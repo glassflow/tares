@@ -341,6 +341,93 @@ const until = async (fn, tries = 40) => {
     ck("Claude Code is reporting, with how long ago", /^Reporting: last session .+ See how$/.test(await text(page, "tool-claude_code")), await text(page, "tool-claude_code"));
     ck("Claude Code goes to its source", (await page.getByTestId("tool-claude_code").locator("a").getAttribute("href")) === "/sources/claude-code");
 
+    // 2b. model providers (TR-1392). Pictures first, of states set through the API, so the same
+    // steps picture the panel before and after. Every endpoint is a closed port, so discovery fails
+    // at once instead of reaching a real provider; the cell ends with none, as it started.
+    {
+      const DEAD = "http://127.0.0.1:9/v1";
+      const shots = async (tag, wait) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "providers");
+          await n.page.getByText(wait).first().waitFor();
+          await shot(n.page, `providers-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("as-found", /model provider yet/i);
+      await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "anthropic", key: "sk-ant-e2e-1392", base_url: "http://127.0.0.1:9" });
+      await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "openai_compatible", name: "LiteLLM", key: "sk-e2e-1392", base_url: DEAD });
+      await shots("two-providers", "LiteLLM");
+      await api(TOKEN, "DELETE", "/api/settings/providers/litellm");
+      await api(TOKEN, "DELETE", "/api/settings/providers/anthropic");
+      await go(page, "providers");
+
+      const panel = page.getByTestId("providers");
+      const row = (id) => panel.locator(`[data-testid="providers-row"][data-id="${id}"]`);
+      ck("Providers has one heading of that name", (await page.getByRole("heading", { name: "Providers", exact: true }).count()) === 1);
+      ck("a cell with no provider says so, and what waits on one",
+        /^No model provider yet\. Add one: agents cannot be switched on and Ask cannot answer until then\.$/.test(await text(page, "providers-empty")), await text(page, "providers-empty"));
+      await checkWords(page, ck, "Providers item");
+      await panel.getByRole("button", { name: "Add a provider" }).click();
+      const form = panel.getByTestId("providers-form");
+      ck("Add a provider opens a form with labelled fields, on Anthropic",
+        (await form.getByLabel("Provider").count()) === 1 && (await form.getByLabel("API key", { exact: true }).count()) === 1 && (await form.getByLabel("Base URL (optional)").count()) === 1
+        && /Claude models/.test(await form.innerText()));
+      ck("Save waits for a key", await form.getByRole("button", { name: "Save" }).isDisabled());
+      await form.getByLabel("Provider").click();
+      await page.getByRole("option", { name: "Ollama", exact: true }).click();
+      ck("Ollama fills its name and address, and needs no key",
+        (await form.getByLabel("Name").inputValue()) === "Ollama" && (await form.getByLabel("Base URL").inputValue()) === "http://localhost:11434/v1"
+        && (await form.getByLabel("API key (optional)").count()) === 1 && !(await form.getByRole("button", { name: "Save" }).isDisabled()));
+      const url = form.getByLabel("Base URL");
+      await url.fill("localhost:11434");
+      await form.getByRole("button", { name: "Save" }).click();
+      ck("a base URL the daemon refuses is said under the field, as a sentence",
+        await until(async () => (await url.getAttribute("aria-invalid")) === "true") && (await form.getByText(/^Base URL must be an http\(s\) URL/).count()) === 1);
+      await shot(page, "providers-refused-1440.png");
+      await url.fill(DEAD);
+      ck("typing again clears the error", (await url.getAttribute("aria-invalid")) !== "true");
+      await url.press("Enter");
+      ck("Enter saves, and says the endpoint did not answer",
+        await until(async () => (await panel.getByTestId("providers-form").count()) === 0 && (await panel.getByTestId("providers-note").count()) === 1)
+        && /^Saved, but the endpoint did not answer/.test(await text(page, "providers-note")), await panel.innerText());
+      ck("the first provider is the default, and its row says it needs no key",
+        (await row("ollama").getByTestId("providers-default").count()) === 1 && (await row("ollama").getByTestId("providers-key-state").innerText()).trim() === "Needs no key.",
+        await row("ollama").innerText());
+      ck("its models line says why there is no list", /^The endpoint did not answer; is it running and reachable from this daemon\? Agents can still name a model by hand\.$/.test((await row("ollama").getByTestId("providers-models").innerText()).trim()),
+        await row("ollama").getByTestId("providers-models").innerText());
+
+      await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "anthropic", key: "sk-ant-e2e-1392", base_url: "http://127.0.0.1:9" });
+      await go(page, "providers");
+      ck("a saved Anthropic key reads as saved here", (await row("anthropic").getByTestId("providers-key-state").innerText()).trim() === "Key saved here.", await row("anthropic").innerText());
+      await row("anthropic").getByRole("button", { name: "Make default" }).click();
+      ck("Make default moves the default", await until(async () => (await row("anthropic").getByTestId("providers-default").count()) === 1 && (await row("ollama").getByTestId("providers-default").count()) === 0)
+        && (await api(TOKEN, "GET", "/api/settings/providers")).body?.default === "anthropic");
+      await row("anthropic").getByRole("button", { name: "Edit" }).click();
+      ck("Edit names the provider and keeps the saved key unless one is typed",
+        /^Anthropic\. Claude models/.test((await form.innerText()).trim()) && (await form.getByLabel("API key", { exact: true }).getAttribute("placeholder")) === "Leave empty to keep the saved key"
+        && (await form.getByLabel("Provider").count()) === 0);
+      await form.getByRole("button", { name: "Cancel" }).click();
+      ck("Cancel closes it", (await panel.getByTestId("providers-form").count()) === 0 && (await panel.getByRole("button", { name: "Add a provider" }).count()) === 1);
+
+      await row("ollama").getByRole("button", { name: "Remove" }).click();
+      const dialog = page.getByTestId("providers-remove-dialog");
+      ck("Remove asks first, and says where its agents go", await until(async () => (await dialog.count()) === 1)
+        && /Remove Ollama\?/.test(await dialog.innerText()) && /move to the default/.test(await dialog.innerText()), await dialog.innerText().catch(() => ""));
+      await page.getByTestId("providers-remove-confirm").click();
+      ck("Remove removes it, here and in the daemon", await until(async () => (await row("ollama").count()) === 0 && (await dialog.count()) === 0)
+        && !(await api(TOKEN, "GET", "/api/settings/providers")).body?.providers.some((p) => p.id === "ollama"));
+      const n = await newPage(390);
+      await go(n.page, "providers");
+      await n.page.getByTestId("providers-row").first().waitFor();
+      ck("the Providers item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+      await api(TOKEN, "DELETE", "/api/settings/providers/anthropic");
+      ck("the cell ends with no provider, as it started", ((await api(TOKEN, "GET", "/api/settings/providers")).body?.providers ?? []).every((p) => !p.configured && !p.stored));
+    }
+
     // 3. the crew starts as a new cell has it
     await go(page, "crew");
     ck("You approve each merge is chosen", (await page.getByTestId("how-L3-review").getAttribute("aria-checked")) === "true" && (await page.getByTestId("how-L4-ship").getAttribute("aria-checked")) === "false");
@@ -523,7 +610,7 @@ const until = async (fn, tries = 40) => {
       const p = n.page;
       for (const tab of ["keys", "github", "providers", "observability"]) {
         await go(p, tab);
-        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : ".panel"}`).first().waitFor();
+        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : tab === "providers" ? '[data-testid="providers"]' : ".panel"}`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
       // Observability's select was the last native one in a pane (TR-1392 moved it to the kit);

@@ -4,9 +4,9 @@ import { useLocation } from "react-router-dom";
 import { api, type AgentLimits } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
-import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
+import { InternalName, TimeAgo, keyTitle } from "../components/bits";
 import { licenceWordsOn, useCloud } from "../cloud";
-import type { ApiKey, Edition, EditionSettings, ModelProvider, ModelProviders, Person, Whoami } from "../types";
+import type { ApiKey, Edition, EditionSettings, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
@@ -16,6 +16,7 @@ import { extraEmails, personDraft, type PersonDraft } from "../personDraft";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../editions/settings/SlackPanels";
 import { TracingPanel } from "../editions/settings/TracingPanel";
 import { GithubPanel } from "../editions/settings/GithubPanel";
+import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
@@ -179,7 +180,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
       {tab === "access" && <AccessTab />}
       {tab === "edition" && <EditionPanel />}
       {tab === "licence" && <LicencePanel />}
-      {tab === "anthropic" && <ProvidersPanel />}
+      {tab === "anthropic" && <ProvidersPanel title="Model providers" intro />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
       {tab === "github" && <GithubPanel cloud={cloud} title="GitHub" intro />}
@@ -388,213 +389,6 @@ export function McpToolsPanel() {
           </span>
         </span>
       </label>
-    </div>
-  );
-}
-
-// The model providers a cell holds (TR-301): Anthropic, OpenAI, or any OpenAI-compatible
-// endpoint (LiteLLM, OpenRouter, Ollama, vLLM). One is the default, what Ask and the builder
-// use and what an agent without a provider of its own runs on. Credentials are write-only.
-// The Anthropic entry doubles as the old key + gateway settings, so a deployment that fills
-// those (a hosted trial cell, a compose file) shows up here unchanged.
-type ProviderKind = ModelProvider["kind"];
-const KIND_HELP: Record<ProviderKind, string> = {
-  anthropic: "Claude models with your Anthropic API key. Base URL only if calls go through a gateway that speaks the Anthropic format.",
-  openai: "GPT models with your OpenAI API key. Base URL only for Azure or a proxy.",
-  openai_compatible: "Anything that speaks OpenAI chat completions: LiteLLM, OpenRouter, Ollama, vLLM. The models it lists are what the picker offers.",
-};
-const PRESETS: { id: string; label: string; kind: ProviderKind; name: string; base_url: string; key: boolean }[] = [
-  { id: "anthropic", label: "Anthropic", kind: "anthropic", name: "Anthropic", base_url: "", key: true },
-  { id: "openai", label: "OpenAI", kind: "openai", name: "OpenAI", base_url: "", key: true },
-  { id: "litellm", label: "LiteLLM", kind: "openai_compatible", name: "LiteLLM", base_url: "http://localhost:4000/v1", key: true },
-  { id: "openrouter", label: "OpenRouter", kind: "openai_compatible", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", key: true },
-  { id: "xai", label: "xAI (Grok)", kind: "openai_compatible", name: "xAI", base_url: "https://api.x.ai/v1", key: true },
-  { id: "ollama", label: "Ollama", kind: "openai_compatible", name: "Ollama", base_url: "http://localhost:11434/v1", key: false },
-  { id: "other", label: "Other OpenAI-compatible", kind: "openai_compatible", name: "", base_url: "", key: true },
-];
-
-export function ProvidersPanel() {
-  const terse = useContext(TerseSettings);
-  const [data, setData] = useState<ModelProviders>();
-  const [err, setErr] = useState<string>();
-  const [msg, setMsg] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState<{ id: string; preset: string; kind: ProviderKind; name: string; base_url: string; key: string }>();
-  const [confirmDelete, setConfirmDelete] = useState<ModelProvider>();
-
-  const load = () => api.providers().then(setData).catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
-
-  const startAdd = () => {
-    const p = PRESETS[0];
-    setEditing({ id: "new", preset: p.id, kind: p.kind, name: p.name, base_url: p.base_url, key: "" });
-    setMsg(undefined); setErr(undefined);
-  };
-  const startEdit = (p: ModelProvider) => {
-    const preset = p.kind === "openai_compatible" ? (PRESETS.find((x) => x.base_url && p.base_url.startsWith(x.base_url))?.id ?? "other") : p.kind;
-    setEditing({ id: p.id, preset, kind: p.kind, name: p.name, base_url: p.kind === "anthropic" && !p.gateway_stored && !p.base_source ? "" : p.base_url, key: "" });
-    setMsg(undefined); setErr(undefined);
-  };
-  const pickPreset = (id: string) => {
-    const p = PRESETS.find((x) => x.id === id)!;
-    setEditing((e) => e && { ...e, preset: id, kind: p.kind, name: p.name, base_url: p.base_url });
-  };
-  const save = async () => {
-    if (!editing) return;
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try {
-      const r = await api.saveProvider(editing.id, { kind: editing.kind, name: editing.name, key: editing.key, base_url: editing.base_url });
-      setData(r); setEditing(undefined);
-      const saved = r.providers.find((p) => p.id === r.id);
-      setMsg(saved?.models_error
-        ? `✓ saved, but ${saved.models_problem || "the endpoint did not list its models"}. Agents can still name a model by hand.`
-        : saved?.discovers ? `✓ saved; ${saved.models.length} model${saved.models.length === 1 ? "" : "s"} listed by the endpoint` : "✓ saved; in use from the next call");
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-  const remove = async (id: string) => {
-    setBusy(true); setErr(undefined);
-    try { setData(await api.deleteProvider(id)); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false); setConfirmDelete(undefined);
-  };
-  const makeDefault = async (id: string) => {
-    setBusy(true); setErr(undefined);
-    try { setData(await api.setDefaultProvider(id)); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-  const refresh = async (id: string) => {
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try {
-      const r = await api.refreshProviderModels(id);
-      setData(r);
-      setMsg(r.error ? undefined : `✓ ${r.models.length} model${r.models.length === 1 ? "" : "s"} listed`);
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-
-  const preset = editing && PRESETS.find((x) => x.id === editing.preset);
-  const existing = editing && data?.providers.find((p) => p.id === editing.id);
-  const isNew = editing?.id === "new";
-  const needsUrl = editing?.kind === "openai_compatible";
-  const canSave = !!editing && (!needsUrl || !!editing.base_url.trim()) && (editing.kind !== "openai_compatible" || !!editing.name.trim())
-    && (!!editing.key.trim() || !!existing?.configured || (editing.kind === "openai_compatible" && preset?.key === false));
-
-  return (
-    <div className="panel">
-      <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h2 style={{ margin: 0 }}>{terse ? "Providers" : "Model providers"}</h2>
-        {!editing && <button className="primary" onClick={startAdd}>Add provider</button>}
-      </div>
-      {!terse && (<p className="help">
-        What <strong>Tares agents</strong> and Ask run on. Add the providers you hold keys for; each
-        agent picks a provider and a model, and the <strong>default</strong> is what Ask and any agent
-        without its own choice use. Values saved here win over the daemon's environment
-        (<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>TARES_MODEL_PROVIDER</code>);
-        credentials are never returned by the API and never included in a catalog export.
-      </p>)}
-
-      {err && <div className="alert error">{err}</div>}
-      {msg && <p className="help">{msg}</p>}
-
-      {editing && (
-        <div className="panel" style={{ marginBottom: 12 }}>
-          {isNew && (
-            <div className="field">
-              <span className="lbl">provider</span>
-              <Picker value={editing.preset} options={PRESETS.map((p) => p.id)} style={{ width: 280 }}
-                      labels={Object.fromEntries(PRESETS.map((p) => [p.id, p.label]))}
-                      ariaLabel="provider" onChange={pickPreset} />
-              <span className="help">{KIND_HELP[editing.kind]}</span>
-            </div>
-          )}
-          {!isNew && <p className="help" style={{ marginTop: 0 }}><strong>{existing?.name}</strong>: {KIND_HELP[editing.kind]}</p>}
-          <div className="row2">
-            {editing.kind === "openai_compatible" && (
-              <label className="field">
-                <span className="lbl">name</span>
-                <input type="text" placeholder="e.g. LiteLLM" value={editing.name} disabled={!isNew}
-                       onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-                {isNew && <span className="help">agents refer to it by this name</span>}
-              </label>
-            )}
-            <label className="field">
-              <span className="lbl">API key {(!needsUrl || preset?.key !== false) ? "" : <span className="help">(optional)</span>}</span>
-              <input type="password" className="mono" autoComplete="new-password" value={editing.key}
-                     placeholder={existing?.configured ? "leave blank to keep the stored key" : editing.kind === "anthropic" ? "sk-ant-…" : editing.kind === "openai" ? "sk-…" : "the endpoint's key, if it wants one"}
-                     onChange={(e) => setEditing({ ...editing, key: e.target.value })} />
-              {existing?.source.startsWith("env:") && <span className="help">the environment's key ({existing.source}) is in use; a key saved here takes over</span>}
-              {existing?.gateway_token_stored && <span className="help">a gateway token is stored and sent as a bearer header</span>}
-            </label>
-          </div>
-          <label className="field">
-            <span className="lbl">base URL {!needsUrl && <span className="help">(optional)</span>}</span>
-            <input type="text" className="mono" value={editing.base_url}
-                   placeholder={editing.kind === "anthropic" ? "https://api.anthropic.com, or a gateway that speaks the Anthropic format" : editing.kind === "openai" ? "https://api.openai.com/v1" : "http://localhost:4000/v1"}
-                   onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} />
-            {editing.kind === "anthropic" && existing?.base_source?.startsWith("env:") && !editing.base_url && (
-              <span className="help">the deployment routes calls through <span className="mono">{existing.base_url}</span> ({existing.base_source}); a URL saved here takes over</span>
-            )}
-          </label>
-          <div className="btnrow">
-            <button className="primary" disabled={busy || !canSave} onClick={save}>Save</button>
-            <button onClick={() => { setEditing(undefined); setErr(undefined); }}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {!data ? <div className="muted">loading…</div>
-        : data.providers.filter((p) => p.configured || p.stored).length === 0 && !editing ? (
-          <div className="empty">no model provider yet. Add one: agents cannot be enabled and Ask cannot answer until then.</div>
-        ) : (
-          <div className="table-scroll">
-          <table>
-            <thead><tr><th>provider</th><th>kind</th><th>endpoint</th><th>status</th><th>models</th><th aria-label="actions" /></tr></thead>
-            <tbody>
-              {data.providers.filter((p) => p.configured || p.stored).map((p) => (
-                <tr key={p.id}>
-                  <td><strong>{p.name}</strong>
-                    {p.default && <span className="badge agent" style={{ marginLeft: 8 }}>default</span>}</td>
-                  <td className="help">{data.kinds.find((k) => k.id === p.kind)?.label ?? p.kind}</td>
-                  <td className="mono help">{p.base_url || (p.kind === "anthropic" ? "api.anthropic.com" : "")}</td>
-                  <td>
-                    {!p.configured
-                      ? <span className="badge error">no key</span>
-                      : p.models_problem?.startsWith("the endpoint rejected the key")
-                        ? <><span className="badge error">key rejected</span><span className="help"> by the endpoint; edit and save a valid key</span></>
-                        : <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>}
-                  </td>
-                  <td style={{ minWidth: 220 }}>
-                    {p.models_error
-                      ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models_problem}{p.models.length > 0 ? `; the picker offers ${p.models.length} ${p.discovers && p.models_at ? "from the last read" : "built in"}` : ""}</span>
-                      : <span className="help" title={p.models.slice(0, 40).join("\n")}>{p.models.length}{p.discovers ? " from the endpoint" : " built in"}</span>}
-                  </td>
-                  <td style={{ width: 270 }}>
-                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
-                      {p.discovers && p.configured && <button style={{ whiteSpace: "nowrap" }} disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
-                      {!p.default && p.configured && <button style={{ whiteSpace: "nowrap" }} disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
-                      <button disabled={busy} onClick={() => startEdit(p)}>Edit</button>
-                      {(p.stored || p.kind !== "anthropic") && <button className="danger" disabled={busy} onClick={() => setConfirmDelete(p)}>Remove</button>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
-
-      {confirmDelete && (
-        <ConfirmDialog
-          title={`Remove ${confirmDelete.name}?`}
-          message={confirmDelete.kind === "anthropic"
-            ? "The stored key and gateway are removed. If the deployment's environment carries a key, that one is used again."
-            : "Agents that name this provider fall back to the default until you point them elsewhere."}
-          confirmLabel="Remove" danger
-          onConfirm={() => remove(confirmDelete.id)}
-          onCancel={() => setConfirmDelete(undefined)} />
-      )}
     </div>
   );
 }
