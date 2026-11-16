@@ -21,6 +21,7 @@ factory-projects
 factory-reviews
 factory-secrets
 factory-settings
+factory-setup
 factory-start
 factory-start-show
 factory-team
