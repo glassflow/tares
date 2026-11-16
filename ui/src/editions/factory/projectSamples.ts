@@ -227,11 +227,12 @@ export const sampleClosed = (d: FactoryProjectData): FactoryProjectData => ({
   ...d, stage: "done", stage_label: "Done", state: "finished", state_label: "Finished", can_close: false,
 });
 
-export const isSample = (name: string | null): name is string => !!name && name in SAMPLES;
+// The Pull requests page's merge queue samples (`queue-*`, see mergeQueueSamples.ts) borrow the ready project for the frame.
+export const isSample = (name: string | null): name is string => !!name && (name in SAMPLES || name.startsWith("queue-"));
 
 /** What a read of the page answers for a sample: the data, never an answer (`load`), or an error (`err`). */
 export function sampleLoad(name: string): Promise<FactoryProjectData> {
-  const s = SAMPLES[name];
+  const s = SAMPLES[name] ?? READY;
   if (s === "load") return new Promise(() => {});
   if (s === "err") return Promise.reject(new Error("The cell did not answer."));
   return Promise.resolve(s);

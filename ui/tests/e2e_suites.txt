@@ -12,6 +12,7 @@ factory-crew
 factory-docs
 factory-github
 factory-home
+factory-merge-queue
 factory-new-project
 factory-people
 factory-project
