@@ -15,6 +15,7 @@
 //   many     a full page of 200 items, with an older page to load
 
 import type { RangeKey, TimelineData, TimelineItem, TimelineKind, TimelineRawData, TimelineRawRow, TimelineTone } from "../Timeline.api";
+import { formatCount } from "../../../lib/number";
 
 export const SAMPLE_NAMES = ["normal", "raw", "service", "kinds", "empty", "load", "err", "rawerr", "long", "many"] as const;
 export type SampleName = (typeof SAMPLE_NAMES)[number];
@@ -85,9 +86,9 @@ function hourItems(back: number, hour: number, minutes: number[]): TimelineItem[
         const start = iso(back, hour, m - 10 < 0 ? 0 : m - 10);
         const raw = { from: start, to: end, count: 1100 + ((n * 37) % 400) };
         const k = n % 3;
-        const text = k === 0 ? `${svc}: ${raw.count.toLocaleString("en-US")} events, 18 errors, errors up 3x on the 10 minutes before`
-          : k === 1 ? `${svc}: ${raw.count.toLocaleString("en-US")} events, 2 errors`
-          : `${svc}: ${raw.count.toLocaleString("en-US")} events, events up 2.2x on the 10 minutes before`;
+        const text = k === 0 ? `${svc}: ${formatCount(raw.count)} events, 18 errors, errors up 3x on the 10 minutes before`
+          : k === 1 ? `${svc}: ${formatCount(raw.count)} events, 2 errors`
+          : `${svc}: ${formatCount(raw.count)} events, events up 2.2x on the 10 minutes before`;
         out.push(item("window", `win:${key}`, start, end, svc, text, k === 0 ? "bad" : k === 1 ? "warn" : "info", { raw }));
         break;
       }

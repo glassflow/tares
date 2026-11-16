@@ -7,6 +7,7 @@ import { SlackPick } from "../../components/SlackPick";
 import { Switch } from "../../components/ui/switch";
 import type { Person } from "../../types";
 import type { MorningResult, MorningStatus } from "./FactorySettings.api";
+import { viewerZone } from "../../lib/time";
 
 // Settings, Crew, Morning status: the standup report, sent by the cell itself on weekday mornings
 // to Slack, by email, or both. Off until someone turns it on. Email is Tares Cloud only, so on a
@@ -17,7 +18,7 @@ export const MORNING_OFF: MorningStatus = {
   email_available: false, last_result: "",
 };
 
-const here = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const here = viewerZone;
 
 function zones(current: string): { value: string; label: string }[] {
   const all = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? ["UTC"];

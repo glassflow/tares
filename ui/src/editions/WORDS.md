@@ -47,9 +47,10 @@ Two limits of the check. "runs on" is allowed as a phrase, so "3 runs on main" p
 ## Copy rules
 
 - Plain words for what happened. Name the symptom, then the cause.
-- Durations in words, never raw minutes or ids: "17 seconds ago", "8 minutes ago", "6 days",
-  "1 day, 18 hours". `durationWords(seconds)` in `words.ts` formats them: one unit, floored; when that
-  unit's count is 1 the next unit follows if it is not zero.
+- Durations in words, never raw minutes or ids: "just now", "8 minutes ago", "6 days",
+  "1 hour 4 minutes". `src/lib/time.ts` formats them, the same way the server does: `ageWords` and
+  `spanWords` give one unit, floored; `durationWords` adds the next unit when it is not zero. A time
+  of day is UTC: "14:05", "yesterday, 14:05" (`sinceWords`). Never a locale string.
 - Say who an item is from: "Lee opened this PR", "from the reviewer".
 - Put what needs the person first, and say how long it has waited.
 - No em dashes in any rendered string. Use a comma, a colon or a new sentence.

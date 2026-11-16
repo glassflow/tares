@@ -46,9 +46,9 @@ async function waitFor(url, tries = 100) {
   return false;
 }
 
-// incidentTime.ts, compiled and run here: pure functions, no page needed
+// lib/time.ts (the helpers the incident screens use), compiled and run here: pure functions, no page needed
 function loadTimeWords() {
-  const src = fs.readFileSync(path.join(UI_DIR, "src", "editions", "sre", "incidentTime.ts"), "utf8");
+  const src = fs.readFileSync(path.join(UI_DIR, "src", "lib", "time.ts"), "utf8");
   const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
   const mod = { exports: {} };
   vm.runInNewContext(js, { module: mod, exports: mod.exports });

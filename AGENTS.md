@@ -88,13 +88,19 @@ predate the kit.
 - **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`, and no em dash anywhere.
   The platform pages are checked too, each held at its count in `ui/words-contract.baseline.json`:
   add none, and when you remove some, `npm run words-baseline` lowers the count in the same PR.
+- **Time** comes from `ui/src/lib/time.ts`: a UTC stamp (`formatStampUTC`) with "3h ago" in its
+  tooltip (`formatDistance`), a day as `Nov 12, 2026` (`formatDayUTC`), a length in words
+  (`ageWords`, `spanWords`, `durationWords`, the same ladder as the server's `goal.py`). A grouped
+  number is `formatCount` from `ui/src/lib/number.ts`. No `toLocale*String` and no
+  `Intl.DateTimeFormat` anywhere else; the legacy pages keep theirs at the count in
+  `ui/time-contract.baseline.json`, lowered with `npm run time-baseline`. Tests: `npm run test:time`.
 - **Before you push** a console change:
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
-  npm run design-contract && npm run build`,
+  npm run test:time && npm run design-contract && npm run build`,
   and the gallery suite when you touched `components/edition`. `design-contract`
-  (`ui/eslint-design-contract.config.mjs`) fails on a rounded corner, a page shadow, a side stripe and
-  an em dash in copy. In both contracts, and in kit-only, an exception goes in the register with
-  a reason, never in an `eslint-disable` comment (inline config is off).
+  (`ui/eslint-design-contract.config.mjs`) fails on a rounded corner, a page shadow, a side stripe,
+  an em dash in copy and a locale time. In both contracts, and in kit-only, an exception goes in
+  the register with a reason, never in an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
   enforces it when there is one.
 

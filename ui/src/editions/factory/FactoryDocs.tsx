@@ -15,6 +15,7 @@ import {
   type DocProject, type DocRow, type DocView, type DocsPage,
 } from "./FactoryDocs.api";
 import { isSample, sampleBox, sampleLoad } from "./docsSamples";
+import { formatCount } from "../../lib/number";
 
 // Docs and memory: the crew's shared rules and memory, and one project's spec, plan, rules and
 // memory at a time, read as documents. The list shows the shared documents, then a project picker
@@ -124,7 +125,7 @@ export function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: 
             {cut > 0 && (
               <button type="button" onClick={() => setAll(true)} data-testid="doc-earlier"
                       className="block w-full border-0 border-b border-dotted border-border bg-transparent px-0 py-2.5 text-left text-[13px] font-normal text-foreground underline cursor-pointer">
-                Show {cut.toLocaleString("en")} earlier lines
+                Show {formatCount(cut)} earlier lines
               </button>
             )}
             {doc.lines.slice(cut).map((r, i) => <Row key={cut + i} row={r} />)}

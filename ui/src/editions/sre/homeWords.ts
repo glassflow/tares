@@ -1,5 +1,6 @@
 // Small wording helpers for the AI SRE home page. Times the cell words itself (the headline, the
 // "Posted to" line) are UTC, so these are UTC too.
+import { formatCount } from "../../lib/number";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -33,4 +34,4 @@ export function money(n: number): string {
   return `$${s}`;
 }
 
-export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en")} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = `${one}s`) => `${formatCount(n)} ${n === 1 ? one : many}`;

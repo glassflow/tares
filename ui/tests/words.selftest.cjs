@@ -25,7 +25,7 @@ function loadTs(file) {
 }
 const WORDS_TS = path.join(__dirname, "..", "src", "editions", "words.ts");
 const WORDS_MD = path.join(__dirname, "..", "src", "editions", "WORDS.md");
-const { forbiddenIn, durationWords } = loadTs(WORDS_TS);
+const { forbiddenIn } = loadTs(WORDS_TS);
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -67,17 +67,6 @@ ck("forbiddenIn: names come in the order they appear, once each",
 ck("forbiddenIn: line breaks and runs of spaces do not hide an allowed phrase",
   same(forbiddenIn("open\n  source   and View\tPR"), []));
 ck("forbiddenIn: an em dash comes first when it comes first", same(forbiddenIn("a\u2014b sources"), ["em dash", "sources"]));
-
-// durationWords: one unit, floored; when the count is 1 the next unit follows if it is not zero.
-for (const [secs, want] of [
-  [0, "0 seconds"], [1, "1 second"], [17, "17 seconds"], [17.9, "17 seconds"], [59, "59 seconds"],
-  [60, "1 minute"], [61, "1 minute, 1 second"], [125, "2 minutes"], [480, "8 minutes"], [3599, "59 minutes"],
-  [3600, "1 hour"], [3660, "1 hour, 1 minute"], [7200, "2 hours"], [86400, "1 day"], [86430, "1 day"],
-  [151200, "1 day, 18 hours"], [518400, "6 days"],
-  [-5, "0 seconds"], [NaN, "0 seconds"], [Infinity, "0 seconds"],
-]) {
-  ck(`durationWords(${secs}) -> ${JSON.stringify(want)}`, durationWords(secs) === want, durationWords(secs));
-}
 
 // The static scanner, on fixture strings.
 const scan = (src, name = "Fixture.tsx") => scanSource(name, src).map((h) => `${h.line} ${h.word}`);

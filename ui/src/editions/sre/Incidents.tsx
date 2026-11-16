@@ -15,10 +15,13 @@ import {
   incidentAction, sreIncident, sreIncidents,
   type GroupState, type IncidentAction, type IncidentData, type IncidentItem, type IncidentsData, type WorthAction,
 } from "./Incidents.api";
-import { ageWords, clock, dateWords, durationWords, sentence, sinceWords, spanWords, stamp } from "./incidentTime";
+import { ageWords, clock, dateWords, durationWords, sinceWords, spanWords, stamp } from "../../lib/time";
 import {
   isIncidentSample, isListSample, sampleAct, sampleIncident, sampleIncidents, SAMPLE_ME, SAMPLE_NOW,
 } from "./sample/incidents";
+
+/** Sentence case: the cell writes "open 38 minutes, nobody on it" and the row starts a sentence. */
+const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Incidents (TR-751): the list of incidents by state (GET /api/sre/incidents) and one incident
 // (GET /api/sre/incidents/{id}). Each screen is one read, polled every 20 seconds while the tab is
