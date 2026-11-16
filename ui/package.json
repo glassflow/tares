@@ -44,7 +44,8 @@
     "test:settings-people": "vite build && node tests/settings-people.e2e.cjs",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "token-contract": "eslint --quiet --config eslint-token-contract.config.mjs \"src/**/*.{ts,tsx}\"",
-    "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\""
+    "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\"",
+    "kit-baseline": "node scripts/kit-baseline.mjs"
   },
   "dependencies": {
     "@fontsource-variable/doto": "^5.3.0",

@@ -17,6 +17,10 @@
 //                    inset accent bar above; a section opens with a 1px top rule.
 //   voice-contract   Copy carries no em dash. A string or JSX text holding one fails, except a
 //                    lone '—' (the no-value mark in a cell). Comments are not copy.
+//   kit-only         No inline style and no raw form control in edition code (TR-1258). Its own
+//                    rule (eslint-rules/kit-only.mjs) with its own register and per-file baseline,
+//                    so it is a separate config object, not a selector. It runs in `npm run lint`
+//                    too; it is here because inline config is off here.
 //
 // Not here: a table-head selector. The console has no table primitive in src/components/ui,
 // so a raw <th> rule would have nowhere to point; it joins when the primitive does. The time
@@ -31,6 +35,7 @@
 // with the subset that still applies to it. Never add a second config object for a new selector.
 
 import tseslint from 'typescript-eslint'
+import { kitOnlyConfig } from './eslint-rules/kit-register.mjs'
 
 // --- repoint on copy ---------------------------------------------------------
 const SRC = 'src/**/*.{ts,tsx}'
@@ -100,4 +105,7 @@ export default [
   { ...base, files: [SRC], rules: syntax(ALL) },
   ...register(SHADOW_REGISTER, 'shadow'),
   ...register(STRIPE_REGISTER, 'stripe'),
+  // kit-only (TR-1258), also in `npm run lint`: here inline config is off, so a disable comment
+  // that silences it in lint still fails CI.
+  kitOnlyConfig(base),
 ]

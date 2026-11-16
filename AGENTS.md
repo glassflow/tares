@@ -61,8 +61,15 @@ predate the kit.
   component goes in `components/edition`, with a gallery section and a check in
   `ui/tests/component-gallery.e2e.cjs` in the same PR. `components/ui` holds the primitives the kit
   wraps; screens do not import them.
-- **No raw controls, no inline styles** in edition code: no `<button>`, `<input>`, `<select>` or
-  `<textarea>`, and no `style={{}}` except for a value computed at run time (a bar's width).
+- **No raw controls, no inline styles** in edition code (`ui/src/editions`, `components/edition`,
+  `ui/src/ee`): no `<button>`, `<input>`, `<select>` or `<textarea>`, and no `style={{}}`.
+  `npm run lint` enforces it (`ui/eslint-rules/kit-only.mjs`). An edition file may break the rule
+  only while it is in the register (`ui/eslint-rules/kit-register.mjs`) with its reason: a value
+  computed at run time (a bar's width), a control the kit has no primitive for yet, a native picker
+  kept on purpose, or a legacy panel waiting for its move. The legacy pages (`ui/src/pages` and the
+  shared components outside the kit) are frozen at their count in `ui/kit-contract.baseline.json`.
+  A file that gets cleaner lowers its count in the same PR with `npm run kit-baseline`, which never
+  raises one without `--raise` and a reason in the PR.
 - **Colour from the semantic utilities**, which `@theme inline` in `styles.css` maps from the
   tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
   `bg-primary`, `text-ok`, `text-warn`, `text-err`, and the rest of the roles listed under Colour
@@ -84,8 +91,8 @@ predate the kit.
   npm run design-contract && npm run build`,
   and the gallery suite when you touched `components/edition`. `design-contract`
   (`ui/eslint-design-contract.config.mjs`) fails on a rounded corner, a page shadow, a side stripe and
-  an em dash in copy. In both contracts an exception goes in the register with a reason and a
-  ticket, never in an `eslint-disable` comment (inline config is off).
+  an em dash in copy. In both contracts, and in kit-only, an exception goes in the register with
+  a reason, never in an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
   enforces it when there is one.
 

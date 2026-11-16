@@ -302,7 +302,7 @@ function blocksOf(d: IncidentData): Block[] {
   return out.length > 0 ? out : parts;
 }
 
-const CLIP = 260;
+const CLIP = 260;          // the clipped height; the note body says max-h-[260px], keep them equal
 const CLIP_SLACK = 120;   // a note only a little over the cut is shown whole: a button should not hide two lines
 
 function Note({ d }: { d: IncidentData }) {
@@ -325,7 +325,7 @@ function Note({ d }: { d: IncidentData }) {
   return (
     <div className="grid gap-3">
       <Panel title="The note" data-testid="note" data-clipped={clipped || undefined}>
-        <div className="relative" style={clipped ? { maxHeight: CLIP, overflow: "hidden" } : undefined} data-testid="note-body">
+        <div className={cn("relative", clipped && "max-h-[260px] overflow-hidden")} data-testid="note-body">
           <div ref={inner} className="grid gap-3 text-[15px]" data-words-exempt>
             {blocks.map((b, i) => (
               <div key={i}>
