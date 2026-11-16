@@ -23,6 +23,10 @@ sys.path.insert(0, HERE)
 # BACKFILL_TZ=UTC runs the same data in a zone with no such hour.
 os.environ["TZ"] = os.environ.get("BACKFILL_TZ", "Europe/Berlin")
 time.tzset()
+# With the state in Postgres, times come back in the session's zone, not the process's: the server
+# says UTC unless told otherwise, and in UTC the repeated hour is not there to test. libpq reads
+# PGTZ when a connection opens, so the session gets the same zone.
+os.environ["PGTZ"] = os.environ["TZ"]
 
 TMP = tempfile.mkdtemp()
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")

@@ -28,7 +28,7 @@ from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
 from ..envelope import now_utc
-from ..factory_home import _dt, for_caller, plain_ago, waiting_items
+from ..factory_home import _dt, for_caller, plain_ago, caller_waiting
 from .factory_project import _pr_out, _review_out, station_roles, ticket_state, who_words
 from .factory_projects import ORDER, row_for
 
@@ -94,7 +94,8 @@ def register(app, store, h, ctx):
         roles = station_roles(station_rows)
 
         # the projects in the order of the Projects page: what needs you first, finished last
-        waiting = waiting_items(store, for_caller(fx, request), now, hidden)
+        # what waits for the caller, as their home has it (never another person's items)
+        waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
         stations = fx.stations() if fx else []
         ranked = []
         for p in projects:

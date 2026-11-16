@@ -38,6 +38,9 @@ export interface ProjectMilestone {
   needs_person: boolean;
   /** The person may accept it as it is (the crew never recorded its checks, none is for them). */
   can_accept: boolean;
+  /** Whom the person checks wait for (the project's lead, else the admins); `yours` when the viewer is one. */
+  checks_for?: { id: string; name: string }[];
+  yours?: boolean;
   tickets_href: string;
 }
 
