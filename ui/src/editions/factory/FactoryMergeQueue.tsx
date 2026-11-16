@@ -260,7 +260,7 @@ function Group({ g, pid, sample, rows, hidden, open, onToggle, onChanged }: {
     <section className={cn(CARD, "min-w-0")} aria-label={g.title} data-testid="mq-group">
       <div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 bg-[var(--th-bg)] py-2 pl-2.5 pr-[18px] @max-[559px]/mq:pl-1.5 @max-[559px]/mq:pr-3.5", open && "border-b border-border")}>
         <button type="button" onClick={onToggle} aria-expanded={open} data-testid="mq-group-toggle"
-                className="flex min-w-0 items-center gap-2 border-0 bg-transparent px-2 py-1 text-left font-mono! text-sm font-semibold! leading-[1.4] text-foreground hover:bg-[var(--wash-2)]">
+                className="flex! min-w-0 items-center gap-2 border-0! bg-transparent! px-2! py-1! text-left font-mono! text-sm font-semibold! leading-[1.4] text-foreground hover:bg-[var(--wash-2)]!">
           <Chevron open={open} />
           <span className="min-w-0 [overflow-wrap:anywhere]" data-user-text>
             {g.repo} <span className="font-sans font-normal text-muted-foreground">into</span> {g.base}
@@ -282,7 +282,7 @@ function Group({ g, pid, sample, rows, hidden, open, onToggle, onChanged }: {
       {open && g.merged && (
         <div className="border-t border-border" data-testid="mq-merged">
           <button type="button" onClick={() => setMergedOpen(!mergedOpen)} aria-expanded={mergedOpen}
-                  className="flex w-full items-center gap-2 border-0 bg-transparent px-[18px] py-2 text-left text-[13px] text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground @max-[559px]/mq:px-3.5"
+                  className="flex! w-full items-center gap-2 border-0! bg-transparent! px-[18px]! py-2! text-left text-[13px] text-muted-foreground! hover:bg-[var(--row-hover)]! hover:text-foreground! @max-[559px]/mq:px-3.5!"
                   data-testid="mq-merged-toggle">
             <Chevron open={mergedOpen} />{g.merged.title}
           </button>

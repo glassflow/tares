@@ -142,6 +142,9 @@ async function waitFor(url, tries = 100) {
       const into = await css(grp.getByTestId("mq-group-toggle").locator("span span").first(), ["fontFamily", "fontWeight"]);
       ck(`${width}: the word into is plain`, !/mono/i.test(into.fontFamily) && Number(into.fontWeight) <= 400, JSON.stringify(into));
       ck(`${width}: the group header has a chevron`, (await grp.getByTestId("mq-group-toggle").locator("svg").count()) === 1);
+      const flat = async (loc) => { const c = await css(loc, ["borderTopWidth", "backgroundColor", "paddingLeft", "display"]); return c.borderTopWidth === "0px" && /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(c.backgroundColor) && c.display === "flex"; };
+      ck(`${width}: the group toggle is a flat row, not a boxed button`, await flat(grp.getByTestId("mq-group-toggle")), JSON.stringify(await css(grp.getByTestId("mq-group-toggle"), ["borderTopWidth", "backgroundColor", "paddingLeft", "display"])));
+      ck(`${width}: the chevron sits on the same line as the repo`, await grp.getByTestId("mq-group-toggle").evaluate((el) => { const s = el.querySelector("svg").getBoundingClientRect(); const t = el.querySelector("span").getBoundingClientRect(); return Math.abs((s.top + s.bottom) / 2 - (t.top + t.bottom) / 2) < t.height; }));
       const chips = await page.getByTestId("mq-chip").allInnerTexts();
       ck(`${width}: waiting for CI first, then next, then queued`, chips.slice(0, 3).map((c) => c.trim().toLowerCase()).join(",") === "waiting for ci,next,queued", chips.join(","));
       const first = rowOf(page, "ORD-41");
@@ -154,6 +157,7 @@ async function waitFor(url, tries = 100) {
       ck(`${width}: a CI line that waits says so`, (await text(first.getByTestId("mq-check-ci"))).includes("Pending"), await text(first.getByTestId("mq-check-ci")));
       ck(`${width}: a row with no question has no buttons`, (await page.getByTestId("mq-actions").count()) === 0);
       ck(`${width}: the merged list is closed until asked`, (await page.getByTestId("mq-merged-item").count()) === 0);
+      ck(`${width}: the merged toggle is a flat row, not a boxed button`, await flat(page.getByTestId("mq-merged-toggle")), JSON.stringify(await css(page.getByTestId("mq-merged-toggle"), ["borderTopWidth", "backgroundColor", "display"])));
       await page.getByTestId("mq-merged-toggle").click();
       ck(`${width}: the merged list names the ticket, the pull request, when and by whom`, (await text(page.getByTestId("mq-merged-item").first())).includes("ORD-38"), await text(page.getByTestId("mq-merged")));
       const long = rowOf(page, "ORD-45");

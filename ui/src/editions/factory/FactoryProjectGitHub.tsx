@@ -110,7 +110,7 @@ function useQueueRead(id: string, sample: string | null) {
 
 function Tab({ to, on, tab, children }: { to: string; on: boolean; tab: "queue" | "prs"; children: React.ReactNode }) {
   return (
-    <Link to={to} replace role="tab" id={`tab-${tab}`} aria-selected={on} aria-controls={`panel-${tab}`} data-testid={`tab-${tab}`}
+    <Link to={to} replace role="tab" id={`tab-${tab}`} aria-selected={on} aria-controls={on ? `panel-${tab}` : undefined} data-testid={`tab-${tab}`}
           className={cn("-mb-px flex items-center gap-2 whitespace-nowrap border-b-[3px] border-transparent px-3.5 py-2.5 text-sm text-muted-foreground! no-underline! hover:bg-[var(--row-hover)] hover:text-foreground!",
                         on && "border-b-[color:var(--accent)] font-semibold text-foreground!")}>
       {children}
