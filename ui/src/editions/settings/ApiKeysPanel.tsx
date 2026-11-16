@@ -13,9 +13,9 @@ import { copyText } from "../copyText";
 // admin; docs/design/api-keys.md), may be bound to a person (the ee slots pick and rebind one), and a
 // project key reads one project only (made on that project's page, listed here). The secret exists
 // only in the create response; the daemon keeps its hash, so the panel shows it once.
+// Whether keys are checked at all is the Access box's to say (AccessPanels.tsx); both callers show it.
 
 const TEXT = "m-0 text-[13px] leading-relaxed text-muted-foreground";
-const CODE = "font-mono text-[12px] text-foreground";
 const FORM = "grid gap-4 border border-border bg-muted/40 p-4";
 
 const messageOf = (e: unknown) => String((e as Error)?.message ?? e);
@@ -58,7 +58,6 @@ export function ApiKeysPanel({ title, intro, people, admin, me }: {
   people: Person[]; admin: boolean; me?: string;
 }) {
   const [keys, setKeys] = useState<ApiKey[]>();
-  const [enforced, setEnforced] = useState(true);
   const [loadErr, setLoadErr] = useState<string>();
   const [rowErr, setRowErr] = useState<{ id: string; text: string }>();
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
@@ -69,7 +68,7 @@ export function ApiKeysPanel({ title, intro, people, admin, me }: {
   const [showRevoked, setShowRevoked] = useState(false);
 
   const load = useCallback(() => api.keys()
-    .then((r) => { setKeys(r.keys); setEnforced(r.enforced); setLoadErr(undefined); })
+    .then((r) => { setKeys(r.keys); setLoadErr(undefined); })
     .catch((e) => setLoadErr(sentence(messageOf(e)))), []);
   useEffect(() => { void load(); }, [load]);
   // a project key names its project; made on the project's page, it is listed here
@@ -101,12 +100,6 @@ export function ApiKeysPanel({ title, intro, people, admin, me }: {
             can read (an agent connecting over MCP), send data (a script or service pushing logs or webhooks), both (the
             Claude Code plugin), or change settings, which includes everything else.
           </p>
-        )}
-        {keys && !enforced && (
-          <Banner tone="warn" data-testid="keys-open">
-            Keys are not checked yet: this cell has no root token (<code className={CODE}>TARES_AUTH_TOKEN</code>), so anyone
-            who can reach it can read and write. Start it with <code className={CODE}>tares up --auth</code> to require them.
-          </Banner>
         )}
         {loadErr && keys && <Banner tone="error">{loadErr}</Banner>}
         {created && <CreatedKey created={created} onDone={() => setCreated(undefined)} />}

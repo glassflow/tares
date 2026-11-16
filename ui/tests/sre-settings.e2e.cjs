@@ -329,6 +329,48 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // The Access box and People on the Access tab (TR-1392). This cell is open, and has no licence.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      await T(p, "you-row").waitFor();
+      ck(`${w}: Access says the cell is open, and how to close it`,
+        /^This cell is open: anyone who can reach it can read and change everything, and API keys are not checked\. Start it with tares up --auth to ask for a sign-in\.$/
+          .test((await T(p, "access-open").innerText()).replace(/\s+/g, " ").trim()), await T(p, "access-open").innerText());
+      ck(`${w}: the keys panel does not say it again`, !/not checked/.test(await T(p, "keys").innerText()));
+      ck(`${w}: People is one row, you, with what is missing said in words`,
+        (await T(p, "you-row").locator("[data-user-text]").first().innerText()) === "You"
+        && (await T(p, "you-email").innerText()).trim() === "No email." && (await T(p, "you-github").innerText()).trim() === "No GitHub login.",
+        await T(p, "you-row").innerText());
+      const gaps = await p.evaluate(() => ["access", "you", "keys"].map((id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect())
+        .reduce((out, r, i, all) => (i ? [...out, Math.round(r.top - all[i - 1].bottom)] : out), []));
+      ck(`${w}: Access and People stand apart, like every panel on the tab`, gaps[0] >= 12 && gaps[1] >= 12, JSON.stringify(gaps));
+      ck(`${w}: adding people is the licence's, said under the row`, (await T(p, "you").getByTestId("licence-needed").count()) === 1);
+      if (w === 1440) {
+        await T(p, "you-edit").click();
+        const name = T(p, "you-name");
+        ck("Edit opens a form on the name, with email and GitHub login for an admin", await name.evaluate((e) => e === document.activeElement)
+          && (await T(p, "you-email-input").count()) === 1 && (await T(p, "you-github-input").count()) === 1 && (await T(p, "you-edit").count()) === 0);
+        await name.fill("");
+        await name.press("Enter");
+        ck("an empty name is said under the Name field", (await name.getAttribute("aria-invalid")) === "true" && /Give your name\./.test(await T(p, "you-form").innerText()));
+        await shot(p, "advanced-access-you-form-1440.png");
+        await name.press("Escape");
+        ck("Escape closes the form and keeps the name", (await T(p, "you-form").count()) === 0 && (await T(p, "you-row").locator("[data-user-text]").first().innerText()) === "You");
+        await T(p, "you-edit").click();
+        await T(p, "you-name").fill("Sam Reyes");
+        await T(p, "you-name").press("Enter");
+        await p.waitForFunction(() => document.querySelector('[data-testid="you-row"]')?.textContent.includes("Sam Reyes"));
+        ck("Enter saves, and the row shows the new name", (await T(p, "you-form").count()) === 0);
+        await T(p, "you-edit").click();
+        await T(p, "you-name").fill("You");
+        await T(p, "you-save").click();
+        await p.waitForFunction(() => !document.querySelector('[data-testid="you-row"]')?.textContent.includes("Sam Reyes"));
+      }
+      ck(`${w}: the Access tab still does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);
