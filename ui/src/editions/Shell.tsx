@@ -261,11 +261,21 @@ export default function EditionShell() {
   const [brain, setBrain] = useState(false);
   const [brainRead, setBrainRead] = useState<BrainRead>({ state: "loading" });
   const brainLive = useRef(true);
+  // each read has a number; an answer that is not the latest read's is dropped, so a slow first read
+  // cannot overwrite the page's Retry
+  const brainSeq = useRef(0);
   const readBrain = useCallback(() => {
+    const mine = ++brainSeq.current;
     setBrainRead({ state: "loading" });
     askBrainRepos().then(
-      (data) => { if (brainLive.current) { setBrain(data?.configured === true); setBrainRead({ state: "ok", data }); } },
-      () => { if (brainLive.current) { setBrain(false); setBrainRead({ state: "error" }); } },
+      (data) => {
+        if (!brainLive.current || mine !== brainSeq.current) return;
+        // a body that is not an object (null, a string) is a failed read, not a page to draw
+        if (data == null || typeof data !== "object") { setBrain(false); setBrainRead({ state: "error" }); return; }
+        setBrain(data.configured === true);
+        setBrainRead({ state: "ok", data });
+      },
+      () => { if (brainLive.current && mine === brainSeq.current) { setBrain(false); setBrainRead({ state: "error" }); } },
     );
   }, []);
   useEffect(() => {

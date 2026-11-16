@@ -117,7 +117,8 @@ export function safeHref(href: string | null | undefined): string {
   if (!h) return "";
   // browsers ignore tabs, line breaks and other control characters inside a scheme ("java\nscript:")
   const bare = h.replace(/[\u0000-\u0020\u007f]/g, "");
-  if (bare.startsWith("//")) return "";
+  // a protocol-relative address, and "/\\host" or "\\\\host", which browsers read as "//host"
+  if (/^[\\/]{2}/.test(bare)) return "";
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(bare);
   if (!scheme) return h;
   return ["http", "https", "mailto"].includes(scheme[1].toLowerCase()) ? h : "";

@@ -105,6 +105,7 @@ function brainMock(rows, extra = {}) {
       m.reads++;
       if (m.readGate) await m.readGate.p;
       if (m.readStatus !== 200) return route.fulfill({ status: m.readStatus, json: { detail: "nope" } });
+      if ("readBody" in m) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(m.readBody) });
       return route.fulfill({ status: 200, json: { configured: m.configured, repos: m.rows } });
     }
     if (req.method() === "POST" && p === "/api/brain/ask") {
@@ -175,7 +176,7 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
     ck("askErrorWords: a daily cap says after midnight UTC, not tomorrow", !/tomorrow/i.test(T.askErrorWords({ status: 429, message: quickCap }, false)) && /after midnight UTC/.test(T.askErrorWords({ status: 429, message: quickCap }, false)));
     eq("answerText: blank or not text is empty", [T.answerText("  a "), T.answerText("   "), T.answerText(null), T.answerText(undefined), T.answerText(5), T.answerText({})], ["a", "", "", "", "", ""]);
     eq("safeHref: http, https, mailto and relative stay", [T.safeHref("https://a.co/x"), T.safeHref("HTTP://a.co"), T.safeHref("mailto:a@b.co"), T.safeHref("/brain"), T.safeHref("./x"), T.safeHref("#top"), T.safeHref("docs/x.md")], ["https://a.co/x", "HTTP://a.co", "mailto:a@b.co", "/brain", "./x", "#top", "docs/x.md"]);
-    eq("safeHref: javascript, data, vbscript, a hidden scheme and a protocol-relative address are dropped", [T.safeHref("javascript:alert(1)"), T.safeHref(" JaVaScRiPt:alert(1)"), T.safeHref("java\nscript:alert(1)"), T.safeHref("data:text/html,x"), T.safeHref("vbscript:x"), T.safeHref("//evil.example/x"), T.safeHref(""), T.safeHref(null)], ["", "", "", "", "", "", "", ""]);
+    eq("safeHref: javascript, data, vbscript, a hidden scheme and a protocol-relative address (also with backslashes) are dropped", [T.safeHref("javascript:alert(1)"), T.safeHref(" JaVaScRiPt:alert(1)"), T.safeHref("java\nscript:alert(1)"), T.safeHref("data:text/html,x"), T.safeHref("vbscript:x"), T.safeHref("//evil.example/x"), T.safeHref("/\\evil.example/x"), T.safeHref("\\\\evil.example/x"), T.safeHref(""), T.safeHref(null)], ["", "", "", "", "", "", "", "", "", ""]);
     eq("failedNames: failed, not removing", T.failedNames([row("a/f", "failed"), row("b/g", "failed", { removing: true }), row("c/r", "ready")]), ["a/f"]);
     eq("askErrorWords: 400 keeps the cell's words", T.askErrorWords({ status: 400, message: "question: at most 2,000 characters" }, false), "Question: at most 2,000 characters.");
     eq("askErrorWords: no status is the network", T.askErrorWords({ message: "Failed to fetch" }, false), T.NETWORK_WORDS);
@@ -552,6 +553,13 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await f.page.getByTestId("brain-ask-question").waitFor({ timeout: 15000 });
       ck("Retry loads the page", (await f.page.getByTestId("brain-ask-read-error").count()) === 0);
       await f.ctx.close();
+
+      // a 200 with a body that is not an object (null) is a failed read: the page says so, it does not crash
+      const nul = brainMock(THREE(), {});
+      nul.readBody = null;
+      const nu = await open({ mock: nul, wait: "brain-ask-read-error" });
+      eq("a null body on the read is a failed read", await text(nu.page.getByTestId("brain-ask-read-error")), "Ask did not load. The cell did not answer. Try again in a moment. Retry");
+      await nu.ctx.close();
 
       const gate = deferred();
       const lo = await open({ mock: brainMock(THREE(), { readGate: gate }), wait: "brain-ask-loading", one: false });
