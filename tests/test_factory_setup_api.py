@@ -12,10 +12,13 @@ Covered:
    a guardrail that checks use cannot be removed, one connection for monitoring, memory and
    runtime;
  - the licence ended: the "Licence ended" tag, and the banner on Tickets when the crew really falls
-   back to the built-in choice;
+   back to the built-in choice; the words for a valid key without the enterprise feature, a key that
+   is not valid and an ended licence with no date;
  - Tares Cloud: the edition, the app block on Linear and GitHub only where the connect address is
    set, the state after the app is connected, a row connected through the app; none of it on a
    self-hosted cell;
+ - the steps keep the order of the registry's slots, and each footer names the next step shown;
+ - a project that is not a software factory project is not counted as following a default;
  - many projects and long names;
  - no secret value in any response, no em dash, no internal name in a shown string;
  - last_test is null: nothing stores a connection test.
@@ -226,6 +229,12 @@ async def main():
             ck("seven steps in order", [s["slot"] for s in body["steps"]] == [
                 "tickets", "review", "ci", "memory", "monitoring", "guardrails", "runtime"]
                and [s["number"] for s in body["steps"]] == list(range(1, 8)))
+            ck("the steps run in the registry's slot order", [s["slot"] for s in body["steps"]] == list(registry.SLOTS),
+               ([s["slot"] for s in body["steps"]], list(registry.SLOTS)))
+            ck("each footer names the step shown after it",
+               [s["footer"]["next"] for s in body["steps"]] == [
+                   "Next: " + n["name"] for n in body["steps"][1:]] + ["Finish setup"],
+               [s["footer"]["next"] for s in body["steps"]])
             ck("steps are named and say why", [s["name"] for s in body["steps"]] == [
                 "Tickets", "Review", "CI", "Memory", "Monitoring", "Guardrails", "Runtime"]
                and step(body, "review")["why"] == "Who reviews each pull request before it can merge. "
@@ -265,6 +274,8 @@ async def main():
                lf["label"] == "API key" and lf["kind"] == "secret" and lf["requirement"] == "Optional"
                and lf["error"] == "Enter the API key." and lf["saved"] is False and "value" not in lf
                and lf["help"].startswith("A Linear personal API key."), lf)
+            ck("an unsaved secret has no saved note and no saved placeholder",
+               lf["saved_note"] == "" and lf["placeholder"] == "", lf)
             gh = field(avail(tix, "github")["form"], "repo")
             ck("the GitHub repository field", gh["placeholder"] == "owner/name" and gh["value"] == ""
                and gh["error"] == "Enter the repository as owner/name, for example northwind/orders-api.", gh)
@@ -298,6 +309,9 @@ async def main():
                             ("pr4", "warehouse-sync"), ("pr5", "mobile-app")):
                 store.create_project(uid, "custom", nm, {})
                 store.set_project_kind(uid, "software_factory")
+            store.create_project("plain", "custom", "plain-notes", {})   # not a software factory project
+            ck("the plain project is not a software factory project",
+               store.get_project("plain").get("kind") != "software_factory", store.get_project("plain").get("kind"))
             store.set_choice("tickets", "linear", {"api_key": SECRETS["linear"]}, "Dana Whitfield")
             store.set_choice("tickets", "github", {"repo": "northwind/orders-api"}, "Dana Whitfield", default=False)
             store.set_choice("tickets", "jira", {"site": "https://northwind.atlassian.net", "email": "dana@northwind.example",
@@ -332,6 +346,8 @@ async def main():
             ck("who picks Linear and who follows it", lin["picked_by"] == [{"uid": "pr1", "name": "orders-api"}]
                and lin["follows"] == 2 and lin["use"] == "Picked by orders-api. Every project that picks none (2) follows it.",
                (lin["picked_by"], lin["follows"], lin["use"]))
+            ck("a project that is not a factory project follows no default", lin["follows"] == 2
+               and "(2)" in lin["use"], lin["use"])
             ck("who picks GitHub", [p["name"] for p in gh["picked_by"]] == ["billing-service", "warehouse-sync"]
                and gh["use"] == "Picked by billing-service, warehouse-sync." and gh["follows"] == 0, gh["use"])
             ck("a connection no project picks", jira["use"] == "No project picks it." and jira["picked_by"] == [])
@@ -421,7 +437,7 @@ async def main():
             body = r.json()
             tix = step(body, "tickets")
             ck("the state and the day", body["licence"] == {"state": "ended", "ended_on": "31 October",
-                                                           "text": "Your licence ended on 31 October."}, body["licence"])
+                                                           "text": "Your licence ended on 31 October." + " Enterprise integrations keep working; adding people is paused until it is renewed."}, body["licence"])
             ck("an ee row carries the tag while the backend still lets it work",
                "Licence ended" in [t["text"] for t in conn(tix, "jira")["tags"]]
                and "Licence ended" in [t["text"] for t in conn(step(body, "review"), "coderabbit")["tags"]]
@@ -443,6 +459,41 @@ async def main():
             ck("the row is not allowed", avail(step(body, "review"), "qodo")["allowed"] is False
                and avail(step(body, "review"), "qodo")["form"] is None)
             ck("the Jira row still has its settings", conn(tix, "jira")["form"] is not None)
+            # a valid key that lacks the enterprise feature, a key that is not valid, and an ended
+            # licence with no date: each reads true, not "no licence"
+            NOFEAT = "This licence does not include the enterprise integrations."
+            licence.current = lambda store_, now=None, force=False: {
+                "valid": True, "expired": False, "expires": "2027-06-30", "seats": 10, "used": 1, "features": []}
+            body = (await get()).json()
+            tix = step(body, "tickets")
+            ck("a valid key without the feature: the licence block says so", body["licence"] == {
+                "state": "valid", "ended_on": None, "text": NOFEAT}, body["licence"])
+            ck("a valid key without the feature: the row says so, not that there is no licence",
+               avail(step(body, "review"), "qodo")["reason"] == NOFEAT + " Without it, Qodo cannot be connected. "
+               "Your crew keeps using the built-in choice for this step.", avail(step(body, "review"), "qodo")["reason"])
+            ck("a valid key without the feature: the banner says so", tix["banner"] is not None
+               and tix["banner"]["lead"] == NOFEAT and "no licence" not in tix["banner"]["text"], tix["banner"])
+            licence.current = lambda store_, now=None, force=False: {
+                "valid": False, "expired": False, "expires": None, "seats": None, "used": 1, "features": [],
+                "reason": "the licence signature does not match its contents"}
+            body = (await get()).json()
+            tix = step(body, "tickets")
+            BAD = "The licence key is not valid: the licence signature does not match its contents."
+            ck("a key that is not valid: the licence block gives the reason", body["licence"] == {
+                "state": "none", "ended_on": None, "text": BAD}, body["licence"])
+            ck("a key that is not valid: the row and the banner give it too",
+               avail(step(body, "review"), "qodo")["reason"].startswith(BAD + " Without it, Qodo")
+               and tix["banner"] is not None and tix["banner"]["lead"] == BAD, (avail(step(body, "review"), "qodo")["reason"], tix["banner"]))
+            licence.current = lambda store_, now=None, force=False: {
+                "valid": True, "expired": True, "expires": None, "seats": 10, "used": 1, "features": ["enterprise"]}
+            body = (await get()).json()
+            tix = step(body, "tickets")
+            ck("an ended licence with no date: the licence block says it ended", body["licence"] == {
+                "state": "ended", "ended_on": None, "text": "Your licence has ended." + " Enterprise integrations keep working; adding people is paused until it is renewed."}, body["licence"])
+            ck("an ended licence with no date: the row and the banner say it ended",
+               avail(step(body, "review"), "qodo")["reason"].startswith("Your licence has ended. Without it, Qodo")
+               and tix["banner"] is not None and tix["banner"]["lead"] == "Your licence has ended."
+               and "no licence" not in tix["banner"]["text"], (avail(step(body, "review"), "qodo")["reason"], tix["banner"]))
             licence.current = REAL_CURRENT
             store.set_choice("tickets", "linear", {}, "Dana Whitfield")       # Linear is the default again
             licensed[0] = True
@@ -459,6 +510,19 @@ async def main():
             ck("cloud without a connect address: still no app block", body["edition"] == {
                 "key": "cloud", "name": "Tares Cloud", "cloud": True} and body["licence"]["text"] == ""
                and all(x["via"] is None for x in tix["connected"]), body["edition"])
+            # the fallback banner is a self-hosted licence word: on Tares Cloud it never shows
+            licensed[0] = False
+            store.set_choice("tickets", "jira", {}, "Dana Whitfield")        # the crew cannot use it now
+            body = (await get()).json()
+            ck("cloud: no fallback banner and no licence words", step(body, "tickets")["banner"] is None
+               and body["licence"]["text"] == "" and avail(step(body, "review"), "qodo")["reason"].startswith(
+                   licence.CLOUD_WORDS + " Without it, Qodo"), step(body, "tickets")["banner"])
+            os.environ.pop("TARES_WORKSPACE_API_URL")
+            ck("the same state on a self-hosted cell does show it", step((await get()).json(), "tickets")["banner"]
+               is not None)
+            os.environ["TARES_WORKSPACE_API_URL"] = "http://workspace.example/api"
+            licensed[0] = True
+            store.set_choice("tickets", "linear", {}, "Dana Whitfield")
             # fresh set of available rows: drop Linear and GitHub so they show as available
             store.clear_project_choice("pr2", "tickets")
             store.clear_project_choice("pr4", "tickets")
@@ -496,6 +560,11 @@ async def main():
                and "Connected with the app" in [t["text"] for t in lin["tags"]]
                and "edit" not in [a["key"] for a in lin["actions"]] and lin["form"] is None
                and lin["use"].endswith("To disconnect it, make another integration the default first."), lin)
+            store.set_choice("tickets", "linear", {"api_key": SECRETS["linear"]}, "Dana Whitfield")
+            lin = conn(step((await get()).json(), "tickets"), "linear")
+            ck("cloud: a kept API key wins over the app connection", lin["via"] == "key" and lin["who"] == ""
+               and "API key" in [t["text"] for t in lin["tags"]] and "edit" in [a["key"] for a in lin["actions"]], lin)
+            store.set_choice("tickets", "linear", {"api_key": None}, "Dana Whitfield")
             store.set_choice("tickets", "tares", {}, "Dana Whitfield")        # another default
             r = await get()
             lin = conn(step(r.json(), "tickets"), "linear")
@@ -512,6 +581,19 @@ async def main():
             gha = avail(step(r.json(), "tickets"), "github")
             ck("cloud: the GitHub app block after approval", gha["app"]["stage"] == "done" and gha["app"]["done"] == (
                 "GitHub is connected. The GlassFlow GitHub App is installed on the northwind organisation."), gha["app"])
+            # a GitHub connection that names its credential: a stored token is a key, the app's is the app
+            store.upsert_github_credential("personal-token", SECRETS["gh"], kind="token", account="dana")
+            store.set_choice("tickets", "github", {"repo": "northwind/orders-api", "credential": "personal-token"},
+                             "Dana Whitfield", default=False)
+            gh = conn(step((await get()).json(), "tickets"), "github")
+            ck("cloud: a named GitHub token reads as a key, though the app is installed", gh["via"] == "key"
+               and gh["who"] == "" and "Credential" in [t["text"] for t in gh["tags"]], gh)
+            store.set_choice("tickets", "github", {"repo": "northwind/orders-api", "credential": "glassflow-github-app"},
+                             "Dana Whitfield", default=False)
+            gh = conn(step((await get()).json(), "tickets"), "github")
+            ck("cloud: a named app credential reads as the app", gh["via"] == "app"
+               and gh["who"] == "on the northwind organisation", gh)
+            store.delete_connection("tickets", "github")
             # self-hosted with the connect addresses still set: the app is a Tares Cloud thing only
             os.environ.pop("TARES_WORKSPACE_API_URL", None)
             r = await get()

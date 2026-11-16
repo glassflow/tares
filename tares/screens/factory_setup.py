@@ -47,9 +47,8 @@ from .. import github_credentials
 from ..factory_api import caller
 from ..factory_store import PROJECT_SLOTS, FactoryStore
 from ..integrations import registry, resolve
-from ..integrations.registry import SLOTS
 
-STEPS = {
+STEPS = {   # the order here is the order of the steps
     "tickets": ("Tickets", "Where the crew's tickets live and where their status is kept."),
     "review": ("Review", "Who reviews each pull request before it can merge. This is the review gate."),
     "ci": ("CI", "Where Tares looks to see whether a pull request's checks pass."),
@@ -61,6 +60,8 @@ STEPS = {
 GUARDRAILS_NOTE = ("Your own rules and the checks asked before a build, a merge or a release are on "
                    "the factory Guardrails page, not here.")
 FOOTER = "Step {n} of {total}. Projects pick one of the connected integrations; they never hold a key."
+ENDED_NOTE = " Enterprise integrations keep working; adding people is paused until it is renewed."
+NO_FEATURE = "This licence does not include the enterprise integrations."
 AVAILABLE_EMPTY = "Everything installed for this step is connected."
 SAVED_NOTE = "A key is saved. Leave this blank to keep it."
 SAVED_PLACEHOLDER = "Saved. Leave blank to keep it."
@@ -204,6 +205,17 @@ def _day(iso) -> str:
     return f"{d.day} {d:%B}"
 
 
+def licence_words(st: dict, ended_on: str) -> str:
+    """One sentence for why the licence does not unlock the enterprise integrations, or "" when
+    it does."""
+    if st.get("valid"):
+        if st.get("expired"):
+            return f"Your licence ended on {ended_on}." if ended_on else "Your licence has ended."
+        return "" if licence.allows(st) else NO_FEATURE
+    why = str(st.get("reason") or "").strip().rstrip(".")
+    return f"The licence key is not valid: {why}." if why else "This cell has no licence."
+
+
 def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
 
@@ -314,6 +326,8 @@ def register(app, store, h, ctx):
         if not url:
             return None
         spec = APPS[(slot, name)]
+        # the url is the control plane's start address with the workspace name only (no token or
+        # signature: the signed state is made after the person signs in there), so it is safe to return
         block = {"url": url, **{k: spec[k] for k in ("service", "app_name", "button", "repo_step",
                                                      "steps", "note", "use_key_label",
                                                      "use_app_label")},
@@ -399,12 +413,16 @@ def register(app, store, h, ctx):
     # ── one step ─────────────────────────────────────────────────────────────
     def step_of(slot: str, number: int, lic: dict, allowed: bool) -> dict:
         name, why = STEPS[slot]
+        order = list(STEPS)
         default = default_of(slot)
         rows = {c["name"]: c for c in store.list_connections(slot)}
         names = connected_names(slot, default, rows)
         picks, follow = project_picks(slot)
-        pairs = ([p for p in store.list_guardrail_pairs() if p["integration"]]
+        every = ([p for p in store.list_guardrail_pairs() if p["integration"]]
                  if slot == "guardrails" else [])
+        hidden = h.hidden_ids()
+        # the count shows only the pairs of projects the caller can see; the removal is blocked by any
+        pairs = [p for p in every if p["project_uid"] not in hidden]
         project_slot = slot in PROJECT_SLOTS
         one = slot in FactoryStore.ONE_CONNECTION
         default_title = title_of(slot, default)
@@ -459,7 +477,7 @@ def register(app, store, h, ctx):
             if not is_default and not one:
                 actions.append({"key": "make_default", "label": "Make default"})
             if not is_default and not built_in and not one:
-                if slot == "guardrails" and any(p["integration"] == n for p in pairs):
+                if slot == "guardrails" and any(p["integration"] == n for p in every):
                     blocked = {"key": "remove",
                                "text": "Remove its checks on the Guardrails page first."}
                 else:
@@ -496,10 +514,8 @@ def register(app, store, h, ctx):
             ok = (not ee) or allowed
             reason = None
             if not ok:
-                why_not = (licence.CLOUD_WORDS + " " if cloud() else
-                           "Your licence ended on " + lic["ended_on"] + ". " if lic["state"] == "ended"
-                           and lic["ended_on"] else "This cell has no licence. ")
-                reason = (f"{why_not}Without it, {title_of(slot, cls.name)} cannot be connected. "
+                why_not = licence.CLOUD_WORDS if cloud() else lic["words"] or NO_FEATURE
+                reason = (f"{why_not} Without it, {title_of(slot, cls.name)} cannot be connected. "
                           "Your crew keeps using the built-in choice for this step.")
             block = app_block(slot, cls.name) if ok else None
             available.append({
@@ -515,8 +531,7 @@ def register(app, store, h, ctx):
             eff = resolve.effective(slot, None, store=store)
             kept = store.get_choice(slot)
             if eff.reason == resolve.NEEDS_LICENCE and kept and not cloud():
-                lead = (f"Your licence ended on {lic['ended_on']}." if lic["state"] == "ended"
-                        and lic["ended_on"] else "This cell has no licence.")
+                lead = lic["words"] or NO_FEATURE
                 kept_title = title_of(slot, kept["name"])
                 banner = {"lead": lead,
                           "text": f"{lead} {kept_title} is still connected, but the crew now keeps "
@@ -529,7 +544,7 @@ def register(app, store, h, ctx):
                 or any(not c["built_in"] for c in connected))
         line = default_title + (f" and {len(names) - 1} more" if len(names) > 1 else "")
         last = number == len(STEPS)
-        nxt = "Finish setup" if last else "Next: " + STEPS[SLOTS[number]][0]
+        nxt = "Finish setup" if last else "Next: " + STEPS[order[number]][0]
         return {
             "slot": slot, "number": number, "name": name, "why": why,
             "state": "set" if set_ else "not_set", "set": set_,
@@ -555,6 +570,7 @@ def register(app, store, h, ctx):
         ended = bool(st.get("valid") and st.get("expired"))
         state = "ended" if ended else "valid" if st.get("valid") else "none"
         lic = {"state": state, "ended_on": _day(st.get("expires")) if ended else ""}
+        lic["words"] = licence_words(st, lic["ended_on"])
         steps = [step_of(slot, i + 1, lic, allowed) for i, slot in enumerate(STEPS)]
         done = sum(1 for s in steps if s["set"])
         return {
@@ -562,8 +578,6 @@ def register(app, store, h, ctx):
             "edition": {"key": "cloud" if cloud() else "self_hosted",
                         "name": "Tares Cloud" if cloud() else "Self-hosted", "cloud": cloud()},
             "licence": {"state": state, "ended_on": lic["ended_on"] or None,
-                        "text": ("" if cloud() else
-                                 "Your licence ended on " + lic["ended_on"] + "." if ended and lic["ended_on"]
-                                 else "This cell has no licence." if state == "none" else "")},
+                        "text": "" if cloud() else lic["words"] + (ENDED_NOTE if ended and licence.allows(st) else "")},
             "progress": {"set": done, "total": len(steps), "text": f"{done} of {len(steps)} steps set"},
             "steps": steps}

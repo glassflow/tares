@@ -11,8 +11,9 @@ A group is {repo, base, title, count, auto, sub, line, you, blocked, sent, rows,
 {id, position, state, chip, ticket, pr, branch, builder, review, ci, guardrail, status, answer,
 bounce, needs_you}:
 - `position` is the place in line (1, 2, ...); a pull request sent back to its builder has none.
-  It counts this project's pull requests only, so a queued row reads "Next in this project" or
-  "2nd in this project", never a place across the projects the crew works on.
+  It counts the rows of its own repo and base branch only, merging and blocked ones included. The
+  words say the place among the queued rows that wait for their turn: "Next in line", "2nd in line",
+  "3rd in line", without a gap, and never a place across the projects the crew works on.
 - `chip` is {key, text}: the badge, in words.
 - `status` is {lead, text, note}: what is going on, in a sentence. `lead` is the start of `text`
   the page may set in bold; `note` is the second line.
@@ -22,7 +23,8 @@ bounce, needs_you}:
   other (someone else's question), moved (the pull request changed since the question), done (it
   was answered), withdrawn, unrecorded or missing. `item.id` goes to POST /api/desk/{ref}/reply and
   `id` of the row goes to POST /api/factory/merge-queue/{mid}/approve, both only when `can_answer`.
-  A transient state of the page (answering, failed) is the page's own.
+  A transient state of the page (answering, failed) is the page's own. `by` is null while the
+  question is open or when the answer was given from a session (no person is recorded).
 - `bounce` is set for a pull request sent back: {count, text}.
 
 Where an answer was given: the decision records only `via`, "console" or "slack" (or nothing, for
@@ -291,7 +293,7 @@ def register(app, store, h, ctx):
             name = person_name(pid)
             return {"id": pid, "name": name, "text": f"{_first(name)}’s builder"} if name else None
 
-        def row_out(row: dict, pos: int | None, first_queued: bool) -> dict:
+        def row_out(row: dict, pos: int | None, turn: list) -> dict:
             t = by_id.get(row["ticket"]) or {}
             pr = t.get("pr") or {}
             reviews = store.ticket_reviews(t["id"]) if t else []
@@ -340,12 +342,14 @@ def register(app, store, h, ctx):
                 if waits:
                     chip = {"key": "queued", "text": "Queued"}
                     status["text"] = f"Waiting for {', '.join(waits)} to merge."
-                elif first_queued:
-                    chip = {"key": "next", "text": "Next"}
-                    status["text"] = "Next in this project."
                 else:
-                    chip = {"key": "queued", "text": "Queued"}
-                    status["text"] = f"{_ordinal(pos)} in this project." if pos else "In line."
+                    turn[0] += 1    # the queued rows that wait for their turn, counted in line order
+                    if turn[0] == 1:
+                        chip = {"key": "next", "text": "Next"}
+                        status["text"] = "Next in line."
+                    else:
+                        chip = {"key": "queued", "text": "Queued"}
+                        status["text"] = f"{_ordinal(turn[0])} in line."
             elif state == "blocked":
                 blocked = True
                 chip = {"key": "blocked", "text": "Blocked"}
@@ -415,11 +419,11 @@ def register(app, store, h, ctx):
             mine = [r for r in rows if r["repo"] == repo and r["base"] == base]
             line_rows = [r for r in mine if r["state"] != "sent_back"]
             back_rows = [r for r in mine if r["state"] == "sent_back"]
-            first_q = next((r["id"] for r in line_rows if r["state"] == "queued"), None)
+            turn = [0]
             out_rows = []
             for i, r in enumerate(line_rows + back_rows):
                 pos = i + 1 if r["state"] != "sent_back" else None
-                out_rows.append(row_out(r, pos, r["id"] == first_q))
+                out_rows.append(row_out(r, pos, turn))
             you = sum(1 for o in out_rows if o["_you"])
             blocked = sum(1 for o in out_rows if o["_blocked"])
             for o in out_rows:

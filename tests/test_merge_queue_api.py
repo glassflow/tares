@@ -281,12 +281,12 @@ async def main():
                   ci="Pending, checks restarted on the new commit"),
                 X(r2, None, 2, "ORD-43", "Add currency to the order export", 219, API,
                   "ord-43-export-currency", MARCUS_B, {"key": "next", "text": "Next"},
-                  S("Next in this project."), review="Approved by Dana Whitfield")],
+                  S("Next in line."), review="Approved by Dana Whitfield")],
               merged=mg),
             G(WEB, "main", [
                 X(r3, None, 1, "ORD-52", "Show the shipping estimate in the cart", 88, WEB,
                   "ord-52-shipping-estimate", DANA_B, {"key": "next", "text": "Next"},
-                  S("Next in this project."))])],
+                  S("Next in line."))])],
             aside="3 in line", line=3, note="3 pull requests are in the merge queue.")
         expect("waiting for CI: two groups, a pending check, the next to merge, three merged",
                await page(uid), want)
@@ -516,7 +516,7 @@ async def main():
                   review="Approved by Dana Whitfield", needs=True),
                 X(r2, None, 2, "ORD-56", "Return a clear error for an unknown currency", 430, API,
                   "ord-56-currency-error", MARCUS_B, {"key": "next", "text": "Next"},
-                  S("Next in this project."))],
+                  S("Next in line."))],
               blocked=1, extra=["1 blocked"]),
             G("northwind/orders-docs", "main", [
                 X(r5, None, 1, "ORD-70", "Fix a link", 12, "northwind/orders-docs", "ord-70-link",
@@ -585,7 +585,7 @@ async def main():
         want = doc(uid, "Sent back", [
             G(API, "main", [
                 X(r1, None, 1, "ORD-59", "Use one rounding rule for every price", 235, API,
-                  "ord-59-one-rule", MARCUS_B, {"key": "next", "text": "Next"}, S("Next in this project.")),
+                  "ord-59-one-rule", MARCUS_B, {"key": "next", "text": "Next"}, S("Next in line.")),
                 sb(r2, "ORD-57", "Move the price rules into one file", 229, API, "ord-57-price-rules",
                    LEE_B, "conflicts with PR 218 in app/pricing.py", 2, L1),
                 sb(r3, "ORD-61", "Show the tax rate on invoices", 236, API, "ord-61-tax-line",
@@ -739,12 +739,39 @@ async def main():
         got = await page(uid)
         order = [r["pr"]["number"] for r in got["groups"][0]["rows"]]
         ck("the line is in milestone then ticket order", order == [341, 340, 342], order)
-        ck("positions run 1, 2, 3 and the first queued is Next, the others say their place in this project",
+        ck("positions run 1, 2, 3 and the first queued is Next, the others say their place in line",
            [r["position"] for r in got["groups"][0]["rows"]] == [1, 2, 3]
-           and got["groups"][0]["rows"][0]["status"]["text"] == "Next in this project."
-           and got["groups"][0]["rows"][1]["status"]["text"] == "2nd in this project."
-           and got["groups"][0]["rows"][2]["status"]["text"] == "3rd in this project.",
+           and got["groups"][0]["rows"][0]["status"]["text"] == "Next in line."
+           and got["groups"][0]["rows"][1]["status"]["text"] == "2nd in line."
+           and got["groups"][0]["rows"][2]["status"]["text"] == "3rd in line.",
            repr([r["status"]["text"] for r in got["groups"][0]["rows"]]))
+
+        # ── the words count the queued rows in line, so the ordinals never skip ─────────────────
+        uid = project("Ordinals")
+        _, rm = pull(uid, API, 360, "ORD-94", "Merging now", "ord-94", state="merging")
+        t_wait, _ = pull(uid, API, 361, "ORD-95", "Waits for the merge", "ord-95")
+        _, rq1 = pull(uid, API, 362, "ORD-96", "Waits on a ticket", "ord-96", depends=[t_wait])
+        _, rq2 = pull(uid, API, 363, "ORD-97", "Third", "ord-97")
+        _, rq3 = pull(uid, API, 364, "ORD-98", "Fourth", "ord-98")
+        rows = (await page(uid))["groups"][0]["rows"]
+        said_by = {r["pr"]["number"]: r["status"]["text"] for r in rows}
+        ck("a merging row ahead does not turn Next into a later place", said_by[361] == "Next in line."
+           and said_by[363] == "2nd in line." and said_by[364] == "3rd in line.", said_by)
+        ck("the places in line still count every row", [r["position"] for r in rows] == [1, 2, 3, 4, 5],
+           [r["position"] for r in rows])
+        ck("a row that waits on a ticket says so and takes no ordinal", said_by[362].startswith("Waiting for "),
+           said_by[362])
+
+        # ── a place is a place in this repo and base, so each group says "in line" ──────────────
+        uid = project("Two bases")
+        pull(uid, API, 370, "ORD-99", "On main", "ord-99")
+        pull(uid, API, 371, "ORD-100", "Also on main", "ord-100")
+        pull(uid, API, 372, "ORD-101", "On release", "ord-101", base="release")
+        groups = (await page(uid))["groups"]
+        said = [r["status"]["text"] for g in groups for r in g["rows"]]
+        ck("each repo and base has its own line, and no word claims the whole project",
+           len(groups) == 2 and said.count("Next in line.") == 2 and "2nd in line." in said
+           and not any("in this project" in w for w in said), said)
 
         # ── a gate that is an outside tool names itself while nothing has reviewed ──────────────
         uid = project("Unreviewed")

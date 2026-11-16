@@ -32,8 +32,33 @@ os.environ["TARES_EDITION"] = "factory"
 import httpx
 
 from tares import factory as factory_mod
+from tares import licence
 from tares import factory_home as fh
+from tares.integrations import registry
+from tares.integrations.guardrails import Guardrail
+from tares.integrations.types import Field
 from tares.store import now_utc
+
+
+class Webhook(Guardrail):
+    """An installed guardrail the setup screen lists as connected, so a pair can use it."""
+    name = "webhook"
+    title = "Policy webhook"
+    ee = True
+    settings_schema = [Field("url", "Address", "url", required=True)]
+
+
+class AuditLog(Guardrail):
+    """An installed guardrail nobody has connected, so the setup page lists it as available."""
+    name = "auditlog"
+    title = "Audit log"
+    ee = True
+    settings_schema = [Field("url", "Address", "url", required=True)]
+
+
+registry.load()
+registry._loaded[(Webhook.slot, Webhook.name)] = Webhook
+registry._loaded[(AuditLog.slot, AuditLog.name)] = AuditLog
 
 P = F = 0
 
@@ -155,6 +180,11 @@ async def main():
         store.update_ticket(t_vault, holder="atlas-build-m1")
         # Vault picks an integration; the setup page names the projects that pick one (TR-871)
         store.set_project_choice(vault, "tickets", "tares", {}, "Lee")
+        # the setup page counts the checks that use a connection (TR-871): one pair on Atlas, one on Vault
+        store.set_choice("guardrails", "webhook", {"url": "https://policy.example.com/check"}, "Lee",
+                         default=False)
+        store.save_guardrail_pair("project", atlas, "pre_merge", "webhook", "block")
+        store.save_guardrail_pair("project", vault, "pre_merge", "webhook", "block")
         # a grant given on Vault, in the project's own grants document
         store.create_doc(vault, "grants", "Grants", '# Grants\n\n- "Zephyrvault may read the status of a '
                          'commit" (2026-11-01)\n')
@@ -204,6 +234,56 @@ async def main():
             r = await get(who, f"/api/factory/docs/{vdoc}")
             ck(f"{who.capitalize()}: Vault's memory by id answers 404", r.status_code == 404,
                (r.status_code, r.text[:120]))
+
+        print("== the guardrail checks on the setup page ==")
+        def webhook(body):
+            gd = next(x for x in body["steps"] if x["slot"] == "guardrails")
+            return next(c for c in gd["connected"] if c["id"] == "webhook")
+
+        for who in ("kim", "alex"):
+            r = await get(who, "/api/factory/setup")
+            wh = webhook(r.json())
+            ck(f"{who.capitalize()}: the use line counts only the checks she can see",
+               wh["use"] == "1 check uses it.", wh["use"])
+            ck(f"{who.capitalize()}: a check on Vault still blocks the removal, in words that name no project",
+               wh["blocked"] == {"key": "remove", "text": "Remove its checks on the Guardrails page first."}
+               and wh["confirm"] is None and "remove" not in [a["key"] for a in wh["actions"]], wh)
+        store.delete_guardrail_pair(next(x["id"] for x in store.list_guardrail_pairs("project", atlas)))
+        r = await get("kim", "/api/factory/setup")
+        wh = webhook(r.json())
+        ck("Kim: with only a check on Vault left, the use line counts none and the removal is still blocked",
+           wh["use"] == "No check uses it." and wh["blocked"] is not None and not leaks(r.json(), vault),
+           (wh["use"], wh["blocked"]))
+        store.save_guardrail_pair("project", atlas, "pre_merge", "webhook", "block")
+        for who in ("lee", "root"):
+            r = await get(who, "/api/factory/setup")
+            ck(f"{who}: reads both checks", webhook(r.json())["use"] == "2 checks use it.", webhook(r.json())["use"])
+
+        print("== an ended licence, a real signed key ==")
+        from datetime import date
+        gone = date.today() - timedelta(days=3)
+        os.environ["TARES_LICENSE"] = licensed.test_licence(expires=gone.isoformat())
+        licence.current(store, force=True)
+        r = await get("root", "/api/factory/setup")
+        body = r.json()
+        words = (f"Your licence ended on {gone.day} {gone:%B}. Enterprise integrations keep working; "
+                 "adding people is paused until it is renewed.")
+        ck("an ended key reads as ended, with the day and the words", body["licence"] == {
+            "state": "ended", "ended_on": f"{gone.day} {gone:%B}", "text": words}, body["licence"])
+        gd = next(x for x in body["steps"] if x["slot"] == "guardrails")
+        rows = [a for x in body["steps"] for a in x["available"] if a["enterprise"]]
+        ck("an ee row stays allowed and has its connect form", bool(rows) and all(
+            a["allowed"] is True and a["reason"] is None and a["form"] is not None for a in rows),
+           [(a["id"], a["allowed"], a["reason"]) for a in rows])
+        ck("no step shows a fallback banner", all(x["banner"] is None for x in body["steps"]),
+           [x["banner"] for x in body["steps"] if x["banner"]])
+        ck("the connected ee row carries the Licence ended tag", "Licence ended" in [
+            t["text"] for t in webhook(body)["tags"]], webhook(body)["tags"])
+        os.environ["TARES_LICENSE"] = licensed.test_licence()
+        licence.current(store, force=True)
+        r = await get("root", "/api/factory/setup")
+        ck("a renewed key reads as valid again", r.json()["licence"]["state"] == "valid"
+           and r.json()["licence"]["text"] == "", r.json()["licence"])
 
         print("== the pieces under the screens ==")
         fx = app.state.factory if hasattr(app.state, "factory") else None
