@@ -63,6 +63,7 @@ test_crew_regrant
 test_crew_rules
 test_crew_scratch_home
 test_crew_session
+test_crew_session_brain
 test_crew_session_start
 test_crew_setup_contract
 test_crew_standup
