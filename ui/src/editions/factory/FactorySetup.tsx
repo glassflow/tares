@@ -3,19 +3,21 @@ import { createPortal } from "react-dom";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
+import { useCloud } from "../../cloud";
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
 import { Check } from "../../components/icons";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { ENTERPRISE_URL, licenceWordsOn } from "../../licenceWords";
 import { cn } from "../../lib/utils";
 import { useSample } from "../sample";
 import { useHeaderSlots, useOwnMenu } from "../Shell";
 import { usePagePolling } from "../usePagePolling";
 import {
-  clearProjectPick, makeDefault, removeConnection, saveIntegration, setupRead,
-  type SettingValue, type SetupApp, type SetupAvailable, type SetupConnected, type SetupData, type SetupField, type SetupForm,
+  clearProjectPick, makeDefault, removeConnection, saveIntegration, setupRead, testIntegration,
+  type SettingValue, type TestResult, type SetupApp, type SetupAvailable, type SetupConnected, type SetupData, type SetupField, type SetupForm,
   type SetupSlot, type SetupStep, type SetupTag,
 } from "./FactorySetup.api";
 import { isSample, sampleLoad } from "./setupSamples";
@@ -36,6 +38,7 @@ const LOAD_ERROR_LEAD = "The setup could not be loaded.";
 const LOAD_ERROR_CAUSE = "Tares did not answer, so nothing here is shown. Nothing was changed.";
 const FALLBACK_TITLE = "Set up your factory";
 const FALLBACK_EXIT = "Exit setup";
+const TEST_NEEDS_FIELDS = "Fill in the required settings first.";
 
 const SMALL_BTN = "h-8! px-3! text-[13px]!";
 // A button with the dark border of the main action (the mock's plain .btn), a red one for what removes,
@@ -274,6 +277,8 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
   const [bad, setBad] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [problem, setProblem] = React.useState("");
+  const [test, setTest] = React.useState<TestResult | null>(null);
+  const [testing, setTesting] = React.useState(false);
   const formRef = React.useRef<HTMLFormElement>(null);
 
   const appMode = !!app && via === "app";
@@ -306,9 +311,40 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
     setWaiting(true);
   };
 
+  // A test answers for the settings it ran with. Each run takes a number; a change to a field or to the way of
+  // connecting takes the next one, so a late answer for older settings is dropped, not shown.
+  const testRun = React.useRef(0);
+  const forgetTest = () => { testRun.current += 1; setTest(null); setTesting(false); };
+
   const change = (n: string, v: SettingValue) => {
     setValues((s) => ({ ...s, [n]: v }));
     setBad((b) => b.filter((x) => x !== n));
+    forgetTest();
+  };
+
+  // Test connection: the settings above go to the service and nothing is saved. A blank secret tests the saved
+  // one. The answer is the service's own sentence; a refusal from Tares shows as a failed test too. A result
+  // belongs to the settings it ran with, so a change to a field, or to the way of connecting, clears it.
+  const runTest = async () => {
+    if (testing) return;
+    const empty = missing(fields, values);
+    setBad(empty);
+    setProblem("");
+    if (empty.length) {
+      setTest({ ok: false, message: TEST_NEEDS_FIELDS });
+      return;
+    }
+    const run = ++testRun.current;
+    setTesting(true);
+    setTest(null);
+    try {
+      const r = await testIntegration(slot, name, settingsOf(fields, values));
+      if (run === testRun.current) setTest({ ok: r.ok, message: r.message });
+    } catch (err) {
+      if (run === testRun.current) setTest({ ok: false, message: err instanceof ApiError || err instanceof Error ? err.message || GENERIC_ERROR : GENERIC_ERROR });
+    } finally {
+      if (run === testRun.current) setTesting(false);
+    }
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -357,7 +393,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
       <form ref={formRef} onSubmit={submit} noValidate className="grid min-w-0 gap-[18px] border border-border bg-card p-4 min-[560px]:p-5" data-testid="form-panel">
         {app && !appMode && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" data-testid="app-switch">
-            <Button variant="secondary" className={SMALL_BTN} onClick={() => setVia("app")} data-testid="app-use-app">{app.use_app_label}</Button>
+            <Button variant="secondary" className={SMALL_BTN} onClick={() => { setVia("app"); forgetTest(); }} data-testid="app-use-app">{app.use_app_label}</Button>
           </div>
         )}
         {choosing && <AppSteps app={app} />}
@@ -373,6 +409,34 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
               data-testid="app-done"
             >
               {app.done}
+            </div>
+          </div>
+        )}
+        {hasForm && !appMode && (
+          <div className="grid border-t border-border pt-4" data-testid="test-box">
+            <div role="status" data-testid="test-status">
+              {test && (
+              <div
+                className={cn(
+                  "mb-2 border px-3 py-2 text-[13px] [overflow-wrap:anywhere]",
+                  test.ok
+                    ? cn("border-[color:var(--ok-border)] bg-[var(--ok-soft)]", OK_TEXT)
+                    : "border-[color:var(--danger-border)] bg-[var(--err-soft)] font-semibold text-[color:color-mix(in_srgb,var(--err)_78%,var(--ink))]",
+                )}
+                data-testid="test-line"
+                data-ok={test.ok}
+              >
+                {test.ok ? "Passed." : "Failed."} <span data-user-text>{test.message}</span>
+              </div>
+              )}
+            </div>
+            {!test && (
+              <p className="m-0 mb-2 text-[13px] text-muted-foreground" data-testid="test-help">
+                {form.test_hint}
+              </p>
+            )}
+            <div>
+              <Button variant="secondary" className={cn(SMALL_BTN, DARK)} busy={testing} disabled={busy} onClick={runTest} data-testid="test-connection">Test connection</Button>
             </div>
           </div>
         )}
@@ -455,16 +519,25 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
 }
 
 function AvailableRow({ a, onConnect }: { a: SetupAvailable; onConnect: () => void }) {
+  useCloud();   // renders again when /health lands: only a self-hosted cell may name the enterprise licence
+  const aboutLicence = !a.allowed && licenceWordsOn();
   return (
     <li className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-3.5 last:border-b-0" data-testid={`available-${a.id}`}>
       <div className="min-w-0 flex-[1_1_320px]">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-semibold [overflow-wrap:anywhere]">{a.title}</span>
           {a.enterprise && <Tag tone={TAG_TONE.built_in} data-testid="tag-enterprise">Enterprise</Tag>}
-          {!a.allowed && <Tag tone={TAG_TONE.not_licensed} data-testid="tag-not_licensed">Not licensed</Tag>}
         </div>
         <div className="mt-0.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{a.description}</div>
-        {!a.allowed && a.reason && <div className="mt-1 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="row-reason">{a.reason}</div>}
+        {!a.allowed && (
+          <div className="mt-1 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="row-reason">
+            <Tag tone={TAG_TONE.not_licensed} data-testid="tag-not_licensed">Not licensed</Tag>{a.reason ? <> {a.reason}</> : null}
+          </div>
+        )}
+        {aboutLicence && (
+          <a href={ENTERPRISE_URL} target="_blank" rel="noreferrer" data-testid="row-licence-link"
+             className="mt-1 inline-block text-[13px] text-foreground! underline! decoration-border! underline-offset-[3px]">About the enterprise licence</a>
+        )}
       </div>
       <div className="flex flex-none items-center gap-2">
         <Button variant="secondary" className={cn(SMALL_BTN, DARK)} disabled={!a.allowed || !a.form} onClick={onConnect} data-testid="action-connect">{a.button}</Button>

@@ -9,7 +9,8 @@
  * it, serving the built console. The states a plain cell cannot be in (a mapping, a select, a licence that
  * ended, a long or a large answer, Tares Cloud's apps) are the console's own samples (?sample=<name>, with
  * the sample flag), drawn by the same code from an answer shaped like the real one. Not built here, by
- * ticket: Test connection and where the screen opens from (TR-1095), the Guardrails step's content (TR-1096).
+ * ticket: the Guardrails step's content (TR-1096). Test connection, the not-licensed rows and where the screen
+ * opens from (the first-run list, Settings) are here (TR-1095).
  * Every state shows only words from words.json and none scrolls sideways at 390 px.
  * Run:  npm run build && node tests/factory-setup.e2e.cjs     (from ui/, tares installed in ../.venv)
  * Set SHOTS_DIR to keep a screenshot of every state at 1440 and 390 px.
@@ -583,6 +584,259 @@ async function waitFor(url, tries = 100) {
       await settle(page);
       ck("after Remove the Connect form does not open again by itself", (await page.getByTestId("setup-form").count()) === 0 && (await page.getByTestId(`available-${pick.id}`).count()) === 1
          && (await page.getByTestId(`connected-${pick.id}`).count()) === 0);
+      await ctx.close();
+    }
+
+    // Test connection (TR-1095): the settings in the form go to the service and nothing is saved. The answers a real service
+    // gives (a refused key, a connected account) are the route's, replaced here by the answer the mock shows.
+    console.log("== test connection ==");
+    const FAILED = { ok: false, message: "Linear said the API key is not valid. Check the key and try again." };
+    const PASSED = { ok: true, message: "Connected as Dana Whitfield, workspace Northwind." };
+    const testOpen = async (page) => {
+      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      await settle(page);
+      await page.getByTestId("available-linear").getByTestId("action-connect").click();
+      await page.getByTestId("setup-form").waitFor();
+    };
+    const testRoute = async (page, answer, calls) => {
+      await page.route("**/api/factory/integrations/*/test", async (r) => {
+        calls.push({ path: new URL(r.request().url()).pathname, body: JSON.parse(r.request().postData() || "null") });
+        await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
+      });
+    };
+    const testState = async (label, file, answer, run) => widths(label, async ({ page, writes }, width, name) => {
+      const calls = [];
+      await testRoute(page, answer, calls);
+      await testOpen(page);
+      ck(`${name}: before a test the form says what the button does, and nothing is shown as a result`,
+        (await text(page.getByTestId("test-help"))) === "Test connection checks the settings above with Linear. Nothing is saved by it." && (await page.getByTestId("test-line").count()) === 0);
+      ck(`${name}: the Test connection button is below the fields and above Save`,
+        await page.evaluate(() => { const y = (id) => document.querySelector(`[data-testid=${id}]`).getBoundingClientRect().top;
+          return y("input-api_key") < y("test-connection") && y("test-connection") < y("form-save"); }));
+      await page.getByTestId("input-api_key").fill("  lin_api_invented  ");
+      await page.getByTestId("test-connection").click();
+      await page.getByTestId("test-line").waitFor();
+      ck(`${name}: no sideways scroll`, (await overflow(page)) <= 0, String(await overflow(page)));
+      await checkWords(page, ck, name);
+      await shot(page, `${file}-${width}.png`);
+      await run(page, calls, writes, name);
+    });
+    await testState("connection test failed", "test-failed", FAILED, async (page, calls, writes, name) => {
+      const line = page.getByTestId("test-line");
+      ck(`${name}: the line says Failed and then the integration's own sentence`, (await text(line)) === `Failed. ${FAILED.message}`, await text(line));
+      ck(`${name}: it is inside the status region for the screen reader, drawn in the error colours`, (await line.evaluate((el) => el.parentElement.getAttribute("role"))) === "status" && (await line.getAttribute("data-ok")) === "false"
+         && (await line.evaluate((el) => getComputedStyle(el).fontWeight)) === "600");
+      ck(`${name}: the settings went to the test route, trimmed, and nothing was saved`, calls.length === 1 && calls[0].path === "/api/factory/integrations/tickets/test"
+         && calls[0].body.name === "linear" && calls[0].body.settings.api_key === "lin_api_invented" && writes.filter((w) => w.method !== "POST" || !w.path.endsWith("/test")).length === 0, JSON.stringify([calls, writes]));
+      await page.getByTestId("input-api_key").fill("lin_api_other");
+      ck(`${name}: changing a field takes the result away, because it belongs to the old settings`,
+        (await page.getByTestId("test-line").count()) === 0 && (await page.getByTestId("test-help").count()) === 1);
+    });
+    await testState("connection test passed", "test-passed", PASSED, async (page, calls, writes, name) => {
+      const line = page.getByTestId("test-line");
+      ck(`${name}: the line says Passed and then the integration's own sentence`, (await text(line)) === `Passed. ${PASSED.message}`, await text(line));
+      ck(`${name}: it is drawn in the ok colours, not the error ones`, (await line.getAttribute("data-ok")) === "true" && (await line.evaluate((el) => getComputedStyle(el).fontWeight)) !== "600");
+      ck(`${name}: a pass saves nothing: the form is still open and Save is still the way to keep it`,
+        (await page.getByTestId("form-save").isVisible()) && writes.filter((w) => w.method === "PUT").length === 0);
+    });
+    {
+      // a test with a required field empty asks for it and sends nothing
+      const { ctx, page, writes } = await newPage(1440, { sampleFlag: true });
+      const calls = [];
+      await testRoute(page, PASSED, calls);
+      await testOpen(page);
+      await page.getByTestId("test-connection").click();
+      await page.getByTestId("test-line").waitFor();
+      ck("an empty required field: the line asks for it and marks the field, and no test is sent",
+        (await text(page.getByTestId("test-line"))) === "Failed. Fill in the required settings first." && (await page.getByTestId("input-api_key").getAttribute("aria-invalid")) === "true"
+        && calls.length === 0 && writes.length === 0, JSON.stringify([calls, writes]));
+      await ctx.close();
+    }
+    {
+      // a refusal from the cell shows as a failed test in the same place, with the cell's words
+      const { ctx, page } = await newPage(1440, { sampleFlag: true });
+      await page.route("**/api/factory/integrations/*/test", (r) => r.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: "The address is not a web address." }) }));
+      await testOpen(page);
+      await page.getByTestId("input-api_key").fill("lin_api_invented");
+      await page.getByTestId("test-connection").click();
+      await page.getByTestId("test-line").waitFor();
+      ck("a refusal from the cell is a failed test with its sentence", (await text(page.getByTestId("test-line"))) === "Failed. The address is not a web address.", await text(page.getByTestId("test-line")));
+      await ctx.close();
+    }
+    {
+      // the live route: a key the cell cannot use never saves anything, and the answer comes back as the same line
+      const { ctx, page, writes } = await newPage(1440);
+      await page.goto(`${BASE}/setup`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      await settle(page);
+      const before = JSON.stringify(await read(page));
+      await page.getByTestId("available-github").getByTestId("action-connect").click();
+      await page.getByTestId("setup-form").waitFor();
+      if (await page.getByTestId("app-use-key").count()) await page.getByTestId("app-use-key").click();
+      await page.getByTestId("input-repo").fill("not a repository");
+      const sent = page.waitForResponse((r) => r.url().includes("/test") && r.request().method() === "POST");
+      await page.getByTestId("test-connection").click();
+      const r = await sent;
+      await page.getByTestId("test-line").waitFor();
+      ck("the live test route answers, the page shows its sentence as a failed test, and the cell is unchanged",
+        r.status() < 500 && (await text(page.getByTestId("test-line"))).startsWith("Failed. ") && JSON.stringify(await read(page)) === before
+        && writes.every((w) => w.method === "POST" && w.path.endsWith("/test")), `${r.status()} ${await text(page.getByTestId("test-line"))}`);
+      await ctx.close();
+    }
+    {
+      // a test answers for the settings it ran with: while it runs the button is busy and a second press sends nothing,
+      // and an answer that comes back after a field changed is not shown
+      const { ctx, page } = await newPage(1440, { sampleFlag: true });
+      let release; const gate = new Promise((res) => { release = res; });
+      const calls = [];
+      await page.route("**/api/factory/integrations/*/test", async (r) => {
+        calls.push(JSON.parse(r.request().postData() || "null"));
+        if (calls.length === 1) await gate;
+        await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PASSED) });
+      });
+      await testOpen(page);
+      const status = page.getByTestId("test-status");
+      ck("the result's live region is on the page before any test, and empty", (await status.getAttribute("role")) === "status" && (await text(status)) === "");
+      await page.getByTestId("input-api_key").fill("lin_api_first");
+      const btn = page.getByTestId("test-connection");
+      await btn.click();
+      await page.waitForFunction(() => document.querySelector("[data-testid=test-connection]")?.getAttribute("aria-busy") === "true");
+      await btn.evaluate((el) => el.click());
+      await page.waitForTimeout(300);
+      ck("while a test runs the button is busy and a second press sends nothing", (await btn.getAttribute("aria-busy")) === "true" && calls.length === 1, String(calls.length));
+      await page.getByTestId("input-api_key").fill("lin_api_second");
+      ck("changing a field while a test runs ends the wait: the button is free again and nothing is shown",
+        (await btn.getAttribute("aria-busy")) === null && (await page.getByTestId("test-line").count()) === 0 && (await page.getByTestId("test-help").count()) === 1);
+      release();
+      await page.waitForTimeout(400);
+      ck("the answer for the old settings is dropped when it arrives", (await page.getByTestId("test-line").count()) === 0 && (await page.getByTestId("test-help").count()) === 1);
+      await btn.click();
+      await page.getByTestId("test-line").waitFor();
+      ck("a new test for the new settings is shown", (await text(page.getByTestId("test-line"))) === `Passed. ${PASSED.message}` && calls.length === 2 && calls[1].settings.api_key === "lin_api_second", JSON.stringify(calls));
+      ck("and it is inside the live region", (await status.getByTestId("test-line").count()) === 1);
+      await ctx.close();
+    }
+    {
+      // an app connection has no key to try: no Test connection button while the app is the way in
+      const { ctx, page } = await newPage(1440, { sampleFlag: true });
+      await page.goto(`${BASE}/setup?sample=cloud`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      await settle(page);
+      await page.getByTestId("available-linear").getByTestId("action-connect").click();
+      await page.getByTestId("setup-form").waitFor();
+      ck("with the app as the way in, there is no Test connection", (await page.getByTestId("test-connection").count()) === 0);
+      await page.getByTestId("app-use-key").click();
+      ck("and with a key as the way in, there is", (await page.getByTestId("test-connection").count()) === 1);
+      // a result belongs to the way it was got: leave the key for the app and come back, and it is gone
+      let release; const gate = new Promise((res) => { release = res; });
+      let n = 0;
+      await page.route("**/api/factory/integrations/*/test", async (r) => {
+        n += 1;
+        if (n === 2) await gate;
+        await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PASSED) });
+      });
+      await page.getByTestId("input-api_key").fill("lin_api_invented");
+      await page.getByTestId("test-connection").click();
+      await page.getByTestId("test-line").waitFor();
+      await page.getByTestId("app-use-app").click();
+      await page.getByTestId("app-use-key").click();
+      ck("after the app and back to the key, the earlier result is gone", (await page.getByTestId("test-line").count()) === 0 && (await page.getByTestId("test-help").count()) === 1);
+      await page.getByTestId("test-connection").click();
+      await page.waitForFunction(() => document.querySelector("[data-testid=test-connection]")?.getAttribute("aria-busy") === "true");
+      await page.getByTestId("app-use-app").click();
+      await page.getByTestId("app-use-key").click();
+      release();
+      await page.waitForTimeout(400);
+      ck("a test still running when the way in changed shows nothing when it answers", (await page.getByTestId("test-line").count()) === 0 && (await page.getByTestId("test-connection").getAttribute("aria-busy")) === null);
+      await ctx.close();
+    }
+
+    // an integration the cell has no licence for
+    console.log("== enterprise integration not licensed ==");
+    await widths("enterprise integration not licensed", async ({ page }, width, name) => {
+      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      await settle(page);
+      const row = page.getByTestId("available-jira");
+      const reason = row.getByTestId("row-reason");
+      const said = (await raw(reason)).replace(/\s+/g, " ");
+      ck(`${name}: Jira is in the list with the tag Enterprise by its name, and Not licensed at the start of the reason`,
+        (await raw(row.getByTestId("tag-enterprise"))) === "Enterprise" && (await row.getByTestId("tag-not_licensed").count()) === 1
+        && (await reason.getByTestId("tag-not_licensed").count()) === 1 && (await raw(reason.getByTestId("tag-not_licensed"))) === "Not licensed"
+        && (await row.getByTestId("tag-enterprise").evaluate((el) => !!el.closest("[data-testid=row-reason]"))) === false);
+      ck(`${name}: the reason reads Not licensed, then the API's words, and says the crew keeps its built-in choice`,
+        said.startsWith("Not licensed This cell has no licence. Without it, Jira cannot be connected.") && said.includes("built-in choice"), said);
+      ck(`${name}: the tag sits on the same line as the first words of the reason`,
+        await reason.evaluate((el) => { const t = el.querySelector("[data-testid=tag-not_licensed]").getBoundingClientRect(); const r = document.createRange();
+          r.setStart(el.lastChild, 1); r.setEnd(el.lastChild, 2); const w = r.getBoundingClientRect(); return Math.abs((t.top + t.bottom) / 2 - (w.top + w.bottom) / 2) < t.height; }));
+      ck(`${name}: it links to the enterprise licence page, in a new tab`, (await row.getByTestId("row-licence-link").getAttribute("href")) === "https://docs.glassflow.ai/tares/enterprise"
+         && (await row.getByTestId("row-licence-link").getAttribute("target")) === "_blank" && (await text(row.getByTestId("row-licence-link"))) === "About the enterprise licence");
+      ck(`${name}: it cannot be connected`, await row.getByTestId("action-connect").isDisabled());
+      ck(`${name}: a row that can be connected has no licence link`, (await page.getByTestId("available-linear").getByTestId("row-licence-link").count()) === 0);
+      ck(`${name}: no sideways scroll`, (await overflow(page)) <= 0);
+      await checkWords(page, ck, name);
+      await shot(page, `not-licensed-${width}.png`);
+    });
+    {
+      // Tares Cloud needs no licence from the person: the row stays marked and cannot be connected, but it links nowhere
+      const { ctx, page } = await newPage(1440, { sampleFlag: true });
+      await page.route(/\/health(\?|$)/, async (r) => {
+        const res = await r.fetch();
+        await r.fulfill({ response: res, json: { ...(await res.json()), workspace_api_url: "https://workspaces.example.invalid" } });
+      });
+      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      await settle(page);
+      const row = page.getByTestId("available-jira");
+      ck("on Tares Cloud: Jira is still in the list, marked, and cannot be connected",
+        (await row.getByTestId("tag-not_licensed").count()) === 1 && await row.getByTestId("action-connect").isDisabled());
+      ck("on Tares Cloud: no link to the enterprise licence page", (await row.getByTestId("row-licence-link").count()) === 0 && (await page.locator(`a[href="https://docs.glassflow.ai/tares/enterprise"]`).count()) === 0);
+      await ctx.close();
+    }
+
+    // where /setup opens from: the first-run list and Settings
+    console.log("== entry points ==");
+    {
+      const { ctx, page } = await newPage(1440, { sampleFlag: true });
+      await page.goto(`${BASE}/?sample=startNothing`, { waitUntil: "load" });
+      await page.getByTestId("onboarding-title").waitFor();
+      ck("first run: the list has a Set up your factory link to /setup", (await page.getByTestId("onboarding-setup").getAttribute("href")) === "/setup"
+         && (await text(page.getByTestId("onboarding-setup"))) === "Set up your factory");
+      await shot(page, "entry-first-run-1440.png");
+      await page.getByTestId("onboarding-setup").click();
+      await page.getByTestId("step-view").waitFor();
+      ck("and it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await newPage(390, { sampleFlag: true });
+      await page.goto(`${BASE}/?sample=startNothing`, { waitUntil: "load" });
+      await page.getByTestId("onboarding-title").waitFor();
+      ck("first run at 390: the link is there and the page does not scroll sideways", (await page.getByTestId("onboarding-setup").isVisible()) && (await overflow(page)) <= 0);
+      await shot(page, "entry-first-run-390.png");
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await newPage(1440);
+      await page.goto(`${BASE}/settings`, { waitUntil: "load" });
+      await page.getByTestId("nav-crew").waitFor();
+      ck("Settings: Crew has Set up your factory, linking to /setup", (await page.getByTestId("nav-setup").getAttribute("href")) === "/setup" && (await text(page.getByTestId("nav-setup"))) === "Set up your factory");
+      await page.getByTestId("nav-setup").click();
+      await page.getByTestId("step-view").waitFor();
+      ck("and it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
+      await ctx.close();
+    }
+    {
+      // at 390 the sections are a select, and the entry is one of its options
+      const { ctx, page } = await newPage(390);
+      await page.goto(`${BASE}/settings`, { waitUntil: "load" });
+      await page.getByTestId("settings-select").waitFor();
+      ck("Settings at 390: the select lists Set up your factory under Crew",
+        (await page.getByTestId("settings-select").locator('optgroup[label="Crew"] option[value="setup"]').textContent()) === "Set up your factory");
+      await page.getByTestId("settings-select").selectOption("setup");
+      await page.getByTestId("step-view").waitFor();
+      ck("and choosing it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
       await ctx.close();
     }
 
