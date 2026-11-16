@@ -849,8 +849,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 question open/.test((await texts("repo-you-own"))[0])
          && /nothing waiting/.test((await texts("repo-you-own"))[1]), JSON.stringify(await texts("repo-you-own")));
       ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced?tab=areas");
-      ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Kim\'s Claude plan"]').count()) === 1
-         && (await page.locator('section[aria-label="Connected"]').count()) === 1);
+      ck(t("the Claude plan stays, and no connected tools: they are on Integrations"), (await page.locator('section[aria-label="Kim\'s Claude plan"]').count()) === 1
+         && (await page.locator('section[aria-label="Connected"]').count()) === 0);
       ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
       await shot(page, "side-three-people", width);
       await checkWords(page, ck, t("side, three people"));

@@ -1,7 +1,6 @@
 import { request } from "../../api";
 import type { HomeData } from "./home.types";
 
-export { hideStart, showStart } from "../StartChecklist.api";
 
 // The calls of the live factory home. Edition code stays here, so nothing is added to the shared
 // api.ts. Each path and body is the one the daemon reads (tares/factory_api.py, tares/daemon.py).
@@ -61,12 +60,7 @@ export function keepForLater(project: string, later = true): Promise<unknown> {
   });
 }
 
-/** Step 1 of the first-run panel: the crew's three choices, saved together when the person confirms. */
+/** How the crew works (Set up your factory): the crew's three choices, saved together when the person confirms. */
 export function saveCrewChoices(c: { autonomy: string; builders_max: number; releaser: boolean }): Promise<unknown> {
   return request("/api/crew/settings", { method: "PUT", body: JSON.stringify(c) });
-}
-
-/** Step 2 of the first-run panel: where tickets live. */
-export function saveTracker(tracker: string): Promise<unknown> {
-  return request("/api/crew/tracker", { method: "PUT", body: JSON.stringify({ tracker }) });
 }

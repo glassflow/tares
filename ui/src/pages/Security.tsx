@@ -5,7 +5,7 @@ import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
-import { type Cloud, cloudLink, licenceWordsOn, useCloud } from "../cloud";
+import { type Cloud, cloudLinkHere, licenceWordsOn, useCloud } from "../cloud";
 import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
@@ -220,6 +220,7 @@ export function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUr
     api.slackTokenStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
   }, []);
   const canConnect = cloud.isOwner !== false;
+  const terse = useContext(TerseSettings);
   return (
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Slack</h2>
@@ -230,22 +231,26 @@ export function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUr
             <strong>{st.team?.name ? `Connected to ${st.team.name}` : "Connected"}</strong>
           </p>
           <p className="help" style={{ marginTop: 0 }}>
-            Triggers and agents post what they find to the channels you pick, and your team can
-            ask Tares from any channel with <code>/tares ask</code>. Tares posts to any public
-            channel; for a private one, add it there first with <code>/invite @Tares</code>.
+            {terse
+              ? <>For a private channel, invite Tares there first with <code>/invite @Tares</code>.</>
+              : <>Triggers and agents post what they find to the channels you pick, and your team can
+                ask Tares from any channel with <code>/tares ask</code>. Tares posts to any public
+                channel; for a private one, add it there first with <code>/invite @Tares</code>.</>}
           </p>
           {canConnect
-            ? <a className="btn danger" href={cloudLink(connectUrl, { action: "disconnect" }, "slack")}>Disconnect</a>
+            ? <a className="btn danger" href={cloudLinkHere(connectUrl, { action: "disconnect" })}>Disconnect</a>
             : <OwnerOnly cloud={cloud} what="Slack" />}
         </>
       ) : (
         <>
-          <p className="help" style={{ marginTop: 0 }}>
-            Connect Slack to have triggers and agents post what they find to a channel, and to let
-            your team ask Tares from Slack with <code>/tares ask</code>.
-          </p>
+          {!terse && (
+            <p className="help" style={{ marginTop: 0 }}>
+              Connect Slack to have triggers and agents post what they find to a channel, and to let
+              your team ask Tares from Slack with <code>/tares ask</code>.
+            </p>
+          )}
           {canConnect
-            ? <a className="btn primary" href={cloudLink(connectUrl, {}, "slack")}>Connect Slack</a>
+            ? <a className="btn primary" href={cloudLinkHere(connectUrl)}>Connect Slack</a>
             : <OwnerOnly cloud={cloud} what="Slack" />}
         </>
       )}
@@ -371,7 +376,7 @@ export function GithubPanel({ cloud }: { cloud: Cloud }) {
         {!adding && (
           <div className="btnrow">
             {connectUrl
-              ? canConnect && <a className="btn primary" href={cloudLink(connectUrl, {}, "github")}>Connect GitHub</a>
+              ? canConnect && <a className="btn primary" href={cloudLinkHere(connectUrl)}>Connect GitHub</a>
               : <button className="primary" onClick={() => { setAdding("app"); setName("github-app"); }}>Create GitHub App</button>}
             <button onClick={() => { setAdding("token"); setName(""); }}>Add a personal token</button>
           </div>
@@ -496,7 +501,7 @@ export function GithubPanel({ cloud }: { cloud: Cloud }) {
                 const iid = insts[0]?.id;
                 const repos = c.repositories ?? [];
                 const repoLink = (params: Record<string, string>) =>
-                  cloudLink(connectUrl!, { installation: String(iid), ...params }, "github");
+                  cloudLinkHere(connectUrl!, { installation: String(iid), ...params });
                 return (
                   <Fragment key={c.name}>
                     <tr>
@@ -1313,10 +1318,17 @@ export function SlackTokenPanel() {
     setBusy(false);
   };
 
+  const terse = useContext(TerseSettings);
   return (
     <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Slack bot token</h2>
-      <p className="help" style={{ marginTop: 0 }}>
+      <h2 style={{ marginTop: 0 }}>{terse ? "Bot token" : "Slack bot token"}</h2>
+      {terse ? (
+        <p className="help" style={{ marginTop: 0 }}>
+          The <strong>Bot User OAuth Token</strong> of your Slack app. The app needs the bot scopes{" "}
+          <code>chat:write</code>, <code>chat:write.public</code>, <code>channels:read</code>,{" "}
+          <code>groups:read</code> and <code>commands</code>.
+        </p>
+      ) : <p className="help" style={{ marginTop: 0 }}>
         Lets triggers and agents post to Slack: pick a channel on a trigger or an agent and every
         firing or finding is delivered, retried and logged like a webhook. Create a Slack app with
         the bot scopes <code>chat:write</code>, <code>chat:write.public</code> (post to a public
@@ -1325,7 +1337,7 @@ export function SlackTokenPanel() {
         (<code>/tares ask</code>). Paste its <strong>Bot User OAuth Token</strong> here, or set{" "}
         <code>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment. It is never returned by
         the API and never included in a catalog export.
-      </p>
+      </p>}
 
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
@@ -1333,7 +1345,9 @@ export function SlackTokenPanel() {
       {!st ? <div className="muted">loading…</div> : (
         <>
           <p style={{ margin: "0 0 10px" }}>
-            {st.configured
+            {terse
+              ? <span className="help">{st.configured ? "Saved." : "Not set yet."}</span>
+              : st.configured
               ? <><span className="badge ok">configured</span>{" "}
                   <span className="help">from <span className="mono">{st.source}</span></span></>
               : <><span className="badge">not configured</span>{" "}
@@ -1389,10 +1403,16 @@ export function SlackSigningSecretPanel() {
     setBusy(false);
   };
 
+  const terse = useContext(TerseSettings);
   return (
     <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Slack signing secret</h2>
-      <p className="help" style={{ marginTop: 0 }}>
+      <h2 style={{ marginTop: 0 }}>{terse ? "Signing secret" : "Slack signing secret"}</h2>
+      {terse ? (
+        <p className="help" style={{ marginTop: 0 }}>
+          Lets your team answer the crew from Slack. Paste the app's <strong>Signing Secret</strong>{" "}
+          (Basic Information), and point its <code>/tares</code> command at <code>/api/slack/events</code>.
+        </p>
+      ) : <p className="help" style={{ marginTop: 0 }}>
         Lets your team ask Tares from Slack: point the Slack app's <code>/tares</code> slash
         command at <code>/api/slack/events</code> on this instance and run{" "}
         <code>/tares ask what happened to checkout-svc?</code> in any channel. Paste the app's{" "}
@@ -1400,7 +1420,7 @@ export function SlackSigningSecretPanel() {
         <code>TARES_SLACK_SIGNING_SECRET</code>. Every inbound request is verified against it and
         replays older than 5 minutes are refused; with no secret configured the endpoint answers
         503 rather than trusting anything. The secret is never returned by the API.
-      </p>
+      </p>}
 
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
@@ -1408,7 +1428,7 @@ export function SlackSigningSecretPanel() {
       {!st ? <div className="muted">loading…</div> : (
         <>
           <p style={{ margin: "0 0 10px" }}>
-            {st.configured
+            {terse ? <span className="help">{st.configured ? "Saved." : "Not set yet."}</span> : st.configured
               ? <><span className="badge ok">configured</span>{" "}
                   <span className="help">from <span className="mono">{st.source}</span></span></>
               : <><span className="badge">not configured</span>{" "}

@@ -13,11 +13,9 @@ import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoade
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
-import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
-import { CrewOnboarding, type OnboardingApi } from "./CrewOnboarding";
 import {
-  allowDesk, deskReply, finishProject, getHome, keepAssumption, keepForLater, saveCrewChoices, saveTracker,
+  allowDesk, deskReply, finishProject, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
@@ -36,8 +34,6 @@ import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGr
 
 const SHOW_FIRST = 5;
 const POLL_MS = 15000;
-// while the first-run panel shows, the steps tick from the cell within seconds
-const ONBOARDING_POLL_MS = 5000;
 const COPIED_MS = 2000;
 const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 seconds; read again just after
 const GRANT_MAX = 400;
@@ -163,11 +159,6 @@ function WaitingPending() {
 
 /** A cell with more than one person sends these keys; a cell of one never does. */
 const isTeam = (d: HomeData): boolean => d.summary !== undefined;
-
-// The first-run panel has its own crew panel, for a cell that is new: nothing waiting and no project yet.
-// A team, or a cell already in use, keeps its standing crew card (members, autonomy, the crew limit).
-const crewStands = (d: HomeData): boolean =>
-  isTeam(d) || !(d.start?.show && d.onboarding) || d.waiting_total > 0 || d.projects.length > 0;
 
 function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAction; rows?: Record<string, RowState> }) {
   const [all, setAll] = React.useState(false);
@@ -365,30 +356,6 @@ function PlanCard({ data }: { data: HomeData }) {
   );
 }
 
-function Tools({ data }: { data: HomeData }) {
-  const chip = "inline-flex items-center gap-1.5 border px-2.5 py-1.5 text-[13px]";
-  return (
-    <section aria-label="Connected" className="min-w-0">
-      <SectionHead title="Connected" />
-      <div className="flex flex-wrap gap-2">
-        {data.tools.map((t) => (
-          <Link key={t.name} to="/settings#tools" data-testid="tool-chip" data-on={t.connected}
-                className={cn(chip, "border-border bg-card text-foreground! no-underline! hover:bg-[var(--row-hover)]")}>
-            <StatusDot tone={t.connected ? "ready" : "quiet"} label={t.connected ? "connected" : "not connected"} />
-            <span>{t.name}</span>
-            {t.connected && t.short && <span className="text-muted-foreground" data-user-text>· {t.short}</span>}
-          </Link>
-        ))}
-        {data.tools.some((t) => !t.connected) && (
-          <Link to="/settings#tools" data-testid="tool-add" className={cn(chip, "border-dashed border-border text-muted-foreground no-underline!")}>
-            Add a tool
-          </Link>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function TopBar({ name, headline }: { name: string; headline?: React.ReactNode }) {
   const hello = greetingWord(new Date().getHours()) + (name ? `, ${name}` : "");
   return (
@@ -410,21 +377,14 @@ const COLS = "flex flex-wrap items-start gap-8";
 const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
-const START_TITLE = "Get your crew running";
-const ONBOARDING_API: OnboardingApi = { saveChoices: saveCrewChoices, saveTracker };
-
-export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown, onboardingApi, onOnboardingChanged, projectsView, onProjectsView }: {
+// Setting the factory up lives on /setup (the Setup menu entry), so the home shows no first-run list.
+export function FactoryHomeView({ data, onAction, rows, notice, panels, projectsView, onProjectsView }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
   /** Mine or Team on a team cell's Projects (Mine unless told); the page reads the list again for the other. */
   projectsView?: ProjectsView; onProjectsView?: (v: ProjectsView) => void;
   /** Hand over anyway on a row of You are waiting on. */
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
-  /** What Hide this list and Show it again call; a sample passes ones that touch nothing. */
-  hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
-  showStart?: () => Promise<unknown>; onStartShown?: () => void;
-  /** What the first-run panel saves with, and what it calls after a save; a sample passes ones that touch nothing. */
-  onboardingApi?: OnboardingApi; onOnboardingChanged?: () => void;
 }) {
   const { personName } = useEdition();
   const name = useFirstName();
@@ -439,19 +399,8 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
     <div className={PAGE} data-testid="factory-home">
       <TopBar name={name} headline={<p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
       {notice}
-      {data.start?.show && data.onboarding && (
-        <CrewOnboarding block={data.start} onboarding={data.onboarding} api={onboardingApi ?? ONBOARDING_API}
-                        crewPanel={!crewStands(data)}
-                        onChanged={onOnboardingChanged ?? (() => undefined)} hide={hideStart} onHidden={onStartHidden} />
-      )}
       <div className={COLS}>
         <div className={LEFT}>
-          {data.start?.show && !data.onboarding && (
-            <StartChecklist block={data.start} title={START_TITLE} hide={hideStart} onHidden={onStartHidden} />
-          )}
-          {data.start && (
-            <StartChecklistHidden block={data.start} title={START_TITLE} show={showStart} onShown={onStartShown} />
-          )}
           {isTeam(data) ? (
             // the team's lists are enterprise: without it the single-person list shows
             <Slot name="home.waiting" items={data.waiting_for_you}
@@ -467,11 +416,10 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
           <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} />
         </div>
         <aside className={RIGHT}>
-          {crewStands(data) && <CrewCard data={data} />}
+          <CrewCard data={data} />
           {isTeam(data) && <Slot name="home.teamCrews" crews={data.crews ?? []} quiet={data.crews_quiet ?? []} />}
           {isTeam(data) && <Slot name="home.reposYouOwn" areas={data.areas ?? []} />}
           <PlanCard data={data} />
-          <Tools data={data} />
         </aside>
       </div>
     </div>
@@ -489,7 +437,6 @@ export function FactoryHomeLoading() {
       <TopBar name={name} headline={<Skeleton width={320} height={14} className="mt-2" />} />
       <div className={COLS}>
         <div className={LEFT}>
-          <StartChecklistLoading title={START_TITLE} />
           <section className="min-w-0"><SectionHead title="Waiting for you" /><LoadingBox rows={3} /></section>
           <section className="min-w-0"><SectionHead title="Projects" /><LoadingBox rows={3} /></section>
         </div>
@@ -839,8 +786,7 @@ function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeS
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={sampleData(all[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()}
-                       onboardingApi={{ saveChoices: () => Promise.resolve(), saveTracker: () => Promise.resolve() }} />;
+  else body = <FactoryHomeView data={sampleData(all[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} rows={rows} panels={panels} />;
   return (
     <>
       {body}
@@ -861,9 +807,7 @@ function hhmm(d: Date): string {
 
 function LiveHome() {
   const [view, setView] = React.useState<ProjectsView>();   // unset: what the cell sends with no ?projects=
-  const [firstRun, setFirstRun] = React.useState(false);
-  const { data, error, reload } = usePagePolling(() => getHome(view), firstRun ? ONBOARDING_POLL_MS : POLL_MS);
-  React.useEffect(() => { if (data) setFirstRun(Boolean(data.start?.show && data.onboarding)); }, [data]);
+  const { data, error, reload } = usePagePolling(() => getHome(view), POLL_MS);
   const [readAt, setReadAt] = React.useState<Date>();
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
@@ -905,7 +849,7 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload} onOnboardingChanged={reload}
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice}
                            projectsView={view} onProjectsView={(v) => { setView(v); reload(); }} />;
   }
   return (

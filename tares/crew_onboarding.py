@@ -1,8 +1,8 @@
 """The first run of a new factory cell (TR-1312): what the home's "Get your crew running" panel shows.
 
-Two choices are made in the console (how the crew works, where tickets live) and four commands are run
-in a terminal. Each step ticks from what the cell knows: the crew's settings, the GitHub and Linear
-connections, a machine report the command line posts after `tares login` (this module), and the crew's
+The factory is set up in the console on /setup (how the crew works, GitHub, the integrations) and four
+commands are run in a terminal. Each step ticks from what the cell knows: the crew's settings, the GitHub
+connection, a machine report the command line posts after `tares login` (this module), and the crew's
 live sessions. `payload()` is what GET /api/home carries as `onboarding`; tares/start_steps.py words
 the steps from the same facts.
 
@@ -16,8 +16,6 @@ from datetime import datetime, timezone
 
 MACHINE_SETTING = "crew_machine"     # {"machine", "version", "at"}: the last `tares login` or `crew up`;
                                      # `crew_machine:<person>` for a person's own (machine_key)
-TRACKER_SETTING = "crew_tracker"     # where tickets live, chosen in step 2
-TRACKERS = ("tares", "linear", "github_issues")
 
 # the sessions that count as up: a quiet one was heard from and has not ended
 UP = ("working", "idle", "waiting", "quiet")
@@ -63,18 +61,6 @@ def machine_report(store, key: str | None = MACHINE_SETTING) -> dict | None:
     return out if isinstance(out, dict) and (out.get("machine") or out.get("version")) else None
 
 
-def saved_tracker(store) -> str | None:
-    v = store.get_setting(TRACKER_SETTING)
-    return v if v in TRACKERS else None
-
-
-def save_tracker(store, value: str) -> str:
-    if value not in TRACKERS:
-        raise ValueError("tracker must be one of " + ", ".join(TRACKERS))
-    store.set_setting(TRACKER_SETTING, value)
-    return value
-
-
 def defaults() -> dict:
     """What the first-run form starts on. Who merges starts on the person's own yes (L3-review): the
     crew merging on its own is asked about before it is saved. Releases and builders are the crew's
@@ -101,21 +87,6 @@ def choices_text(c: dict) -> str:
     n = c["builders_max"] or 0
     builders = f"{n} builder" + ("" if n == 1 else "s")
     return f"{merges}, {builders}, " + ("releases on" if c["releaser"] else "no releases")
-
-
-def tracker(store, linear: bool, issues: bool, crew_up: bool) -> str | None:
-    """Where tickets live: the saved choice; else what is connected; else Tares itself for a cell whose
-    crew already runs."""
-    return (saved_tracker(store) or ("linear" if linear else "github_issues" if issues
-                                    else "tares" if crew_up else None))
-
-
-def tracker_done(chosen: str | None, github: bool, linear: bool) -> bool:
-    """Step 2 is done with GitHub connected and the tickets' place settled: nothing to connect for
-    Tares, Linear connected for Linear, GitHub Issues uses the GitHub connection."""
-    if not github or chosen is None:
-        return False
-    return linear if chosen == "linear" else True
 
 
 def github_text(store) -> str:
@@ -161,7 +132,7 @@ def crew_view(stations: list[dict], settings: dict, machine: str) -> dict:
                   and o_row.get("state") in UP and r_row.get("state") in UP}
 
 
-def payload(store, stations: list[dict], settings: dict, linear: bool, issues: bool,
+def payload(store, stations: list[dict], settings: dict,
             key: str | None = MACHINE_SETTING, person_id: str | None = None) -> dict:
     """The `onboarding` block of the home, for the caller: `key` is where their machine report is
     kept (machine_key) and `person_id` is whose crew may name the machine when no report came (a
@@ -172,9 +143,7 @@ def payload(store, stations: list[dict], settings: dict, linear: bool, issues: b
     c = choices(settings)
     crew = crew_view(stations, settings, machine)
     return {"choices": c,
-            "tracker": tracker(store, linear, issues, crew["up"]),
             "github": {"connected": bool(store.list_github_credentials()), "text": github_text(store)},
-            "linear": {"connected": bool(linear)},
             "machine": {"name": machine, "version": report.get("version") or "",
                         "at": report.get("at")},
             "crew": crew}

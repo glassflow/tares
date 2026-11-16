@@ -516,12 +516,19 @@ async def main():
         ck("a failed Job with no error is a plain sentence naming the repo", row("acme/odd")["error"] == "The index of acme/odd failed. Retry to start it again.", row("acme/odd")["error"])
 
         print("== it does nothing without a licence or without the brain ==")
+
+        async def polls_done():
+            """Wait out every poll in flight, not only the one repo checked: another repo's poll that got past
+            its own check just before the change may still be calling the control plane or the brain."""
+            for r in store.list_brain_repos():
+                async with indexer.lock(r["repo"]):
+                    pass
+
         await connect("acme/lic")
         await state_is("acme/lic", "cloning")
         r = await cx.delete("/api/licence")
         ck("the licence is removed", r.status_code == 200)
-        async with indexer.lock("acme/lic"):   # a poll that began before the licence went has finished
-            pass
+        await polls_done()   # a poll of any repo that began before the licence went has finished
         n = len(cp.requests) + len(lore.requests)
         cp.set(src("acme/lic"), "failed", error="fatal: out of memory")
         await asyncio.sleep(0.4)
@@ -534,8 +541,7 @@ async def main():
         await state_is("acme/nobrain", "cloning")
         for var in ("TARES_BRAIN_URL", "TARES_BRAIN_KEY"):
             saved = os.environ.pop(var)
-            async with indexer.lock("acme/nobrain"):   # a poll that began before the setting went has finished
-                pass
+            await polls_done()   # a poll of any repo that began before the setting went has finished
             n = len(cp.requests) + len(lore.requests)
             cp.set(src("acme/nobrain"), "failed", error="fatal: out of memory")
             await asyncio.sleep(0.3)

@@ -651,18 +651,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         factory_home.clear_cache()   # the home card shows the change on the next read
         return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
 
-    # ── the first run (TR-1312): where tickets live, and the machine the crew runs on ──
-    @app.put("/api/crew/tracker")
-    def put_crew_tracker(body: dict = Body(...)):
-        """Where tickets live, chosen in the first-run panel: `tares`, `linear` or `github_issues`.
-        The cell's own choice, so it takes an admin key (the default for a write)."""
-        try:
-            value = crew_onboarding.save_tracker(store, body.get("tracker"))
-        except ValueError as e:
-            h.err(e, 400)
-        factory_home.clear_cache()
-        return {"tracker": value}
-
+    # ── the first run (TR-1312): the machine the crew runs on ──
     def machine_key(request: Request | None) -> str | None:
         """Where the caller's machine report is kept, as `writes_default` and `personal_key` decide
         for the crew's settings (one rule, `cell_wide`): the cell's own for the system credential

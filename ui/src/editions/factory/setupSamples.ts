@@ -110,7 +110,6 @@ function step(slot: SetupSlot, o: Partial<SetupStep> & { connected: SetupConnect
     slot, number: i + 1, name: NAMES[slot][0], why: NAMES[slot][1], state: isSet ? "set" : "not_set", set: isSet,
     line: dflt + (o.connected.length > 1 ? ` and ${o.connected.length - 1} more` : "") + (isSet ? "" : " (not set yet)"),
     note: null, banner: null, connected_heading: `Connected (${o.connected.length})`, available_heading: "Connect another",
-    available_empty: o.available.length ? null : "Everything installed for this step is connected.",
     footer: { hint: FOOTER(i + 1), next: i === 6 ? "Finish setup" : `Next: ${NAMES[SLOTS[i + 1]][0]}` }, ...o,
   };
 }

@@ -107,18 +107,11 @@ const PLAN: HomeData["plan"] = {
   title: "Your Claude plan",
 };
 
-const TOOLS: HomeData["tools"] = [
-  { key: "github", name: "GitHub", connected: true, short: "example-org" },
-  { key: "linear", name: "Linear", connected: true, short: "Example Org" },
-  { key: "slack", name: "Slack", connected: false, short: null },
-  { key: "claude_code", name: "Claude Code", connected: true, short: "last session 5 minutes ago" },
-];
-
 const BASE: HomeData = {
   edition: "factory",
   headline: "4 things wait for you. 2 projects are building and 1 is ready to close.",
   waiting_for_you: BUSY_WAITING, waiting_total: BUSY_WAITING.length,
-  projects: BUSY_PROJECTS, finished_count: 4, crew: CREW, plan: PLAN, tools: TOOLS, now: NOW,
+  projects: BUSY_PROJECTS, finished_count: 4, crew: CREW, plan: PLAN, now: NOW,
 };
 
 const LONG_GOAL =
@@ -157,7 +150,6 @@ export const empty: HomeData = {
                 doing: "Starts when you hand over a project", memory_pct: null, memory: null }],
   },
   plan: { known: false, limits: [], share_text: null, title: "Your Claude plan" },
-  tools: [{ key: "github", name: "GitHub", connected: false, short: null }],
 };
 
 export const crewQuiet: HomeData = {
@@ -197,15 +189,13 @@ export const longGoals: HomeData = {
   ],
 };
 
-// The first-run steps, as the daemon words them (tares/start_steps.py): six steps, done ones in place
+// The first-run steps, as the daemon words them (tares/start_steps.py): five steps, done ones in place
 // without buttons.
-const STEP_KEYS = ["choices", "connections", "install", "login", "crew", "spec"];
+const STEP_KEYS = ["setup", "install", "login", "crew", "spec"];
 const STEPS: Record<string, Omit<StartStep, "done">> = {
-  choices: { key: "choices", title: "Decide how your crew works", where: "workspace",
-    gets: "The crew reads these when it starts. Change any of them later in Settings, Crew.", actions: [] },
-  connections: { key: "connections", title: "Connect GitHub and choose where tickets live", where: "workspace",
-    gets: "Tares follows every pull request. Tickets stay here, or in Linear or GitHub Issues.",
-    actions: [{ label: "Connect GitHub", to: "/settings#tools" }, { label: "Connect Linear", to: "/settings#tools" }] },
+  setup: { key: "setup", title: "Set up your factory", where: "workspace",
+    gets: "How your crew works, your GitHub, and where tickets, reviews and checks live.",
+    actions: [{ label: "Set up your factory", to: "/setup" }] },
   install: { key: "install", title: "Install Tares", where: "terminal",
     gets: "The command that starts and watches the crew.",
     actions: [{ label: "Copy the command", copy: "uv tool install tares" }] },
@@ -236,16 +226,13 @@ const RUNNING_MEMBER: OnboardingMember = { state: "running", last_at: "2026-11-0
 const FRESH: HomeOnboarding = {
   choices: { chosen: false, autonomy: null, releaser: null, builders_max: null,
              defaults: { autonomy: "L3-review", releaser: false, builders_max: 2 } },
-  tracker: null,
   github: { connected: false, text: "" },
-  linear: { connected: false },
   machine: { name: "", version: "", at: null },
   crew: { machine: "", orchestrator: NO_MEMBER, reviewer: NO_MEMBER, builders: { live: 0, max: 2 }, up: false },
 };
 const CHOSEN: HomeOnboarding = {
   ...FRESH,
   choices: { ...FRESH.choices, chosen: true, autonomy: "L3-review", releaser: false, builders_max: 2 },
-  tracker: "tares",
   github: { connected: true, text: "GitHub connected as example-org" },
 };
 const SIGNED_IN: HomeOnboarding = {
@@ -268,26 +255,25 @@ const LONG_DETAIL =
   + "until the connection is removed.";
 
 const DONE_TEXT = {
-  choices: "You approve each merge, 2 builders, no releases",
-  connections: "GitHub connected as example-org, tickets in Tares",
+  setup: "You approve each merge, 2 builders, no releases. GitHub connected as example-org",
   install: "Installed: tares 1.60.0.",
   login: "Signed in from example-laptop.",
 };
-const FOUR = ["choices", "connections", "install", "login"];
+const FIRST_THREE = ["setup", "install", "login"];
 
-/** A new cell: nothing done, so the list shows all six steps and the form starts on the defaults. */
+/** A new cell: nothing done, so the list shows all five steps and the form starts on the defaults. */
 export const startNothing: HomeData = { ...empty, start: startBlock([]), onboarding: FRESH };
 
 /** Choices saved, GitHub connected and tickets placed, Tares installed and signed in: the crew command is next. */
-export const startThree: HomeData = { ...empty, start: startBlock(FOUR, DONE_TEXT), onboarding: SIGNED_IN };
+export const startThree: HomeData = { ...empty, start: startBlock(FIRST_THREE, DONE_TEXT), onboarding: SIGNED_IN };
 
 /** The crew command ran: the orchestrator is up and the reviewer is starting. */
-export const startComingUp: HomeData = { ...empty, start: startBlock(FOUR, DONE_TEXT), onboarding: COMING_UP };
+export const startComingUp: HomeData = { ...empty, start: startBlock(FIRST_THREE, DONE_TEXT), onboarding: COMING_UP };
 
 /** The crew is up and waits for a plan: the page says so and links to Settings and the Crew page. */
 export const startCrewUp: HomeData = {
   ...empty,
-  start: startBlock([...FOUR, "crew"], { ...DONE_TEXT, crew: "The orchestrator and the reviewer are running." }),
+  start: startBlock([...FIRST_THREE, "crew"], { ...DONE_TEXT, crew: "The orchestrator and the reviewer are running." }),
   onboarding: CREW_UP,
 };
 
@@ -300,7 +286,7 @@ export const startLong: HomeData = {
 export const startDone: HomeData = { ...nothingWaiting, start: startBlock(STEP_KEYS), onboarding: CREW_UP };
 
 /** The person hid the list: the page shows one line with Show it again where the list was. */
-export const startHidden: HomeData = { ...empty, start: startBlock(["choices", "connections"], {}, true), onboarding: CHOSEN };
+export const startHidden: HomeData = { ...empty, start: startBlock(["setup"], {}, true), onboarding: CHOSEN };
 
 /** The samples by the name `?sample=` gives them. Loading and error have no data and live in FactoryHome. */
 export const HOME_SAMPLES: Record<string, HomeData> = {

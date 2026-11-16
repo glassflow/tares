@@ -174,8 +174,8 @@ function cleanEnv(extra) {
       ck(`busy @${width}: Autonomy links to Settings`, (await page.getByRole("link", { name: "Autonomy" }).getAttribute("href")) === "/settings#crew");
       ck(`busy @${width}: the plan card shows both limits`, (await page.getByText("1% used · resets 21:50").count()) === 1
          && (await page.getByText("11% used · resets Fri").count()) === 1);
-      ck(`busy @${width}: connected tools and the dashed Add a tool link`, (await page.getByText("GitHub").count()) === 1
-         && (await page.getByRole("link", { name: "Add a tool" }).getAttribute("href")) === "/settings#tools");
+      ck(`busy @${width}: the home lists no tools: they are on Integrations`, (await page.getByTestId("tool-chip").count()) === 0
+         && (await page.getByRole("link", { name: "Add a tool" }).count()) === 0);
       const copy = page.getByRole("button", { name: "Copy the hand-over command" });
       ck(`busy @${width}: the copy action is a button`, (await copy.count()) === 1);
       await copy.click();

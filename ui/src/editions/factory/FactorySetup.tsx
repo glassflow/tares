@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { useCloud } from "../../cloud";
+import { CLOUD_BACK, GithubPanel, SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings } from "../../pages/Security";
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
 import { Check } from "../../components/icons";
@@ -13,22 +14,32 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { ENTERPRISE_URL, licenceWordsOn } from "../../licenceWords";
 import { cn } from "../../lib/utils";
 import { useSample } from "../sample";
+import type { StartStep } from "../StartChecklist.api";
 import { useHeaderSlots, useOwnMenu } from "../Shell";
 import { usePagePolling } from "../usePagePolling";
 import {
-  clearProjectPick, makeDefault, removeConnection, saveIntegration, setupRead, testIntegration,
+  clearProjectPick, keepDefault, makeDefault, removeConnection, saveIntegration, setupRead, testIntegration,
   type SettingValue, type TestResult, type SetupApp, type SetupAvailable, type SetupConnected, type SetupData, type SetupField, type SetupForm,
   type SetupSlot, type SetupStep, type SetupTag,
 } from "./FactorySetup.api";
 import { isSample, sampleLoad } from "./setupSamples";
+import { ChoicesForm, Prerequisites, TerminalSteps, YourCrew } from "./SetupParts";
+import { saveCrewChoices } from "./FactoryHome.api";
+import { HOME_SAMPLES } from "./homeSamples";
+import type { HomeOnboarding } from "./home.types";
 
-// Set up your factory (TR-872): seven steps, a rail on the left, and for the chosen step what is
-// connected, what can be connected and the form of the one being connected or changed. Every string
-// comes from GET /api/factory/setup; this file words only what happens after a click (a saved
-// integration, a failed read). One generic form renderer draws every integration's fields by kind, so
-// a new integration needs no code here. A save goes through the routes that already exist.
+// Set up your factory (TR-872): the one place a factory is set up, and the place to come back to.
+// A rail on the left: how the crew works and GitHub first, then the seven integration steps, then the
+// commands to run in a terminal. For an integration step, what is connected, what can be connected and
+// the form of the one being connected or changed; every string of those comes from GET
+// /api/factory/setup, and one generic form renderer draws every integration's fields by kind, so a new
+// integration needs no code here. The crew, GitHub and terminal steps read the onboarding and Start
+// blocks of GET /api/home, the same ones the home's first-run panel draws. A save goes through the
+// routes that already exist.
 
 const POLL_APP_MS = 3000;
+// The terminal step ticks as the machine reports, so the setup is read again while it is shown.
+const POLL_TERMINAL_MS = 4000;
 // Below 900 px the rail becomes a list under the title. The classes are written out whole, because Tailwind
 // reads class names as literal text and cannot see one built from a variable.
 
@@ -473,7 +484,7 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
   asking: boolean;
   onAsk: () => void;
   onAnswer: (yes: boolean) => void;
-  onAction: (key: "edit" | "make_default") => void;
+  onAction: (key: "edit" | "make_default" | "keep") => void;
 }) {
   const keepRef = React.useRef<HTMLButtonElement>(null);
   const removeRef = React.useRef<HTMLButtonElement>(null);
@@ -496,6 +507,8 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
           <div className="flex max-w-full flex-wrap items-center gap-2">
             {c.actions.map((a) => a.key === "edit" ? (
               <Button key={a.key} variant="secondary" className={cn(SMALL_BTN, DARK)} disabled={busy} onClick={() => onAction("edit")} data-testid={`action-${a.key}`}>{a.label}</Button>
+            ) : a.key === "keep" ? (
+              <Button key={a.key} variant="secondary" className={cn(SMALL_BTN, DARK)} disabled={busy} onClick={() => onAction("keep")} data-testid={`action-${a.key}`}>{a.label}</Button>
             ) : a.key === "make_default" ? (
               <Button key={a.key} variant="secondary" className={SMALL_BTN} disabled={busy} onClick={() => onAction("make_default")} data-testid={`action-${a.key}`}>{a.label}</Button>
             ) : (
@@ -550,17 +563,37 @@ function SectionHead({ children, ...props }: { children: React.ReactNode } & Rea
   return <h2 className="m-0! mb-2 font-mono text-xs! font-medium! uppercase tracking-[0.08em]! text-muted-foreground" {...props}>{children}</h2>;
 }
 
-function StepView({ step, nextStep, busy, asking, notice, problem, onGo, onConnect, onEdit, onMakeDefault, onAsk, onAnswer, onClearNotice }: {
+/** The step after this one in the rail, for the footer's button; null on the last. */
+interface NextStep { key: StepKey; name: string }
+
+function StepFooter({ hint, next, onGo, button = true }: {
+  hint: string; next: NextStep | null; onGo: (k: StepKey) => void; button?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-t border-border pt-4" data-testid="step-footer">
+      <p className="m-0 min-w-0 flex-[1_1_280px] text-[13px] text-muted-foreground">{hint}</p>
+      {!button ? null : next ? (
+        <Button onClick={() => onGo(next.key)} data-testid="step-next">Next: {next.name}</Button>
+      ) : (
+        <Button asChild data-testid="step-next"><Link to="/">Finish setup</Link></Button>
+      )}
+    </div>
+  );
+}
+
+function StepView({ step, footer = true, nextStep, busy, asking, notice, problem, onGo, onConnect, onEdit, onMakeDefault, onKeep, onAsk, onAnswer, onClearNotice }: {
   step: SetupStep;
-  nextStep: SetupSlot | null;
+  footer?: boolean;
+  nextStep: NextStep | null;
   busy: boolean;
   asking: string | null;
   notice: string;
   problem: string;
-  onGo: (slot: SetupSlot) => void;
+  onGo: (key: StepKey) => void;
   onConnect: (id: string) => void;
   onEdit: (id: string) => void;
   onMakeDefault: (id: string) => void;
+  onKeep: (id: string) => void;
   onAsk: (id: string | null) => void;
   onAnswer: (c: SetupConnected, yes: boolean) => void;
   onClearNotice: () => void;
@@ -592,40 +625,120 @@ function StepView({ step, nextStep, busy, asking, notice, problem, onGo, onConne
               asking={asking === c.id}
               onAsk={() => onAsk(c.id)}
               onAnswer={(yes) => onAnswer(c, yes)}
-              onAction={(k) => (k === "edit" ? onEdit(c.id) : onMakeDefault(c.id))}
+              onAction={(k) => (k === "edit" ? onEdit(c.id) : k === "keep" ? onKeep(c.id) : onMakeDefault(c.id))}
             />
           ))}
         </ul>
       </section>
 
-      <section aria-labelledby="available-head" data-testid="available">
-        <SectionHead id="available-head">{step.available_heading}</SectionHead>
-        {step.available.length > 0 ? (
+      {/* nothing more to connect for this step: the section is left out, not shown empty */}
+      {step.available.length > 0 && (
+        <section aria-labelledby="available-head" data-testid="available">
+          <SectionHead id="available-head">{step.available_heading}</SectionHead>
           <ul className="m-0! list-none! border border-border bg-card p-0!">
             {step.available.map((a) => <AvailableRow key={a.id} a={a} onConnect={() => onConnect(a.id)} />)}
           </ul>
-        ) : (
-          <p className="m-0 text-sm text-muted-foreground" data-testid="available-empty">{step.available_empty}</p>
-        )}
-      </section>
+        </section>
+      )}
 
       {step.note && <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="step-note">{step.note}</p>}
 
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-t border-border pt-4" data-testid="step-footer">
-        <p className="m-0 min-w-0 flex-[1_1_280px] text-[13px] text-muted-foreground">{step.footer.hint}</p>
-        {nextStep ? (
-          <Button onClick={() => onGo(nextStep)} data-testid="step-next">{step.footer.next}</Button>
-        ) : (
-          <Button asChild data-testid="step-next"><Link to="/">{step.footer.next}</Link></Button>
-        )}
+      {footer && <StepFooter hint={step.footer.hint} next={nextStep} onGo={onGo} />}
+    </div>
+  );
+}
+
+// ---- the steps around the integrations: the crew, GitHub, the terminal ----
+
+function StepHead({ name, why }: { name: string; why: string }) {
+  return (
+    <div className="grid gap-2">
+      <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]! [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{name}</h1>
+      <p className="m-0 max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{why}</p>
+    </div>
+  );
+}
+
+const CREW_WHY = "The crew reads these when it starts. Change them here at any time.";
+const GITHUB_WHY = "The crew opens its pull requests there, and Tares follows each one through review and CI.";
+const TERMINAL_WHY = "Your crew is a set of Claude Code sessions on your own machine. Type these commands there; each step ticks itself when it is done.";
+
+function choicesLine(o: HomeOnboarding): string {
+  const c = o.choices;
+  if (!c.chosen) return "Not set yet";
+  const n = c.builders_max ?? 0;
+  return `${c.autonomy === "L4-ship" ? "Crew merges" : "You approve merges"}, ${n} builder${n === 1 ? "" : "s"}`;
+}
+
+/** The form's own button saves and moves on, so the footer has no second one. */
+function CrewView({ o, next, onGo, onSaved }: { o: HomeOnboarding; next: NextStep | null; onGo: (k: StepKey) => void; onSaved: () => void }) {
+  return (
+    <div className="grid min-w-0 max-w-[880px] gap-6" data-testid="step-view" data-slot="crew">
+      <StepHead name="How your crew works" why={CREW_WHY} />
+      <ChoicesForm o={o} save={saveCrewChoices}
+                   onSaved={() => { onSaved(); if (next) onGo(next.key); }} />
+      <StepFooter hint="Who merges, how many builders work at once, and whether the crew may release." next={next} onGo={onGo} button={false} />
+    </div>
+  );
+}
+
+/** Code: GitHub, as Settings managed it (the credentials, the app, its repositories), with its own
+ *  connect links that come back to this page. Setup has a Next button under it; Integrations does not. */
+function GithubView({ name, next, onGo, footer }: { name: string; next: NextStep | null; onGo: (k: StepKey) => void; footer: boolean }) {
+  const cloud = useCloud();
+  return (
+    <div className="grid min-w-0 max-w-[880px] gap-6" data-testid="step-view" data-slot="github">
+      <StepHead name={name} why={GITHUB_WHY} />
+      <TerseSettings.Provider value={true}><div className="settings-tool min-w-0"><GithubPanel cloud={cloud} /></div></TerseSettings.Provider>
+      {footer && <StepFooter hint="" next={next} onGo={onGo} />}
+    </div>
+  );
+}
+
+const NOTIFICATIONS_WHY = "Where the crew asks you its questions and sends the morning status.";
+
+/** Notifications: Slack, connected the way this cell connects it (the Tares Cloud app, or a bot token). */
+function NotificationsView() {
+  const cloud = useCloud();
+  const url = cloud.health?.slack_connect_url;
+  return (
+    <div className="grid min-w-0 max-w-[880px] gap-6" data-testid="step-view" data-slot="notifications">
+      <StepHead name="Notifications" why={NOTIFICATIONS_WHY} />
+      <TerseSettings.Provider value={true}>
+        {url
+          ? <div className="settings-tool min-w-0"><SlackCloudPanel cloud={cloud} connectUrl={url} /></div>
+          : <div className="settings-tool grid min-w-0 gap-4"><SlackTokenPanel /><SlackSigningSecretPanel /></div>}
+      </TerseSettings.Provider>
+    </div>
+  );
+}
+
+function TerminalView({ o, steps, onGo }: { o: HomeOnboarding; steps: StartStep[]; onGo: (k: StepKey) => void }) {
+  const current = steps.find((s) => !s.done)?.key;
+  return (
+    <div className="grid min-w-0 max-w-[1100px] gap-6" data-testid="step-view" data-slot="terminal">
+      <StepHead name="In your terminal" why={TERMINAL_WHY} />
+      {/* above both columns, so the crew panel starts level with the first step */}
+      <Prerequisites />
+      <div className="-mt-3 flex flex-wrap items-start gap-6">
+        <div className="grid min-w-0 flex-[999_1_480px] gap-3">
+          <TerminalSteps steps={steps} o={o} current={current} showDone />
+        </div>
+        <YourCrew o={o} />
       </div>
+      <StepFooter hint="" next={null} onGo={onGo} />
     </div>
   );
 }
 
 // ---- the rail ----
 
-function StepButton({ s, current, onPick, id }: { s: SetupStep; current: boolean; onPick: () => void; id: string }) {
+type StepKey = SetupSlot | "crew" | "github" | "notifications" | "terminal";
+
+/** One row of the rail: an integration step, or one of the steps around them. */
+interface RailItem { key: StepKey; name: string; line: string; set: boolean }
+
+function StepButton({ s, n, current, onPick, id, plain }: { s: RailItem; n: number; current: boolean; onPick: () => void; id: string; plain: boolean }) {
   return (
     <button
       type="button"
@@ -635,50 +748,57 @@ function StepButton({ s, current, onPick, id }: { s: SetupStep; current: boolean
         "flex! w-full items-start gap-3 border-0! border-b! border-border! bg-transparent! px-3! py-3! text-left font-normal! text-foreground! cursor-pointer hover:bg-[var(--row-hover)]! last:border-b-0!",
         current && "bg-[var(--row-hover)]! shadow-[inset_2px_0_0_var(--accent)]",
       )}
-      data-testid={`${id}-${s.slot}`}
-      data-state={s.state}
+      data-testid={`${id}-${s.key}`}
+      data-state={s.set ? "set" : "not_set"}
     >
-      <span
-        className={cn("mt-0.5 inline-flex size-[18px] flex-none items-center justify-center border", s.set ? "border-foreground bg-foreground text-background" : "border-input")}
-        aria-hidden
-      >
-        {s.set && <Check className="size-3" />}
-      </span>
+      {!plain && (
+        <span
+          className={cn("mt-0.5 inline-flex size-[18px] flex-none items-center justify-center border", s.set ? "border-foreground bg-foreground text-background" : "border-input")}
+          aria-hidden
+        >
+          {s.set && <Check className="size-3" />}
+        </span>
+      )}
       <span className="grid min-w-0 gap-0.5">
-        <span className="text-sm font-semibold [overflow-wrap:anywhere]">{`${s.number}. ${s.name}`}</span>
+        <span className="text-sm font-semibold [overflow-wrap:anywhere]">{plain ? s.name : `${n}. ${s.name}`}</span>
         <span className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="step-line">{s.line}</span>
       </span>
     </button>
   );
 }
 
-function Rail({ data, slot, onPick }: { data: SetupData; slot: SetupSlot; onPick: (s: SetupSlot) => void }) {
+/** The list on the left. Setup numbers its steps, ticks them and says how far it is; Integrations
+ *  (`plain`) lists its sections only. */
+function Rail({ items, current, progress, onPick, plain = false }: {
+  items: RailItem[]; current: StepKey; progress: SetupData["progress"]; onPick: (k: StepKey) => void; plain?: boolean;
+}) {
   const [open, setOpen] = React.useState(false);
-  const cur = data.steps.find((s) => s.slot === slot) ?? data.steps[0];
-  const { set, total } = data.progress;
-  const pick = (s: SetupSlot) => { setOpen(false); onPick(s); };
+  const at = Math.max(0, items.findIndex((s) => s.key === current));
+  const cur = items[at];
+  const { set, total, text } = progress;
+  const pick = (k: StepKey) => { setOpen(false); onPick(k); };
   // The wide rail and the narrow list are both in the page, one hidden by width; the narrow ones
   // have their own test ids so a test finds the one that is shown.
   const list = (id: string) => (
     <div className="border border-border bg-card">
-      {data.steps.map((s) => <StepButton key={s.slot} id={id} s={s} current={s.slot === slot} onPick={() => pick(s.slot)} />)}
+      {items.map((s, i) => <StepButton key={s.key} id={id} s={s} n={i + 1} plain={plain} current={s.key === current} onPick={() => pick(s.key)} />)}
     </div>
   );
   return (
     <>
-      <nav aria-label="Steps" className={cn("hidden self-start sticky top-6 gap-3", "min-[900px]:grid")} data-testid="rail">
-        <div className="grid gap-2">
-          <h2 className="m-0! text-sm! font-semibold" data-testid="progress-text">{data.progress.text}</h2>
-          <div className="h-1 bg-[var(--wash-2)]" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={set} aria-label={data.progress.text}>
+      <nav aria-label={plain ? "Integrations" : "Steps"} className={cn("hidden self-start sticky top-6 gap-3", "min-[900px]:grid")} data-testid="rail">
+        {!plain && <div className="grid gap-2">
+          <h2 className="m-0! text-sm! font-semibold" data-testid="progress-text">{text}</h2>
+          <div className="h-1 bg-[var(--wash-2)]" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={set} aria-label={text}>
             <div className="h-full bg-foreground" style={{ width: `${total ? (set / total) * 100 : 0}%` }} />
           </div>
-        </div>
+        </div>}
         {list("step")}
       </nav>
       <details open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)} className={cn("border border-border bg-card", "min-[900px]:hidden")} data-testid="rail-narrow">
         <summary className="flex cursor-pointer items-center justify-between gap-3 px-3 py-3 text-sm font-semibold">
-          <span>{`Step ${cur.number} of ${total}: ${cur.name}`}</span>
-          <span className="text-[13px] font-normal text-muted-foreground">{`${set} set`}</span>
+          <span>{plain ? cur.name : `Step ${at + 1} of ${total}: ${cur.name}`}</span>
+          {!plain && <span className="text-[13px] font-normal text-muted-foreground">{`${set} set`}</span>}
         </summary>
         <div className="border-t border-border">{list("nstep")}</div>
       </details>
@@ -688,13 +808,23 @@ function Rail({ data, slot, onPick }: { data: SetupData; slot: SetupSlot; onPick
 
 // ---- the page ----
 
+function AroundLoading() {
+  return (
+    <div className="grid max-w-[880px] gap-4 self-start" role="status" aria-busy="true" aria-label="Loading" data-testid="setup-loading">
+      <Skeleton width="30%" height={26} />
+      <Skeleton width="70%" height={14} />
+      <Skeleton height={96} />
+    </div>
+  );
+}
+
 function Loading() {
   return (
     <div className="grid gap-6 min-[900px]:grid-cols-[272px_minmax(0,1fr)]" role="status" aria-busy="true" aria-label="Loading" data-testid="setup-loading">
       <div className="grid gap-3 self-start">
         <Skeleton width="60%" height={14} />
         <Skeleton height={4} />
-        {Array.from({ length: 7 }, (_, i) => <Skeleton key={i} height={44} />)}
+        {Array.from({ length: 10 }, (_, i) => <Skeleton key={i} height={44} />)}
       </div>
       <div className="grid max-w-[880px] gap-4 self-start">
         <Skeleton width="30%" height={26} />
@@ -728,8 +858,67 @@ function HeaderBits({ title, exit }: { title: string; exit: string }) {
 
 interface OpenForm { id: string; mode: "connect" | "edit"; title: string }
 
-function Setup({ data, reload, first }: { data: SetupData; reload: () => void; first: SetupSlot | null }) {
-  const [slot, setSlot] = React.useState<SetupSlot>(() => (data.steps.some((s) => s.slot === first) ? first! : data.steps[0].slot));
+const AROUND: StepKey[] = ["crew", "github", "notifications", "terminal"];
+
+/** "setup" walks every step once, with Next buttons and a count; "integrations" is the same sections
+ *  grouped by what they do for the crew, to come back to at any time. */
+type Mode = "setup" | "integrations";
+
+function railItems(mode: Mode, data: SetupData): RailItem[] {
+  const o = data.onboarding ?? null;
+  const terminal = data.terminal ?? [];
+  const slots = data.steps.map((st): RailItem => ({
+    key: st.slot, name: st.name, line: mode === "setup" ? st.line : st.line.replace(/ \(not set yet\)$/, ""), set: st.set,
+  }));
+  if (mode === "integrations") {
+    const tool = (k: "github" | "slack") => data.tools?.[k];
+    const runtime = slots.filter((x) => x.key === "runtime");
+    return [
+      { key: "github", name: "Code", line: tool("github")?.detail ?? "", set: !!tool("github")?.connected },
+      ...slots.filter((x) => x.key !== "runtime"),
+      { key: "notifications", name: "Notifications", line: tool("slack")?.detail ?? "", set: !!tool("slack")?.connected },
+      ...runtime,
+    ];
+  }
+  return [
+    { key: "crew", name: "How your crew works", line: o ? choicesLine(o) : "", set: !!o?.choices.chosen },
+    { key: "github", name: "GitHub", line: o ? (o.github.connected ? o.github.text || "Connected" : "Not connected") : "", set: !!o?.github.connected },
+    ...slots,
+    { key: "terminal", name: "In your terminal", set: terminal.length > 0 && terminal.every((t) => t.done),
+      line: terminal.length ? `${terminal.filter((t) => t.done).length} of ${terminal.length} done` : "" },
+  ];
+}
+
+function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reload: () => void; first: string | null; mode?: Mode }) {
+  const [params, setParams] = useSearchParams();
+  const o = data.onboarding ?? null;
+  const terminal = data.terminal ?? [];
+  const setupMode = mode === "setup";
+  // A Tares Cloud connect page comes back with ?cloud= (and ?cloud_detail=): said once, then dropped
+  // from the address so a reload does not say it again.
+  const [cloudBack] = React.useState(() => {
+    const m = CLOUD_BACK[params.get("cloud") ?? ""];
+    return m ? { ...m, detail: params.get("cloud_detail") ?? "" } : null;
+  });
+  React.useEffect(() => {
+    if (!params.has("cloud") && !params.has("cloud_detail")) return;
+    setParams((p) => { const q = new URLSearchParams(p); q.delete("cloud"); q.delete("cloud_detail"); return q; }, { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const items = railItems(mode, data);
+  const [key, setKey] = React.useState<StepKey>(() => (items.some((i) => i.key === first) ? first as StepKey : items[0].key));
+  const around = AROUND.includes(key);
+  const slot: SetupSlot = around ? data.steps[0].slot : key as SetupSlot;
+  const at = items.findIndex((i) => i.key === key);
+  const nextStep: NextStep | null = at >= 0 && at < items.length - 1 ? { key: items[at + 1].key, name: items[at + 1].name } : null;
+  // Integrations is not a walk: no step is "set" by a click there, so no Use button and no Next
+  const shownStep = (st: SetupStep): SetupStep => (setupMode ? st
+    : { ...st, connected: st.connected.map((c) => ({ ...c, actions: c.actions.filter((a) => a.key !== "keep") })) });
+  // the terminal step ticks as the machine reports: read the home again while it is shown
+  React.useEffect(() => {
+    if (key !== "terminal") return undefined;
+    const t = setInterval(reload, POLL_TERMINAL_MS);
+    return () => clearInterval(t);
+  }, [key, reload]);
   const [view, setView] = React.useState<OpenForm | null>(null);
   const [asking, setAsking] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState("");
@@ -740,8 +929,6 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
   const refocus = React.useRef(false);
 
   const step = data.steps.find((s) => s.slot === slot) ?? data.steps[0];
-  const idx = data.steps.indexOf(step);
-  const nextStep = idx < data.steps.length - 1 ? data.steps[idx + 1].slot : null;
 
   // what the form is for, read from the current answer: a connection that appeared closes it
   const item = view?.mode === "edit" ? step.connected.find((c) => c.id === view.id) : view ? step.available.find((a) => a.id === view.id) : undefined;
@@ -764,7 +951,7 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
   React.useEffect(() => {
     if (!moved.current) { moved.current = true; return; }
     titleOf()?.focus();
-  }, [slot, showForm]);
+  }, [key, showForm]);
 
   // after a removal or a new default the row that had the focus is gone or changed, so the title takes it
   React.useEffect(() => {
@@ -773,7 +960,12 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
     titleOf()?.focus();
   }, [data]);
 
-  const go = (s: SetupSlot) => { setSlot(s); setView(null); setAsking(null); setNotice(""); setProblem(""); window.scrollTo?.({ top: 0 }); };
+  // the step is kept in the address, so a connect page that sends the person back lands on it
+  const go = (k: StepKey) => {
+    setKey(k); setView(null); setAsking(null); setNotice(""); setProblem("");
+    setParams((p) => { const q = new URLSearchParams(p); q.set("step", k); return q; }, { replace: true });
+    window.scrollTo?.({ top: 0 });
+  };
 
   const fail = (e: unknown) => setProblem(e instanceof Error && e.message ? e.message : GENERIC_ERROR);
 
@@ -782,6 +974,16 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
     try {
       await makeDefault(slot, id);
       setNotice(`${step.connected.find((c) => c.id === id)?.title ?? id} is now the default for ${step.name}.`);
+      refocus.current = true;
+      reload();
+    } catch (e) { fail(e); } finally { setBusy(false); }
+  };
+
+  const keepOf = async (id: string) => {
+    setBusy(true); setProblem(""); setNotice("");
+    try {
+      await keepDefault(slot, id);
+      setNotice(`${step.connected.find((c) => c.id === id)?.title ?? id} is set for ${step.name}.`);
       refocus.current = true;
       reload();
     } catch (e) { fail(e); } finally { setBusy(false); }
@@ -809,12 +1011,23 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-[1280px] min-w-0 gap-6 px-4 py-6 min-[900px]:px-10" data-testid="setup">
-      <HeaderBits title={data.title} exit={data.exit_label} />
+    <div className={cn("mx-auto grid w-full max-w-[1280px] min-w-0 gap-6", setupMode && "px-4 py-6 min-[900px]:px-10")} data-testid={setupMode ? "setup" : "integrations"}>
+      {setupMode && <HeaderBits title={data.title} exit={data.exit_label} />}
       <div className={cn("grid min-w-0 gap-6", !showForm && "min-[900px]:grid-cols-[272px_minmax(0,1fr)] min-[900px]:gap-8")}>
-        {!showForm && <Rail data={data} slot={step.slot} onPick={go} />}
-        <div ref={headRef} className="min-w-0">
-          {showForm && view && form ? (
+        {!showForm && <Rail items={items} current={key} progress={data.progress} onPick={go} plain={!setupMode} />}
+        <div ref={headRef} className="grid min-w-0 content-start gap-4">
+          {cloudBack && !showForm && (
+            <Banner tone={cloudBack.kind === "error" ? "error" : "note"} data-testid="cloud-back">
+              <span data-user-text>{cloudBack.text}{cloudBack.detail ? ` ${cloudBack.detail}` : ""}</span>
+            </Banner>
+          )}
+          {key === "github" ? <GithubView name={setupMode ? "GitHub" : "Code"} next={nextStep} onGo={go} footer={setupMode} />
+          : key === "notifications" ? <NotificationsView />
+          : around ? (
+            !o ? <AroundLoading />
+              : key === "crew" ? <CrewView o={o} next={nextStep} onGo={go} onSaved={reload} />
+              : <TerminalView o={o} steps={terminal} onGo={go} />
+          ) : showForm && view && form ? (
             <FormView
               key={`${slot}:${view.id}:${view.mode}`}
               slot={slot}
@@ -829,7 +1042,8 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
             />
           ) : (
             <StepView
-              step={step}
+              step={shownStep(step)}
+              footer={setupMode}
               nextStep={nextStep}
               busy={busy}
               asking={asking}
@@ -839,6 +1053,7 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
               onConnect={(id) => openForm(id, "connect")}
               onEdit={(id) => openForm(id, "edit")}
               onMakeDefault={makeDefaultOf}
+              onKeep={keepOf}
               onAsk={setAsking}
               onAnswer={answer}
               onClearNotice={() => setNotice("")}
@@ -850,14 +1065,36 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
   );
 }
 
+/** A sample has no crew of its own: it borrows the home sample of a new cell for the steps around. */
+const withSampleAround = (d: SetupData): SetupData => ({
+  ...d,
+  onboarding: d.onboarding ?? HOME_SAMPLES.startNothing.onboarding,
+  terminal: d.terminal ?? (HOME_SAMPLES.startNothing.start?.steps ?? []).filter((s) => s.where === "terminal"),
+});
+
+/** Integrations: the same sections as setup, grouped by what they do, in the console's own frame. */
+export function FactoryIntegrations() {
+  const named = useSample();
+  const sample = isSample(named) ? named : null;
+  const [params] = useSearchParams();
+  const { data, error, reload } = usePagePolling<SetupData>(() => (sample ? sampleLoad(sample).then(withSampleAround) : setupRead()), 0);
+  if (data) return <Setup data={data} reload={reload} first={params.get("step")} mode="integrations" />;
+  return error ? (
+    <div role="alert" className="border border-[color:var(--danger-border)] bg-[var(--err-soft)] px-3.5 py-2.5 text-[13px] text-foreground" data-testid="integrations-error">
+      <b>The integrations could not be loaded.</b> Nothing was changed.
+      <Button variant="secondary" className={cn(SMALL_BTN, DARK, "ml-2 align-middle")} onClick={reload}>Try again</Button>
+    </div>
+  ) : <Loading />;
+}
+
 export default function FactorySetup() {
   useOwnMenu();
   const named = useSample();
   const sample = isSample(named) ? named : null;
   const [params] = useSearchParams();
-  const { data, error, reload } = usePagePolling<SetupData>(() => (sample ? sampleLoad(sample) : setupRead()), 0);
+  const { data, error, reload } = usePagePolling<SetupData>(() => (sample ? sampleLoad(sample).then(withSampleAround) : setupRead()), 0);
 
-  if (data) return <Setup data={data} reload={reload} first={(params.get("step") as SetupSlot | null) ?? null} />;
+  if (data) return <Setup data={data} reload={reload} first={params.get("step")} />;
   return (
     <div className="mx-auto grid w-full max-w-[1280px] min-w-0 gap-6 px-4 py-6 min-[900px]:px-10" data-testid="setup">
       <HeaderBits title={FALLBACK_TITLE} exit={FALLBACK_EXIT} />

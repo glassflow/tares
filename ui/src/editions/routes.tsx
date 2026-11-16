@@ -88,6 +88,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-1011
     "/people": { page: React.lazy(() => import("./factory/FactoryPeople")), fallback: { redirect: "/settings" } },
 
+    // Integrations: the setup sections, to come back to
+    "/integrations": { page: React.lazy(() => import("./factory/FactoryIntegrations")), fallback: { redirect: "/" } },
+
     // TR-872
     "/setup": { page: React.lazy(() => import("./factory/FactorySetup")), fallback: { redirect: "/" } },
 

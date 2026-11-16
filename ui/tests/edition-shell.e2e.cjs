@@ -65,7 +65,8 @@ async function waitFor(url, tries = 150) {
 
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
     const shot = async (page, n) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, n), fullPage: false }); };
-    const labels = (page) => page.locator('nav[aria-label="Main"] a').allInnerTexts();
+    // the menu's pages, without the Setup card on top (a card, not a row)
+    const labels = (page) => page.locator('nav[aria-label="Main"] a:not([data-testid="menu-setup"])').allInnerTexts();
 
     // Patches one JSON answer of the daemon, leaving the rest of it as it is.
     const patch = (page, e, route, fn) => page.route(`${base(e)}${route}`, async (r) => {
@@ -121,7 +122,7 @@ async function waitFor(url, tries = 150) {
     };
 
     const expect = {
-      factory: { name: "Software Factory", menu: ["Home", "Projects", "Tickets", "Reviews", "Crew", "Docs and memory", "People", "Settings"], page: "/crew", call: "/api/crew" },
+      factory: { name: "Software Factory", menu: ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
       // The AI SRE menu grows as each screen merges (Services, Incidents, Timeline, Settings): the menu must
       // keep the full order, start with Home, end with Settings and hold the entries that exist today.
       // The exact list is pinned per screen ticket in edition-routes.e2e.cjs.
@@ -173,9 +174,11 @@ async function waitFor(url, tries = 150) {
       await ctx.close();
     }
 
-    // 1b. the factory menu in two groups (TR-1203). A cell with no licence answers 404 on /api/brain: no brain.
-    // Entries below the group names, in order; the names are not links.
-    const FACTORY_ROWS = ["Home", "Projects", "Tickets", "Reviews", "Crew", "Docs and memory", "People"];
+    // 1b. the factory menu: Home and Integrations, then the groups Work, Team and Knowledge (the Second Brain's
+    // pages join Knowledge). A cell with no licence answers 404 on /api/brain: no brain. Entries below the group
+    // names, in order; a name is a button that folds its group, not a link.
+    const FACTORY_ROWS = ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory"];
+    const GROUPS = "Work|Team|Knowledge";
     const BRAIN_ROWS = ["Repos", "Decisions", "Ask"];
     const brainReply = (page, status, json) => page.route(`${base("factory")}/api/brain`, (r) => r.fulfill({ status, json }));
     const groupNames = (page) => page.locator('nav[aria-label="Main"] [data-testid^="menu-group-"]').allInnerTexts();
@@ -188,7 +191,9 @@ async function waitFor(url, tries = 150) {
       page.on("pageerror", (x) => errors.push(String(x)));
       await visit(page, "factory", "/projects");
       ck("factory, no licence: GET /api/brain answers 404", calls.length === 1 && calls[0] === 404, calls.join(","));
-      ck("factory, no licence: the menu names only the Factory group", (await groupNames(page)).join("|") === "Factory", (await groupNames(page)).join("|"));
+      ck("factory, no licence: the menu names Work, Team and Knowledge", (await groupNames(page)).join("|") === GROUPS, (await groupNames(page)).join("|"));
+      ck("factory: a cell not set up has the Setup card on top of the menu, before Home", (await page.getByTestId("menu-setup").count()) === 1
+         && await page.locator('nav[aria-label="Main"]').evaluate((n) => { const a = [...n.querySelectorAll("a")]; return a[0].dataset.testid === "menu-setup" && a[1].dataset.testid === "menu-home"; }));
       ck("factory, no licence: the rows are today's, Settings last", (await labels(page)).map((t) => t.trim()).join(",") === [...FACTORY_ROWS.filter((l) => expect.factory.menu.includes(l)), "Settings"].join(","));
       ck("factory, no licence: no Second Brain row", (await page.getByTestId("menu-brain-repos").count()) === 0);
       ck("factory, no licence: no error is shown", (await page.getByText(/not found|failed|error/i).count()) === 0 && errors.length === 0, errors.join(" "));
@@ -200,7 +205,7 @@ async function waitFor(url, tries = 150) {
       const { page, ctx } = await open("factory", 1440);
       await brainReply(page, status, json);
       await visit(page, "factory", "/projects");
-      ck(`factory, ${what}: only the Factory group shows`, (await groupNames(page)).join("|") === "Factory" && (await page.getByTestId("menu-brain-repos").count()) === 0);
+      ck(`factory, ${what}: no Second Brain rows`, (await groupNames(page)).join("|") === GROUPS && (await page.getByTestId("menu-brain-repos").count()) === 0);
       ck(`factory, ${what}: and no error`, (await page.getByText(/internal server error|boom/i).count()) === 0);
       await ctx.close();
     }
@@ -212,24 +217,28 @@ async function waitFor(url, tries = 150) {
       if (w === 390) await page.getByTestId("menu-button").click();
       const nav = page.locator('nav[aria-label="Main"]');
       await nav.waitFor();
-      ck(`${tag}: the groups are Factory then Second Brain`, (await groupNames(page)).join("|") === "Factory|Second Brain", (await groupNames(page)).join("|"));
+      ck(`${tag}: the groups are still Work, Team and Knowledge`, (await groupNames(page)).join("|") === GROUPS, (await groupNames(page)).join("|"));
       const items = (await labels(page)).map((t) => t.trim());
-      ck(`${tag}: rows are the Factory rows, then Repos, Decisions, Ask, then Settings`,
+      ck(`${tag}: rows are the factory rows, then Repos, Decisions, Ask under Knowledge, then Settings`,
          items.join(",") === [...expect.factory.menu.slice(0, -1), ...BRAIN_ROWS, "Settings"].join(","), items.join(","));
       // each group name sits right above its first row, and Settings stays below Second Brain
       const order = await nav.evaluate((n) => [...n.querySelectorAll('[data-testid^="menu-group-"], a')].map((el) => el.getAttribute("data-testid") || el.textContent.trim()));
       const at = (k) => order.indexOf(k);
-      ck(`${tag}: Factory name above Home; Second Brain name above Repos, after People`,
-         at("menu-group-factory") + 1 === at("menu-home") && at("menu-group-second-brain") === at("menu-people") + 1 && at("menu-group-second-brain") + 1 === at("menu-brain-repos"), order.join(","));
+      ck(`${tag}: Work above Projects, Knowledge above Docs and memory, and Repos right after it`,
+         at("menu-group-work") + 1 === at("menu-projects") && at("menu-group-knowledge") + 1 === at("menu-docs") && at("menu-docs") + 1 === at("menu-brain-repos"), order.join(","));
       ck(`${tag}: Settings is the last row`, order[order.length - 1] === "menu-settings");
-      const g = nav.getByTestId("menu-group-second-brain");
+      const g = nav.getByTestId("menu-group-knowledge");
       const gs = await g.evaluate((el) => { const c = getComputedStyle(el); return { size: c.fontSize, weight: c.fontWeight, tag: el.tagName }; });
       const grouped = await nav.evaluate((n) => [...n.querySelectorAll('[role="group"]')].map((g) => {
         const l = document.getElementById(g.getAttribute("aria-labelledby") || "");
         return l ? l.textContent.trim() : "";
       }));
-      ck(`${tag}: each group is a role=group named by its heading`, grouped.join("|") === "Factory|Second Brain", grouped.join("|"));
-      ck(`${tag}: the group name is small and bold, not a link`, gs.size === "12px" && Number(gs.weight) >= 600 && gs.tag === "DIV", JSON.stringify(gs));
+      ck(`${tag}: each group is a role=group named by its heading`, grouped.join("|") === GROUPS, grouped.join("|"));
+      ck(`${tag}: the group name is small and bold, a button that folds it, not a link`, gs.size === "12px" && Number(gs.weight) >= 600 && gs.tag === "BUTTON", JSON.stringify(gs));
+      await g.click();
+      ck(`${tag}: folding Knowledge hides its rows and says so`, (await g.getAttribute("aria-expanded")) === "false" && (await nav.getByTestId("menu-brain-repos").count()) === 0);
+      await g.click();
+      ck(`${tag}: and opening it shows them again`, (await g.getAttribute("aria-expanded")) === "true" && (await nav.getByTestId("menu-brain-repos").count()) === 1);
       const hrefs = await nav.locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href")));
       ck(`${tag}: the rows lead to /brain, /brain/decisions and /brain/ask`, ["/brain", "/brain/decisions", "/brain/ask"].every((h) => hrefs.includes(h)), hrefs.join(","));
       // a row of the group is the active one on its own page, and Repos is not active on Decisions

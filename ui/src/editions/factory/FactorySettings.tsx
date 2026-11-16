@@ -4,12 +4,11 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../../api";
 import { licenceWordsOn, slugFromHost, useCloud, useWorkspaceOverview } from "../../cloud";
 import LicencePanel from "../../components/LicencePanel";
-import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import {
-  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, GithubPanel, McpToolsPanel, PeopleBlock, ProvidersPanel,
-  SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings, TracingPanel, useAccessData,
+  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock, ProvidersPanel,
+  TerseSettings, TracingPanel, useAccessData,
 } from "../../pages/Security";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
@@ -72,28 +71,6 @@ function Row({ title, text, user, children, ...props }: { title: string; text: s
 /** A switch with its own words; `label` names it for people who cannot see the row. */
 function Toggle({ label, on, off, disabled, onChange, testid }: { label: string; on: boolean; off?: boolean; disabled: boolean; onChange: (v: boolean) => void; testid: string }) {
   return <Switch aria-label={label} checked={on} disabled={disabled || off} onCheckedChange={onChange} data-testid={testid} />;
-}
-
-/** Where a tool stands, above its own settings. */
-function ToolStatus({ t, dim }: { t: SettingsTool; dim: boolean }) {
-  return (
-    <Card dim={dim}>
-      <ListRow data-testid={`tool-${t.key}`}>
-        <div className={ROW_TEXT}>
-          <div className="font-semibold" data-user-text>
-            <StatusDot tone={t.connected ? "ready" : "quiet"} className="mr-2 align-baseline" data-testid="tool-dot" data-on={t.connected} />
-            {t.detail}
-          </div>
-          {t.covers && <div className="mt-0.5 text-[13px] text-muted-foreground" data-user-text data-testid="tool-covers">{t.covers}</div>}
-        </div>
-        {t.key === "claude_code" && (
-          <div className="flex flex-none items-center gap-2">
-            <Button asChild variant={t.connected ? "secondary" : "primary"} disabled={dim} data-ctl><Link to={t.href}>{t.connected ? "See how" : "Connect"}</Link></Button>
-          </div>
-        )}
-      </ListRow>
-    </Card>
-  );
 }
 
 const CHOICES: { value: Autonomy; title: string; text: string }[] = [
@@ -164,7 +141,9 @@ export interface ViewProps {
 // A console panel that is the whole page: its heading sits above its card, like the other pages.
 const HEADED = "settings-headed min-w-0";
 
-const TOOL_ITEMS = new Set<string>(["github", "linear", "slack", "claude_code"]);
+// The tools moved to Integrations (/integrations), grouped by what they do: an old address of one
+// goes to its section there.
+const TOOL_SECTIONS: Record<string, string> = { github: "github", linear: "tickets", slack: "notifications", claude_code: "runtime" };
 
 function CellPeople() {
   return <PeopleBlock access={useAccessData()} />;
@@ -201,17 +180,6 @@ function KeysPane() {
   );
 }
 
-/** The item's own settings. A tool's Connect and accounts are in the panel under its status. */
-function ToolPanel({ id }: { id: string }) {
-  const cloud = useCloud();
-  const slackConnectUrl = cloud.health?.slack_connect_url;
-  if (id === "github") return <GithubPanel cloud={cloud} />;
-  // the page already says Linear or Slack above the panel
-  if (id === "linear") return <div className="settings-tool min-w-0"><LinearSettings cloud={cloud} /></div>;
-  if (id === "slack") return slackConnectUrl ? <div className="settings-tool min-w-0"><SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} /></div> : <><SlackTokenPanel /><SlackSigningSecretPanel /></>;
-  return null;
-}
-
 export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant, onSwitch, onMorning, onMorningSend, morningPeople = null }: ViewProps) {
   const { crew, models, edition, tools } = page;
   const cloud = useCloud();
@@ -221,7 +189,6 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
   const [grantOpen, setGrantOpen] = React.useState(false);
   const [switching, setSwitching] = React.useState(false);
   const level = crew.how_far.value;
-  const tool = TOOL_ITEMS.has(tab) ? tools.find((t) => t.key === tab) : undefined;
   const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
 
   return (
@@ -299,14 +266,6 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
                            people={morningPeople}
                            onSave={onMorning ?? (async () => null)}
                            onSendNow={onMorningSend ?? (async () => null)} />
-      )}
-
-      {tool && (
-        <>
-          <Heading title={tool.name} />
-          <ToolStatus t={tool} dim={dim} />
-          <ToolPanel id={tab} />
-        </>
       )}
 
       {tab === "providers" && <div className={HEADED}><ProvidersPanel /></div>}
@@ -466,6 +425,19 @@ function SettingsPage() {
   const cloud = useCloud();
   const eeLoaded = useEeLoaded();
   const eePending = useEePending();
+  // An old address of a tool (?tab=github, #tools), or a Tares Cloud connect page coming back
+  // (?cloud=github-connected), opens its section of Integrations. The rest of the address goes along:
+  // the GitHub App's return (?event=, ?github=) and the cloud's message are read there.
+  const q0 = new URLSearchParams(loc.search);
+  const toolTab = q0.get("tab") ?? CLOUD_BACK[q0.get("cloud") ?? ""]?.tab ?? (loc.hash === "#tools" ? "github" : "");
+  const toIntegrations = TOOL_SECTIONS[toolTab];
+  React.useEffect(() => {
+    if (!toIntegrations) return;
+    const q = new URLSearchParams(loc.search);
+    q.delete("tab");
+    q.set("step", toIntegrations);
+    navigate(`/integrations?${q}`, { replace: true });
+  }, [toIntegrations, navigate, loc.search]);
   const { data, error, reload } = usePagePolling<SettingsPage>(() => (sample ? sampleLoad(sample) : factorySettings()), POLL_MS);
   // What was just changed shows at once; the next read replaces it.
   const [over, setOver] = React.useState<CrewChange>({});
@@ -489,6 +461,7 @@ function SettingsPage() {
   });
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
+    if (toIntegrations) return;   // Integrations says it
     if (!q.has("cloud") && !q.has("cloud_detail")) return;
     q.delete("cloud"); q.delete("cloud_detail");
     if (cloudBack?.item) q.set("tab", cloudBack.item);
