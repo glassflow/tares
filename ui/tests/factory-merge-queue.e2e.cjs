@@ -109,6 +109,7 @@ async function waitFor(url, tries = 100) {
       console.log(`== tabs, waiting for CI, queued, merged list at ${width} ==`);
       // The Pull requests page makes three reads on its own: the project (the sidebar), the pull requests
       // and the merge queue, so expectOneCall (one route only) does not fit; this counts each of the three.
+      // /api/brain is the shell's own read for the Second Brain menu (TR-1203), not the page's.
       const seen = [];
       page.on("request", (r) => { if (r.method() === "GET" && new URL(r.url()).pathname.startsWith("/api/")) seen.push(new URL(r.url()).pathname); });
       await open(page, "p-wait");
@@ -117,7 +118,7 @@ async function waitFor(url, tries = 100) {
       ck(`${width}: one read of the queue`, reads(mergeQueueRoute) === 1, String(reads(mergeQueueRoute)));
       ck(`${width}: one read of the pull requests`, reads(`/api/factory/projects/${pwait}/github`) === 1, String(reads(`/api/factory/projects/${pwait}/github`)));
       ck(`${width}: one read of the project`, reads(`/api/factory/projects/${pwait}`) === 1, String(reads(`/api/factory/projects/${pwait}`)));
-      const extra = seen.filter((x) => ![mergeQueueRoute, `/api/factory/projects/${pwait}/github`, `/api/factory/projects/${pwait}`, "/api/licence", "/api/whoami"].includes(x));
+      const extra = seen.filter((x) => ![mergeQueueRoute, `/api/factory/projects/${pwait}/github`, `/api/factory/projects/${pwait}`, "/api/licence", "/api/whoami", "/api/brain"].includes(x));
       ck(`${width}: no other read`, extra.length === 0, extra.join(", "));
 
       const pages = await page.getByTestId("project-pages").locator("a").allInnerTexts();
