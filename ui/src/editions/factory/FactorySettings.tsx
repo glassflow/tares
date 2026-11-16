@@ -8,13 +8,14 @@ import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import {
-  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock, ProvidersPanel,
+  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock,
   TerseSettings, useAccessData,
 } from "../../pages/Security";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
 import { TracingPanel } from "../settings/TracingPanel";
 import { GithubPanel } from "../settings/GithubPanel";
+import { ProvidersPanel } from "../settings/ProvidersPanel";
 import { Banner, Button, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
@@ -311,7 +312,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
         </>
       )}
 
-      {tab === "providers" && <div className={HEADED}><ProvidersPanel /></div>}
+      {tab === "providers" && (<><Heading title="Providers" /><ProvidersPanel /></>)}
 
       {tab === "budget" && (
         <>

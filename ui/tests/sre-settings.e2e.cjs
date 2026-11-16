@@ -301,6 +301,20 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // The model providers tab (TR-1392): what agents and Ask work with, and how to add one.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=anthropic`, { waitUntil: "load" });
+      await p.locator('[data-testid="providers-empty"], [data-testid="providers-row"]').first().waitFor();
+      ck(`${w}: the Model providers tab has its heading, its introduction and Add a provider`,
+        (await p.getByRole("heading", { name: "Model providers", exact: true }).count()) === 1
+        && /What Tares agents and Ask work with/.test((await T(p, "providers").innerText()).trim())
+        && (await p.getByRole("button", { name: "Add a provider" }).count()) === 1, await T(p, "providers").innerText());
+      ck(`${w}: the Model providers tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-providers-${w}.png`);
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);
