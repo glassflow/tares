@@ -49,6 +49,8 @@
     "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\"",
     "time-baseline": "node scripts/time-baseline.mjs",
     "test:time": "node tests/time.selftest.cjs",
+    "test:visual": "sh tests/visual/run.sh",
+    "test:visual:update": "sh tests/visual/run.sh --update-snapshots",
     "kit-baseline": "node scripts/kit-baseline.mjs"
   },
   "dependencies": {
@@ -74,6 +76,8 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "1.60.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

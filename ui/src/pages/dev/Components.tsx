@@ -153,9 +153,12 @@ function LinkProbe() {
   );
 }
 
+/** The section's name in the screenshot check (tests/visual): "List section and rows" is list-section-and-rows. */
+const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mb-10">
+    <section className="mb-10" data-gallery-section={slug(title)}>
       <h2 className="m-0! mb-3! text-base! text-foreground">{title}</h2>
       <div className="grid gap-4">{children}</div>
     </section>
