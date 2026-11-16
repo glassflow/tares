@@ -780,6 +780,10 @@ async def main():
             ck("the responses carry no em dash", chr(0x2014) not in blob)
             for path in ("tares/guardrails_api.py", "tares/integrations/hooks.py", "tests/test_guardrail_pairs.py",
                          "changelog.d/TR-863.md"):
+                # a release collects changelog.d into CHANGELOG.md and deletes the files: on a release
+                # commit the fragment is gone, and its words are checked there by the release itself
+                if path.startswith("changelog.d/") and not os.path.exists(os.path.join(ROOT, path)):
+                    continue
                 ck(f"{path} has no em dash", chr(0x2014) not in open(os.path.join(ROOT, path)).read())
 
     print(f"\n{P} passed, {F} failed")
