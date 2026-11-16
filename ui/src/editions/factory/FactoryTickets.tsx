@@ -481,7 +481,7 @@ function TicketsSkeleton({ layout, narrow }: { layout: Layout; narrow: boolean }
     );
   } else {
     body = (
-      <div className="grid items-start gap-2.5" style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))" }}>
+      <div className="grid grid-cols-6 items-start gap-2.5">
         {COLUMNS.map((k) => (
           <section key={k} className="min-w-0 border border-border bg-wash">
             <div className="border-b border-border px-2.5 py-3"><Skeleton width="60%" /></div>

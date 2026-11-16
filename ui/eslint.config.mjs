@@ -4,6 +4,7 @@
 // for now. The design and token gates run as their own configs so each fails on its own line in CI.
 import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
+import { kitOnlyConfig } from './eslint-rules/kit-register.mjs'
 
 export default tseslint.config(
   { ignores: ['dist/**', 'node_modules/**', 'tests/**', '*.config.*'] },
@@ -21,4 +22,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-expressions': ['error', { allowTernary: true, allowShortCircuit: true }],
     },
   },
+  // kit-only (TR-1258): no inline style and no raw form control in edition code. Scope, register
+  // and baseline: eslint-rules/kit-register.mjs. design-contract runs it too, with inline config off.
+  kitOnlyConfig(),
 )
