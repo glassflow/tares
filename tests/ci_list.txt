@@ -226,6 +226,7 @@ test_session_flow
 test_session_project
 test_setup_flow
 test_shared_code_context
+test_skill_pages
 test_skills
 test_skills_portable
 test_skills_ticket_moves

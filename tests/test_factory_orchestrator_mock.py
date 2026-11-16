@@ -24,10 +24,9 @@ def ck(label, cond, detail=""):
 
 
 skill = open(os.path.join(ROOT, "claude-plugin/skills/station-orchestrator/SKILL.md")).read()
-ask = skill.split("## Answering questions", 1)[1].split("## The desk", 1)[0]
-mock = ask.split("A builder's mock `ASK`", 1)[1] if "A builder's mock `ASK`" in ask else ""
+mock = open(os.path.join(ROOT, "claude-plugin/skills/station-orchestrator/mock-ask.md")).read()
 
-ck("the orchestrator skill has a section for a builder's mock ASK", bool(mock), ask[:200])
+ck("the orchestrator skill names mock-ask.md for a builder's mock ASK", "| `mock-ask.md` |" in skill and bool(mock), mock[:200])
 ck("it reads the mock file from the path in the ASK", "Read the mock file from the path in the `ASK`" in mock, mock[:300])
 ck("it keeps the mock as the project doc \"Mock: <screen>\" with write_doc",
    'project doc "Mock: <screen>"' in mock and "`write_doc`" in mock, mock[:500])

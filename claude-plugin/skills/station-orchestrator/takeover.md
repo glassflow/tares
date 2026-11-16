@@ -9,5 +9,3 @@ The person may take a project back from the crew to build it in their own sessio
 3. When each has replied (or after 15 minutes without a reply, or when it is gone), `tares factory retire <station>` it. Leave its branches, pull requests and worktree where they are.
 4. `release_project(project)`. Tares clears the tickets' holders; the person's session owns the project.
 5. Reply to the session named in the `TAKEOVER` (its `session:` line) with `[TF:RELEASED]`, listing each ticket the builders left in progress with its branch and pull request. Write it to your report. Tell the person nothing else about it unless they ask.
-
-Note in your report which step you are on, so a compaction mid-takeover resumes at the right step.
