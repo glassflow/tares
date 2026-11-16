@@ -54,6 +54,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
 
     // a project's pull requests, by repo
     "/projects/:id/github": { page: React.lazy(() => import("./factory/FactoryProjectGitHub")), fallback: { redirect: "/projects/:id" } },
+    "/projects/:id/merge-queue": { page: React.lazy(() => import("./factory/FactoryMergeQueue")), fallback: { redirect: "/projects/:id" } },
 
     // every document of one project, on its own page
     "/projects/:id/docs": { page: React.lazy(() => import("./factory/FactoryProjectDocs")), fallback: { redirect: "/projects/:id" } },
