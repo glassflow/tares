@@ -52,6 +52,7 @@ jobs:
           npx tsc --noEmit
           npm run lint
           npm run token-contract
+          npm run test:tokens
           node tests/words.selftest.cjs
           node tests/time.selftest.cjs
           node tests/words.check.cjs
