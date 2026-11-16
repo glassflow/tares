@@ -375,6 +375,10 @@ export function CrewOnboarding({ block, onboarding: o, api, onChanged, hide = hi
           <span className="text-xs text-muted-foreground" data-testid="start-count">{block.done} of {block.total} done</span>
           <ProgressBar value={pct} aria-label="Steps done" className="h-1 w-40 [&>div:first-child]:bg-foreground!" />
         </div>
+        <div className="text-[13px] text-muted-foreground" data-testid="onboarding-setup-line">
+          Want tickets, review, CI, memory and monitoring chosen in one place?{" "}
+          <Link to="/setup" className="text-foreground underline underline-offset-2" data-testid="onboarding-setup">Set up your factory</Link>
+        </div>
         {hideError && <div role="alert" data-testid="start-error" className="text-[13px] text-[color:var(--err)]">Could not hide the list. Try again in a moment.</div>}
       </header>
       <div className="flex flex-wrap items-start gap-6">

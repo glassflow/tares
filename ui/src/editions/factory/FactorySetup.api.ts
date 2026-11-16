@@ -147,6 +147,13 @@ const slotPath = (slot: SetupSlot) => `/api/factory/integrations/${encodeURIComp
 export const saveIntegration = (slot: SetupSlot, name: string, settings: Record<string, SettingValue>, asDefault: boolean) =>
   put(slotPath(slot), { name, settings, default: asDefault });
 
+/** What a connection test answers: the integration's own sentence, never saved. */
+export interface TestResult { ok: boolean; message: string }
+
+/** Try the settings in the form against the service. Nothing is saved; a blank secret tests the saved one. */
+export const testIntegration = (slot: SetupSlot, name: string, settings: Record<string, SettingValue>) =>
+  request<TestResult>(`${slotPath(slot)}/test`, { method: "POST", body: JSON.stringify({ name, settings }) });
+
 export const makeDefault = (slot: SetupSlot, name: string) => put(`${slotPath(slot)}/default`, { name });
 
 /** Move a project off its own pick of this step, back to the default. */
