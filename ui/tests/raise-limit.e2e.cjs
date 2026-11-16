@@ -81,14 +81,45 @@ async function waitFor(url, tries = 100) {
     const box = await field.boundingBox();
     ck("the field is in view", !!box && box.y >= 0 && box.y + box.height <= VIEW_H, JSON.stringify(box));
     ck("the page scrolled to it", (await page.evaluate(() => window.scrollY)) > 0);
-    ck("the field is marked", /field-focus/.test(await field.getAttribute("class")));
+    ck("the field is marked", (await field.getAttribute("data-came-for")) !== null);
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "2-settings-limits.png") });
 
     // Settings opened from the sidebar, with no agent asked for, shows the plain field
     await page.goto(`${BASE}/settings?tab=agents`, { waitUntil: "networkidle" });
     const plain = page.getByTestId("daily-cap-field");
     await plain.waitFor();
-    ck("without an agent the field is not marked", !/field-focus/.test(await plain.getAttribute("class")));
+    ck("without an agent the field is not marked", (await plain.getAttribute("data-came-for")) === null);
+
+    // The field itself (TR-1392, on the edition kit): its label, where the number comes from, a number
+    // out of range said under it, save on Enter, and clearing back to the deployment's value
+    const big = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await big.goto(`${BASE}/settings?tab=agents&agent=watcher`, { waitUntil: "networkidle" });
+    const cap = big.getByLabel("Starts per agent per day");
+    await cap.waitFor();
+    const limits = async () => (await big.getByTestId("agent-limits").innerText()).replace(/\s+/g, " ");
+    ck("the field has a visible label", (await cap.getAttribute("data-testid")) === "daily-cap");
+    ck("it says the number comes from the daemon's environment", (await limits()).includes("Now 1, from TARES_AGENT_DAILY_CAP in the daemon's environment."), await limits());
+    ck("Save waits for a change", await big.getByTestId("daily-cap-save").isDisabled());
+    ck("there is nothing to clear yet", (await big.getByTestId("daily-cap-clear").count()) === 0);
+    if (SHOTS) await big.screenshot({ path: path.join(SHOTS, "3-limits-1440.png"), fullPage: true });
+    await cap.fill("0");
+    await big.getByTestId("daily-cap-save").click();
+    ck("a number out of range is said under the field", (await limits()).includes("Give a whole number from 1 to 10,000.") && (await cap.getAttribute("aria-invalid")) === "true", await limits());
+    if (SHOTS) await big.screenshot({ path: path.join(SHOTS, "4-limits-invalid-1440.png"), fullPage: true });
+    await cap.fill("5");
+    ck("typing again clears the complaint", !(await limits()).includes("Give a whole number"));
+    await cap.press("Enter");
+    await big.getByTestId("daily-cap-saved").waitFor();
+    ck("Enter saves, and it says from when", (await big.getByTestId("daily-cap-saved").innerText()) === "Saved. It applies the next time an agent starts.");
+    await big.waitForFunction(() => document.querySelector('[data-testid="agent-limits"]').innerText.includes("Now 5, saved here."));
+    ck("the hint says it is saved here", (await limits()).includes("Now 5, saved here."));
+    if (SHOTS) await big.screenshot({ path: path.join(SHOTS, "5-limits-saved-1440.png"), fullPage: true });
+    await big.getByTestId("daily-cap-clear").click();
+    await big.waitForFunction(() => document.querySelector('[data-testid="agent-limits"]').innerText.includes("Now 1, from"));
+    ck("clearing brings the deployment's value back", (await limits()).includes("Cleared. The deployment's value or the default applies.") && (await cap.inputValue()) === "1");
+    const wide = await big.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    ck("Limits does not scroll sideways", wide <= 0, `${wide}px`);
+    await big.close();
   } finally {
     if (browser) await browser.close();
     daemon.kill();

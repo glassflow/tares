@@ -1,7 +1,7 @@
-import { Fragment, useContext, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 
-import { api, type AgentLimits } from "../api";
+import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { licenceWordsOn, useCloud } from "../cloud";
 import type { Edition, EditionSettings } from "../types";
@@ -15,7 +15,8 @@ import { GithubPanel } from "../editions/settings/GithubPanel";
 import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
 import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
 import { McpToolsPanel } from "../editions/settings/McpToolsPanel";
-import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../editions/settings/AccessPanels";
+import { AgentLimitsPanel } from "../editions/settings/AgentLimitsPanel";
+import { AccessPanel, PeopleBlock, useAccessData } from "../editions/settings/AccessPanels";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
@@ -201,82 +202,6 @@ function AccessTab() {
       <PeopleBlock access={access} />
       <McpToolsPanel title="Agent tools" />
       <ApiKeysPanel title="API keys" intro people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
-    </div>
-  );
-}
-
-// Agent tracing: every agent run and Ask turn exported as an OpenTelemetry trace. Rius is a
-// preset (a key is enough); any OTLP/HTTP endpoint works. Same precedence as the Anthropic key:
-// a value saved here wins over the environment, so a cloud cell shows "from env" everywhere and
-// the switch is the one live control. The key and headers are write-only.
-// Runs per agent per day (TR-325). A guard against a runaway trigger, not a bill: spend is bounded
-// by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
-// `agent` is who the person came for (a project's "Raise the limit", TR-670): the field is scrolled
-// into view and marked, since the one number applies to every agent without its own limit.
-export function AgentLimitsPanel({ agent }: { agent?: string }) {
-  const terse = useContext(TerseSettings);
-  const [st, setSt] = useState<AgentLimits>();
-  const field = useRef<HTMLLabelElement>(null);
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-  const [msg, setMsg] = useState<string>();
-
-  const load = () => api.agentLimits()
-    .then((s) => { setSt(s); setValue(String(s.daily_cap)); })
-    .catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
-  useEffect(() => {
-    if (agent && st) field.current?.scrollIntoView({ block: "center" });
-  }, [agent, !!st]);
-
-  const save = async (daily_cap: string | null, done: string) => {
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try { await api.setAgentLimits({ daily_cap }); setMsg(done); await load(); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-
-  if (!st) return <div className="panel"><h2 style={{ marginTop: 0 }}>Agent limits</h2>
-    {err ? <div className="alert error">{err}</div> : <div className="muted">loading…</div>}</div>;
-
-  const from = st.daily_cap_source === "console" ? "saved here"
-    : st.daily_cap_source === "env" ? `from ${st.env}` : "the default";
-
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Agent limits</h2>
-      {!terse && (<p className="help" style={{ marginTop: 0 }}>
-        How many times each Tares agent may run in 24 hours. When an agent reaches it, further
-        firings are recorded as capped and cost nothing until the window moves on. An agent on a
-        schedule every 10 minutes runs 144 times a day. Spend is bounded separately by each
-        agent's budget.
-      </p>)}
-      {err && <div className="alert error">{err}</div>}
-      {msg && <p className="help">{msg}</p>}
-      <div className="row2">
-        <label className={`field${agent ? " field-focus" : ""}`} ref={field}
-               data-testid="daily-cap-field">
-          <span className="lbl">runs per agent per day</span>
-          <input type="number" min={1} max={10000} value={value} disabled={busy}
-                 onChange={(e) => setValue(e.target.value)} />
-          <span className="help">now {st.daily_cap}, {from}</span>
-          {agent && (
-            <span className="help">{agent} stopped at this limit. Raise it here and {agent} runs
-              again on its next trigger; the number applies to every agent
-              without its own limit.</span>
-          )}
-        </label>
-      </div>
-      <div className="btnrow">
-        <button className="primary" disabled={busy || value.trim() === String(st.daily_cap)}
-                onClick={() => save(value.trim(), "✓ saved; applies from the next run")}>Save</button>
-        {st.daily_cap_source === "console" && (
-          <button disabled={busy} onClick={() => save(null, "✓ cleared")}>
-            Use the deployment's value or the default
-          </button>
-        )}
-      </div>
     </div>
   );
 }

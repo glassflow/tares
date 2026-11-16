@@ -553,6 +553,21 @@ const until = async (fn, tries = 40) => {
       }
     }
 
+    // 2e. agent limits under Budget (TR-1392): the kit field, without the platform page's introduction
+    for (const w of [1440, 390]) {
+      const n = await newPage(w);
+      const p = n.page;
+      await go(p, "budget");
+      const cap = p.getByLabel("Starts per agent per day");
+      await cap.waitFor();
+      ck(`${w}: Budget shows the daily limit field`, (await cap.getAttribute("data-testid")) === "daily-cap");
+      ck(`${w}: and says where its number comes from`, /Now \d+, (saved here|the default|from \S+ in the daemon's environment)\./.test(await text(p, "agent-limits")), await text(p, "agent-limits"));
+      ck(`${w}: the sidebar already says where you are, so no introduction`, !/How many times each Tares agent/.test(await text(p, "agent-limits")));
+      ck(`${w}: Budget does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+      await shot(p, `budget-${w}.png`);
+      await n.ctx.close();
+    }
+
     // 3. the crew starts as a new cell has it
     await go(page, "crew");
     ck("You approve each merge is chosen", (await page.getByTestId("how-L3-review").getAttribute("aria-checked")) === "true" && (await page.getByTestId("how-L4-ship").getAttribute("aria-checked")) === "false");
