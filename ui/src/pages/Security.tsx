@@ -14,6 +14,7 @@ import { EE_FAILED_WORDS, EePage, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, us
 import LicenceNeeded from "../components/LicenceNeeded";
 import { extraEmails, personDraft, type PersonDraft } from "../personDraft";
 import OwnerOnly from "../components/OwnerOnly";
+import { SlackCloudPanel, SlackSelfHostedPanels } from "../editions/settings/SlackPanels";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
@@ -184,8 +185,8 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
       {tab === "linear" && <LinearSettings cloud={cloud} />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
           a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
-      {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
-        : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
+      {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} title="Slack" />
+        : <SlackSelfHostedPanels />)}
       {tab === "observability" && <TracingPanel />}
       {tab === "advanced" && <AdvancedPanel />}
       </div>
@@ -207,49 +208,6 @@ function RepoNames({ repos, account }: { repos: string[]; account: string }) {
     <span className="mono" title={repos.join("\n")}>
       {shown}{names.length > 3 && <span className="help"> and {names.length - 3} more</span>}
     </span>
-  );
-}
-
-// Slack on Tares Cloud (TR-364): the control plane runs the Slack install and pushes the bot
-// token, signing secret and team name here, so instead of two paste boxes this is one Connect /
-// Disconnect, both links to the control plane that come back to this tab.
-export function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: string }) {
-  const [st, setSt] = useState<Awaited<ReturnType<typeof api.slackTokenStatus>>>();
-  const [err, setErr] = useState<string>();
-  useEffect(() => {
-    api.slackTokenStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
-  }, []);
-  const canConnect = cloud.isOwner !== false;
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Slack</h2>
-      {err && <div className="alert error">{err}</div>}
-      {!st ? (!err && <div className="muted">loading…</div>) : st.configured ? (
-        <>
-          <p style={{ margin: "0 0 6px" }}>
-            <strong>{st.team?.name ? `Connected to ${st.team.name}` : "Connected"}</strong>
-          </p>
-          <p className="help" style={{ marginTop: 0 }}>
-            Triggers and agents post what they find to the channels you pick, and your team can
-            ask Tares from any channel with <code>/tares ask</code>. Tares posts to any public
-            channel; for a private one, add it there first with <code>/invite @Tares</code>.
-          </p>
-          {canConnect
-            ? <a className="btn danger" href={cloudLink(connectUrl, { action: "disconnect" }, "slack")}>Disconnect</a>
-            : <OwnerOnly cloud={cloud} what="Slack" />}
-        </>
-      ) : (
-        <>
-          <p className="help" style={{ marginTop: 0 }}>
-            Connect Slack to have triggers and agents post what they find to a channel, and to let
-            your team ask Tares from Slack with <code>/tares ask</code>.
-          </p>
-          {canConnect
-            ? <a className="btn primary" href={cloudLink(connectUrl, {}, "slack")}>Connect Slack</a>
-            : <OwnerOnly cloud={cloud} what="Slack" />}
-        </>
-      )}
-    </div>
   );
 }
 
@@ -1284,157 +1242,6 @@ export function TracingPanel() {
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-// One bot token per instance, behind every `slack://channel/<id>` trigger subscription. Same
-// contract as the Anthropic key — env wins, the value is never returned — so this panel is a
-// deliberate near-copy rather than a variation the reader has to diff in their head.
-export function SlackTokenPanel() {
-  const [st, setSt] = useState<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>();
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-  const [msg, setMsg] = useState<string>();
-
-  const load = () =>
-    api.slackTokenStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
-
-  const save = async () => {
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try {
-      const r = await api.setSlackToken(token.trim());
-      setToken("");
-      setMsg(r.note ?? "✓ saved");
-      await load();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Slack bot token</h2>
-      <p className="help" style={{ marginTop: 0 }}>
-        Lets triggers and agents post to Slack: pick a channel on a trigger or an agent and every
-        firing or finding is delivered, retried and logged like a webhook. Create a Slack app with
-        the bot scopes <code>chat:write</code>, <code>chat:write.public</code> (post to a public
-        channel without inviting the app), <code>channels:read</code> and{" "}
-        <code>groups:read</code> (list the channels to pick from), and <code>commands</code>{" "}
-        (<code>/tares ask</code>). Paste its <strong>Bot User OAuth Token</strong> here, or set{" "}
-        <code>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment. It is never returned by
-        the API and never included in a catalog export.
-      </p>
-
-      {err && <div className="alert error">{err}</div>}
-      {msg && <p className="help">{msg}</p>}
-
-      {!st ? <div className="muted">loading…</div> : (
-        <>
-          <p style={{ margin: "0 0 10px" }}>
-            {st.configured
-              ? <><span className="badge ok">configured</span>{" "}
-                  <span className="help">from <span className="mono">{st.source}</span></span></>
-              : <><span className="badge">not configured</span>{" "}
-                  <span className="help">channels cannot be subscribed until one is set</span></>}
-          </p>
-          {st.env_overrides && st.stored && (
-            <div className="alert">
-              A token is set in the environment and takes precedence; the one stored here is not in
-              use. Remove the environment variable, or clear the stored token to avoid confusion.
-            </div>
-          )}
-          <div className="btnrow" style={{ alignItems: "center", maxWidth: 720 }}>
-            <input type="password" className="mono" style={{ flex: 1 }} placeholder="xoxb-…"
-                   value={token} onChange={(e) => setToken(e.target.value)} />
-            <button className="primary" disabled={busy || !token.trim()} onClick={save}>Save</button>
-            {st.stored && (
-              <button className="danger" disabled={busy} onClick={async () => {
-                setBusy(true);
-                try { await api.clearSlackToken(); await load(); }
-                catch (e) { setErr(String((e as Error).message ?? e)); }
-                setBusy(false);
-              }}>Clear stored</button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// The other half of Slack: the signing secret that authenticates requests coming IN. Same
-// write-only contract again, and the same panel shape — but this one is the security boundary for
-// the only route that is public to the auth middleware, so the copy says what happens without it.
-export function SlackSigningSecretPanel() {
-  const [st, setSt] = useState<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>();
-  const [secret, setSecret] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-  const [msg, setMsg] = useState<string>();
-
-  const load = () =>
-    api.slackSigningSecretStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
-
-  const save = async () => {
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try {
-      const r = await api.setSlackSigningSecret(secret.trim());
-      setSecret("");
-      setMsg(r.note ?? "✓ saved");
-      await load();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Slack signing secret</h2>
-      <p className="help" style={{ marginTop: 0 }}>
-        Lets your team ask Tares from Slack: point the Slack app's <code>/tares</code> slash
-        command at <code>/api/slack/events</code> on this instance and run{" "}
-        <code>/tares ask what happened to checkout-svc?</code> in any channel. Paste the app's{" "}
-        <strong>Signing Secret</strong> (Basic Information) here, or set{" "}
-        <code>TARES_SLACK_SIGNING_SECRET</code>. Every inbound request is verified against it and
-        replays older than 5 minutes are refused; with no secret configured the endpoint answers
-        503 rather than trusting anything. The secret is never returned by the API.
-      </p>
-
-      {err && <div className="alert error">{err}</div>}
-      {msg && <p className="help">{msg}</p>}
-
-      {!st ? <div className="muted">loading…</div> : (
-        <>
-          <p style={{ margin: "0 0 10px" }}>
-            {st.configured
-              ? <><span className="badge ok">configured</span>{" "}
-                  <span className="help">from <span className="mono">{st.source}</span></span></>
-              : <><span className="badge">not configured</span>{" "}
-                  <span className="help">inbound Slack requests are refused until one is set</span></>}
-          </p>
-          {st.env_overrides && st.stored && (
-            <div className="alert">
-              A signing secret is set in the environment and takes precedence; the one stored here
-              is not in use. Remove the environment variable, or clear the stored secret.
-            </div>
-          )}
-          <div className="btnrow" style={{ alignItems: "center", maxWidth: 720 }}>
-            <input type="password" className="mono" style={{ flex: 1 }} placeholder="signing secret"
-                   value={secret} onChange={(e) => setSecret(e.target.value)} />
-            <button className="primary" disabled={busy || !secret.trim()} onClick={save}>Save</button>
-            {st.stored && (
-              <button className="danger" disabled={busy} onClick={async () => {
-                setBusy(true);
-                try { await api.clearSlackSigningSecret(); await load(); }
-                catch (e) { setErr(String((e as Error).message ?? e)); }
-                setBusy(false);
-              }}>Clear stored</button>
-            )}
-          </div>
-        </>
-      )}
     </div>
   );
 }

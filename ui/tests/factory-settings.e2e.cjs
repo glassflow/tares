@@ -144,6 +144,55 @@ const until = async (fn, tries = 40) => {
     ck("Linear is not connected, and its own form is there", /^Not connected/.test(await text(page, "tool-linear")) && (await page.getByTestId("pane-linear").getByRole("button", { name: "Connect" }).count()) === 1, await text(page, "tool-linear"));
     await go(page, "slack");
     ck("Slack is not connected", /^Not connected/.test(await text(page, "tool-slack")), await text(page, "tool-slack"));
+    // The Slack item on a self-hosted cell: the bot token and the signing secret (TR-1392). Pictures
+    // first, of states set through the API, so the same steps picture the panels before and after.
+    {
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "slack");
+          await shot(n.page, `slack-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("empty");
+      await api(TOKEN, "PUT", "/api/settings/slack-bot-token", { token: "xoxb-e2e-1392" });
+      await shots("token-saved");
+      await api(TOKEN, "DELETE", "/api/settings/slack-bot-token");
+      await go(page, "slack");
+
+      const tok = page.getByTestId("slack-token");
+      const sec = page.getByTestId("slack-secret");
+      const field = tok.getByLabel("Bot User OAuth Token");
+      ck("Slack shows the bot token and the signing secret, each under its own heading",
+        (await tok.getByRole("heading", { name: "Bot token", exact: true }).count()) === 1 && (await sec.getByRole("heading", { name: "Signing secret", exact: true }).count()) === 1);
+      ck("neither is set yet, and each says what that means",
+        /^Not set\. Slack channels/.test(await text(page, "slack-token-state")) && /^Not set\. Tares refuses/.test(await text(page, "slack-secret-state")),
+        `${await text(page, "slack-token-state")} | ${await text(page, "slack-secret-state")}`);
+      ck("each field has a visible label", (await field.count()) === 1 && (await sec.getByLabel("Signing Secret").count()) === 1);
+      ck("Save waits for something to save", await tok.getByRole("button", { name: "Save" }).isDisabled());
+      ck("nothing to clear yet", (await tok.getByRole("button", { name: "Clear the saved token" }).count()) === 0);
+      await checkWords(page, ck, "Slack item");
+
+      await field.fill("not-a-token");
+      await tok.getByRole("button", { name: "Save" }).click();
+      ck("a value that is not a bot token is refused, under the field, as a sentence",
+        await until(async () => (await field.getAttribute("aria-invalid")) === "true") && (await tok.getByText(/^That does not look like a Slack bot token/).count()) === 1);
+      await shot(page, "slack-refused-1440.png");
+      await field.fill("xoxb-e2e-1392");
+      ck("typing again clears the error", (await field.getAttribute("aria-invalid")) !== "true");
+      await field.press("Enter");
+      ck("Enter saves, and a saved token reads as set here", await until(async () => /^Set, saved here/.test(await text(page, "slack-token-state"))), await text(page, "slack-token-state"));
+      ck("the field is empty again: a secret is never shown back", (await field.inputValue()) === "");
+      ck("the daemon has it", (await api(TOKEN, "GET", "/api/settings/slack-bot-token")).body?.stored === true);
+      await tok.getByRole("button", { name: "Clear the saved token" }).click();
+      ck("Clear removes it", await until(async () => /^Not set/.test(await text(page, "slack-token-state"))) && (await api(TOKEN, "GET", "/api/settings/slack-bot-token")).body?.stored === false);
+      const n = await newPage(390);
+      await go(n.page, "slack");
+      ck("the Slack item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+    }
     await go(page, "claude_code");
     ck("Claude Code is reporting, with how long ago", /^Reporting: last session .+ See how$/.test(await text(page, "tool-claude_code")), await text(page, "tool-claude_code"));
     ck("Claude Code goes to its source", (await page.getByTestId("tool-claude_code").locator("a").getAttribute("href")) === "/sources/claude-code");
