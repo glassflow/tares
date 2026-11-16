@@ -387,6 +387,25 @@ FACTORY_SCHEMA = [
     # failure's words. A success clears both.
     "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_failures INTEGER DEFAULT 0",
     "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_error TEXT",
+    # Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked
+    # (the station and person the call came with, `via` mcp or console), what, which repos it used,
+    # how long it took and the tokens lore reported. The daily caps count the ask rows.
+    """CREATE TABLE IF NOT EXISTS brain_calls (
+      id            TEXT PRIMARY KEY,
+      "at"          TIMESTAMPTZ,
+      tool          TEXT,
+      deep          INTEGER DEFAULT 0,
+      question      TEXT,
+      repos         TEXT,
+      duration_ms   INTEGER,
+      input_tokens  INTEGER,
+      output_tokens INTEGER,
+      ok            INTEGER,
+      error         TEXT,
+      station       TEXT,
+      person_id     TEXT,
+      via           TEXT
+    )""",
     # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
     # since the hand-over stopped waiting for sign-offs; the rows are kept.
     """CREATE TABLE IF NOT EXISTS signoffs (
@@ -1900,6 +1919,66 @@ class FactoryStore:
             hit = self.sc.execute(f"UPDATE brain_repos SET {sets} WHERE {where} RETURNING repo",
                                   args).fetchone()
         return hit is not None
+
+    # ── the calls made to the brain (TR-1200) ─────────────────────────────────
+    _BC_COLS = ('id, "at", tool, deep, question, repos, duration_ms, input_tokens, output_tokens, '
+                "ok, error, station, person_id, via")
+
+    def reserve_brain_call(self, call: dict, cap: int | None = None, since=None) -> bool:
+        """Keep a call that is about to start. With `cap`, only while fewer than `cap` calls of the
+        same tool and depth have started since `since`; False when the cap is reached (nothing is
+        kept). The count and the insert are one step under this process's write lock, so two calls in
+        this process cannot both take the last place; the cap is not shared between daemons."""
+        with self._swrite:
+            if cap is not None:
+                n = self.sc.execute(
+                    'SELECT count(*) FROM brain_calls WHERE tool = ? AND deep = ? AND "at" >= ?',
+                    [call["tool"], 1 if call.get("deep") else 0, since]).fetchone()[0]
+                if n >= cap:
+                    return False
+            self.sc.execute(
+                f"INSERT INTO brain_calls ({self._BC_COLS}) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, "
+                "NULL, NULL, ?, ?, ?)",
+                [call["id"], call["at"], call["tool"], 1 if call.get("deep") else 0, call.get("question"),
+                 json.dumps(call.get("repos") or []), call.get("station") or None,
+                 call.get("person_id") or None, call.get("via") or None])
+        return True
+
+    def finish_brain_call(self, call_id: str, duration_ms: int, ok: bool, input_tokens: int | None = None,
+                          output_tokens: int | None = None, error: str | None = None) -> None:
+        with self._swrite:
+            self.sc.execute(
+                "UPDATE brain_calls SET duration_ms = ?, input_tokens = ?, output_tokens = ?, ok = ?, "
+                "error = ? WHERE id = ?",
+                [duration_ms, input_tokens, output_tokens, 1 if ok else 0, error, call_id])
+
+    def list_brain_calls(self, since=None, tool: str | None = None, station: str | None = None,
+                         limit: int = 1000) -> list[dict]:
+        """The calls made to the brain, newest first."""
+        where, args = [], []
+        if since is not None:
+            where.append('"at" >= ?')
+            args.append(since)
+        if tool:
+            where.append("tool = ?")
+            args.append(tool)
+        if station:
+            where.append("station = ?")
+            args.append(station)
+        sql = f"SELECT {self._BC_COLS} FROM brain_calls" + (f" WHERE {' AND '.join(where)}" if where else "")
+        with self._sread:
+            rows = self.sc.execute(sql + ' ORDER BY "at" DESC, id LIMIT ?', [*args, limit]).fetchall()
+        out = []
+        for r in rows:
+            try:
+                repos = json.loads(r[5]) if r[5] else []
+            except ValueError:
+                repos = []
+            out.append({"id": r[0], "at": r[1], "tool": r[2], "deep": bool(r[3]), "question": r[4],
+                        "repos": repos, "duration_ms": r[6], "input_tokens": r[7],
+                        "output_tokens": r[8], "ok": None if r[9] is None else bool(r[9]),
+                        "error": r[10], "station": r[11], "person_id": r[12], "via": r[13]})
+        return out
 
     def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
         """End a grant that still waits and keep who said no; False when it was no longer waiting
