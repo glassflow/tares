@@ -86,6 +86,8 @@ async function waitFor(url, tries = 100) {
     const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(250); };
     const text = (loc) => loc.innerText().then((t) => t.replace(/\s+/g, " ").trim());
     // the note shows at once and the cell is read again after it, so wait for that read too
+    // the words as the API sent them: a tag is drawn in capitals, which innerText would return as capitals
+    const raw = (loc) => loc.textContent().then((t) => t.trim());
     const flashed = async (page) => { await page.getByTestId("flash").waitFor(); await settle(page); };
     const flashText = async (page) => (await text(page.getByTestId("flash"))).replace(/ Dismiss$/, "");
     const read = async (page) => (await page.request.get(`${BASE}/api/factory/setup`)).json();
@@ -127,6 +129,10 @@ async function waitFor(url, tries = 100) {
       const api = await read(page);
       ck("the title and the exit link are the API's", (await text(page.getByTestId("setup-title"))) === api.title
          && (await text(page.getByTestId("setup-exit"))) === api.exit_label && (await page.getByTestId("setup-exit").getAttribute("href")) === "/");
+      ck("the title is a crumb in the console header and the way out is a bordered button there, not a line in the page",
+        (await page.getByTestId("edition-header").getByTestId("setup-title").count()) === 1 && (await page.getByTestId("edition-header").getByTestId("setup-exit").count()) === 1
+        && (await page.getByTestId("setup").getByTestId("setup-title").count()) === 0 && (await page.getByTestId("setup").getByTestId("setup-exit").count()) === 0
+        && (await page.getByTestId("setup-exit").evaluate((el) => { const c = getComputedStyle(el); return c.borderTopWidth === "1px" && c.textDecorationLine === "none"; })));
       ck("the main menu is hidden", (await page.locator('nav[aria-label="Main"]').count()) === 0);
       ck("the rail lists the seven steps in order", (await page.getByTestId("rail").locator('button[data-testid^="step-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(5)))).join() === SLOTS.join());
       ck("on a wide screen the rail shows and the narrow list does not", (await page.getByTestId("rail").isVisible()) && !(await page.getByTestId("rail-narrow").isVisible()));
@@ -140,8 +146,14 @@ async function waitFor(url, tries = 100) {
       const rows = await page.getByTestId("connected").locator('[data-testid^="connected-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(10)));
       ck("Connected lists tares, linear and github", rows.join() === "tares,linear,github", rows.join());
       ck("the heading and the tags are the API's", (await text(page.getByTestId("connected").locator("h2"))).toLowerCase() === stepOf(api, "tickets").connected_heading.toLowerCase()
-         && (await text(page.getByTestId("connected-linear").getByTestId("tag-default"))) === "Default"
-         && (await text(page.getByTestId("connected-tares").getByTestId("tag-built_in"))) === "Built in");
+         && (await raw(page.getByTestId("connected-linear").getByTestId("tag-default"))) === "Default"
+         && (await raw(page.getByTestId("connected-tares").getByTestId("tag-built_in"))) === "Built in");
+      const look = (loc) => loc.evaluate((el) => { const c = getComputedStyle(el); return { family: c.fontFamily, upper: c.textTransform, border: c.borderTopColor, width: c.borderTopWidth, color: c.color }; });
+      const [tagLook, headLook] = [await look(page.getByTestId("connected-linear").getByTestId("tag-default")), await look(page.getByTestId("connected").locator("h2"))];
+      ck("tags and section heads are small mono capitals", /mono/i.test(tagLook.family) && tagLook.upper === "uppercase" && /mono/i.test(headLook.family) && headLook.upper === "uppercase", JSON.stringify([tagLook, headLook]));
+      const [editLook, makeLook, removeLook] = [await look(page.getByTestId("connected-linear").getByTestId("action-edit")), await look(page.getByTestId("connected-tares").getByTestId("action-make_default")), await look(page.getByTestId("connected-github").getByTestId("action-remove"))];
+      ck("Make default is a bordered button, Remove has a red border and red words, Edit settings the dark border", makeLook.width === "1px" && removeLook.width === "1px" && editLook.width === "1px"
+        && removeLook.border !== makeLook.border && editLook.border !== makeLook.border && removeLook.color !== makeLook.color, JSON.stringify([editLook, makeLook, removeLook]));
       ck("who picks a connection is shown", (await text(page.getByTestId("connected-github").getByTestId("row-use"))) === "Picked by project-p.");
       ck("a connection that is the default cannot be removed", (await page.getByTestId("connected-linear").getByTestId("action-remove").count()) === 0
          && (await page.getByTestId("connected-linear").getByTestId("action-edit").count()) === 1);
@@ -180,8 +192,8 @@ async function waitFor(url, tries = 100) {
       ck("the form is the connection's own, in edit mode", (await text(page.getByTestId("page-title"))) === "Edit Linear" && (await page.getByTestId("setup-form").getAttribute("data-mode")) === "edit");
       ck("a secret is a password field with nothing in it", (await f.getAttribute("data-kind")) === "secret" && (await page.getByTestId("input-api_key").getAttribute("type")) === "password"
          && (await page.getByTestId("input-api_key").inputValue()) === "");
-      ck("it says a key is saved, and the placeholder says to leave it blank", (await text(f.getByTestId("field-saved"))) === "A key is saved. Leave this blank to keep it."
-         && (await page.getByTestId("input-api_key").getAttribute("placeholder")) === "Saved. Leave blank to keep it.");
+      ck("it says a key is saved once, in the note, and the box has no second sentence", (await text(f.getByTestId("field-saved"))) === "A key is saved. Leave this blank to keep it."
+         && (await page.getByTestId("input-api_key").getAttribute("placeholder")) === null && (await text(page.getByTestId("setup-form"))).split("Leave").length === 2);
       ck("its requirement is shown beside the label", (await text(f.getByTestId("field-requirement"))) === "Optional");
       await shot(page, "form-secret-1440.png");
       await page.getByTestId("form-save").click();
@@ -219,6 +231,10 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("step-view").waitFor();
       ck("Cancel goes back and saves nothing", writes.length === 0 && (await page.getByTestId("setup-form").count()) === 0);
       await page.getByTestId("connected-github").getByTestId("action-edit").click();
+      const crumb = page.locator('nav[aria-label="Breadcrumb"]');
+      ck("the form has a breadcrumb: the step is the link, then the form's title", (await text(crumb)) === `Tickets / ${await text(page.getByTestId("page-title"))}`
+         && (await page.getByTestId("form-back").evaluate((el) => el.tagName)) === "BUTTON" && (await page.getByTestId("form-back").evaluate((el) => getComputedStyle(el).textDecorationLine)) === "underline"
+         && (await page.getByTestId("setup-form").getByRole("button", { name: "Cancel" }).evaluate((el) => getComputedStyle(el).borderTopWidth)) === "1px", await text(crumb));
       await page.getByTestId("form-back").click();
       ck("the back link goes to the step", (await text(page.getByTestId("page-title"))) === "Tickets");
 
@@ -292,12 +308,14 @@ async function waitFor(url, tries = 100) {
       await shot(page, "confirm-1440.png");
       await page.getByTestId("confirm-no").click();
       ck("Keep it closes it and removes nothing", (await page.getByTestId("confirm").count()) === 0 && writes.length === 0 && (await page.getByTestId("connected-github").count()) === 1);
+      ck("and the focus goes back to Remove", await page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-testid") === "action-remove"));
       await page.getByTestId("connected-github").getByTestId("action-remove").click();
       await page.getByTestId("confirm-yes").click();
       await flashed(page);
       ck("the project moves to the default first, then the connection goes", writes.map((w) => `${w.method} ${w.path}`).join("; ")
          === `DELETE /api/projects/${ids["project-p"]}/integrations/tickets; DELETE /api/factory/integrations/tickets/connections/github`, writes.map((w) => `${w.method} ${w.path}`).join("; "));
       ck("the row is gone and the note says so", (await page.getByTestId("connected-github").count()) === 0 && (await flashText(page)) === "GitHub Issues is removed.", await flashText(page));
+      ck("the focus is not lost: it moves to the title", await page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-testid") === "page-title"));
       // make default
       writes.length = 0;
       await page.getByTestId("connected-tares").getByTestId("action-make_default").click();
@@ -310,20 +328,21 @@ async function waitFor(url, tries = 100) {
 
     // 5. loading, an error and its retry, with the live route
     console.log("== loading and error ==");
-    {
-      const { ctx, page } = await newPage(1440);
+    for (const width of [1440, 390]) {
+      const { ctx, page } = await newPage(width);
       let release;
       const gate = new Promise((r) => { release = r; });
       await page.route("**/api/factory/setup", async (r) => { await gate; await r.continue(); });
       await page.goto(`${BASE}/setup`, { waitUntil: "load" });
       await page.getByTestId("setup-loading").waitFor();
-      ck("while the read is out, the screen shows a skeleton", (await page.getByTestId("setup-loading").getAttribute("aria-busy")) === "true" && (await page.getByTestId("step-view").count()) === 0);
-      ck("no sideways scroll", (await overflow(page)) <= 0);
-      await checkWords(page, ck, "loading 1440");
-      await shot(page, "loading-1440.png");
+      ck(`while the read is out, the screen shows a skeleton at ${width}`, (await page.getByTestId("setup-loading").getAttribute("aria-busy")) === "true" && (await page.getByTestId("step-view").count()) === 0);
+      ck(`loading: no sideways scroll at ${width}`, (await overflow(page)) <= 0, String(await overflow(page)));
+      ck(`loading: the skeleton stays inside the screen at ${width}`, await page.getByTestId("setup-loading").evaluate((el) => el.getBoundingClientRect().right <= window.innerWidth + 0.5));
+      await checkWords(page, ck, `loading ${width}`);
+      await shot(page, `loading-${width}.png`);
       release();
       await page.getByTestId("step-view").waitFor();
-      ck("then the first step", (await text(page.getByTestId("page-title"))) === "Tickets");
+      ck(`then the first step at ${width}`, (await text(page.getByTestId("page-title"))) === "Tickets");
       await page.unroute("**/api/factory/setup");
       await ctx.close();
     }
@@ -337,6 +356,9 @@ async function waitFor(url, tries = 100) {
       await one(ck, `error ${width}`);
       ck(`a failed read says so and offers Try again at ${width}`, (await text(page.getByTestId("setup-error"))).startsWith("The setup could not be loaded.") && (await page.getByTestId("setup-retry").count()) === 1
          && (await page.getByTestId("step-view").count()) === 0);
+      ck(`the error has a bold lead, the cause, and Try again right after the text at ${width}`, (await page.getByTestId("setup-error").locator("p > b").innerText()) === "The setup could not be loaded."
+         && (await text(page.getByTestId("setup-error"))).includes("Nothing was changed.") && (await page.getByTestId("setup-error").locator("p > button").count()) === 1
+         && (await text(page.getByTestId("setup-error"))).endsWith("Try again"));
       ck(`the error shows no raw status at ${width}`, !(await text(page.getByTestId("setup"))).includes("500") && !(await text(page.getByTestId("setup"))).includes("boom"));
       ck(`no sideways scroll at ${width}`, (await overflow(page)) <= 0);
       await checkWords(page, ck, `error ${width}`);
@@ -357,6 +379,7 @@ async function waitFor(url, tries = 100) {
          && (await text(page.getByTestId("rail-narrow").locator("summary"))).startsWith("Step 1 of 7: Tickets"));
       await page.getByTestId("rail-narrow").locator("summary").click();
       await page.getByTestId("nstep-monitoring").click();
+      ck("on a phone the crumb is hidden and Exit setup stays in the header", !(await page.getByTestId("setup-title").isVisible()) && (await page.getByTestId("setup-exit").isVisible()));
       ck("a step picked in the list opens and closes the list", (await text(page.getByTestId("page-title"))) === "Monitoring" && (await page.getByTestId("rail-narrow").getAttribute("open")) === null);
       ck("no sideways scroll", (await overflow(page)) <= 0);
       await checkWords(page, ck, "partly set up cell 390");
@@ -391,7 +414,7 @@ async function waitFor(url, tries = 100) {
       await page.goto(`${BASE}/setup?sample=expired`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       ck(`${name}: the step's banner is the API's text`, (await text(page.getByTestId("step-banner"))).includes("Your licence ended on 3 November."));
-      ck(`${name}: the connection says its licence ended`, (await text(page.getByTestId("connected-linear").getByTestId("tag-licence_ended"))) === "Licence ended");
+      ck(`${name}: the connection says its licence ended`, (await raw(page.getByTestId("connected-linear").getByTestId("tag-licence_ended"))) === "Licence ended");
       ck(`${name}: no sideways scroll`, (await overflow(page)) <= 0);
       await checkWords(page, ck, name);
       await shot(page, `expired-${width}.png`);
@@ -403,7 +426,7 @@ async function waitFor(url, tries = 100) {
       ck(`${name}: an integration that needs a licence is listed, with its reason, and cannot be connected`,
         (await page.getByTestId("available-jira").getByTestId("tag-not_licensed").count()) === 1 && (await page.getByTestId("available-jira").getByTestId("row-reason").count()) === 1
         && (await page.getByTestId("available-jira").getByTestId("action-connect").isDisabled()));
-      ck(`${name}: the licence tags read Enterprise and Not licensed`, (await text(page.getByTestId("available-jira").getByTestId("tag-enterprise"))) === "Enterprise");
+      ck(`${name}: the licence tags read Enterprise and Not licensed`, (await raw(page.getByTestId("available-jira").getByTestId("tag-enterprise"))) === "Enterprise");
       ck(`${name}: no sideways scroll`, (await overflow(page)) <= 0);
       await shot(page, `empty-tickets-${width}.png`);
     });
@@ -469,15 +492,25 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("app-block").waitFor();
       ck("a connection with an app starts with the app", (await text(page.getByTestId("app-block"))).includes("Approve the GlassFlow Linear app.") && (await page.getByTestId("field-api_key").count()) === 0
          && (await page.getByTestId("form-save").count()) === 0);
+      ck("the start has one Cancel, and the way to the key is a line of its own below the buttons", (await page.getByTestId("form-cancel").count()) === 1 && (await page.getByTestId("app-use-key").count()) === 1
+         && (await page.getByTestId("app-open").evaluate((a) => a.getBoundingClientRect().bottom)) <= (await page.getByTestId("app-use-key").evaluate((a) => a.getBoundingClientRect().top)));
       await shot(page, "app-start-1440.png");
       await page.getByTestId("app-open").click();
       await page.getByTestId("app-waiting").waitFor();
       opened = await page.evaluate(() => (window.__opened || []).length);
       ck("Open the app opens its address in a new window and waits", opened === 1 && (await page.evaluate(() => window.__opened[0][0])) === "https://connect.example.test/linear"
          && (await text(page.getByTestId("app-waiting"))).startsWith("Waiting for Linear"));
+      ck("while it waits there is one waiting box and one Cancel, and no steps, note or key line",
+        (await page.getByTestId("app-waiting").count()) === 1 && (await page.getByTestId("form-cancel").count()) === 1 && (await page.getByTestId("app-block").count()) === 0
+        && (await page.getByTestId("app-use-key").count()) === 0 && (await page.getByTestId("app-open").count()) === 0 && (await page.getByTestId("app-open-again").count()) === 1
+        && !(await text(page.getByTestId("setup-form"))).includes("What happens next") && !(await text(page.getByTestId("setup-form"))).includes("Cannot use the app"), await text(page.getByTestId("setup-form")));
       await shot(page, "app-waiting-1440.png");
-      await page.getByTestId("app-cancel").click();
-      ck("Cancel stops waiting", (await page.getByTestId("app-open").count()) === 1);
+      await page.getByTestId("app-open-again").click();
+      ck("Open again opens the address once more and keeps waiting", (await page.evaluate(() => window.__opened.length)) === 2 && (await page.getByTestId("app-waiting").count()) === 1);
+      await page.getByTestId("form-cancel").click();
+      ck("Cancel stops waiting and goes back to the step", (await page.getByTestId("setup-form").count()) === 0 && (await page.getByTestId("step-view").count()) === 1);
+      await page.getByTestId("available-linear").getByTestId("action-connect").click();
+      await page.getByTestId("app-block").waitFor();
       await page.getByTestId("app-use-key").click();
       ck("the key is one click away", (await page.getByTestId("field-api_key").count()) === 1 && (await page.getByTestId("form-save").count()) === 1 && (await page.getByTestId("app-switch").count()) === 1);
       await page.getByTestId("app-use-app").click();
@@ -490,12 +523,66 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("app-done").waitFor();
       ck("a finished app asks only for what it cannot know", (await text(page.getByTestId("app-done"))).startsWith("GitHub is connected.") && (await page.getByTestId("field-repo").count()) === 1
          && (await page.getByTestId("field-credential").count()) === 0 && (await page.getByTestId("input-repo").count()) === 1);
+      ck("the green line is under the fields and just above Save and connect", await page.evaluate(() => {
+        const d = document.querySelector('[data-testid="app-done"]'), f = document.querySelector('[data-testid="field-repo"]'), b = document.querySelector('[data-testid="form-done"], [data-testid="form-save"]');
+        return !!(d && f && b && (f.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING) && (d.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+          && getComputedStyle(d).color !== getComputedStyle(document.body).color);
+      }));
       await shot(page, "app-done-1440.png");
       await checkWords(page, ck, "app done");
       await page.goto(`${BASE}/setup?sample=approw`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       ck("a row connected with the app says so, and is disconnected, not removed", (await page.getByTestId("connected-linear").getByTestId("tag-app").count()) === 1
          && (await text(page.getByTestId("connected-linear").getByTestId("action-remove"))) === "Disconnect" && (await page.getByTestId("connected-linear").getByTestId("action-edit").count()) === 0);
+      await ctx.close();
+    }
+
+    // the waiting page reads the cell again by itself, then shows the connection (F9 and F2)
+    console.log("== the app poll ==");
+    {
+      const { ctx, page } = await newPage(1440);
+      await page.addInitScript(() => { window.open = (...a) => { (window.__opened = window.__opened || []).push(a); return null; }; });
+      let connected = false, reads = 0, pick = null;
+      const patch = (d) => {
+        const st = d.steps.find((x) => x.slot === "tickets");
+        if (!pick) pick = JSON.parse(JSON.stringify(st.available.find((a) => a.form && a.allowed)));
+        const base = st.available.filter((a) => a.id !== pick.id);
+        if (!connected) {
+          st.available = [{ ...pick, app: { url: "https://connect.example.test/poll", service: pick.title, app_name: `GlassFlow ${pick.title}`, button: `Connect ${pick.title}`, repo_step: false, steps: ["Approve the app."], note: "Nothing else to set up.", use_key_label: "Use an API key instead", use_app_label: "Use the app instead", stage: "start", done: null } }, ...base];
+        } else {
+          st.available = base;
+          st.connected = [...st.connected, { id: pick.id, title: pick.title, description: pick.description, tags: [{ key: "app", text: "App" }], default: false, built_in: false, via: "app", who: "", picked_by: [], follows: 0, use: "",
+            actions: [{ key: "remove", label: "Disconnect" }], blocked: null, confirm: { title: `Disconnect ${pick.title}?`, text: "Nothing else changes.", yes: "Yes, disconnect", no: "Keep it", moves_projects: false }, form: null, last_test: null }];
+        }
+      };
+      await page.route("**/api/factory/setup", async (r) => {
+        reads += 1;
+        const d = await (await r.fetch()).json();
+        patch(d);
+        await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(d) });
+      });
+      await page.route("**/api/factory/integrations/tickets/connections/*", async (r) => { connected = false; await r.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
+      await page.goto(`${BASE}/setup`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      await settle(page);
+      await page.getByTestId(`available-${pick.id}`).getByTestId("action-connect").click();
+      await page.getByTestId("app-open").click();
+      await page.getByTestId("app-waiting").waitFor();
+      const before = reads;
+      await page.waitForTimeout(3600);
+      ck("the waiting page reads the cell again by itself", reads > before, `${before} then ${reads}`);
+      ck("and it is still waiting while the app is not approved", (await page.getByTestId("app-waiting").count()) === 1);
+      connected = true;
+      await page.getByTestId("flash").waitFor({ timeout: 8000 }).catch(() => {});
+      const said = (await page.getByTestId("flash").count()) ? await flashText(page) : "(no note)";
+      ck("once the app is approved the form closes and the note says it is connected", (await page.getByTestId("setup-form").count()) === 0 && said === `${pick.title} is connected.`
+         && (await page.getByTestId(`connected-${pick.id}`).count()) === 1, said);
+      await page.getByTestId(`connected-${pick.id}`).getByTestId("action-remove").click();
+      await page.getByTestId("confirm-yes").click();
+      await page.getByTestId("flash").filter({ hasText: "disconnected" }).waitFor();
+      await settle(page);
+      ck("after Remove the Connect form does not open again by itself", (await page.getByTestId("setup-form").count()) === 0 && (await page.getByTestId(`available-${pick.id}`).count()) === 1
+         && (await page.getByTestId(`connected-${pick.id}`).count()) === 0);
       await ctx.close();
     }
 

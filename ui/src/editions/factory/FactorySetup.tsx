@@ -1,16 +1,17 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
-import { Check, ChevronLeft, ExternalLink } from "../../components/icons";
+import { Check } from "../../components/icons";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { useSample } from "../sample";
-import { useOwnMenu } from "../Shell";
+import { useHeaderSlots, useOwnMenu } from "../Shell";
 import { usePagePolling } from "../usePagePolling";
 import {
   clearProjectPick, makeDefault, removeConnection, saveIntegration, setupRead,
@@ -30,10 +31,20 @@ const POLL_APP_MS = 3000;
 // reads class names as literal text and cannot see one built from a variable.
 
 const GENERIC_ERROR = "That did not work. Try again in a moment.";
-const LOAD_ERROR = "The setup could not be loaded. Check that the cell is running, then try again.";
+// Words the page writes itself, where the cell gave none: the failed read has no answer to take them from.
+const LOAD_ERROR_LEAD = "The setup could not be loaded.";
+const LOAD_ERROR_CAUSE = "Tares did not answer, so nothing here is shown. Nothing was changed.";
+const FALLBACK_TITLE = "Set up your factory";
+const FALLBACK_EXIT = "Exit setup";
 
 const SMALL_BTN = "h-8! px-3! text-[13px]!";
-const DANGER_TEXT = "text-[color:var(--err)]!";
+// A button with the dark border of the main action (the mock's plain .btn), a red one for what removes,
+// and the same colours as the text of an error. Hover keeps the border, or the secondary variant would reset it.
+const DARK = "border-foreground! hover:border-foreground!";
+const DANGER_BTN = "border-[color:var(--danger-border)]! text-[color:color-mix(in_srgb,var(--err)_78%,var(--ink))]! hover:border-[color:var(--danger-border)]!";
+const OK_TEXT = "text-[color:color-mix(in_srgb,var(--ok)_62%,var(--ink))]";
+// Narrow, the buttons of a row share its width, as in the mock.
+const ACTS = "flex flex-wrap items-center gap-2.5 max-[559px]:[&>*]:flex-auto";
 
 // ---- tags ----
 
@@ -41,14 +52,14 @@ const TAG_TONE: Record<SetupTag["key"], string> = {
   default: "border-foreground bg-foreground text-background",
   built_in: "border-border bg-muted text-muted-foreground",
   key: "border-border bg-muted text-muted-foreground",
-  app: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
+  app: cn("border-[color:var(--ok-border)] bg-[var(--ok-soft)]", OK_TEXT),
   licence_ended: "border-[color:var(--warn)] bg-[var(--warn-soft)] text-foreground",
   not_licensed: "border-[color:var(--warn)] bg-[var(--warn-soft)] text-foreground",
 };
 
 function Tag({ tone, children, ...props }: { tone: string; children: React.ReactNode } & React.HTMLAttributes<HTMLSpanElement>) {
   return (
-    <span className={cn("inline-block border px-1.5 py-px text-[11px] font-semibold leading-4", tone)} {...props}>
+    <span className={cn("inline-block whitespace-nowrap border px-1.5 py-px font-mono text-[11px] font-medium uppercase leading-4 tracking-[0.08em]", tone)} {...props}>
       {children}
     </span>
   );
@@ -185,6 +196,8 @@ function SettingField({ f, value, error, onChange }: {
     );
   } else {
     const secret = f.kind === "secret";
+    // A saved secret says it is saved once, in the note under the box; the placeholder would repeat it.
+    const said = secret && f.saved && !!f.saved_note;
     control = (
       <Input
         {...aria}
@@ -192,7 +205,7 @@ function SettingField({ f, value, error, onChange }: {
         inputMode={f.kind === "url" ? "url" : undefined}
         value={typeof value === "string" ? value : ""}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={f.placeholder || undefined}
+        placeholder={said ? undefined : f.placeholder || undefined}
         autoComplete={secret ? "new-password" : "off"}
         autoCapitalize="off"
         spellCheck={false}
@@ -221,38 +234,25 @@ function SettingField({ f, value, error, onChange }: {
 /** The fields an app connection still asks for: no key and no address, since the app holds the access. */
 const appFields = (fields: SetupField[]) => fields.filter((f) => f.kind !== "secret" && f.kind !== "url" && f.name !== "credential");
 
-function AppBlock({ app, waiting, onOpen, onStop, onKey }: {
-  app: SetupApp;
-  waiting: boolean;
-  onOpen: () => void;
-  onStop: () => void;
-  onKey: () => void;
-}) {
+/** What happens when the app is used: the steps and the note, in a box. */
+function AppSteps({ app }: { app: SetupApp }) {
   return (
-    <div className="grid gap-4" data-testid="app-block">
-      <div className="grid gap-2">
-        <h2 className="m-0! text-sm! font-semibold">What happens next</h2>
-        <ol className="m-0 grid list-decimal gap-1 pl-5 text-sm text-foreground">
-          {app.steps.map((s) => <li key={s} className="[overflow-wrap:anywhere]">{s}</li>)}
-        </ol>
-        <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{app.note}</p>
-      </div>
-      {waiting ? (
-        <div className="flex flex-wrap items-center gap-3" role="status" data-testid="app-waiting">
-          <span className="inline-block size-4 animate-spin rounded-full border-2 border-border border-t-foreground motion-reduce:animate-none" aria-hidden />
-          <span className="text-sm font-semibold">Waiting for {app.service}</span>
-          <Button variant="secondary" className={SMALL_BTN} onClick={onOpen} data-testid="app-open-again">Open {app.service} again</Button>
-          <Button variant="quiet" className={SMALL_BTN} onClick={onStop} data-testid="app-cancel">Cancel</Button>
-        </div>
-      ) : (
-        <div>
-          <Button onClick={onOpen} data-testid="app-open"><ExternalLink className="size-4" aria-hidden />{app.button}</Button>
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-sm">
-        <span className="text-muted-foreground">Cannot use the app?</span>
-        <Button variant="quiet" className={SMALL_BTN} onClick={onKey} data-testid="app-use-key">{app.use_key_label}</Button>
-      </div>
+    <div className="grid gap-2.5 border border-border bg-background p-4" data-testid="app-block">
+      <h2 className="m-0! text-sm! font-semibold!">What happens next</h2>
+      <ol className="m-0 grid list-decimal gap-1.5 pl-5 text-sm text-foreground">
+        {app.steps.map((s) => <li key={s} className="[overflow-wrap:anywhere]">{s}</li>)}
+      </ol>
+      <p className="m-0 text-[13px] text-foreground [overflow-wrap:anywhere]">{app.note}</p>
+    </div>
+  );
+}
+
+/** While the app window is open the page shows only this: one box that says what it waits for. */
+function AppWaiting({ service }: { service: string }) {
+  return (
+    <div className="border border-border px-3 py-2 text-[13px] [overflow-wrap:anywhere]" role="status" data-testid="app-waiting">
+      <span className="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-border border-t-foreground align-[-2px] motion-reduce:animate-none" aria-hidden />
+      <b>Waiting for {service}.</b> Finish signing in on the {service} page that opened. This page carries on by itself once you approve the app.
     </div>
   );
 }
@@ -282,11 +282,24 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
   const waitingNow = waiting && appMode && app.stage === "start";
 
   // While the app window is open, read the page again every few seconds: the connection shows up on its own.
+  // The reader is held in a ref, so the timer is not built again each time the page draws; a hidden tab
+  // makes no calls, and reads once as soon as it is visible again.
+  const pollRef = React.useRef(onPoll);
+  pollRef.current = onPoll;
   React.useEffect(() => {
     if (!waitingNow) return undefined;
-    const t = setInterval(onPoll, POLL_APP_MS);
-    return () => clearInterval(t);
-  }, [waitingNow, onPoll]);
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const stop = () => { if (timer !== undefined) { clearInterval(timer); timer = undefined; } };
+    const start = () => { stop(); timer = setInterval(() => pollRef.current(), POLL_APP_MS); };
+    const onVisible = () => {
+      if (document.hidden) { stop(); return; }
+      pollRef.current();
+      start();
+    };
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVisible); };
+  }, [waitingNow]);
 
   const open = () => {
     if (app) window.open(app.url, "_blank", "noopener");
@@ -320,55 +333,66 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
   };
 
   const hasForm = fields.length > 0;
+  const choosing = appMode && !done && !waitingNow;
 
   return (
     <div className="mx-auto grid w-full max-w-[640px] min-w-0 gap-5" data-testid="setup-form" data-mode={form.mode}>
-      <div className="grid gap-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex! w-fit items-center gap-1 border-0! bg-transparent! p-0! text-[13px]! font-normal! text-muted-foreground! hover:text-foreground! cursor-pointer"
-          data-testid="form-back"
-        >
-          <ChevronLeft className="size-3.5" aria-hidden />
-          <span>{stepName}</span>
-        </button>
+      <div className="grid gap-1">
+        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-x-1.5 text-[13px] text-muted-foreground">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline! border-0! bg-transparent! p-0! text-[13px]! font-normal! text-muted-foreground! underline! underline-offset-[3px] hover:text-foreground! cursor-pointer"
+            data-testid="form-back"
+          >
+            {stepName}
+          </button>
+          <span aria-hidden>/</span>
+          <span aria-current="page" className="[overflow-wrap:anywhere]" data-testid="form-crumb">{form.title}</span>
+        </nav>
         <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]! [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{form.title}</h1>
-        <p className="m-0 text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="form-lead">{form.lead}</p>
+        <p className="m-0 mt-1 text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="form-lead">{form.lead}</p>
       </div>
 
-      <form ref={formRef} onSubmit={submit} noValidate className="grid min-w-0 gap-5 border border-border bg-card p-4 min-[560px]:p-6" data-testid="form-panel">
+      <form ref={formRef} onSubmit={submit} noValidate className="grid min-w-0 gap-[18px] border border-border bg-card p-4 min-[560px]:p-5" data-testid="form-panel">
         {app && !appMode && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-3 text-sm" data-testid="app-switch">
-            <Button variant="quiet" className={SMALL_BTN} onClick={() => setVia("app")} data-testid="app-use-app">{app.use_app_label}</Button>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" data-testid="app-switch">
+            <Button variant="secondary" className={SMALL_BTN} onClick={() => setVia("app")} data-testid="app-use-app">{app.use_app_label}</Button>
           </div>
         )}
-        {appMode && !done && (
-          <AppBlock app={app} waiting={waitingNow} onOpen={open} onStop={() => setWaiting(false)} onKey={() => setVia("key")} />
-        )}
-        {done && app.done && (
-          <p className="m-0 flex items-start gap-2 text-sm font-semibold [overflow-wrap:anywhere]" role="status" data-testid="app-done">
-            <Check className="mt-0.5 size-4 flex-none text-[color:var(--ok)]" aria-hidden />
-            <span>{app.done}</span>
-          </p>
-        )}
+        {choosing && <AppSteps app={app} />}
+        {waitingNow && <AppWaiting service={app.service} />}
         {fields.map((f) => (
           <SettingField key={f.name} f={f} value={values[f.name]} error={bad.includes(f.name)} onChange={(v) => change(f.name, v)} />
         ))}
-        {problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}
-        {(hasForm || done || !appMode) && (
-          <div className="flex flex-wrap items-center gap-3">
-            {hasForm || !appMode ? (
-              <Button type="submit" busy={busy} data-testid="form-save">{form.save_label}</Button>
-            ) : (
-              <Button type="button" onClick={onBack} data-testid="form-done">{stepName}</Button>
-            )}
-            <Button variant="quiet" onClick={onBack} data-testid="form-cancel">Cancel</Button>
+        {done && app.done && (
+          <div className="border-t border-border pt-4">
+            <div
+              className={cn("border border-[color:var(--ok-border)] bg-[var(--ok-soft)] px-3 py-2 text-[13px] [overflow-wrap:anywhere]", OK_TEXT)}
+              role="status"
+              data-testid="app-done"
+            >
+              {app.done}
+            </div>
           </div>
         )}
-        {appMode && !done && (
-          <div className="flex">
-            <Button variant="quiet" onClick={onBack} data-testid="form-cancel">Cancel</Button>
+        {problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}
+        <div className={ACTS}>
+          {waitingNow ? (
+            <Button variant="secondary" className={DARK} onClick={open} data-testid="app-open-again">Open {app.service} again</Button>
+          ) : choosing ? (
+            <Button onClick={open} data-testid="app-open">{app.button}</Button>
+          ) : hasForm || !appMode ? (
+            <Button type="submit" busy={busy} data-testid="form-save">{form.save_label}</Button>
+          ) : (
+            <Button type="button" onClick={onBack} data-testid="form-done">{stepName}</Button>
+          )}
+          <Button variant="secondary" className={DARK} onClick={onBack} data-testid="form-cancel">Cancel</Button>
+        </div>
+        {choosing && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-4 text-[13px] text-muted-foreground">
+            <span>Cannot use the app?</span>
+            <Button variant="secondary" className={SMALL_BTN} onClick={() => setVia("key")} data-testid="app-use-key">{app.use_key_label}</Button>
           </div>
         )}
       </form>
@@ -388,7 +412,10 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
   onAction: (key: "edit" | "make_default") => void;
 }) {
   const keepRef = React.useRef<HTMLButtonElement>(null);
+  const removeRef = React.useRef<HTMLButtonElement>(null);
   React.useEffect(() => { if (asking) keepRef.current?.focus(); }, [asking]);
+  // The answer No closes the question, and the focus goes back to the button that opened it.
+  const keep = () => { onAnswer(false); removeRef.current?.focus(); };
   return (
     <li className="grid gap-3 border-b border-border px-4 py-3.5 last:border-b-0" data-testid={`connected-${c.id}`} data-slot={slot}>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -404,11 +431,11 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
         {c.actions.length > 0 && (
           <div className="flex max-w-full flex-wrap items-center gap-2">
             {c.actions.map((a) => a.key === "edit" ? (
-              <Button key={a.key} variant="secondary" className={SMALL_BTN} disabled={busy} onClick={() => onAction("edit")} data-testid={`action-${a.key}`}>{a.label}</Button>
+              <Button key={a.key} variant="secondary" className={cn(SMALL_BTN, DARK)} disabled={busy} onClick={() => onAction("edit")} data-testid={`action-${a.key}`}>{a.label}</Button>
             ) : a.key === "make_default" ? (
-              <Button key={a.key} variant="quiet" className={SMALL_BTN} disabled={busy} onClick={() => onAction("make_default")} data-testid={`action-${a.key}`}>{a.label}</Button>
+              <Button key={a.key} variant="secondary" className={SMALL_BTN} disabled={busy} onClick={() => onAction("make_default")} data-testid={`action-${a.key}`}>{a.label}</Button>
             ) : (
-              <Button key={a.key} variant="quiet" className={cn(SMALL_BTN, DANGER_TEXT)} disabled={busy} onClick={onAsk} data-testid={`action-${a.key}`} aria-expanded={asking}>{a.label}</Button>
+              <Button ref={removeRef} key={a.key} variant="secondary" className={cn(SMALL_BTN, DANGER_BTN)} disabled={busy} onClick={onAsk} data-testid={`action-${a.key}`} aria-expanded={asking}>{a.label}</Button>
             ))}
           </div>
         )}
@@ -418,8 +445,8 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
           <div id={`ask-${slot}-${c.id}`} className="text-sm font-semibold">{c.confirm.title}</div>
           <p className="m-0 text-[13px] [overflow-wrap:anywhere]" data-user-text>{c.confirm.text}</p>
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" className={cn(SMALL_BTN, "border-[color:var(--err)]! bg-[var(--err)]! text-background! hover:bg-[var(--err)]!")} busy={busy} onClick={() => onAnswer(true)} data-testid="confirm-yes">{c.confirm.yes}</Button>
-            <Button ref={keepRef} variant="secondary" className={SMALL_BTN} disabled={busy} onClick={() => onAnswer(false)} data-testid="confirm-no">{c.confirm.no}</Button>
+            <Button variant="secondary" className={cn(SMALL_BTN, DANGER_BTN)} busy={busy} onClick={() => onAnswer(true)} data-testid="confirm-yes">{c.confirm.yes}</Button>
+            <Button ref={keepRef} variant="secondary" className={cn(SMALL_BTN, DARK)} disabled={busy} onClick={keep} data-testid="confirm-no">{c.confirm.no}</Button>
           </div>
         </div>
       )}
@@ -440,14 +467,14 @@ function AvailableRow({ a, onConnect }: { a: SetupAvailable; onConnect: () => vo
         {!a.allowed && a.reason && <div className="mt-1 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="row-reason">{a.reason}</div>}
       </div>
       <div className="flex flex-none items-center gap-2">
-        <Button variant="secondary" className={SMALL_BTN} disabled={!a.allowed || !a.form} onClick={onConnect} data-testid="action-connect">{a.button}</Button>
+        <Button variant="secondary" className={cn(SMALL_BTN, DARK)} disabled={!a.allowed || !a.form} onClick={onConnect} data-testid="action-connect">{a.button}</Button>
       </div>
     </li>
   );
 }
 
 function SectionHead({ children, ...props }: { children: React.ReactNode } & React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className="m-0! mb-2 text-xs! font-semibold uppercase tracking-[0.06em] text-muted-foreground" {...props}>{children}</h2>;
+  return <h2 className="m-0! mb-2 font-mono text-xs! font-medium! uppercase tracking-[0.08em]! text-muted-foreground" {...props}>{children}</h2>;
 }
 
 function StepView({ step, nextStep, busy, asking, notice, problem, onGo, onConnect, onEdit, onMakeDefault, onAsk, onAnswer, onClearNotice }: {
@@ -606,15 +633,38 @@ function Loading() {
   );
 }
 
+/** The page's words in the console header: its name after the cell name (not on a phone) and the way out. */
+function HeaderBits({ title, exit }: { title: string; exit: string }) {
+  const { crumb, actions } = useHeaderSlots();
+  return (
+    <>
+      {crumb && createPortal(
+        <span className="hidden min-w-0 items-center gap-2.5 text-[13px] text-muted-foreground md:flex">
+          <span aria-hidden>/</span>
+          <span className="truncate" data-testid="setup-title">{title}</span>
+        </span>,
+        crumb,
+      )}
+      {actions && createPortal(
+        <Button asChild variant="secondary" className={cn(SMALL_BTN, "shrink-0")} data-testid="setup-exit"><Link to="/">{exit}</Link></Button>,
+        actions,
+      )}
+    </>
+  );
+}
+
+interface OpenForm { id: string; mode: "connect" | "edit"; title: string }
+
 function Setup({ data, reload, first }: { data: SetupData; reload: () => void; first: SetupSlot | null }) {
   const [slot, setSlot] = React.useState<SetupSlot>(() => (data.steps.some((s) => s.slot === first) ? first! : data.steps[0].slot));
-  const [view, setView] = React.useState<{ id: string; mode: "connect" | "edit" } | null>(null);
+  const [view, setView] = React.useState<OpenForm | null>(null);
   const [asking, setAsking] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState("");
   const [problem, setProblem] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const headRef = React.useRef<HTMLDivElement>(null);
   const moved = React.useRef(false);
+  const refocus = React.useRef(false);
 
   const step = data.steps.find((s) => s.slot === slot) ?? data.steps[0];
   const idx = data.steps.indexOf(step);
@@ -625,11 +675,30 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
   const form = view && item ? (item as SetupConnected | SetupAvailable).form : null;
   const showForm = !!view && !!form && !!item;
 
+  // The row the form is for left the answer: the app brought the connection in while the form was open, or
+  // the connection is gone. The form closes and the step says what happened, and the form does not
+  // come back on its own later.
+  React.useEffect(() => {
+    if (!view || item) return;
+    const connected = step.connected.some((c) => c.id === view.id);
+    setNotice(view.mode === "connect" && connected ? `${view.title} is connected.` : view.mode === "edit" ? `${view.title} is no longer connected.` : "");
+    setView(null);
+  }, [view, item, step]);
+
+  const titleOf = () => headRef.current?.querySelector<HTMLElement>("[data-testid=page-title]");
+
   // a move to another step or into a form puts the focus on the new title, so a keyboard or screen reader follows
   React.useEffect(() => {
     if (!moved.current) { moved.current = true; return; }
-    headRef.current?.querySelector<HTMLElement>("[data-testid=page-title]")?.focus();
+    titleOf()?.focus();
   }, [slot, showForm]);
+
+  // after a removal or a new default the row that had the focus is gone or changed, so the title takes it
+  React.useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    titleOf()?.focus();
+  }, [data]);
 
   const go = (s: SetupSlot) => { setSlot(s); setView(null); setAsking(null); setNotice(""); setProblem(""); window.scrollTo?.({ top: 0 }); };
 
@@ -640,6 +709,7 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
     try {
       await makeDefault(slot, id);
       setNotice(`${step.connected.find((c) => c.id === id)?.title ?? id} is now the default for ${step.name}.`);
+      refocus.current = true;
       reload();
     } catch (e) { fail(e); } finally { setBusy(false); }
   };
@@ -653,18 +723,21 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
       await removeConnection(slot, c.id);
       setNotice(`${c.title} is ${c.via === "app" ? "disconnected" : "removed"}.`);
       setAsking(null);
+      refocus.current = true;
       reload();
     } catch (e) { fail(e); reload(); } finally { setBusy(false); }
   };
 
   const saved = (text: string) => { setView(null); setNotice(text); setProblem(""); reload(); };
 
+  const openForm = (id: string, mode: OpenForm["mode"]) => {
+    const row = mode === "edit" ? step.connected.find((c) => c.id === id) : step.available.find((a) => a.id === id);
+    setNotice(""); setProblem(""); setView({ id, mode, title: row?.title ?? id });
+  };
+
   return (
     <div className="mx-auto grid w-full max-w-[1280px] min-w-0 gap-6 px-4 py-6 min-[900px]:px-10" data-testid="setup">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <p className="m-0 text-sm font-semibold" data-testid="setup-title">{data.title}</p>
-        <Link to="/" className="text-[13px] text-[color:var(--accent-deep)] underline" data-testid="setup-exit">{data.exit_label}</Link>
-      </div>
+      <HeaderBits title={data.title} exit={data.exit_label} />
       <div className={cn("grid min-w-0 gap-6", !showForm && "min-[900px]:grid-cols-[272px_minmax(0,1fr)] min-[900px]:gap-8")}>
         {!showForm && <Rail data={data} slot={step.slot} onPick={go} />}
         <div ref={headRef} className="min-w-0">
@@ -690,8 +763,8 @@ function Setup({ data, reload, first }: { data: SetupData; reload: () => void; f
               notice={notice}
               problem={problem}
               onGo={go}
-              onConnect={(id) => { setNotice(""); setProblem(""); setView({ id, mode: "connect" }); }}
-              onEdit={(id) => { setNotice(""); setProblem(""); setView({ id, mode: "edit" }); }}
+              onConnect={(id) => openForm(id, "connect")}
+              onEdit={(id) => openForm(id, "edit")}
               onMakeDefault={makeDefaultOf}
               onAsk={setAsking}
               onAnswer={answer}
@@ -714,12 +787,16 @@ export default function FactorySetup() {
   if (data) return <Setup data={data} reload={reload} first={(params.get("step") as SetupSlot | null) ?? null} />;
   return (
     <div className="mx-auto grid w-full max-w-[1280px] min-w-0 gap-6 px-4 py-6 min-[900px]:px-10" data-testid="setup">
+      <HeaderBits title={FALLBACK_TITLE} exit={FALLBACK_EXIT} />
       {error ? (
         <div className="grid max-w-[880px] gap-4">
-          <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]!" data-testid="page-title">Set up your factory</h1>
-          <Banner tone="error" data-testid="setup-error" action={<Button variant="secondary" className={SMALL_BTN} onClick={reload} data-testid="setup-retry">Try again</Button>}>
-            {LOAD_ERROR}
-          </Banner>
+          <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]!" data-testid="page-title">{FALLBACK_TITLE}</h1>
+          <div role="alert" className="border border-[color:var(--danger-border)] bg-[var(--err-soft)] px-3.5 py-2.5 text-[13px] text-foreground" data-testid="setup-error">
+            <p className="m-0 [overflow-wrap:anywhere]">
+              <b>{LOAD_ERROR_LEAD}</b> {LOAD_ERROR_CAUSE}
+              <Button variant="secondary" className={cn(SMALL_BTN, DARK, "ml-2 align-middle")} onClick={reload} data-testid="setup-retry">Try again</Button>
+            </p>
+          </div>
         </div>
       ) : (
         <Loading />
