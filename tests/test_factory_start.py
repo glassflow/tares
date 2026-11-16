@@ -1,8 +1,8 @@
 """The Start checklist of the factory home (TR-756): tares/start_steps.py, its place in
 GET /api/home, and hiding it per credential (POST and DELETE /api/home/start/hide).
 
-Five steps in a fixed order with fixed words (TR-1312): Set up your factory, done on /setup, then four
-terminal commands; each is done from one read of the store; the block hides when everything is done or
+Four steps in a fixed order with fixed words (TR-1312): Set up your factory, done on /setup, then three
+terminal commands (planning the first project comes after setup, on the home); each is done from one read of the store; the block hides when everything is done or
 when the caller hid it, for that caller only; the words pass tares/words.py. A terminal step keeps its
 command once done, so /setup can always show it.
 
@@ -57,9 +57,9 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
-KEYS = ["setup", "install", "login", "crew", "spec"]
+KEYS = ["setup", "install", "login", "crew"]
 ALL = dict(choices_made=True, github_connected=True, cli_version="1.0.0", machine_name="example-laptop",
-           crew_up=True, spec_with_tickets=True)
+           crew_up=True)
 
 
 def done_of(ctx):
@@ -97,7 +97,7 @@ class Store:
 def units():
     print("== the steps ==")
     steps = ss.factory_steps({})
-    ck("five steps in order", [s["key"] for s in steps] == KEYS, [s["key"] for s in steps])
+    ck("four steps in order: planning the first project is not a step of setup", [s["key"] for s in steps] == KEYS, [s["key"] for s in steps])
     ck("the titles and what each gives, word for word",
        [(s["title"], s["gets"]) for s in steps] == [
            ("Set up your factory",
@@ -105,13 +105,10 @@ def units():
            ("Install Tares", "The command that starts and watches the crew."),
            ("Sign your machine in", "So the crew on your machine reports here."),
            ("Start the crew",
-            "It reads your choices from this workspace and asks only what belongs to your machine."),
-           ("Plan the first project",
-            "Start it in the repo you want built. You talk the project through with Claude Code, "
-            "and it writes the plan as milestones and tickets.")],
+            "It reads your choices from this workspace and asks only what belongs to your machine.")],
        [(s["title"], s["gets"]) for s in steps])
-    ck("the first is done in the console, the last four in a terminal",
-       [s["where"] for s in steps] == ["workspace", "terminal", "terminal", "terminal", "terminal"])
+    ck("the first is done in the console, the last three in a terminal",
+       [s["where"] for s in steps] == ["workspace", "terminal", "terminal", "terminal"])
     ck("every row has done and actions, nothing done on an empty cell",
        all(set(s) >= {"key", "title", "gets", "done", "actions", "where"} and isinstance(s["actions"], list)
            for s in steps) and not any(s["done"] for s in steps))
@@ -127,8 +124,6 @@ def units():
     ck("GitHub alone does not finish setup", done_of({"github_connected": True})["setup"] is False)
     d = done_of({"choices_made": True, "github_connected": True})
     ck("the choices and GitHub finish setup, and only setup", d["setup"] is True and sum(d.values()) == 1, d)
-    d = done_of({"spec_with_tickets": True})
-    ck("a factory project with tickets finishes the spec only", d["spec"] is True and sum(d.values()) == 1, d)
     d = done_of({"cli_version": "1.2.3"})
     ck("a reported version finishes install only", d["install"] and not d["login"] and sum(d.values()) == 1, d)
     d = done_of({"machine_name": "example-laptop"})
@@ -136,7 +131,7 @@ def units():
        and not d["crew"] and sum(d.values()) == 2, d)
     d = done_of({"crew_up": True})
     ck("a crew that is up finishes install, sign in and the crew", d["install"] and d["login"] and d["crew"]
-       and not d["spec"] and sum(d.values()) == 3, d)
+       and sum(d.values()) == 3, d)
     ck("done rows say what was chosen",
        step({"choices_made": True, "github_connected": True,
              "setup_text": "You approve each merge, 2 builders, no releases. GitHub connected as example-org"},
@@ -149,15 +144,15 @@ def units():
     cloud = {"cloud": True}
     ck("Set up your factory opens /setup",
        step(o, "setup")["actions"] == [{"label": "Set up your factory", "to": "/setup"}], step(o, "setup")["actions"])
-    ck("the four commands are copied word for word",
-       [step(o, k)["actions"] for k in ("install", "login", "crew", "spec")] == [
+    ck("the three commands are copied word for word",
+       [step(o, k)["actions"] for k in ("install", "login", "crew")] == [
            [{"label": "Copy the command", "copy": "uv tool install tares"}],
            [{"label": "Copy the command", "copy": "tares login"}],
-           [{"label": "Copy the command", "copy": "tares factory crew up"}],
-           [{"label": "Copy the command", "copy": "tares factory spec"}]])
+           [{"label": "Copy the command", "copy": "tares factory crew up"}]])
     ck("a terminal step keeps its command, done or not",
-       [step(c, k)["command"] for c in (o, ALL) for k in ("install", "login", "crew", "spec")]
-       == ["uv tool install tares", "tares login", "tares factory crew up", "tares factory spec"] * 2)
+       [step(c, k)["command"] for c in (o, ALL) for k in ("install", "login", "crew")]
+       == ["uv tool install tares", "tares login", "tares factory crew up"] * 2)
+    ck("the command that plans a project is kept for the home", ss.SPEC_COMMAND == "tares factory spec")
     ck("Set up your factory has no command", "command" not in step(o, "setup"))
     ck("a button is one of to, href or copy",
        all(sum(k in a for k in ("to", "href", "copy")) == 1
@@ -172,10 +167,10 @@ def units():
     print("== checklist ==")
     st = Store()
     c = ss.checklist(st, ss.factory_steps({"choices_made": True, "github_connected": True}), "ana")
-    ck("the counts and show", c["done"] == 1 and c["total"] == 5 and c["show"] is True
-       and len(c["steps"]) == 5, {k: v for k, v in c.items() if k != "steps"})
+    ck("the counts and show", c["done"] == 1 and c["total"] == 4 and c["show"] is True
+       and len(c["steps"]) == 4, {k: v for k, v in c.items() if k != "steps"})
     c = ss.checklist(st, ss.factory_steps(ALL), "ana")
-    ck("show is false when everything is done", c["show"] is False and c["done"] == 5, c["show"])
+    ck("show is false when everything is done", c["show"] is False and c["done"] == 4, c["show"])
     ck("show is false when everything is done, for whoever", ss.checklist(Store(), ss.factory_steps(ALL), "bo")["show"] is False)
     ss.hide(st, "ana")
     some = ss.factory_steps({"choices_made": True})
@@ -205,8 +200,8 @@ async def main():
     async with app.router.lifespan_context(app):
         print("== the block in the home of a new cell ==")
         s0 = start_of()
-        ck("five steps, none done, shown", [s["key"] for s in s0["steps"]] == KEYS and s0["done"] == 0
-           and s0["total"] == 5 and s0["show"] is True, s0["done"])
+        ck("four steps, none done, shown", [s["key"] for s in s0["steps"]] == KEYS and s0["done"] == 0
+           and s0["total"] == 4 and s0["show"] is True, s0["done"])
         ck("Set up your factory opens /setup",
            s0["steps"][0]["actions"] == [{"label": "Set up your factory", "to": "/setup"}])
 
@@ -224,10 +219,7 @@ async def main():
             await cx.post("/api/projects", json={"template": "custom", "name": "billing-export",
                                                  "goal": "Invoices as a CSV file", "objects": [],
                                                  "kind": "software_factory"})
-            pid = store.list_projects()[0]["id"]
-            ck("a project with no ticket does not finish the spec", done_now()["spec"] is False)
-            await cx.post(f"/api/projects/{pid}/tickets", json={"title": "Write the export query"})
-            ck("a ticket finishes the spec", done_now()["spec"] is True)
+            ck("a project is not a step: the steps stay the four", list(done_now()) == KEYS)
             real = fx.stations
             now = fh.now_utc()
             row = lambda role, state: {"name": "crew-" + role, "role": role, "state": state,
@@ -265,8 +257,8 @@ async def main():
             ck("both see the block", a0["show"] is True and b0["show"] is True)
             r = await ax.post("/api/home/start/hide")
             ck("a read key may hide its own block", r.status_code == 200, r.text)
-            ck("and gets its new start block back", r.json()["show"] is False and r.json()["total"] == 5
-               and len(r.json()["steps"]) == 5, r.text[:200])
+            ck("and gets its new start block back", r.json()["show"] is False and r.json()["total"] == 4
+               and len(r.json()["steps"]) == 4, r.text[:200])
             ck("key-a sees it hidden at once, not after the cache",
                (await ax.get("/api/home")).json()["start"]["show"] is False)
             ck("key-b still sees it", (await bx.get("/api/home")).json()["start"]["show"] is True)

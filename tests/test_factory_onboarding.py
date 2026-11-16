@@ -255,7 +255,7 @@ async def main():
                                               for t in (TOKEN, ka, kb)))
             ck("the home ticks install and sign in within the same call, no cache wait",
                {s["key"]: s["done"] for s in (await ax.get("/api/home")).json()["start"]["steps"]}
-               == {"setup": False, "install": True, "login": True, "crew": False, "spec": False})
+               == {"setup": False, "install": True, "login": True, "crew": False})
             ck("a body without a name or version saves what is there",
                (await ax.post("/api/crew/machine", json={})).json() == {"machine": "ana-laptop",
                                                                          "version": "1.58.1"})

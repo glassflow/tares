@@ -150,6 +150,7 @@ export const empty: HomeData = {
                 doing: "Starts when you hand over a project", memory_pct: null, memory: null }],
   },
   plan: { known: false, limits: [], share_text: null, title: "Your Claude plan" },
+  plan_command: "tares factory spec",
 };
 
 export const crewQuiet: HomeData = {
@@ -189,9 +190,9 @@ export const longGoals: HomeData = {
   ],
 };
 
-// The first-run steps, as the daemon words them (tares/start_steps.py): five steps, done ones in place
+// The first-run steps, as the daemon words them (tares/start_steps.py): four steps, done ones in place
 // without buttons.
-const STEP_KEYS = ["setup", "install", "login", "crew", "spec"];
+const STEP_KEYS = ["setup", "install", "login", "crew"];
 const STEPS: Record<string, Omit<StartStep, "done">> = {
   setup: { key: "setup", title: "Set up your factory", where: "workspace",
     gets: "How your crew works, your GitHub, and where tickets, reviews and checks live.",
@@ -205,9 +206,6 @@ const STEPS: Record<string, Omit<StartStep, "done">> = {
   crew: { key: "crew", title: "Start the crew", where: "terminal",
     gets: "It reads your choices from this workspace and asks only what belongs to your machine.",
     actions: [{ label: "Copy the command", copy: "tares factory crew up" }] },
-  spec: { key: "spec", title: "Plan the first project", where: "terminal",
-    gets: "Start it in the repo you want built. You talk the project through with Claude Code, and it writes the plan as milestones and tickets.",
-    actions: [{ label: "Copy the command", copy: "tares factory spec" }] },
 };
 
 /** The block with the steps named in `done` ticked, and `details` added to the steps they name. */

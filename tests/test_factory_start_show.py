@@ -46,7 +46,7 @@ def ck(label, cond, detail=""):
 
 
 ALL = dict(choices_made=True, github_connected=True, cli_version="1.0.0", machine_name="example-laptop",
-           crew_up=True, spec_with_tickets=True)
+           crew_up=True)
 
 
 class Store:
@@ -74,12 +74,12 @@ def units():
     c = ss.checklist(st, some, "ana")
     ck("hidden by the caller with open steps: hidden is true", c["show"] is False and c["hidden"] is True, c)
     ck("the steps and counts stay in the block so Show it again has nothing to fetch",
-       c["total"] == 5 and c["done"] == 1 and len(c["steps"]) == 5)
+       c["total"] == 4 and c["done"] == 1 and len(c["steps"]) == 4)
     c = ss.checklist(st, some, "bo")
     ck("another person did not hide it: shown, not hidden", c["show"] is True and c["hidden"] is False, c)
     c = ss.checklist(st, ss.factory_steps(ALL), "ana")
     ck("everything done: neither shown nor hidden, whatever the setting says",
-       c["show"] is False and c["hidden"] is False and c["done"] == 5, c)
+       c["show"] is False and c["hidden"] is False and c["done"] == 4, c)
     ss.unhide(st, "ana")
     c = ss.checklist(st, some, "ana")
     ck("shown again after unhide", c["show"] is True and c["hidden"] is False, c)

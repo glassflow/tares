@@ -188,7 +188,12 @@ function cleanEnv(extra) {
       await open(page, "empty");
       ck(`empty @${width}: Nothing waits for you.`, await page.getByText("Nothing waits for you.", { exact: true }).isVisible());
       ck(`empty @${width}: no waiting rows and no project rows`, (await rows.count()) === 0 && (await projects.count()) === 0);
-      ck(`empty @${width}: a New project button in the projects box`, (await page.getByRole("region", { name: "Projects" }).getByRole("link", { name: "New project" }).count()) === 1);
+      const projBox = page.getByRole("region", { name: "Projects" });
+      ck(`empty @${width}: the projects box says how to plan the first project, with the command to copy`,
+        (await projBox.getByTestId("plan-first").count()) === 1 && (await projBox.getByRole("heading", { name: "Plan your first project" }).count()) === 1
+        && (await projBox.getByTestId("plan-first").locator("code").innerText()) === "tares factory spec"
+        && (await projBox.getByTestId("start-copy").count()) === 1);
+      ck(`empty @${width}: and a link to start one in the console instead`, (await projBox.getByRole("link", { name: "start one here" }).getAttribute("href")) === "/projects/new");
       ck(`empty @${width}: no "All projects" link on a cell with none`, (await page.getByRole("link", { name: /^All projects/ }).count()) === 0);
       ck(`empty @${width}: plan hidden for one line`, await page.getByText("Plan use shows once the crew reports it.", { exact: true }).isVisible()
          && (await page.getByText(/% used/).count()) === 0);

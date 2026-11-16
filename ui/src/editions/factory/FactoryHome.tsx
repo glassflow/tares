@@ -14,6 +14,7 @@ import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
+import { CopyCommand } from "../StartChecklist";
 import {
   allowDesk, deskReply, finishProject, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
@@ -231,8 +232,26 @@ interface TeamProjectsProps {
 
 const PROJECTS_FIRST = 6;
 
-function Projects({ projects, stubs, finished, later = 0, team }: {
-  projects: HomeProject[]; stubs: HomeHiddenProject[]; finished: number; later?: number; team?: TeamProjectsProps;
+/** No project yet: planning the first one is what comes after setup, in a terminal, with the crew. */
+function PlanFirst({ command }: { command: string }) {
+  return (
+    <div className="grid gap-3 px-5 py-5" data-testid="plan-first">
+      <h3 className="m-0! text-base!">Plan your first project</h3>
+      <p className="m-0! max-w-[640px] text-[13px] text-muted-foreground">
+        In your project's repo on this machine, type the command and talk the project through with Claude Code. It writes
+        the plan as milestones and tickets and hands them to the crew. A new project? Start in an empty folder: it offers
+        to make the GitHub repo for you.
+      </p>
+      <div><CopyCommand command={command} /></div>
+      <p className="m-0! text-[13px] text-muted-foreground">
+        Or <Link to="/projects/new" className="text-foreground! underline! underline-offset-2">start one here</Link> and hand it to the crew later.
+      </p>
+    </div>
+  );
+}
+
+function Projects({ projects, stubs, finished, later = 0, team, planCommand }: {
+  projects: HomeProject[]; stubs: HomeHiddenProject[]; finished: number; later?: number; team?: TeamProjectsProps; planCommand?: string;
 }) {
   const [all, setAll] = React.useState(false);
   const shown = team && !all ? projects.slice(0, PROJECTS_FIRST) : projects;
@@ -254,6 +273,8 @@ function Projects({ projects, stubs, finished, later = 0, team }: {
         {projects.length === 0 ? (
           stubs.length > 0 ? null : team && team.view === "mine" ? (
             <EmptyState title="No projects of yours yet." />
+          ) : planCommand && finished === 0 && later === 0 ? (
+            <PlanFirst command={planCommand} />
           ) : (
             <EmptyState title="No projects yet."
                         action={<Button asChild><Link to="/projects/new">New project</Link></Button>}>
@@ -413,7 +434,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, projects
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
-          <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} />
+          <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} planCommand={data.plan_command} />
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />

@@ -246,7 +246,7 @@ async def main():
                and body["progress"] == {"set": 2, "total": 10, "text": "2 of 10 done"}, body["progress"])
             ck("the crew, GitHub and the terminal come from the home",
                body["onboarding"]["choices"]["chosen"] is False and body["onboarding"]["github"]["connected"] is False
-               and [t["key"] for t in body["terminal"]] == ["install", "login", "crew", "spec"]
+               and [t["key"] for t in body["terminal"]] == ["install", "login", "crew"]
                and body["tools"] == {"github": {"connected": False, "detail": "Not connected"},
                                      "slack": {"connected": False, "detail": "Not connected"}}, body["tools"])
             tix = step(body, "tickets")

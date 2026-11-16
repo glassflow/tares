@@ -468,6 +468,76 @@ def _git(args: list, cwd=None):
     return r.returncode, r.stdout.rstrip("\n")
 
 
+# ---------- a new project's repo ----------
+# `spec` plans in a git repo that has a commit on GitHub: builders branch from it and the crew opens pull requests
+# there. A person starting from an empty folder is offered to make that repo here (asked only at a terminal); anyone
+# else is told the commands.
+
+
+def _repo_name(folder: str) -> str:
+    """A GitHub repo name from a folder's name: letters, digits, '.', '-' and '_'."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", os.path.basename(os.path.normpath(folder))).strip("-.") or "project"
+
+
+def _has_origin(path: str) -> bool:
+    return _git(["-C", path, "remote", "get-url", "origin"])[0] == 0
+
+
+def first_repo_commands(folder: str, is_repo: bool) -> list:
+    """The commands that make `folder` a GitHub repo with a first commit, as a person would type them."""
+    name = _repo_name(folder)
+    out = [] if is_repo else ["git init"]
+    out.append('git commit --allow-empty -m "Start"')
+    out.append("git push -u origin HEAD" if is_repo and _has_origin(folder)
+               else f"gh repo create {name} --private --source . --remote origin --push")
+    return out
+
+
+def _say_commands(cmds: list) -> str:
+    return "".join(f"\n           {c}" for c in cmds)
+
+
+def _ask_yes(question: str) -> bool:
+    """A yes or no at a terminal; False when there is none to ask (a script, the crew), or on anything but yes."""
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+    except (AttributeError, ValueError):
+        return False
+    _err(f"{ME}: {question} [y/N] ")
+    try:
+        line = sys.stdin.readline()
+    except (OSError, ValueError):
+        return False
+    return line.strip().lower() in ("y", "yes")
+
+
+def _run_step(cmd: list, cwd: str) -> None:
+    """Run one step of making the repo; a failure stops with the tool's own last line."""
+    try:
+        r = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        raise CrewError(f"could not run {cmd[0]}: install it, or make the repo yourself") from None
+    if r.returncode != 0:
+        last = ((r.stderr or r.stdout).strip().splitlines() or [f"{cmd[0]} failed"])[-1]
+        raise CrewError(f"{' '.join(cmd[:3])} failed: {last}")
+
+
+def make_first_repo(folder: str, is_repo: bool) -> None:
+    """Make `folder` a private GitHub repo with an empty first commit, pushed: what `first_repo_commands` says."""
+    name = _repo_name(folder)
+    if not is_repo:
+        _run_step(["git", "init"], folder)
+    _run_step(["git", "commit", "--allow-empty", "-m", "Start"], folder)
+    if is_repo and _has_origin(folder):
+        _run_step(["git", "push", "-u", "origin", "HEAD"], folder)
+    else:
+        _run_step(["gh", "repo", "create", name, "--private", "--source", ".", "--remote", "origin", "--push"], folder)
+    _err(f"{ME}: {folder} is now the GitHub repo {name}, with a first commit.\n"
+         "         Make sure the Tares app on GitHub can reach it (all repositories, or this one picked).\n")
+
+
 def has_commit(path: str) -> bool:
     return _git(["-C", path, "rev-parse", "-q", "--verify", "HEAD"])[0] == 0
 
@@ -741,15 +811,26 @@ def _spec(args: list, env: dict) -> int:
                 here = root
         elif root:
             if not has_commit(root):
-                raise CrewError(f"{root} has no commit yet. Make a first commit and push it, so builders can branch from it.")
+                if not _ask_yes(f"{root} has no commit yet. Make a first commit and push it to GitHub now?"):
+                    raise CrewError(f"{root} has no commit yet. Make a first commit and push it, so builders can "
+                                    "branch from it:" + _say_commands(first_repo_commands(root, True)))
+                make_first_repo(root, True)
             here = root
             client.say(f"planning in the repo {root}")
         else:
             repos = repos_in(here)
             if not repos:
-                raise CrewError(f"run {ME} spec inside the git repo the project builds on, or in a folder that holds its repos")
-            client.say(f"planning in {here}, which holds {len(repos)} repo(s): "
-                       + ", ".join(os.path.basename(r) for r in repos))
+                if not _ask_yes(f"{here} is not a git repo. Make it a private GitHub repo with a first commit, "
+                                "and plan the project in it?"):
+                    raise CrewError(f"run {ME} spec inside the git repo the project builds on, or in a folder that "
+                                    "holds its repos. A new project? Make its repo here first:"
+                                    + _say_commands(first_repo_commands(here, False)))
+                make_first_repo(here, False)
+                here = git_root() or here
+                client.say(f"planning in the repo {here}")
+            else:
+                client.say(f"planning in {here}, which holds {len(repos)} repo(s): "
+                           + ", ".join(os.path.basename(r) for r in repos))
         slug = _cut_slug(name or _words(idea, 4))
         if not slug:
             slug = state.slugify(os.path.basename(here))

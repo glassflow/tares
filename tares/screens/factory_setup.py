@@ -199,8 +199,8 @@ APPS = {
     ("tickets", "linear"): {
         "env": "TARES_LINEAR_CONNECT_URL", "service": "Linear", "app_name": "GlassFlow Linear app",
         "button": "Connect Linear", "repo_step": False,
-        "steps": ["Linear opens in a new window.", "Sign in and choose your workspace.",
-                  "Approve the GlassFlow Linear app. You come back to this page."],
+        "steps": ["Linear opens in this window.", "Sign in and choose your workspace.",
+                  "Approve the GlassFlow Linear app. You come back to this step to save it."],
         "note": "Tares keeps you signed in and renews the access for you, so there is no key to "
                 "create. Disconnect on the Tickets step takes the access away in Linear again.",
         "use_key_label": "Use an API key instead",
@@ -208,7 +208,7 @@ APPS = {
     ("tickets", "github"): {
         "env": "TARES_GITHUB_CONNECT_URL", "service": "GitHub", "app_name": "GlassFlow GitHub App",
         "button": "Connect GitHub", "repo_step": True,
-        "steps": ["GitHub opens in a new window.",
+        "steps": ["GitHub opens in this window.",
                   "Choose your account or organisation and the repositories the crew may use.",
                   "Approve the GlassFlow GitHub App. You come back here to choose the repository."],
         "note": "Tares reads and writes issues through the app, so there is no credential to "

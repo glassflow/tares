@@ -186,7 +186,8 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("step-terminal").click();
       ck("the last step, the terminal, ends the setup", (await text(page.getByTestId("page-title"))) === "In your terminal"
          && (await text(page.getByTestId("step-next"))) === "Finish setup" && (await page.getByTestId("step-next").getAttribute("href")) === "/");
-      ck("the terminal step shows the four commands, done or not", (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4);
+      ck("the terminal step shows the three commands, done or not, and no planning step", (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 3
+         && (await page.locator("[data-testid=start-step][data-key=spec]").count()) === 0);
       await page.getByTestId("step-tickets").click();
       await page.getByTestId("step-next").click();
       ck("Next goes to the next step", (await text(page.getByTestId("page-title"))) === "Review");
@@ -496,8 +497,9 @@ async function waitFor(url, tries = 100) {
     console.log("== the app ==");
     {
       const { ctx, page } = await newPage(1440, { sampleFlag: true });
-      let opened = 0;
-      await page.addInitScript(() => { window.open = (...a) => { (window.__opened = window.__opened || []).push(a); return null; }; });
+      // the app's connect page: answered here, so the test sees where the browser was sent and goes nowhere
+      let sent = "";
+      await page.route("https://connect.example.test/**", (r) => { sent = r.request().url(); return r.fulfill({ contentType: "text/html", body: "<p>connect page</p>" }); });
       await page.goto(`${BASE}/setup?step=tickets&sample=cloud`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await page.getByTestId("available-linear").getByTestId("action-connect").click();
@@ -508,19 +510,13 @@ async function waitFor(url, tries = 100) {
          && (await page.getByTestId("app-open").evaluate((a) => a.getBoundingClientRect().bottom)) <= (await page.getByTestId("app-use-key").evaluate((a) => a.getBoundingClientRect().top)));
       await shot(page, "app-start-1440.png");
       await page.getByTestId("app-open").click();
-      await page.getByTestId("app-waiting").waitFor();
-      opened = await page.evaluate(() => (window.__opened || []).length);
-      ck("Open the app opens its address in a new window and waits", opened === 1 && (await page.evaluate(() => window.__opened[0][0])) === "https://connect.example.test/linear"
-         && (await text(page.getByTestId("app-waiting"))).startsWith("Waiting for Linear"));
-      ck("while it waits there is one waiting box and one Cancel, and no steps, note or key line",
-        (await page.getByTestId("app-waiting").count()) === 1 && (await page.getByTestId("form-cancel").count()) === 1 && (await page.getByTestId("app-block").count()) === 0
-        && (await page.getByTestId("app-use-key").count()) === 0 && (await page.getByTestId("app-open").count()) === 0 && (await page.getByTestId("app-open-again").count()) === 1
-        && !(await text(page.getByTestId("setup-form"))).includes("What happens next") && !(await text(page.getByTestId("setup-form"))).includes("Cannot use the app"), await text(page.getByTestId("setup-form")));
-      await shot(page, "app-waiting-1440.png");
-      await page.getByTestId("app-open-again").click();
-      ck("Open again opens the address once more and keeps waiting", (await page.evaluate(() => window.__opened.length)) === 2 && (await page.getByTestId("app-waiting").count()) === 1);
-      await page.getByTestId("form-cancel").click();
-      ck("Cancel stops waiting and goes back to the step", (await page.getByTestId("setup-form").count()) === 0 && (await page.getByTestId("step-view").count()) === 1);
+      await page.waitForURL((u) => u.hostname === "connect.example.test");
+      const back = new URL(sent).searchParams.get("return") || "";
+      ck("Open the app goes to its connect page in this window, with this step to come back to",
+        new URL(sent).pathname === "/linear" && new URL(back).origin === BASE && new URL(back).pathname === "/setup"
+        && new URL(back).searchParams.get("step") === "tickets", sent);
+      await page.goto(`${BASE}/setup?step=tickets&sample=cloud`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
       await page.getByTestId("available-linear").getByTestId("action-connect").click();
       await page.getByTestId("app-block").waitFor();
       await page.getByTestId("app-use-key").click();
@@ -535,8 +531,9 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("app-done").waitFor();
       ck("a finished app asks only for what it cannot know", (await text(page.getByTestId("app-done"))).startsWith("GitHub is connected.") && (await page.getByTestId("field-repo").count()) === 1
          && (await page.getByTestId("field-credential").count()) === 0 && (await page.getByTestId("input-repo").count()) === 1);
+      ck("and saves it as this step's integration", (await text(page.getByTestId("form-save"))) === "Save and connect");
       ck("the green line is under the fields and just above Save and connect", await page.evaluate(() => {
-        const d = document.querySelector('[data-testid="app-done"]'), f = document.querySelector('[data-testid="field-repo"]'), b = document.querySelector('[data-testid="form-done"], [data-testid="form-save"]');
+        const d = document.querySelector('[data-testid="app-done"]'), f = document.querySelector('[data-testid="field-repo"]'), b = document.querySelector('[data-testid="form-save"]');
         return !!(d && f && b && (f.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING) && (d.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
           && getComputedStyle(d).color !== getComputedStyle(document.body).color);
       }));
@@ -549,52 +546,44 @@ async function waitFor(url, tries = 100) {
       await ctx.close();
     }
 
-    // the waiting page reads the cell again by itself, then shows the connection (F9 and F2)
-    console.log("== the app poll ==");
+    // back from the app's connect page: the step opens the app's form by itself, done, and one click saves it as
+    // the step's integration (the app alone only lets the cell in, it is not yet where the tickets live)
+    console.log("== back from the app ==");
     {
-      const { ctx, page } = await newPage(1440);
-      await page.addInitScript(() => { window.open = (...a) => { (window.__opened = window.__opened || []).push(a); return null; }; });
-      let connected = false, reads = 0, pick = null;
+      const { ctx, page, writes } = await newPage(1440);
+      let pick = null, saved = false;
       const patch = (d) => {
         const st = d.steps.find((x) => x.slot === "tickets");
-        if (!pick) pick = JSON.parse(JSON.stringify(st.available.find((a) => a.form && a.allowed)));
+        if (!pick) pick = JSON.parse(JSON.stringify(st.available.find((a) => a.id === "linear" && a.form && a.allowed) || st.available.find((a) => a.form && a.allowed)));
         const base = st.available.filter((a) => a.id !== pick.id);
-        if (!connected) {
-          st.available = [{ ...pick, app: { url: "https://connect.example.test/poll", service: pick.title, app_name: `GlassFlow ${pick.title}`, button: `Connect ${pick.title}`, repo_step: false, steps: ["Approve the app."], note: "Nothing else to set up.", use_key_label: "Use an API key instead", use_app_label: "Use the app instead", stage: "start", done: null } }, ...base];
-        } else {
+        const app = { url: "https://connect.example.test/linear?workspace=x", service: pick.title, app_name: `GlassFlow ${pick.title} app`, button: `Connect ${pick.title}`, repo_step: false,
+                      steps: ["Approve the app."], note: "Nothing else to set up.", use_key_label: "Use an API key instead", use_app_label: "Use the app instead",
+                      stage: "done", done: `${pick.title} is connected through the GlassFlow ${pick.title} app.` };
+        if (!saved) st.available = [{ ...pick, app, form: { ...pick.form, fields: [] } }, ...base];
+        else {
           st.available = base;
-          st.connected = [...st.connected, { id: pick.id, title: pick.title, description: pick.description, tags: [{ key: "app", text: "App" }], default: false, built_in: false, via: "app", who: "", picked_by: [], follows: 0, use: "",
-            actions: [{ key: "remove", label: "Disconnect" }], blocked: null, confirm: { title: `Disconnect ${pick.title}?`, text: "Nothing else changes.", yes: "Yes, disconnect", no: "Keep it", moves_projects: false }, form: null, last_test: null }];
+          st.connected = [...st.connected, { id: pick.id, title: pick.title, description: pick.description, tags: [{ key: "app", text: "App" }], default: false, built_in: false, via: "app", who: "",
+            picked_by: [], follows: 0, use: "", actions: [{ key: "remove", label: "Disconnect" }], blocked: null, confirm: null, form: null, last_test: null }];
         }
       };
       await page.route("**/api/factory/setup", async (r) => {
-        reads += 1;
         const d = await (await r.fetch()).json();
         patch(d);
         await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(d) });
       });
-      await page.route("**/api/factory/integrations/tickets/connections/*", async (r) => { connected = false; await r.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
-      await page.goto(`${BASE}/setup?step=tickets`, { waitUntil: "load" });
-      await page.getByTestId("step-view").waitFor();
-      await settle(page);
-      await page.getByTestId(`available-${pick.id}`).getByTestId("action-connect").click();
-      await page.getByTestId("app-open").click();
-      await page.getByTestId("app-waiting").waitFor();
-      const before = reads;
-      await page.waitForTimeout(3600);
-      ck("the waiting page reads the cell again by itself", reads > before, `${before} then ${reads}`);
-      ck("and it is still waiting while the app is not approved", (await page.getByTestId("app-waiting").count()) === 1);
-      connected = true;
-      await page.getByTestId("flash").waitFor({ timeout: 8000 }).catch(() => {});
-      const said = (await page.getByTestId("flash").count()) ? await flashText(page) : "(no note)";
-      ck("once the app is approved the form closes and the note says it is connected", (await page.getByTestId("setup-form").count()) === 0 && said === `${pick.title} is connected.`
-         && (await page.getByTestId(`connected-${pick.id}`).count()) === 1, said);
-      await page.getByTestId(`connected-${pick.id}`).getByTestId("action-remove").click();
-      await page.getByTestId("confirm-yes").click();
-      await page.getByTestId("flash").filter({ hasText: "disconnected" }).waitFor();
-      await settle(page);
-      ck("after Remove the Connect form does not open again by itself", (await page.getByTestId("setup-form").count()) === 0 && (await page.getByTestId(`available-${pick.id}`).count()) === 1
-         && (await page.getByTestId(`connected-${pick.id}`).count()) === 0);
+      await page.route("**/api/factory/integrations/tickets", async (r) => { saved = true; await r.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
+      patch(await read(page));    // what to pick: the first integration of Tickets that can be connected
+      await page.goto(`${BASE}/setup?step=tickets&cloud=${pick.id}-connected`, { waitUntil: "load" });
+      await page.getByTestId("setup-form").waitFor({ timeout: 10000 }).catch(() => {});
+      ck("the cloud's word is dropped from the address, so a reload does not open the form again", !new URL(page.url()).searchParams.has("cloud"), page.url());
+      ck("and the app's form is open again, done, with Save and connect", (await page.getByTestId("setup-form").count()) === 1 && (await page.getByTestId("app-done").count()) === 1
+         && (await text(page.getByTestId("form-save"))) === "Save and connect");
+      await shot(page, "app-back-1440.png");
+      await page.getByTestId("form-save").click();
+      await flashed(page);
+      const put = writes.find((w) => w.method === "PUT" && w.path === "/api/factory/integrations/tickets");
+      ck("saving sends the app's integration for the step", put && put.body.name === pick.id, JSON.stringify(put));
+      ck("and the step lists it as connected", (await page.getByTestId(`connected-${pick.id}`).count()) === 1 && (await flashText(page)) === `${pick.title} is connected.`, await flashText(page));
       await ctx.close();
     }
 
@@ -837,8 +826,8 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("step-terminal").click();
       await page.locator("[data-testid=step-view][data-slot=terminal]").waitFor();
       const steps = page.getByTestId("terminal-panel").getByTestId("start-step");
-      ck("four commands, each with its copy button, and what they need said once above them", (await steps.count()) === 4
-         && (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4 && (await page.getByTestId("prerequisites").count()) === 1);
+      ck("three commands, each with its copy button, and what they need said once above them", (await steps.count()) === 3
+         && (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 3 && (await page.getByTestId("prerequisites").count()) === 1);
       ck("the crew panel stands beside them", (await page.getByTestId("your-crew").isVisible()));
       const box = await page.getByTestId("terminal-panel").locator("code").first().evaluate((el) => {
         const b = el.parentElement.getBoundingClientRect(), row = el.closest("[data-testid=start-step]").getBoundingClientRect();
