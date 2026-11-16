@@ -114,5 +114,16 @@ clean = ["touch \"$FACTORY_HOME/stations/$FACTORY_STATION.done\"", "git log --fo
 ck("the commands a skill really uses are not flagged", all(scan(c, BANNED_SKILLS_ONLY) == [] for c in clean),
    [(c, scan(c, BANNED_SKILLS_ONLY)) for c in clean])
 
+print("factory-protocol keeps its reload and permission rules")
+fp = (PLUGIN / "skills" / "factory-protocol" / "SKILL.md").read_text(encoding="utf-8")
+fp_desc = re.search(r"^description: (.*)$", fp, re.M).group(1)
+ck("the description does not say to load it after any compaction", "after any compaction" not in fp_desc, fp_desc[-120:])
+ck("the description still says to load it at boot and on reload", "at boot" in fp_desc and "reload" in fp_desc, fp_desc[-120:])
+ck("rule 13 (a denied permission) is still there", "13. **A permission check denies an action**" in fp)
+ck("the compaction bullet is still there and names Claude Code's cut note",
+   "**After a compaction or a revive**" in fp and "skill content truncated for compaction" in fp)
+ck("the older Tares page is named and present", "`older-tares.md`" in fp and (PLUGIN / "skills" / "factory-protocol" / "older-tares.md").is_file())
+ck("the skill stays under its size limit (14,000 characters)", len(fp) <= 14000, len(fp))
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
