@@ -342,9 +342,11 @@ async function waitFor(url, tries = 150) {
         (await T(p, "you-row").locator("[data-user-text]").first().innerText()) === "You"
         && (await T(p, "you-email").innerText()).trim() === "No email." && (await T(p, "you-github").innerText()).trim() === "No GitHub login.",
         await T(p, "you-row").innerText());
-      const gaps = await p.evaluate(() => ["access", "you", "keys"].map((id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect())
+      const gaps = await p.evaluate(() => ["access", "you", "mcp-tools", "keys"].map((id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect())
         .reduce((out, r, i, all) => (i ? [...out, Math.round(r.top - all[i - 1].bottom)] : out), []));
-      ck(`${w}: Access and People stand apart, like every panel on the tab`, gaps[0] >= 12 && gaps[1] >= 12, JSON.stringify(gaps));
+      ck(`${w}: the panels on the Access tab stand apart`, gaps.every((g) => g >= 12), JSON.stringify(gaps));
+      ck(`${w}: Agent tools has its title and its switch`, (await T(p, "mcp-tools").getByRole("heading", { name: "Agent tools", exact: true }).count()) === 1
+        && (await p.getByRole("switch", { name: "Let agents use the building blocks" }).count()) === 1);
       ck(`${w}: adding people is the licence's, said under the row`, (await T(p, "you").getByTestId("licence-needed").count()) === 1);
       if (w === 1440) {
         await T(p, "you-edit").click();
@@ -403,6 +405,11 @@ async function waitFor(url, tries = 150) {
       ck(`read key ${width}: none of the settings is there`, (await T(p, "sre-settings").count()) === 0 && (await inputsIn(p)) === 0 && (await T(p, "settings-error").count()) === 0);
       ck(`read key ${width}: it is not told to try again`, !/try again|did not load/i.test(await text(p, "sre-settings-refused")));
       ck(`read key ${width}: the cell refuses the read`, (await fetch(`${RO_BASE}${ROUTE}`, { headers: { authorization: `Bearer ${READ_KEY}` } })).status === 403);
+      // Agent tools is an admin's: on the Access tab a read key sees no switch it could not flip
+      await p.goto(`${RO_BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      await T(p, "access").waitFor();
+      await settle(p);
+      ck(`read key ${width}: Access shows no Agent tools`, (await T(p, "mcp-tools").count()) === 0 && (await p.getByRole("switch", { name: "Let agents use the building blocks" }).count()) === 0);
       if (width === 390) ck("read key 390: no sideways scroll", (await overflow(p)) <= 0, String(await overflow(p)));
       await checkWords(p, ck, `read key ${width}`);
       await shot(p, `live-ro-${width}.png`);

@@ -7,11 +7,12 @@ import LicencePanel from "../../components/LicencePanel";
 import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
-import { AgentLimitsPanel, CLOUD_BACK, McpToolsPanel } from "../../pages/Security";
+import { AgentLimitsPanel, CLOUD_BACK } from "../../pages/Security";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
 import { TracingPanel } from "../settings/TracingPanel";
+import { McpToolsPanel } from "../settings/McpToolsPanel";
 import { GithubPanel } from "../settings/GithubPanel";
 import { ProvidersPanel } from "../settings/ProvidersPanel";
 import { ApiKeysPanel } from "../settings/ApiKeysPanel";
@@ -326,7 +327,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
       {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={() => undefined} noTeam />}
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
-      {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}
+      {tab === "agent_tools" && (<><Heading title="Agent tools" /><McpToolsPanel /></>)}
       {tab === "observability" && (<><Heading title="Observability" /><TracingPanel /></>)}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
 

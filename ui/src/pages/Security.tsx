@@ -14,6 +14,7 @@ import { TracingPanel } from "../editions/settings/TracingPanel";
 import { GithubPanel } from "../editions/settings/GithubPanel";
 import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
 import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
+import { McpToolsPanel } from "../editions/settings/McpToolsPanel";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../editions/settings/AccessPanels";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
@@ -193,51 +194,13 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
 
 function AccessTab() {
   const access = useAccessData();
-  // Kit panels carry no margin of their own; the legacy one (agent tools) loses its own here.
+  // Kit panels carry no margin of their own, so the tab stacks them with a gap.
   return (
-    <div className="grid min-w-0 gap-4 [&>.panel]:mb-0">
+    <div className="grid min-w-0 gap-4">
       <AccessPanel me={access.me} />
       <PeopleBlock access={access} />
-      <McpToolsPanel />
+      <McpToolsPanel title="Agent tools" />
       <ApiKeysPanel title="API keys" intro people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
-    </div>
-  );
-}
-
-// Whether agents that connect over MCP see the building-block tools (TR-757). On by default on a
-// platform cell; off on a factory or AI SRE cell until an admin turns it on. Only an admin sees it.
-export function McpToolsPanel() {
-  const [on, setOn] = useState<boolean>();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-  useEffect(() => {
-    api.whoami().then((w) => w.scopes.includes("admin") ? api.mcpSettings().then((s) => setOn(s.object_tools)) : undefined)
-      .catch((e) => setErr(String((e as Error).message ?? e)));
-  }, []);
-  if (on === undefined && !err) return null;
-  const toggle = async (next: boolean) => {
-    setBusy(true); setErr(undefined);
-    try { setOn((await api.setMcpObjectTools(next)).object_tools); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
-  };
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Agent tools</h2>
-      {err && <div className="alert error">{err}</div>}
-      <label className="field" style={{ display: "flex", flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
-        <input type="checkbox" checked={!!on} disabled={busy || on === undefined} style={{ marginTop: 3 }}
-               onChange={(e) => toggle(e.target.checked)} />
-        <span>
-          <strong>Let agents use the building blocks (connections, raw data, rules)</strong><br />
-          <span className="help">
-            Agents that connect over MCP get the low-level tools as well as the ones named for what you want done.
-            Crew sessions always have them. Project keys lose these tools unless this is on. Agents that are
-            already connected need to reconnect after a change. This only shortens the list; what a key may do
-            is set by its scopes.
-          </span>
-        </span>
-      </label>
     </div>
   );
 }

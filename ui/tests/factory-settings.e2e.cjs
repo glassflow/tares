@@ -522,6 +522,37 @@ const until = async (fn, tries = 40) => {
       await api(TOKEN, "DELETE", `/api/keys/${pkey.id}`);
     }
 
+    // 2d. agent tools (TR-1392): the switch says what it adds, saves at once and says when it applies
+    {
+      const mcp = async () => (await api(TOKEN, "GET", "/api/settings/mcp")).body.object_tools;
+      for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+        const n = await newPage(w, { dark });
+        const p = n.page;
+        await go(p, "agent_tools");
+        const sw = p.getByRole("switch", { name: "Let agents use the building blocks" });
+        await sw.waitFor();
+        const tag = `${w}${dark ? " dark" : ""}`;
+        ck(`${tag}: Agent tools has one heading, the page's`, (await p.locator('[data-testid="pane-agent_tools"]').getByRole("heading", { name: "Agent tools" }).count()) === 1);
+        ck(`${tag}: it says what the building blocks are`, /This adds the building blocks underneath: connections, raw data and rules\./.test(await text(p, "mcp-tools")), await text(p, "mcp-tools"));
+        ck(`${tag}: the switch shows the cell's setting`, (await sw.getAttribute("aria-checked")) === String(await mcp()));
+        ck(`${tag}: its hint says what it does not change`, /what a key may do is set by its scopes/.test(await text(p, "mcp-tools")));
+        ck(`${tag}: Agent tools does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+        await shot(p, `agent-tools-${w}${dark ? "-dark" : ""}.png`);
+        if (w === 1440 && !dark) {
+          const was = await mcp();
+          await sw.click();
+          await p.getByTestId("mcp-saved").waitFor();
+          ck("the switch saves at once", (await mcp()) === !was && (await sw.getAttribute("aria-checked")) === String(!was));
+          ck("and says connected agents see it when they reconnect", /Agents that are already connected see the change when they reconnect\./.test(await text(p, "mcp-saved")));
+          await shot(p, "agent-tools-saved-1440.png");
+          await p.getByText("Let agents use the building blocks", { exact: true }).click();
+          await p.waitForFunction((v) => document.querySelector('[data-testid="mcp-object-tools"]')?.getAttribute("aria-checked") === String(v), was);
+          ck("its label flips it back", (await mcp()) === was);
+        }
+        await n.ctx.close();
+      }
+    }
+
     // 3. the crew starts as a new cell has it
     await go(page, "crew");
     ck("You approve each merge is chosen", (await page.getByTestId("how-L3-review").getAttribute("aria-checked")) === "true" && (await page.getByTestId("how-L4-ship").getAttribute("aria-checked")) === "false");
@@ -720,10 +751,10 @@ const until = async (fn, tries = 40) => {
         await m.ctx.close();
       }
       await go(p, "agent_tools");
-      const box = p.locator('[data-testid="pane-agent_tools"] label.field input[type=checkbox]').first();
+      const box = p.getByTestId("mcp-object-tools");
       await box.waitFor();
-      const gap = await box.evaluate((e) => Math.round(e.nextElementSibling.getBoundingClientRect().left - e.getBoundingClientRect().right));
-      ck("the Agent tools checkbox sits apart from its label", gap >= 8, `${gap}px`);
+      const gap = await box.evaluate((e) => Math.round(document.querySelector(`label[for="${e.id}"]`).getBoundingClientRect().left - e.getBoundingClientRect().right));
+      ck("the Agent tools switch sits apart from its label", gap >= 8, `${gap}px`);
       await n.ctx.close();
     }
 
