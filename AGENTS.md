@@ -79,6 +79,8 @@ predate the kit.
   (`shadow-[inset_3px_0_0_var(--accent)]`), never a left border wider than 1px. Inter for text,
   `font-mono` for labels, badges and code, the pixel font for headline numerals only.
 - **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`, and no em dash anywhere.
+  The platform pages are checked too, each held at its count in `ui/words-contract.baseline.json`:
+  add none, and when you remove some, `npm run words-baseline` lowers the count in the same PR.
 - **Before you push** a console change:
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
   npm run design-contract && npm run build`,

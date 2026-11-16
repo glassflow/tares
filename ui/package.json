@@ -41,6 +41,7 @@
     "test:sre-settings": "vite build && node tests/sre-settings.e2e.cjs",
     "test:choose-edition": "vite build && node tests/choose-edition.e2e.cjs",
     "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs",
+    "words-baseline": "node tests/words.check.cjs --write",
     "test:settings-people": "vite build && node tests/settings-people.e2e.cjs",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "token-contract": "eslint --quiet --config eslint-token-contract.config.mjs \"src/**/*.{ts,tsx}\"",
