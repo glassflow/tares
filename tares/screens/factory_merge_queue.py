@@ -11,6 +11,8 @@ A group is {repo, base, title, count, auto, sub, line, you, blocked, sent, rows,
 {id, position, state, chip, ticket, pr, branch, builder, review, ci, guardrail, status, answer,
 bounce, needs_you}:
 - `position` is the place in line (1, 2, ...); a pull request sent back to its builder has none.
+  It counts this project's pull requests only, so a queued row reads "Next in this project" or
+  "2nd in this project", never a place across the projects the crew works on.
 - `chip` is {key, text}: the badge, in words.
 - `status` is {lead, text, note}: what is going on, in a sentence. `lead` is the start of `text`
   the page may set in bold; `note` is the second line.
@@ -93,6 +95,12 @@ def _count(n: int, one: str, many: str | None = None) -> str:
 def _sentence(text: str) -> str:
     one = " ".join(str(text or "").split())
     return one if one.endswith((".", "!", "?")) else one + "."
+
+
+def _ordinal(n: int) -> str:
+    """1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st."""
+    tail = 0 if 10 <= n % 100 <= 20 else n % 10
+    return f"{n}{({1: 'st', 2: 'nd', 3: 'rd'}).get(tail, 'th')}"
 
 
 def _upper(text: str) -> str:
@@ -234,14 +242,18 @@ def register(app, store, h, ctx):
             return out
         yes, said = merge_queue.judge(dec)
         who_p = dec.get("person") or {}
-        who = ("you" if who_p.get("id") and who_p.get("id") == me else
-               who_p.get("name") or (out["for"] or {}).get("name") or "someone")
+        # the person the decision records; a session answer records none, and the person the
+        # question was addressed to is not credited with it
+        who = ("you" if who_p.get("id") and who_p.get("id") == me else who_p.get("name") or None)
         where = where_of(dec)
         when = plain_ago(dec.get("at"), now)
-        lead = "Yes, merge." if yes else ("No, hold." if _NO.match(said) else f"Held: {_first_line(said)}.")
+        line = _first_line(said)
+        lead = ("Yes, merge." if yes else "No, hold." if _NO.match(said) else
+                f"Held: {line}." if line else "Held.")
         out.update(kind="done", lead=lead, decision="yes" if yes else "no", by=who,
                    where={"key": where["key"], "words": where["words"]}, when=when,
-                   text=f"{lead} Answered by {who} {where['phrase']}, {when}, for commit {asked}.",
+                   text=(f"{lead} Answered {f'by {who} ' if who else ''}{where['phrase']}, {when}, "
+                         f"for commit {asked}."),
                    note=("The question is closed on Overview, the project page and the Calls page. It merges in its turn."
                          if yes else
                          "The question is closed everywhere. The merge queue skips this pull request; a new commit asks again."))
@@ -279,7 +291,7 @@ def register(app, store, h, ctx):
             name = person_name(pid)
             return {"id": pid, "name": name, "text": f"{_first(name)}’s builder"} if name else None
 
-        def row_out(row: dict, pos: int | None, prev_pr: int | None, first_queued: bool) -> dict:
+        def row_out(row: dict, pos: int | None, first_queued: bool) -> dict:
             t = by_id.get(row["ticket"]) or {}
             pr = t.get("pr") or {}
             reviews = store.ticket_reviews(t["id"]) if t else []
@@ -330,10 +342,10 @@ def register(app, store, h, ctx):
                     status["text"] = f"Waiting for {', '.join(waits)} to merge."
                 elif first_queued:
                     chip = {"key": "next", "text": "Next"}
-                    status["text"] = "Next to merge."
+                    status["text"] = "Next in this project."
                 else:
                     chip = {"key": "queued", "text": "Queued"}
-                    status["text"] = f"In line behind #{prev_pr}." if prev_pr else "In line."
+                    status["text"] = f"{_ordinal(pos)} in this project." if pos else "In line."
             elif state == "blocked":
                 blocked = True
                 chip = {"key": "blocked", "text": "Blocked"}
@@ -404,13 +416,10 @@ def register(app, store, h, ctx):
             line_rows = [r for r in mine if r["state"] != "sent_back"]
             back_rows = [r for r in mine if r["state"] == "sent_back"]
             first_q = next((r["id"] for r in line_rows if r["state"] == "queued"), None)
-            out_rows, prev_pr = [], None
+            out_rows = []
             for i, r in enumerate(line_rows + back_rows):
                 pos = i + 1 if r["state"] != "sent_back" else None
-                o = row_out(r, pos, prev_pr, r["id"] == first_q)
-                out_rows.append(o)
-                if r["state"] != "blocked" and pos:
-                    prev_pr = r["pr"]
+                out_rows.append(row_out(r, pos, r["id"] == first_q))
             you = sum(1 for o in out_rows if o["_you"])
             blocked = sum(1 for o in out_rows if o["_blocked"])
             for o in out_rows:
