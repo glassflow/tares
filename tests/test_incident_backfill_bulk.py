@@ -11,11 +11,22 @@ import os
 import random
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
+
+# The machine's zone is part of the input: in a zone that sets its clock back, one wall-clock hour
+# happens twice. A fixed zone and a fixed NOW keep the run the same on any machine and any day;
+# BACKFILL_TZ=UTC runs the same data in a zone with no such hour.
+os.environ["TZ"] = os.environ.get("BACKFILL_TZ", "Europe/Berlin")
+time.tzset()
+# With the state in Postgres, times come back in the session's zone, not the process's: the server
+# says UTC unless told otherwise, and in UTC the repeated hour is not there to test. libpq reads
+# PGTZ when a connection opens, so the session gets the same zone.
+os.environ["PGTZ"] = os.environ["TZ"]
 
 TMP = tempfile.mkdtemp()
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
@@ -40,7 +51,10 @@ def eq(label, got, want):
     ck(label, got == want, f"got {got!r}, want {want!r}")
 
 
-NOW = datetime.now(timezone.utc).replace(microsecond=0)
+# Three days after Europe/Berlin set its clocks back (2026-10-25, 03:00 CEST to 02:00 CET): the
+# window the seed covers holds the hour that happens twice.
+NOW = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+CLOCK_BACK = datetime(2026, 10, 25, 0, 0, 0, tzinfo=timezone.utc)   # 02:00 CEST, the hour begins
 N = 400
 
 
@@ -65,6 +79,17 @@ def seed(store):
                               project=uid, practice=(0.9 < kind < 0.95))
         store.finish_agent_run(rid, "ok", finding=f"{key} errors.", outcome="finding",
                                verdict="resolved" if kind >= 0.95 else "rca")
+        with store._swrite:
+            store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, rid])
+    # Notes in the hour that happens twice, on one service: 00:50 UTC reads 02:50 and 01:05 UTC
+    # reads 02:05 on a Berlin clock, so by wall clock the later one looks earlier. Handoff-free runs
+    # (the trigger's cooldown) so each one is judged by the time alone.
+    for j, minutes in enumerate((50, 65, 80)):
+        rid = f"c{j}"
+        at = CLOCK_BACK + timedelta(minutes=minutes)
+        store.start_agent_run(rid, "investigator", "watch-prod", "", "svc-clock", "h", project=uid)
+        store.finish_agent_run(rid, "ok", finding="svc-clock errors.", outcome="finding",
+                               verdict="rca")
         with store._swrite:
             store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, rid])
     live = store.create_incident("svc-3", uid, NOW - timedelta(hours=1))

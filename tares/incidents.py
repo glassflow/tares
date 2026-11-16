@@ -32,7 +32,11 @@ _LOCK = threading.Lock()
 
 
 def _aware(dt):
-    return goal._aware(dt)
+    """`dt` as an aware UTC datetime. The store hands times back in the machine's zone, and Python
+    orders and subtracts two datetimes of one zone by their wall clock, so in the hour a clock goes
+    back the same reading means two moments and notes file out of order. UTC has no such hour."""
+    d = goal._aware(dt)
+    return d.astimezone(timezone.utc) if d is not None else None
 
 
 # ── what is a note, and what service is it about ─────────────────────────────
