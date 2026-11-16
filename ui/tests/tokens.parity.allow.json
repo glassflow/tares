@@ -1,0 +1,10 @@
+{
+  "--kit-accent-soft": {
+    "reason": "The amber tint behind a selected or hovered row. The kit's accent/accent-soft (light). Neither the shared paper layer nor argus-ui's theme.css names it, so there is nothing to compare it with; Tares keeps the kit value.",
+    "ticket": "TR-1268"
+  },
+  "--kit-dark-accent-soft": {
+    "reason": "The dark-mode twin of --kit-accent-soft (the kit's accent/accent-soft, dark). Same reason.",
+    "ticket": "TR-1268"
+  }
+}

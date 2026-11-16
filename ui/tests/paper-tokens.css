@@ -1,0 +1,445 @@
+/*
+ * VENDORED, do not edit here. A copy of glassflow/arche-design
+ * skills/glassflow-paper-design/references/tokens.css at commit ca7aacf8ddc946419f445e4028812691aaee3354
+ * (the glassflow-paper-design skill's token reference, itself copied from argus-ui src/app/theme.css).
+ * tests/tokens.parity.cjs compares every --kit-* value in src/styles.css with the --agency-* token here
+ * (TR-1268). To take a new shared value: change the skill in arche-design, then replace this file with
+ * its new copy and this header's commit, in one PR. That PR is where a change to the family is reviewed.
+ */
+/*
+ * tokens.css — the GlassFlow paper token layer, copied from argus-ui
+ * src/app/theme.css on 2026-09-10 (branch design/polish-time-heads-0910).
+ *
+ * SOURCE OF TRUTH is argus-ui's theme.css; this file is a bootstrap copy for
+ * a new consumer (Tares, a portal, a docs site). When the two disagree, the
+ * app wins — re-copy, do not hand-edit here.
+ *
+ * Contract: every value is an HSL TRIPLET ("56 32% 91%"), consumed as
+ * hsl(var(--token)) or hsl(var(--token) / alpha). Two layers:
+ *   --agency-*   raw values from the design agency's HeroUI Kit V3 Figma
+ *                variables (docs/design/heroui-v3-figma-variables.json).
+ *                Components NEVER reference these.
+ *   semantic     --background, --foreground, --rule, --status-*, --kind-*, …
+ *                the only names components may use.
+ * The @theme inline block at the bottom is Tailwind v4's utility mapping.
+ *
+ * Known VESTIGIAL names (kept in the app for churn reasons, DO NOT copy into a
+ * new consumer): --glass-surface / --glass-edge and the bg-glass*, border-glass*
+ * utilities; --elevation-* and shadow-field/surface/overlay (only fields still
+ * consume shadow-field); --card/--card-foreground; --input; --wordmark-* (a
+ * logo asset ramp, not a palette). See SKILL.md "Vestigial names".
+ */
+
+/*
+ * theme.css — THE token definitions. This file (with base.css) is the only
+ * place raw color values are allowed; everywhere else colors resolve through
+ * `hsl(var(--token))` or a mapped Tailwind utility (enforced by the
+ * token-contract CI gate). See docs/arche-ui/08-design-tokens.md.
+ *
+ * VENUS (design proposal 002, design agency teaser — see
+ * docs/design/venus-002-demo.md): cream-first light canvas ("Pure"), deep
+ * warm-brown ink (the teaser's mislabeled "Emerald Green" swatch), and the
+ * "Space Sand" amber as the single brand accent. The dark brown doubles as
+ * app chrome (sidebar/topbar) via the .venus-chrome scope below. Status and
+ * chart colors are dark-on-cream derivatives (not in the teaser — assumption).
+ */
+
+/*
+ * HeroUI Kit V3 adapter (RIUS-52) — the single point of contact with the
+ * design agency's Figma variables ("02_Theme (HeroUI)" collection), per
+ * docs/design/2026-07-29-heroui-token-adoption-decision.md §5.
+ * Source of truth: docs/design/heroui-v3-figma-variables.json (extracted
+ * 2026-08-26 from kit duplicate V2, file 3DFIbIQJS5wcJ6ce9KkYV5 — the
+ * agency's answers to the RIUS-52 questions applied in-kit; full diff in
+ * docs/design/2026-08-26-kit-v2-agency-answers.md); each value is the kit
+ * hex converted to our HSL triplet form. Components never reference
+ * --agency-*; they consume the Venus semantic tokens below.
+ *
+ * After the V2 answers (2026-08-26), standing defaults — adopted without
+ * further agency input (rationale: kit-v2-agency-answers.md §7): charts/*
+ * follow the kit's amber MONOCHROME ramp (hue-as-identity split out to
+ * --kind-*); warning stays on coral (the kit's own unreferenced custom ramp —
+ * stock HeroUI amber would camouflage against our primary); the kit's zinc
+ * stragglers (border dark, field/background-hover dark, foreground/overlay
+ * light) are substituted with warm rungs here, reported back as kit bugs.
+ * Still held: typography (mono-sm scope + Inter Display = a separate pass).
+ */
+:root {
+  /* Light mode */
+  --agency-background: 56 32% 91%; /* background/background #f0efe2 */
+  --agency-foreground: 30 100% 6%; /* foreground/foreground = eclipse #1e0f00 */
+  --agency-surface: 56 58% 95%; /* surface/surface #faf9ec */
+  --agency-surface-secondary: 53 39% 91%; /* surface/surface-secondary #f1efdf */
+  --agency-surface-tertiary: 54 38% 90%; /* surface/surface-tertiary #efeddb */
+  --agency-overlay: 0 0% 100%; /* overlay #ffffff */
+  --agency-muted-foreground: 36 27% 34%; /* foreground/muted #6e5b3f */
+  --agency-default: 56 32% 91%; /* default/default #f0efe2 */
+  --agency-border: 54 26% 79%; /* border #d8d5bc */
+  --agency-accent: 40 100% 50%; /* accent/accent #ffac00 */
+  --agency-accent-hover: 41 100% 73%; /* accent/accent-hover #ffd274 (fixed across modes, like accent) */
+  --agency-accent-foreground: 30 100% 6%; /* accent/accent-foreground = eclipse (fixed across modes) */
+  --agency-snow: 0 0% 99%; /* base colors/snow #fcfcfc (dark-mode foreground) */
+
+  /* Status ramps per kit V2 (RIUS-52 Q2 ANSWERED 2026-08-26): success → jade,
+     danger → ROSE (the stock Tailwind rose ramp — the custom ruby ramp is now
+     vestigial in the kit and removed here). The kit binds the 500 steps as its
+     FILL roles; our --status-* tokens double as TEXT colors, so text-safe deep
+     700 steps carry light mode and the 500s drive the dark lift (see .dark).
+     Coral stays: the kit left warning on stock HeroUI (open Q) and our warning
+     wiring keeps the on-brand ramp. Each is the kit hex → our HSL triplet. */
+  --agency-jade-700: 145 56% 34%; /* #26874f */
+  --agency-jade-500: 144 60% 52%; /* #3bce76 */
+  --agency-rose-700: 345 83% 41%; /* #be123c */
+  --agency-rose-500: 350 89% 60%; /* #f43f5e — kit danger/danger, both modes */
+  --agency-coral-700: 39 90% 41%; /* #cb8605 */
+  --agency-coral-500: 38 100% 60%; /* #ffb22c */
+
+  /* Dark mode (consumed by the .venus-chrome scope) — kit V2 finished most of
+     the dark theming (Q1): canvas SHIFTED off eclipse to #2b1600, the old
+     #5a3109 mid rung is gone (background-tertiary now = #281400, an
+     inset well darker than the canvas — unconsumed here), and the remaining
+     zinc stragglers (border, field/background-hover) stay substituted with
+     warm rungs. V2 ladder: #281400 < #2b1600 canvas < #442200 < #492400
+     surface < #582f06 field-focus < #663b11 overlay/default < #783e06
+     segment < #895523 separator. */
+  --agency-dark-background: 31 100% 8%; /* background/background dark #2b1600 (V2 — no longer eclipse) */
+  --agency-dark-surface: 30 100% 14%; /* surface/surface dark #492400 (V2: all three surface tiers) */
+  --agency-dark-overlay: 30 71% 23%; /* overlay dark #663b11 */
+  --agency-dark-default: 30 71% 23%; /* default/default dark #663b11 */
+  --agency-dark-field-focus: 30 87% 18%; /* field/background-focus dark #582f06 — the V2 rung between surface and default */
+  --agency-dark-muted-foreground: 36 26% 68%; /* foreground/muted dark #c2b197 */
+  --agency-dark-segment: 30 90% 25%; /* segment dark #783e06 — the ladder rung above default, used to float overlays/popovers */
+  --agency-dark-separator: 29 59% 34%; /* separator/separator dark #895523 */
+}
+
+:root {
+  color-scheme: light;
+
+  /* Canvas + ink — cream paper, deep brown text */
+  --background: var(--agency-background);
+  --foreground: var(--agency-foreground);
+  --card: var(--agency-surface);
+  --card-foreground: var(--agency-foreground);
+  --popover: var(--agency-overlay);
+  --popover-foreground: var(--agency-foreground); /* kit foreground/overlay (#18181b zinc) held */
+  /* The kit's Button component maps its "Primary" variant to the accent role
+     (Button page, node 17601-67952) — the earlier ink-button mapping predated
+     that page and is superseded. Accent is fixed across kit modes. */
+  --primary: var(--agency-accent);
+  --primary-foreground: var(--agency-accent-foreground);
+  --primary-hover: var(--agency-accent-hover);
+  --secondary: var(--agency-default); /* kit "default" = the neutral control role */
+  --secondary-foreground: var(--agency-foreground);
+  --muted: var(--agency-surface-tertiary);
+  --muted-foreground: var(--agency-muted-foreground);
+  --accent: var(--agency-surface-secondary); /* shadcn hover-wash role, not the kit's amber accent */
+  --accent-foreground: var(--agency-foreground);
+  /* Destructive = the kit's danger FILL role: rose/500 with snow text, and
+     mode-constant in V2 (no dark override — same value on the dark canvas). */
+  --destructive: var(--agency-rose-500);
+  --destructive-foreground: var(--agency-snow); /* kit danger-foreground = snow #fcfcfc */
+  --border: var(--agency-border);
+  --input: 38 26% 70%; /* legacy field-border token; fields are now borderless (see --field) */
+  /* Field fill (kit field/background). RIUS-52 §2b: fields are borderless —
+     white on cream, lifted by --shadow-field; the transparent border is kept
+     only for layout. In dark the fill is a lighter brown rung (see .dark) so the
+     field reads by contrast, since the kit drops field shadows in dark. */
+  --field: 0 0% 100%; /* #ffffff */
+  --ring: var(--agency-accent); /* kit focus-ring aliases accent */
+
+  /* Surface tiers — cream base; raised/overlay step toward paper-white. */
+  --surface-base: var(--agency-background);
+  --surface-raised: var(--agency-surface);
+  --surface-overlay: var(--agency-overlay);
+
+  /* Brand — "Space Sand" amber (kit accent/accent). Used sparingly: brand
+     mark, active nav, section-index accents, primary CTAs. Foreground is the
+     brown ink (the proposal sets brown mono labels on amber chips). */
+  --brand: var(--agency-accent);
+  --brand-foreground: var(--agency-accent-foreground);
+
+  /* Chrome — the dark-brown app frame (sidebar / mobile topbar), matching the
+     kit's dark-mode canvas around cream content. Kit V2 shifted that canvas
+     off eclipse to #2b1600 and chrome follows it; if the slightly lighter
+     frame reads wrong, pin this to --agency-foreground (eclipse) instead. */
+  --chrome: var(--agency-dark-background);
+  --chrome-foreground: var(--agency-snow);
+
+  /* Official wordmark (GLA2-259) — the brand asset's amber gradient ramp,
+     verbatim from the glassflow.dev logo SVG (#D7613A → #DC8946 → #F9C078).
+     Consumed only by RiusWordmark as hsl(var(--wordmark-N)); not a UI
+     palette — use --brand for interface accents. The favicon (src/app/icon.svg)
+     hardcodes the same ramp as literals. */
+  --wordmark-1: 15 66% 54%;
+  --wordmark-2: 27 68% 57%;
+  --wordmark-3: 33 91% 72%;
+
+  /* Status — trace/span semantics. Kit V2 answered Q2: success→jade,
+     danger→rose; deep 700 steps here because these tokens double as TEXT
+     colors on cream (the kit's 500 fill values sit at ~2–4:1 as text).
+     Warning stays coral (kit left it stock HeroUI — open Q). `degraded` has
+     no kit equivalent (product-domain, Q3) and stays a Venus derivation,
+     hue-nested between coral and rose. */
+  --status-error: var(--agency-rose-700);
+  --status-warning: var(--agency-coral-700);
+  --status-running: var(--agency-jade-700);
+  --status-degraded: 25 90% 42%;
+
+  /* Metrics — positive tracks success (jade), negative tracks danger (rose). */
+  --metric-positive: var(--agency-jade-700);
+  --metric-negative: var(--agency-rose-700);
+  --metric-neutral: 36 27% 34%; /* tracks foreground/muted */
+
+  /* Soft status tints (kit *-soft family, RIUS-52 §2a). The soft BACKGROUND is
+     the status hue at low alpha (defined in @theme inline; auto-adapts across
+     modes because it references the mode-scoped --status-* value). These are the
+     paired READABLE FOREGROUNDS — the kit ships a dedicated soft-foreground per
+     status that differs by mode, so coloured text stays legible on the tint;
+     dark values are re-tuned in the .dark block. */
+  --success-soft-foreground: 146 54% 25%; /* kit V2 success-soft-foreground = jade-800 #1d623b */
+  --warning-soft-foreground: 34 50% 35%; /* kit warning-soft-foreground #855f2c */
+  --danger-soft-foreground: 343 80% 35%; /* kit V2 danger-soft-foreground = rose-800 #9f1239 */
+
+  /* Failure modes (T16 issues taxonomy) — same hue-per-mode contract,
+     re-tuned dark-on-cream. */
+  --failure-yolo: 0 72% 44%;
+  --failure-delegation: 217 70% 45%;
+  --failure-stochasticity: 35 92% 38%;
+  --failure-amnesia: 262 45% 48%;
+
+  /* Chart series palette — kit V2 charts/chart-1..5 (RIUS-52): an amber
+     MONOCHROME lightness ramp at the brand hue. Charts encode quantity, so
+     lightness carries series separation; hue-as-identity lives in --kind-*
+     below. Ordered dark→light in light mode (1 = most prominent on cream);
+     the kit inverts 1–3 for dark. chart-4/5 alias the kit's accent/accent +
+     accent/accent-hover and are mode-constant, like the aliases they mirror.
+     Charts consume these as `hsl(var(--chart-N))`. */
+  --chart-1: 41 100% 19%; /* #5f4100 */
+  --chart-2: 41 100% 27%; /* #8a5e00 */
+  --chart-3: 41 100% 36%; /* #ba7e00 */
+  --chart-4: var(--agency-accent); /* kit alias accent/accent #ffac00 */
+  --chart-5: var(--agency-accent-hover); /* kit alias accent/accent-hover #ffd274 */
+
+  /* Trace-map kind identity (GLA2-177) — hue AS taxonomy, split from --chart-N
+     (RIUS-52): charts encode quantity and can follow the kit's monochrome ramp,
+     but span kinds need hue separation to stay tellable apart at /15 fill +
+     /60 stroke on the map. Pinned to the pre-split Venus multi-hue set, so the
+     split itself changes nothing visually. */
+  --kind-agent: 30 85% 24%; /* ink brown */
+  --kind-llm: 41 100% 42%; /* space sand amber */
+  --kind-tool: 168 45% 30%; /* teal */
+  --kind-retriever: 217 35% 45%; /* slate blue */
+  --kind-embedding: 0 72% 44%; /* red */
+
+  /* Panel surface + hairline edge. The former "glass" tokens now back the
+     Venus flat print-like panels: --glass-surface is the card fill,
+     --glass-edge is the brown used for hairline borders at low alpha (was
+     white on dark). Utility names (bg-glass, border-glass-border…) are kept
+     so consumers don't churn. Edge held: kit light separators are stock zinc. */
+  --glass-surface: var(--agency-surface);
+  --glass-edge: 30 85% 18%;
+
+  /* TREATMENT A — instrument panel (design/treatment-a-instrument). Regions
+     are cells of one plate separated by hairlines, not cards with their own
+     borders and shadows. --rule is the hairline between cells (the kit's
+     light border), --rule-strong the outer edge / section rule, and
+     --surface-plate the plate itself (the kit's raised surface). */
+  --rule: var(--agency-border);
+  --rule-strong: 36 18% 64%; /* #b3ad92 — one rung darker than the kit border */
+  --surface-plate: var(--agency-surface);
+
+  /* Radius language — verified against the actual COMPONENTS, not just the
+     variables (RIUS-52 §3). Confirmed bindings in the Figma file: the Input,
+     Surface, and Modal components ALL bind dimensions/radius/rounded-none = 0 —
+     they are square, edge drawn by shadow-field / shadow-surface / shadow-overlay,
+     never a corner radius. The theme's field/radius = 12 (and the earlier
+     "panel = 24", which was actually spacing/6 padding) are VESTIGIAL variables
+     the components never reference. So the language is dead simple: everything
+     square (0); only genuine pills / avatars / badges use rounded-full. Matches
+     Tares' squared approach. */
+  --radius: 0; /* the only radius — every control and surface is square */
+
+  /* Elevation (kit shadow-drawn model, RIUS-52 §2b). SCAFFOLDING ONLY — the
+     tokens exist so a later component pass can adopt the kit's borderless
+     shadow-drawn fields/surfaces/overlays as a pure consume-the-token change,
+     without re-touching the token layer. Not yet consumed: the Venus flat panels
+     stay hairline-bordered by design (see base.css). Tailwind tree-shakes the
+     unused shadow-* utilities, so this is zero-bundle until adopted. Shadow
+     colour is the warm ink (eclipse), not pure black, to sit on the cream canvas. */
+  --elevation-field: 0 1px 2px 0 hsl(30 100% 6% / 0.1), 0 2px 5px -1px hsl(30 100% 6% / 0.08);
+  --elevation-surface: 0 1px 2px 0 hsl(30 100% 6% / 0.04), 0 4px 12px -2px hsl(30 100% 6% / 0.08);
+  --elevation-overlay: 0 2px 8px 0 hsl(30 100% 6% / 0.08), 0 14px 28px -6px hsl(30 100% 6% / 0.18);
+}
+
+/* Chrome scope — wraps the sidebar/topbar. Re-points the semantic tokens so
+ * every token-driven child (nav items, UserMenu, MockModeBadge) adapts to the
+ * dark-brown ground without per-component changes. Values follow the kit's
+ * dark mode where it is deliberately themed (warm browns); its zinc
+ * leftovers are held (RIUS-52).
+ *
+ * `.dark` (on <html>, set by ThemeToggle) applies the same kit dark mapping
+ * app-wide — a RIUS-52 preview surface for the kit's Dark variable mode, not
+ * a shipped feature. Tokens this block doesn't override (status, charts,
+ * destructive, …) inherit their light values: exactly the "held pending
+ * designer answers" set, so the preview doubles as the gap demo. */
+.dark,
+.venus-chrome {
+  color-scheme: dark;
+  --background: var(--agency-dark-background);
+  --foreground: var(--agency-snow);
+  --card: var(--agency-dark-surface);
+  --card-foreground: var(--agency-snow);
+  --popover: var(--agency-dark-segment); /* rung 4 — #783e06, floats above secondary (was overlay #663b11, collided) */
+  --popover-foreground: var(--agency-snow);
+  /* --primary family not overridden: the kit's accent (and its foreground)
+     is fixed across modes, so primary buttons stay amber on dark chrome. */
+  /* Warm ladder (RIUS-52 §4, re-rung on kit V2). The kit still collapses roles
+     in dark (all three surface tiers = #492400; overlay = default = #663b11),
+     so the spread remains ours: card 14% < muted 18% < secondary/accent 23% <
+     popover 25% < border 34% L. Muted moved from the removed #5a3109 rung to
+     V2's #582f06 (field-focus) — same ladder position. All single-hue warm
+     brown; no zinc imported. */
+  --secondary: var(--agency-dark-default); /* rung 3 — #663b11 */
+  --secondary-foreground: var(--agency-snow);
+  --muted: var(--agency-dark-field-focus); /* rung 2 — #582f06 (V2; old #5a3109 no longer in the kit) */
+  --muted-foreground: var(--agency-dark-muted-foreground);
+  --accent: var(--agency-dark-default); /* hover-wash — reads as a lift; shares rung 3 */
+  --accent-foreground: var(--agency-snow);
+  --border: var(--agency-dark-separator);
+  --input: var(--agency-dark-separator);
+  --field: var(--agency-dark-default); /* #663b11 — a rung above the card so borderless fields read by fill (dark drops field shadow) */
+  --surface-base: var(--agency-dark-background);
+  --surface-raised: var(--agency-dark-surface);
+  --surface-overlay: var(--agency-dark-segment); /* tracks --popover */
+  --status-error: var(--agency-rose-500); /* lifted rose for the dark canvas (chrome badge + dark preview) */
+  --metric-neutral: var(--agency-dark-muted-foreground);
+  /* Soft-tint foregrounds, dark (kit V2 *-soft-foreground dark values) — lighter
+     so coloured text reads on the warm-brown soft tint. */
+  --success-soft-foreground: 143 65% 70%; /* kit V2 = jade-300 #81e4a7 */
+  --warning-soft-foreground: 36 90% 75%; /* #f9cb87 */
+  --danger-soft-foreground: var(--agency-rose-500); /* kit V2 = rose-500 */
+  --glass-surface: var(--agency-dark-surface);
+  --glass-edge: var(--agency-snow);
+  --rule: 30 55% 22%; /* #573210 — between the dark surface and the separator */
+  --rule-strong: var(--agency-dark-separator);
+  --surface-plate: var(--agency-dark-surface);
+  /* Elevation, dark — the kit drops field drop-shadows in dark (fills carry the
+     edge); surfaces/overlays use a deep neutral shadow instead of warm ink. */
+  --elevation-field: none;
+  --elevation-surface: 0 1px 2px 0 hsl(0 0% 0% / 0.4);
+  --elevation-overlay: 0 8px 24px -4px hsl(0 0% 0% / 0.55);
+}
+
+/* Product-domain colour lift for full-app dark mode (RIUS-52 §4). The kit gives
+ * ZERO dark guidance for charts / trace-status / failure taxonomy, and the light
+ * derivations (deep, tuned for cream) go near-invisible on the #1e0f00 canvas.
+ * Same hues as light, lightness raised into the ~55–68% band and saturation
+ * eased so they read on deep brown. Scoped to `.dark` ONLY (not the shared chrome
+ * block): the always-on sidebar chrome renders none of these, so it stays on the
+ * warm structural ladder above. `.dark` matches <html> with equal specificity to
+ * `.dark, .venus-chrome` but comes later, so it wins for the dark preview.
+ * Preview surface until the agency finishes dark (Q1) — gated by the toggle. */
+.dark {
+  --status-warning: var(--agency-coral-500);
+  --status-running: var(--agency-jade-500);
+  --status-degraded: 30 92% 60%;
+  /* --destructive not overridden: kit V2 danger (rose-500) is mode-constant. */
+  --metric-positive: var(--agency-jade-500);
+  --metric-negative: var(--agency-rose-500);
+  /* Failure taxonomy (T16) — same hue-per-mode contract, lifted for dark. */
+  --failure-yolo: 4 84% 62%;
+  --failure-delegation: 217 75% 68%;
+  --failure-stochasticity: 38 95% 62%;
+  --failure-amnesia: 262 60% 72%;
+  /* Chart series — kit V2 dark: the ramp inverts, 1 = lightest = most
+     prominent on the dark canvas. chart-4/5 need no override — they inherit
+     the mode-constant accent aliases from :root. */
+  --chart-1: 41 100% 89%; /* #ffeec8 */
+  --chart-2: 41 100% 79%; /* #ffdd94 */
+  --chart-3: 41 100% 60%; /* #ffbe35 */
+  /* Map kind identity — same lift as the pre-split dark chart values. */
+  --kind-agent: 32 65% 66%;
+  --kind-llm: 41 100% 62%;
+  --kind-tool: 168 50% 55%;
+  --kind-retriever: 217 55% 68%;
+  --kind-embedding: 4 82% 64%;
+}
+
+/* Map tokens to Tailwind v4 utilities (bg-popover, text-muted-foreground, …).
+ * `inline` resolves the var into each generated utility. */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-hover: hsl(var(--primary-hover));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-field: hsl(var(--field));
+  --color-ring: hsl(var(--ring));
+  --color-surface-base: hsl(var(--surface-base));
+  --color-surface-raised: hsl(var(--surface-raised));
+  --color-surface-overlay: hsl(var(--surface-overlay));
+  --color-brand: hsl(var(--brand));
+  --color-brand-foreground: hsl(var(--brand-foreground));
+  --color-chrome: hsl(var(--chrome));
+  --color-chrome-foreground: hsl(var(--chrome-foreground));
+  --color-status-error: hsl(var(--status-error));
+  --color-status-warning: hsl(var(--status-warning));
+  --color-status-running: hsl(var(--status-running));
+  --color-status-degraded: hsl(var(--status-degraded));
+  --color-metric-positive: hsl(var(--metric-positive));
+  --color-metric-negative: hsl(var(--metric-negative));
+  --color-metric-neutral: hsl(var(--metric-neutral));
+  /* Soft status tints (RIUS-52 §2a): background = status hue at low alpha
+     (mode-adapting), foreground = the paired readable text token. */
+  --color-success-soft: hsl(var(--status-running) / 0.15);
+  --color-success-soft-foreground: hsl(var(--success-soft-foreground));
+  --color-warning-soft: hsl(var(--status-warning) / 0.15);
+  --color-warning-soft-foreground: hsl(var(--warning-soft-foreground));
+  --color-danger-soft: hsl(var(--status-error) / 0.15);
+  --color-danger-soft-foreground: hsl(var(--danger-soft-foreground));
+  --color-failure-yolo: hsl(var(--failure-yolo));
+  --color-failure-delegation: hsl(var(--failure-delegation));
+  --color-failure-stochasticity: hsl(var(--failure-stochasticity));
+  --color-failure-amnesia: hsl(var(--failure-amnesia));
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+  --color-kind-agent: hsl(var(--kind-agent));
+  --color-kind-llm: hsl(var(--kind-llm));
+  --color-kind-tool: hsl(var(--kind-tool));
+  --color-kind-retriever: hsl(var(--kind-retriever));
+  --color-kind-embedding: hsl(var(--kind-embedding));
+  /* Panel utilities carry their alpha here (bg-glass, border-glass-border…)
+     so components never write opacity-modified raw colors. */
+  --color-rule: hsl(var(--rule));
+  --color-rule-strong: hsl(var(--rule-strong));
+  --color-plate: hsl(var(--surface-plate));
+  --color-glass: hsl(var(--glass-surface) / 0.75);
+  --color-glass-border: hsl(var(--glass-edge) / 0.18);
+  --color-glass-highlight: hsl(var(--glass-edge) / 0.1);
+  /* Elevation utilities (shadow-field / shadow-surface / shadow-overlay) — map
+     to the mode-switched --elevation-* tokens. `inline` keeps the var() so one
+     utility renders warm-ink in light and deep-neutral in dark (RIUS-52 §2b). */
+  --shadow-field: var(--elevation-field);
+  --shadow-surface: var(--elevation-surface);
+  --shadow-overlay: var(--elevation-overlay);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-geist-mono);
+  --font-pixel: var(--font-doto);
+}
