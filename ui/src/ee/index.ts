@@ -12,6 +12,8 @@ import TeamActions from "./home/actions";
 import { HOME_SAMPLES_EE } from "./home/samples";
 import { CrewLimit, ReposYouOwn, TeamCrews } from "./home/Side";
 import { WaitingForYou, YouAreWaitingOn } from "./home/Waiting";
+import { HiddenRows, LeadLine, PrivateLock, ProjectsSwitch } from "./projects/Projects";
+import { PROJECTS_SAMPLES_EE } from "./projects/samples";
 
 /** Called once by the console after the cell says its licence allows enterprise. Each ee screen
  *  registers itself under a slot name here. */
@@ -19,6 +21,10 @@ export function register(registerSlot: RegisterSlot, registerSamples: RegisterSa
   registerSlot("project.access", ProjectAccess);
   registerSlot("page.project.members", ProjectMembers);
   registerSlot("projects.changeLead", ChangeLead);
+  registerSlot("projects.switch", ProjectsSwitch);
+  registerSlot("projects.lock", PrivateLock);
+  registerSlot("projects.lead", LeadLine);
+  registerSlot("projects.hidden", HiddenRows);
   registerSlot("page.settings.areas", AreasPanel);
   registerSlot("settings.people", PeoplePanel);
   registerSlot("settings.keyPerson", KeyPersonCell);
@@ -41,4 +47,5 @@ export function register(registerSlot: RegisterSlot, registerSamples: RegisterSa
   registerSlot("crew.groups", CrewPeople);
   registerSlot("desk.groups", DeskForPeople);
   registerSamples("home", HOME_SAMPLES_EE);
+  registerSamples("projects", PROJECTS_SAMPLES_EE);
 }

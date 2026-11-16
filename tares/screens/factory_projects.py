@@ -109,4 +109,31 @@ def register(app, store, h, ctx):
         rows.sort(key=lambda r: (ORDER[r["state"]],
                                  -(_dt(r["last_activity_at"]) or _EPOCH).timestamp()))
         counts = {"all": len(rows), **{s: sum(1 for r in rows if r["state"] == s) for s in STATES}}
-        return {"projects": rows, "counts": counts, "now": now.isoformat()}
+        body = {"projects": rows, "counts": counts, "now": now.isoformat()}
+        team = _team(fx, request, projects, tickets, rows, now)
+        if team:
+            body.update(team)
+        return body
+
+
+def _team(fx, request, projects, tickets, rows, now) -> dict:
+    """What a cell of more than one person adds (TR-1277), or {} for a cell of one and a cell with no
+    licence: each row gains its lead, members, scope, the person's tickets in words and `mine` (the
+    person leads it, holds a ticket in it, or something in it waits for them), and `team` holds the
+    counts of the two views, a stub for each open private project the caller is not on, and the one
+    line about them. The rows and the stubs come from the seam Home used (fx.team_projects), asked
+    for the Team view; the page cuts Mine from it in the browser, so switching makes no call.
+    `mine` reads what waits for the caller's person (fx.team_home), not the cell's list."""
+    if fx is None or not hasattr(fx, "team_home") or not hasattr(fx, "team_projects"):
+        return {}
+    home = fx.team_home(request, now)
+    if not home:
+        return {}
+    keys = fx.team_projects(request, projects, tickets, rows, "team", now, home["waiting_for_you"])
+    if not keys:
+        return {}
+    listed = keys["projects"]
+    team = {"counts": keys["counts"], "hidden": [p for p in listed if p.get("hidden")]}
+    if keys.get("hidden_summary"):
+        team["hidden_summary"] = keys["hidden_summary"]
+    return {"projects": [p for p in listed if not p.get("hidden")], "team": team}

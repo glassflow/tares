@@ -5,10 +5,14 @@ import { api, ApiError } from "../../api";
 import { Banner, Button, Dialog, EmptyState, LoadingBlocks, ProgressBar, STATUS_TONES, StatusLabel } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Slot, useEeLoaded, useEePending, useEeSamples } from "../../eeSlots";
 import { cn } from "../../lib/utils";
+import { useEdition } from "../edition";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
-import { factoryProjects, type FactoryProjectRow, type FactoryProjectsData, type ProjectState } from "./FactoryProjects.api";
+import {
+  factoryProjects, type FactoryProjectRow, type FactoryProjectsData, type ProjectState, type ProjectsView,
+} from "./FactoryProjects.api";
 import { InlineIcon } from "./ProjectIcon";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectsSamples";
 
@@ -17,6 +21,12 @@ import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectsSampl
 // neither makes another call. A project whose tickets are all merged has a Close button. Every
 // string from the cell is a React text node; a name, goal, repo and milestone are the person's own
 // text and marked data-user-text.
+//
+// On a cell with more than one person the body carries `team` (TR-1277), and ee fills four slots:
+// the Yours/Team switch (?whose=team, cut from the rows already read, so it makes no call either), the
+// lock on a private project, who leads each row, and the private projects the person is not on, as
+// quiet rows (Team) or one line (Mine). Without the ee chunk loaded the page ignores `team` and lists
+// every row, so a switch that is not on screen never hides a project.
 
 const POLL_MS = 15_000;
 const NOT_CLOSED = "The project was not closed. Try again in a moment.";
@@ -37,7 +47,9 @@ const isFilter = (v: string | null): v is Filter => TABS.some((t) => t.key === v
 
 const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
 
-function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onClose: (p: FactoryProjectRow) => void }) {
+function Row({ p, error, onClose, team, me }: {
+  p: FactoryProjectRow; error?: string; onClose: (p: FactoryProjectRow) => void; team: boolean; me?: string;
+}) {
   const { merged, blocked, total } = p.tickets;
   const repos = p.repo_names.join(", ");
   return (
@@ -45,6 +57,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <InlineIcon icon={p.icon} />
+          {team && p.scope === "private" && <Slot name="projects.lock" />}
           <Link to={`/projects/${encodeURIComponent(p.id)}`} data-user-text data-testid="project-name"
                 className="font-bold [overflow-wrap:anywhere] text-foreground underline decoration-border underline-offset-[3px]">
             {p.name}
@@ -68,6 +81,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
           {p.meta}
         </div>
       )}
+      {team && <Slot name="projects.lead" p={p} me={me} />}
       <ProgressBar value={pct(merged, total)} blocked={pct(blocked, total)} aria-label={`${merged} of ${total} tickets merged`}
                    className={cn("my-2 [&>div:first-child]:bg-foreground", p.state === "done" && "[&>div:first-child]:bg-faint")} />
       <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground" data-testid="project-tickets">
@@ -101,19 +115,30 @@ export function FactoryProjectsView({ data, onClose, start }: {
   const [asking, setAsking] = React.useState<string | null>(start?.open || null);
   const [busy, setBusy] = React.useState(false);
   const [errors, setErrors] = React.useState<Record<string, string>>(start?.row ? { [start.row]: start.error } : {});
+  const me = useMe();
+  // the team's keys count only once ee can show the switch that undoes Mine
+  const team = useEeLoaded() ? data.team : undefined;
+  const view: ProjectsView = team && params.get("whose") === "team" ? "team" : "mine";
+  const rows = team && view === "mine" ? data.projects.filter((p) => p.mine) : data.projects;
+  const counts = team ? countsOf(rows) : data.counts;
 
   const setTab = (k: string) => setParams((q) => {
     const n = new URLSearchParams(q);
     if (k === "open") n.delete("state"); else n.set("state", k);
     return n;
   });
+  const setView = (v: ProjectsView) => setParams((q) => {
+    const n = new URLSearchParams(q);
+    if (v === "mine") n.delete("whose"); else n.set("whose", v);
+    return n;
+  });
   // Open is what is being worked on: not finished, and not kept for later
-  const count = (k: Filter) => k === "all" ? data.counts.all
-    : k === "open" ? data.counts.all - data.counts.done - (data.counts.later ?? 0) : (data.counts[k] ?? 0);
-  const finished = data.counts.done;
+  const count = (k: Filter) => k === "all" ? counts.all
+    : k === "open" ? counts.all - counts.done - (counts.later ?? 0) : (counts[k] ?? 0);
+  const finished = counts.done;
 
   const needle = query.trim().toLowerCase();
-  const shown = data.projects.filter((p) =>
+  const shown = rows.filter((p) =>
     (tab === "all" || (tab === "open" ? p.state !== "done" && p.state !== "later" : p.state === tab)) &&
     (!needle || `${p.name} ${p.goal}`.toLowerCase().includes(needle)));
 
@@ -133,7 +158,13 @@ export function FactoryProjectsView({ data, onClose, start }: {
     }
   };
 
-  const empty = data.projects.length === 0;
+  // a private project the person is not on is open work, so it shows where the open rows do
+  const hiddenHere = !!team && !needle && (tab === "open" || tab === "all")
+    && (view === "team" ? team.hidden.length > 0 : !!team.hidden_summary);
+  const empty = data.projects.length === 0 && !team?.hidden.length;
+  const none = needle ? "No project matches your search."
+    : team && view === "mine" && (tab === "open" || tab === "all") ? "No projects of yours yet."
+    : "No project is in this state.";
   return (
     <ProjectsHead>
       {empty ? (
@@ -142,8 +173,11 @@ export function FactoryProjectsView({ data, onClose, start }: {
         </EmptyState>
       ) : (
         <div className="grid gap-4">
-          <Input aria-label="Search projects" placeholder="Search by name or goal" value={query} data-testid="projects-search"
-                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-field" />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Input aria-label="Search projects" placeholder="Search by name or goal" value={query} data-testid="projects-search"
+                   onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-field" />
+            {team && <Slot name="projects.switch" view={view} counts={team.counts} onView={setView} />}
+          </div>
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList aria-label="Projects by state" className="h-auto flex-wrap">
               {TABS.map((t) => (
@@ -156,12 +190,13 @@ export function FactoryProjectsView({ data, onClose, start }: {
             </TabsList>
             <TabsContent value={tab} className="mt-4">
               <div className="border border-border bg-card" data-testid="projects-list">
-                {shown.length === 0 && (
-                  <div className="px-4 py-7 text-muted-foreground" data-testid="projects-none">
-                    {needle ? "No project matches your search." : "No project is in this state."}
+                {shown.length === 0 && !(hiddenHere && view === "team") && (
+                  <div className="border-b border-border px-4 py-7 text-muted-foreground last:border-b-0" data-testid="projects-none">
+                    {none}
                   </div>
                 )}
-                {shown.map((p) => <Row key={p.id} p={p} error={errors[p.id]} onClose={(r) => setAsking(r.id)} />)}
+                {shown.map((p) => <Row key={p.id} p={p} error={errors[p.id]} onClose={(r) => setAsking(r.id)} team={!!team} me={me} />)}
+                {hiddenHere && <Slot name="projects.hidden" stubs={team.hidden} summary={team.hidden_summary} view={view} />}
                 {tab === "open" && finished > 0 && (
                   <Link to="?state=done" data-testid="show-finished"
                         className="block border-t border-border px-4 py-3 text-[13px] text-foreground underline">
@@ -187,12 +222,35 @@ export function FactoryProjectsView({ data, onClose, start }: {
   );
 }
 
+/** The person's name as the cell has it, for "Led by you". */
+function useMe(): string | undefined {
+  const { personName } = useEdition();
+  return personName && personName !== "You" ? personName : undefined;
+}
+
+const countsOf = (rows: FactoryProjectRow[]): FactoryProjectsData["counts"] => {
+  const n = (s: ProjectState) => rows.filter((p) => p.state === s).length;
+  return { all: rows.length, building: n("building"), waiting_on_you: n("waiting_on_you"), not_started: n("not_started"),
+           ready_to_close: n("ready_to_close"), later: n("later"), done: n("done") };
+};
+
 export default function FactoryProjects() {
   const named = useSample();
-  const sample = isSample(named) ? named : null;
+  const ee = useEeSamples("projects");
+  const eePending = useEePending();
+  const eeSample = named && !isSample(named) && Object.prototype.hasOwnProperty.call(ee, named) ? ee[named] : null;
+  // a team sample is ee's: while the chunk loads, wait for it instead of showing the live list and swapping
+  if (named && !isSample(named) && !eeSample && eePending) {
+    return <ProjectsHead><LoadingBlocks data-testid="projects-loading" /></ProjectsHead>;
+  }
+  return <ProjectsPage key={named ?? ""} named={named} eeSample={eeSample} />;
+}
+
+function ProjectsPage({ named, eeSample }: { named: string | null; eeSample: FactoryProjectsData | null }) {
+  const sample = isSample(named) ? named : eeSample ? named : null;
   const [closedHere, setClosedHere] = React.useState<string[]>([]);
   const { data, error, reload } = usePagePolling<FactoryProjectsData>(
-    () => (sample ? sampleLoad(sample) : factoryProjects()), POLL_MS);
+    () => (eeSample ? Promise.resolve(eeSample) : sample ? sampleLoad(sample) : factoryProjects()), POLL_MS);
 
   const shown = data && closedHere.reduce(sampleClosed, data);
   // a sample has no cell to close on: `fail` answers as the cell does, any other moves the row on this copy

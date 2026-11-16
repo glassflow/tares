@@ -102,6 +102,13 @@ async def main():
         BODIES.append(r.json())
         return r.json()
 
+    async def projects_of(who):
+        """GET /api/factory/projects, the Projects page's one read (TR-1277)."""
+        r = await call(who, "GET", "/api/factory/projects")
+        assert r.status_code == 200, r.text
+        BODIES.append(r.json())
+        return r.json()
+
     def by_kind(h):
         out = {}
         for i in h["waiting_for_you"]:
@@ -152,6 +159,12 @@ async def main():
             type("C", (), {"store": store})(), None, now_utc()) == {})
         ck("a key with no person is the cell's own key: same body", (await home("root"))["waiting_total"]
            == one["waiting_total"])
+
+        solo_list = await projects_of("root")
+        ck("Projects on a cell of one: no team key, and no row has a lead, scope or mine",
+           "team" not in solo_list and solo_list["projects"]
+           and not any(k in p for p in solo_list["projects"] for k in ("lead", "members", "scope", "mine")),
+           sorted(solo_list))
 
         print("== a cell of three people ==")
         for who in ("alex", "kim", "lee"):
@@ -512,6 +525,36 @@ async def main():
         ck("Lee leads it: his own row, no stub, no summary", next(p for p in h["projects"] if p["id"] == vault)
            ["scope"] == "private" and not any(p.get("hidden") for p in h["projects"])
            and "hidden_summary" not in h)
+        print("== part two: the Projects page carries the same team keys (TR-1277) ==")
+        for who in ("alex", "kim"):
+            dump = json.dumps(await projects_of(who))
+            ck(f"{who.capitalize()} / Projects: nothing of Vault is anywhere in the body",
+               not any(w in dump for w in ("Vault", "launch codes", "secret keys", vault)),
+               [w for w in ("Vault", "launch codes", "secret keys", vault) if w in dump])
+        pl, ht = await projects_of("alex"), await home_of("alex", "team")
+        open_rows = [p for p in pl["projects"] if p["state"] not in ("done", "later")]
+        ck("Alex / Projects: one stub, its lead's name only, apart from the rows",
+           pl["team"]["hidden"] == [{"hidden": True, "lead": {"name": "Lee"}}]
+           and not any(p.get("hidden") for p in pl["projects"]), pl["team"])
+        ck("... the same line about it as Home's",
+           pl["team"]["hidden_summary"] == "1 private project you are not on, led by Lee", pl["team"])
+        ck("... counts.team is every row, counts.mine the rows marked mine",
+           pl["team"]["counts"] == {"team": len(pl["projects"]),
+                                    "mine": sum(1 for p in pl["projects"] if p["mine"])}, pl["team"]["counts"])
+        home_rows = {p["id"]: p for p in ht["projects"] if not p.get("hidden")}
+        same = lambda p, q: all(p[k] == q[k] for k in ("lead", "members", "scope", "yours", "yours_text", "mine"))
+        ck("... an open project reads the same lead, members, scope, yours and mine as on Home",
+           {p["id"] for p in open_rows} == set(home_rows)
+           and all(same(p, home_rows[p["id"]]) for p in open_rows),
+           [(p["id"], p.get("mine"), home_rows.get(p["id"], {}).get("mine")) for p in open_rows])
+        ck("... Atlas says Kim leads it", next(p for p in pl["projects"] if p["id"] == atlas)["lead"]
+           == {"id": pid["kim"], "name": "Kim"})
+        lee_list = await projects_of("lee")
+        ck("Lee / Projects: his own Vault row, private and his, no stub and no line",
+           next(p for p in lee_list["projects"] if p["id"] == vault)["scope"] == "private"
+           and next(p for p in lee_list["projects"] if p["id"] == vault)["mine"]
+           and lee_list["team"]["hidden"] == [] and "hidden_summary" not in lee_list["team"], lee_list["team"])
+
         store.add_desk_item(vault, "Rotate the vault keys?", "", [], "yes", "why", "", [], False,
                             "crew-orchestrator", [], ago(minutes=3), to_person_id=pid["alex"])
         ck("a desk item addressed to Alex in a project he is not on is not in his list",
