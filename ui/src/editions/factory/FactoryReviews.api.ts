@@ -31,6 +31,8 @@ export interface ReviewRow {
 export interface FactoryReviewsData {
   /** The ones that wait for the person to merge, the longest waiting first. */
   waiting_for_you: ReviewRow[];
+  /** The ones that wait for someone else's merge (their ticket, or a project they lead), named for them. */
+  waiting_for_others?: (ReviewRow & { for_people: { id: string; name: string }[] })[];
   /** The ones a named role of the crew has next, the longest waiting first. */
   with_the_crew: ReviewRow[];
   /** The ones nobody is on (project finished, never handed over, closed, blocked), each with its reason. */

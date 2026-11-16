@@ -1,8 +1,8 @@
 # Tares enterprise licence, see ee/LICENSE
 """The ee MCP tools of a factory cell follow the licence (TR-923).
 
-A factory cell with a licence lists the four outcome tools first, then the question tools the ee
-team adds (`ask_area`, `answer_question`, `list_questions`), and a call to one of them runs. The same
+A factory cell with a licence lists the four outcome tools first, then the question tools and the brain tools the ee
+team adds (`ask_area`, `answer_question`, `list_questions`, `ask_brain`, `search_brain`, `get_brain_doc`), and a call to one of them runs. The same
 cell with no licence does not list them and answers a call with the licence text. `sign_off` is not
 a tool: the cell has no sign-offs.
 
@@ -28,6 +28,7 @@ TOKEN = "root-mcp-ee"
 ROOT = {"Authorization": f"Bearer {TOKEN}"}
 OUTCOMES = ["what_needs_me", "how_is_project", "start_project", "hand_project_to_crew"]
 QUESTION_TOOLS = ["ask_area", "answer_question", "list_questions"]
+BRAIN_TOOLS = ["ask_brain", "search_brain", "get_brain_doc"]
 LICENCE_TEXT = "licence_required: This needs an enterprise licence. https://docs.glassflow.ai/tares/enterprise"
 
 
@@ -104,6 +105,7 @@ async def licensed_cell():
         ck("the outcome tools come first", n[:4] == OUTCOMES, str(n[:6]))
         ck("the question tools are listed", all(t in n for t in QUESTION_TOOLS), str(n))
         ck("they come after the outcome tools", all(t in n and n.index(t) >= 4 for t in QUESTION_TOOLS), str(n[:8]))
+        ck("the brain tools are listed", all(t in n for t in BRAIN_TOOLS), str(n))
         ck("sign_off is not a tool", "sign_off" not in n, str(n))
         ck("the crew's tools stay", "list_tickets" in n and "hand_over" in n and "my_work" in n, str(n))
         out = await call(murl, "list_questions", {})
@@ -128,6 +130,8 @@ async def unlicensed_cell():
         n = await names(murl)
         ck("the outcome tools come first", n[:4] == OUTCOMES, str(n[:6]))
         ck("no question tool is listed", not set(QUESTION_TOOLS) & set(n), str(sorted(set(QUESTION_TOOLS) & set(n))))
+        ck("no brain tool is listed", not set(BRAIN_TOOLS) & set(n), str(sorted(set(BRAIN_TOOLS) & set(n))))
+        ck("a call to ask_brain answers the licence text", await call(murl, "ask_brain", {"question": "x"}) == LICENCE_TEXT)
         for t in QUESTION_TOOLS:
             args = {"repo": "acme/web", "text": "x"} if t == "ask_area" else (
                 {"id": "q", "answer": "x"} if t == "answer_question" else {})

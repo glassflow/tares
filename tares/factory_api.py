@@ -25,6 +25,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
+from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
 from . import team as team_mod
@@ -1156,47 +1157,61 @@ def register(app, store, h: Host) -> SimpleNamespace:
         local = store.get_person("local") or {}
         return {"id": "local", "name": local.get("name") or "You"}
 
-    def is_mine(t: dict, me: str, p: dict | None) -> bool:
-        """A ticket is the person's when it is assigned to them. One with no assignee counts as
-        its project's lead's; only when the project has no lead is it the person `local`'s (a
-        cell of one)."""
-        a = t.get("assignee_person_id") or (p or {}).get("lead_person_id")
-        return a == me or (me == "local" and not a)
+    # Who owns what is one rule, factory_owners (TR: project page waiting): an assignee, else the
+    # project's lead, else the cell's admins; a person who left, or an unclaimed `local`, owns
+    # nothing. These three read it, so every list and every check agrees with the home.
+    def is_mine(t: dict, me: str, p: dict | None, o=None) -> bool:
+        """A ticket is the person's when it is assigned to them; one with no assignee (or one who
+        left) is its project's owner's (factory_owners)."""
+        o = o or owners_mod.Owners(store)
+        return o.owns_all(me) or me in o.ticket(t, p)
 
-    def desk_is_mine(d: dict, me: str) -> bool:
-        """A desk item is the person's when it is addressed to them; the person `local` (a cell of
-        one) also has the items from before they were addressed."""
-        to = d.get("to_person_id")
-        return to == me or (me == "local" and not to)
+    def desk_is_mine(d: dict, me: str, o=None) -> bool:
+        """A desk item is the person's when it is addressed to them; one addressed to nobody here
+        is its project's owner's (factory_owners)."""
+        o = o or owners_mod.Owners(store)
+        if o.owns_all(me):
+            return True
+        p = store.get_project(d["project"]) if d.get("project") else None
+        return me in o.desk(d, p)
 
     def desk_can_act(d: dict, me: str, request: Request) -> bool:
-        """Who may answer or allow a desk item from the console (TR-898): the person it is
-        addressed to. An item from before items were addressed has no one: an admin key, the
-        project's lead and `local` may act on it, nobody else (a key that can only ingest must not
-        grant a permission). The lists (`desk_is_mine`) still show it to `local` only."""
-        to = d.get("to_person_id")
-        if to:
-            return to == me
-        if me == "local" or h.is_admin(request):
+        """Who may answer or allow a desk item from the console (TR-898): the person it waits for
+        (desk_is_mine). One addressed to nobody who is here also lets an admin key act on it;
+        nobody else (a key that can only ingest must not grant a permission)."""
+        # who it waits for, by the rule itself: seeing every item (the root credential) is not a
+        # right to act on one addressed to someone else
+        o = owners_mod.Owners(store)
+        p = store.get_project(d["project"]) if d.get("project") else None
+        ids = o.desk(d, p)
+        if o.single or me in ids:
             return True
-        return leads(store.get_project(d["project"]) if d.get("project") else None, me)
+        # addressed to nobody who is here (TR-898), or an orphan: an admin key and the cell's own
+        # credential may act on it too. A right, not a list: the lists show it to its owner.
+        unaddressed = o.here(d.get("to_person_id")) is None or o.orphan(ids)
+        return unaddressed and (h.is_admin(request) or h.is_system(request))
 
-    def leads(p: dict | None, me: str) -> bool:
-        lead = (p or {}).get("lead_person_id")
-        return lead == me or (me == "local" and not lead)
+    def leads(p: dict | None, me: str, o=None) -> bool:
+        """The person owns the project's work: its lead, else (no lead, or the lead left) an admin
+        (factory_owners)."""
+        o = o or owners_mod.Owners(store)
+        return o.owns_all(me) or me in o.project(p)
 
     def my_projects(request: Request) -> set[str] | None:
         """The projects the caller's person leads or holds a ticket assignment in, or None when
         nothing narrows the list: the system credential, or a key with no person (a project key)."""
         if h.is_system(request) or not h.current_person(request):
             return None
-        me = h.current_person(request)["id"]
-        out = set()
-        for row in store.list_projects():
-            p = store.get_project(row["id"])
-            if leads(p, me) or any(is_mine(t, me, p) for t in store.list_tickets(row["id"])):
-                out.add(row["id"])
-        return out
+        return projects_of(h.current_person(request)["id"])
+
+    def projects_of(me: str) -> set[str]:
+        """The projects person `me` owns or owns a ticket in (my_projects' rule): one read of the
+        people, the projects and their tickets."""
+        o = owners_mod.Owners(store)
+        ps = store.list_projects()
+        tickets = store.tickets_by_project([p["id"] for p in ps])
+        return {p["id"] for p in ps
+                if leads(p, me, o) or any(is_mine(t, me, p, o) for t in tickets.get(p["id"]) or [])}
 
     def crews_of(rows: list[dict]) -> list[dict]:
         """The stations (as `stations()` lists them) grouped by crew, the crew seen last first."""
@@ -1296,6 +1311,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         to each led project, its `project_id` and `milestones` ([{id, name, checks, since}]) for
         the home page; the route does not ask for it."""
         from . import merge_queue       # here: merge_queue imports this module
+        o = owners_mod.Owners(store)    # one read of the people for every check below
         ready, doing, led, bouncing = [], [], [], []
         for uid in store.handed_over_projects(finished=False, taken=False):
             p = store.get_project(uid)
@@ -1304,7 +1320,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             tickets = store.list_tickets(uid)
             wait = factory_mod.readiness(tickets)
             for t in tickets:
-                if not is_mine(t, me["id"], p) or factory_mod.finished(t):
+                if not is_mine(t, me["id"], p, o) or factory_mod.finished(t):
                     continue
                 if t["holder"]:
                     doing.append({"project": p["name"], "ticket": factory_mod.label(t),
@@ -1320,7 +1336,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "holder": t["holder"] or "", "stage": t["stage"] or "",
                         "count": merge_queue.bounces(store, t["id"]), "ladder": step,
                         "reason": merge_queue.last_bounce_reason(store, t["id"])})
-            if leads(p, me["id"]):
+            if leads(p, me["id"], o):
                 ms, full = [], []
                 for m in store.list_milestones(uid):
                     mine = [t for t in tickets if t["milestone"] == m["id"]
@@ -1336,7 +1352,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         desk = [{k: d[k] for k in ("label", "project_name", "question", "options", "recommendation",
                                    "why", "context", "blocks", "tickets", "blocking", "created_at")}
                 for d in map(desk_out, store.list_desk("open"))
-                if d["project"] not in hidden and desk_is_mine(d, me["id"])]
+                if d["project"] not in hidden and desk_is_mine(d, me["id"], o)]
         asked = team_mod.get().open_questions_for(team_reader(), me["id"], hidden, want)
         return {"ready": ready, "in_progress": doing, "bouncing": bouncing, "led_projects": led,
                 "desk": desk, "spec_questions": asked}
@@ -1387,6 +1403,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
         one person: see the team interface. It reads what this module holds; the route stays in daemon.py."""
         return team_mod.get().team_home(team_reader(), request, now or now_utc())
+
+    def project_waiting(request: Request, uid: str, now=None) -> dict | None:
+        """What waits in one project on a team cell: {mine, others} (see the team interface), or
+        None on a cell of one person."""
+        return team_mod.get().project_waiting(team_reader(), request, now or now_utc(), uid)
 
     def own_stations(request: Request, rows: list[dict]) -> list[dict]:
         """`rows` kept to the caller's own crews on a team cell (see the team interface)."""
@@ -2007,11 +2028,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
             return {"queue": queue(), "now": now_utc()}
         me = work_person(request)["id"]
         projects: dict[str, dict | None] = {}
+        o = owners_mod.Owners(store)
 
         def keep(t: dict) -> bool:
             if t["project"] not in projects:
                 projects[t["project"]] = store.get_project(t["project"])
-            return is_mine(t, me, projects[t["project"]])
+            return is_mine(t, me, projects[t["project"]], o)
         return {"queue": queue(keep), "now": now_utc()}
 
     @app.get("/api/factory/merge-ready")
@@ -2569,8 +2591,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         uid = h.project_or_404(h.resolve_project(project.strip()))["id"] if project.strip() else None
         hidden = h.hidden_ids()
         me = work_person(request)["id"] if mine else None
+        o = owners_mod.Owners(store)
         return {"desk": [desk_out(d) for d in store.list_desk(st, uid)
-                         if d["project"] not in hidden and (me is None or desk_is_mine(d, me))]}
+                         if d["project"] not in hidden and (me is None or desk_is_mine(d, me, o))]}
 
     def desk_or_404(ref: str) -> dict:
         d = store.get_desk_item(ref)
@@ -3148,6 +3171,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
         later hand-over opens it again."""
         deny(request, "finish")
         p = h.project_or_404(uid)
+        # a person closes a project whose work is theirs (factory_owners: its lead, else the
+        # admins; an orphan, any admin key); a crew station finishes what its desk was told to
+        me = h.current_person(request)
+        if me and not caller(request)["station"] and not h.is_system(request):
+            o = owners_mod.Owners(store)
+            ids = o.project(p)
+            if not (me["id"] in ids or (o.orphan(ids) and h.is_admin(request))):
+                h.err(PermissionError(f"{p['name']} is led by someone else: its lead closes it"), 403)
         ho = store.get_handover(uid)
         if not ho and caller(request)["station"]:
             h.err(ValueError(f"{p['name']} was never handed to the crew; there is nothing to finish"))
@@ -3215,10 +3246,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
     fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
-                         team_home=team_home, team_projects=team_projects, own_stations=own_stations,
+                         team_home=team_home, project_waiting=project_waiting,
+                         team_projects=team_projects, own_stations=own_stations,
                          own_desk=own_desk, own_tickets=own_tickets,
                          hidden_ids=lambda: h.hidden_ids(),
                          caller_person=lambda request: h.current_person(request),
+                         is_system=lambda request: h.is_system(request),
+                         is_admin=lambda request: h.is_admin(request),
                          machine_key=machine_key)
 
     def for_request(request):

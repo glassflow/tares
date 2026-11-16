@@ -388,6 +388,33 @@ FACTORY_SCHEMA = [
       added_by       TEXT,
       added_at       TIMESTAMPTZ
     )""",
+    # Where a repo's index job stands (TR-1198): the place in the control plane's queue while it
+    # waits, and when the cell asked for the job (NULL until it did, so a repo is asked for once).
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS place INTEGER",
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS job_started_at TIMESTAMPTZ",
+    # How the keep-up sync of a ready repo is doing (TR-1201): the failures in a row and the last
+    # failure's words. A success clears both.
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_failures INTEGER DEFAULT 0",
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_error TEXT",
+    # Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked
+    # (the station and person the call came with, `via` mcp or console), what, which repos it used,
+    # how long it took and the tokens lore reported. The daily caps count the ask rows.
+    """CREATE TABLE IF NOT EXISTS brain_calls (
+      id            TEXT PRIMARY KEY,
+      "at"          TIMESTAMPTZ,
+      tool          TEXT,
+      deep          INTEGER DEFAULT 0,
+      question      TEXT,
+      repos         TEXT,
+      duration_ms   INTEGER,
+      input_tokens  INTEGER,
+      output_tokens INTEGER,
+      ok            INTEGER,
+      error         TEXT,
+      station       TEXT,
+      person_id     TEXT,
+      via           TEXT
+    )""",
     # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
     # since the hand-over stopped waiting for sign-offs; the rows are kept.
     """CREATE TABLE IF NOT EXISTS signoffs (
@@ -1925,12 +1952,14 @@ class FactoryStore:
 
     # ── the repos connected to the brain (TR-1197) ────────────────────────────
     _BR_COLS = ("repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
-                "error, added_by, added_at")
+                "error, added_by, added_at, place, job_started_at, sync_failures, sync_error")
 
     def _br_rows(self, rows) -> list[dict]:
         out = [{"repo": r[0], "repo_source_id": r[1], "state": r[2], "files_done": r[3] or 0,
                 "files_total": r[4] or 0, "indexed_commit": r[5], "last_synced": r[6],
-                "error": r[7], "added_by": r[8], "added_at": r[9]} for r in rows]
+                "error": r[7], "added_by": r[8], "added_at": r[9], "place": r[10],
+                "job_started_at": r[11], "sync_failures": r[12] or 0, "sync_error": r[13]}
+               for r in rows]
         refs = self._person_refs(r["added_by"] for r in out)
         for r in out:
             r["added_by_name"] = (refs.get(r["added_by"]) or {}).get("name")
@@ -1954,7 +1983,7 @@ class FactoryStore:
         with self._swrite:
             hit = self.sc.execute(
                 f"INSERT INTO brain_repos ({self._BR_COLS}) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, "
-                "?, ?) ON CONFLICT DO NOTHING RETURNING repo",
+                "?, ?, NULL, NULL, 0, NULL) ON CONFLICT DO NOTHING RETURNING repo",
                 [repo, repo_source_id or None, state, added_by or None, at]).fetchone()
         return hit is not None
 
@@ -1965,13 +1994,96 @@ class FactoryStore:
         return hit is not None
 
     def requeue_brain_repo(self, repo: str, from_state: str = "failed") -> bool:
-        """Put a repo that is in `from_state` back to queued with its error cleared; False when it
-        is not in that state (or not there), and then the row is left as it was."""
+        """Put a repo that is in `from_state` back to queued for a new index job: the error, the
+        place, the counts and the job's start are cleared. False when it is not in that state (or
+        not there), and then the row is left as it was."""
         with self._swrite:
             hit = self.sc.execute(
-                "UPDATE brain_repos SET state = 'queued', error = NULL WHERE repo = ? AND state = ? "
-                "RETURNING repo", [repo, from_state]).fetchone()
+                "UPDATE brain_repos SET state = 'queued', error = NULL, place = NULL, "
+                "files_done = 0, files_total = 0, job_started_at = NULL, sync_failures = 0, "
+                "sync_error = NULL WHERE repo = ? AND state = ? RETURNING repo", [repo, from_state]).fetchone()
         return hit is not None
+
+    _BR_SETTABLE = ("state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
+                    "place", "job_started_at", "sync_failures", "sync_error")
+
+    def update_brain_repo(self, repo: str, fields: dict, only_in: tuple[str, ...] | None = None) -> bool:
+        """Set some of a repo's columns (state, files_done, files_total, indexed_commit,
+        last_synced, error, place, job_started_at, sync_failures, sync_error). With `only_in`, only while the repo is in one
+        of those states. False when no row was changed."""
+        bad = sorted(set(fields) - set(self._BR_SETTABLE))
+        if bad or not fields:
+            raise ValueError(f"cannot set {bad or 'nothing'} on a brain repo")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        args = [*fields.values(), repo]
+        where = "repo = ?"
+        if only_in:
+            where += f" AND state IN ({', '.join('?' for _ in only_in)})"
+            args += list(only_in)
+        with self._swrite:
+            hit = self.sc.execute(f"UPDATE brain_repos SET {sets} WHERE {where} RETURNING repo",
+                                  args).fetchone()
+        return hit is not None
+
+    # ── the calls made to the brain (TR-1200) ─────────────────────────────────
+    _BC_COLS = ('id, "at", tool, deep, question, repos, duration_ms, input_tokens, output_tokens, '
+                "ok, error, station, person_id, via")
+
+    def reserve_brain_call(self, call: dict, cap: int | None = None, since=None) -> bool:
+        """Keep a call that is about to start. With `cap`, only while fewer than `cap` calls of the
+        same tool and depth have started since `since`; False when the cap is reached (nothing is
+        kept). The count and the insert are one step under this process's write lock, so two calls in
+        this process cannot both take the last place; the cap is not shared between daemons."""
+        with self._swrite:
+            if cap is not None:
+                n = self.sc.execute(
+                    'SELECT count(*) FROM brain_calls WHERE tool = ? AND deep = ? AND "at" >= ?',
+                    [call["tool"], 1 if call.get("deep") else 0, since]).fetchone()[0]
+                if n >= cap:
+                    return False
+            self.sc.execute(
+                f"INSERT INTO brain_calls ({self._BC_COLS}) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, "
+                "NULL, NULL, ?, ?, ?)",
+                [call["id"], call["at"], call["tool"], 1 if call.get("deep") else 0, call.get("question"),
+                 json.dumps(call.get("repos") or []), call.get("station") or None,
+                 call.get("person_id") or None, call.get("via") or None])
+        return True
+
+    def finish_brain_call(self, call_id: str, duration_ms: int, ok: bool, input_tokens: int | None = None,
+                          output_tokens: int | None = None, error: str | None = None) -> None:
+        with self._swrite:
+            self.sc.execute(
+                "UPDATE brain_calls SET duration_ms = ?, input_tokens = ?, output_tokens = ?, ok = ?, "
+                "error = ? WHERE id = ?",
+                [duration_ms, input_tokens, output_tokens, 1 if ok else 0, error, call_id])
+
+    def list_brain_calls(self, since=None, tool: str | None = None, station: str | None = None,
+                         limit: int = 1000) -> list[dict]:
+        """The calls made to the brain, newest first."""
+        where, args = [], []
+        if since is not None:
+            where.append('"at" >= ?')
+            args.append(since)
+        if tool:
+            where.append("tool = ?")
+            args.append(tool)
+        if station:
+            where.append("station = ?")
+            args.append(station)
+        sql = f"SELECT {self._BC_COLS} FROM brain_calls" + (f" WHERE {' AND '.join(where)}" if where else "")
+        with self._sread:
+            rows = self.sc.execute(sql + ' ORDER BY "at" DESC, id LIMIT ?', [*args, limit]).fetchall()
+        out = []
+        for r in rows:
+            try:
+                repos = json.loads(r[5]) if r[5] else []
+            except ValueError:
+                repos = []
+            out.append({"id": r[0], "at": r[1], "tool": r[2], "deep": bool(r[3]), "question": r[4],
+                        "repos": repos, "duration_ms": r[6], "input_tokens": r[7],
+                        "output_tokens": r[8], "ok": None if r[9] is None else bool(r[9]),
+                        "error": r[10], "station": r[11], "person_id": r[12], "via": r[13]})
+        return out
 
     def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
         """End a grant that still waits and keep who said no; False when it was no longer waiting
