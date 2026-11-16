@@ -34,7 +34,6 @@ class StartCtx:
     machine_name: str = ""              # the machine that signed in or runs the crew
     crew_up: bool = False               # the orchestrator and the reviewer have both reported
     crew_text: str = ""                 # "Running on <machine>"
-    spec_with_tickets: bool = False     # a factory project has tickets
 
 
 @dataclass
@@ -74,9 +73,11 @@ def _where(step: dict, where: str, command: str | None = None) -> dict:
 
 
 def factory_steps(ctx) -> list[dict]:
-    """The five steps of the factory home's first run (TR-1312), in order: Set up your factory, done
-    in the console on /setup (how the crew works, GitHub, and the integrations), then four commands
-    in a terminal. Each ticks from what the cell knows."""
+    """The four steps of a factory's first run (TR-1312), in order: Set up your factory, done in the
+    console on /setup (how the crew works, GitHub, and the integrations), then three commands in a
+    terminal. Each ticks from what the cell knows. The factory is set up once the crew is up; planning
+    the first project (SPEC_COMMAND) is what comes next, on the home, not a step of setup: it is a long
+    conversation, not something to wait on."""
     c = _ctx(ctx)
     return [
         _where(_step("setup", "Set up your factory",
@@ -95,11 +96,6 @@ def factory_steps(ctx) -> list[dict]:
                      "It reads your choices from this workspace and asks only what belongs to your machine.",
                      c.crew_up, [{"label": "Copy the command", "copy": CREW_COMMAND}],
                      c.crew_text), "terminal", CREW_COMMAND),
-        _where(_step("spec", "Plan the first project",
-                     "Start it in the repo you want built. You talk the project through with Claude Code, "
-                     "and it writes the plan as milestones and tickets.",
-                     c.spec_with_tickets, [{"label": "Copy the command", "copy": SPEC_COMMAND}]),
-               "terminal", SPEC_COMMAND),
     ]
 
 

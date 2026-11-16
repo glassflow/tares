@@ -186,7 +186,8 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("step-terminal").click();
       ck("the last step, the terminal, ends the setup", (await text(page.getByTestId("page-title"))) === "In your terminal"
          && (await text(page.getByTestId("step-next"))) === "Finish setup" && (await page.getByTestId("step-next").getAttribute("href")) === "/");
-      ck("the terminal step shows the four commands, done or not", (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4);
+      ck("the terminal step shows the three commands, done or not, and no planning step", (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 3
+         && (await page.locator("[data-testid=start-step][data-key=spec]").count()) === 0);
       await page.getByTestId("step-tickets").click();
       await page.getByTestId("step-next").click();
       ck("Next goes to the next step", (await text(page.getByTestId("page-title"))) === "Review");
@@ -837,8 +838,8 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("step-terminal").click();
       await page.locator("[data-testid=step-view][data-slot=terminal]").waitFor();
       const steps = page.getByTestId("terminal-panel").getByTestId("start-step");
-      ck("four commands, each with its copy button, and what they need said once above them", (await steps.count()) === 4
-         && (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4 && (await page.getByTestId("prerequisites").count()) === 1);
+      ck("three commands, each with its copy button, and what they need said once above them", (await steps.count()) === 3
+         && (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 3 && (await page.getByTestId("prerequisites").count()) === 1);
       ck("the crew panel stands beside them", (await page.getByTestId("your-crew").isVisible()));
       const box = await page.getByTestId("terminal-panel").locator("code").first().evaluate((el) => {
         const b = el.parentElement.getBoundingClientRect(), row = el.closest("[data-testid=start-step]").getBoundingClientRect();

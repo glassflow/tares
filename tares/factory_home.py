@@ -433,22 +433,15 @@ def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
 
 # ── the page ──────────────────────────────────────────────────────────────────
 
-def _start_ctx(store, onboarding: dict, tickets: dict) -> start_steps.StartCtx:
-    """What the Start checklist needs, from the store alone (`onboarding` is the block of this
-    home, `tickets` is the open projects' tickets, already read)."""
-    spec = any(tickets.values())
-    if not spec:
-        done = [p["id"] for p in store.list_projects()
-                if p.get("kind") == "software_factory" and p["status"] == "done"]
-        spec = any(store.tickets_by_project(done).values())
+def _start_ctx(onboarding: dict) -> start_steps.StartCtx:
+    """What the Start checklist needs (`onboarding` is the block of this home)."""
     c, g, m, crew = onboarding["choices"], onboarding["github"], onboarding["machine"], onboarding["crew"]
     parts = [crew_onboarding.choices_text(c) if c["chosen"] else "", g["text"]]
     return start_steps.StartCtx(
         choices_made=c["chosen"], github_connected=g["connected"],
         setup_text=". ".join(t for t in parts if t),
         cli_version=m["version"], machine_name=m["name"], crew_up=crew["up"],
-        crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "",
-        spec_with_tickets=spec)
+        crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "")
 
 
 def _cut(fx, name: str, request, rows, *more):
@@ -577,8 +570,10 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
+            # how a project is planned with the crew: the home's empty Projects list shows it
+            "plan_command": start_steps.SPEC_COMMAND,
             "start": start_steps.checklist(
-                store, start_steps.factory_steps(_start_ctx(store, onboarding, tickets)),
+                store, start_steps.factory_steps(_start_ctx(onboarding)),
                 "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
             "now": now.isoformat()}

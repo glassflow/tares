@@ -236,6 +236,8 @@ export interface HomeData {
   later_count?: number; // projects kept for later, off the home
   crew: HomeCrew;
   plan: HomePlan;
+  /** The command that plans a project with the crew (`tares factory spec`), shown while there is none. */
+  plan_command?: string;
   // The Start checklist (tares/start_steps.py); absent in older answers and in samples that skip it.
   start?: StartBlock;
   // What the first-run panel shows beside it (tares/crew_onboarding.py); absent in older answers.
