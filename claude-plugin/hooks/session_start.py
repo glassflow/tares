@@ -2,8 +2,9 @@
 and a person's own session bound to a project (`tares factory session`, TARES_PROJECT set) which project
 it works on (or, with TARES_SESSION_KIND=contributor, that it only contributes to it).
 Where the cell reports a code brain with a ready repo (`GET /api/brain` on TARES_FACTORY_URL), any of
-these sessions is also told to ask the brain before it reads code (TR-1202). Silent in every other
-session. It replaced session-start.sh (TR-1103): the same words, no jq.
+these sessions is also told to ask the brain before it reads code (TR-1202). Any shell with
+TARES_FACTORY_URL set makes that one call (a cell without a brain, or a slow one, changes nothing). Silent
+in every other session. It replaced session-start.sh (TR-1103): the same words, no jq.
 
 Started by `tares hook session-start` (it runs this file in process), or by hand with python3.
 Standard library only, and 3.9-safe: it runs on a person's machine, not in the repo's venv.
@@ -22,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.request
 
 # "compact" + "d" read "compactd" in the bash hook
@@ -108,29 +110,44 @@ def crew_bearer(root: str, url: str) -> str:
         return ""
 
 
+def brain_ready_repos(root: str, url: str) -> list:
+    """The names of the ready repos `GET /api/brain` on `url` lists, or [] (it may raise: brain_line catches)."""
+    req = urllib.request.Request(url.rstrip("/") + "/api/brain", headers={"Accept": "application/json"})
+    token = crew_bearer(root, url)
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(req, timeout=BRAIN_SECONDS) as resp:
+        data = json.loads(resp.read(1 << 20).decode("utf-8", errors="replace"))
+    if not isinstance(data, dict) or data.get("configured") is not True:
+        return []
+    rows = data.get("repos")
+    return [str(r.get("repo")) for r in rows if isinstance(r, dict) and r.get("state") == "ready" and r.get("repo")] \
+        if isinstance(rows, list) else []
+
+
 def brain_line(root: str) -> str:
     """One paragraph telling the session to ask the code brain first, only when the cell reports one
     (`GET /api/brain` says configured with at least one ready repo), else "". The cell is
     TARES_FACTORY_URL, the one the crew uses; with it unset, in a session that is not the crew's or a
     spec session's, nothing is asked. Any failure (no brain, 404, auth, a slow or dead cell) gives "":
-    a cell without a brain changes nothing."""
+    a cell without a brain changes nothing. The whole check has BRAIN_SECONDS: a socket timeout covers
+    one read, not a body that arrives a byte at a time or a lookup that hangs, so the call runs in a
+    daemon thread the hook stops waiting for."""
     url = os.environ.get("TARES_FACTORY_URL", "").strip()
     if not url:
         return ""
-    try:
-        req = urllib.request.Request(url.rstrip("/") + "/api/brain", headers={"Accept": "application/json"})
-        token = crew_bearer(root, url)
-        if token:
-            req.add_header("Authorization", "Bearer " + token)
-        with urllib.request.urlopen(req, timeout=BRAIN_SECONDS) as resp:
-            data = json.loads(resp.read(1 << 20).decode("utf-8", errors="replace"))
-        if not isinstance(data, dict) or data.get("configured") is not True:
-            return ""
-        rows = data.get("repos")
-        ready = [str(r.get("repo")) for r in rows if isinstance(r, dict) and r.get("state") == "ready" and r.get("repo")] \
-            if isinstance(rows, list) else []
-    except Exception:
-        return ""
+    found: list = []
+
+    def work() -> None:
+        try:
+            found.append(brain_ready_repos(root, url))
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(BRAIN_SECONDS)
+    ready = found[0] if found else []
     if not ready:
         return ""
     names = ", ".join(ready[:5]) + (f" and {len(ready) - 5} more" if len(ready) > 5 else "")

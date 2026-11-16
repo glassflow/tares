@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,7 +34,7 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
-ANSWER = {"status": 200, "body": {"configured": False, "repos": []}}
+ANSWER = {"status": 200, "body": {"configured": False, "repos": []}, "slow": False}
 SEEN = []   # the Authorization header of each request
 
 
@@ -45,6 +46,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        if ANSWER["slow"]:
+            # a body that arrives a byte every half second: each read is quick, the whole is not
+            try:
+                for i in range(len(body)):
+                    self.wfile.write(body[i:i + 1])
+                    self.wfile.flush()
+                    time.sleep(0.5)
+            except OSError:
+                pass
+            return
         self.wfile.write(body)
 
     def log_message(self, *a):
@@ -139,6 +150,37 @@ ck("the crew's token goes to /api/brain as a bearer", SEEN and SEEN[0] == ("/api
 del SEEN[:]
 r, ctx = hook(STATION)
 ck("no token file: no Authorization header", SEEN and SEEN[0] == ("/api/brain", None), SEEN)
+
+print("the saved key")
+home = T / "home"
+home.mkdir()
+(home / "login.json").write_text(json.dumps({"cell_url": URL, "key": "key-abc"}), encoding="utf-8")
+del SEEN[:]
+r, ctx = hook(dict(STATION, TARES_HOME=str(home)))
+ck("no token file: the key `tares login` saved for this cell goes as the bearer", SEEN and SEEN[0] == ("/api/brain", "Bearer key-abc"), SEEN)
+(home / "login.json").write_text(json.dumps({"cell_url": "http://example.invalid", "key": "key-abc"}), encoding="utf-8")
+del SEEN[:]
+r, ctx = hook(dict(STATION, TARES_HOME=str(home)))
+ck("a key saved for another cell is not presented", SEEN and SEEN[0] == ("/api/brain", None), SEEN)
+
+print("many ready repos")
+answer(200, {"configured": True, "repos": [{"repo": f"acme/r{i}", "state": "ready"} for i in range(8)]})
+r, ctx = hook(STATION)
+ck("five names and a count of the rest", "acme/r0, acme/r1, acme/r2, acme/r3, acme/r4 and 3 more" in ctx and "acme/r5" not in ctx, ctx[-400:])
+answer(200, {"configured": True, "repos": [{"repo": f"acme/r{i}", "state": "ready"} for i in range(5)]})
+r, ctx = hook(STATION)
+ck("exactly five: all five, no count", "acme/r4)" in ctx and "more" not in ctx.split("brain")[-1].split("(")[1], ctx[-400:])
+
+print("a slow cell")
+answer(200, READY)
+ANSWER["slow"] = True
+t0 = time.time()
+r, ctx = hook(STATION)
+took = time.time() - t0
+ANSWER["slow"] = False
+ck("a body that trickles in: the station text still comes out within about 3 seconds, without the brain paragraph",
+   took < 3.5 and ctx.startswith("You are the builder station") and "brain" not in ctx and r.returncode == 0 and r.stderr == b"",
+   (round(took, 1), ctx[-200:], r.returncode))
 
 print("the skill")
 step0 = SKILL.split("## 0. Read what is already decided")[1].split("## 1.")[0]
