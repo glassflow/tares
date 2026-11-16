@@ -8,7 +8,7 @@ import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import { Moon, Search, Sun } from "../components/icons";
 import { Button } from "../components/edition";
-import { Initials } from "../components/edition/Initials";
+import { Initials, initialsOf } from "../components/edition/Initials";
 import { Input } from "../components/ui/input";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
@@ -92,7 +92,8 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
 
   return (
     <div ref={box} className="relative">
-      <button ref={button} type="button" data-testid="account-button" aria-label="Account menu" aria-haspopup="menu" aria-expanded={open}
+      {/* The name starts with the initials the button shows, so "click AK" works by voice (WCAG 2.5.3, TR-1269). */}
+      <button ref={button} type="button" data-testid="account-button" aria-label={`${initialsOf(who)}, account menu`} aria-haspopup="menu" aria-expanded={open}
               onClick={() => setOpen((o) => !o)} className="block border-0 bg-transparent p-0 hover:bg-transparent">
         <Initials name={who} picture={picture} aria-hidden data-testid="account-avatar" />
       </button>
