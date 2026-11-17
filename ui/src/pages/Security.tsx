@@ -17,7 +17,7 @@ import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../editions/settings/AccessPanels";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
-import WorkspaceSettings from "./WorkspaceSettings";
+import WorkspaceSettings from "../editions/settings/WorkspacePanels";
 import { copyText } from "../editions/copyText";
 
 // Four distinct credential concepts, one box each:
