@@ -43,6 +43,7 @@ resources
 session-picker
 settings-people
 source-claude-code
+source-detail
 source-form
 source-new
 sources
