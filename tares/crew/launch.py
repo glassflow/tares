@@ -608,7 +608,8 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     args: the `claude` arguments up to and including --plugin-dir, with --setting-sources project,local and
     --no-chrome after --settings; no --resume and no prompt, which `launch` adds. env and settings: the two
     halves of the settings document (env, and everything else); the file is `{"env": env, **settings}`. The
-    settings carry the person's restrictions (see with_restrictions) and disableClaudeAiConnectors. otel: the
+    settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors and, for every role but the
+    orchestrator (and the helpers under it), autoMemoryEnabled false. otel: the
     OTEL_* variables, the person's and the spec's, which reach the station only through the environment of
     the process that starts it, never a file. `model` and `effort` default to the crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
@@ -642,6 +643,8 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
     settings = with_restrictions(fill_placeholders(spec["settings"], values), person)
     settings["disableClaudeAiConnectors"] = True
+    if (parent_role(parent, paths) if role == "helper" else role) != "orchestrator":
+        settings["autoMemoryEnabled"] = False
     return {"args": lean_args(fill_placeholders(spec["command"], values)), "env": env, "settings": settings,
             "otel": otel}
 

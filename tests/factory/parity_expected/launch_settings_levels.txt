@@ -241,6 +241,7 @@ exit: 0
 }
 == file crew/stations/loose-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -303,6 +304,7 @@ exit: 0
 }
 == file crew/stations/strict-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

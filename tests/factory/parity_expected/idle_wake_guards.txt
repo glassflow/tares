@@ -1239,6 +1239,7 @@ tares factory: waking crew-releaser (liveness); restarting it in the same conver
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1301,6 +1302,7 @@ tares factory: waking crew-releaser (liveness); restarting it in the same conver
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1364,6 +1366,7 @@ tares factory: waking crew-releaser (liveness); restarting it in the same conver
 @project 
 == file crew/stations/links-app-build-m1-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1428,6 +1431,7 @@ tares factory: waking crew-releaser (liveness); restarting it in the same conver
 @project 
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

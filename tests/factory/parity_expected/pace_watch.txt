@@ -7307,6 +7307,7 @@ the reviewer may label pull requests
 {"stretched":true,"held":false}
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -7369,6 +7370,7 @@ the reviewer may label pull requests
 {"stretched":true,"held":false}
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -7432,6 +7434,7 @@ the reviewer may label pull requests
 {"stretched":true,"held":false}
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -7496,6 +7499,7 @@ the reviewer may label pull requests
 @project 
 == file crew/stations/links-app-build-m2.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

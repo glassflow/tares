@@ -153,6 +153,7 @@ tares factory: the crew was halted; nothing more was restarted (tares factory cr
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

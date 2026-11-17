@@ -238,6 +238,7 @@ exit: 0
 }
 == file crew/stations/argus-build-m1-charts.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -300,6 +301,7 @@ exit: 0
 }
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

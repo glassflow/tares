@@ -18,6 +18,7 @@ The crew takes a few minutes to check in. Next:
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -490,6 +491,7 @@ exit: 0
 }
 == file crew/stations/crew-builder-x.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -620,6 +622,7 @@ exit: 0
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -680,6 +683,7 @@ exit: 0
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

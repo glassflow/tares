@@ -2,6 +2,7 @@
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -136,6 +137,7 @@ exit: 0
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -198,6 +200,7 @@ exit: 0
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -652,6 +655,7 @@ tares factory: old-helper is a helper, and its rules follow the station it works
 }
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -710,6 +714,7 @@ tares factory: old-helper is a helper, and its rules follow the station it works
 }
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
