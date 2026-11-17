@@ -53,7 +53,7 @@ its types from them.
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
 `station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `setup_needed`, `tares_error`
 (a call to Tares failed), `not_signed_in` (no Tares is configured: no saved `tares login`, no address set, and nothing at
-the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `cell_unreachable`, `key_refused`, `key_lacks_admin`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
+the local default), `crew_home_untrusted` (Claude Code has not trusted the crew home; `error.folder` is that folder, an optional string only this code sets). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `cell_unreachable`, `key_refused`, `key_lacks_admin`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
 
 ## login and logout
 
