@@ -131,5 +131,26 @@ ck("the compaction bullet does not say to load both skills again", "load this sk
 ck("the older Tares page is named and present", "`older-tares.md`" in fp and (PLUGIN / "skills" / "factory-protocol" / "older-tares.md").is_file())
 ck("the skill stays under its size limit (14,000 characters)", len(fp) <= 14000, len(fp))
 
+print("the report is a small state file")
+skills_dir = PLUGIN / "skills"
+rp = (skills_dir / "factory-protocol" / "report.md").read_text(encoding="utf-8")
+ck("factory-protocol names the report page", "`report.md`" in fp)
+for section in ("## Now", "## Waiting on", "## Desk", "## Undelivered", "## Bouncing", "## Taken"):
+    ck(f"the report page names {section}", f"`{section}`" in rp)
+ck("the report page says to keep Undelivered, which the watch reads", "Always keep this section" in rp)
+ck("the report page sends history to report log and search to report grep",
+   "tares factory report log" in rp and "tares factory report grep" in rp)
+ck("the report page gives the 4 KB and 8 KB limits", "4 KB" in rp and "8 KB" in rp)
+bad = []
+for md in sorted(skills_dir.glob("*/*.md")):
+    for n, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
+        if re.search(r"reports/.*(>>|tail|cat )", line) or re.search(r"\bappend\b[^.]*\b(report|log)\b", line, re.I) \
+                and "never" not in line.lower() and "no skill" not in line.lower():
+            bad.append(f"{md.relative_to(skills_dir)}:{n}")
+ck("no skill tells a station to cat, tail or append to a report", not bad, bad)
+for station in ("station-orchestrator", "station-reviewer", "station-releaser"):
+    body = (skills_dir / station / "SKILL.md").read_text(encoding="utf-8")
+    ck(f"{station} logs history with report log", "tares factory report log" in body)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

@@ -74,15 +74,25 @@ def stale(pr: dict | None) -> bool:
     return when is None or (now_utc() - when).total_seconds() >= wait
 
 
-def _newest(items: list[dict], name_key: str, stamp_keys: tuple) -> list[dict]:
+def _app_of(it: dict) -> str:
+    app = it.get("app")
+    app = app if isinstance(app, dict) else {}
+    return str(app.get("id") or app.get("slug") or "")
+
+
+def _newest(items: list[dict], name_key: str, stamp_keys: tuple, by_app: bool = False) -> list[dict]:
     """The entries that count, in the order they came: for each name only the newest (the latest
     stamp among `stamp_keys`, then the highest id), so a run that a draft's cancelled workflow or an
-    earlier push left behind never outvotes the run that replaced it. An entry with no name is kept."""
+    earlier push left behind never outvotes the run that replaced it. With `by_app` a name is told
+    apart per GitHub App, so a later run of that name from another app does not hide a failure; an
+    entry with no app is grouped by its name alone. An entry with no name is kept."""
     best: dict = {}
     for i, it in enumerate(items or []):
         name = it.get(name_key)
         if not name:
             continue
+        if by_app:
+            name = (_app_of(it), name)
         stamp = next((str(it[k]) for k in stamp_keys if it.get(k)), "")
         try:
             ident = int(it.get("id") or 0)
@@ -98,7 +108,7 @@ def _ci(statuses: list[dict], runs: list[dict]) -> str:
     """One word for CI on a commit, the reviewer's own status left out: success, failure,
     pending, or none (no checks at all)."""
     statuses = _newest(statuses, "context", ("updated_at", "created_at"))
-    runs = _newest(runs, "name", ("started_at", "created_at"))
+    runs = _newest(runs, "name", ("started_at", "created_at"), by_app=True)
     states = [s.get("state") for s in statuses if s.get("context") != REVIEW_CONTEXT]
     for r in runs:
         if r.get("name") == REVIEW_CONTEXT:
@@ -145,7 +155,7 @@ def _check_list(statuses: list[dict], runs: list[dict]) -> list[dict]:
     for s in _newest(statuses, "context", ("updated_at", "created_at")):
         if s.get("context") != REVIEW_CONTEXT:
             out.append({"name": str(s.get("context") or ""), "state": _status_state(s.get("state"))})
-    for r in _newest(runs, "name", ("started_at", "created_at")):
+    for r in _newest(runs, "name", ("started_at", "created_at"), by_app=True):
         if r.get("name") == REVIEW_CONTEXT:
             continue
         if r.get("status") != "completed":

@@ -273,14 +273,14 @@ print("== a later run of the same name replaces the earlier one ==")
 SUITE = [9000]
 
 
-def real_run(name, rid, started, status="completed", conclusion="success", suite=None):
+def real_run(name, rid, started, status="completed", conclusion="success", suite=None, app=None):
     """A check run as GitHub's check-runs endpoint sends it (the fields the gate reads and those it ignores)."""
     suite = suite or rid + 100
     return {"id": rid, "node_id": f"CR_{rid}", "name": name, "head_sha": HEAD, "status": status,
             "conclusion": conclusion if status == "completed" else None, "started_at": started,
             "completed_at": started if status == "completed" else None,
             "html_url": f"https://github.com/{REPO}/actions/runs/{rid}/job/{rid}",
-            "app": {"slug": "github-actions"}, "check_suite": {"id": suite},
+            "app": app or {"id": 15368, "slug": "github-actions"}, "check_suite": {"id": suite},
             "output": {"title": None, "summary": None}}
 
 
@@ -335,6 +335,37 @@ ck("...and required names are met by the later run", (out.state, out.failing) ==
 reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY),
             real_run("factory/review", 33, DRAFT, conclusion="failure")])
 ck("the reviewer's own run is still not a check", ci().state == "success")
+
+print("== a check name is told apart per GitHub App ==")
+ACTIONS, OTHER = {"id": 15368, "slug": "github-actions"}, {"id": 8800, "slug": "other-ci"}
+reset(runs=[real_run("test", 11, DRAFT, conclusion="failure"), real_run("test", 22, READY, app=OTHER)])
+out = ci()
+ck("a failing run of an app, a later passing run of that name from another app: failure, named",
+   (out.state, out.failing) == ("failure", ["test"]), out)
+reset(runs=[real_run("test", 22, READY, app=OTHER), real_run("test", 11, DRAFT, conclusion="failure")])
+ck("...whichever order GitHub lists them in", ci().failing == ["test"])
+got = (reset(runs=[real_run("test", 11, DRAFT, conclusion="failure"), real_run("test", 22, READY, app=OTHER)]),
+       asyncio.run(fg.read_pr(store, REPO, N)))[1]
+ck("...read_pr gives ci failure and both checks", got["ci"] == "failure"
+   and got["ci_checks"] == [{"name": "test", "state": "failure"}, {"name": "test", "state": "success"}], got)
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY),
+            real_run("test", 33, READY, app=OTHER)])
+ck("a cancelled run is still replaced by a later run of the same app and name", ci().state == "success")
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY),
+            real_run("test", 33, DRAFT, conclusion="failure", app=OTHER)])
+ck("...while the other app's own failing run keeps failing", ci().failing == ["test"])
+a, b = real_run("test", 11, DRAFT, conclusion="failure"), real_run("test", 22, READY)
+del a["app"], b["app"]
+reset(runs=[a, b])
+ck("runs with no app are grouped by name alone, the later one counts", ci().state == "success")
+b["app"] = OTHER
+reset(runs=[a, b])
+ck("a run with no app and a later run with an app are told apart", ci().failing == ["test"])
+reset(runs=[real_run("test", 11, DRAFT, conclusion="failure", app={"slug": "x"}),
+            real_run("test", 22, READY, app={"slug": "y"})])
+ck("an app with a slug and no id is told apart by its slug", ci().failing == ["test"])
+reset(runs=[real_run("test", 11, DRAFT, app={"id": None}), real_run("test", 22, READY, conclusion="failure", app="odd")])
+ck("an app that is not a mapping counts as no app", ci().failing == ["test"])
 
 print("== the newest status of a context counts ==")
 reset(statuses=[real_status("ci/legacy", "failure", 1, DRAFT), real_status("ci/legacy", "success", 2, READY)])
