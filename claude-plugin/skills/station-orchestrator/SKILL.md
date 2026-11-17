@@ -33,7 +33,7 @@ Every Tares call names its project (`project=`).
 A project reaches you as a `[TF:SHIP]` message (start now) or as a `ready` ticket of yours whose project you haven't started (boot and every tick). The hand-over on Tares is the record; the message only wakes you.
 
 1. Each repo of the project has a `path` here and `git -C <path> rev-parse --show-toplevel` works. A repo with only a GitHub `name`: one desk item asking where it is cloned (recommend next to the others); leave its tickets until answered.
-2. Read the plan: `list_milestones`, `list_tickets` (what each milestone holds, in what order), `list_docs(kind="spec")` and `list_docs(kind="agents")`, then `get_doc(id)`. No milestones or tickets: one desk item, and stop there for this project.
+2. Read the plan: `list_milestones`, `list_tickets` (what each milestone holds, in what order), `list_docs(kind="spec")` and `list_docs(kind="agents")`, then `get_doc(id, section="all")` (without it a long doc comes cut to its headings; an older Tares ignores it). No milestones or tickets: one desk item, and stop there for this project.
 3. Start builders for the first milestone with work left: **one builder per repo** that your own `ready` tickets of that milestone change (never the whole milestone). A ticket's `repo` (owner/name) matches a repo's `name` in `crew_projects`; no `repo` means the first repo.
 
    ```

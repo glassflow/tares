@@ -138,7 +138,7 @@ Write for a reader who was not here: no "as discussed", no references to this co
 4. `write_doc` kind `agents`, the AGENTS.md of the build: where the code lives (each repo's
    absolute path or clone URL, GitHub name and branch), layout, exact commands to install, build,
    run, test, lint, per repo when they differ; conventions; the
-   git rules; what not to touch; and the **release section**: how to release, where it runs, how
+   git rules; what not to touch; and the **release section**, a `## Release` heading: how to release, where it runs, how
    to check it went out, how to roll back, as exact commands. Propose the release section and get
    the user's yes. Ask for anything you do not know; a builder cannot guess it.
    When the project's CI is local (`get_integrations` shows the `ci` slot as `local`), call

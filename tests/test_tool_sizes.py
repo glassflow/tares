@@ -1,6 +1,6 @@
 """The crew's read tools answer small by default: get_ticket cuts a long working doc to Goal,
 Steps and Progress (section= reads the rest), keeps the latest messages and checks, and answers
-"unchanged" to its own fingerprint; the size helpers stop a list at a limit and a byte cap and say
+"unchanged" to its own fingerprint; get_doc cuts a long doc to its headings (section= reads one); the size helpers stop a list at a limit and a byte cap and say
 how to read the rest.
 
 Drives the tool functions in-process against the daemon, as test_factory_mcp.py does.
@@ -413,8 +413,8 @@ async def main():
         keep_get = mf._cx
 
         class _Later:
-            def __init__(self, real, minutes):
-                self.real, self.minutes = real, minutes
+            def __init__(self, real, minutes, edit=None):
+                self.real, self.minutes, self.edit = real, minutes, edit or {}
 
             async def __aenter__(self):
                 self.cx = await self.real.__aenter__()
@@ -429,6 +429,7 @@ async def main():
                     d = r.json()
                     for q in d["queue"]:
                         q["waiting_minutes"] = (q.get("waiting_minutes") or 0) + self.minutes
+                        q.update(self.edit)
                     return httpx.Response(200, json=d, request=httpx.Request("GET", url))
                 return r
 
@@ -436,6 +437,11 @@ async def main():
         try:
             ck("minutes spent waiting are no change", json.loads(await mf.review_queue(
                 since=rq["fingerprint"])) == {"unchanged": True})
+            for field, edit in (("head", {"head": "b" * 40}), ("verdict_note", {"verdict": {"note": "changes asked"}})):
+                mf._cx = lambda timeout=10, edit=edit: _Later(keep_get(timeout), 0, edit)
+                moved = json.loads(await mf.review_queue(since=rq["fingerprint"]))
+                ck(f"a new {field} on a ticket in the queue is a change", "unchanged" not in moved
+                   and moved["fingerprint"] != rq["fingerprint"], moved)
         finally:
             mf._cx = keep_get
         await m.write_ticket("Refund", project="Shop")
@@ -448,6 +454,49 @@ async def main():
         back = json.loads(await mf.review_queue(since=ch["fingerprint"]))
         ck("a ticket leaving the queue shows too", "unchanged" not in back and back["fingerprint"] == rq["fingerprint"],
            back)
+
+        print("== get_doc ==")
+        big = ("## Goal\n\n" + "goal line\n" * 600 + "\n## Scope\n\nsmall scope\n\n```\n# not a heading\n```\n\n## Plan\n\n"
+               + "plan line\n" * 2000)
+        sd = json.loads(await m.write_doc("spec", "Spec: shop", big, project="Shop"))
+        ck("the spec is over 30,000 characters", len(big) > 25_000, len(big))
+        raw = await m.get_doc(sd["id"], project="Shop")
+        gd = json.loads(raw)
+        ck("a long doc answers under 6 KB by default", len(raw.encode()) < 6_000, len(raw.encode()))
+        ck("and gives its headings with their sizes", [s["heading"] for s in gd["sections"]] == ["Goal", "Scope", "Plan"]
+           and all(s["chars"] > 0 for s in gd["sections"]), gd.get("sections"))
+        ck("and the start of its first section, cut", gd["body"].startswith("## Goal") and 2_000 < len(gd["body"]) <= 3_000
+           and "small scope" not in gd["body"], len(gd["body"]))
+        ck("and says how to read the rest", 'section="all"' in gd["note"] and f'get_doc("{sd["id"]}"' in gd["note"], gd["note"])
+        ck("and keeps its id, kind and title", (gd["id"], gd["kind"], gd["title"]) == (sd["id"], "spec", "Spec: shop"), sorted(gd))
+        one = json.loads(await m.get_doc(sd["id"], project="Shop", section="scope"))
+        ck("section= reads one section, whatever its case", "small scope" in one["body"] and "goal line" not in one["body"]
+           and "plan line" not in one["body"] and one["section"] == "scope", one["body"][:80])
+        ck("a # inside a fence stays in its section", "# not a heading" in one["body"])
+        hashes = json.loads(await m.get_doc(sd["id"], project="Shop", section="## Goal"))
+        ck("a section is found with its hashes", hashes["body"].count("goal line") == 600, len(hashes["body"]))
+        whole = json.loads(await m.get_doc(sd["id"], project="Shop", section="all"))
+        ck("section=all reads the whole doc", whole["body"] == big and "sections" not in whole and "note" not in whole,
+           len(whole["body"]))
+        bad = await m.get_doc(sd["id"], project="Shop", section="Nope")
+        ck("an unknown section names the ones there are", "no section" in bad and "Goal" in bad and "Plan" in bad, bad)
+        gone = await m.get_doc("doc_nope000000", project="Shop")
+        ck("a missing doc answers the error, not a doc", "\"body\"" not in gone and ("404" in gone or "not found" in gone.lower()), gone)
+        edge = "## A\n\n" + "x" * (m.DOC_MAX - 6)
+        ed = json.loads(await m.write_doc("note", "Edge", edge, project="Shop"))
+        ck("a doc of exactly the limit comes whole", len(edge) == m.DOC_MAX
+           and json.loads(await m.get_doc(ed["id"], project="Shop"))["body"] == edge)
+        more = json.loads(await m.write_doc("note", "Edge+1", edge + "y", project="Shop"))
+        ck("a doc one character over comes cut", "sections" in json.loads(await m.get_doc(more["id"], project="Shop")))
+        sdoc = json.loads(await m.get_doc(sw["id"], project="Shop"))
+        ck("a short doc comes whole, as before", sdoc["body"] == "1. charge" and "sections" not in sdoc and "note" not in sdoc, sdoc)
+        ck("a section of a short doc reads", json.loads(await m.get_doc(sw["id"], project="Shop", section="all"))["body"] == "1. charge")
+        many = "".join(f"## H{i}\n\ntext\n\n" for i in range(150)) + "x" * 13_000
+        md = json.loads(await m.write_doc("note", "Many", many, project="Shop"))
+        mg = json.loads(await m.get_doc(md["id"], project="Shop"))
+        ck("a doc with many headings lists the first sixty and counts the rest", len(mg["sections"]) == m.DOC_HEADINGS + 1
+           and mg["sections"][-1] == {"more": 90}, mg["sections"][-2:])
+        ck("get_doc takes `section`", "section" in __import__("inspect").signature(m.get_doc).parameters)
 
         print("== review_brief and the repo map ==")
         mapbody = "# acme/shop\n\n## Layout\n" + "- `src/` the shop code\n" * 80

@@ -795,15 +795,43 @@ async def list_docs(kind: str = "", project: str = "", limit: int = 40, offset: 
     return json.dumps(page + ([{"more": more}] if more else []), default=str)
 
 
+DOC_MAX = 12_000      # characters of a doc get_doc answers whole by default
+DOC_HEAD = 3_000      # of those, the part of its first section a long doc shows
+DOC_HEADINGS = 60     # headings listed for a long doc
+
+
 @mcp.tool()
-async def get_doc(id: str, project: str = "") -> str:
-    """One of the project's docs, with its markdown body."""
+async def get_doc(id: str, project: str = "", section: str = "") -> str:
+    """One of the project's docs, with its markdown body. A doc over 12,000 characters comes as
+    its headings (each with its size) and the start of its first section, not whole:
+    `section="<heading>"` reads one section (a heading of the doc, any case, with or without
+    its #), `section="all"` the whole doc. A shorter doc comes whole unless you name a section."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.get(f"{TARESD}/api/projects/{uid}/docs/{id}")
-    return _out(r, ("id", "kind", "title", "body", "updated_at", "updated_by"))
+    if r.status_code >= 400:
+        return _out(r)
+    doc = r.json()
+    out = {k: doc.get(k) for k in ("id", "kind", "title", "body", "updated_at", "updated_by")}
+    body, want = out["body"] or "", section.strip()
+    if want.lower() == "all" or (not want and len(body) <= DOC_MAX):
+        return json.dumps(out, default=str)
+    secs = _doc_sections(body)
+    if want:
+        hits = _find_sections(secs, want)
+        if not hits:
+            names = [h for h, _ in secs if h]
+            return f"no section {section!r} in doc {id}: it has {names}"
+        return json.dumps({**out, "body": "".join(hits), "section": section}, default=str)
+    heads = [{"heading": h or "(top)", "chars": len(text)} for h, text in secs]
+    out["body"] = _clip(secs[0][1], DOC_HEAD) if secs else _clip(body, DOC_HEAD)
+    out["sections"] = heads[:DOC_HEADINGS] + ([{"more": len(heads) - DOC_HEADINGS}]
+                                              if len(heads) > DOC_HEADINGS else [])
+    out["note"] = (f"{len(body)} characters, so only the start of the first section is here. "
+                   f'get_doc("{id}", section="<heading>") reads one section, section="all" the whole doc.')
+    return json.dumps(out, default=str)
 
 
 @mcp.tool()
@@ -1098,12 +1126,16 @@ def _doc_sections(body: str) -> list[tuple[str, str]]:
     return [(h, t) for h, t in out if h or t.strip()]
 
 
+def _find_sections(secs: list[tuple[str, str]], section: str) -> list[str]:
+    want = section.strip().lstrip("#").strip().lower()
+    return [text for h, text in secs if h.lower() == want]
+
+
 def _doc_section(t: dict, section: str) -> str:
     body = t.get("working_doc_body") or ""
     if section.strip().lower() == "all":
         return json.dumps({"label": t.get("label"), "working_doc_body": body})
-    want = section.strip().lstrip("#").strip().lower()
-    hits = [text for h, text in _doc_sections(body) if h.lower() == want]
+    hits = _find_sections(_doc_sections(body), section)
     if not hits:
         names = [h for h, _ in _doc_sections(body) if h]
         return f"no section {section!r} in the working doc of {t.get('label')}: it has {names}"
