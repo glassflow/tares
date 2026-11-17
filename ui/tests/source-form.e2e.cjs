@@ -11,6 +11,7 @@ const path = require("path");
 const { chromium } = require(path.join(path.resolve(__dirname, ".."), "node_modules", "playwright"));
 const { startDaemon } = require("./licensed.cjs");
 const { offendersIn } = require("./words.cjs");
+const { kindButton } = require("./source-new.fixture.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 9964);
 const SHOTS = process.env.SHOTS_DIR;
@@ -77,7 +78,7 @@ const noSideways = async (page) => page.evaluate(() => document.documentElement.
       { full_name: "acme/docs", default_branch: "trunk", private: false, pushed_at: null }] }));
     if (connector) {
       await page.goto(`${d.base}/sources/new`, { waitUntil: "load" });
-      await page.locator("button.connector-card", { has: page.locator(".name", { hasText: new RegExp(`^${connector}$`) }) }).click({ timeout: 15000 });
+      await kindButton(page, connector).click({ timeout: 15000 });
       await page.getByTestId("connection-form").waitFor({ timeout: 15000 });
     }
     return { page, calls, close: () => ctx.close() };
