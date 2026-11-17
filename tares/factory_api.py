@@ -2079,7 +2079,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         repos = (store.get_handover(uid) or {}).get("repos") or []
         return repos[0].get("name") or None if len(repos) == 1 else None
 
-    def repo_map_md(repo: str | None, builder: bool) -> list[str]:
+    def repo_map_md(repo: str | None, builder: bool, known: str = "") -> list[str]:
         if not repo:
             return []
         m = store.get_repo_map(repo)
@@ -2093,6 +2093,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
                     f"{factory_mod.MAP_MAX_CHARS} characters). Every project on this repo then starts "
                     "from it.", ""]
         version = factory_mod.map_version(m["body"])
+        if known and known == version:
+            return [f"## Repo map: {repo}",
+                    f"Version {version}, the one you already read: unchanged. Call review_brief "
+                    "without known_map to read it again.", ""]
         L = [f"## Repo map: {repo} (shared by every project on it; version {version}, changed "
              f"{str(m['updated_at'])[:10]} by {m['updated_by']})", m["body"].strip()]
         recent = store.repo_map_history(repo, 3)
@@ -2163,14 +2167,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 "max_chars": factory_mod.MAP_MAX_CHARS, "history": store.repo_map_history(name, 5)}
 
     @app.get("/api/projects/{uid}/tickets/{ref}/brief")
-    async def review_brief(uid: str, ref: str, head: str = ""):
-        """Everything the reviewer needs for one review, as markdown (TR-445)."""
+    async def review_brief(uid: str, ref: str, head: str = "", known_map: str = ""):
+        """Everything the reviewer needs for one review, as markdown (TR-445). `known_map` is the
+        repo map version the reviewer already read: an unchanged map comes as one line."""
         p = h.project_or_404(uid)
         await refresh_prs(store, uid)
         t = ticket_or_404(uid, ref)
-        return {"brief": brief_md(p, t, head.strip())}
+        return {"brief": brief_md(p, t, head.strip(), known_map.strip())}
 
-    def brief_md(p: dict, t: dict, head: str) -> str:
+    def brief_md(p: dict, t: dict, head: str, known_map: str = "") -> str:
         full = h.ticket_out(p["id"], t, with_doc=True)
         pr = t["pr"] or {}
         lab = factory_mod.label(t)
@@ -2258,7 +2263,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
                 L.append("")
         # 8. the repo map: read it instead of exploring the repo
-        L += repo_map_md(repo_of(p["id"], t), builder=False)
+        L += repo_map_md(repo_of(p["id"], t), builder=False, known=known_map)
         # 8. links, not inlined
         L += ["## Read as needed",
               "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "

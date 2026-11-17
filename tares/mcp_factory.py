@@ -352,34 +352,44 @@ async def record_review(ticket: str, head: str, verdict: str, verified: str,
 
 
 @mcp.tool()
-async def review_queue() -> str:
+async def review_queue(since: str = "") -> str:
     """The pull requests waiting for review across every project, in the order to take them:
     those blocking their milestone first, then the longest waiting. Each says whether the
-    builder's Codex layer is clean and whether an earlier verdict is for an older commit."""
+    builder's Codex layer is clean and whether an earlier verdict is for an older commit.
+    The answer is {"fingerprint": ..., "queue": [...]}. Pass the fingerprint back as `since`:
+    when nothing in the queue changed (a new head, verdict or order counts; the minutes a pull
+    request has waited do not) it answers {"unchanged": true} alone. Leave `since` empty after a
+    compaction or restart."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/review-queue")
     if r.status_code >= 400:
         return _out(r)
-    return json.dumps([{k: q.get(k) for k in ("project_name", "ticket", "title", "holder", "pr",
-                                              "head", "waiting_minutes", "blocks_milestone",
-                                              "layer1_clean")}
-                       | {"verdict_note": (q.get("verdict") or {}).get("note")}
-                       for q in r.json().get("queue") or []], default=str)
+    rows = [{k: q.get(k) for k in ("project_name", "ticket", "title", "holder", "pr", "head",
+                                   "waiting_minutes", "blocks_milestone", "layer1_clean")}
+            | {"verdict_note": (q.get("verdict") or {}).get("note")}
+            for q in r.json().get("queue") or []]
+    fp = _fingerprint([{k: v for k, v in row.items() if k != "waiting_minutes"} for row in rows])
+    if since and since == fp:
+        return json.dumps({"unchanged": True})
+    return json.dumps({"fingerprint": fp, "queue": rows}, default=str)
 
 
 @mcp.tool()
-async def review_brief(ticket: str, head: str = "", project: str = "") -> str:
+async def review_brief(ticket: str, head: str = "", project: str = "", known_map: str = "") -> str:
     """Start every review here: the pull request as GitHub has it (it says STOP when the PR is
     merged or its head moved past `head`), the ticket and its working doc, the builder's checks
     compared with its recorded session (unmatched first: check those yourself), Codex's
     findings and the waivers to judge, earlier rounds and their open findings, assumptions and
-    decisions, and what keeps coming back in this repo. Then review to your own bar."""
+    decisions, what keeps coming back in this repo, and the repo map. `known_map` is the map
+    version an earlier brief in your context showed (its heading says "version <v>"): when the
+    map is still that one it comes as one line. Leave it empty after a compaction or restart.
+    Then review to your own bar."""
     async with _cx(30) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/brief",
-                         params={"head": head})
+                         params={"head": head, "known_map": known_map})
     return r.json()["brief"] if r.status_code == 200 else _out(r)
 
 
