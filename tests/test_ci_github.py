@@ -352,6 +352,21 @@ ck("another context's newer status does not hide a failure", ci().failing == ["c
 reset(statuses=[real_status("same", "failure", 1, DRAFT)], runs=[real_run("same", 22, READY)])
 ck("a status and a check run of one name are two checks", ci().failing == ["same"])
 
+print("== the overall word and the fallback stamp ==")
+reset(statuses=[real_status("ci/legacy", "failure", 1, DRAFT), real_status("ci/legacy", "success", 2, READY)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("ci for an older failing status and a newer passing one is success", got["ci"] == "success", got["ci"])
+reset(statuses=[real_status("ci/legacy", "success", 1, DRAFT), real_status("ci/legacy", "failure", 2, READY)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("...and failure when the newer one failed", got["ci"] == "failure", got["ci"])
+old, new = real_run("test", 22, DRAFT, conclusion="cancelled"), real_run("test", 11, READY)
+del old["started_at"], new["started_at"]
+old["created_at"], new["created_at"] = DRAFT, READY
+reset(runs=[old, new])
+ck("a run with no started_at is ordered by created_at, not by id", ci().state == "success")
+reset(runs=[new, old])
+ck("...in either order", ci().state == "success")
+
 print("== has_workflows ==")
 fg._workflows.clear()
 reset(workflows=(200, [{"type": "file", "name": "ci.yml"}]))
