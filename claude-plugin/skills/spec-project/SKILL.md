@@ -11,12 +11,12 @@ asking the user anything you could have written down. Cheaper models may build t
 nothing may be left for them to guess. You do not build anything here.
 
 **Light mode** (the `session` skill sends you here for `tares factory session "<idea>"`): a small
-project planned and built in the same session. Follow the section "Light mode" at the end instead
-of steps 1 to 9.
+project planned and built in the same session. Read `light-mode.md` in this skill's folder before
+anything else, and follow it instead of steps 1 to 9.
 
 **Contributor mode** (a session whose first message says "You are contributing to <project> led by
-<lead>"): you are not the project's lead. Follow the section "Contributor" below instead of
-steps 1 to 9.
+<lead>"): you are not the project's lead. Read `contributor.md` in this skill's folder before
+anything else, and follow it instead of steps 1 to 9.
 
 ## 0. Read what is already decided
 
@@ -53,27 +53,10 @@ when you could explain the project to a new engineer. Cover:
 - whether it will run on a tares-factory crew, or be built by one session (see step 8)
 
 **Area owners.** On an older Tares with no `list_areas` tool (factory-protocol), skip this part:
-one person owns every repo. Otherwise, once you know which repos the
-project changes, call `list_areas` and note the
-owner of each one (`{repo, person: {id, name}}`). If a repo has none, ask the user who owns it
-(one question, recommending a person from `list_people`) and call `set_area(repo, person)`. Setting
-the owner of a repo that has one, or of a repo for someone else, needs an admin: when you are not
-one, tell the user an admin sets the owner. Tickets go to these owners (step 6). Nobody signs off
-before the hand-over: an owner is asked only what the spec needs from them, with `ask_area`.
-`ask_area`, `list_questions` and `answer_question` come with an enterprise licence, like `list_areas`: when
-they are not tools, ask the user what you need to know yourself and skip the rest of this part and
-the open-questions step below.
-
-When a question is about a repo whose area owner is not the user (what a module does, whether a
-change is acceptable, how it is deployed), do not guess and do not make the user relay it. Once the
-project exists (after `create_project`, below), call
-`ask_area(repo, text, project)` with the question written so the owner can answer without this
-conversation. On a private project, first put the other owners on it with
-`set_project_access(project, add_members=[<their emails>])`, because `ask_area` is refused (403) for
-an owner who is not on the project. Tell the user "waiting for <name>", and carry on with the other questions. Before
-you plan (step 3), call `list_questions(project=<name>)`, fold each answered one into the spec
-(name the answerer: "Kiran said ..."), and say which are still open. Plan around an open one only
-as an explicit assumption in the spec.
+one person owns every repo. Otherwise, once you know which repos the project changes, read
+`area-owners.md` in this skill's folder: who owns each repo, and how to ask an owner a question
+with `ask_area`. Before you plan (step 3), call `list_questions(project=<name>)` and fold each
+answered one into the spec; tickets go to the repo owners (step 6).
 
 **As soon as the user agrees the goal** (usually the first question), call `create_project` with a
 short unique name and the one-line goal, and tell the user its name in one line. From then on the
@@ -161,51 +144,9 @@ Write for a reader who was not here: no "as discussed", no references to this co
    When the project's CI is local (`get_integrations` shows the `ci` slot as `local`), call
    `set_required_checks` with the test and lint commands from that AGENTS.md, exactly as a
    builder runs them. A pull request counts as passing when each is recorded on its head commit.
-5. Link and milestones. When the tickets live in Linear or GitHub, `link_tickets` first: for
-   Linear `link_fields={"project": "<the Linear project's URL or name>"}`; for GitHub
-   `link_fields={"repo": "owner/name", "issue_label": "tares:<project>"}`, the label cut to 50
-   characters. If it answers `error 429: GitHub rate limit reached`, nothing is linked: wait about
-   5 minutes and call it again. Then `write_milestone` once per milestone, in order, with its goal
-   and its acceptance checks (`[{"check": ..., "expect": ...}]`, plus `"for": "person"` on a check
-   only a person can do). For Linear and GitHub it creates the milestone there; the checks stay in
-   Tares.
-6. Tickets: `write_ticket` once per ticket, in dependency order, with `milestone` (the name
-   written just above) and `depends_on` (the labels of tickets already written, `T1`, `T2`, or
-   `GH-3`, `ENG-12`). Titles say what the ticket does, without a number. It creates the ticket in
-   Tares, Linear or GitHub alike, and a repeat of the same title finds it again. Then
-   `list_tickets` and check it holds what you created.
-   - A ticket in Linear or GitHub takes no `status`, `assignee` or `position` when it is created.
-     The person sets the assignee in the tracker afterwards, if the owner of its repo should
-     have it (`list_people` gives the email, and the `github` login); this session cannot.
-     `assign_ticket` is the orchestrator's, and only hands a ticket to a crew station.
-   - A Tares ticket also takes `assignee` (the email or id of its repo's area owner).
-   - **Every ticket carries `repo`, wherever it lives, even in a project with one repo:** it is
-     how a ticket finds its area owner and how a builder knows where to work.
-7. A working doc per ticket: `write_doc` kind `working`, titled `Working: <ticket title>`, then
-   `attach_working_doc`. Working docs never go to Linear or GitHub. Use exactly these sections:
-
-   ```markdown
-   ## Goal
-   What this ticket delivers, in one or two lines.
-
-   ## Context and files
-   Why it exists, what it builds on (its dependencies), and the files or modules likely touched.
-
-   ## Steps
-   1. Concrete steps in order, naming files and functions.
-
-   ## Definition of done
-   - Observable results that must hold.
-
-   ## Out of scope
-   - What this ticket must not do.
-
-   ## How to check
-   - `<command>` -> <expected output>
-
-   ## Progress
-   (The builder keeps this current: what is done, what is next, how to run what it needs.)
-   ```
+5. Read `write-out.md` in this skill's folder, then follow its items 5 to 7: link the tickets
+   (Linear or GitHub), `write_milestone` per milestone, `write_ticket` per ticket (every ticket
+   carries `repo`), and a working doc per ticket in the page's template.
 
 ## 7. The starting prompt
 
@@ -287,63 +228,8 @@ The orchestrator finds the project on Tares when it starts; no message is needed
 
 ## Contributor
 
-For a session opened by `tares factory spec <project>` by someone who is not the project's lead,
-with the first message "You are contributing to <project> led by <lead>". The project's spec and
-tickets exist; you ask nothing about the idea. Your job is to answer the questions for this person
-as an area owner and to check the tickets in their repos. Use `<project>` as `project`
-in every call, and the person's own words in anything you write.
-
-1. Call `read_global_docs`, then `get_doc` for the `spec` and the `plan`, and read them.
-2. Call `my_work(project=<project>)` and read `person` (who this is) and `spec_questions` (the
-   open questions addressed to this person in this project only). An error 404 ("no project 'x' you
-   can see: use a project id or its exact name") means the name or id is wrong or the project is
-   not shared with this person: stop
-   and tell the user, do not retry with another spelling. Question numbers (Q1, Q2)
-   restart in each project, so never answer a question from a list that was not asked for this
-   project. Do not match people by display name. Ask the user each one, one at a time, with your
-   recommended answer and why, so they can say yes.
-3. On their answer, call `answer_question(id, answer, project)` with their words. Say which
-   questions are left.
-4. Call `list_tickets(project=<project>)` and keep the tickets whose `repo` is one that
-   `list_areas` gives to the `person` from `my_work` (match by `person.id`, not by name). Show them
-   (title, milestone, depends on, a line from the working doc) and ask what to change. Apply each
-   edit where the ticket lives: `write_ticket` (and `write_doc` for its working doc) for Tares
-   tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for GitHub ones. A ticket that
-   changes a repo this person does not own is not theirs to edit: tell the lead instead. Editing a
-   Tares ticket or its working doc (`write_ticket`, `write_doc`) needs a key with the `admin`
-   scope, and an ordinary key (read and ingest) is refused with 403 "this credential lacks the
-   'admin' scope". Linear and GitHub edits do not go through the Tares key, so they are not refused
-   this way. On that 403, do not retry and do not go around it: write the change the person wants, ticket by ticket, in your reply and
-   tell the user to pass it to <lead>, who makes it. Answering still works.
-5. When the questions are answered and the tickets checked, say so, and that <lead> can hand the
-   project over: nothing else waits for this person.
+Read `contributor.md` in this skill's folder and follow it instead of steps 1 to 9.
 
 ## Light mode: plan a small project and build it in this session
 
-For `tares factory session "<idea>"`. The person wants it built now, in this session, still under
-Tares: the project, its shared AGENTS.md and memory, a light record of what was built and why.
-
-1. **Step 0 as above** (`read_global_docs`, read the repo if there is one).
-2. **The goal, one question.** Propose the goal in one line and a short name; on yes,
-   `create_project(name, goal)` (this binds the session to it) and tell the person its name.
-3. **What is in and out, and how we know it works**: one question at a time, with your
-   recommendation, only what you cannot answer from the repo. Two or three questions is normal;
-   stop as soon as you could explain it to a new engineer.
-4. **The light record**, nothing more:
-   - `write_doc` kind `spec`: the goal, scope in and out, decisions with the person's words, open
-     assumptions. Short.
-   - `write_doc` kind `agents` only for what this project adds to the shared AGENTS.md and the
-     repo's own (how to build and test it, git rules if different).
-   - `write_doc` kind `start`, titled `Start here`: what the project is in two lines, where the
-     code lives, and "follow the `session` skill", so a later session can pick it up.
-   - The tickets: `write_ticket` per piece of work, in order, with `depends_on` (one ticket is
-     fine). When the person keeps tickets in Linear or GitHub Issues, `link_tickets` first, then
-     `write_ticket` creates them there, as in the last two steps of the full spec. No milestones, no
-     working docs, no second-model attack.
-5. **Size check**, once the ticket list exists: more than about five tickets, or tickets in more
-   than one repo, is big enough for the crew. Then ask: "This looks big enough for the crew.
-   Switch to the full spec and hand it over?" (recommend yes). On yes, carry on from step 2 of the
-   full flow in this session, keeping everything written so far (add milestones with checks,
-   working docs, the second-model attack, the hand-over in step 9). On no, or when it is small:
-   say the plan is done and go back to the `session` skill to build it here.
-
+Read `light-mode.md` in this skill's folder and follow it instead of steps 1 to 9.
