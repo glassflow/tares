@@ -143,7 +143,8 @@ tares factory: crew resumed
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -203,7 +204,8 @@ tares factory: crew resumed
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

@@ -131,7 +131,8 @@ tares factory: the crew was halted; nothing more was restarted (tares factory cr
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -191,7 +192,8 @@ tares factory: the crew was halted; nothing more was restarted (tares factory cr
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

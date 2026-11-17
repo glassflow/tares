@@ -163,6 +163,7 @@ Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -259,7 +260,8 @@ Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -320,6 +322,7 @@ Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -387,7 +390,8 @@ Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

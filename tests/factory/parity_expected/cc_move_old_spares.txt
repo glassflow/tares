@@ -155,7 +155,8 @@ tares factory: crew-reviewer keeps coming back on an older Claude Code than 1.2.
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -215,7 +216,8 @@ tares factory: crew-reviewer keeps coming back on an older Claude Code than 1.2.
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

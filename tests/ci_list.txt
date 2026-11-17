@@ -61,6 +61,7 @@ test_crew_packaging
 test_crew_person
 test_crew_readings
 test_crew_regrant
+test_crew_report
 test_crew_rules
 test_crew_scratch_home
 test_crew_session

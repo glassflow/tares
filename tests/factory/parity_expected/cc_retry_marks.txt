@@ -251,6 +251,7 @@ cu-secret
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -350,7 +351,8 @@ cu-secret
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -413,6 +415,7 @@ cu-secret
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -482,7 +485,8 @@ cu-secret
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

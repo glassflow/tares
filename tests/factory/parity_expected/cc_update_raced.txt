@@ -152,6 +152,7 @@ tares factory: every station runs Claude Code 1.2.6, one session each
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -248,7 +249,8 @@ tares factory: every station runs Claude Code 1.2.6, one session each
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -335,7 +337,8 @@ tares factory: every station runs Claude Code 1.2.6, one session each
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -396,6 +399,7 @@ tares factory: every station runs Claude Code 1.2.6, one session each
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -463,7 +467,8 @@ tares factory: every station runs Claude Code 1.2.6, one session each
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -521,7 +526,8 @@ tares factory: every station runs Claude Code 1.2.6, one session each
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
