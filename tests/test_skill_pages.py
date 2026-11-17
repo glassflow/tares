@@ -93,11 +93,14 @@ orch = open(os.path.join(SKILLS, "station-orchestrator", "SKILL.md"), encoding="
 ck("station-orchestrator: the tick calls my_work(since=), a full call after a compaction",
    "`my_work(since=<the fingerprint of your last answer>)`" in orch and "Call it without `since` after a compaction or a revive" in orch)
 ck("station-orchestrator: a tool that refuses `since` or sends no fingerprint is called without it",
-   "whenever the tool refuses `since` or answers with no `fingerprint`" in orch)
+   "whenever the tool refuses `since` or answers with neither `unchanged` nor `fingerprint`" in orch)
+ck("station-orchestrator: an unchanged answer still runs the watch on the lists already held",
+   "the lists you already hold are still current, so everything below still runs on them" in orch
+   and "`desk_list`" in orch)
 builder = open(os.path.join(SKILLS, "station-builder", "SKILL.md"), encoding="utf-8").read()
 ck("station-builder: the tick reads a ticket with get_ticket(since=), and without it when refused",
    "`get_ticket(ticket, since=<the fingerprint of your last read>)`" in builder
-   and "whenever the tool refuses `since` or answers with no `fingerprint`" in builder)
+   and "whenever the tool refuses `since` or answers with neither `unchanged` nor `fingerprint`" in builder)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

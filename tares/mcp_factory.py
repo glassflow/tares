@@ -874,14 +874,14 @@ def _work_since(data: dict, since: str) -> dict:
     fp = _work_fingerprint(data)
     old = since.split(".")
     if since == fp:
-        return {"unchanged": True, "fingerprint": fp}
+        return {"unchanged": True}
     if len(old) != len(WORK_PARTS) + 2 or old[0] != "w1":
         return {**data, "fingerprint": fp}
-    out: dict = {"fingerprint": fp, "unchanged": []}
+    out: dict = {"fingerprint": fp, "same": []}
     seen = set(old[-1].split("-")) if old[-1] else set()
     for i, k in enumerate(WORK_PARTS):
         if _fingerprint(data.get(k) or [])[:6] == old[i + 1]:
-            out["unchanged"].append(k)
+            out["same"].append(k)
         elif k == "desk":
             rows = data.get("desk") or []
             out["desk"] = [{"label": d["label"], "question": _clip(d.get("question"), 100),
@@ -912,8 +912,8 @@ async def my_work(crew: str = "", project: str = "", since: str = "") -> str:
     project 'x' you can see"), so name it exactly. Needs a key with a person.
 
     Every answer carries a `fingerprint`. Pass the last one back as `since` on each tick: when
-    nothing changed the answer is {"unchanged": true, "fingerprint": ...} alone; otherwise only
-    the parts that changed come, `unchanged` names the others, desk items you have already seen
+    nothing changed the answer is {"unchanged": true} alone (keep the fingerprint you hold);
+    otherwise only the parts that changed come with a new `fingerprint`, `same` names the others, desk items you have already seen
     come as their label and question (`seen`), and `desk_closed` lists the ones gone. Call it
     without `since` after a compaction or a restart, to have everything again."""
     params = {"crew": crew or _caller("crew")}
