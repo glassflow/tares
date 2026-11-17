@@ -3,6 +3,7 @@ a11y
 capped-runs
 choose-edition
 component-gallery
+connect
 crew-people
 edition-routes
 edition-shell
