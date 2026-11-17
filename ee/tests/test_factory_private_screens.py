@@ -290,6 +290,22 @@ async def main():
         ck("Lee: the orchestrator does not report an empty desk, the question of Vault is open",
            bool(m) and m.get("doing") != "Desk empty.", m)
 
+        print("== the answered-since count leaves out Vault, and what is not hers with mine=1 ==")
+        store.close_desk_item(dk_vault["id"], "answered", None, now_utc())
+        answered = lambda who, **q: get(who, "/api/desk/answered", **q)
+        r = await answered("kim")
+        ck("Kim: the answer in Vault is not counted, the one in Atlas is", r.status_code == 200
+           and r.json()["count"] == 1, r.text)
+        r = await answered("lee")
+        ck("Lee, who leads Vault: both answers are counted", r.status_code == 200
+           and r.json()["count"] == 2, r.text)
+        r = await answered("lee", mine=1)
+        ck("Lee with mine=1: only the answers that were for her", r.status_code == 200
+           and r.json()["count"] == 1, r.text)
+        r = await answered("kim", mine=1)
+        ck("Kim with mine=1: the answer in Atlas, addressed to her", r.status_code == 200
+           and r.json()["count"] == 1, r.text)
+
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 
