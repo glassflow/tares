@@ -259,6 +259,91 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("form-error").waitFor();
       ck("a refused save shows the API's sentence and stays on the form", (await text(page.getByTestId("form-error"))).includes("The repository was not found.") && (await page.getByTestId("setup-form").count()) === 1);
       await page.unroute("**/api/factory/integrations/tickets");
+
+      // the repository: a box that also offers the repos GitHub lists; typing narrows the list, anything can be typed
+      writes.length = 0;
+      const asked = [];
+      let answer = { repos: ["example-org/api", "example-org/web"], error: "", note: "" };
+      let hold = null;
+      await page.route("**/api/factory/setup/github/repos**", async (r) => {
+        asked.push(new URL(r.request().url()).searchParams);
+        if (hold) await hold;
+        r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
+      });
+      await page.getByTestId("form-cancel").click();
+      await page.getByTestId("step-view").waitFor();
+      await page.getByTestId("connected-github").getByTestId("action-edit").click();
+      const box = page.getByTestId("input-repo");
+      await page.locator('[data-testid="input-repo"][data-listed]').waitFor();
+      ck("with repos listed, the box keeps the saved value and offers the list", (await box.inputValue()) === "example-org/billing"
+        && (await box.getAttribute("role")) === "combobox" && (await box.getAttribute("data-listed")) === "2");
+      ck("its help says it can be chosen or typed", (await text(page.getByTestId("field-repo"))).includes("Choose it from the list, or type it as owner/name."));
+      ck("the list is asked for the way of connecting and the credential in the form",
+        asked.length === 1 && asked[0].get("via") === "key" && asked[0].get("credential") === "", asked.map(String).join(" | "));
+      ck("a saved repo the list does not have opens no empty list", (await box.click(), await page.getByTestId("repo-list").count()) === 0);
+      await box.fill("");
+      ck("an empty box shows the whole list", (await page.getByTestId("repo-option").allInnerTexts()).join() === "example-org/api,example-org/web"
+        && (await box.getAttribute("aria-expanded")) === "true");
+      await shot(page, "form-repo-pick-1440.png");
+      await box.fill("we");
+      ck("typing narrows it", (await page.getByTestId("repo-option").allInnerTexts()).join() === "example-org/web");
+      await box.press("ArrowDown");
+      await box.press("Enter");
+      ck("arrow and Enter pick it, and Enter does not save", (await box.inputValue()) === "example-org/web" && writes.length === 0
+        && (await page.getByTestId("repo-list").count()) === 0);
+      await page.getByTestId("form-save").click();
+      await flashed(page);
+      let pw = writes.find((w) => w.method === "PUT");
+      ck("a picked repository is saved", pw && pw.body.settings.repo === "example-org/web", JSON.stringify(pw));
+
+      writes.length = 0;
+      asked.length = 0;
+      await page.getByTestId("connected-github").getByTestId("action-edit").click();
+      await page.locator('[data-testid="input-repo"][data-listed]').waitFor();
+      await page.getByTestId("input-repo").fill("example-org/brand-new");
+      ck("a repo the list does not have can still be typed", (await page.getByTestId("input-repo").inputValue()) === "example-org/brand-new");
+      await page.getByTestId("input-credential").fill("ci-bot");
+      await page.waitForTimeout(800);
+      ck("a typed credential asks for its repos once, after the typing", asked.length === 2 && asked[1].get("credential") === "ci-bot",
+        asked.map(String).join(" | "));
+      ck("and the list stays while it loads, so the box does not flicker", (await page.getByTestId("input-repo").getAttribute("data-listed")) === "2");
+      await page.getByTestId("input-credential").fill("");
+      await page.getByTestId("input-repo").fill("");
+      await page.getByTestId("form-save").click();
+      ck("an empty repository still shows the sentence and takes the focus", (await text(page.getByTestId("field-repo").getByTestId("field-error"))) === "Enter the repository as owner/name, for example northwind/orders-api."
+        && await page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-testid") === "input-repo") && writes.length === 0);
+      await page.getByTestId("form-cancel").click();
+      await page.getByTestId("step-view").waitFor();
+
+      // a long list is cut at fifty, and says how many more
+      answer = { repos: Array.from({ length: 60 }, (_, i) => `example-org/repo-${String(i).padStart(2, "0")}`), error: "", note: "" };
+      await page.getByTestId("connected-github").getByTestId("action-edit").click();
+      await page.locator('[data-testid="input-repo"][data-listed="60"]').waitFor();
+      await page.getByTestId("input-repo").fill("");
+      ck("a long list shows fifty and says how many more", (await page.getByTestId("repo-option").count()) === 50
+        && (await text(page.getByTestId("repo-more"))) === "10 more. Type to narrow the list.");
+      await page.getByTestId("input-repo").fill("repo-5");
+      ck("and typing narrows it", (await page.getByTestId("repo-option").count()) === 10 && (await page.getByTestId("repo-more").count()) === 0);
+      await page.getByTestId("form-cancel").click();
+      await page.getByTestId("step-view").waitFor();
+
+      // while the list loads the box can be typed in, and says it is loading
+      let release;
+      hold = new Promise((res) => { release = res; });
+      answer = { repos: [], error: "GitHub refused the credential: Bad credentials", note: "GitHub did not list the repositories: GitHub refused the credential: Bad credentials. Type the repository as owner/name." };
+      await page.getByTestId("connected-github").getByTestId("action-edit").click();
+      await page.getByTestId("repo-status").waitFor();
+      ck("while loading: the box takes typing and the line says it is loading", (await page.getByTestId("input-repo").isEditable())
+        && (await text(page.getByTestId("repo-status"))) === "Loading your repositories from GitHub.");
+      await page.getByTestId("input-repo").fill("example-org/typed");
+      release();
+      hold = null;
+      await page.getByText("GitHub did not list the repositories").waitFor();
+      ck("when GitHub lists nothing: its reason, a plain box, and the typed value kept",
+        (await page.getByTestId("input-repo").getAttribute("data-listed")) === null && (await page.getByTestId("input-repo").inputValue()) === "example-org/typed"
+        && (await page.getByTestId("input-repo").getAttribute("aria-describedby")).split(" ").some((x) => x.endsWith("-status")));
+      await shot(page, "form-repo-none-1440.png");
+      await page.unroute("**/api/factory/setup/github/repos**");
       await ctx.close();
     }
 

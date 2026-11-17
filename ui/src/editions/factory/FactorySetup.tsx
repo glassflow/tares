@@ -7,7 +7,7 @@ import { cloudLinkHere, useCloud } from "../../cloud";
 import { CLOUD_BACK, GithubPanel, SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings } from "../../pages/Security";
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
-import { Check } from "../../components/icons";
+import { Check, ChevronDown } from "../../components/icons";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -18,7 +18,7 @@ import type { StartStep } from "../StartChecklist.api";
 import { useHeaderSlots, useOwnMenu } from "../Shell";
 import { usePagePolling } from "../usePagePolling";
 import {
-  clearProjectPick, keepDefault, makeDefault, removeConnection, saveIntegration, setupRead, testIntegration,
+  clearProjectPick, keepDefault, makeDefault, removeConnection, saveIntegration, setupGithubRepos, setupRead, testIntegration,
   type SettingValue, type TestResult, type SetupApp, type SetupAvailable, type SetupConnected, type SetupData, type SetupField, type SetupForm,
   type SetupSlot, type SetupStep, type SetupTag,
 } from "./FactorySetup.api";
@@ -131,19 +131,136 @@ function FieldLabel({ f, htmlFor, as: As = "label" }: { f: SetupField; htmlFor?:
   );
 }
 
-function SettingField({ f, value, error, onChange }: {
+/** The repos a "github_repo" field offers. `repos` is null until a list arrives, and a list stays while the next
+ *  one loads (a credential typed in the form is waited on briefly, so each key does not ask again). `note` is
+ *  the cell's sentence when GitHub listed nothing. */
+function useRepoList(on: boolean, via: "app" | "key", credential: string) {
+  const [state, setState] = React.useState<{ repos: string[] | null; loading: boolean; note: string }>(
+    { repos: null, loading: on, note: "" });
+  const cred = credential.trim();
+  const first = React.useRef(true);
+  React.useEffect(() => {
+    if (!on) { setState({ repos: null, loading: false, note: "" }); return; }
+    let live = true;
+    const wait = first.current ? 0 : 400;
+    first.current = false;
+    const t = window.setTimeout(() => {
+      setState((s) => ({ ...s, loading: true }));
+      setupGithubRepos(via, cred)
+        .then((r) => { if (live) setState({ repos: r.repos.length ? r.repos : null, loading: false, note: r.note }); })
+        .catch(() => { if (live) setState({ repos: null, loading: false, note: "" }); });
+    }, wait);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [on, via, cred]);
+  return state;
+}
+
+/** owner/name of a typed repository, lower case, for matching against the list: a pasted GitHub address works. */
+const repoKey = (v: string) => v.trim().toLowerCase().replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
+const SHOWN_REPOS = 50;
+
+/** A text box that also offers the listed repos: typing narrows the list, and anything can still be typed. */
+function RepoCombo({ aria, value, onChange, repos, placeholder, more, className }: {
+  aria: Record<string, unknown> & { id: string };
+  value: string;
+  onChange: (v: string) => void;
+  repos: string[] | null;
+  placeholder: string;
+  more: string;
+  className: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [hi, setHi] = React.useState(-1);
+  const listId = `${aria.id}-list`;
+  const key = repoKey(value);
+  const all = repos ?? [];
+  // A value that is one of the repos (or empty) shows the whole list; anything else narrows it.
+  const matches = !key || all.some((r) => r.toLowerCase() === key) ? all : all.filter((r) => r.toLowerCase().includes(key));
+  const shown = matches.slice(0, SHOWN_REPOS);
+  const listed = all.length > 0;
+  const expanded = open && shown.length > 0;
+  const pick = (r: string) => { onChange(r); setOpen(false); setHi(-1); };
+  const onKey = (e: React.KeyboardEvent) => {
+    if (!listed) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, shown.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter" && expanded && hi >= 0 && shown[hi]) { e.preventDefault(); pick(shown[hi]); }
+    else if (e.key === "Escape" && expanded) { e.preventDefault(); setOpen(false); }
+  };
+  return (
+    <div className="relative min-w-0">
+      <Input
+        {...aria}
+        type="text"
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setHi(-1); }}
+        onClick={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={onKey}
+        placeholder={placeholder || undefined}
+        autoComplete="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        role={listed ? "combobox" : undefined}
+        aria-autocomplete={listed ? "list" : undefined}
+        aria-expanded={listed ? expanded : undefined}
+        aria-controls={listed ? listId : undefined}
+        aria-activedescendant={expanded && hi >= 0 ? `${listId}-${hi}` : undefined}
+        className={cn(className, listed && "pr-10")}
+        data-testid="input-repo"
+        data-listed={listed ? String(all.length) : undefined}
+      />
+      {listed && (
+        <button type="button" tabIndex={-1} aria-hidden onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}
+          className="absolute inset-y-0 right-0 flex! w-10 items-center justify-center border-0! bg-transparent! p-0! text-muted-foreground"
+          data-testid="repo-toggle">
+          <ChevronDown className="size-4" aria-hidden />
+        </button>
+      )}
+      {expanded && (
+        <ul id={listId} role="listbox" aria-label="Repositories" data-testid="repo-list"
+          className="absolute inset-x-0 top-full z-30 m-0! mt-1 max-h-72 list-none! overflow-y-auto border border-border bg-popover p-1! shadow-[0_6px_18px_var(--sheet-shadow)]">
+          {shown.map((r, i) => (
+            <li key={r} id={`${listId}-${i}`} role="option" aria-selected={r.toLowerCase() === key}
+              onMouseDown={(e) => { e.preventDefault(); pick(r); }} onMouseEnter={() => setHi(i)}
+              className={cn("flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-sm [overflow-wrap:anywhere]",
+                i === hi && "bg-[var(--row-hover)]", r.toLowerCase() === key && "font-semibold")}
+              data-testid="repo-option">
+              <span className="min-w-0">{r}</span>
+              {r.toLowerCase() === key && <Check className="size-4 flex-none" aria-hidden />}
+            </li>
+          ))}
+          {matches.length > shown.length && (
+            <li role="presentation" className="px-2.5 py-1.5 text-[13px] text-muted-foreground" data-testid="repo-more">
+              {more.replace("{n}", String(matches.length - shown.length))}
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SettingField({ f, value, error, onChange, via = "key", credential = "" }: {
   f: SetupField;
   value: SettingValue;
   error: boolean;
   onChange: (v: SettingValue) => void;
+  via?: "app" | "key";
+  credential?: string;
 }) {
+  const picking = f.picker === "github_repo";
+  const list = useRepoList(picking, via, credential);
   const base = React.useId();
   const id = `${base}-${f.name}`;
   const helpId = `${id}-help`;
   const errId = `${id}-error`;
-  const describedBy = [f.help && helpId, f.kind === "secret" && f.saved && f.saved_note && `${id}-saved`, error && errId].filter(Boolean).join(" ") || undefined;
+  const describedBy = [f.help && helpId, f.kind === "secret" && f.saved && f.saved_note && `${id}-saved`, picking && `${id}-status`, error && errId].filter(Boolean).join(" ") || undefined;
   const aria = { id, "aria-describedby": describedBy, "aria-invalid": error || undefined, "aria-required": f.required || undefined };
-  const help = f.help ? <p id={helpId} className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{f.help}</p> : null;
+  const helpText = picking && list.repos ? f.picker_help || f.help : f.help;
+  const help = helpText ? <p id={helpId} className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{helpText}</p> : null;
+  // The list's own line: loading while the first list is asked for, then the cell's sentence when GitHub listed nothing.
+  const status = !picking ? "" : list.loading && !list.repos ? f.picker_loading || "" : !list.repos ? list.note : "";
   const err = error ? <p id={errId} className="m-0 text-[13px] font-semibold text-[color:var(--err)]" data-testid="field-error">{f.error}</p> : null;
   const box = cn(FIELD_BOX, error && cn(ERROR_BORDER, BAR));
 
@@ -196,7 +313,12 @@ function SettingField({ f, value, error, onChange }: {
   }
 
   let control: React.ReactNode;
-  if (f.kind === "select") {
+  if (picking) {
+    control = (
+      <RepoCombo aria={aria} value={typeof value === "string" ? value : ""} onChange={(v) => onChange(v)} repos={list.repos}
+        placeholder={list.repos ? f.picker_placeholder || f.placeholder : f.placeholder} more={f.picker_more || ""} className={box} />
+    );
+  } else if (f.kind === "select") {
     control = (
       <Select value={typeof value === "string" ? value : ""} onValueChange={(v) => onChange(v)}>
         <SelectTrigger {...aria} className={box} data-testid={`input-${f.name}`}>
@@ -239,6 +361,10 @@ function SettingField({ f, value, error, onChange }: {
         </p>
       )}
       {help}
+      {picking && (
+        <p id={`${id}-status`} className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere] empty:hidden" role="status"
+          aria-live="polite" data-testid="repo-status" data-words-exempt={list.note && status === list.note ? "" : undefined}>{status}</p>
+      )}
       {err}
     </div>
   );
@@ -375,7 +501,8 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
         )}
         {choosing && <AppSteps app={app} />}
         {fields.map((f) => (
-          <SettingField key={f.name} f={f} value={values[f.name]} error={bad.includes(f.name)} onChange={(v) => change(f.name, v)} />
+          <SettingField key={f.name} f={f} value={values[f.name]} error={bad.includes(f.name)} onChange={(v) => change(f.name, v)}
+            via={appMode ? "app" : "key"} credential={typeof values.credential === "string" ? values.credential : ""} />
         ))}
         {done && app.done && (
           <div className="border-t border-border pt-4">

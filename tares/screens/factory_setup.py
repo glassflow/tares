@@ -126,7 +126,12 @@ FIELD_COPY = {
         "placeholder": "owner/name",
         "help": "The repository that holds the issues, as owner/name, for example "
                 "northwind/orders-api.",
-        "error": "Enter the repository as owner/name, for example northwind/orders-api."},
+        "error": "Enter the repository as owner/name, for example northwind/orders-api.",
+        "picker_help": "The repository that holds the issues. Choose it from the list, or type it as "
+                       "owner/name.",
+        "picker_placeholder": "Choose or type a repository",
+        "picker_loading": "Loading your repositories from GitHub.",
+        "picker_more": "{n} more. Type to narrow the list."},
     ("tickets", "github", "credential"): {
         "help": "The name of a GitHub credential stored on this cell. It needs to write issues. "
                 "Left empty, every stored credential is tried."},
@@ -192,6 +197,17 @@ FIELD_COPY = {
 # The rows of a field that maps Tares's stages to another system's, by the keys the field lists.
 STAGE_LABELS = {"todo": "To do", "in_progress": "In progress", "in_review": "In review",
                 "done": "Done"}
+
+# Fields the console fills from a list it asks the cell for, by (slot, integration, field): the
+# repository of GitHub Issues is picked from the repos GitHub lets the cell see (GET
+# /api/factory/setup/github/repos). The console falls back to typing when the list is empty.
+PICKERS = {("tickets", "github", "repo"): "github_repo"}
+# How long the form waits for GitHub's lists, all credentials together. A listing still going after
+# that keeps going in LISTING (by credential and its last change), so the next open finds it done.
+REPOS_BUDGET = 10
+LISTING: dict = {}
+REPOS_GOING = ("GitHub is still listing your repositories. Type the repository as owner/name, or open "
+               "this form again in a minute to choose it from the list.")
 
 # Tares Cloud connects these two with an app instead of a key. The connect address comes from the
 # environment (the control plane sets it), read when asked, so a cell without one has no app.
@@ -369,7 +385,12 @@ def register(app, store, h, ctx):
                "help": copy.get("help") or f.help,
                "error": "" if f.kind == "bool" else copy.get("error") or f"Enter {label.lower()}.",
                "options": list(f.options) if f.kind == "select" else [], "rows": [],
-               "value": None, "saved": False, "saved_note": ""}
+               "value": None, "saved": False, "saved_note": "",
+               "picker": PICKERS.get((slot, name, f.name), ""),
+               "picker_help": copy.get("picker_help", ""),
+               "picker_placeholder": copy.get("picker_placeholder", ""),
+               "picker_loading": copy.get("picker_loading", ""),
+               "picker_more": copy.get("picker_more", "")}
         value = settings.get(f.name)
         if f.kind == "secret":
             out["saved"] = bool((secrets.get(f.name) or {}).get("has_value"))
@@ -589,6 +610,58 @@ def register(app, store, h, ctx):
             "connected": connected,
             "available_heading": "Connect another", "available": available,
             "footer": {"hint": FOOTER, "next": nxt}}
+
+    # ── the repositories GitHub lets the cell see ─────────────────────────────
+    @app.get("/api/factory/setup/github/repos")
+    async def get_github_repos(request: Request, credential: str = "", via: str = "app"):
+        """The repos (owner/name, sorted) the GitHub Issues form offers, from the credentials the
+        connection would use: `credential` when one is named (a bare name or credential:github/<name>);
+        otherwise, connecting with the app (`via` app), the GitHub App connections; otherwise every
+        github.com credential, as the connection tries those when none is named.
+
+        All are asked at once, within REPOS_BUDGET seconds in all. A listing still going then keeps
+        going (LISTING) and fills the cache, so the next open has it. `note` is the sentence the form
+        shows when nothing was listed: GitHub's reason, or that the listing is still going."""
+        import asyncio
+        guard(request)
+        named = github_credentials.credential_name(credential)
+        creds = safe(store.list_github_credentials, []) or []
+        dotcom = [c for c in creds if not c.get("api_url")]
+        if named:
+            creds = [c for c in creds if c["name"] == named]
+        elif via == "app":
+            creds = [c for c in creds if github_credentials.is_app(c)] or dotcom
+        else:
+            creds = dotcom
+        tasks = []
+        for c in creds:
+            key = f"{c['name']}@{c.get('updated_at')}"
+            t = LISTING.get(key)
+            if t is None or (t.done() and (t.cancelled() or t.exception() is not None)):
+                t = LISTING[key] = asyncio.ensure_future(github_credentials.list_repos_for(c))
+                t.add_done_callback(lambda f: f.cancelled() or f.exception())   # read, so never logged as lost
+            tasks.append((key, t))
+        if tasks:
+            await asyncio.wait([t for _, t in tasks], timeout=REPOS_BUDGET)
+        names: set[str] = set()
+        errors, going = [], False
+        for key, t in tasks:
+            if not t.done():
+                going = True
+                continue
+            LISTING.pop(key, None)          # the cache holds the answer now; the next ask is new
+            if t.cancelled() or t.exception() is not None:
+                errors.append(str(t.exception() if not t.cancelled() else "") or "GitHub did not answer.")
+                continue
+            names |= {r["full_name"] for r in t.result()}
+        note = ""
+        if not names and going:
+            note = REPOS_GOING
+        elif not names and errors:
+            reason = errors[0].rstrip(".") + "."
+            note = f"GitHub did not list the repositories: {reason} Type the repository as owner/name."
+        return {"repos": sorted(names, key=str.lower), "error": errors[0] if errors and not names else "",
+                "note": note}
 
     # ── keeping the default ──────────────────────────────────────────────────
     @app.put("/api/factory/setup/{slot}/keep")

@@ -34,6 +34,14 @@ export interface SetupField {
   value?: string | boolean | null;
   saved: boolean;
   saved_note: string;
+  /** "github_repo": the value is picked from the repos GitHub lets the cell see (setupGithubRepos). */
+  picker?: string;
+  /** The help, placeholder and empty-field line while the list is shown instead of the text box. */
+  picker_help?: string;
+  picker_placeholder?: string;
+  picker_loading?: string;
+  /** "{n} more. ..." under a list cut short. */
+  picker_more?: string;
 }
 
 export interface SetupForm {
@@ -150,6 +158,10 @@ export type SettingValue = string | boolean | Record<string, string>;
 export const setupRead = () => request<SetupData>("/api/factory/setup");
 
 /** The count the Setup menu entry shows. Admins only: any other key gets a refusal, and no entry. */
+/** The repos the GitHub Issues form offers, of `credential` or else of the GitHub App connections. */
+export const setupGithubRepos = (via: "app" | "key", credential = "") =>
+  request<{ repos: string[]; error: string; note: string }>(
+    `/api/factory/setup/github/repos?via=${via}&credential=${encodeURIComponent(credential)}`);
 export const setupProgress = () => request<SetupProgress & { projects: number }>("/api/factory/setup/progress");
 
 const put = (path: string, body: unknown) => request<unknown>(path, { method: "PUT", body: JSON.stringify(body) });

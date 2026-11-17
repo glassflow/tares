@@ -284,7 +284,14 @@ async def main():
                and lf["help"].startswith("A Linear personal API key."), lf)
             gh = field(avail(tix, "github")["form"], "repo")
             ck("the GitHub repository field", gh["placeholder"] == "owner/name" and gh["value"] == ""
-               and gh["error"] == "Enter the repository as owner/name, for example northwind/orders-api.", gh)
+               and gh["error"] == "Enter the repository as owner/name, for example northwind/orders-api."
+               and gh["picker"] == "github_repo"
+               and gh["picker_help"] == "The repository that holds the issues. Choose it from the list, or type it as owner/name."
+               and gh["picker_placeholder"] == "Choose or type a repository"
+               and gh["picker_loading"] == "Loading your repositories from GitHub."
+               and gh["picker_more"] == "{n} more. Type to narrow the list.", gh)
+            ck("only the GitHub repository field is picked from a list",
+               field(lin["form"], "api_key")["picker"] == "" and field(avail(tix, "github")["form"], "issue_label")["picker"] == "")
             ck("the form's test hint", lin["form"]["test_hint"] == "Test connection checks the settings above with "
                                                                 "Linear. Nothing is saved by it.")
             ck("tickets: no banner and no note", tix["banner"] is None and tix["note"] is None)
@@ -533,6 +540,90 @@ async def main():
             gha = avail(step(r.json(), "tickets"), "github")
             ck("cloud: the GitHub app block after approval", gha["app"]["stage"] == "done" and gha["app"]["done"] == (
                 "GitHub is connected. The GlassFlow GitHub App is installed on the northwind organisation."), gha["app"])
+
+            print("== the repositories the GitHub Issues form offers ==")
+            from tares import github_credentials as ghc
+            from tares.screens import factory_setup as fsmod
+            listed = {"glassflow-github-app": ["northwind/orders-api", "northwind/Billing"],
+                      "dana-token": ["dana/notes", "northwind/orders-api"], "ghe": ["corp/secret"]}
+            asked = []
+            slow = asyncio.Event()
+
+            async def fake_list(cred, query=""):
+                asked.append(cred["name"])
+                if cred["name"] == "broken":
+                    raise ValueError("GitHub refused the credential broken: Bad credentials")
+                if cred["name"] == "slow":
+                    await slow.wait()
+                    return [{"full_name": "slow/repo"}]
+                return [{"full_name": n} for n in listed[cred["name"]]]
+            real_list, ghc.list_repos_for = ghc.list_repos_for, fake_list
+            real_budget, fsmod.REPOS_BUDGET = fsmod.REPOS_BUDGET, 0.3
+
+            async def repos(q=""):
+                return (await root.get("/api/factory/setup/github/repos" + q)).json()
+            try:
+                store.upsert_github_credential("dana-token", "ghp_" + "d" * 36)
+                store.upsert_github_credential("ghe", "ghp_" + "e" * 36, api_url="https://ghe.northwind.example/api/v3")
+                r = await repos()
+                ck("with the app: the app's repos, sorted, and no other credential is asked",
+                   r == {"repos": ["northwind/Billing", "northwind/orders-api"], "error": "", "note": ""}
+                   and asked == ["glassflow-github-app"], (r, asked))
+                asked.clear()
+                r = await repos("?via=key")
+                ck("no credential named: every github.com credential's repos, once each, and not Enterprise's",
+                   r["repos"] == ["dana/notes", "northwind/Billing", "northwind/orders-api"]
+                   and sorted(asked) == ["dana-token", "glassflow-github-app"], (r, asked))
+                r = await repos("?via=key&credential=dana-token")
+                ck("a named credential: only its repos", r["repos"] == ["dana/notes", "northwind/orders-api"], r)
+                r = await repos("?via=key&credential=credential:github/dana-token")
+                ck("a credential named the way the connection writes it works too",
+                   r["repos"] == ["dana/notes", "northwind/orders-api"], r)
+                r = await repos("?via=key&credential=ghe")
+                ck("an Enterprise credential named: its repos", r["repos"] == ["corp/secret"], r)
+                r = await repos("?via=app&credential=dana-token")
+                ck("a credential saved with the app connection narrows the list too", r["repos"] == ["dana/notes", "northwind/orders-api"], r)
+                r = await repos("?via=key&credential=nobody")
+                ck("an unknown credential: no repos and no sentence", r == {"repos": [], "error": "", "note": ""}, r)
+                store.upsert_github_credential("broken", "ghp_" + "b" * 36)
+                r = await repos("?via=key&credential=broken")
+                ck("a refused credential: no repos, and GitHub's reason in the sentence", r == {
+                    "repos": [], "error": "GitHub refused the credential broken: Bad credentials",
+                    "note": "GitHub did not list the repositories: GitHub refused the credential broken: Bad credentials. "
+                            "Type the repository as owner/name."}, r)
+                r = await repos("?via=key")
+                ck("a refused credential next to others does not hide their repos", len(r["repos"]) == 3
+                   and r["error"] == "" and r["note"] == "", r)
+                store.upsert_github_credential("slow", "ghp_" + "s" * 36)
+                t0 = asyncio.get_running_loop().time()
+                r = await repos("?via=key")
+                ck("a slow credential is not waited on past the budget, and the others answer",
+                   len(r["repos"]) == 3 and asyncio.get_running_loop().time() - t0 < 2, r)
+                r = await repos("?via=key&credential=slow")
+                ck("a listing still going says so", r == {"repos": [], "error": "", "note": fsmod.REPOS_GOING}, r)
+                n = asked.count("slow")
+                slow.set()
+                await asyncio.sleep(0)
+                r = await repos("?via=key&credential=slow")
+                ck("the listing kept going, so the next open has it, without asking GitHub again",
+                   r["repos"] == ["slow/repo"] and asked.count("slow") == n, (r, asked.count("slow"), n))
+                for c in [c["name"] for c in store.list_github_credentials() if ghc.is_app(c)]:
+                    store.delete_github_credential(c)
+                asked.clear()
+                r = await repos()
+                ck("with the app chosen but no app connection: the github.com credentials",
+                   "glassflow-github-app" not in asked and "ghe" not in asked and "dana/notes" in r["repos"], (r, asked))
+                async with mk(reader) as cx:
+                    ck("a read key may not list them", (await cx.get("/api/factory/setup/github/repos")).status_code == 403)
+                async with mk(station="northwind-build-1", role="builder") as cx:
+                    ck("a crew station may not list them", (await cx.get("/api/factory/setup/github/repos")).status_code == 403)
+            finally:
+                ghc.list_repos_for = real_list
+                fsmod.REPOS_BUDGET = real_budget
+                for n in ("dana-token", "broken", "ghe", "slow"):
+                    store.delete_github_credential(n)
+                store.upsert_github_credential("glassflow-github-app", SECRETS["gh"], kind="app_broker", account="northwind",
+                                               config={"installation_id": 4242, "account_type": "Organization"})
             # self-hosted with the connect addresses still set: the app is a Tares Cloud thing only
             os.environ.pop("TARES_WORKSPACE_API_URL", None)
             r = await get()
