@@ -193,10 +193,45 @@ def _secs(closed_at):
     return t - sign * (int(z[1:3]) * 3600 + int(z[4:6]) * 60)
 
 
+def _my_work(client: TaresClient):
+    """What /api/crew/my-work says, or None from a Tares that does not have the route (older: skip the signal)."""
+    try:
+        return state.loads_json(client.tares_http("GET", "/api/crew/my-work"))
+    except TaresHTTPError as e:
+        if e.status == 404:
+            return None
+        raise ScanError(str(e)) from None
+    except ValueError as e:
+        raise ScanError(str(e)) from None
+
+
+def _work_items(doc) -> list:
+    """The orchestrator's tickets and milestones that want it, as [{key, text}]: tickets that can start, tickets
+    that came back from review enough times to reach a new ladder step, and milestones whose tickets are all
+    delivered."""
+    items = []
+    for t in _list(_get(doc, "ready")):
+        project, ticket = _text(_get(t, "project")), _text(_get(t, "ticket"))
+        items.append({"key": f"rd:{project}/{ticket}", "text": f"ticket {ticket} of {project} is ready to start"})
+    for t in _list(_get(doc, "bouncing")):
+        ticket, ladder = _text(_get(t, "ticket")), _text(_get(t, "ladder"))
+        items.append({"key": f"bn:{ticket}@{ladder}",
+                      "text": f"ticket {ticket} of {_text(_get(t, 'project'))} bounced again (ladder step {ladder})"})
+    for lp in _list(_get(doc, "led_projects")):
+        project = _text(_get(lp, "project"))
+        for m in _list(_get(lp, "milestones_ready_to_check")):
+            items.append({"key": f"ms:{project}/{_text(m)}", "text": f"milestone {_text(m)} of {project} is ready to check"})
+    return items
+
+
 def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
-    """Desk answers closed, and projects handed over, since the baseline; the first look only sets it."""
+    """Desk answers closed, projects handed over, tickets ready, tickets bouncing to a new ladder step and
+    milestones ready to check, since the baseline; the first look only sets it."""
     desk = _json(client, "/api/desk?state=answered&mine=1")
     projs = _json(client, "/api/crew/projects")
+    work = _my_work(client)
+    items = None if work is None else _work_items(work)
+    work_keys = [] if items is None else [i["key"] for i in items]
     orch = state.crew_orchestrator(paths)
     base = state.wake_read(orch, paths)["baseline"]
     act = claude.station_updated(orch, paths)   # an answer the orchestrator itself recorded is not news to it
@@ -207,7 +242,10 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
     ids = [_get(p, "id") for p in project_rows]
     try:
         if base is None:
-            return {"first": True, "pending": [], "live": True, "baseline": {"desk": dmax, "projects": ids}}
+            first = {"desk": dmax, "projects": ids}
+            if items is not None:
+                first["work"] = sorted(set(work_keys))
+            return {"first": True, "pending": [], "live": True, "baseline": first}
         base_desk = _alt(_get(base, "desk"), "")
         known = _alt(_get(base, "projects"), [])
         if not isinstance(known, list):
@@ -226,8 +264,21 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
             if _get(p, "id") not in known:
                 pending.append({"key": f"ph:{_text(_get(p, 'id'))}",
                                 "text": f"project {_text(_alt(_get(p, 'name'), _get(p, 'id')))} was handed over"})
-        return {"live": True, "pending": pending,
-                "baseline": {"desk": max(dmax, base_desk), "projects": sorted(set(known + ids), key=state.dumps_compact)}}
+        baseline = {"desk": max(dmax, base_desk), "projects": sorted(set(known + ids), key=state.dumps_compact)}
+        if items is not None:
+            seen_work = _get(base, "work")
+            if isinstance(seen_work, list):
+                pending += [i for i in items if i["key"] not in seen_work]
+            else:   # a baseline from before this signal: its first look only sets the work part, and keeps it now
+                seen_work = []
+                try:
+                    state.wake_update(orch, {"baseline": {**base, "work": sorted(set(work_keys))}}, paths)
+                except OSError:
+                    pass
+            baseline["work"] = sorted(set(seen_work + work_keys))
+        elif isinstance(_get(base, "work"), list):
+            baseline["work"] = base["work"]
+        return {"live": True, "pending": pending, "baseline": baseline}
     except TypeError as e:   # a time that is not text, an id that cannot be ordered
         raise ScanError(str(e)) from None
 
