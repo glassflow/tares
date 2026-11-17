@@ -356,4 +356,4 @@ jobs:
       # gitleaks via its Docker image — the gitleaks-action needs a paid license for org repos;
       # the tool itself is free.
       - name: gitleaks
-        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source=/repo --redact --config=/repo/.gitleaks.toml
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source=/repo --log-opts=HEAD --redact --config=/repo/.gitleaks.toml
