@@ -1293,6 +1293,18 @@ def register(app, store, h: Host) -> SimpleNamespace:
         watch reads this (TR-674); a person's own `pace` setting counts for that person."""
         return pace(request)
 
+    def as_utc(x):
+        """A stored time (a datetime, or its text) as an aware UTC datetime; None when there is none or it
+        is not a time. The crew's watch reads the ISO form of this."""
+        if isinstance(x, str):
+            try:
+                x = datetime.fromisoformat(x)
+            except ValueError:
+                return None
+        if not isinstance(x, datetime):
+            return None
+        return (x if x.tzinfo else x.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
     def work_of(me: dict, hidden: set, want: str = "", detail: bool = False) -> dict:
         """What belongs to person `me` ({id, name}) as GET /api/crew/my-work gives it: `ready`,
         `in_progress`, `bouncing`, `led_projects`, `desk` and `spec_questions`, leaving out the projects in
@@ -1315,11 +1327,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 if t["holder"]:
                     if notes is None:
                         notes = {d["id"]: d["updated_at"] for d in store.list_docs(uid, "working")}
-                    news = [x for x in (t.get("updated_at"), notes.get(t.get("working_doc"))) if x]
+                    news = [d for d in (as_utc(t.get("updated_at")), as_utc(notes.get(t.get("working_doc")))) if d]
                     doing.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "holder": t["holder"],
                                   "stage": t["stage"] or "", "head": (t.get("pr") or {}).get("head") or "",
-                                  "updated_at": max(str(x) for x in news) if news else None})
+                                  "updated_at": max(news).isoformat() if news else None})
                 elif wait[t["id"]]["ready"]:
                     ready.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "repo": t.get("repo") or ""})

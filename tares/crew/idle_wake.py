@@ -227,21 +227,22 @@ def _work_items(doc) -> list:
 
 def _stall_items(doc, client: TaresClient, paths: CrewPaths) -> list:
     """The held tickets that stopped moving, as [{key, text}]: a ticket whose builder owes the next step (stage todo,
-    doing or changes) with no news for STALL_AFTER seconds, and a ticket in changes whose holder is no longer
+    doing or changes, or none yet) with no news for STALL_AFTER seconds, and a ticket in changes whose holder is no longer
     running. A ticket whose row has no `updated_at` (a Tares before that field) gives no stall signal; the
     liveness signal needs only the stage and the holder."""
     items, now, running = [], state.now_s(), {}
+    known = state.stations_load(paths)
     for t in _list(_get(doc, "in_progress")):
         project, ticket = _text(_get(t, "project")), _text(_get(t, "ticket"))
         stage, holder = _get(t, "stage"), _get(t, "holder")
-        if stage not in ("todo", "doing", "changes"):
+        if stage not in ("", "todo", "doing", "changes"):   # "" is held but not started: the same as todo
             continue
         at = _get(t, "updated_at")
         when = _secs(at)
         if when is not None and now - when > STALL_AFTER:
             items.append({"key": f"st:{project}/{ticket}@{at}",
                           "text": f"ticket {ticket} of {project} has had no news for {(now - when) // 60} minutes"})
-        if stage == "changes" and isinstance(holder, str) and holder:
+        if stage == "changes" and isinstance(holder, str) and holder in known:   # a station this crew does not know is not ours to call gone
             if holder not in running:
                 try:
                     running[holder] = claude.is_alive(holder, "", claude.claude_bin(client.env), paths)

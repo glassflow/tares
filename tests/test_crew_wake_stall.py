@@ -109,7 +109,9 @@ def reset(wake=None):
     shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", CREW / "crew.json")
     row = {"role": "orchestrator", "status": "active", "parent": "", "project": "", "repo": "", "cwd": str(SCRATCH),
            "id": "aaaa0001", "sessionId": "sess-1"}
-    (CREW / "stations.json").write_text(json.dumps({ORCH: row}, indent=2) + "\n", encoding="utf-8")
+    builders = {b: {**row, "role": "builder", "id": f"bbbb000{i}", "sessionId": f"sess-b{i}"}
+                for i, b in enumerate(("build-1", "build-2"), 1)}
+    (CREW / "stations.json").write_text(json.dumps({ORCH: row, **builders}, indent=2) + "\n", encoding="utf-8")
     if wake is not None:
         (CREW / "stations" / f"{ORCH}.wake").write_text(json.dumps(wake) + "\n", encoding="utf-8")
     del say_lines[:], restarted[:]
@@ -126,7 +128,7 @@ def wake():
     return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
 
 
-def fake_restart(cl, pth, args, *, claude_bin):
+def fake_restart(cl, pth, args, *, claude_bin, **_kw):
     restarted.append(args)
 
 
@@ -214,7 +216,7 @@ for label, row, now in (
         ("45 minutes exactly is not a stall", held(at=iso(NOW - 45 * 60)), NOW),
         ("a ticket in review waits on the reviewer, not the builder", held("review", STALE), NOW),
         ("a blocked ticket is known to be blocked", held("blocked", STALE), NOW),
-        ("a stage that is not set is left alone", held("", STALE), NOW)):
+        ("a ticket that merged is finished", held("merged", STALE), NOW)):
     reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
     p = round_(doc(row), now)
     ck(label + ": no wake", p is None and not restarted, str(p))
@@ -273,6 +275,24 @@ p = round_(doc(held("changes", iso(NOW - 60), head="a"), held("changes", iso(NOW
                held("changes", iso(NOW - 60), head="c", ticket="T4", holder="build-2")))
 ck("two tickets of one holder are one question", asked == ["build-1", "build-2"], str(asked))
 ck("...and both tickets of the gone holder wake it", p and p["keys"] == ["gone:Shop/T2@a", "gone:Shop/T3@b"], str(p))
+
+print("a holder this crew does not know")
+reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
+p = round_(doc(held("changes", iso(NOW - 60), head="abc123", holder="someone-else")))
+ck("is not called gone: it has no station here to be running", p is None and not restarted, str(p))
+
+print("a held ticket that has no stage yet")
+reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
+p = round_(doc(held("", STALE)))
+ck("is a stall like one in todo", p and p["keys"] == [KEY], str(p))
+
+print("the time as the server writes it")
+for label, at in (("a UTC time with microseconds", "2027-01-15T07:14:00.123456+00:00"),
+                  ("a UTC time with no fraction", "2027-01-15T07:14:00+00:00"),
+                  ("a time in another offset", "2027-01-15T08:14:00.123456+01:00")):
+    reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
+    p = round_(doc(held(at=at)))
+    ck(label + " is read: 46 minutes is a stall", p and p["keys"] == [f"st:Shop/T2@{at}"], str(p))
 
 print("a session list that cannot be read")
 reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
