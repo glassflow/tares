@@ -149,6 +149,13 @@ ck("with no settings of the person's, the station's permissions are its own, and
    doc["permissions"].get("deny") == ["Bash(gh pr merge:*)"] and "ask" not in doc["permissions"], str(doc["permissions"]))
 ck("the plan's arguments do not repeat the flags when the spec has them already",
    L.lean_args(args).count("--setting-sources") == 1 and L.lean_args(args) == args, str(L.lean_args(args)))
+spec_args = ["--settings", "s", "--setting-sources", "user,project,local", "--model", "m"]
+fixed = L.lean_args(spec_args)
+ck("a spec that carries --setting-sources has it forced to project,local, once",
+   fixed.count("--setting-sources") == 1 and fixed[fixed.index("--setting-sources") + 1] == "project,local", str(fixed))
+ck("a spec that carries --setting-sources gets --no-chrome too, once, and nothing else moves",
+   fixed.count("--no-chrome") == 1 and [a for a in fixed if a != "--no-chrome"] == ["--settings", "s", "--setting-sources", "project,local", "--model", "m"], str(fixed))
+ck("a spec with --setting-sources and no value gets the value", L.lean_args(["--setting-sources"])[:2] == ["--setting-sources", "project,local"], str(L.lean_args(["--setting-sources"])))
 
 # ---------------------------------------------------------------------------------------------
 print("b. the person's restrictions are copied in, never replacing the station's")

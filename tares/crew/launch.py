@@ -370,6 +370,12 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     file, shown = settings_path(client, station)
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
     state.write_json(file, {"env": plan["env"], **plan["settings"]}, mode=0o600)
+    servers = plan.get("mcp") or {}
+    mcp_path = mcp_file(paths, station)[0]
+    if servers:
+        state.write_json(mcp_path, {"mcpServers": servers}, mode=0o600)
+    else:
+        mcp_path.unlink(missing_ok=True)
     pid = plan["env"].get("TARES_PROJECT")
     if project and pid:
         state.stations_put(station, {"project_id": pid}, paths)
@@ -594,11 +600,55 @@ def telemetry_env(person: dict, spec_env: dict) -> dict:
 
 
 def lean_args(args: list) -> list:
-    """`args` with the flags that keep the person's own sources out of a station, right after --settings."""
-    if "--setting-sources" in args:
-        return list(args)
-    at = args.index("--settings") + 2 if "--settings" in args and args.index("--settings") + 1 < len(args) else len(args)
-    return [*args[:at], *LEAN_FLAGS, *args[at:]]
+    """`args` with the flags that keep the person's own sources out of a station, right after --settings:
+    --setting-sources is always project,local (a value the spec carries is replaced), --no-chrome is added
+    when missing."""
+    out = list(args)
+    if "--setting-sources" in out:
+        at = out.index("--setting-sources")
+        if at + 1 < len(out):
+            out[at + 1] = LEAN_FLAGS[1]
+        else:
+            out.append(LEAN_FLAGS[1])
+        if "--no-chrome" not in out:
+            out.insert(at + 2, "--no-chrome")
+        return out
+    at = out.index("--settings") + 2 if "--settings" in out and out.index("--settings") + 1 < len(out) else len(out)
+    return [*out[:at], *LEAN_FLAGS, *out[at:]]
+
+
+def mcp_file(paths: CrewPaths, station: str) -> tuple:
+    """(the file, the path as bash prints it) of the MCP servers a station launches with (--mcp-config)."""
+    return paths.station_file(station, "mcp.json"), f"{_forward(paths.raw)}/stations/{station}.mcp.json"
+
+
+def with_mcp_flag(args: list, file: str) -> list:
+    """`args` with `--mcp-config <file>` placed before another flag (the option takes every word up to the next
+    flag, so one at the end would swallow the prompt): after the --settings value, else before --plugin-dir,
+    else in the `--mcp-config=<file>` form at the end."""
+    for flag, shift in (("--settings", 2), ("--plugin-dir", 0)):
+        if flag in args:
+            at = args.index(flag) + shift
+            return [*args[:at], "--mcp-config", file, *args[at:]]
+    return [*args, f"--mcp-config={file}"]
+
+
+def mcp_servers(paths: CrewPaths, station: str, role: str, parent: str, env=None) -> dict:
+    """The role's allow-listed MCP servers (stations.<role>.mcp) as the person's ~/.claude.json defines them,
+    {name: config}. A name that file does not have is skipped with one line on stderr; the configs are never
+    printed or logged, since they can hold credentials."""
+    names = allow_lists(paths, role, parent)[0]
+    if not names:
+        return {}
+    doc = state.read_json(Path(cl._home(env)) / ".claude.json", None)
+    have = doc.get("mcpServers") if isinstance(doc, dict) and isinstance(doc.get("mcpServers"), dict) else {}
+    out = {}
+    for name in names:
+        if isinstance(have.get(name), dict):
+            out[name] = have[name]
+        else:
+            print(f"  ! {station}: MCP server '{name}' is not in ~/.claude.json, so it is not loaded", file=sys.stderr)
+    return out
 
 
 def launch_plan(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
@@ -606,9 +656,12 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel}.
 
     args: the `claude` arguments up to and including --plugin-dir, with --setting-sources project,local and
-    --no-chrome after --settings; no --resume and no prompt, which `launch` adds. env and settings: the two
+    --no-chrome after --settings, and `--mcp-config <file>` before them when the role keeps MCP servers; no
+    --resume and no prompt, which `launch` adds. mcp: those servers, {name: config}, which write_settings puts
+    in the file. env and settings: the two
     halves of the settings document (env, and everything else); the file is `{"env": env, **settings}`. The
-    settings carry the person's restrictions (see with_restrictions) and disableClaudeAiConnectors. otel: the
+    settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors and the role's
+    allow-listed plugins in enabledPlugins. otel: the
     OTEL_* variables, the person's and the spec's, which reach the station only through the environment of
     the process that starts it, never a file. `model` and `effort` default to the crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
@@ -642,8 +695,16 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
     settings = with_restrictions(fill_placeholders(spec["settings"], values), person)
     settings["disableClaudeAiConnectors"] = True
-    return {"args": lean_args(fill_placeholders(spec["command"], values)), "env": env, "settings": settings,
-            "otel": otel}
+    plugins = allow_lists(paths, role, parent)[1]
+    if plugins:
+        enabled = dict(settings["enabledPlugins"]) if isinstance(settings.get("enabledPlugins"), dict) else {}
+        enabled.update({name: True for name in plugins})
+        settings["enabledPlugins"] = enabled
+    args = lean_args(fill_placeholders(spec["command"], values))
+    servers = mcp_servers(paths, station, role, parent, client.env)
+    if servers:
+        args = with_mcp_flag(args, mcp_file(paths, station)[1])
+    return {"args": args, "env": env, "settings": settings, "otel": otel, "mcp": servers}
 
 
 # ---------- starting a station ----------
