@@ -5,7 +5,7 @@ and nothing else: Tares writes it through to Linear or GitHub Issues. A line tha
 to use Linear's tools or `gh issue` for a status would move a ticket behind Tares's back. The
 session and spec skills are out of scope: a person's own session still moves its own tickets.
 
-Every mention of `linear` (any case) or `gh issue` in the four skills must sit inside one of the
+Every mention of `linear` (any case) or `gh issue` in the four skills, and in the pages beside each SKILL.md, must sit inside one of the
 allowed phrases below. The phrases are stripped from each line first, so a new instruction on a
 line that already holds an allowed phrase is still caught.
 
@@ -62,18 +62,20 @@ def main():
             bad += 1
 
     for name in SKILLS:
-        path = os.path.join(ROOT, "claude-plugin", "skills", name, "SKILL.md")
-        if not os.path.exists(path):
-            print("FAIL missing skill:", path)
+        folder = os.path.join(ROOT, "claude-plugin", "skills", name)
+        if not os.path.exists(os.path.join(folder, "SKILL.md")):
+            print("FAIL missing skill:", os.path.join(folder, "SKILL.md"))
             bad += 1
             continue
-        with open(path, encoding="utf-8") as f:
-            found = offenders(f.read())
-        for n, line in found:
-            print(f"FAIL {name}/SKILL.md:{n}: {line[:160]}")
-            bad += 1
-        if not found:
-            print(f"ok {name}")
+        files = ["SKILL.md"] + sorted(f for f in os.listdir(folder) if f.endswith(".md") and f != "SKILL.md")
+        for fname in files:
+            with open(os.path.join(folder, fname), encoding="utf-8") as f:
+                found = offenders(f.read())
+            for n, line in found:
+                print(f"FAIL {name}/{fname}:{n}: {line[:160]}")
+                bad += 1
+            if not found:
+                print(f"ok {name}/{fname}")
     if bad:
         print(f"{bad} failed")
         sys.exit(1)

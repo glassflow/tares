@@ -175,6 +175,11 @@ ck("... names the station, the project and the role's skill, with non-ASCII inta
    "`s-\u540d`" in c and "`Shop \u00e9\u540d`" in c and "`station-builder`" in c, short(c))
 ck("... a resumed station is told to reload its skills and re-arm its schedule",
    "This session was resumed: load both skills again" in c and "re-arm your schedule" in c, short(c))
+r = run_py('{"source": "compact"}', {"FACTORY_ROLE": "builder", "FACTORY_STATION": "b", "TARES_PROJECT": "uc_1"})
+c = ctx_of(r.stdout) or ""
+ck("... a compacted station is told to load a skill again only when its re-attached copy was truncated",
+   "your skills are re-attached" in c and "only if its re-attached copy says it was truncated" in c
+   and "load both skills again" not in c and "re-arm your schedule" in c, short(c))
 r = run_py(b'{"source": "compact", "x": "\xff\xfe"}', {"FACTORY_ROLE": "orchestrator", "FACTORY_STATION": "crew-orchestrator"})
 ck("invalid UTF-8 in the input does not fail the hook", r.returncode == 0 and "was compacted:" in (ctx_of(r.stdout) or ""),
    short((r.returncode, r.stdout, r.stderr[-200:])))

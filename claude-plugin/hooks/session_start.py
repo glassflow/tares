@@ -152,9 +152,16 @@ def context_for(source: str) -> str:
              f"({env('TARES_FACTORY_URL', 'the crew Tares')}), through the Tares MCP tools.")
     text += f" Your rules are in the skills `factory-protocol` and `station-{station_skill(role)}`."
     if source != "startup":
-        text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, re-read your report and your work on "
-                 "Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows "
-                 "idle_wake true, arm none: the factory wakes you), then carry on where your report left off.")
+        if source == "compact":
+            text += (" This session was compacted: your skills are re-attached, so load one again only if its "
+                     "re-attached copy says it was truncated or you cannot find a rule you need; a page is never "
+                     "re-attached, so Read it again when a situation needs it. Re-read your report and your work on Tares, check "
+                     "CronList and re-arm your schedule if it is missing (if get_crew_settings shows idle_wake "
+                     "true, arm none: the factory wakes you), then carry on where your report left off.")
+        else:
+            text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, re-read your report and your work on "
+                     "Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows "
+                     "idle_wake true, arm none: the factory wakes you), then carry on where your report left off.")
     home = os.environ.get("FACTORY_HOME", "")
     if home and os.path.isfile(os.path.join(home, "HALT")):
         text += (f" The crew is halted ({halt_reason(os.path.join(home, 'HALT'))}): start nothing new until "

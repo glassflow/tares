@@ -121,7 +121,13 @@ ck("the description does not say to load it after any compaction", "after any co
 ck("the description still says to load it at boot and on reload", "at boot" in fp_desc and "reload" in fp_desc, fp_desc[-120:])
 ck("rule 13 (a denied permission) is still there", "13. **A permission check denies an action**" in fp)
 ck("the compaction bullet is still there and names Claude Code's cut note",
-   "**After a compaction or a revive**" in fp and "skill content truncated for compaction" in fp)
+   "**After a compaction**" in fp and "skill content truncated for compaction" in fp)
+bullet = next(l for l in fp.splitlines() if l.startswith("- **After a compaction**"))
+ck("after a compaction a skill is loaded again only when truncated or missing a rule, and pages are read on need",
+   "re-attached" in bullet and "only if" in bullet and "skill content truncated for compaction" in bullet
+   and "a rule is missing" in bullet and "Pages are not re-attached" in bullet, bullet[:200])
+ck("the compaction bullet does not say to load both skills again", "load this skill and your station skill again" not in fp
+   and "load both skills again" not in fp, bullet[:200])
 ck("the older Tares page is named and present", "`older-tares.md`" in fp and (PLUGIN / "skills" / "factory-protocol" / "older-tares.md").is_file())
 ck("the skill stays under its size limit (14,000 characters)", len(fp) <= 14000, len(fp))
 

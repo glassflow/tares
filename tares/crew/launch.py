@@ -385,8 +385,9 @@ def identity(role: str, station: str, parent: str, project: str, repo: str, skil
     if parent:
         identity += f", started by {parent}"
     identity += (f". Your operating rules are the skills factory-protocol and station-{skill} from the tares plugin. "
-                 "Load them at boot, after any compaction, and whenever you are told to reload. Act only within "
-                 "your role.")
+                 "Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches "
+                 "them: load one again only when its re-attached copy says it was truncated or you cannot find a "
+                 "rule you need. Act only within your role.")
     return identity
 
 
