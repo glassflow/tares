@@ -162,7 +162,7 @@ depends on how the project is built (step 1's last question).
 - where the code lives: the repo's absolute path or clone URL, the branch, and what to do if it
   is not there yet
 - how to work: one milestone at a time; within it, the ready tickets from `list_tickets` in
-  order; each read with `get_ticket` (it carries the working doc); progress marked (in Linear for
+  order; each read with `get_ticket` (it carries the working doc: a long one as its Goal, Steps and Progress, `section="all"` for all of it; if the tool refuses `section`, call without: an older Tares sends it whole); progress marked (in Linear for
   Linear tickets, with `gh issue edit` and `gh issue close` for GitHub tickets, `write_ticket`
   otherwise); when a milestone's tickets are done, run its crew checks and record each with
   `record_milestone_check`
