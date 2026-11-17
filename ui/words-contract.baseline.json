@@ -38,7 +38,6 @@
   "src/pages/CatalogExport.tsx": 12,
   "src/pages/CatalogImport.tsx": 12,
   "src/pages/Crew.tsx": 18,
-  "src/pages/Explore.tsx": 15,
   "src/pages/ProjectNew.tsx": 10,
   "src/pages/ProjectNewCustom.tsx": 10,
   "src/pages/ProjectNewGeneric.tsx": 1,
