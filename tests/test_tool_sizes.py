@@ -480,6 +480,8 @@ async def main():
            len(whole["body"]))
         bad = await m.get_doc(sd["id"], project="Shop", section="Nope")
         ck("an unknown section names the ones there are", "no section" in bad and "Goal" in bad and "Plan" in bad, bad)
+        gone = await m.get_doc("doc_nope000000", project="Shop")
+        ck("a missing doc answers the error, not a doc", "\"body\"" not in gone and ("404" in gone or "not found" in gone.lower()), gone)
         edge = "## A\n\n" + "x" * (m.DOC_MAX - 6)
         ed = json.loads(await m.write_doc("note", "Edge", edge, project="Shop"))
         ck("a doc of exactly the limit comes whole", len(edge) == m.DOC_MAX

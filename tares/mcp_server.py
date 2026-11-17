@@ -805,7 +805,7 @@ async def get_doc(id: str, project: str = "", section: str = "") -> str:
     """One of the project's docs, with its markdown body. A doc over 12,000 characters comes as
     its headings (each with its size) and the start of its first section, not whole:
     `section="<heading>"` reads one section (a heading of the doc, any case, with or without
-    its #), `section="all"` the whole doc. A shorter doc comes whole either way."""
+    its #), `section="all"` the whole doc. A shorter doc comes whole unless you name a section."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:

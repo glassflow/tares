@@ -114,7 +114,10 @@ ck("station-reviewer: the brief is asked with known_map, left empty after a comp
 rel = open(os.path.join(SKILLS, "station-releaser", "SKILL.md"), encoding="utf-8").read()
 ck("station-releaser: the agents doc is read by its Release section, whole when the tool refuses section",
    '`get_doc(id, section="Release")`' in rel
-   and "if the tool refuses `section` or answers the whole doc, read the Release part from it" in rel)
+   and "answers the whole doc or says there is no such section, take the release heading it lists or `section=\"all\"`" in rel)
+spec = open(os.path.join(SKILLS, "spec-project", "SKILL.md"), encoding="utf-8").read()
+ck("spec-project: the agents doc's release section is a `## Release` heading, which the releaser reads",
+   "the **release section**, a `## Release` heading" in spec)
 orch = open(os.path.join(SKILLS, "station-orchestrator", "SKILL.md"), encoding="utf-8").read()
 ck("station-orchestrator: the spec and agents doc are read whole with section=\"all\"",
    '`get_doc(id, section="all")`' in orch and "an older Tares ignores it" in orch)
