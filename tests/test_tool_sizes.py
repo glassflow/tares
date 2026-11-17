@@ -188,6 +188,125 @@ async def main():
         ck("a changed ticket comes whole again", moved.get("title") == "Cart and wishlist"
            and moved["fingerprint"] != g["fingerprint"], moved)
 
+        print("== the lists ==")
+        for i in range(30):
+            out = await m.write_doc("note", f"Note {i} " + "t" * 150, "n", project="Shop")
+        ck("thirty notes are written", '"id"' in out, out)
+        docs = json.loads(await m.list_docs(project="Shop", limit=10))
+        ck("list_docs stops at its limit and says how to read on",
+           len(docs) == 11 and "offset=10" in docs[-1]["more"], docs[-1])
+        ck("and leaves the working docs and updated_at out",
+           all(d.get("kind") != "working" and "updated_at" not in d for d in docs[:-1]), docs[:2])
+        got, offset = [], 0
+        while True:
+            page = json.loads(await m.list_docs(kind="note", project="Shop", limit=12, offset=offset))
+            got += [d for d in page if "more" not in d]
+            if "more" not in page[-1]:
+                break
+            offset = len(got)
+            ck("the docs note names the next offset", f"offset={offset}" in page[-1]["more"], page[-1])
+        ck("reading on with offset gives every note once", len(got) == 30 and len({d["id"] for d in got}) == 30,
+           len(got))
+        every = json.loads(await m.list_docs(project="Shop", limit=100))
+        ck("a long list has no working doc in it", "more" not in every[-1]
+           and all(d["kind"] != "working" for d in every), [d["kind"] for d in every])
+        wk = json.loads(await m.list_docs(kind="working", project="Shop"))
+        ck("kind=working lists the working docs", len(wk) == 2, wk)
+
+        await mf.write_milestone("Alpha", "x" * 300, [{"check": "pytest", "expect": "green"}], project="Shop")
+        await mf.write_milestone("Beta", "second", [{"check": "curl /", "expect": "200"}], project="Shop")
+        for i in range(98):
+            await m.write_ticket(f"Ticket {i} " + "t" * 80, project="Shop", milestone="Alpha" if i < 5 else None)
+        out = await m.list_tickets(project="Shop")
+        tl = json.loads(out)
+        ck("list_tickets of 100 tickets answers under 8,000 bytes", len(out.encode()) < 8_000, len(out.encode()))
+        ck("and says how to read the rest", 0 < len(tl["tickets"]) <= 60 and "offset=" in tl["more"], tl.get("more"))
+        ck("each ticket has its label, status and what blocks it",
+           {"label", "status", "ready", "blocked_by", "stage", "repo"} <= set(tl["tickets"][0]), tl["tickets"][0])
+        ck("and a project's tickets share one link pattern or each keeps its own",
+           ("ticket_url" in tl) != ("url" in tl["tickets"][0]), sorted(tl["tickets"][0]))
+        got, offset = [], 0
+        while True:
+            tl = json.loads(await m.list_tickets(project="Shop", open=True, offset=offset))
+            got += tl["tickets"]
+            if "more" not in tl:
+                break
+            offset = len(got)
+            ck("the tickets note names the next offset", f"offset={offset}" in tl["more"], tl["more"])
+        ck("reading on with offset gives every ticket once",
+           len(got) == 100 and len({t["id"] for t in got}) == 100, len(got))
+        full = json.loads(await m.list_tickets(project="Shop", detail="full"))
+        ck("detail=full gives all 100 with every field, as before", len(full["tickets"]) == 100
+           and "more" not in full and {"url", "working_doc", "working_doc_title", "assignee",
+                                       "assignee_raw", "pr_note", "identifier"} <= set(full["tickets"][0]),
+           sorted(full["tickets"][0]))
+        al = json.loads(await m.list_tickets(project="Shop", milestone="Alpha", detail="full"))
+        ck("milestone= narrows the list", len(al["tickets"]) == 5
+           and {t["milestone_name"] for t in al["tickets"]} == {"Alpha"}, len(al["tickets"]))
+        await m.write_ticket("", status="done", id="T3", project="Shop")
+        op = json.loads(await m.list_tickets(project="Shop", open=True, limit=100, detail="full"))
+        ck("open=True leaves the done ones out", len(op["tickets"]) == 99
+           and all(t["status"] != "done" for t in op["tickets"]), len(op["tickets"]))
+
+        print("== milestones and decisions ==")
+        for t in al["tickets"]:
+            await m.write_ticket("", status="done", id=t["id"], project="Shop")
+        ms = json.loads(await mf.list_milestones(project="Shop"))
+        alpha = next(x for x in ms if x["name"] == "Alpha")
+        ck("a finished milestone comes short: goal cut, checks counted",
+           alpha["finished"] is True and len(alpha["goal"]) <= 100 and alpha["checks"] == 1, alpha)
+        beta = next(x for x in ms if x["name"] == "Beta")
+        ck("an unfinished one keeps its goal and its checks", beta["checks"] == [{"check": "curl /", "expect": "200"}]
+           and beta["goal"] == "second", beta)
+        msf = json.loads(await mf.list_milestones(project="Shop", detail="full"))
+        alpha = next(x for x in msf if x["name"] == "Alpha")
+        ck("detail=full gives the finished one whole", alpha["goal"] == "x" * 300
+           and alpha["checks"] == [{"check": "pytest", "expect": "green"}], alpha)
+
+        rows = [{"label": f"D{i}", "question": "q" * 400, "words": "go with the plan", "choice": "go with the plan",
+                 "standing": False, "matched": True, "via": "console", "tickets": [], "at": "2026-11-17T10:00:00Z",
+                 "person": {"id": "p1", "name": "Kiran", "email": "k@x.io"}} for i in range(1, 41)]
+        rows[0]["choice"] = "B"
+
+        class _Decisions:
+            """The daemon's client, but /decisions answers the rows above."""
+            def __init__(self, real):
+                self.real = real
+
+            async def __aenter__(self):
+                await self.real.__aenter__()
+                return self
+
+            async def __aexit__(self, *a):
+                return await self.real.__aexit__(*a)
+
+            async def get(self, url, **kw):
+                if url.endswith("/decisions"):
+                    return httpx.Response(200, json={"decisions": rows}, request=httpx.Request("GET", url))
+                return await self.real.get(url, **kw)
+
+        def fake(timeout=10, _real=mf._cx):
+            return _Decisions(_real(timeout))
+
+        keep = mf._cx
+        mf._cx = fake
+        try:
+            out = await mf.list_decisions(project="Shop")
+            dl = json.loads(out)
+            ck("list_decisions answers its newest 15 under 8,000 bytes, with a note",
+               len(out.encode()) < 8_000 and len(dl) == 16 and "offset=15" in dl[-1]["more"], (len(out), dl[-1]))
+            ck("each question is cut, the person is its name only, an echoing choice is left out",
+               all(len(d["question"]) <= 200 for d in dl[:-1]) and dl[0]["person"] == {"name": "Kiran"}
+               and dl[0]["answer"] == "B" and "choice" not in dl[0] and "choice" not in dl[1], dl[:2])
+            more = json.loads(await mf.list_decisions(project="Shop", limit=40, offset=15))
+            ck("offset reads on", more[0]["label"] == "D16", more[0])
+            fd = json.loads(await mf.list_decisions(project="Shop", detail="full"))
+            ck("detail=full gives every decision whole, as before", len(fd) == 40
+               and len(fd[0]["question"]) == 400 and fd[0]["person"] == {"id": "p1", "name": "Kiran", "email": "k@x.io"}
+               and fd[1]["choice"] == "go with the plan" and "more" not in json.dumps(fd), fd[0])
+        finally:
+            mf._cx = keep
+
 
 if __name__ == "__main__":
     helpers()

@@ -36,7 +36,7 @@ The message names the project, its repo (one per line when the milestone spans s
    | `rollback` | `kubectl rollout undo` | undo if `verify` fails |
 
    A `custom` profile is entirely the project's own commands.
-6. **Verify for real.** Rollout status, the smoke test output, the milestone's checks (`list_milestones`), and the error rate or logs for a few minutes after deploy if the project has them. A deploy that "applied" is not a deploy that works.
+6. **Verify for real.** Rollout status, the smoke test output, the milestone's checks (`list_milestones(detail="full")`, or only its unfinished milestones; a finished one comes with its checks counted; if the tool refuses `detail`, call without), and the error rate or logs for a few minutes after deploy if the project has them. A deploy that "applied" is not a deploy that works.
 7. **On failure**, roll back, confirm the previous version is serving, write what failed to your report, and send the orchestrator `RELEASE` with `result: rolled-back` and the evidence.
 8. **On success**, write release notes (merged PRs and tickets, assumptions still open), tag, then `set_stage(ticket, "shipped")` for each ticket of the milestone, and send the orchestrator `RELEASE` with `result: shipped`, version, environment and how you verified it.
 

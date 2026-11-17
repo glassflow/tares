@@ -774,11 +774,13 @@ async def write_doc(kind: str, title: str, body: str, id: str = "", project: str
 
 
 @mcp.tool()
-async def list_docs(kind: str = "", project: str = "") -> str:
+async def list_docs(kind: str = "", project: str = "", limit: int = 40, offset: int = 0) -> str:
     """The project's docs in reading order (starting prompt, spec, plan, AGENTS.md, memory,
-    notes, working docs): id, kind, title, size, when changed. No bodies: read one with get_doc.
-    `kind` narrows the list. Docs marked `global` (the AGENTS.md and the memory for all
-    projects) belong to every project: read them too, they hold the user's standing rules."""
+    notes): id, kind, title, size. No bodies: read one with get_doc. `kind` narrows the list.
+    Working docs are left out unless `kind="working"` (a ticket's working doc comes with
+    get_ticket). Docs marked `global` (the AGENTS.md and the memory for all projects) belong to
+    every project: read them too, they hold the user's standing rules. At most `limit` docs;
+    a last entry {"more": ...} says how to read the rest."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -786,9 +788,11 @@ async def list_docs(kind: str = "", project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/docs", params={"kind": kind})
     if r.status_code >= 400:
         return _out(r)
-    return json.dumps([{k: d.get(k) for k in ("id", "kind", "title", "global", "size",
-                                               "updated_at")}
-                       for d in r.json()], default=str)
+    docs = [d for d in r.json() if kind or d.get("kind") != "working"]
+    rows = [{k: d.get(k) for k in ("id", "kind", "title", "global", "size")} for d in docs]
+    page, more = _fit(rows, limit, offset, LIST_CAP - 200,
+                      f'list_docs(kind="{kind}", offset={{offset}})')
+    return json.dumps(page + ([{"more": more}] if more else []), default=str)
 
 
 @mcp.tool()
@@ -928,18 +932,22 @@ async def pick_up(project: str = "", take_over: bool = False) -> str:
 
 
 @mcp.tool()
-async def list_tickets(project: str = "") -> str:
+async def list_tickets(project: str = "", milestone: str = "", open: bool = False,
+                       limit: int = 60, offset: int = 0, detail: str = "") -> str:
     """The project's tickets in plan order: id, label (the Linear identifier such as ENG-12, the
     GitHub identifier such as GH-12, else T<n>), title, status (todo, in_progress, done,
     canceled), milestone, depends_on, the GitHub repo it changes (`repo`, owner/name, for a
     project that spans several), whether it is ready (all it depends on is done) or which tickets
-    block it, the link when it lives in Linear or GitHub, and the id and title of each one's
-    working doc, and who it is for (`assignee`, {id, name}, or null with `assignee_raw` as the
-    source named them, and `assignee_note`: "assignee: Kiran" or "unowned (kiran@x.com is not on
+    block it, who it is for (`assignee_note`: "assignee: Kiran" or "unowned (kiran@x.com is not on
     this cell)"). Work the ready tickets in this order. Also says where they live: `linear` is
     the Linear project and `github` the repo and issue label, each with when it was last synced
     (null when the project does not use it); with both null the tickets live in Tares. Read one
-    with get_ticket to get its working doc."""
+    with get_ticket to get its working doc.
+    Small by default: `milestone` (a name) and `open=True` (not done or canceled) narrow it, at
+    most `limit` tickets come back and within about 8,000 bytes (`more` says how to read the
+    rest with `offset`), and each ticket leaves out its link when they share one pattern
+    (`ticket_url`, with `{label}`), its working doc and its assignee object. `detail="full"`
+    gives every ticket with every field, as before."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -950,22 +958,51 @@ async def list_tickets(project: str = "") -> str:
     data = r.json()
     lin = data.get("linear")
     gh = data.get("github")
+    every = data.get("tickets") or []
+    tickets = [t for t in every if (not milestone or t.get("milestone_name") == milestone)
+               and (not open or t.get("status") not in ("done", "canceled"))]
+    full = detail == "full"
+    keys = (("id", "label", "number", "identifier", "title", "status", "milestone_name",
+             "depends_on", "ready", "blocked_by", "holder", "stage", "stage_reason", "repo", "url",
+             "working_doc", "working_doc_title", "assignee", "assignee_raw") if full else
+            ("id", "label", "number", "title", "status", "milestone_name", "depends_on", "ready",
+             "blocked_by", "holder", "stage", "stage_reason", "repo"))
+    pattern = "" if full else _url_pattern(tickets)
+    if not full and not pattern:
+        keys += ("url",)     # links of their own: keep them
+    rows = [{k: t.get(k) for k in keys}
+            | {"pr": _pr_brief(t.get("pr"))}
+            | ({"pr_note": t.get("pr_note")} if full or t.get("pr_note") else {})
+            | {"assignee_note": _assignee_note(t)}
+            for t in tickets]
     out = {
         "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
         "github": ({k: gh.get(k) for k in ("repo", "issue_label", "url", "synced_at", "error")}
-                   if gh else None),
-        "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
-                                            "status", "milestone_name", "depends_on", "ready",
-                                            "blocked_by", "holder", "stage", "stage_reason",
-                                            "repo", "url", "working_doc", "working_doc_title",
-                                            "assignee", "assignee_raw")}
-                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note"),
-                       "assignee_note": _assignee_note(t)}
-                    for t in data.get("tickets") or []]}
-    if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
+                   if gh else None)}
+    if full:
+        out["tickets"] = rows
+    else:
+        page, more = _fit(rows, limit, offset, LIST_CAP - 1_000,
+                          f'list_tickets(milestone="{milestone}", open={open}, offset={{offset}})')
+        out["tickets"] = page
+        if pattern:
+            out["ticket_url"] = pattern
+        if more:
+            out["more"] = more
+    if any(t.get("status") == "in_progress" for t in every):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
                        "it, call pick_up before anything else.")
     return json.dumps(out, default=str)
+
+
+def _url_pattern(tickets: list[dict]) -> str:
+    """"https://linear.app/acme/issue/{label}" when every ticket's link is that prefix plus its
+    label, so a compact list can leave the links out; "" otherwise."""
+    urls = [(t.get("url") or "", t.get("label") or "") for t in tickets]
+    if not urls or not all(u and lab and u.endswith("/" + lab) for u, lab in urls):
+        return ""
+    prefixes = {u[:-len(lab)] for u, lab in urls}
+    return prefixes.pop() + "{label}" if len(prefixes) == 1 else ""
 
 
 def _assignee_note(t: dict) -> str:

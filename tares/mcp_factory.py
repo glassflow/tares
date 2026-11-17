@@ -7,7 +7,8 @@ from __future__ import annotations
 import json
 import re
 
-from .mcp_server import TARESD, _caller, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
+from .mcp_server import (LIST_CAP, TARESD, _caller, _clip, _cx, _default_project, _fit, _out,
+                         _person_in, _project_id, mcp, writable)
 
 
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
@@ -69,12 +70,14 @@ async def record_milestone_check(milestone: str, n: int, result: str, note: str 
 
 
 @mcp.tool()
-async def list_milestones(project: str = "") -> str:
+async def list_milestones(project: str = "", detail: str = "") -> str:
     """The project's milestones in order: name, goal, acceptance checks, `check_results` (each
     check's `n`, `for` crew or person, and its latest `result`), how many tickets and how many are done, which are
     ready, whether the milestone is finished and accepted, and `crew_to_run` (the crew checks not
     recorded yet) and `crew_failed` / `person_wrong` (failed ones: open a ticket for each, where
-    the project's tickets live). Work one milestone at a time, in this order."""
+    the project's tickets live). Work one milestone at a time, in this order.
+    A finished milestone comes short (its goal cut, `checks` only counted); `detail="full"` gives
+    every milestone whole, and a milestone's acceptance checks are read that way."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -82,9 +85,13 @@ async def list_milestones(project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/milestones")
     if r.status_code >= 400:
         return _out(r)
-    return json.dumps([{k: m.get(k) for k in ("name", "goal", "checks", "tickets", "done",
-                                              "ready", "finished")}
-                       for m in r.json().get("milestones") or []], default=str)
+    rows = [{k: m.get(k) for k in ("name", "goal", "checks", "tickets", "done", "ready",
+                                   "finished")}
+            for m in r.json().get("milestones") or []]
+    if detail != "full":
+        rows = [{**m, "goal": _clip(m["goal"], 100), "checks": len(m["checks"] or [])}
+                if m.get("finished") else m for m in rows]
+    return json.dumps(rows, default=str)
 
 
 # ── the integrations (TR-842) ─────────────────────────────────────────────────
@@ -533,11 +540,15 @@ async def desk_withdraw(item: str, reason: str) -> str:
 
 
 @mcp.tool()
-async def list_decisions(project: str = "") -> str:
+async def list_decisions(project: str = "", limit: int = 15, offset: int = 0,
+                         detail: str = "") -> str:
     """What the person decided on the project, newest first: the question, their words, the
     choice, whether it stands from now on and whether it matched what they typed (`via`
     "console": they answered or allowed it in the console; a permission they allowed there
-    restarts that station with it). Follow them; relay them to stations by quoting the words."""
+    restarts that station with it). Follow them; relay them to stations by quoting the words.
+    The newest `limit` come (a last entry {"more": ...} says how to read older ones with
+    `offset`), each question cut to 200 characters, `person` as its name only, and `choice` left out
+    when it is the `answer`; `detail="full"` gives all of them whole, as before."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -546,10 +557,23 @@ async def list_decisions(project: str = "") -> str:
     if r.status_code >= 400:
         return _out(r)
     from . import factory as factory_mod
-    return json.dumps([{**{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
-                                                 "matched", "via", "tickets", "at", "person")},
-                        "answer": factory_mod.decision_words(d)["answer"]}
-                       for d in r.json().get("decisions") or []], default=str)
+    full = detail == "full"
+    rows = []
+    for d in r.json().get("decisions") or []:
+        row = {**{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
+                                         "matched", "via", "tickets", "at", "person")},
+               "answer": factory_mod.decision_words(d)["answer"]}
+        if not full:
+            row["question"] = _clip(row["question"], 200)
+            if isinstance(row["person"], dict):
+                row["person"] = {"name": row["person"].get("name")}
+            if row["choice"] == row["answer"]:
+                row.pop("choice")
+        rows.append(row)
+    if full:
+        return json.dumps(rows, default=str)
+    page, more = _fit(rows, limit, offset, LIST_CAP - 200, "list_decisions(offset={offset})")
+    return json.dumps(page + ([{"more": more}] if more else []), default=str)
 
 
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
