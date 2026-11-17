@@ -72,5 +72,21 @@ ck("linear.md: get_issue with fields, one updatedAt look per tick, one save_issu
 ck("linear.md: a Tares ticket is read with Tares's tools, and a refused fields is called without",
    "read with the Tares tools" in linear and "If Linear refuses `fields` or `limit`" in linear)
 
+print("skills read the keys the small list answers still carry")
+spec = open(os.path.join(SKILLS, "spec-project", "SKILL.md"), encoding="utf-8").read()
+ck("spec-project: the working docs come from list_docs(kind=\"working\"), not the ticket list",
+   "`list_docs(kind=\"working\")`" in spec)
+ck("spec-project and contributor.md: read the ticket list on while it ends with `more`",
+   "while it ends with `more`" in spec and "while it ends with `more`" in contributor)
+ck("contributor.md: a ticket's working doc line comes from get_ticket", "`get_ticket` has it" in contributor)
+design = open(os.path.join(SKILLS, "station-reviewer", "design-check.md"), encoding="utf-8").read()
+ck("design-check.md: the approval is read from `answer`, which the list always carries",
+   "has an `answer`" in design and "neither its `answer` nor its `words`" in design and "has a `choice`" not in design)
+ck("design-check.md: an older decision is read with offset or detail=full",
+   "`offset`" in design and "`detail=\"full\"`" in design)
+releaser = open(os.path.join(SKILLS, "station-releaser", "SKILL.md"), encoding="utf-8").read()
+ck("station-releaser: the merged check reads the ticket list on while it ends with `more`",
+   "`list_tickets`, read on while it ends with `more`" in releaser)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

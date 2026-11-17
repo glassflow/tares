@@ -68,6 +68,17 @@ def helpers():
        and m._fingerprint({"a": 1}) != m._fingerprint({"a": 2}))
 
 
+def url_patterns():
+    print("== the link pattern ==")
+    one = [{"url": f"https://l/acme/issue/T{i}", "label": f"T{i}"} for i in range(3)]
+    ck("_url_pattern folds links that share a prefix", m._url_pattern(one) == "https://l/acme/issue/{label}")
+    mixed = one + [{"url": "https://other/x/T9", "label": "T9"}]
+    ck("_url_pattern gives up when the prefixes differ", m._url_pattern(mixed) == "")
+    ck("_url_pattern gives up when a link is not prefix plus label",
+       m._url_pattern(one + [{"url": "https://l/acme/issue/other", "label": "T9"}]) == "")
+    ck("_url_pattern gives up with no links", m._url_pattern([]) == "" and m._url_pattern([{"label": "T1"}]) == "")
+
+
 def gist_parts():
     print("== reviews and decisions in the gist ==")
     fake = {"label": "T9", "working_doc_body": "short",
@@ -225,6 +236,9 @@ async def main():
            {"label", "status", "ready", "blocked_by", "stage", "repo"} <= set(tl["tickets"][0]), tl["tickets"][0])
         ck("and a project's tickets share one link pattern or each keeps its own",
            ("ticket_url" in tl) != ("url" in tl["tickets"][0]), sorted(tl["tickets"][0]))
+        few = json.loads(await m.list_tickets(project="Shop", limit=7))
+        ck("limit sets how many tickets come", len(few["tickets"]) == 7 and "offset=7" in few["more"],
+           (len(few["tickets"]), few.get("more")))
         got, offset = [], 0
         while True:
             tl = json.loads(await m.list_tickets(project="Shop", open=True, offset=offset))
@@ -258,15 +272,22 @@ async def main():
         beta = next(x for x in ms if x["name"] == "Beta")
         ck("an unfinished one keeps its goal and its checks", beta["checks"] == [{"check": "curl /", "expect": "200"}]
            and beta["goal"] == "second", beta)
+        ck("a finished one still says which crew checks are to run and whether it is accepted",
+           alpha["crew_to_run"] == [1] and alpha["accepted"] is False and "check_results" not in alpha
+           and {"crew_failed", "person_wrong", "needs_person"} <= set(alpha), alpha)
+        ck("an unfinished one has each check's result and what is to run",
+           beta["check_results"][0]["n"] == 1 and beta["crew_to_run"] == [1], beta)
         msf = json.loads(await mf.list_milestones(project="Shop", detail="full"))
         alpha = next(x for x in msf if x["name"] == "Alpha")
         ck("detail=full gives the finished one whole", alpha["goal"] == "x" * 300
-           and alpha["checks"] == [{"check": "pytest", "expect": "green"}], alpha)
+           and alpha["checks"] == [{"check": "pytest", "expect": "green"}]
+           and alpha["check_results"][0]["result"] is None and alpha["crew_to_run"] == [1], alpha)
 
         rows = [{"label": f"D{i}", "question": "q" * 400, "words": "go with the plan", "choice": "go with the plan",
                  "standing": False, "matched": True, "via": "console", "tickets": [], "at": "2026-11-17T10:00:00Z",
                  "person": {"id": "p1", "name": "Kiran", "email": "k@x.io"}} for i in range(1, 41)]
         rows[0]["choice"] = "B"
+        rows[2]["choice"] = None
 
         class _Decisions:
             """The daemon's client, but /decisions answers the rows above."""
@@ -298,6 +319,8 @@ async def main():
             ck("each question is cut, the person is its name only, an echoing choice is left out",
                all(len(d["question"]) <= 200 for d in dl[:-1]) and dl[0]["person"] == {"name": "Kiran"}
                and dl[0]["answer"] == "B" and "choice" not in dl[0] and "choice" not in dl[1], dl[:2])
+            ck("a decision with no choice keeps its words as the answer",
+               dl[2]["choice"] is None and dl[2]["answer"] == "go with the plan", dl[2])
             more = json.loads(await mf.list_decisions(project="Shop", limit=40, offset=15))
             ck("offset reads on", more[0]["label"] == "D16", more[0])
             fd = json.loads(await mf.list_decisions(project="Shop", detail="full"))
@@ -310,6 +333,7 @@ async def main():
 
 if __name__ == "__main__":
     helpers()
+    url_patterns()
     gist_parts()
     asyncio.run(main())
     print(f"\n{P} passed, {F} failed")

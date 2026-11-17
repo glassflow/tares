@@ -76,8 +76,9 @@ async def list_milestones(project: str = "", detail: str = "") -> str:
     ready, whether the milestone is finished and accepted, and `crew_to_run` (the crew checks not
     recorded yet) and `crew_failed` / `person_wrong` (failed ones: open a ticket for each, where
     the project's tickets live). Work one milestone at a time, in this order.
-    A finished milestone comes short (its goal cut, `checks` only counted); `detail="full"` gives
-    every milestone whole, and a milestone's acceptance checks are read that way."""
+    A finished milestone comes short (its goal cut, `checks` only counted, no `check_results`, the
+    rest as is); `detail="full"` gives every milestone whole, and a milestone's acceptance checks
+    are read that way."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -85,11 +86,13 @@ async def list_milestones(project: str = "", detail: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/milestones")
     if r.status_code >= 400:
         return _out(r)
-    rows = [{k: m.get(k) for k in ("name", "goal", "checks", "tickets", "done", "ready",
-                                   "finished")}
+    rows = [{k: m.get(k) for k in ("name", "goal", "checks", "check_results", "tickets", "done",
+                                   "ready", "finished", "accepted", "needs_person", "crew_to_run",
+                                   "crew_failed", "person_wrong")}
             for m in r.json().get("milestones") or []]
     if detail != "full":
-        rows = [{**m, "goal": _clip(m["goal"], 100), "checks": len(m["checks"] or [])}
+        rows = [{**{k: v for k, v in m.items() if k != "check_results"},
+                 "goal": _clip(m["goal"], 100), "checks": len(m["checks"] or [])}
                 if m.get("finished") else m for m in rows]
     return json.dumps(rows, default=str)
 
