@@ -25,7 +25,8 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
-        "message": {"description": "The line the text mode prints, without the `tares factory: ` prefix.", "type": "string"}
+        "message": {"description": "The line the text mode prints, without the `tares factory: ` prefix.", "type": "string"},
+        "folder": {"description": "The folder the failure is about, as an absolute path in the system's own separators, when the code names one (crew_home_untrusted).", "type": "string"}
       },
       "additionalProperties": false
     }
