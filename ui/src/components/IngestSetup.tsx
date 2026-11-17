@@ -33,7 +33,7 @@ export default function IngestSetup({ connector, url, authKey }: {
           Alertmanager. Every alert it routes here becomes an event.
         </p>
         <div className="ingest-url">
-          <code className="mono" style={{ whiteSpace: "pre-wrap" }}>{yaml}</code>
+          <code className="mono" style={{ whiteSpace: "pre-wrap" }} data-words-exempt>{yaml}</code>
           <CopyBtn text={yaml} label="copy" />
         </div>
         {authRequired && <KeyNote authKey={authKey} />}
@@ -67,7 +67,7 @@ export default function IngestSetup({ connector, url, authKey }: {
           : <>Test it right away:</>}
       </p>
       <div className="ingest-url">
-        <code className="mono" style={{ whiteSpace: "pre-wrap" }}>{snippet}</code>
+        <code className="mono" style={{ whiteSpace: "pre-wrap" }} data-words-exempt>{snippet}</code>
         <CopyBtn text={snippet} label="copy" />
       </div>
     </div>
