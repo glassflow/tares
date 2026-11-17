@@ -146,6 +146,43 @@ ck("grep with no pattern is the usage", code == 1 and "usage:" in err, err)
 code, out, err = run()
 ck("no subcommand is the usage", code == 1 and "usage:" in err, err)
 
+print("grep --section")
+SEC = TMP / "section-home"
+SENV = {"FACTORY_CREW_HOME": str(SEC), "HOME": str(TMP)}
+(SEC / "reports" / "log").mkdir(parents=True)
+for i in range(30):  # many stations whose logs and reports all mention [TF:, so a plain grep hits its cap
+    st = f"crew-b{i:02d}"
+    (SEC / "reports" / "log" / st).mkdir()
+    (SEC / "reports" / "log" / st / "2026-11-14.md").write_text(
+        "".join(f"- 10:{n:02d}Z [TF:DONE] sent {n}\n" for n in range(5)), newline="\n")
+    (SEC / "reports" / f"{st}.md").write_text(
+        f"## Now\n[TF:REVIEW] waiting on {st}\n## Undelivered\nnone\n## Taken\nx\n", newline="\n")
+(SEC / "reports" / "crew-zz-builder.md").write_text(
+    "## Now\n[TF:ASK] not parked, only in Now\n## Undelivered\n[TF:ASK] parked question for the orchestrator\n"
+    "\n[TF:DONE] parked done\n## Taken\n[TF:ASK] under Taken\n", newline="\n")
+(SEC / "reports" / "log" / "crew-b00" / "final.md").write_text(
+    "## Undelivered\n[TF:ASK] old parked line of an archived report\n", newline="\n")
+code, out, err = run("grep", "--days", "36500", "\\[TF:", env=SENV)
+ck("a plain grep for [TF: is cut by its cap and misses the parked line (the gap)",
+   code == 0 and "parked question" not in out and "more matching lines not shown" in out, out[-200:])
+code, out, err = run("grep", "--section", "Undelivered", env=SENV)
+ck("--section Undelivered shows the parked lines of a crowded home",
+   code == 0 and "crew-zz-builder report: [TF:ASK] parked question for the orchestrator" in out
+   and "crew-zz-builder report: [TF:DONE] parked done" in out, out)
+ck("...and nothing else: not Now, not Taken, not logs, not an archived report, not `none`, not a blank line",
+   len(out.splitlines()) == 2 and "only in Now" not in out and "under Taken" not in out and "sent" not in out
+   and "archived report" not in out, out)
+code, out, err = run("grep", "--section", "undelivered", "done", env=SENV)
+ck("the section name is case-insensitive and the regex still narrows", code == 0 and out.splitlines() == [
+   "crew-zz-builder report: [TF:DONE] parked done"], out)
+code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-b03", env=SENV)
+ck("--station narrows --section; a station with only `none` is no match", code == 0 and out.strip() == "no match", out)
+code, out, err = run("grep", "--section", env=SENV)
+ck("--section with no name is the usage", code == 1 and "usage:" in err, err)
+code, out, err = run("log", "--section", "Undelivered", "x", env=ENV)
+ck("--section is not an option of log: it stays in the entry", code == 0 and
+   any("--section Undelivered x" in f.read_text() for f in LOG.glob("*.md")), (code, err))
+
 
 print("archive")
 ARC = TMP / "archive-home"
