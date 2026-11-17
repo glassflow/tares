@@ -164,11 +164,11 @@ reset({"released": True, "clock": NOW - 60})
 p = round_({**EMPTY, "ready": [READY], "bouncing": [BOUNCE], "led_projects": [LED]})
 ck("what is already waiting does not wake it", p is None and not restarted, str(p))
 ck("...and is remembered in the baseline", wake()["baseline"] == {"desk": "", "projects": ["p1"],
-   "work": ["bn:T3@3", "ms:Shop/M1 Core", "rd:Shop/T5"]}, str(wake()))
+   "work": ["bn:Shop/T3@3", "ms:Shop/M1 Core", "rd:Shop/T5"]}, str(wake()))
 
 for label, doc, key, text in (
         ("a ticket that became ready", {**EMPTY, "ready": [READY]}, "rd:Shop/T5", "ticket T5 of Shop is ready to start"),
-        ("a ticket bouncing to a new ladder step", {**EMPTY, "bouncing": [BOUNCE]}, "bn:T3@3",
+        ("a ticket bouncing to a new ladder step", {**EMPTY, "bouncing": [BOUNCE]}, "bn:Shop/T3@3",
          "ticket T3 of Shop bounced again (ladder step 3)"),
         ("a milestone ready to check", {**EMPTY, "led_projects": [LED]}, "ms:Shop/M1 Core",
          "milestone M1 Core of Shop is ready to check")):
@@ -184,9 +184,18 @@ for label, doc, key, text in (
     ck("the same signal does not wake it again", p is None and not restarted, str(p))
 
 print("a new ladder step is a new signal")
-reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": ["bn:T3@3"]}})
+reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": ["bn:Shop/T3@3"]}})
 p = round_({**EMPTY, "bouncing": [{**BOUNCE, "ladder": 5, "count": 5}]})
-ck("ticket T3 at step 5 wakes though it woke at step 3", p and p["keys"] == ["bn:T3@5"], str(p))
+ck("ticket T3 at step 5 wakes though it woke at step 3", p and p["keys"] == ["bn:Shop/T3@5"], str(p))
+
+print("two projects, the same ticket label")
+reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
+p = round_({**EMPTY, "bouncing": [BOUNCE]})
+ck("project Shop's T3 wakes at step 3", p and p["keys"] == ["bn:Shop/T3@3"], str(p))
+p = round_({**EMPTY, "bouncing": [BOUNCE, {**BOUNCE, "project": "Blog"}]}, NOW + 60)
+ck("project Blog's T3 at step 3 wakes though Shop's T3 already did", p and p["keys"] == ["bn:Blog/T3@3"], str(p))
+p = round_({**EMPTY, "ready": [READY, {**READY, "project": "Blog"}]}, NOW + 120)
+ck("...and a ready T5 of another project wakes too", p and p["keys"] == ["rd:Shop/T5", "rd:Blog/T5"], str(p))
 
 print("a baseline from before this signal")
 reset({"released": True, "clock": NOW - 60, "baseline": BASE})
@@ -203,6 +212,15 @@ with FakeTares(routes(None)):
     s = IW.scan_orchestrator(c, paths, ORCH)
     c.close()
 ck("...and leaves the baseline without a work list", s["pending"] == [] and s["baseline"] == BASE, str(s))
+reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": ["rd:Shop/T5"]}})
+p = round_(None)
+ck("a 404 with a work baseline wakes nothing and keeps the work list", p is None and not restarted
+   and wake()["baseline"] == {**BASE, "work": ["rd:Shop/T5"]}, str(wake()))
+with FakeTares(routes(None)):
+    c = client()
+    s = IW.scan_orchestrator(c, paths, ORCH)
+    c.close()
+ck("...in the scan's baseline too", s["pending"] == [] and s["baseline"] == {**BASE, "work": ["rd:Shop/T5"]}, str(s))
 reset()
 with FakeTares(routes(None)):
     c = client()

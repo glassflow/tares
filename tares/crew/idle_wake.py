@@ -214,9 +214,9 @@ def _work_items(doc) -> list:
         project, ticket = _text(_get(t, "project")), _text(_get(t, "ticket"))
         items.append({"key": f"rd:{project}/{ticket}", "text": f"ticket {ticket} of {project} is ready to start"})
     for t in _list(_get(doc, "bouncing")):
-        ticket, ladder = _text(_get(t, "ticket")), _text(_get(t, "ladder"))
-        items.append({"key": f"bn:{ticket}@{ladder}",
-                      "text": f"ticket {ticket} of {_text(_get(t, 'project'))} bounced again (ladder step {ladder})"})
+        project, ticket, ladder = _text(_get(t, "project")), _text(_get(t, "ticket")), _text(_get(t, "ladder"))
+        items.append({"key": f"bn:{project}/{ticket}@{ladder}",
+                      "text": f"ticket {ticket} of {project} bounced again (ladder step {ladder})"})
     for lp in _list(_get(doc, "led_projects")):
         project = _text(_get(lp, "project"))
         for m in _list(_get(lp, "milestones_ready_to_check")):
