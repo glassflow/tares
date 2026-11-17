@@ -419,7 +419,11 @@ def saved_spec(paths: CrewPaths, station: str):
     """The launch spec the cell last gave this station (<crew home>/launch/<station>.json), or None when there
     is none, or it is not a launch spec."""
     doc = state.read_json(paths.launch_file(station), None)
-    return doc if _valid_spec(doc) else None
+    if not _valid_spec(doc):
+        return None
+    if any(str(k).startswith("OTEL_") for k in doc["env"]):
+        state.write_json(paths.launch_file(station), without_otel(doc))
+    return doc
 
 
 def _with_model(spec: dict, model: str, effort: str) -> dict:

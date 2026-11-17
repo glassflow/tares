@@ -232,6 +232,8 @@ extra = seen.get("kw", {}).get("env_extra", {})
 body = (crew_home / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8")
 ck("a start from a kept copy that has OTEL_* gives it to the process and not to the settings file",
    err is None and extra.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://old-copy.example.com" and "OTEL_" not in body, str((err, sorted(extra))))
+ck("a start from a kept copy that has OTEL_* strips it from the file on disk",
+   "old-copy.example.com" not in copy.read_text(encoding="utf-8") and "OTEL_" not in copy.read_text(encoding="utf-8"), "")
 ck("the lean flags and the connectors key are there from a kept copy too",
    "--no-chrome" in seen.get("args", []) and json.loads(body).get("disableClaudeAiConnectors") is True, str(seen.get("args")))
 
