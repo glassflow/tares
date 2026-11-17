@@ -343,6 +343,7 @@ tares factory: shop-build-m2 has new permissions from Tares; restarting it with 
 @project 
 == file crew/stations/shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -411,6 +412,7 @@ tares factory: shop-build-m2 has new permissions from Tares; restarting it with 
 @project 
 == file crew/stations/shop-build-m2.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

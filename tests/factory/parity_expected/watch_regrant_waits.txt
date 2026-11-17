@@ -303,6 +303,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
 - "the reviewer may label pull requests" (2026-02-03)
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -366,6 +367,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
 - "the reviewer may label pull requests" (2026-02-03)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
