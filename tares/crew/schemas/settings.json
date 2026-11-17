@@ -38,6 +38,7 @@
       "additionalProperties": {"type": "string"}
     },
     "crossSessionInbound": {"type": "string"},
+    "disableClaudeAiConnectors": {"description": "True: the station loads no claude.ai connector.", "type": "boolean"},
     "enabledPlugins": {"type": "object", "additionalProperties": {"type": "boolean"}},
     "statusLine": {
       "type": "object",
