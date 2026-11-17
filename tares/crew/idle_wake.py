@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 
 from . import claude, launch, lifecycle, locks, pace, state
 from .claude import SessionListUnreadableError
@@ -484,8 +485,11 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
         client.close()
 
 
-_ANSWERED_OFF: set = set()   # crew homes whose Tares has no /api/desk/answered: the round alone wakes the orchestrator
+_ANSWERED_OFF: dict = {}     # crew home -> when to ask again, for a Tares without /api/desk/answered (the round wakes meanwhile)
 _ANSWERED_DONE: dict = {}    # crew home -> the latest answer time the console tick has already acted on
+_ANSWERED_WAIT: dict = {}    # crew home -> when to try again after a wake that did not happen
+_OFF_FOR = 600.0             # seconds before a Tares that lacked the route is asked again (it may have been upgraded)
+_RETRY_AFTER = 30.0          # seconds before a wake that did not happen is tried again
 
 
 def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
@@ -493,7 +497,8 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     round. One small call asks whether anything was answered; only a yes reads the desk and plans the wake, and
     only for the orchestrator, between turns. A Tares without the route keeps the round's behaviour."""
     home = str(paths.home)
-    if home in _ANSWERED_OFF:
+    now = time.monotonic()
+    if now < _ANSWERED_OFF.get(home, 0.0) or now < _ANSWERED_WAIT.get(home, 0.0):
         return
     env = os.environ if env is None else env
     orch = state.crew_orchestrator(paths)
@@ -512,7 +517,7 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
                 "GET", "/api/desk/answered?mine=1&since=" + uri(_alt(_get(base, "desk"), ""))))
         except TaresHTTPError as e:
             if e.status == 404:
-                _ANSWERED_OFF.add(home)
+                _ANSWERED_OFF[home] = now + _OFF_FOR
             return
         except ValueError:
             return
@@ -527,10 +532,16 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
                     or not claude.between_turns(orch, claude_bin, paths)):
                 return   # not now: the next tick asks again
-            _ANSWERED_DONE[home] = latest
             p = plan(client, paths, orch, claude_bin=claude_bin)
-            if p is not None and p["work"]:   # a release note or a liveness wake waits for the round
-                send(client, paths, p, claude_bin=claude_bin)
+            if p is None or not p["work"]:   # nothing new for it; a release note or a liveness wake waits for the round
+                _ANSWERED_DONE[home] = latest
+                return
+            before = state.wake_read(orch, paths)["last_wake"]
+            send(client, paths, p, claude_bin=claude_bin)
+            if state.wake_read(orch, paths)["last_wake"] != before:
+                _ANSWERED_DONE[home] = latest
+            else:
+                _ANSWERED_WAIT[home] = now + _RETRY_AFTER   # it was not woken: ask again soon, not every tick
         except SessionListUnreadableError:
             return
         except CrewError as e:

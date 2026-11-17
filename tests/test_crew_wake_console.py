@@ -40,6 +40,7 @@ _crew_guard.install()   # an exec or spawn that would reach the real ~/factory f
 sys.path.insert(0, str(ROOT))
 
 from tares.crew import claude, idle_wake as IW, launch, lifecycle, state, watch  # noqa: E402
+from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -74,6 +75,7 @@ class Clock:
 
 
 watch.time = Clock()
+IW.time = Clock()
 
 
 def sleep(seconds):
@@ -115,6 +117,9 @@ os.environ["TARESD_URL"] = f"http://127.0.0.1:{server.server_address[1]}"
 
 
 def fake_restart(cl, pth, args, *, claude_bin, **_kw):
+    if world.get("restart_fails", 0) > 0:
+        world["restart_fails"] -= 1
+        raise CrewError("the station would not stop")
     restarts.append((clock[0], args))
 
 
@@ -147,6 +152,7 @@ def reset(baseline=True, **over):
     claude.is_alive = lambda *a, **k: world["alive"]
     IW._ANSWERED_OFF.clear()
     IW._ANSWERED_DONE.clear()
+    IW._ANSWERED_WAIT.clear()
     del requests[:], restarts[:]
     clock[0] = 0.0
 
@@ -203,6 +209,28 @@ nap(60)
 ck("it asked once and stopped asking", len(routes_asked("/api/desk/answered")) == 1,
    str(len(routes_asked("/api/desk/answered"))))
 ck("and woke nobody and read nothing else", restarts == [] and routes_asked("/api/desk") == [], str(restarts))
+
+print("a Tares upgraded later is asked again")
+reset(route=False)
+answer(at=0.0)
+nap(60)
+ck("it did not ask again within the wait", len(routes_asked("/api/desk/answered")) == 1,
+   str(len(routes_asked("/api/desk/answered"))))
+world["route"] = True
+nap(IW._OFF_FOR)
+ck("it asks again after the wait and wakes the orchestrator", len(restarts) == 1 and restarts[0][0] >= IW._OFF_FOR,
+   str(restarts))
+
+print("a wake that did not happen is tried again soon, not forgotten and not every tick")
+reset(restart_fails=1)
+answer(at=0.0)
+nap(20)
+ck("the first try failed and nothing was restarted yet", restarts == [], str(restarts))
+ck("it did not hammer the restart every tick", len(routes_asked("/api/desk")) == 1, str(routes_asked("/api/desk")))
+nap(40)
+ck("the retry after the wait woke it once", len(restarts) == 1 and restarts[0][0] >= IW._RETRY_AFTER, str(restarts))
+nap(60)
+ck("and then it is told no more", len(restarts) == 1, str(restarts))
 
 print("the first look is the round's: no baseline, no call")
 reset(baseline=False)
