@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from tares.crew import dispatch, report  # noqa: E402
+from tares.crew.errors import SessionListUnreadableError  # noqa: E402
 
 P = F = 0
 
@@ -173,6 +174,7 @@ def arun(*args):
 
 
 BUSY = set()
+REAL_IDLE = report._idle
 report._idle = lambda station, paths: station not in BUSY
 put(ARC / "crew.json", "{}")
 stations(**{"crew-orchestrator": "running", "crew-reviewer": "running", "old-builder": "retired"})
@@ -254,9 +256,92 @@ except report.CrewError:
 ck("_move never replaces a file that is there", refused and (TMP / "from.md").is_file()
    and (TMP / "to.md").read_bytes() == b"what is there\n")
 
+# a copy that fails or comes out short leaves the source and names both files; so does a source that cannot go
+real_copy = shutil.copyfileobj
+def fail_copy(a, b, *x):
+    raise OSError(28, "No space left on device")
+def short_copy(a, b, *x):
+    b.write(a.read(3))
+for label, fake, want in (("a failed copy", fail_copy, "cannot copy"), ("a short copy", short_copy, "is short")):
+    put(TMP / "from.md", "new text\n")
+    shutil.copyfileobj = fake
+    try:
+        report._move(TMP / "from.md", TMP / "fresh.md")
+        got = ""
+    except report.CrewError as e:
+        got = e.message
+    finally:
+        shutil.copyfileobj = real_copy
+    ck(f"_move: {label} is a CrewError naming both files, the source stays",
+       want in got and "from.md" in got and "fresh.md" in got and (TMP / "from.md").read_bytes() == b"new text\n", got)
+    (TMP / "fresh.md").unlink()
+real_unlink = Path.unlink
+def stuck_unlink(self, *x, **y):
+    raise PermissionError(13, "Permission denied")
+put(TMP / "from.md", "new text\n")
+Path.unlink = stuck_unlink
+try:
+    report._move(TMP / "from.md", TMP / "fresh.md")
+    got = ""
+except report.CrewError as e:
+    got = e.message
+finally:
+    Path.unlink = real_unlink
+ck("_move: a source that cannot be taken away says both files now exist", "both files exist" in got and (TMP / "from.md").is_file()
+   and (TMP / "fresh.md").read_bytes() == b"new text\n", got)
+
+# a station is checked again right before its own files move: one that starts a turn meanwhile stops the run
+put(AREP / "crew-orchestrator.next.md", "# orch\n\n## Undelivered\nnone\n")
+put(AREP / "crew-reviewer.next.md", "# reviewer\n\n## Undelivered\nnone\n")
+put(AREP / "crew-reviewer.md", "# reviewer\n\n## Undelivered\nnone\n")
+stations(**{"crew-orchestrator": "running", "crew-reviewer": "running", "old-builder": "retired"})
+calls = {}
+def turn_starts(station, paths):
+    calls[station] = calls.get(station, 0) + 1
+    return not (station == "crew-reviewer" and calls[station] > 1)
+report._idle = turn_starts
+code, out, err = arun("--apply")
+orch_done = list((AREP / "log" / "crew-orchestrator").glob("archive-until-2026-11-15*.md"))
+ck("a station that starts a turn after the first check stops the run before its files move",
+   code == 1 and "crew-reviewer started a turn" in err and (AREP / "crew-reviewer.next.md").is_file()
+   and (AREP / "crew-reviewer.md").read_text().startswith("# reviewer") and not (AREP / "crew-orchestrator.next.md").exists()
+   and len(orch_done) >= 1, (code, err, out))
+report._idle = REAL_IDLE
+
+# the real _idle, with the session answers faked
+put(ARC / "stations.json", json.dumps({"crew-reviewer": {"status": "running", "id": "abcd1234"},
+                                        "crew-orchestrator": {"status": "running"}}))
+real = (report.claude.attached, report.claude.turn_state, report.claude.between_turns)
+PATHS = report.CrewPaths.at(ARC)
+def idle(att=False, ts="", bt=True, ts_raises=False, station="crew-reviewer"):
+    report.claude.attached = lambda s, p: att
+    def turn(sid, c=None):
+        if ts_raises:
+            raise SessionListUnreadableError("cannot read")
+        return ts
+    report.claude.turn_state = turn
+    report.claude.between_turns = lambda s, c=None, p=None, now=None: bt
+    return REAL_IDLE(station, PATHS)
+try:
+    ck("a stopped live station (no session listed) is idle, though between_turns says no for it", idle(ts="", bt=False) is True)
+    ck("...a station with no id is idle too", idle(ts="working", bt=False, station="crew-orchestrator") is True)
+    ck("a working session is not idle", idle(ts="working", bt=False) is False)
+    ck("a session between turns is idle", idle(ts="done", bt=True) is True)
+    ck("a session open in a terminal is not idle, even when done", idle(att=True, ts="done", bt=True) is False)
+    ck("a session list that cannot be read is not idle", idle(ts_raises=True) is False)
+finally:
+    report.claude.attached, report.claude.turn_state, report.claude.between_turns = real
+report._idle = lambda station, paths: station not in BUSY
+
+# the guards of the plan
+put(AREP / "Bad Name.md", "not a station\n")
+stations(**{"crew-orchestrator": "running"})
+code, out, err = arun()
+ck("a file whose name is no station name is skipped with a note, never planned", "skip Bad Name.md: not a station name" in out
+   and "Bad Name" not in out.replace("skip Bad Name.md: not a station name", ""), out)
 (ARC / "stations.json").unlink()
 code, out, err = arun()
-ck("without stations.json nothing can tell a live report from an old one: refused", code == 1 and "stations.json" in err, err)
+ck("without stations.json nothing can tell a live report from an old one: refused", code == 1 and "no stations.json in" in err, err)
 stations(**{"old-builder": "retired"})
 code, out, err = arun()
 ck("with no live station it is refused too, even as a dry run", code == 1 and "no live station" in err, err)

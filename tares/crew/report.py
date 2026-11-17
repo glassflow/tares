@@ -214,24 +214,41 @@ def plan_archive(paths: CrewPaths) -> tuple[list[Move], list[str], list[str]]:
 
 
 def _idle(station: str, paths: CrewPaths) -> bool:
-    """Nobody has the station open and it is between turns. What cannot be read is not idle."""
+    """Nothing is writing the station's files: nobody has it open in a terminal, and it either has no live
+    session (stopped) or is between turns. A session list that cannot be read is not idle."""
     try:
-        return not claude.attached(station, paths) and claude.between_turns(station, None, paths)
+        if claude.attached(station, paths):
+            return False
+        sid = state.stations_get(station, "id", paths=paths)
+        if not sid or claude.turn_state(sid) == "":
+            return True
+        return claude.between_turns(station, None, paths)
     except CrewError:
         return False
 
 
 def _move(src: Path, dst: Path) -> None:
     """Copy `src` to a file that must not exist yet (x mode), check the copy, then take `src` away: a move that
-    cannot replace a file, which `rename` and `replace` do."""
+    cannot replace a file, which `rename` and `replace` do. Any failure is a CrewError naming both files; a
+    half-written `dst` is left (the next run picks another name) and `src` stays where it was."""
     try:
         with open(src, "rb") as a, open(dst, "xb") as b:
             shutil.copyfileobj(a, b)
     except FileExistsError:
         raise CrewError(f"{dst} exists: not overwriting it") from None
-    if dst.stat().st_size != src.stat().st_size:
+    except OSError as e:
+        raise CrewError(f"cannot copy {src} to {dst}: {e.strerror or e}; {src} is left where it was") from None
+    try:
+        short = dst.stat().st_size != src.stat().st_size
+    except OSError as e:
+        raise CrewError(f"cannot check the copy {dst} of {src}: {e.strerror or e}; {src} is left where it was") from None
+    if short:
         raise CrewError(f"copy of {src} to {dst} is short: {src} left where it was")
-    src.unlink()
+    try:
+        src.unlink()
+    except OSError as e:
+        raise CrewError(f"copied {src} to {dst} but cannot take {src} away: {e.strerror or e} "
+                        f"(a station may have it open); both files exist now") from None
 
 
 def archive(paths: CrewPaths, apply: bool) -> int:
@@ -243,13 +260,22 @@ def archive(paths: CrewPaths, apply: bool) -> int:
 
     for n in notes + stops:
         print(n)
-    busy = sorted({m.station for m in moves if m.station and not _idle(m.station, paths)})
+    busy = [n for n in sorted({m.station for m in moves if m.station}) if not _idle(n, paths)]
     if apply and busy:
         raise NotBetweenTurnsError(f"{', '.join(busy)} in a turn or open in a terminal: not moving anything; "
                                    "run it again between turns")
+    rechecked = set()
     for m in moves:
         if apply:
-            m.dst.parent.mkdir(parents=True, exist_ok=True)
+            if m.station and m.station not in rechecked:
+                rechecked.add(m.station)
+                if not _idle(m.station, paths):
+                    raise NotBetweenTurnsError(f"{m.station} started a turn: stopped before touching its files; "
+                                               "run it again between turns")
+            try:
+                m.dst.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                raise CrewError(f"cannot make {m.dst.parent}: {e.strerror or e}") from None
             _move(m.src, m.dst)
         print(f"{'moved' if apply else 'would move'} {rel(m.src)} -> {rel(m.dst)}")
     if busy:
