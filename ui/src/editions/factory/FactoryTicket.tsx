@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot, StatusLabel, toneOf, type Tone,
+  Banner, Button, Collapse, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot, StatusLabel, type Tone, toneOf,
 } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -434,11 +434,11 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
   const msText = ms ? (ms.name.startsWith(ms.number) ? ms.name : `${ms.number} ${ms.name}`) : "";
   return (
     <div className="grid min-w-0 gap-4" data-testid="factory-ticket" data-ref={d.ref} data-state={d.state}>
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={onRetry}>Retry</Button>}>
           <b>This page did not refresh.</b> Check your connection, then try again.
         </Banner>
-      )}
+      )}</Collapse>
       <Back href={d.project.href} name={d.project.name} icon={d.project.icon} />
       <div className="grid min-w-0 gap-2.5">
         <div className="flex flex-wrap items-center gap-2.5">

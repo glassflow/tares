@@ -23,7 +23,7 @@ const ToastViewport = React.forwardRef<
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName;
 
 const toastVariants = cva(
-  "pointer-events-auto relative flex w-full items-center justify-between gap-4 overflow-hidden border bg-background p-4 pr-8",
+  "motion-toast pointer-events-auto relative flex w-full items-center justify-between gap-4 overflow-hidden border bg-background p-4 pr-8",
   {
     variants: {
       variant: {

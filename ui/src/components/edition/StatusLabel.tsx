@@ -31,12 +31,26 @@ export interface StatusLabelProps extends React.HTMLAttributes<HTMLSpanElement> 
   tone: Tone;
 }
 
+/** A status that changes while the reader watches (a poll moved a ticket on) washes once and fades back
+ *  (TR-1435), so the change is seen without a toast. The first tone it shows does not wash. */
 export function StatusLabel({ tone, className, ...props }: StatusLabelProps) {
+  const ref = React.useRef<HTMLSpanElement>(null);
+  const first = React.useRef(tone);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || tone === first.current) return;
+    first.current = tone;
+    // restart the wash: take the class off, make the browser see it gone, put it back
+    el.classList.remove("motion-wash");
+    void el.offsetWidth;
+    el.classList.add("motion-wash");
+  }, [tone]);
   return (
     <span
+      ref={ref}
       data-tone={tone}
       className={cn(
-        "whitespace-nowrap font-mono text-[11px] font-medium uppercase tracking-[0.08em] underline decoration-1 underline-offset-[4px]",
+        "transition-colors whitespace-nowrap font-mono text-[11px] font-medium uppercase tracking-[0.08em] underline decoration-1 underline-offset-[4px]",
         TONE_TEXT[tone],
         className,
       )}

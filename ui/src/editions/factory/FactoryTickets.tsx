@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ChevronDown, ChevronRight } from "../../components/icons";
-import { Banner, Button, EmptyState, Loading, Skeleton, StatusDot, STATUS_TONES } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -696,9 +696,9 @@ function TicketsBody({ scope }: { scope: string }) {
           <ListBody rows={rows} />
           {(more || moreState === "error") && (
             <div className="grid justify-items-center gap-2 border border-t-0 border-border bg-card px-4 py-3">
-              {moreState === "error" && (
+              <Collapse>{moreState === "error" && (
                 <Banner tone="error" className="w-full"><b>More tickets did not load.</b> <span className="text-foreground">Try again.</span></Banner>
-              )}
+              )}</Collapse>
               <Button variant="secondary" busy={moreState === "busy"} onClick={showMore} data-testid="list-more">Show {PAGE} more</Button>
             </div>
           )}
@@ -715,7 +715,7 @@ function TicketsBody({ scope }: { scope: string }) {
     const p: BodyProps = { data: resp, rows, cols, group, narrow, caps, bump, closed, flip, listOf };
     return (
       <>
-        {more && <Banner tone="note" className="mb-3" data-testid="tickets-capped">Showing every open ticket and the newest merged ones, {BOARD_LIMIT} in all. Narrow the filters, or use the List, to reach the rest.</Banner>}
+        <Collapse>{more && <Banner tone="note" className="mb-3" data-testid="tickets-capped">Showing every open ticket and the newest merged ones, {BOARD_LIMIT} in all. Narrow the filters, or use the List, to reach the rest.</Banner>}</Collapse>
         {layout === "board" ? <BoardBody {...p} /> : <LanesBody {...p} />}
       </>
     );
@@ -724,11 +724,11 @@ function TicketsBody({ scope }: { scope: string }) {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-tickets">
       {!scope && <Head sub={hasFilter ? "Every ticket of every project the crew holds" : `${plural(resp.counts.total, "ticket", "tickets")} in ${plural(resp.projects.length, "project", "projects")}`} />}
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={retry}>
           <b>We could not load the tickets.</b> <span className="text-foreground">Check your connection, then try again.</span>
         </Banner>
-      )}
+      )}</Collapse>
       <div className="grid gap-4" aria-busy={!fresh}>
         <FilterBar layout={layout} filters={filters} qText={qText} group={group} data={resp} onLayout={pickLayout} patch={patch} setQText={setQText} />
         <div className="-mt-1.5 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[13px] text-muted-foreground" data-testid="tickets-count-line">

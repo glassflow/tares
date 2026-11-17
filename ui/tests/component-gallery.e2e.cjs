@@ -134,7 +134,8 @@ async function waitFor(url, tries = 100) {
 
 const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "empty-line", "stat",
   "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
-  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link"];
+  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link",
+  "collapse-toggle", "collapse-stack", "moving-list", "status-changing"];
 
 (async () => {
   const bin = path.join(REPO, ".venv/bin");

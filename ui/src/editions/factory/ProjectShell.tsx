@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, Loading as KitLoading, Skeleton, STATUS_TONES, StatusLabel, Toaster } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, Loading as KitLoading, Skeleton, STATUS_TONES, StatusLabel, Toaster } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { placeBeforeProject } from "../settingsBack";
@@ -340,11 +340,11 @@ export function ProjectShell({ page, onOther, children }: {
     <div className="flex min-w-0 flex-col gap-6 lg:flex-row lg:items-start lg:gap-8" data-testid="project-shell" data-page={page}>
       <ProjectNav d={data} page={page} search={keep} />
       <div className="grid min-w-0 flex-1 content-start gap-6" data-testid="project-page">
-        {error && (
+        <Collapse>{error && (
           <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
             <b>This page did not refresh.</b> <span className="text-foreground">Check your connection, then try again.</span>
           </Banner>
-        )}
+        )}</Collapse>
         {children({ d: data, id, sample, reload, act })}
       </div>
       <Toaster />

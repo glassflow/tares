@@ -180,7 +180,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <EditionProvider>
         <LicenceProvider>
           <EeLoader />
-          <RouterProvider router={router} />
+          {/* a page change is a transition: while the next page's code loads, the current page stays instead
+              of a skeleton flashing in between (TR-1433) */}
+          <RouterProvider router={router} future={{ v7_startTransition: true }} />
         </LicenceProvider>
       </EditionProvider>
     </AuthGate>

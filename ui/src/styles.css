@@ -2543,10 +2543,25 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
      page below moves with it instead of jumping. Clipped only while it moves: both keyframes name
      the overflow, so a focus ring is never cut once it stands still. Without interpolate-size the
      height snaps and only the fade is left. */
-  @keyframes m-grow { from { block-size: 0; opacity: 0; overflow: clip; } to { overflow: clip; } }
-  @keyframes m-shrink { from { overflow: clip; } to { block-size: 0; opacity: 0; overflow: clip; } }
+  /* The gap the parent puts beside it (a grid's gap-5) opens and closes with it, or the page would still
+     jump by the gap as the element mounts and unmounts. A grid track never goes below 0, so the element's
+     own negative margin cannot take the gap back; the next sibling can, by moving up over it. Collapse
+     measures the parent's gap into --m-gap on the parent, where the sibling inherits it. With nothing
+     after it, the element pulls itself (--m-gap-s): exact in a flex column, close in a grid. */
+  @keyframes m-grow {
+    from { block-size: 0; opacity: 0; overflow: clip; margin-block-start: calc(-1 * var(--m-gap-s, 0px)); }
+    to { overflow: clip; }
+  }
+  @keyframes m-shrink {
+    from { overflow: clip; }
+    to { block-size: 0; opacity: 0; overflow: clip; margin-block-start: calc(-1 * var(--m-gap-s, 0px)); }
+  }
+  @keyframes m-pull-in { from { margin-block-start: calc(-1 * var(--m-gap, 0px)); } }
+  @keyframes m-pull-out { to { margin-block-start: calc(-1 * var(--m-gap, 0px)); } }
   .motion-collapse[data-state="open"]:not([data-initial]) { animation: m-grow var(--dur-2) var(--ease-out); }
+  .motion-collapse[data-state="open"]:not([data-initial]) + * { animation: m-pull-in var(--dur-2) var(--ease-out); }
   .motion-collapse[data-state="closed"] { animation: m-shrink var(--dur-1) var(--ease-in) forwards; }
+  .motion-collapse[data-state="closed"] + * { animation: m-pull-out var(--dur-1) var(--ease-in) forwards; }
 
   /* TR-1435: a value that just changed under a poll washes and fades back. */
   @keyframes m-wash { from { background-color: var(--color-wash-strong); } }

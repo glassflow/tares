@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "../api";
@@ -7,14 +8,15 @@ import CommandPalette from "../components/CommandPalette";
 import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import { Moon, Search, Sun } from "../components/icons";
-import { Button } from "../components/edition";
+import { Button, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
 import { Input } from "../components/ui/input";
+import { reducedMotion } from "../lib/motion";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
 import { useEdition } from "./edition";
 import { SETTINGS_ENTRY, visibleEntries, type MenuEntry } from "./menus";
-import { hasPage } from "./routes";
+import { hasPage, preloadPage } from "./routes";
 import { isSettingsPath, rememberPlace } from "./settingsBack";
 
 // The shell of the factory and sre editions: a header, a left menu, and the page in between.
@@ -44,15 +46,20 @@ const linkClass = (soft: boolean, narrow: boolean) => ({ isActive }: { isActive:
 const ROW = "flex w-full items-center justify-between gap-3 border-0 bg-transparent px-3.5 py-2.5 text-left text-sm font-normal text-foreground no-underline hover:bg-muted hover:text-foreground";
 
 function MenuLinks({ entries, narrow }: { entries: MenuEntry[]; narrow: boolean }) {
+  const { edition } = useEdition();
+  // the page's code starts loading while the pointer rests on its link (TR-1433)
+  const early = (to: string) => () => preloadPage(edition, to);
   return (
     <>
       {entries.map((e) => (
-        <NavLink key={e.key} to={e.to} end={e.to === "/"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}>
+        <NavLink key={e.key} to={e.to} end={e.to === "/"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}
+                 onMouseEnter={early(e.to)} onFocus={early(e.to)}>
           {e.label}
         </NavLink>
       ))}
       <div className="min-h-6 flex-1" />
-      <NavLink to={SETTINGS_ENTRY.to} data-testid={`menu-${SETTINGS_ENTRY.key}`} className={linkClass(true, narrow)}>
+      <NavLink to={SETTINGS_ENTRY.to} data-testid={`menu-${SETTINGS_ENTRY.key}`} className={linkClass(true, narrow)}
+               onMouseEnter={early(SETTINGS_ENTRY.to)} onFocus={early(SETTINGS_ENTRY.to)}>
         {SETTINGS_ENTRY.label}
       </NavLink>
     </>
@@ -84,10 +91,14 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
+  // The page crossfades into the other theme instead of every colour flipping at once (TR-1436): a view
+  // transition snapshots the page, swaps the theme, and fades between the two. Where the browser has none,
+  // or the person asked for less motion, it switches at once.
   const toggleTheme = () => {
     const next: Theme = theme === "dark" ? "light" : "dark";
-    applyTheme(next);
-    setTheme(next);
+    const swap = () => { applyTheme(next); flushSync(() => setTheme(next)); };
+    if (!reducedMotion() && typeof document.startViewTransition === "function") document.startViewTransition(swap);
+    else swap();
   };
 
   return (
@@ -175,6 +186,7 @@ export default function EditionShell() {
   const switcher = cloud.switcher ? <WorkspaceSwitcher cloud={cloud} /> : null;
   const cellName = narrow && edition === "sre" ? cloud.current?.slug : undefined;
   const menuButton = useRef<HTMLButtonElement>(null);
+  const drawerShown = usePresence<HTMLDivElement>(narrow && drawer);
 
   useEffect(() => { setDrawer(false); }, [here]);
   useEffect(() => { if (!narrow) setDrawer(false); }, [narrow]);
@@ -251,20 +263,25 @@ export default function EditionShell() {
         <main className="main min-w-0 flex-1">
           <LicenceBanner />
           <OwnMenu.Provider value={setFrame}>
-            <Outlet />
+            {/* each page fades in as it arrives, in opacity only so nothing fixed inside it moves (TR-1433) */}
+            <div className="motion-page contents"><Outlet /></div>
           </OwnMenu.Provider>
         </main>
       </div>
 
-      {narrow && drawer && (
-        <>
-          <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-scrim" onClick={() => setDrawer(false)} />
-          <nav id="edition-drawer" aria-label="Main" data-testid="edition-menu"
-               className="fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
+      {/* the phone menu slides in over a fading scrim, and back out (TR-1432); while it leaves it no
+          longer counts as the menu, so a check or a screen reader sees it gone at once */}
+      {drawerShown.mounted && (
+        <div ref={drawerShown.ref} data-state={drawerShown.state} className="contents">
+          <div data-testid={drawer ? "edition-scrim" : undefined} data-state={drawerShown.state}
+               className="motion-scrim fixed inset-x-0 bottom-0 top-[57px] z-40 bg-scrim" onClick={() => setDrawer(false)} />
+          <nav id="edition-drawer" aria-label="Main" data-testid={drawer ? "edition-menu" : undefined} data-state={drawerShown.state}
+               aria-hidden={drawer ? undefined : true}
+               className="motion-drawer data-[state=closed]:pointer-events-none fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
             {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
             <MenuLinks entries={entries} narrow />
           </nav>
-        </>
+        </div>
       )}
 
       <CommandPalette />

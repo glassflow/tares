@@ -42,10 +42,11 @@ export interface LoadingProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 /** The one loading state. It tells a screen reader that the area is busy; the page puts Skeletons inside,
- *  arranged as its loaded content will be, so nothing jumps when the data arrives (.impeccable.md, States). */
-export function Loading({ label = "Loading", children, ...props }: LoadingProps) {
+ *  arranged as its loaded content will be, so nothing jumps when the data arrives (.impeccable.md, States).
+ *  It shows only after `--dur-wait` (200ms), fading in, so a fast read never flashes it (TR-1433). */
+export function Loading({ label = "Loading", children, className, ...props }: LoadingProps) {
   return (
-    <div role="status" aria-busy="true" aria-label={label} {...props}>
+    <div role="status" aria-busy="true" aria-label={label} className={cn("motion-wait", className)} {...props}>
       {children}
     </div>
   );

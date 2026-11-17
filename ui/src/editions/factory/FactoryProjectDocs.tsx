@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Skeleton } from "../../components/edition";
 import { Check, ChevronDown } from "../../components/icons";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
@@ -138,11 +138,11 @@ function ProjectDocs({ id }: { id: string }) {
         <span className="text-xs">
           {data ? <>Every document of <span data-user-text>{data.project.name}</span>. The rules and memory for every project are on <Link to="/docs" className={LINK}>Docs and memory</Link>.</> : " "}
         </span>} />
-      {error && !data && (
+      <Collapse>{error && !data && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
           <b>The documents did not load.</b> <span className="text-foreground">Check your connection, then try again.</span>
         </Banner>
-      )}
+      )}</Collapse>
       {!data && !error && <Skeleton className="h-60" />}
       {data && data.total === 0 && (
         <EmptyState title="No documents yet" className="border-t border-border" data-testid="project-docs-empty">

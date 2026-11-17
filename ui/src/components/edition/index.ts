@@ -9,6 +9,7 @@ export { LineChart, LineMarks, type LineChartProps, type LineMark, type LineSeri
 export { ListRow, type ListRowProps } from "./ListRow";
 export { ListSection, type ListSectionProps } from "./ListSection";
 export { Panel, type PanelProps } from "./Panel";
+export { Collapse, usePresence, type CollapseProps, type PresenceState } from "./Presence";
 export { ProgressBar, type ProgressBarProps } from "./ProgressBar";
 export { ServiceRows, type ServiceRowItem, type ServiceRowsProps } from "./ServiceRows";
 export { Select, type SelectOption, type SelectProps } from "./Select";
