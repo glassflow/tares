@@ -12,6 +12,10 @@ tares factory doctor
   ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
   FIX   the kit is frozen since <TS> by ada, but its copy <TMP>/crew/frozen-kit is missing, so new starts use the checkout: tares factory crew unfreeze, then tares factory crew freeze
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   ok    gh signed in
 fix the items marked FIX
 -- stderr --
@@ -30,6 +34,10 @@ tares factory doctor
   ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
   warn  the kit is frozen since <TS> by ada, and the checkout has a newer kit that no station moves onto: tares factory crew unfreeze lets them follow it
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   ok    gh signed in
 all good
 -- stderr --
