@@ -64,6 +64,7 @@ import httpx  # noqa: E402
 
 from tares.envelope import now_utc  # noqa: E402
 from tares.integrations import registry, resolve  # noqa: E402
+from tares.crew.launch import LEAN_FLAGS  # noqa: E402
 from tares.integrations.builtin.runtime_claude_code import ROLES, RuntimeClaudeCode  # noqa: E402
 from tares.integrations.runtime import PLACEHOLDERS, fill_placeholders  # noqa: E402
 import parity  # noqa: E402
@@ -189,11 +190,17 @@ for i, (station, role, *_rest) in enumerate(CASES):
     filled = fill_placeholders({"command": spec.command, "env": spec.env, "settings": spec.settings}, values)
     ck(f"{role}: filling the placeholders does not change the spec", [spec.command, spec.env, spec.settings] == before)
     ck(f"{role}: the plan has no placeholder left", not NAME.findall(json.dumps(plan)), NAME.findall(json.dumps(plan)))
+    at = plan["args"].index("--settings") + 2
+    lean = tuple(plan["args"][at:at + len(LEAN_FLAGS)])
+    plan_args = plan["args"][:at] + plan["args"][at + len(LEAN_FLAGS):]
+    plan_settings = {k: v for k, v in plan["settings"].items() if k != "disableClaudeAiConnectors"}
+    ck(f"{role}: the station starts lean: the flags follow --settings and the connectors are off",
+       lean == LEAN_FLAGS and plan["settings"].get("disableClaudeAiConnectors") is True, json.dumps([lean, sorted(plan["settings"])]))
     ck(f"{role}: the arguments are the spec's command with this machine's values",
-       same(spec.command, plan["args"], values), json.dumps([spec.command, plan["args"]])[:600])
+       same(spec.command, plan_args, values), json.dumps([spec.command, plan["args"]])[:600])
     ck(f"{role}: the settings are the spec's settings with this machine's values",
-       same(spec.settings, plan["settings"], values),
-       [k for k in plan["settings"] if not same(spec.settings.get(k), plan["settings"][k], values)])
+       same(spec.settings, plan_settings, values),
+       [k for k in plan_settings if not same(spec.settings.get(k), plan_settings[k], values)])
     plan_env = {k: v for k, v in plan["env"].items() if k != "FACTORY_TARES"}
     ck(f"{role}: the environment is the spec's, but for FACTORY_TARES", same(spec.env, plan_env, values),
        {k: (spec.env.get(k), plan_env.get(k)) for k in set(spec.env) | set(plan_env) if not same(spec.env.get(k, ""), plan_env.get(k, ""), values)})

@@ -311,6 +311,7 @@ tares factory: spawn takes builder or helper
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -374,6 +375,7 @@ tares factory: spawn takes builder or helper
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -479,7 +481,7 @@ tares factory: spawn takes builder or helper
 ]
 == file claude/calls.jsonl ==
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "links-app-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1 and T2"], "cwd": "<TMP>/links"}
+{"args": ["--bg", "-n", "links-app-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1 and T2"], "cwd": "<TMP>/links"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "links-app-build-m1-rebase", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name links-app-build-m1-rebase, project Links App, repo <TMP>/links, started by links-app-build-m1. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station links-app-build-m1: load the skills factory-protocol and station-builder, do only the task below, write results to your report, and send links-app-build-m1 DONE when it is finished.\n\nYour task:\nrebase T2"], "cwd": "<TMP>/links"}
+{"args": ["--bg", "-n", "links-app-build-m1-rebase", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name links-app-build-m1-rebase, project Links App, repo <TMP>/links, started by links-app-build-m1. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station links-app-build-m1: load the skills factory-protocol and station-builder, do only the task below, write results to your report, and send links-app-build-m1 DONE when it is finished.\n\nYour task:\nrebase T2"], "cwd": "<TMP>/links"}
