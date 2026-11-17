@@ -243,6 +243,10 @@ tares factory doctor
   ok    project Mix: <TMP>/gw2 is o/gw2 on GitHub (WRITE)
   ok    project Mix: <TMP>/site trusted
   ok    project Mix: <TMP>/site is o/site on GitHub (WRITE)
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   ok    project Mix: Python in <TMP>/api has a language server for Claude Code (pyright-lsp plugin, pyright-langserver on PATH)
   ok    project Mix: TypeScript in <TMP>/api has a language server for Claude Code (typescript-lsp plugin, typescript-language-server on PATH)
   ok    project Mix: Go in <TMP>/gw has a language server for Claude Code (gopls-lsp plugin, gopls on PATH)
