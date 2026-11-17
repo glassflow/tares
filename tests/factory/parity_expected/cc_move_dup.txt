@@ -158,6 +158,7 @@ tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the on
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
