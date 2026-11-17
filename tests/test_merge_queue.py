@@ -1775,6 +1775,56 @@ async def main():
            [n for n, _ in merged_calls(repo)] == [2, 3] and updated(repo) == [1]
            and not str(row(repo, 3)["reason"] or "").startswith("waits its turn: "), (MERGES, UPDATES, row(repo, 3)))
 
+        print("== L3-review: the turn lasts until the yes, and a yes survives the update ==")
+        repo = "acme/turn-l3"
+        up = project("turnl3", "L3-review", review="fakerev", ci="github")
+        l3 = {n: ticket(up, repo, f"L3 {n}", n, position=n) for n in (1, 2)}
+        first = factory_mod.label(store.get_ticket(up, l3[1]))
+        for n in l3:
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        land(repo, 1)
+        CHECKED.add(PRS[(repo, 1)]["head"])
+        await tick()
+        await tick()
+        await tick()
+        ck("the first row is up to date and asks the person",
+           row(repo, 1)["state"] == "waiting_approval" and len(desk(up)) == 1, (row(repo, 1), desk(up)))
+        ck("while it waits for the yes the next behind row is not updated, and says why",
+           updated(repo) == [1] and row(repo, 2)["state"] == "queued"
+           and row(repo, 2)["reason"] == f"waits its turn: {first} is waiting for approval to merge",
+           (UPDATES, row(repo, 2)))
+        answer(desk(up)[0], "Yes, merge")
+        await tick()
+        ck("the yes merges the first, and the next is brought up to date in that tick",
+           [n for n, _ in merged_calls(repo)] == [1] and updated(repo) == [1, 2]
+           and row(repo, 2)["state"] == "waiting_ci", (MERGES, UPDATES, row(repo, 2)))
+
+        repo = "acme/turn-l3b"
+        up = project("turnl3b", "L3-review", review="fakerev", ci="github")
+        ticket(up, repo, "Approved, then behind", 1, position=1)
+        del UPDATES[:], MERGES[:]
+        await tick()
+        await tick()
+        ck("a row that is up to date asks once", row(repo, 1)["state"] == "waiting_approval"
+           and len(desk(up)) == 1 and updated(repo) == [], (row(repo, 1), desk(up)))
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")     # the base moved meanwhile
+        answer(desk(up)[0], "Yes, merge")
+        await tick()
+        ck("the yes is for a commit that is now behind: the branch is brought up to date",
+           updated(repo) == [1] and row(repo, 1)["state"] == "waiting_ci", (UPDATES, row(repo, 1)))
+        old = sha(1)
+        new = land(repo, 1)
+        CHECKED.add(new)
+        await tick()
+        ck("the same changes keep the yes: the approval moves to the new head",
+           row(repo, 1)["state"] == "queued" and row(repo, 1)["approved_head"] == new != old, row(repo, 1))
+        await tick()
+        ck("it merges the new commit with no second question",
+           [(n, b["sha"]) for n, b in merged_calls(repo)] == [(1, new)]
+           and len(store.list_desk(None, up)) == 1, (MERGES, store.list_desk(None, up)))
+
         print("== health, and what Tares says ==")
         async with mk() as cx:
             h = (await cx.get("/health")).json()
