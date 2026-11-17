@@ -482,3 +482,58 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
                 client.say(e.message)
     finally:
         client.close()
+
+
+_ANSWERED_OFF: set = set()   # crew homes whose Tares has no /api/desk/answered: the round alone wakes the orchestrator
+_ANSWERED_DONE: dict = {}    # crew home -> the latest answer time the console tick has already acted on
+
+
+def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
+    """One tick of the nap: a desk answer closed since the orchestrator's baseline wakes it now, not at the next
+    round. One small call asks whether anything was answered; only a yes reads the desk and plans the wake, and
+    only for the orchestrator, between turns. A Tares without the route keeps the round's behaviour."""
+    home = str(paths.home)
+    if home in _ANSWERED_OFF:
+        return
+    env = os.environ if env is None else env
+    orch = state.crew_orchestrator(paths)
+    if (state.stations_get(orch, "status", paths=paths) != "active" or state.halted(paths)
+            or not state.stations_get(orch, "sessionId", paths=paths)):
+        return
+    base = state.wake_read(orch, paths)["baseline"]
+    if not isinstance(base, dict) or not isinstance(_alt(_get(base, "desk"), ""), str):
+        return   # the first look sets the baseline: the round does that
+    client = TaresClient(paths, env)
+    try:
+        if not client.tares_on():
+            return
+        try:
+            doc = state.loads_json(client.tares_http(
+                "GET", "/api/desk/answered?mine=1&since=" + uri(_alt(_get(base, "desk"), ""))))
+        except TaresHTTPError as e:
+            if e.status == 404:
+                _ANSWERED_OFF.add(home)
+            return
+        except ValueError:
+            return
+        latest, count = _get(doc, "latest"), _get(doc, "count")
+        if not isinstance(latest, str) or not isinstance(count, int) or count < 1:
+            return
+        if latest <= _ANSWERED_DONE.get(home, ""):
+            return
+        if claude_bin is None:
+            claude_bin = claude.claude_bin(env)
+        try:
+            if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
+                    or not claude.between_turns(orch, claude_bin, paths)):
+                return   # not now: the next tick asks again
+            _ANSWERED_DONE[home] = latest
+            p = plan(client, paths, orch, claude_bin=claude_bin)
+            if p is not None and p["work"]:   # a release note or a liveness wake waits for the round
+                send(client, paths, p, claude_bin=claude_bin)
+        except SessionListUnreadableError:
+            return
+        except CrewError as e:
+            client.say(e.message)
+    finally:
+        client.close()
