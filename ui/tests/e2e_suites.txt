@@ -32,6 +32,7 @@ licence
 licence-needed
 licence-words
 login-handoff
+other-project
 project-idle
 projects-list
 raise-limit
