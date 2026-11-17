@@ -195,15 +195,18 @@ def pace_json():
 
 launched: list = []
 fail_restart = [False]
+in_a_turn = [False]   # the station starts a turn after the round looked, before the restart
 real_restart = None
 
 
-def fake_restart(client, paths_, args, *, claude_bin):
+def fake_restart(client, paths_, args, *, claude_bin, only_between_turns=False):
     """What pace.send hands to lifecycle.restart: the station and the prompt."""
-    from tares.crew.errors import CrewError
+    from tares.crew.errors import CrewError, NotBetweenTurnsError
     if fail_restart[0]:
         raise CrewError(f"could not start {args[0]}")
-    launched.append({"station": args[0], "prompt": args[1]})
+    if only_between_turns and in_a_turn[0]:
+        raise NotBetweenTurnsError(f"{args[0]} is in a turn; not stopping it")
+    launched.append({"station": args[0], "prompt": args[1], "guarded": only_between_turns})
 
 
 from tares.crew import lifecycle  # noqa: E402
@@ -413,7 +416,7 @@ with FakeTares(doc(85, 10)) as t:
     p = pace.plan(c, paths, "crew-reviewer", pace.read(c), claude_bin=CLAUDE)
     _, out, err = capture(pace.send, c, paths, p, claude_bin=CLAUDE)
     ck("send restarts the station in its conversation with the note",
-       launched == [{"station": "crew-reviewer", "prompt": p["prompt"]}], str(launched))
+       launched == [{"station": "crew-reviewer", "prompt": p["prompt"], "guarded": True}], str(launched))
     ck("...says so", "pacing: telling crew-reviewer (stretch) in the same conversation" in err, err)
     ck("...writes the event and the pace file", told() == [("crew-reviewer", "stretch")] and pfile("crew-reviewer") == {"stretched": True, "held": False},
        str(told()))
@@ -493,6 +496,20 @@ with FakeTares(doc(85, 10)) as t:
     t.health = False
     round_(t)
     ck("...and a Tares that is down neither", launched == [])
+
+print("a station that starts a turn between the round's look and the restart")
+reset()
+del launched[:]
+in_a_turn[0] = True
+with FakeTares(doc(85, 10)) as t:
+    err = round_(t)
+    ck("the restart is asked to leave a station that is in a turn", launched == [] and told() == [], str(launched))
+    ck("...it is said, not raised", "started a turn; not telling it about the pace" in err, err)
+    ck("...and nothing is marked told", pfile("crew-reviewer") is None and pfile("shop-build-m1") is None)
+    in_a_turn[0] = False
+    round_(t)
+    ck("the next round between turns tells them", sorted(told()) == [("crew-reviewer", "stretch"), ("shop-build-m1", "stretch")], str(told()))
+    ck("...with the restart asked to keep to between turns", launched and all(x["guarded"] for x in launched), str(launched))
 
 print("the pace off writes no file")
 reset()
