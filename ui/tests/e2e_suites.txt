@@ -41,6 +41,7 @@ resources
 session-picker
 settings-people
 source-form
+source-new
 sre-guards
 sre-home
 sre-incidents
