@@ -45,6 +45,7 @@ settings-people
 source-claude-code
 source-form
 source-new
+sources
 sre-guards
 sre-home
 sre-incidents
