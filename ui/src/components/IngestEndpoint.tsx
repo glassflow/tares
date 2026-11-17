@@ -8,7 +8,7 @@ export function CopyableUrl({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="ingest-url">
-      <code className="mono">{url}</code>
+      <code className="mono" data-words-exempt>{url}</code>
       <button onClick={() => {
         copyText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
       }}>{copied ? "copied" : "copy"}</button>
@@ -36,7 +36,7 @@ export default function IngestEndpoint({ source }: { source: Source }) {
   const url = `${origin}/ingest/${source.ingest_key || source.name}`;
   return (
     <div className="card ingest-card">
-      <div className="k">ingest endpoint · POST</div>
+      <div className="k">endpoint to post to</div>
       <CopyableUrl url={url} />
       <p className="muted">Point your producer (e.g. a Vercel log drain) at this URL.</p>
       <IngestSetup connector={source.connector} url={url} />
