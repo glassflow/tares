@@ -147,6 +147,83 @@ async def main():
             e = await refused(lore.delete_document(src, ext))
             ck(f"delete_document refuses {src!r}/{ext!r} without a call", e is not None and len(fake.requests) == n)
 
+        # -- list_documents -----------------------------------------------------------------
+        def dec(by=("Ann",), at="2026-03-01", **meta):
+            return {"where": "factory_project", "project": "p1", "decided_by": list(by), "decided_at": at, **meta}
+        await lore.put_documents("lst", [
+            {"external_id": f"project:p1:doc:{i}", "title": f"D{i}", "text": f"t{i}", "kind": "decision",
+             "uri": f"/projects/p1/docs?doc={i}", "metadata": dec(at=f"2026-03-0{i}")} for i in range(1, 6)])
+        await lore.put_documents("lst", [{"external_id": "plain", "title": "Plain", "text": "x"}])
+        await lore.put_documents("other", [{"external_id": "o1", "title": "O", "text": "x", "kind": "decision",
+                                            "metadata": dec(at="2026-04-01")}])
+        got = await lore.list_documents(kind="decision", source="lst")
+        r = fake.calls(route="list_documents")[-1]
+        ck("list_documents asks GET /v1/documents with kind, source and limit", r.method == "GET" and r.path == "/v1/documents"
+           and r.query == {"limit": "50", "kind": "decision", "source": "lst"}, str(r.query))
+        ck("it returns the page: five decisions of the source, newest decision first, no next cursor",
+           [d["external_id"] for d in got["documents"]] == [f"project:p1:doc:{i}" for i in (5, 4, 3, 2, 1)]
+           and got["next_cursor"] is None, str(got))
+        ck("an entry carries id, source, external_id, kind, title, uri, metadata and updated_at",
+           set(got["documents"][0]) == {"id", "source", "external_id", "kind", "title", "uri", "metadata", "updated_at"}
+           and got["documents"][0]["metadata"]["decided_by"] == ["Ann"], str(got["documents"][0]))
+        seen, cursor, pages = [], None, 0
+        while True:
+            pg = await lore.list_documents(kind="decision", source="lst", limit=2, cursor=cursor)
+            pages += 1
+            seen += [d["external_id"] for d in pg["documents"]]
+            cursor = pg["next_cursor"]
+            if not cursor:
+                break
+        ck("a cursor walks the pages: 2, 2, 1, each document once", pages == 3 and seen == [f"project:p1:doc:{i}" for i in (5, 4, 3, 2, 1)], f"{pages} {seen}")
+        ck("kind may be a list, and without a source every source answers", {"lst", "other"} <= {d["source"] for d in (await lore.list_documents(kind=["decision", "note"]))["documents"]})
+        ck("a blank kind, source and cursor are left out of the request", (await lore.list_documents(kind=["", " "], source=" ", cursor=" ")) and fake.calls(route="list_documents")[-1].query == {"limit": "50"})
+        for bad, why in ((0, "0"), (201, "201"), (True, "a bool"), ("5", "a string"), (None, "None")):
+            n = len(fake.requests)
+            e = await refused(lore.list_documents(limit=bad))
+            ck(f"list_documents refuses a limit of {why} without a call", e is not None and e.status is None and len(fake.requests) == n, str(e))
+        e = await refused(lore.list_documents(source=5))
+        ck("a source that is not text is refused", e is not None and e.status is None)
+        e = await refused(lore.list_documents(cursor="not-a-cursor"))
+        ck("a cursor lore does not know is a 400", e is not None and e.status == 400, str(e))
+        fake.fail("list_documents", 502, "lore is restarting")
+        e = await refused(lore.list_documents())
+        ck("a failed listing is a plain LoreError", e is not None and e.status == 502 and KEY not in str(e), str(e))
+
+        # -- decisions in the fake, as lore checks them -------------------------------------
+        def one(meta, kind="decision"):
+            return [{"external_id": "d1", "title": "T", "text": "t", "kind": kind, "metadata": meta}]
+        n_docs = len(fake.documents)
+        for meta, field in ((None, "decided_by"), ({}, "decided_by"), ({"decided_by": None, "decided_at": "2026-01-01"}, "decided_by"),
+                            ({"decided_by": ["A"]}, "decided_at"), ({"decided_by": ["A"], "decided_at": None}, "decided_at"),
+                            ({"decided_by": [], "decided_at": "2026-01-01"}, "decided_by"),
+                            ({"decided_by": ["A", ""], "decided_at": "2026-01-01"}, "decided_by"),
+                            ({"decided_by": ["x" * 257], "decided_at": "2026-01-01"}, "decided_by"),
+                            ({"decided_by": ["A"] * 51, "decided_at": "2026-01-01"}, "decided_by"),
+                            ({"decided_by": "A", "decided_at": "2026-01-01"}, "decided_by"),
+                            ({"decided_by": ["A"], "decided_at": "yesterday"}, "decided_at"),
+                            ({"decided_by": ["A"], "decided_at": "2026-02-30"}, "decided_at"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01T10:00:00"}, "decided_at"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "where": "elsewhere"}, "where"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "project": ""}, "project"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "project": "p" * 257}, "project"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "repo": 5}, "repo"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "added_by": " "}, "added_by"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "pr": "p" * 2049}, "pr"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "changed_by": []}, "changed_by"),
+                            ({"decided_by": ["A"], "decided_at": "2026-01-01", "changed_at": "2026-01-01T10:00:00Z"}, "changed_at")):
+            e = await refused(lore.put_documents("dec", one(meta)))
+            ck(f"a decision with {str(meta)[:60]} is a 400 that names {field}", e is not None and e.status == 400 and f"documents[0].metadata.{field}" in str(e), str(e))
+        ck("... and nothing of any of those requests was written", len(fake.documents) == n_docs and ("dec", "d1") not in fake.documents)
+        e = await refused(lore.put_documents("dec", [{"external_id": "ok", "title": "T", "text": "t", "kind": "decision", "metadata": dec()},
+                                                     {"external_id": "bad", "title": "T", "text": "t", "kind": "decision", "metadata": {}}]))
+        ck("one bad decision refuses the whole request: the good one before it is not written", e is not None and "documents[1].metadata.decided_by is required for a decision" in str(e)
+           and ("dec", "ok") not in fake.documents, str(e))
+        rep = await lore.put_documents("dec", one(dec(at="2026-01-01T10:00:00+02:00", repo="acme/web", added_by="Ann", pr="https://x/1",
+                                                          changed_by=["Bo"], changed_at="2026-02-01")))
+        ck("a full valid decision is stored", rep["upserted"] == 1 and fake.documents[("dec", "d1")]["kind"] == "decision")
+        rep = await lore.put_documents("dec", one(dec(at="2026-01-01T10:00:00Z", by=("x" * 256,))))
+        ck("256 bytes is allowed, and a changed decision is an upsert", rep["upserted"] == 1 and rep["unchanged"] == 0)
+
         # -- search -------------------------------------------------------------------------
         res = await lore.search("licence", k=5, kind=["note", " ", "code"], source="notes")
         r = fake.calls(route="search")[-1]
