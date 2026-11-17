@@ -39,6 +39,7 @@ reads
 resources
 session-picker
 settings-people
+source-claude-code
 source-form
 sre-guards
 sre-home
