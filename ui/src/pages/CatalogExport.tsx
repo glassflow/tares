@@ -5,7 +5,7 @@ import { api, ApiError } from "../api";
 import type { ConnectorSpec, Source } from "../types";
 import { copyText } from "../editions/copyText";
 import { useEdition } from "../editions/edition";
-import { Banner, Button, Checkbox, EmptyState, ListRow, ListSection, LoadingBlocks, Panel, StatusLabel, Switch } from "../components/edition";
+import { Banner, Button, Checkbox, Collapse, EmptyState, ListRow, ListSection, LoadingBlocks, Panel, StatusLabel, Switch } from "../components/edition";
 
 const REDACTED = "••••••••";   // matches connectors.REDACTED_SECRET; a set secret comes back as this
 const hasSecret = (s: Source) => Object.values(s.config ?? {}).includes(REDACTED);
@@ -71,17 +71,17 @@ export default function CatalogExport() {
         </p>
       </header>
 
-      {admin === false && (
+      <Collapse>{admin === false && (
         <Banner tone="note" data-testid="export-admin-only">
           This key can read but not export. Use a key that can write to make the file.
         </Banner>
-      )}
+      )}</Collapse>
 
-      {loadErr && (
+      <Collapse>{loadErr && (
         <Banner tone="error" data-testid="export-load-error">
           Could not load the connections: <span data-user-text>{loadErr}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
       {!sources && !loadErr && <LoadingBlocks label="Loading connections" />}
 
@@ -124,11 +124,11 @@ export default function CatalogExport() {
                     hint={includeSecrets ? undefined : `Left out by default: enter them again on the other Tares after importing.${
                       withSecret ? ` ${count(withSecret, "picked connection")} ${withSecret === 1 ? "has" : "have"} one.` : ""}`}
                     onCheckedChange={(v) => { setIncludeSecrets(v === true); setYaml(undefined); }} />
-            {includeSecrets && (
+            <Collapse>{includeSecrets && (
               <Banner tone="warn" data-testid="export-secrets-warn">
                 The file will hold the secrets in plain text. Don't commit it or share it.
               </Banner>
-            )}
+            )}</Collapse>
           </section>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -138,7 +138,7 @@ export default function CatalogExport() {
             <Button variant="quiet" asChild><Link to="/sources/import">Import a file instead</Link></Button>
           </div>
 
-          {err && <Banner tone="error" data-testid="export-error"><span data-user-text>{err}</span></Banner>}
+          <Collapse>{err && <Banner tone="error" data-testid="export-error"><span data-user-text>{err}</span></Banner>}</Collapse>
 
           {yaml !== undefined && <Result yaml={yaml} />}
         </>
