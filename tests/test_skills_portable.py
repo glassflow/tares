@@ -144,8 +144,12 @@ ck("the report page gives the 4 KB and 8 KB limits", "4 KB" in rp and "8 KB" in 
 bad = []
 for md in sorted(skills_dir.glob("*/*.md")):
     for n, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
-        if re.search(r"reports/.*(>>|tail|cat )", line) or re.search(r"\bappend\b[^.]*\b(report|log)\b", line, re.I) \
-                and "never" not in line.lower() and "no skill" not in line.lower():
+        low = line.lower()
+        if "never" in low or "no skill" in low:
+            continue
+        if re.search(r"(>>|\btail\b|\bcat\b|\bgrep\b|\btee\b|\bsed\b|\bhead\b)[^`\n]*reports/", line) \
+                or re.search(r"reports/[^`\n]*(>>|\|\s*(tail|grep|tee))", line) \
+                or re.search(r"\bappend\b[^.]*\b(report|log)\b", line, re.I):
             bad.append(f"{md.relative_to(skills_dir)}:{n}")
 ck("no skill tells a station to cat, tail or append to a report", not bad, bad)
 for station in ("station-orchestrator", "station-reviewer", "station-releaser"):
