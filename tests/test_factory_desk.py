@@ -440,6 +440,26 @@ async def main():
         ck("list_decisions says so", dl[0]["label"] == pq["label"] and dl[0]["via"] == "console", dl[0])
         r = await allow(pq["label"], {"words": words, "scope": "project"})
         ck("allowing twice is refused", r.status_code == 409 and "already answered" in r.text, r.text)
+
+        print("== the answered-since check the crew's watch asks every few seconds ==")
+        async def answered(since=""):
+            async with mk() as cx:
+                return (await cx.get("/api/desk/answered", params={"since": since})).json()
+        as_station("crew-orchestrator", "orchestrator")
+        rq = json.loads(await mf.desk_add("Docs: tabs or spaces?", "spaces", "house style",
+                                          ["tabs", "spaces"], project="Shop"))
+        as_station()
+        before = await answered()
+        ck("an open item and a permission answered with a command are not answers", before["count"]
+           == len([d for d in json.loads(await mf.desk_list(state="answered")) if not d.get("command")]), before)
+        async with mk() as cx:
+            r = await cx.post(f"/api/desk/{rq['label']}/reply", json={"words": "spaces", "choice": "spaces"})
+        ck("the person answers it in the console", r.status_code == 200, r.text)
+        after = await answered(before["latest"])
+        ck("one answer closed since the last look", after["count"] == 1 and after["latest"] > before["latest"], after)
+        again = await answered(after["latest"])
+        ck("nothing closed since, and the time stays", again == {"count": 0, "latest": after["latest"]}, again)
+        ck("the whole desk's answers are counted from the start", (await answered())["count"] == before["count"] + 1)
         cw = "crew-reviewer may set the review status on this crew's pull requests"
         r = await allow(crewq["label"], {"words": f'"{cw}"', "scope": "all"})
         ck("a crew-wide station's grant goes to every project", r.status_code == 200

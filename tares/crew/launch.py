@@ -399,6 +399,14 @@ def model_effort(paths: CrewPaths, role: str, parent: str = "") -> tuple:
     return (state.ccfg("stations", role, "model", paths=paths), state.ccfg("stations", role, "effort", paths=paths))
 
 
+def allow_lists(paths: CrewPaths, role: str, parent: str = "") -> tuple:
+    """(mcp, plugins) a station of `role` keeps: the MCP server names and the plugin ids in crew.json
+    (stations.<role>.mcp and .plugins). A helper keeps its parent's role's lists; a role with none keeps none."""
+    if role == "helper":
+        role = parent_role(parent, paths)
+    return (state.ccfg_list("stations", role, "mcp", paths=paths), state.ccfg_list("stations", role, "plugins", paths=paths))
+
+
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
 
 

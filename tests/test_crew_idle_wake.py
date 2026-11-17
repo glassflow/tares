@@ -467,7 +467,7 @@ restarted: list = []
 real_restart = lifecycle.restart
 
 
-def fake_restart(cl, pth, args, *, claude_bin):
+def fake_restart(cl, pth, args, *, claude_bin, **_kw):
     restarted.append((args, cl.crew_settings().get("idle_wake")))
     if world.get("restart_fails"):
         raise CrewError("boom")

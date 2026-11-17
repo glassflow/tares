@@ -69,6 +69,10 @@ tares factory doctor
   ok    docker
   ok    kind
   ok    kubectl
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   FIX   gh not signed in: gh auth login
   ok    crew-orchestrator runs Claude Code 1.0.0
   ok    crew-reviewer runs Claude Code 1.0.0
@@ -127,6 +131,10 @@ tares factory doctor
   ok    docker
   ok    kind
   ok    kubectl
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   FIX   gh not signed in: gh auth login
   warn  crew-orchestrator runs Claude Code 1.0.0, older than the 1.1.0 installed; tares factory crew update moves it when it's idle
   warn  crew-reviewer runs Claude Code 1.0.0, older than the 1.1.0 installed; tares factory crew update moves it when it's idle
