@@ -341,6 +341,7 @@ tares factory: shop-build-m3 stopped; reviving it under the same name
 @project 
 == file crew/stations/shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -405,6 +406,7 @@ tares factory: shop-build-m3 stopped; reviving it under the same name
 @project 
 == file crew/stations/shop-build-m2.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -469,6 +471,7 @@ tares factory: shop-build-m3 stopped; reviving it under the same name
 @project 
 == file crew/stations/shop-build-m3.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

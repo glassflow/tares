@@ -35,6 +35,7 @@ exit: 0
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1012,6 +1013,7 @@ stub-token
 - "the reviewer may comment on draft PRs" (<DATE>)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1076,6 +1078,7 @@ stub-token
 @project 
 == file crew/stations/emoji-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1144,6 +1147,7 @@ stub-token
 @project - "builders may bump patch versions of dependencies" (<DATE>)
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1213,6 +1217,7 @@ stub-token
 @project - "builders may bump patch versions of dependencies" (<DATE>)
 == file crew/stations/links-app-build-m3.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1282,6 +1287,7 @@ stub-token
 @project - "builders may bump patch versions of dependencies" (<DATE>)
 == file crew/stations/links-app-build-m5.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1351,6 +1357,7 @@ stub-token
 @project - "builders may bump patch versions of dependencies" (<DATE>)
 == file crew/stations/links-app-build-m6.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

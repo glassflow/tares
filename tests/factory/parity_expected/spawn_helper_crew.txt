@@ -542,6 +542,7 @@ tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-releaser-deploy.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -603,6 +604,7 @@ tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -664,6 +666,7 @@ tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -725,6 +728,7 @@ tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer-second.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -786,6 +790,7 @@ tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

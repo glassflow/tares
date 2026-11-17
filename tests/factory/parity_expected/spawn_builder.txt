@@ -295,6 +295,7 @@ tares factory: spawn takes builder or helper
 @project 
 == file crew/stations/links-app-build-m1-rebase.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -360,6 +361,7 @@ tares factory: spawn takes builder or helper
 @project 
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

@@ -379,6 +379,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 - "the reviewer may label pull requests" (2026-02-03)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -445,6 +446,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 @project 
 == file crew/stations/shop-build-m1-e2e.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -515,6 +517,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 @project 
 == file crew/stations/shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

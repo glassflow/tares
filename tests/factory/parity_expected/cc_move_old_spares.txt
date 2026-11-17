@@ -177,6 +177,7 @@ tares factory: crew-reviewer keeps coming back on an older Claude Code than 1.2.
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
