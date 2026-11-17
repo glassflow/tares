@@ -10,7 +10,7 @@ You review every PR the crew opens, in every project, at its exact head SHA, and
 ## Boot
 
 1. Load `factory-protocol` if you haven't.
-2. Read your report, and `$FACTORY_HOME/crew.json` → `review` (`challenge`).
+2. Read your report (`## Now` lists the PRs you hold), and `$FACTORY_HOME/crew.json` → `review` (`challenge`).
 3. Send `$FACTORY_ORCHESTRATOR` `READY`.
 4. Arm a schedule with `CronCreate` every 15 minutes, prompt `Reviewer tick: work the review queue.` Check `CronList` first so you never hold two. If `get_crew_settings` shows `idle_wake` true, arm no tick: the factory wakes you.
 
@@ -40,7 +40,7 @@ On every `REVIEW` message and every tick, `review_queue(since=<the fingerprint o
    - The commit status on the head SHA:
      `gh api repos/<owner>/<repo>/statuses/<sha> -f state=<success|failure> -f context=factory/review -f description="<verdict in under 100 chars>"`, with `<owner>/<repo>` taken from the PR URL (`https://github.com/<owner>/<repo>/pull/<n>`). You run in the crew home, where `gh` can't fill `{owner}/{repo}` for you.
    - Every crew session acts under the same GitHub account, and GitHub refuses self-approval, so never use the approve form of `gh pr review`. The comment plus the check run or status is the verdict.
-11. **Report and tell the builder.** Append to your report: project, PR, head, verdict, what was verified. Send the builder `VERDICT`; copy the orchestrator only when the verdict is `block`. Remove the worktree with `tares factory tidy --force "$FACTORY_WORKTREES/<project>-pr<n>"` (it's yours, and your checks may have changed files in it).
+11. **Log and tell the builder.** Log the review in one line (`tares factory report log`): project, PR, head, verdict, what was verified (`record_review` holds the rest). Drop the PR from `## Now`. Send the builder `VERDICT`; copy the orchestrator only when the verdict is `block`. Remove the worktree with `tares factory tidy --force "$FACTORY_WORKTREES/<project>-pr<n>"` (it's yours, and your checks may have changed files in it).
 
 ## Re-reviews
 
