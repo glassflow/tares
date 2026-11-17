@@ -508,13 +508,13 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     base = state.wake_read(orch, paths)["baseline"]
     if not isinstance(base, dict) or not isinstance(_alt(_get(base, "desk"), ""), str):
         return   # the first look sets the baseline: the round does that
+    since = max(_alt(_get(base, "desk"), ""), _ANSWERED_DONE.get(home, ""))   # nothing already acted on is asked about again
     client = TaresClient(paths, env)
     try:
         if not client.tares_on():
             return
         try:
-            doc = state.loads_json(client.tares_http(
-                "GET", "/api/desk/answered?mine=1&since=" + uri(_alt(_get(base, "desk"), ""))))
+            doc = state.loads_json(client.tares_http("GET", "/api/desk/answered?mine=1&since=" + uri(since)))
         except TaresHTTPError as e:
             if e.status == 404:
                 _ANSWERED_OFF[home] = now + _OFF_FOR
@@ -546,5 +546,6 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             return
         except CrewError as e:
             client.say(e.message)
+            _ANSWERED_WAIT[home] = now + _RETRY_AFTER   # the same error every tick helps nobody: look again soon
     finally:
         client.close()

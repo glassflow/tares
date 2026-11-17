@@ -460,6 +460,17 @@ async def main():
         again = await answered(after["latest"])
         ck("nothing closed since, and the time stays", again == {"count": 0, "latest": after["latest"]}, again)
         ck("the whole desk's answers are counted from the start", (await answered())["count"] == before["count"] + 1)
+        seen = []
+        real_list_desk = app.state.store.list_desk
+        app.state.store.list_desk = lambda *a, **k: seen.append(len(rows := real_list_desk(*a, **k))) or rows
+        await answered(after["latest"])
+        everything = (await answered())["count"]
+        app.state.store.list_desk = real_list_desk
+        ck("asking since the last answer reads no more than that answer from the store", seen[0] <= 1 < seen[1],
+           str(seen))
+        ck("and an answer closed at that very time is still counted from just before it",
+           (await answered(before["latest"]))["count"] == 1 and everything == before["count"] + 1)
+        ck("a since that is not a time is no error", (await answered("not a time")) == {"count": 0, "latest": "not a time"})
         cw = "crew-reviewer may set the review status on this crew's pull requests"
         r = await allow(crewq["label"], {"words": f'"{cw}"', "scope": "all"})
         ck("a crew-wide station's grant goes to every project", r.status_code == 200
