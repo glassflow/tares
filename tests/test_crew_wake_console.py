@@ -232,6 +232,32 @@ ck("the retry after the wait woke it once", len(restarts) == 1 and restarts[0][0
 nap(60)
 ck("and then it is told no more", len(restarts) == 1, str(restarts))
 
+print("a wake step that raises a CrewError is looked at again soon, not every tick")
+reset()
+answer(at=0.0)
+real_plan = IW.plan
+planned = []
+def failing_plan(*a, **k):
+    planned.append(clock[0])
+    raise CrewError("the desk could not be read")
+IW.plan = failing_plan
+nap(20)
+ck("the step failed once and was not repeated every tick", len(planned) == 1, str(planned))
+nap(40)
+IW.plan = real_plan
+ck("it tried again after the wait, not before", len(planned) == 2 and planned[1] >= IW._RETRY_AFTER, str(planned))
+nap(60)
+ck("and a step that works then wakes the orchestrator once", len(restarts) == 1, str(restarts))
+
+print("an answer already acted on is not asked about again")
+reset(updated=IW._secs(ANSWER) + 60)   # the orchestrator recorded the answer itself: nothing to tell it
+answer(at=0.0)
+nap(60)
+asked = routes_asked("/api/desk/answered")
+ck("the first question carries the baseline", asked and f"since={BASE}" in asked[0].replace("%3A", ":"), str(asked[:2]))
+ck("every later question carries the answer already seen",
+   len(asked) > 2 and all(f"since={ANSWER}" in r.replace("%3A", ":") for r in asked[2:]), str(asked[:4]))
+
 print("the first look is the round's: no baseline, no call")
 reset(baseline=False)
 answer(at=0.0)

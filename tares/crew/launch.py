@@ -341,10 +341,10 @@ def permissions(role: str) -> dict:
     """The `permissions` of a station's settings: the `tares factory` commands it may run, and what it may
     never run. Pure."""
     # each command is allowed as `tares factory ...` (the bare `factory` of the old bash crew is gone, TR-975)
-    cmds = ["tidy *"]
+    cmds = ["tidy *", "report *"]
     if role == "orchestrator":
-        cmds = ["tidy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
-                "crew halt", "crew halt *", "crew resume"]
+        cmds += ["spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
+                 "crew halt", "crew halt *", "crew resume"]
     return {"allow": [f"Bash(tares factory {c})" for c in cmds],
             # Tares merges pull requests (the merge queue); a crew station never does (TR-860)
             "deny": ["Bash(gh pr merge:*)"]}
@@ -369,7 +369,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     plan = plan or launch_plan(client, station, role, parent, project, repo)
     file, shown = settings_path(client, station)
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
-    state.write_json(file, {"env": plan["env"], **plan["settings"]})
+    state.write_json(file, {"env": plan["env"], **plan["settings"]}, mode=0o600)
     pid = plan["env"].get("TARES_PROJECT")
     if project and pid:
         state.stations_put(station, {"project_id": pid}, paths)
@@ -419,7 +419,11 @@ def saved_spec(paths: CrewPaths, station: str):
     """The launch spec the cell last gave this station (<crew home>/launch/<station>.json), or None when there
     is none, or it is not a launch spec."""
     doc = state.read_json(paths.launch_file(station), None)
-    return doc if _valid_spec(doc) else None
+    if not _valid_spec(doc):
+        return None
+    if any(str(k).startswith("OTEL_") for k in doc["env"]):
+        state.write_json(paths.launch_file(station), without_otel(doc))
+    return doc
 
 
 def _with_model(spec: dict, model: str, effort: str) -> dict:
@@ -430,6 +434,11 @@ def _with_model(spec: dict, model: str, effort: str) -> dict:
         if flag in command and command.index(flag) + 1 < len(command):
             command[command.index(flag) + 1] = value
     return {**spec, "command": command}
+
+
+def without_otel(spec: dict) -> dict:
+    """The spec as it is kept on disk: no OTEL_* variable, which a start gives its process and no file."""
+    return {**spec, "env": {k: v for k, v in spec["env"].items() if not str(k).startswith("OTEL_")}}
 
 
 def _spec_query(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
@@ -500,7 +509,7 @@ def _spec(client: TaresClient, station: str, role: str, parent: str, project: st
             why = f"Tares could not give it ({e})"
     if spec is not None:
         paths.launch_dir.mkdir(parents=True, exist_ok=True)
-        state.write_json(paths.launch_file(station), spec)
+        state.write_json(paths.launch_file(station), without_otel(spec))
         return spec
     spec = saved_spec(paths, station)
     if spec is None:
@@ -521,13 +530,87 @@ def machine_values(client: TaresClient, station: str, project: str, repo: str) -
             "SETTINGS_FILE": settings_path(client, station)[1]}
 
 
+LEAN_FLAGS = ("--setting-sources", "project,local", "--no-chrome")  # no user source, no browser extension
+
+
+def _strings(value) -> list:
+    return [x for x in value if isinstance(x, str)] if isinstance(value, list) else []
+
+
+def person_settings(env=None) -> dict:
+    """The person's own ~/.claude/settings.json as a dict; {} when there is no file. A file that cannot be read
+    stops the start: a station started without the person's restrictions would run looser than they asked."""
+    file = Path(cl._home(env)) / ".claude" / "settings.json"
+    try:
+        doc = state.loads_json(state.read_text(file))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        raise CrewError(f"{file} cannot be read as JSON; a station never starts without the restrictions in "
+                        "it. Fix the file, then run this again.") from None
+    return doc if isinstance(doc, dict) else {}
+
+
+def _union(own, extra) -> list:
+    """`own` and then each entry of `extra` it does not have yet: nothing of `own` is dropped or moved."""
+    out = list(own) if isinstance(own, list) else []
+    for item in extra:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def with_restrictions(settings: dict, person: dict) -> dict:
+    """`settings` with the person's restrictions added: the `permissions.deny` and `permissions.ask` entries and
+    the `autoMode.soft_deny` and `autoMode.environment` entries of their settings. The station's own entries
+    stay, in place; the person's allow rules are never copied."""
+    out = dict(settings)
+    perms = person.get("permissions") if isinstance(person.get("permissions"), dict) else {}
+    auto = person.get("autoMode") if isinstance(person.get("autoMode"), dict) else {}
+    station_perms = dict(out["permissions"]) if isinstance(out.get("permissions"), dict) else {}
+    for key in ("deny", "ask"):
+        extra = _strings(perms.get(key))
+        if extra:
+            station_perms[key] = _union(station_perms.get(key), extra)
+    station_auto = dict(out["autoMode"]) if isinstance(out.get("autoMode"), dict) else {}
+    for key in ("soft_deny", "environment"):
+        extra = _strings(auto.get(key))
+        if extra:
+            station_auto[key] = _union(station_auto.get(key), extra)
+    if station_perms:
+        out["permissions"] = station_perms
+    if station_auto:
+        out["autoMode"] = station_auto
+    return out
+
+
+def telemetry_env(person: dict, spec_env: dict) -> dict:
+    """The OTEL_* variables a station starts with: the person's (their settings' env) under the spec's."""
+    out = {}
+    for source in (person.get("env"), spec_env):
+        if isinstance(source, dict):
+            out.update({k: str(v) for k, v in source.items() if str(k).startswith("OTEL_")})
+    return out
+
+
+def lean_args(args: list) -> list:
+    """`args` with the flags that keep the person's own sources out of a station, right after --settings."""
+    if "--setting-sources" in args:
+        return list(args)
+    at = args.index("--settings") + 2 if "--settings" in args and args.index("--settings") + 1 < len(args) else len(args)
+    return [*args[:at], *LEAN_FLAGS, *args[at:]]
+
+
 def launch_plan(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
                 model: str | None = None, effort: str | None = None) -> dict:
-    """What a station starts with, from the cell's launch spec and not started: {args, env, settings}.
+    """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel}.
 
-    args: the `claude` arguments up to and including --plugin-dir; no --resume and no prompt, which `launch`
-    adds. env and settings: the two halves of the settings document (env, and everything else); the file is
-    `{"env": env, **settings}`. `model` and `effort` default to the crew's (see model_effort).
+    args: the `claude` arguments up to and including --plugin-dir, with --setting-sources project,local and
+    --no-chrome after --settings; no --resume and no prompt, which `launch` adds. env and settings: the two
+    halves of the settings document (env, and everything else); the file is `{"env": env, **settings}`. The
+    settings carry the person's restrictions (see with_restrictions) and disableClaudeAiConnectors. otel: the
+    OTEL_* variables, the person's and the spec's, which reach the station only through the environment of
+    the process that starts it, never a file. `model` and `effort` default to the crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
     this fills the placeholders of this machine and adds FACTORY_TARES, the `tares` that started the crew.
     Dies (CrewError) for a model that cannot run auto mode, a name that is not a station name, a helper whose
@@ -554,8 +637,13 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
         tares_bin = None
     if tares_bin:
         env["FACTORY_TARES"] = _forward(tares_bin)
-    return {"args": fill_placeholders(spec["command"], values), "env": env,
-            "settings": fill_placeholders(spec["settings"], values)}
+    person = person_settings(client.env)
+    otel = telemetry_env(person, env)
+    env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
+    settings = with_restrictions(fill_placeholders(spec["settings"], values), person)
+    settings["disableClaudeAiConnectors"] = True
+    return {"args": lean_args(fill_placeholders(spec["command"], values)), "env": env, "settings": settings,
+            "otel": otel}
 
 
 # ---------- starting a station ----------
@@ -592,6 +680,7 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
     try:
         # PWD as `cd "$cwd"` leaves it: the folder as written, not as the system resolves it
         extra = {"FORCE_COLOR": "0"} if (platform or sys.platform) == "win32" else {"FORCE_COLOR": "0", "PWD": os.path.abspath(cwd)}
+        extra.update(plan.get("otel") or {})
         out = cl.run_claude(args, claude, START_TIMEOUT, platform, cwd=cwd, merge_stderr=True,
                             env_extra=extra, drop_env=KEPT_FROM_CHILDREN).stdout.rstrip("\n")  # as $(...) does
     except CrewError:

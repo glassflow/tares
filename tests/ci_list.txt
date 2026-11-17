@@ -52,6 +52,7 @@ test_crew_import_without_tty
 test_crew_kit
 test_crew_launch
 test_crew_launch_allow
+test_crew_launch_lean
 test_crew_launch_spec
 test_crew_lifecycle
 test_crew_lifecycle_json
@@ -61,6 +62,7 @@ test_crew_packaging
 test_crew_person
 test_crew_readings
 test_crew_regrant
+test_crew_report
 test_crew_rules
 test_crew_scratch_home
 test_crew_session
@@ -77,6 +79,7 @@ test_crew_views
 test_crew_wake_console
 test_crew_wake_midturn
 test_crew_wake_mywork
+test_crew_wake_stall
 test_crew_watch_locks
 test_crew_watch_process
 test_crew_watch_restart

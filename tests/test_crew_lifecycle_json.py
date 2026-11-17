@@ -378,6 +378,20 @@ ck("...code setup_needed, names a question and the setup command", d.get("error"
 ck("...and no PUT reached Tares", len(FAKE.written()) == before, FAKE.written()[before:])
 FAKE.settings.update({"autonomy": "L4-ship", "releaser": False, "release_profile": "kind",
                       "prod_pattern": "(^|[-_.])(prod|production)([-_.]|$)", "challenger": False, "builders_max": 2})
+FAKE.grants.append('- "git push" (2026-01-01)')
+code, out, err = crew(["crew", "up", "--yes", "--json", "--no-watch"], FACTORY_NO_WATCH="1")
+d = doc_of("up --json --yes, crew home not trusted", code, out, err, 1, "error")
+ck("...code crew_home_untrusted, with the crew home as the folder", d.get("error", {}).get("code") == "crew_home_untrusted"
+   and d["error"].get("folder") == str(CREW) and str(CREW) in d["error"]["message"], d)
+code, out, err = crew(["crew", "up", "--yes", "--no-watch"], FACTORY_NO_WATCH="1")
+ck("...without --json the text is the same line on stderr", code == 1 and out == "" and "Claude Code has not trusted the crew home "
+   f"{CREW} yet" in err, (code, out, err))
+if sys.platform == "win32":
+    mixed = str(CREW).replace("\\", "/")
+    code, out, err = crew(["crew", "up", "--yes", "--json", "--no-watch"], FACTORY_NO_WATCH="1", FACTORY_CREW_HOME=mixed)
+    d = doc_of("up --json --yes, crew home typed with forward slashes", code, out, err, 1, "error")
+    ck("...Windows: the folder and the message use backslashes only", d.get("error", {}).get("folder") == str(CREW)
+       and "/" not in d["error"]["folder"] and f"crew home {CREW} yet" in d["error"]["message"], d)
 (TMP / "home" / ".claude.json").write_text(json.dumps({"projects": {str(CREW): {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
 FAKE.grants.append('- "git push" (2026-01-01)')
 code, out, err = crew(["crew", "up", "--yes", "--json", "--no-watch"], FACTORY_NO_WATCH="1")
