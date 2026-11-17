@@ -480,6 +480,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -547,6 +548,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -604,6 +606,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -661,6 +664,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -793,7 +797,7 @@ exit: 0
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-aaaa0001", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-aaaa0001", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -803,7 +807,7 @@ exit: 0
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0002", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0002", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -813,7 +817,7 @@ exit: 0
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0003", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0003", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -823,7 +827,7 @@ exit: 0
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "links-app-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project links-app, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-cccc0004", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["--bg", "-n", "links-app-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project links-app, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-cccc0004", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
