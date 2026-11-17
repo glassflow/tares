@@ -35,6 +35,7 @@ login-handoff
 project-idle
 projects-list
 raise-limit
+reads
 resources
 session-picker
 settings-people
