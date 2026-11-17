@@ -180,6 +180,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -331,5 +332,5 @@ exit: 0
 ]
 == file claude/calls.jsonl ==
 {"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "You were started again under the same name, in a new conversation: the last one kept refilling its context right after each compaction, so Claude Code stopped it. Nothing from it carries over except your report and what is on Tares. Reload the skills factory-protocol and station-orchestrator, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off. Read big files, logs and diffs in parts."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "You were started again under the same name, in a new conversation: the last one kept refilling its context right after each compaction, so Claude Code stopped it. Nothing from it carries over except your report and what is on Tares. Reload the skills factory-protocol and station-orchestrator, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off. Read big files, logs and diffs in parts."], "cwd": "<TMP>/work"}
 {"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
