@@ -18,7 +18,7 @@ import type { StartStep } from "../StartChecklist.api";
 import { useHeaderSlots, useOwnMenu } from "../Shell";
 import { usePagePolling } from "../usePagePolling";
 import {
-  clearProjectPick, keepDefault, makeDefault, removeConnection, saveIntegration, setupRead, testIntegration,
+  clearProjectPick, keepDefault, makeDefault, removeConnection, saveIntegration, setupGithubRepos, setupRead, testIntegration,
   type SettingValue, type TestResult, type SetupApp, type SetupAvailable, type SetupConnected, type SetupData, type SetupField, type SetupForm,
   type SetupSlot, type SetupStep, type SetupTag,
 } from "./FactorySetup.api";
@@ -131,12 +131,41 @@ function FieldLabel({ f, htmlFor, as: As = "label" }: { f: SetupField; htmlFor?:
   );
 }
 
-function SettingField({ f, value, error, onChange }: {
+/** The repos a "github_repo" field offers, or null while they load or where there is no list (no picker, or
+ *  GitHub listed none): the field is then a text box. A credential typed in the form is waited on briefly. */
+function useRepoList(picker: string | undefined, via: "app" | "key", credential: string): string[] | null | "loading" {
+  const [list, setList] = React.useState<string[] | null | "loading">(picker === "github_repo" ? "loading" : null);
+  React.useEffect(() => {
+    if (picker !== "github_repo") { setList(null); return; }
+    let live = true;
+    setList("loading");
+    const t = window.setTimeout(() => {
+      setupGithubRepos(via, credential.trim())
+        .then((r) => { if (live) setList(r.repos.length ? r.repos : null); })
+        .catch(() => { if (live) setList(null); });
+    }, credential ? 400 : 0);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [picker, via, credential]);
+  return list;
+}
+
+function SettingField({ f: given, value, error, onChange, via = "key", credential = "" }: {
   f: SetupField;
   value: SettingValue;
   error: boolean;
   onChange: (v: SettingValue) => void;
+  via?: "app" | "key";
+  credential?: string;
 }) {
+  const repos = useRepoList(given.picker, via, credential);
+  const listed = Array.isArray(repos);
+  // While the list shows, the field is a choice: its own help, placeholder and empty line, and a saved value
+  // GitHub no longer lists stays a choice too.
+  const f: SetupField = listed
+    ? { ...given, kind: "select", help: given.picker_help || given.help, placeholder: given.picker_placeholder || given.placeholder,
+        error: given.picker_error || given.error,
+        options: typeof value === "string" && value && !repos.includes(value) ? [value, ...repos] : repos }
+    : given;
   const base = React.useId();
   const id = `${base}-${f.name}`;
   const helpId = `${id}-help`;
@@ -196,7 +225,13 @@ function SettingField({ f, value, error, onChange }: {
   }
 
   let control: React.ReactNode;
-  if (f.kind === "select") {
+  if (repos === "loading") {
+    // The text box, held until the list answers: it becomes the list, or stays a box where there is none.
+    control = (
+      <Input {...aria} type="text" disabled value={typeof value === "string" ? value : ""} placeholder="Loading repositories"
+        className={box} data-testid={`input-${f.name}`} data-loading="true" readOnly />
+    );
+  } else if (f.kind === "select") {
     control = (
       <Select value={typeof value === "string" ? value : ""} onValueChange={(v) => onChange(v)}>
         <SelectTrigger {...aria} className={box} data-testid={`input-${f.name}`}>
@@ -375,7 +410,8 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
         )}
         {choosing && <AppSteps app={app} />}
         {fields.map((f) => (
-          <SettingField key={f.name} f={f} value={values[f.name]} error={bad.includes(f.name)} onChange={(v) => change(f.name, v)} />
+          <SettingField key={f.name} f={f} value={values[f.name]} error={bad.includes(f.name)} onChange={(v) => change(f.name, v)}
+            via={appMode ? "app" : "key"} credential={!appMode && typeof values.credential === "string" ? values.credential : ""} />
         ))}
         {done && app.done && (
           <div className="border-t border-border pt-4">

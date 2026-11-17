@@ -259,6 +259,34 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("form-error").waitFor();
       ck("a refused save shows the API's sentence and stays on the form", (await text(page.getByTestId("form-error"))).includes("The repository was not found.") && (await page.getByTestId("setup-form").count()) === 1);
       await page.unroute("**/api/factory/integrations/tickets");
+
+      // the repository is picked from the repos GitHub lists; a saved one it no longer lists stays a choice
+      writes.length = 0;
+      const asked = [];
+      await page.route("**/api/factory/setup/github/repos**", (r) => {
+        asked.push(new URL(r.request().url()).search);
+        r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ repos: ["example-org/api", "example-org/web"], error: "" }) });
+      });
+      await page.getByTestId("form-cancel").click();
+      await page.getByTestId("step-view").waitFor();
+      await page.getByTestId("connected-github").getByTestId("action-edit").click();
+      const pick = page.getByTestId("field-repo").getByRole("combobox");
+      await pick.waitFor();
+      ck("with repos listed, the repository is a dropdown with the saved one chosen",
+        (await text(pick)) === "example-org/billing" && (await page.getByTestId("field-repo").locator("input").count()) === 0, await text(pick));
+      ck("its help says what to choose", (await text(page.getByTestId("field-repo"))).includes("The repository that holds the issues.")
+        && !(await text(page.getByTestId("field-repo"))).includes("owner/name"));
+      ck("the list is asked for with the way of connecting", asked.length >= 1 && asked[0].includes("via="), asked.join());
+      await pick.click();
+      ck("it offers the listed repos and the saved one", (await page.getByRole("option").allInnerTexts()).join() === "example-org/billing,example-org/api,example-org/web",
+        (await page.getByRole("option").allInnerTexts()).join());
+      await shot(page, "form-repo-pick-1440.png");
+      await page.getByRole("option", { name: "example-org/web" }).click();
+      await page.getByTestId("form-save").click();
+      await flashed(page);
+      const pw = writes.find((w) => w.method === "PUT");
+      ck("a picked repository is saved", pw && pw.body.settings.repo === "example-org/web", JSON.stringify(pw));
+      await page.unroute("**/api/factory/setup/github/repos**");
       await ctx.close();
     }
 

@@ -284,7 +284,11 @@ async def main():
                and lf["help"].startswith("A Linear personal API key."), lf)
             gh = field(avail(tix, "github")["form"], "repo")
             ck("the GitHub repository field", gh["placeholder"] == "owner/name" and gh["value"] == ""
-               and gh["error"] == "Enter the repository as owner/name, for example northwind/orders-api.", gh)
+               and gh["error"] == "Enter the repository as owner/name, for example northwind/orders-api."
+               and gh["picker"] == "github_repo" and gh["picker_help"] == "The repository that holds the issues."
+               and gh["picker_placeholder"] == "Choose a repository" and gh["picker_error"] == "Choose the repository.", gh)
+            ck("only the GitHub repository field is picked from a list",
+               field(lin["form"], "api_key")["picker"] == "" and field(avail(tix, "github")["form"], "issue_label")["picker"] == "")
             ck("the form's test hint", lin["form"]["test_hint"] == "Test connection checks the settings above with "
                                                                 "Linear. Nothing is saved by it.")
             ck("tickets: no banner and no note", tix["banner"] is None and tix["note"] is None)
@@ -533,6 +537,47 @@ async def main():
             gha = avail(step(r.json(), "tickets"), "github")
             ck("cloud: the GitHub app block after approval", gha["app"]["stage"] == "done" and gha["app"]["done"] == (
                 "GitHub is connected. The GlassFlow GitHub App is installed on the northwind organisation."), gha["app"])
+
+            print("== the repositories the GitHub Issues form offers ==")
+            from tares import github_credentials as ghc
+            listed = {"glassflow-github-app": ["northwind/orders-api", "northwind/Billing"],
+                      "dana-token": ["dana/notes", "northwind/orders-api"]}
+            asked = []
+
+            async def fake_list(cred, query=""):
+                asked.append(cred["name"])
+                if cred["name"] == "broken":
+                    raise ValueError("GitHub refused the credential broken: Bad credentials")
+                return [{"full_name": n} for n in listed[cred["name"]]]
+            real_list, ghc.list_repos_for = ghc.list_repos_for, fake_list
+            try:
+                store.upsert_github_credential("dana-token", "ghp_" + "d" * 36)
+                r = await root.get("/api/factory/setup/github/repos")
+                ck("with the app: the app's repos, sorted, and no other credential is asked",
+                   r.json() == {"repos": ["northwind/Billing", "northwind/orders-api"], "error": ""}
+                   and asked == ["glassflow-github-app"], (r.json(), asked))
+                asked.clear()
+                r = await root.get("/api/factory/setup/github/repos?via=key")
+                ck("with a credential and none named: every credential's repos, once each",
+                   r.json()["repos"] == ["dana/notes", "northwind/Billing", "northwind/orders-api"]
+                   and sorted(asked) == ["dana-token", "glassflow-github-app"], (r.json(), asked))
+                r = await root.get("/api/factory/setup/github/repos?via=key&credential=dana-token")
+                ck("a named credential: only its repos", r.json()["repos"] == ["dana/notes", "northwind/orders-api"], r.json())
+                r = await root.get("/api/factory/setup/github/repos?via=key&credential=nobody")
+                ck("an unknown credential: no repos", r.json() == {"repos": [], "error": ""}, r.json())
+                store.upsert_github_credential("broken", "ghp_" + "b" * 36)
+                r = await root.get("/api/factory/setup/github/repos?via=key&credential=broken")
+                ck("a refused credential: no repos, and GitHub's reason", r.json() == {
+                    "repos": [], "error": "GitHub refused the credential broken: Bad credentials"}, r.json())
+                r = await root.get("/api/factory/setup/github/repos?via=key")
+                ck("a refused credential next to others does not hide their repos", len(r.json()["repos"]) == 3
+                   and r.json()["error"] == "", r.json())
+                async with mk(reader) as cx:
+                    ck("a read key may not list them", (await cx.get("/api/factory/setup/github/repos")).status_code == 403)
+            finally:
+                ghc.list_repos_for = real_list
+                for n in ("dana-token", "broken"):
+                    store.delete_github_credential(n)
             # self-hosted with the connect addresses still set: the app is a Tares Cloud thing only
             os.environ.pop("TARES_WORKSPACE_API_URL", None)
             r = await get()

@@ -126,7 +126,10 @@ FIELD_COPY = {
         "placeholder": "owner/name",
         "help": "The repository that holds the issues, as owner/name, for example "
                 "northwind/orders-api.",
-        "error": "Enter the repository as owner/name, for example northwind/orders-api."},
+        "error": "Enter the repository as owner/name, for example northwind/orders-api.",
+        "picker_help": "The repository that holds the issues.",
+        "picker_placeholder": "Choose a repository",
+        "picker_error": "Choose the repository."},
     ("tickets", "github", "credential"): {
         "help": "The name of a GitHub credential stored on this cell. It needs to write issues. "
                 "Left empty, every stored credential is tried."},
@@ -192,6 +195,11 @@ FIELD_COPY = {
 # The rows of a field that maps Tares's stages to another system's, by the keys the field lists.
 STAGE_LABELS = {"todo": "To do", "in_progress": "In progress", "in_review": "In review",
                 "done": "Done"}
+
+# Fields the console fills from a list it asks the cell for, by (slot, integration, field): the
+# repository of GitHub Issues is picked from the repos GitHub lets the cell see (GET
+# /api/factory/setup/github/repos). The console falls back to typing when the list is empty.
+PICKERS = {("tickets", "github", "repo"): "github_repo"}
 
 # Tares Cloud connects these two with an app instead of a key. The connect address comes from the
 # environment (the control plane sets it), read when asked, so a cell without one has no app.
@@ -369,7 +377,11 @@ def register(app, store, h, ctx):
                "help": copy.get("help") or f.help,
                "error": "" if f.kind == "bool" else copy.get("error") or f"Enter {label.lower()}.",
                "options": list(f.options) if f.kind == "select" else [], "rows": [],
-               "value": None, "saved": False, "saved_note": ""}
+               "value": None, "saved": False, "saved_note": "",
+               "picker": PICKERS.get((slot, name, f.name), ""),
+               "picker_help": copy.get("picker_help", ""),
+               "picker_placeholder": copy.get("picker_placeholder", ""),
+               "picker_error": copy.get("picker_error", "")}
         value = settings.get(f.name)
         if f.kind == "secret":
             out["saved"] = bool((secrets.get(f.name) or {}).get("has_value"))
@@ -589,6 +601,31 @@ def register(app, store, h, ctx):
             "connected": connected,
             "available_heading": "Connect another", "available": available,
             "footer": {"hint": FOOTER, "next": nxt}}
+
+    # ── the repositories GitHub lets the cell see ─────────────────────────────
+    @app.get("/api/factory/setup/github/repos")
+    async def get_github_repos(request: Request, credential: str = "", via: str = "app"):
+        """The repos (owner/name, sorted) the GitHub Issues form offers: those of `credential` when one
+        is named; otherwise, connecting with the app (`via` app), those of the GitHub App connections;
+        otherwise those of every stored credential, as the connection tries them all. A credential
+        GitHub refuses is skipped; `error` says why when none answered."""
+        import asyncio
+        guard(request)
+        creds = safe(store.list_github_credentials, []) or []
+        if credential:
+            creds = [c for c in creds if c["name"] == credential]
+        elif via == "app":
+            creds = [c for c in creds if github_credentials.is_app(c)] or creds
+        names: set[str] = set()
+        error = ""
+        for c in creds:
+            try:
+                repos = await asyncio.wait_for(github_credentials.list_repos_for(c), timeout=30)
+            except (ValueError, TimeoutError, asyncio.TimeoutError) as e:
+                error = str(e) or "GitHub took too long to list repositories"
+                continue
+            names |= {r["full_name"] for r in repos}
+        return {"repos": sorted(names, key=str.lower), "error": "" if names else error}
 
     # ── keeping the default ──────────────────────────────────────────────────
     @app.put("/api/factory/setup/{slot}/keep")
