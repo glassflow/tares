@@ -145,13 +145,16 @@ bad = []
 for md in sorted(skills_dir.glob("*/*.md")):
     for n, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
         low = line.lower()
-        if "never" in low or "no skill" in low:
-            continue
-        if re.search(r"(>>|\btail\b|\bcat\b|\bgrep\b|\btee\b|\bsed\b|\bhead\b)[^`\n]*reports/", line) \
-                or re.search(r"reports/[^`\n]*(>>|\|\s*(tail|grep|tee))", line) \
-                or re.search(r"\bappend\b[^.]*\b(report|log)\b", line, re.I):
+        hits = [m.start() for m in (
+            re.search(r"(>>|\btail\b|\bcat\b|\bless\b|\bgrep\b|\btee\b|\bsed\b|\bhead\b)[^`\n]*reports/", line),
+            re.search(r"reports/[^`\n]*(>>|\|\s*(tail|grep|tee))", line),
+            re.search(r"\bappend\b[^.]*\b(report|log)\b", line, re.I)) if m]
+        if hits and not any(w in low[:min(hits)] for w in ("never", "no skill")):
             bad.append(f"{md.relative_to(skills_dir)}:{n}")
 ck("no skill tells a station to cat, tail or append to a report", not bad, bad)
+orch = (skills_dir / "station-orchestrator" / "SKILL.md").read_text(encoding="utf-8")
+ck("the orchestrator finds undelivered peer messages with report grep",
+   "tares factory report grep --days 1 '\\[TF:'" in orch)
 for station in ("station-orchestrator", "station-reviewer", "station-releaser"):
     body = (skills_dir / station / "SKILL.md").read_text(encoding="utf-8")
     ck(f"{station} logs history with report log", "tares factory report log" in body)
