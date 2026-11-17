@@ -44,8 +44,10 @@ resources
 session-picker
 settings-people
 source-claude-code
+source-discover
 source-form
 source-new
+sources
 sre-guards
 sre-home
 sre-incidents
