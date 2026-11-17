@@ -26,7 +26,10 @@ anything else, and follow it instead of steps 1 to 9.
   the user's standing permissions and how far the crew may go alone. Only ask about what is
   different for this project; save a new grant with `add_grant`, quoting the user's own words.
 - If the project builds on a repo that exists, **read the repo before asking about it**: layout,
-  stack, how it builds and tests today, its own AGENTS.md or README.
+  stack, how it builds and tests today, its own AGENTS.md or README. When this session was told the
+  cell has a code brain (the start context says to call `search_brain` or `ask_brain`), ask the brain
+  about the repo first, before asking the user and before reading files; read files only for repos
+  the brain says are not ready and to confirm an exact line.
 - When this session runs in a folder that holds several repos (`tares factory spec` started in a
   workspace), the project may span them, for example an API, its UI and its chart. Read each, and
   ask which ones the project changes, recommending the ones the idea touches.
