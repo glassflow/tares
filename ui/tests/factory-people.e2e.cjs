@@ -18,8 +18,7 @@
 const http = require("http");
 const path = require("path");
 
-const UI_DIR = path.resolve(__dirname, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords } = require("./words.cjs");
 const { startDaemon } = require("./licensed.cjs");
 

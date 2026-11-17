@@ -7,7 +7,7 @@
  * Set SHOTS_DIR to keep screenshots.
  */
 const path = require("path");
-const { chromium } = require(path.join(path.resolve(__dirname, ".."), "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { startDaemon } = require("./licensed.cjs");
 const { checkWords, offendersIn } = require("./words.cjs");
 

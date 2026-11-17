@@ -12,10 +12,8 @@
  * its own browser download is missing.
  */
 const http = require("http");
-const path = require("path");
 
-const UI_DIR = path.resolve(__dirname, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { startDaemon } = require("./licensed.cjs");
 
 const ROOT = "root-token-settings-people-e2e";
