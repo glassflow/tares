@@ -1,6 +1,7 @@
 export { Banner, type BannerProps, type BannerTone } from "./Banner";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
+export { CopyLine, type CopyLineProps } from "./CopyLine";
 export { Dialog, type DialogProps } from "./Dialog";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Initials, initialsOf, type InitialsProps } from "./Initials";

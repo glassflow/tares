@@ -39,7 +39,7 @@ export interface ConnectorField {
 
 export interface ConnectorSpec {
   label: string;
-  mode: "poll" | "push";
+  mode: "poll" | "push" | "reference";   // reference: documents added by hand, no events flow
   discover?: boolean;
   poll?: string;   // connector-specific default poll interval (e.g. github: "2m")
   internal?: boolean;   // provisioned by Tares itself (agent findings) — not offered in the UI
