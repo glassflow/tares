@@ -33,6 +33,7 @@ login-handoff
 project-idle
 projects-list
 raise-limit
+resources
 session-picker
 settings-people
 sre-guards
