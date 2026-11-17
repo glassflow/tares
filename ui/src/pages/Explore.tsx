@@ -1,22 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import { Close, Search } from "../components/icons";
-import { Picker, usePolling } from "../components/bits";
-import type { LabelFacet, TimelineEventRow } from "../types";
+import { usePolling } from "../components/bits";
+import {
+  Banner, Button, EmptyState, Input, ListRow, ListSection, LoadingBlocks, Panel, Select, SkeletonRows, Tabs,
+} from "../components/edition";
+import { Close } from "../components/icons";
 import { copyText } from "../editions/copyText";
+import { formatCount } from "../lib/number";
+import { ageWords } from "../lib/time";
+import type { LabelFacet, TimelineEventRow } from "../types";
 
-// Explore — the hero, selector-first. Pick an entity on the left to start a selector, optionally
-// narrow it with more label=value constraints (strict AND), and read everything matching across
-// ALL sources as one correlated timeline (the `read` primitive). Picking a project narrows the
-// same read to that project's sources. The Timeline/Agent toggle shows the readable timeline or
-// the exact payload an agent receives over MCP.
+// Explore: pick something on the left (a repo, a service, a person: whatever the connections label
+// their events by), narrow it with more label=value terms (strict AND), and read everything that
+// matches, from every connection, as one timeline (the `read` primitive). Picking a project narrows
+// the same read to that project's connections. "What the agent gets" shows the exact payload an
+// agent receives over MCP for the same read.
+//
+// Label names and values are the connections' own (data-user-text); the page's words are the rest.
 
-const WINDOWS = ["1h", "24h", "7d", "30d"];
-const ALL = "";  // scope sentinel: every source
+const WINDOWS = [
+  { value: "1h", label: "Last hour", empty: "in the last hour" },
+  { value: "24h", label: "Last 24 hours", empty: "in the last 24 hours" },
+  { value: "7d", label: "Last 7 days", empty: "in the last 7 days" },
+  { value: "30d", label: "Last 30 days", empty: "in the last 30 days" },
+];
+// The scope sentinel for "every connection". Radix Select refuses "" as an item value.
+const ALL = "all";
 
-// One label=value term of the conjunction. The first term carries display metadata (event count,
-// the axis's declared sources) so we can label the header.
+// One label=value term of the conjunction. The first term carries what the header shows (its event
+// count, the connections that declare the label).
 type Term = { label: string; value: string; events?: number; sources?: string[] };
 
 /** The wire selector: label names as the store expects them (the unnamed primary axis is key_value). */
@@ -26,8 +40,16 @@ function toSelector(terms: Term[]): Record<string, string> {
   return out;
 }
 
+/** A row's offset comes as `T-<seconds>s`; the page says it in the one time grammar. */
+function whenOf(offset: string): string {
+  const m = /^T-(\d+)s$/.exec(offset);
+  return m ? ageWords(Number(m[1]) * 1000) : offset;
+}
+
+const plural = (n: number, one: string, many: string) => `${formatCount(n)} ${n === 1 ? one : many}`;
+
 export default function Explore() {
-  const { data: entities, error } = usePolling(() => api.entities(), 15000);
+  const { data: entities, error, reload } = usePolling(() => api.entities(), 15000);
   const { data: projects } = usePolling(() => api.projects(), 30000);
 
   const [q, setQ] = useState("");
@@ -37,13 +59,13 @@ export default function Explore() {
   const [mode, setMode] = useState<"human" | "agent">("human");
   const [payload, setPayload] = useState<string>();
   const [rows, setRows] = useState<TimelineEventRow[]>();
-  const [readSources, setReadSources] = useState<string[]>([]);
+  const [readFrom, setReadFrom] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [qerror, setQerror] = useState<string>();
   const [copied, setCopied] = useState(false);
 
-  // Facets with values: primary (key) axes first, then the richest axis first so the group that
-  // holds the default landing entity sits at the top of the picker (visible, highlighted).
+  // Labels with values: primary (key) labels first, then the richest first, so the group holding
+  // the landing value sits at the top of the picker.
   const facets = useMemo(
     () => (entities?.labels ?? [])
       .filter((f) => f.values.length)
@@ -53,13 +75,12 @@ export default function Explore() {
     [entities],
   );
 
-  // Default landing: the entity with the most events (the richest timeline — best thing on screen
-  // when a demo opens).
+  // Landing: the value with the most events, the richest timeline on screen when the page opens.
   useEffect(() => {
     if (terms.length || !facets.length) return;
     let best: Term | null = null;
     for (const f of facets) {
-      const top = f.values[0]; // API returns values sorted by events desc
+      const top = f.values[0]; // the API sorts values by events, most first
       if (top && (!best || top.events > (best.events ?? 0))) {
         best = { label: f.label, value: top.value, events: top.events, sources: f.sources };
       }
@@ -70,30 +91,30 @@ export default function Explore() {
   const primary = terms[0];
   const selector = useMemo(() => toSelector(terms), [terms]);
   const projectList = projects?.projects ?? [];
-  const effectiveScope = scope && projectList.some((p) => p.id === scope) ? scope : ALL;
+  const project = scope !== ALL && projectList.some((p) => p.id === scope) ? scope : "";
+  const windowWords = WINDOWS.find((w) => w.value === window_) ?? WINDOWS[0];
 
-  // (Re)run the read whenever the selector, scope or window changes; refresh on an interval so the
-  // timeline feels live.
+  // (Re)read whenever the selector, the project or the window changes; refresh on an interval so the
+  // timeline stays live.
   useEffect(() => {
     if (!terms.length) { setPayload(undefined); setRows(undefined); return; }
     let live = true;
-    const run = (spinner: boolean) => {
+    const read = (spinner: boolean) => {
       if (document.hidden) return;
       if (spinner) setLoading(true);
-      api.read(selector, window_, effectiveScope ? { project: effectiveScope } : undefined)
-        .then((r) => { if (live) setReadSources(r.sources); return r; })
-        .then((r) => { if (live) { setPayload(r.payload); setRows(r.rows ?? []); setQerror(undefined); } })
+      api.read(selector, window_, project ? { project } : undefined)
+        .then((r) => { if (live) { setReadFrom(r.sources); setPayload(r.payload); setRows(r.rows ?? []); setQerror(undefined); } })
         .catch((e) => { if (live) { setQerror(String((e as Error).message ?? e)); setPayload(undefined); setRows(undefined); } })
         .finally(() => { if (live) setLoading(false); });
     };
-    run(true);
-    const id = setInterval(() => run(false), 10000);
-    // run() skips while the tab is hidden, so a read that was due then must fire the moment the
-    // tab becomes visible — otherwise "reading timeline…" sits there until the next interval tick.
-    const onVisible = () => { if (!document.hidden) run(true); };
+    read(true);
+    const id = setInterval(() => read(false), 10000);
+    // read() skips while the tab is hidden, so a read that was due then fires the moment the tab is
+    // visible again, or "Reading" would sit there until the next tick.
+    const onVisible = () => { if (!document.hidden) read(true); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { live = false; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
-  }, [selector, effectiveScope, window_]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selector, project, window_]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const needle = q.trim().toLowerCase();
   const pick = (f: LabelFacet, value: string, events: number) => {
@@ -108,249 +129,203 @@ export default function Explore() {
     copyText(payload).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
   };
 
-  // Left picker: one axis (label) → a group of its values. Split into "read & alert by" (primary
-  // labels) and "other ways to slice" (the rest) so the picker explains itself without jargon.
+  // The picker: one group per label, its values beneath. "Read and alert by" holds the primary
+  // labels, "Other ways to slice" the rest, so the picker explains itself.
   const renderFacet = (f: LabelFacet) => {
     const vals = f.values.filter((v) => !needle ||
       v.value.toLowerCase().includes(needle) || f.label.toLowerCase().includes(needle));
     if (needle && !vals.length) return null;
     return (
-      <div className="cat-group" key={f.label}>
-        <div className="cat-group-head">
-          <span>{f.label}</span>
+      <div className="grid gap-0.5" key={f.label} data-testid="explore-group">
+        <div className="flex items-baseline gap-2 px-2 pb-1 pt-2 text-xs text-muted-foreground">
+          <span className="font-mono" data-user-text>{f.label}</span>
           {f.high_cardinality && (
-            <span className="badge starting" title="high-cardinality: too many distinct values to profile as an entity axis; showing a live sample">high-card</span>
+            <span className="text-faint" title="Too many values to list them all, so this is a live sample.">sample</span>
           )}
-          <span className="n">{vals.length}</span>
+          <span className="ml-auto font-mono">{vals.length}</span>
         </div>
         {vals.map((v) => {
           const active = primary?.label === f.label && primary?.value === v.value;
           return (
-            <div key={v.value} className={"explore-item ent" + (active ? " active" : "")}
-                 onClick={() => pick(f, v.value, v.events)} title={v.value}>
-              <span className="ent-val">{v.value}</span>
-              <span className="ent-n">{v.events.toLocaleString()}</span>
-            </div>
+            <Button key={v.value} variant="quiet" aria-pressed={active} title={v.value} data-testid="explore-value"
+                    onClick={() => pick(f, v.value, v.events)}
+                    className={`h-8 w-full justify-between gap-3 px-2 ${active ? "bg-muted font-semibold text-foreground shadow-[inset_3px_0_0_var(--accent)]" : "font-normal"}`}>
+              <span className="min-w-0 truncate font-mono text-[13px]" data-user-text>{v.value}</span>
+              <span className="font-mono text-xs text-faint">{formatCount(v.events)}</span>
+            </Button>
           );
         })}
       </div>
     );
   };
   const primaryNodes = facets.filter((f) => f.primary).map(renderFacet).filter(Boolean);
-  const secondaryNodes = facets.filter((f) => !f.primary).map(renderFacet).filter(Boolean);
+  const otherNodes = facets.filter((f) => !f.primary).map(renderFacet).filter(Boolean);
+  const sectionHead = "px-2 pt-3 font-mono text-[11px] uppercase tracking-[0.08em] text-faint";
 
-  const shownSources = readSources;
-  const emptyHint = effectiveScope === ALL
-    ? "no events match this selector in the last " + window_ + "; widen the window or remove a filter."
-    : "this project's sources hold nothing for this selector; switch to All sources to read every source.";
+  const timeline = (
+    <TimelineRows rows={rows} loading={rows === undefined && !qerror} title={windowWords.label}
+                  empty={project
+                    ? "This project's connections hold nothing for this. Read from every connection to see the rest."
+                    : `Nothing matches this ${windowWords.empty}. Try a longer window, or remove a filter.`} />
+  );
+  const agent = (
+    <Panel title={`Exactly what an agent receives over MCP for the ${windowWords.label.toLowerCase()}`}
+           action={<Button variant="secondary" onClick={copy} disabled={payload === undefined}>{copied ? "Copied" : "Copy"}</Button>}
+           data-testid="explore-agent">
+      {payload !== undefined
+        ? <pre className="m-0 max-h-[60vh] overflow-auto whitespace-pre-wrap font-mono text-xs text-foreground" data-user-text data-testid="explore-payload">{payload}</pre>
+        : !qerror && <SkeletonRows count={3} />}
+    </Panel>
+  );
 
   return (
-    <>
-      <h1>Explore</h1>
-      <p className="subtitle">Pick an entity and filter it if you like. Everything about it from every source, on one timeline.</p>
+    <div className="grid min-w-0 gap-5" data-testid="explore-page">
+      <header className="min-w-0">
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Explore</h1>
+        <p className="m-0 max-w-2xl text-sm text-muted-foreground">
+          Pick a repo, a service or anything else your connections label their events by, and narrow it if you
+          like. Everything about it, from every connection, on one timeline.
+        </p>
+      </header>
 
-      {error && <div className="alert error">{error}</div>}
-      {!facets.length && !error && (
-        <div className="empty">
-          no entities yet; add a source (each declares one or more labels; one is its key), then
-          ingest some events.
-        </div>
+      {error && (
+        <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Try again</Button>}>
+          Tares is not answering: {error}
+        </Banner>
+      )}
+      {!entities && !error && <LoadingBlocks />}
+      {entities && !facets.length && (
+        <EmptyState title="Nothing to explore yet" data-testid="explore-empty"
+                    action={<Button asChild variant="secondary"><Link to="/sources">See the connections</Link></Button>}>
+          Once a connection receives events, what they are about shows here: each repo, service or person they name.
+        </EmptyState>
       )}
 
       {facets.length > 0 && (
-        <div className="explore">
-          {/* left: entity picker, grouped by axis */}
-          <aside className="explore-list">
-            <div className="search-box full" style={{ marginBottom: 12 }}>
-              <Search />
-              <input type="text" className="search" placeholder="Filter entities…"
-                     value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="grid min-w-0 items-start gap-6 md:grid-cols-[17rem_minmax(0,1fr)]">
+          <aside className="grid min-w-0 gap-1 md:sticky md:top-4" aria-label="What to explore">
+            <Input label="Search" placeholder="A value or a label" value={q}
+                   onChange={(e) => setQ(e.target.value)} data-testid="explore-search" />
+            <div className="grid max-h-80 min-w-0 gap-1 overflow-y-auto border-b border-border pb-2 md:max-h-[70vh] md:border-b-0">
+              {!!primaryNodes.length && <div className={sectionHead} title="The labels an agent is read and woken by.">Read and alert by</div>}
+              {primaryNodes}
+              {!!otherNodes.length && <div className={sectionHead} title="More labels the same events carry.">Other ways to slice</div>}
+              {otherNodes}
+              {needle && !primaryNodes.length && !otherNodes.length && (
+                <EmptyState className="px-2" data-testid="explore-nomatch">Nothing matches “{q}”.</EmptyState>
+              )}
             </div>
-            {!!primaryNodes.length && (
-              <div className="ent-section first" title="the entities you read and alert an agent by">
-                read &amp; alert by
-              </div>
-            )}
-            {primaryNodes}
-            {!!secondaryNodes.length && (
-              <div className="ent-section" title="extra labels you can slice the same events by">
-                other ways to slice
-              </div>
-            )}
-            {secondaryNodes}
-            {needle && !primaryNodes.length && !secondaryNodes.length && (
-              <div className="dim" style={{ fontSize: 13, padding: "4px 9px" }}>no entities match “{q}”</div>
-            )}
           </aside>
 
-          {/* right: the correlated timeline */}
-          <section className="explore-detail">
-            {!primary && <div className="dim">select an entity…</div>}
+          <section className="grid min-w-0 gap-4" data-testid="explore-detail">
+            {!primary && <EmptyState>Pick something on the left to read its timeline.</EmptyState>}
             {primary && (
               <>
-                <div className="tl-head">
-                  <div>
-                    <h2 style={{ margin: 0 }}><span className="mono">{primary.value}</span></h2>
-                    <span className="subtitle" style={{ margin: 0 }}>
-                      {primary.label}{primary.events != null && <> · {primary.events.toLocaleString()} events</>}
-                      {shownSources.length > 0 && <> · {shownSources.length} source{shownSources.length === 1 ? "" : "s"}</>}
-                    </span>
-                  </div>
-                  <div className="seg">
-                    <button className={mode === "human" ? "active" : ""} onClick={() => setMode("human")}>Timeline</button>
-                    <button className={mode === "agent" ? "active" : ""} onClick={() => setMode("agent")}>What the agent gets</button>
-                  </div>
+                <div className="grid min-w-0 gap-1">
+                  <h2 className="m-0 font-mono text-lg [overflow-wrap:anywhere]" data-user-text data-testid="explore-title">{primary.value}</h2>
+                  <p className="m-0 text-[13px] text-muted-foreground" data-testid="explore-meta">
+                    <span className="font-mono" data-user-text>{primary.label}</span>
+                    {primary.events != null && <>, {plural(primary.events, "event", "events")}</>}
+                    {readFrom.length > 0 && <>, from {plural(readFrom.length, "connection", "connections")}: <span data-user-text>{readFrom.join(", ")}</span></>}
+                  </p>
                 </div>
 
-                {/* selector: the conjunction of label=value terms (strict AND) */}
-                <div className="tl-selector">
+                {/* The selector: label=value terms, all of which must hold. */}
+                <div className="flex min-w-0 flex-wrap items-end gap-2" data-testid="explore-terms">
                   {terms.map((t, i) => (
-                    <span className="chip term" key={`${t.label}=${t.value}`}>
-                      <span className="mono">{t.label}={t.value}</span>
-                      <button className="term-x" onClick={() => removeTerm(i)} aria-label="remove">
+                    <span key={`${t.label}=${t.value}`} data-testid="explore-term"
+                          className="inline-flex h-9 min-w-0 items-center gap-1 border border-border bg-card pl-2.5 font-mono text-xs">
+                      <span className="min-w-0 truncate" data-user-text>{t.label}={t.value}</span>
+                      <Button variant="quiet" aria-label={`Remove ${t.label}=${t.value}`} onClick={() => removeTerm(i)}
+                              className="h-8 w-8 px-0">
                         <Close />
-                      </button>
+                      </Button>
                     </span>
                   ))}
                   <AddTerm facets={facets} used={terms.map((t) => t.label)} onAdd={addTerm} />
                 </div>
 
-                <div className="tl-controls">
-                  {/* A div, not a label — as the `window` control beside it already is. Picker
-                      renders a <button>, which IS labelable, so a wrapping <label> forwards clicks
-                      on the word into opening the menu. */}
-                  <div className="tl-ctl">
-                    <span className="lbl">read from</span>
-                    {/* Picker, not a native <select>: the OS draws a <select>'s open menu and won't
-                        let us theme it, so it lands as a light box in the dark console. */}
-                    <Picker value={effectiveScope} onChange={setScope} ariaLabel="read from"
-                            options={[ALL, ...projectList.map((p) => p.id)]}
-                            labels={{ [ALL]: "All sources",
-                                      ...Object.fromEntries(projectList.map((p) => [p.id, `Project ${p.name}`])) }} />
-                  </div>
-                  <div className="tl-ctl">
-                    <span className="lbl">window</span>
-                    <div className="seg small">
-                      {WINDOWS.map((w) => (
-                        <button key={w} className={window_ === w ? "active" : ""} onClick={() => setWindow(w)}>{w}</button>
-                      ))}
-                    </div>
-                  </div>
-                  {shownSources.length > 0 && (
-                    <div className="tl-sources">
-                      {shownSources.map((s) => <span className="chip" key={s}>{s}</span>)}
-                    </div>
-                  )}
-                  <span className="grow" />
-                  {loading && <span className="help">reading…</span>}
+                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,16rem)_minmax(0,12rem)_1fr] sm:items-end">
+                  <Select label="Read from" value={project || ALL} onValueChange={setScope} data-testid="explore-scope"
+                          options={[{ value: ALL, label: "Every connection" },
+                                    ...projectList.map((p) => ({ value: p.id, label: `Project ${p.name}` }))]} />
+                  <Select label="Window" value={window_} onValueChange={setWindow} data-testid="explore-window"
+                          options={WINDOWS.map(({ value, label }) => ({ value, label }))} />
+                  <span role="status" className="pb-2 text-[13px] text-muted-foreground sm:justify-self-end">
+                    {loading ? "Reading" : ""}
+                  </span>
                 </div>
 
-                {qerror && <div className="alert error">{qerror}</div>}
-
-                {mode === "agent" ? (
-                  <div className="panel" style={{ marginTop: 12 }}>
-                    <div className="tl-agent-head">
-                      <span className="help" style={{ margin: 0 }}>
-                        exactly what the agent receives over MCP · read · {window_}
-                      </span>
-                      <button className="copybtn" onClick={copy}>{copied ? "copied" : "copy"}</button>
-                    </div>
-                    {payload !== undefined
-                      ? <pre className="payload" style={{ marginTop: 8 }}>{payload}</pre>
-                      : !qerror && <div className="help">reading timeline…</div>}
-                  </div>
-                ) : (
-                  <TimelineTable rows={rows} loading={rows === undefined && !qerror} emptyHint={emptyHint} />
+                {qerror && (
+                  <Banner tone="error" data-testid="explore-read-error">Tares could not read this: {qerror}</Banner>
                 )}
+
+                <Tabs aria-label="How to show it" value={mode} onValueChange={(v) => setMode(v as "human" | "agent")}
+                      items={[
+                        { value: "human", label: "Timeline", content: mode === "human" ? timeline : null },
+                        { value: "agent", label: "What the agent gets", content: mode === "agent" ? agent : null },
+                      ]} />
               </>
             )}
           </section>
-        </div>
-      )}
-    </>
-  );
-}
-
-/** The conjunction builder: a page-native popover — pick an axis, then a value, to AND-narrow the
- *  selector. Custom (not a native <select>) so the menu matches the console's look. */
-function AddTerm({ facets, used, onAdd }:
-  { facets: LabelFacet[]; used: string[]; onAdd: (label: string, value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [axis, setAxis] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  const available = facets.filter((f) => !used.includes(f.label));
-  const facet = facets.find((f) => f.label === axis);
-  const close = () => { setOpen(false); setAxis(""); };
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) close(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
-  }, [open]);
-
-  if (!available.length) return null;
-  return (
-    <div className="tl-add" ref={ref}>
-      <button className="tl-add-btn" onClick={() => (open ? close() : setOpen(true))}>+ add filter</button>
-      {open && (
-        <div className="menu" role="menu">
-          {!facet ? (
-            available.map((f) => (
-              <button key={f.label} className="menu-item" role="menuitem" onClick={() => setAxis(f.label)}>
-                <span className="menu-val">{f.label}</span>
-                <span className="menu-n">{f.values.length}</span>
-              </button>
-            ))
-          ) : (
-            <>
-              <button className="menu-item back" onClick={() => setAxis("")}>← {facet.label}</button>
-              <div className="menu-scroll">
-                {facet.values.map((v) => (
-                  <button key={v.value} className="menu-item" role="menuitem" title={v.value}
-                          onClick={() => { onAdd(axis, v.value); close(); }}>
-                    <span className="menu-val">{v.value}</span>
-                    <span className="menu-n">{v.events.toLocaleString()}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
         </div>
       )}
     </div>
   );
 }
 
-function TimelineTable({ rows, loading, emptyHint }:
-  { rows: TimelineEventRow[] | undefined; loading: boolean; emptyHint: string }) {
-  if (loading) return <div className="help" style={{ marginTop: 14 }}>reading timeline…</div>;
-  if (!rows) return null;
-  if (!rows.length) return <div className="empty">{emptyHint}</div>;
+/** Narrow the selector: pick a label, then one of its values. Two kit Selects, so the keyboard and a
+ *  screen reader get a real listbox, not a hand-drawn menu. */
+function AddTerm({ facets, used, onAdd }:
+  { facets: LabelFacet[]; used: string[]; onAdd: (label: string, value: string) => void }) {
+  const [axis, setAxis] = useState("");
+  const available = facets.filter((f) => !used.includes(f.label));
+  const facet = facets.find((f) => f.label === axis);
+  if (!available.length) return null;
+  if (!facet) {
+    return (
+      <Select label="Add a filter" placeholder="Pick a label" value="" onValueChange={setAxis}
+              className="h-9 w-44" data-testid="explore-add"
+              options={available.map((f) => ({ value: f.label, label: `${f.label} (${formatCount(f.values.length)})` }))} />
+    );
+  }
   return (
-    <table style={{ marginTop: 12 }}>
-      <thead><tr><th style={{ width: 74 }}>when</th><th style={{ width: 180 }}>source</th><th>event</th></tr></thead>
-      <tbody>
-        {rows.map((r, i) => {
-          const labels = Object.entries(r.labels ?? {});
-          return (
-            <tr key={i}>
-              <td className="mono dim" style={{ whiteSpace: "nowrap" }}>{r.offset}</td>
-              <td><span className="chip">{r.source}</span></td>
-              <td>
-                <span className="mono" style={{ whiteSpace: "pre-wrap" }}>{r.text}</span>
-                {labels.length > 0 && (
-                  <span className="tl-labels">
-                    {labels.map(([k, v]) => <span className="chip lbl" key={k}>{k}={v}</span>)}
-                  </span>
-                )}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <span className="inline-flex items-end gap-1">
+      <Select label={`Filter by ${facet.label}`} placeholder="Pick a value" value=""
+              onValueChange={(v) => { onAdd(facet.label, v); setAxis(""); }}
+              className="h-9 w-56" data-testid="explore-add-value"
+              options={facet.values.map((v) => ({ value: v.value, label: `${v.value} (${formatCount(v.events)})` }))} />
+      <Button variant="quiet" onClick={() => setAxis("")} className="h-9">Cancel</Button>
+    </span>
+  );
+}
+
+function TimelineRows({ rows, loading, title, empty }:
+  { rows: TimelineEventRow[] | undefined; loading: boolean; title: string; empty: string }) {
+  if (loading) return <SkeletonRows count={4} className="pt-3" />;
+  if (!rows) return null;
+  if (!rows.length) return <EmptyState className="pt-3" data-testid="explore-nothing">{empty}</EmptyState>;
+  return (
+    <ListSection paper className="mt-3" title={title}
+                 aside={<span data-testid="explore-count">{plural(rows.length, "event", "events")}</span>}>
+      {rows.map((r, i) => {
+        const labels = Object.entries(r.labels ?? {});
+        return (
+          <ListRow key={i} data-testid="explore-row"
+                   className="grid grid-cols-1 items-start gap-x-5 gap-y-1 md:grid-cols-[8rem_10rem_minmax(0,1fr)]">
+            <span className="whitespace-nowrap text-[13px] text-muted-foreground" data-testid="explore-when">{whenOf(r.offset)}</span>
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" data-user-text data-testid="explore-from">{r.source}</span>
+            <div className="grid min-w-0 gap-1.5">
+              <span className="whitespace-pre-wrap font-mono text-[13px] text-foreground [overflow-wrap:anywhere]" data-user-text>{r.text}</span>
+              {labels.length > 0 && (
+                <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11px] text-faint" data-user-text>
+                  {labels.map(([k, v]) => <span key={k} className="[overflow-wrap:anywhere]">{k}={v}</span>)}
+                </span>
+              )}
+            </div>
+          </ListRow>
+        );
+      })}
+    </ListSection>
   );
 }
