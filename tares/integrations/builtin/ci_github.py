@@ -12,7 +12,8 @@ without, the repository has no CI (`none`). The setting "This repository has no 
 outright.
 
 How a check counts: still running is pending; success, neutral and skipped pass; cancelled,
-timed out, action required, startup failure, stale and failure fail. The reviewer's own
+timed out, action required, startup failure, stale and failure fail. Only the newest run of a check name counts (a draft's cancelled run does not fail a PR
+whose later run of that name passed), and only the newest status of a context. The reviewer's own
 `factory/review` status is never a check.
 """
 from __future__ import annotations
