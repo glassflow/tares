@@ -15,7 +15,7 @@ export default function IngestSetup({ connector, url, authKey }: {
   const [authRequired, setAuthRequired] = useState<boolean>();
   useEffect(() => { api.health().then((h) => setAuthRequired(h.auth_required)).catch(() => {}); }, []);
 
-  const key = authKey ?? "<your ingest key>";
+  const key = authKey ?? "<the connection's key>";
 
   // Alertmanager always shows its receiver YAML (the operator needs it regardless); the auth block
   // folds in only when the instance requires it.
@@ -33,7 +33,7 @@ export default function IngestSetup({ connector, url, authKey }: {
           Alertmanager. Every alert it routes here becomes an event.
         </p>
         <div className="ingest-url">
-          <code className="mono" style={{ whiteSpace: "pre-wrap" }}>{yaml}</code>
+          <code className="mono" style={{ whiteSpace: "pre-wrap" }} data-words-exempt>{yaml}</code>
           <CopyBtn text={yaml} label="copy" />
         </div>
         {authRequired && <KeyNote authKey={authKey} />}
@@ -59,7 +59,7 @@ export default function IngestSetup({ connector, url, authKey }: {
   return (
     <div className="ingest-setup">
       <KeyNote authKey={authKey} />
-      <p className="muted" style={{ marginTop: 12 }}>
+      <p className="muted" style={{ marginTop: authKey ? 0 : 12 }}>
         {connector === "otlp"
           ? <>Exporter setup; Tares accepts OTLP/HTTP <strong>JSON</strong> (not protobuf); use a
               JSON-capable exporter, e.g. the OTel Collector's <span className="mono">otlphttp</span>{" "}
@@ -67,27 +67,22 @@ export default function IngestSetup({ connector, url, authKey }: {
           : <>Test it right away:</>}
       </p>
       <div className="ingest-url">
-        <code className="mono" style={{ whiteSpace: "pre-wrap" }}>{snippet}</code>
+        <code className="mono" style={{ whiteSpace: "pre-wrap" }} data-words-exempt>{snippet}</code>
         <CopyBtn text={snippet} label="copy" />
       </div>
     </div>
   );
 }
 
-// The producer's auth requirement. With the freshly minted key in hand (creation), say "copy it
-// now"; without it (detail page), point at the key that was minted for the source or Security.
+// The producer's auth requirement, on a connection's page: point at the key made with the connection,
+// or Settings. At creation the page shows the fresh key and says this itself, so nothing is added here.
 function KeyNote({ authKey }: { authKey?: string }) {
-  return authKey ? (
+  if (authKey) return null;
+  return (
     <p className="muted">
-      This instance requires auth; send this source's <strong>ingest key</strong> as{" "}
-      <span className="mono">Authorization: Bearer …</span>. Copy it now; it's shown once and listed
-      under <Link to="/settings">Settings</Link>.
-    </p>
-  ) : (
-    <p className="muted">
-      This instance requires auth; the producer needs this source's <strong>ingest key</strong> in{" "}
-      <span className="mono">Authorization: Bearer …</span>. Use the key shown when you created the
-      source, or mint one under <Link to="/settings">Settings</Link> (scope <span className="mono">ingest</span>).
+      This cell requires a key: the producer sends the connection's key in the{" "}
+      <span className="mono" data-words-exempt>Authorization: Bearer …</span> header. Use the key shown when the
+      connection was added, or make one that can send data under <Link to="/settings">Settings</Link>.
     </p>
   );
 }
