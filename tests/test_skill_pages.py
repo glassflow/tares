@@ -88,5 +88,16 @@ releaser = open(os.path.join(SKILLS, "station-releaser", "SKILL.md"), encoding="
 ck("station-releaser: the merged check reads the ticket list on while it ends with `more`",
    "`list_tickets`, read on while it ends with `more`" in releaser)
 
+print("ticks ask for what changed since a fingerprint, and still work when the tool refuses it")
+orch = open(os.path.join(SKILLS, "station-orchestrator", "SKILL.md"), encoding="utf-8").read()
+ck("station-orchestrator: the tick calls my_work(since=), a full call after a compaction",
+   "`my_work(since=<the fingerprint of your last answer>)`" in orch and "Call it without `since` after a compaction or a revive" in orch)
+ck("station-orchestrator: a tool that refuses `since` or sends no fingerprint is called without it",
+   "whenever the tool refuses `since` or answers with no `fingerprint`" in orch)
+builder = open(os.path.join(SKILLS, "station-builder", "SKILL.md"), encoding="utf-8").read()
+ck("station-builder: the tick reads a ticket with get_ticket(since=), and without it when refused",
+   "`get_ticket(ticket, since=<the fingerprint of your last read>)`" in builder
+   and "whenever the tool refuses `since` or answers with no `fingerprint`" in builder)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
