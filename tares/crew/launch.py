@@ -343,8 +343,8 @@ def permissions(role: str) -> dict:
     # each command is allowed as `tares factory ...` (the bare `factory` of the old bash crew is gone, TR-975)
     cmds = ["tidy *", "report *"]
     if role == "orchestrator":
-        cmds = ["tidy *", "report *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
-                "crew halt", "crew halt *", "crew resume"]
+        cmds += ["spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
+                 "crew halt", "crew halt *", "crew resume"]
     return {"allow": [f"Bash(tares factory {c})" for c in cmds],
             # Tares merges pull requests (the merge queue); a crew station never does (TR-860)
             "deny": ["Bash(gh pr merge:*)"]}

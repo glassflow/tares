@@ -62,6 +62,15 @@ code, out, err = run("log", "--station", "crew-reviewer", "for the reviewer")
 ck("--station names another station's log", code == 0 and (HOME / "reports/log/crew-reviewer/2026-11-15.md").is_file())
 code, out, err = run("log", "--station", "../etc", "x")
 ck("a station name with a path in it is refused", code == 1 and "not a station name" in err, err)
+code, out, err = run("log", "--station", "my_station", "underscore name")
+ck("a station name with an underscore is accepted, as station launch accepts it",
+   code == 0 and (HOME / "reports/log/my_station/2026-11-15.md").is_file(), err)
+code, out, err = run("log", "moved files --station crew-reviewer --days 3")
+ck("--station and --days inside the text stay in the entry",
+   code == 0 and (LOG / "2026-11-15.md").read_text().splitlines()[-1] == "- 00:05Z moved files --station crew-reviewer --days 3"
+   and "moved files" not in (HOME / "reports/log/crew-reviewer/2026-11-15.md").read_text(), err)
+code, out, err = run("log", "--days", "3", "x")
+ck("--days before the text is refused for log", code == 1 and "--days" in err, err)
 code, out, err = run("log")
 ck("log with no text is the usage, exit 1", code == 1 and "usage:" in err, err)
 (HOME / "reports" / "crew-orchestrator.md").write_bytes(b"x" * (report.REPORT_CAP + 1))
@@ -115,6 +124,11 @@ code, out, err = run("grep")
 ck("grep with no pattern is the usage", code == 1 and "usage:" in err, err)
 code, out, err = run()
 ck("no subcommand is the usage", code == 1 and "usage:" in err, err)
+
+print("permissions")
+from tares.crew import launch  # noqa: E402
+for role in ("orchestrator", "builder", "reviewer", "releaser", "helper"):
+    ck(f"a {role} may run tares factory report", "Bash(tares factory report *)" in launch.permissions(role)["allow"], role)
 
 print("dispatch")
 ck("`report` is in the table", dispatch.find(["report", "log"]) is not None)

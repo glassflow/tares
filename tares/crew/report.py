@@ -23,6 +23,7 @@ from pathlib import Path
 from . import contract
 from .errors import CrewError
 from .paths import CrewPaths, default_home
+from .state import station_name_ok
 
 USAGE = ('usage: tares factory report log [--station <s>] "<text>"\n'
          '       tares factory report grep [--station <s>] [--days <n>] <regex>')
@@ -32,7 +33,6 @@ MAX_LINE = 300
 MAX_BYTES = 4000
 DEFAULT_DAYS = 14
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
-_STATION = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
 
 
 def _now() -> dt.datetime:
@@ -48,11 +48,18 @@ def log_dir(paths: CrewPaths, station: str) -> Path:
     return paths.reports_dir / "log" / station
 
 
-def _options(args: list, station: str) -> tuple[str, int, list]:
+def _options(args: list, station: str, leading_only: bool = False) -> tuple[str, int, list]:
+    """Read --station and --days. With leading_only (log), only options before the text count, so the words
+    of an entry that happen to be `--station x` stay in the entry."""
     days, rest = DEFAULT_DAYS, []
     i = 0
     while i < len(args):
         a = args[i]
+        if leading_only and rest:
+            rest += args[i:]
+            break
+        if leading_only and a == "--days":
+            raise CrewError("--days is for grep, not log")
         if a in ("--station", "--days") and i + 1 < len(args):
             if a == "--station":
                 station = args[i + 1]
@@ -64,7 +71,7 @@ def _options(args: list, station: str) -> tuple[str, int, list]:
             continue
         rest.append(a)
         i += 1
-    if station and not _STATION.match(station):
+    if station and not station_name_ok(station):
         raise CrewError(f"{station!r} is not a station name")
     return station, days, rest
 
@@ -132,7 +139,7 @@ def _report(args: list, env: dict) -> int:
     if not args or args[0] not in ("log", "grep"):
         raise CrewError(USAGE)
     # log writes your own station's file; grep searches every station unless --station names one
-    station, days, rest = _options(args[1:], env.get("FACTORY_STATION", "") if args[0] == "log" else "")
+    station, days, rest = _options(args[1:], env.get("FACTORY_STATION", "") if args[0] == "log" else "", args[0] == "log")
     paths = _paths(env)
     if args[0] == "log":
         if not station:
