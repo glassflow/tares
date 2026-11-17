@@ -124,6 +124,28 @@ const source = {
   push: "quiet",
 } satisfies Record<SourceHealthState, Tone>;
 
+// A part on the All resources page (tares/resources.py): a connection's health, a rule's switch, an
+// agent's wiring, a tool's credentials, a key's use. One table, because the page lists them in one grammar.
+export type ResourceState =
+  | "receiving" | "silent" | "error" | "paused" | "waiting"
+  | "active" | "on" | "on_handoff" | "off"
+  | "set" | "no_credentials" | "used" | "never_used";
+const resource = {
+  receiving: "ready",
+  silent: "waiting",
+  error: "bad",
+  paused: "waiting",
+  waiting: "quiet",
+  active: "ready",
+  on: "ready",
+  on_handoff: "quiet",
+  off: "quiet",
+  set: "ready",
+  no_credentials: "bad",
+  used: "ready",
+  never_used: "quiet",
+} satisfies Record<ResourceState, Tone>;
+
 // The legacy project docs' ticket status.
 const docTicket = {
   todo: "quiet",
@@ -133,7 +155,7 @@ const docTicket = {
 } satisfies Record<TicketStatus, Tone>;
 
 /** Every table, by domain. The gallery and its test walk this, so a new domain shows up there too. */
-export const STATUS_TONES = { project, ticket, pr, ci, crew, verdict, finding, call, incident, service, source, docTicket } as const;
+export const STATUS_TONES = { project, ticket, pr, ci, crew, verdict, finding, call, incident, service, source, resource, docTicket } as const;
 export type StatusDomain = keyof typeof STATUS_TONES;
 
 /** The tone of a status the API sends as a plain string. An unknown one reads quiet and warns once,
