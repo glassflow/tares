@@ -72,8 +72,10 @@ def emit(obj: dict, schema: str = "") -> None:
     _write(line(document(obj)) + "\n")
 
 
-def error_document(code: str, message: str, notes=None, extra=None) -> dict:
+def error_document(code: str, message: str, notes=None, extra=None, folder: str | None = None) -> dict:
     obj = {"error": {"code": code, "message": message}}
+    if folder:
+        obj["error"]["folder"] = folder
     if notes:
         obj["notes"] = list(notes)
     if extra:
@@ -92,5 +94,6 @@ def refuse(e: CrewError, argv, *, notes=None, extra=None) -> bool:
     argv has no `--json` and the caller prints the text line itself."""
     if not wants_json(argv):
         return False
-    _write_quiet(line(error_document(getattr(e, "code", "error"), e.message, notes, extra)) + "\n")
+    _write_quiet(line(error_document(getattr(e, "code", "error"), e.message, notes, extra,
+                                             getattr(e, "folder", None))) + "\n")
     return True

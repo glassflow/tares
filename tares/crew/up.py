@@ -48,7 +48,7 @@ from pathlib import Path
 from . import contract, doctor_lsp, jsonrun, state
 from . import watch as watch_mod
 from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
-from .errors import CrewError, SetupNeededError, UsageError
+from .errors import CrewError, CrewHomeUntrusted, SetupNeededError, UsageError
 from .paths import CREW_NAME_RULE, ME, CrewPaths
 
 NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,30}$"
@@ -489,11 +489,11 @@ class Up:
     def ensure_home_trusted(self, claude: str) -> None:
         if home_trusted(self.paths, self.env):
             return
-        home = self.paths.raw
+        home = str(self.paths.home)
         how = f'cd {home} && claude, pick "Yes, I trust this folder", then /exit'
         if self.assume_yes or not _terminal():
-            raise CrewError(f"Claude Code has not trusted the crew home {home} yet, and the stations run there. "
-                            f"Trust it once ({how}), then run crew up again.")
+            raise CrewHomeUntrusted(f"Claude Code has not trusted the crew home {home} yet, and the stations run there. "
+                                    f"Trust it once ({how}), then run crew up again.", home)
         _err(f"\nThe crew keeps its own folder, {home}, whichever folder you run this from (FACTORY_CREW_HOME moves it).\n"
              "Its stations run there, and Claude Code starts no session in a folder you have not trusted.\n"
              'Open Claude Code there now to trust it? Pick "Yes, I trust this folder", then type /exit.\n'
@@ -502,14 +502,14 @@ class Up:
         if ans is None:
             ans = "no"
         if (ans or "yes") not in ("y", "Y", "yes", "Yes"):
-            raise CrewError(f"not starting the crew: its home {home} is not trusted. Trust it once ({how}), then run crew up again.")
+            raise CrewHomeUntrusted(f"not starting the crew: its home {home} is not trusted. Trust it once ({how}), then run crew up again.", home)
         try:
             subprocess.run([claude], cwd=home, env=self.env)
         except OSError:
             pass
         if not home_trusted(self.paths, self.env):
-            raise CrewError(f"Claude Code still has not trusted {home} (did the trust prompt get a no?). "
-                            f"Trust it once ({how}), then run crew up again.")
+            raise CrewHomeUntrusted(f"Claude Code still has not trusted {home} (did the trust prompt get a no?). "
+                                    f"Trust it once ({how}), then run crew up again.", home)
         self.say("the crew home is trusted")
 
     # -- the contract --
