@@ -155,6 +155,12 @@ ck("a spec that carries --setting-sources has it forced to project,local, once",
    fixed.count("--setting-sources") == 1 and fixed[fixed.index("--setting-sources") + 1] == "project,local", str(fixed))
 ck("a spec that carries --setting-sources gets --no-chrome too, once, and nothing else moves",
    fixed.count("--no-chrome") == 1 and [a for a in fixed if a != "--no-chrome"] == ["--settings", "s", "--setting-sources", "project,local", "--model", "m"], str(fixed))
+eq = L.lean_args(["--settings", "s", "--setting-sources=user,project,local", "--model", "m"])
+ck("the --setting-sources=value form is replaced, not left beside the lean one",
+   not any(a.startswith("--setting-sources=") for a in eq) and eq.count("--setting-sources") == 1
+   and eq[eq.index("--setting-sources") + 1] == "project,local" and eq.count("--no-chrome") == 1, str(eq))
+once = L.lean_args(["--settings", "s", "--no-chrome", "--model", "m"])
+ck("a spec with --no-chrome and no --setting-sources does not get --no-chrome twice", once.count("--no-chrome") == 1 and "project,local" in once, str(once))
 ck("a spec with --setting-sources and no value gets the value", L.lean_args(["--setting-sources"])[:2] == ["--setting-sources", "project,local"], str(L.lean_args(["--setting-sources"])))
 
 # ---------------------------------------------------------------------------------------------

@@ -601,9 +601,9 @@ def telemetry_env(person: dict, spec_env: dict) -> dict:
 
 def lean_args(args: list) -> list:
     """`args` with the flags that keep the person's own sources out of a station, right after --settings:
-    --setting-sources is always project,local (a value the spec carries is replaced), --no-chrome is added
-    when missing."""
-    out = list(args)
+    --setting-sources is always project,local (a value the spec carries, in either form, is replaced),
+    --no-chrome is added when missing."""
+    out = [a for a in args if not a.startswith("--setting-sources=")]
     if "--setting-sources" in out:
         at = out.index("--setting-sources")
         if at + 1 < len(out):
@@ -613,8 +613,9 @@ def lean_args(args: list) -> list:
         if "--no-chrome" not in out:
             out.insert(at + 2, "--no-chrome")
         return out
+    flags = LEAN_FLAGS if "--no-chrome" not in out else LEAN_FLAGS[:2]
     at = out.index("--settings") + 2 if "--settings" in out and out.index("--settings") + 1 < len(out) else len(out)
-    return [*out[:at], *LEAN_FLAGS, *out[at:]]
+    return [*out[:at], *flags, *out[at:]]
 
 
 def mcp_file(paths: CrewPaths, station: str) -> tuple:

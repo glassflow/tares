@@ -25,7 +25,7 @@ os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"),
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests" / "factory"))
 
-from tares.crew import allow, dispatch, doctor, launch, state  # noqa: E402
+from tares.crew import allow, dispatch, doctor, launch, state, stations  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 import launch_support as LS  # noqa: E402
@@ -148,6 +148,7 @@ print("the launch")
 write(HOME / ".claude.json", {"mcpServers": {"github": {"command": "x"}, "linear": {"command": "y", "env": {"TOKEN": MCP_SECRET}},
                                               "other": {"command": "z"}}})
 _n = [0]
+SHOWN = [""]
 
 
 def plan_of(role, lists, station="proj-build-m1"):
@@ -166,6 +167,8 @@ def plan_of(role, lists, station="proj-build-m1"):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             plan = launch.launch_plan(c, station, role, "", "", str(tmp / "repo"))
             launch.write_settings(c, station, role, "", "", str(tmp / "repo"), plan)
+        with contextlib.redirect_stderr(io.StringIO()):
+            SHOWN[0] = stations.launch_plan(c, c.paths, [station, role, "-", "-", "-"])
     finally:
         c.close()
         tares.__exit__(None, None, None)
@@ -188,6 +191,9 @@ settings = json.loads((sdir / "proj-build-m1.settings.json").read_text(encoding=
 ck("an allow-listed plugin is enabled in the station's settings", settings.get("enabledPlugins", {}).get("pyright-lsp@claude-plugins") is True, str(settings.get("enabledPlugins")))
 ck("the Tares plugin stays enabled beside it", settings.get("enabledPlugins", {}).get("tares@inline") is True, str(settings.get("enabledPlugins")))
 ck("the settings file holds no server config", MCP_SECRET not in json.dumps(settings))
+shown = SHOWN[0]
+ck("`launch-plan` shows the flag and the file, and no server config", "--mcp-config" in shown and ".mcp.json" in shown
+   and MCP_SECRET not in shown and '"mcp"' not in shown and '"mcpServers"' not in shown, shown[:200])
 
 plan, sdir, said, tmp = plan_of("builder", {})
 ck("a role with no list has no --mcp-config and no file", "--mcp-config" not in plan["args"] and not any("--mcp-config=" in a for a in plan["args"])
