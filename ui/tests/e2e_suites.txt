@@ -2,6 +2,7 @@
 a11y
 capped-runs
 catalog-export
+catalog-import
 choose-edition
 component-gallery
 connect
