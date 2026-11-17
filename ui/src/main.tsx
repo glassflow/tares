@@ -8,7 +8,8 @@ import { EditionProvider, useEdition } from "./editions/edition";
 import { ByEdition } from "./editions/routes";
 import { EeLoader } from "./eeSlots";
 import { LicenceProvider } from "./licence";
-import AgentActivity, { ConnectPage } from "./pages/Activity";
+import ReadsPage from "./pages/Reads";
+import { ConnectPage } from "./pages/Connect";
 import Ask from "./pages/Ask";
 import CatalogExport from "./pages/CatalogExport";
 import CatalogImport from "./pages/CatalogImport";
@@ -120,7 +121,7 @@ const router = createBrowserRouter([
       { path: "triggers/new", element: <NewInProjectRedirect kind="triggers" /> },
       { path: "triggers/:name", element: <TriggerRedirect /> },
       { path: "connect", element: <ConnectPage /> },
-      { path: "reads", element: <AgentActivity /> },
+      { path: "reads", element: <ReadsPage /> },
       { path: "firings", element: <FiringsRedirect /> },
       // /deliveries was this page's name before the firing/delivery/dispatch words settled
       { path: "deliveries", element: <Navigate to="/firings" replace /> },
