@@ -308,7 +308,7 @@ tree = ast.parse(SRC, feature_version=(3, 9))
 tops = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
 names = sorted({a.name.split(".")[0] for n in tops if isinstance(n, ast.Import) for a in n.names}
                | {n.module.split(".")[0] for n in tops if isinstance(n, ast.ImportFrom) and n.module})
-ck("it imports only the standard library at the top", set(names) <= {"__future__", "json", "os", "shutil", "subprocess", "sys"}, str(names))
+ck("it imports only the standard library at the top", set(names) <= {"__future__", "importlib", "json", "os", "shutil", "subprocess", "sys", "threading", "urllib"}, str(names))
 ck("it does not import tares at the top (the import is inside compat_line, where its failure is caught)",
    "tares" not in names and "from tares.crew.version import check_plugin_compat" in SRC)
 ck("it has no stray CR (a CRLF checkout is fine) and no em dash", b"\r" not in SCRIPT.read_bytes().replace(b"\r\n", b"") and "\u2014" not in SRC)
