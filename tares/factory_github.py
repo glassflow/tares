@@ -74,9 +74,31 @@ def stale(pr: dict | None) -> bool:
     return when is None or (now_utc() - when).total_seconds() >= wait
 
 
+def _newest(items: list[dict], name_key: str, stamp_keys: tuple) -> list[dict]:
+    """The entries that count, in the order they came: for each name only the newest (the latest
+    stamp among `stamp_keys`, then the highest id), so a run that a draft's cancelled workflow or an
+    earlier push left behind never outvotes the run that replaced it. An entry with no name is kept."""
+    best: dict = {}
+    for i, it in enumerate(items or []):
+        name = it.get(name_key)
+        if not name:
+            continue
+        stamp = next((str(it[k]) for k in stamp_keys if it.get(k)), "")
+        try:
+            ident = int(it.get("id") or 0)
+        except (TypeError, ValueError):
+            ident = 0
+        if name not in best or (stamp, ident) > best[name][0]:
+            best[name] = ((stamp, ident), i)
+    keep = {i for _, i in best.values()}
+    return [it for i, it in enumerate(items or []) if not it.get(name_key) or i in keep]
+
+
 def _ci(statuses: list[dict], runs: list[dict]) -> str:
     """One word for CI on a commit, the reviewer's own status left out: success, failure,
     pending, or none (no checks at all)."""
+    statuses = _newest(statuses, "context", ("updated_at", "created_at"))
+    runs = _newest(runs, "name", ("started_at", "created_at"))
     states = [s.get("state") for s in statuses if s.get("context") != REVIEW_CONTEXT]
     for r in runs:
         if r.get("name") == REVIEW_CONTEXT:
@@ -115,14 +137,15 @@ def _status_state(state) -> str:
 
 def _check_list(statuses: list[dict], runs: list[dict]) -> list[dict]:
     """Every check on a commit as {name, state}, one per commit status and check run, the
-    reviewer's own status left out. The mapping is the one `_ci` uses: a run still going is
+    reviewer's own status left out, and only the newest run of each name and the newest status of each
+    context (see `_newest`). The mapping is the one `_ci` uses: a run still going is
     pending, `success`, `neutral` and `skipped` pass, any other conclusion (`cancelled`,
     `timed_out`, `action_required`, `startup_failure`, `stale`, `failure`) fails."""
     out = []
-    for s in statuses or []:
+    for s in _newest(statuses, "context", ("updated_at", "created_at")):
         if s.get("context") != REVIEW_CONTEXT:
             out.append({"name": str(s.get("context") or ""), "state": _status_state(s.get("state"))})
-    for r in runs or []:
+    for r in _newest(runs, "name", ("started_at", "created_at")):
         if r.get("name") == REVIEW_CONTEXT:
             continue
         if r.get("status") != "completed":

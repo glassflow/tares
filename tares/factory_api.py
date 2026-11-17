@@ -2600,8 +2600,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
         hidden = h.hidden_ids()
         me = work_person(request)["id"] if mine else None
         o = owners_mod.Owners(store)
-        # compared as the text /api/desk sends, which is what the watch keeps as its baseline
-        fresh = [t for d in store.list_desk("answered", None)
+        try:
+            floor = datetime.fromisoformat(since.replace("Z", "+00:00")) if since else None
+            if floor is not None and floor.tzinfo is None:
+                floor = floor.replace(tzinfo=timezone.utc)
+        except ValueError:
+            floor = None   # not a time: the store narrows nothing, the text compare below decides
+        # the store keeps the answers closed at or after `since`; the text compare below is the exact one,
+        # on what /api/desk sends, which is what the watch keeps as its baseline
+        fresh = [t for d in store.list_desk("answered", None, closed_since=floor)
                  if d["project"] not in hidden and (me is None or desk_is_mine(d, me, o))
                  and d.get("command") is None and d.get("closed_at") is not None
                  and (t := str(jsonable_encoder(d["closed_at"]))) > since]
