@@ -8,23 +8,8 @@ import {
 } from "../components/edition";
 import { formatCount } from "../lib/number";
 import { ageWords } from "../lib/time";
-import type { ConnectorSpec, Source } from "../types";
-
-// The words a person reads for each health state (statusTones.ts SourceHealthState). The tone stays keyed
-// by the daemon's value.
-const STATE_WORDS: Record<string, string> = {
-  starting: "starting",
-  ok: "healthy",
-  error: "failing",
-  paused: "paused",
-  push: "receives pushes",
-};
-const stateOf = (s: Source) => s.health?.status ?? "starting";
-const stateWords = (st: string) => STATE_WORDS[st] ?? st;
-
-// A connection can be in several projects: `projects` lists them all, older ones only name an owner.
-const memberOf = (s: Source) => s.projects ?? (s.owned_by ? [s.owned_by] : []);
-const kindOf = (specs: Record<string, ConnectorSpec> | undefined, id: string) => specs?.[id]?.label ?? id;
+import { kindOf, memberOf, stateOf, stateWords } from "../components/connectionState";
+import type { Source } from "../types";
 
 const ALL = "all";
 const NONE = "none";
