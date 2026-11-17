@@ -40,6 +40,7 @@ reads
 resources
 session-picker
 settings-people
+source-claude-code
 source-form
 source-new
 sre-guards
