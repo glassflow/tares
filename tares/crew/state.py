@@ -216,6 +216,22 @@ def ccfg(*keys, paths=None) -> str:
     return jq_get(read_json(paths.crew_cfg, None), keys)
 
 
+def ccfg_list(*keys, paths=None) -> list:
+    """A list of names in crew.json: the non-empty strings of the list at `keys`, [] when the file, the key or
+    a list is not there."""
+    paths = paths or CrewPaths.from_env()
+    value = read_json(paths.crew_cfg, None)
+    for k in keys:
+        value = value.get(k) if isinstance(value, dict) else None
+    if not isinstance(value, list):
+        return []
+    out: list = []
+    for v in value:
+        if isinstance(v, str) and v.strip() and v.strip() not in out:
+            out.append(v.strip())
+    return out
+
+
 def crew_name(paths=None) -> str:
     """The crew's name: FACTORY_CREW_NAME, else crew.json's crew_name, else "crew". A name that can't be a
     station name is refused with a message that names it, where it came from and the rule."""
