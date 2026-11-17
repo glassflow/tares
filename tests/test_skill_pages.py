@@ -13,6 +13,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILLS = os.path.join(ROOT, "claude-plugin", "skills")
+# repo files a skill may name in backticks; they are not pages of the skill
+NOT_PAGES = {"AGENTS.md", "CHANGELOG.md", "CLAUDE.md", "README.md", "MEMORY.md"}
 P = F = 0
 
 
@@ -23,18 +25,41 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
+def named_pages(text):
+    return set(re.findall(r"`([A-Za-z0-9_.-]+\.md)`", text)) - NOT_PAGES
+
+
 for skill_md in sorted(glob.glob(os.path.join(SKILLS, "*", "SKILL.md"))):
     folder = os.path.dirname(skill_md)
     name = os.path.basename(folder)
     text = open(skill_md, encoding="utf-8").read()
     pages = sorted(f for f in os.listdir(folder) if f.endswith(".md") and f != "SKILL.md")
-    named = set(re.findall(r"`([A-Za-z0-9_.-]+\.md)`", text))
+    named = named_pages(text)
     for page in pages:
         ck(f"{name}: SKILL.md names {page}", page in named, sorted(named))
         body = open(os.path.join(folder, page), encoding="utf-8").read()
         ck(f"{name}: {page} says when to read it", re.search(r"^Part of the .+ (manual|skill)\. Read (when|on) ", body, re.M) is not None, body[:120])
     for page in sorted(named):
         ck(f"{name}: the page {page} that SKILL.md names exists", os.path.exists(os.path.join(folder, page)), page)
+
+print("the checker")
+ck("AGENTS.md and CHANGELOG.md in backticks are not pages, a missing page still is",
+   named_pages("see `AGENTS.md`, `CHANGELOG.md`, `gone.md`") == {"gone.md"})
+
+print("spec-project pages keep the rules the split moved")
+write_out = open(os.path.join(SKILLS, "spec-project", "write-out.md"), encoding="utf-8").read()
+ck("write-out.md item 7: a working doc per ticket, attached, never in Linear or GitHub",
+   "7. A working doc per ticket: `write_doc` kind `working`" in write_out and "`attach_working_doc`" in write_out
+   and "Working docs never go to Linear or GitHub" in write_out)
+ck("write-out.md item 7: the working doc's sections, in order",
+   [h for h in re.findall(r"^   ## (.+)$", write_out, re.M)]
+   == ["Goal", "Context and files", "Steps", "Definition of done", "Out of scope", "How to check", "Progress"],
+   re.findall(r"^   ## (.+)$", write_out, re.M))
+contributor = open(os.path.join(SKILLS, "spec-project", "contributor.md"), encoding="utf-8").read()
+ck("contributor.md: answers go through answer_question with the person's words",
+   "call `answer_question(id, answer, project)` with their words" in contributor and "Say which" in contributor)
+ck("contributor.md: questions are asked one at a time and numbers restart per project",
+   "restart in each project" in contributor and "one at a time" in contributor)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

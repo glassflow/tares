@@ -74,7 +74,7 @@ exit: 0
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role builder, session name loose-build-m1, project loose, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role builder, session name loose-build-m1, project loose, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -164,7 +164,7 @@ exit: 0
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role builder, session name strict-build-m1, project strict, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role builder, session name strict-build-m1, project strict, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
