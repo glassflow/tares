@@ -24,6 +24,7 @@ import {
 } from "./FactorySetup.api";
 import { isSample, sampleLoad } from "./setupSamples";
 import { ChoicesForm, Prerequisites, TerminalSteps, YourCrew } from "./SetupParts";
+import { OverviewView } from "./FactoryOverview";
 import { saveCrewChoices } from "./FactoryHome.api";
 import { HOME_SAMPLES } from "./homeSamples";
 import type { HomeOnboarding } from "./home.types";
@@ -822,10 +823,19 @@ function TerminalView({ o, steps, onGo }: { o: HomeOnboarding; steps: StartStep[
 
 // ---- the rail ----
 
-type StepKey = SetupSlot | "crew" | "github" | "notifications" | "terminal";
+type StepKey = SetupSlot | "overview" | "crew" | "github" | "notifications" | "terminal";
 
-/** One row of the rail: an integration step, or one of the steps around them. */
-interface RailItem { key: StepKey; name: string; line: string; set: boolean }
+/** One row of the rail: an integration step, or one of the steps around them. `info` is the page
+ *  before the steps (how the factory works): no number, no tick, not counted in the progress. */
+interface RailItem { key: StepKey; name: string; line: string; set: boolean; info?: boolean }
+
+/** The rail's number of each counted step, by key (the info page has none). */
+function stepNumbers(items: RailItem[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  let n = 0;
+  for (const i of items) if (!i.info) out[i.key] = ++n;
+  return out;
+}
 
 function StepButton({ s, n, current, onPick, id, plain }: { s: RailItem; n: number; current: boolean; onPick: () => void; id: string; plain: boolean }) {
   return (
@@ -840,7 +850,7 @@ function StepButton({ s, n, current, onPick, id, plain }: { s: RailItem; n: numb
       data-testid={`${id}-${s.key}`}
       data-state={s.set ? "set" : "not_set"}
     >
-      {!plain && (
+      {!plain && !s.info && (
         <span
           className={cn("mt-0.5 inline-flex size-[18px] flex-none items-center justify-center border", s.set ? "border-foreground bg-foreground text-background" : "border-input")}
           aria-hidden
@@ -849,8 +859,8 @@ function StepButton({ s, n, current, onPick, id, plain }: { s: RailItem; n: numb
         </span>
       )}
       <span className="grid min-w-0 gap-0.5">
-        <span className="text-sm font-semibold [overflow-wrap:anywhere]">{plain ? s.name : `${n}. ${s.name}`}</span>
-        <span className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="step-line">{s.line}</span>
+        <span className="text-sm font-semibold [overflow-wrap:anywhere]">{plain || s.info ? s.name : `${n}. ${s.name}`}</span>
+        {s.line && <span className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="step-line">{s.line}</span>}
       </span>
     </button>
   );
@@ -866,11 +876,12 @@ function Rail({ items, current, progress, onPick, plain = false }: {
   const cur = items[at];
   const { set, total, text } = progress;
   const pick = (k: StepKey) => { setOpen(false); onPick(k); };
+  const numbers = stepNumbers(items);
   // The wide rail and the narrow list are both in the page, one hidden by width; the narrow ones
   // have their own test ids so a test finds the one that is shown.
   const list = (id: string) => (
     <div className="border border-border bg-card">
-      {items.map((s, i) => <StepButton key={s.key} id={id} s={s} n={i + 1} plain={plain} current={s.key === current} onPick={() => pick(s.key)} />)}
+      {items.map((s) => <StepButton key={s.key} id={id} s={s} n={numbers[s.key] ?? 0} plain={plain} current={s.key === current} onPick={() => pick(s.key)} />)}
     </div>
   );
   return (
@@ -886,7 +897,7 @@ function Rail({ items, current, progress, onPick, plain = false }: {
       </nav>
       <details open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)} className={cn("border border-border bg-card", "min-[900px]:hidden")} data-testid="rail-narrow">
         <summary className="flex cursor-pointer items-center justify-between gap-3 px-3 py-3 text-sm font-semibold">
-          <span>{plain ? cur.name : `Step ${at + 1} of ${total}: ${cur.name}`}</span>
+          <span>{plain || cur.info ? cur.name : `Step ${numbers[cur.key]} of ${total}: ${cur.name}`}</span>
           {!plain && <span className="text-[13px] font-normal text-muted-foreground">{`${set} set`}</span>}
         </summary>
         <div className="border-t border-border">{list("nstep")}</div>
@@ -947,7 +958,7 @@ function HeaderBits({ title, exit }: { title: string; exit: string }) {
 
 interface OpenForm { id: string; mode: "connect" | "edit"; title: string }
 
-const AROUND: StepKey[] = ["crew", "github", "notifications", "terminal"];
+const AROUND: StepKey[] = ["overview", "crew", "github", "notifications", "terminal"];
 
 /** "setup" walks every step once, with Next buttons and a count; "integrations" is the same sections
  *  grouped by what they do for the crew, to come back to at any time. */
@@ -970,6 +981,7 @@ function railItems(mode: Mode, data: SetupData): RailItem[] {
     ];
   }
   return [
+    { key: "overview", name: "How the factory works", line: "", set: false, info: true },
     { key: "crew", name: "How your crew works", line: o ? choicesLine(o) : "", set: !!o?.choices.chosen },
     { key: "github", name: "GitHub", line: o ? (o.github.connected ? o.github.text || "Connected" : "Not connected") : "", set: !!o?.github.connected },
     ...slots,
@@ -994,7 +1006,10 @@ function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reloa
     setParams((p) => { const q = new URLSearchParams(p); q.delete("cloud"); q.delete("cloud_detail"); return q; }, { replace: true });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const items = railItems(mode, data);
-  const [key, setKey] = React.useState<StepKey>(() => (items.some((i) => i.key === first) ? first as StepKey : items[0].key));
+  // Until the crew's choices are saved (step 1), setup opens on how the factory works; after that, on step 1.
+  // The progress count is no guide: a new cell already has its built-in steps set.
+  const [key, setKey] = React.useState<StepKey>(() => (items.some((i) => i.key === first) ? first as StepKey
+    : items[0].info && o?.choices.chosen ? items[1].key : items[0].key));
   const around = AROUND.includes(key);
   const slot: SetupSlot = around ? data.steps[0].slot : key as SetupSlot;
   const at = items.findIndex((i) => i.key === key);
@@ -1120,7 +1135,8 @@ function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reloa
               <span data-user-text>{cloudBack.text}{cloudBack.detail ? ` ${cloudBack.detail}` : ""}</span>
             </Banner>
           )}
-          {key === "github" ? <GithubView name={setupMode ? "GitHub" : "Code"} next={nextStep} onGo={go} footer={setupMode} />
+          {key === "overview" ? <OverviewView data={data} numbers={stepNumbers(items)} next={nextStep} onGo={(k) => go(k as StepKey)} />
+          : key === "github" ? <GithubView name={setupMode ? "GitHub" : "Code"} next={nextStep} onGo={go} footer={setupMode} />
           : key === "notifications" ? <NotificationsView />
           : around ? (
             !o ? <AroundLoading />
