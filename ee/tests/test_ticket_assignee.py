@@ -371,7 +371,7 @@ async def main():
                                               project="Team work"))
         ck("write_ticket: an unknown email is raw", out["assignee"] is None
            and out["assignee_raw"] == "kiran@elsewhere.com", out)
-        out = json.loads(await m.list_tickets("Team work"))
+        out = json.loads(await m.list_tickets("Team work", detail="full"))
         by_title = {t["title"]: t for t in out["tickets"]}
         ck("list_tickets: assignee_note names the person",
            by_title["A"]["assignee_note"] == "assignee: Kiran"

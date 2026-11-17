@@ -186,7 +186,7 @@ prompt only says what this project is:
 
 ## 8. Check, then hand over
 
-Call `list_docs`, `list_milestones` and `list_tickets` and confirm: a spec, a plan, an AGENTS.md
+Call `list_docs`, `list_milestones` and `list_tickets` (read on while it ends with `more`; the working docs are `list_docs(kind="working")`) and confirm: a spec, a plan, an AGENTS.md
 with a release section, a starting prompt, every milestone has checks, every ticket has a
 milestone and a working doc with all sections, and only the first tickets are ready. Fix anything
 missing. Then tell the user, briefly:

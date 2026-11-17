@@ -19,9 +19,9 @@ in every call, and the person's own words in anything you write.
    recommended answer and why, so they can say yes.
 3. On their answer, call `answer_question(id, answer, project)` with their words. Say which
    questions are left.
-4. Call `list_tickets(project=<project>)` and keep the tickets whose `repo` is one that
+4. Call `list_tickets(project=<project>)` (read on with `offset` while it ends with `more`) and keep the tickets whose `repo` is one that
    `list_areas` gives to the `person` from `my_work` (match by `person.id`, not by name). Show them
-   (title, milestone, depends on, a line from the working doc) and ask what to change. Apply each
+   (title, milestone, depends on, a line from the working doc: `get_ticket` has it) and ask what to change. Apply each
    edit where the ticket lives: `write_ticket` (and `write_doc` for its working doc) for Tares
    tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for GitHub ones. A ticket that
    changes a repo this person does not own is not theirs to edit: tell the lead instead. Editing a
