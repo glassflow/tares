@@ -644,6 +644,7 @@ tares factory: every station runs Claude Code 1.2.1, one session each
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

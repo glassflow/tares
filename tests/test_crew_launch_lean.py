@@ -272,6 +272,35 @@ ck("`launch-plan` shows the lean flags and no OTEL_ name or value", "--no-chrome
 ck("the plan itself carries the person's OTEL_* for launch to hand on", plan["otel"].get("OTEL_METRICS_EXPORTER") == "otlp", str(plan.get("otel")))
 
 # ---------------------------------------------------------------------------------------------
+print("c2. auto-memory is off for every station but the orchestrator")
+_n[0] += 1
+tmp = SCRATCH / f"t{_n[0]}"
+tmp.mkdir()
+LS.make_crew(tmp, {"token": FAKE_TOKEN})
+os.environ["TARES_PLUGIN_DIR"] = str(LS.make_kit(tmp))
+tares = LS.FakeTares({"projects": []})
+tares.__enter__()
+c = TaresClient(CrewPaths.at(tmp / "crew"), env={**os.environ, "TARESD_URL": tares.url})
+mem = {}
+try:
+    c.prime()
+    for label, station, role, parent in (("orchestrator", "crew-orchestrator", "orchestrator", ""),
+                                         ("reviewer", "crew-reviewer", "reviewer", ""),
+                                         ("releaser", "crew-releaser", "releaser", ""),
+                                         ("builder", "shop-build-m1", "builder", "crew-orchestrator"),
+                                         ("helper of the orchestrator", "crew-orchestrator-h1", "helper", "crew-orchestrator"),
+                                         ("helper of a builder", "shop-build-m1-h1", "helper", "shop-build-m1")):
+        mem[label] = L.launch_plan(c, station, role, parent, "", "")["settings"]
+finally:
+    c.close()
+    tares.__exit__(None, None, None)
+    os.environ.pop("TARES_PLUGIN_DIR", None)
+ck("the orchestrator keeps auto-memory: the key is not set", "autoMemoryEnabled" not in mem["orchestrator"], str(sorted(mem["orchestrator"])))
+ck("a helper of the orchestrator keeps it too", "autoMemoryEnabled" not in mem["helper of the orchestrator"], "")
+for label in ("reviewer", "releaser", "builder", "helper of a builder"):
+    ck(f"{label}: autoMemoryEnabled is false", mem[label].get("autoMemoryEnabled") is False, str(mem[label].get("autoMemoryEnabled")))
+
+# ---------------------------------------------------------------------------------------------
 print("d. the settings file is for its owner only")
 if os.name == "nt":
     print("  skip the mode checks on Windows (the file's access list is the owner's by default)")

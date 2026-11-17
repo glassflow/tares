@@ -154,6 +154,7 @@ tares factory: could not start crew-reviewer
 }
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

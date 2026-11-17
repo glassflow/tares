@@ -180,6 +180,7 @@ tares factory: nobody is not a recorded station
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

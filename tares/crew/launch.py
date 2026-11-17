@@ -661,8 +661,9 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     --resume and no prompt, which `launch` adds. mcp: those servers, {name: config}, which write_settings puts
     in the file. env and settings: the two
     halves of the settings document (env, and everything else); the file is `{"env": env, **settings}`. The
-    settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors and the role's
-    allow-listed plugins in enabledPlugins. otel: the
+    settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors, the role's
+    allow-listed plugins in enabledPlugins and, for every role but the orchestrator (and the helpers under it),
+    autoMemoryEnabled false. otel: the
     OTEL_* variables, the person's and the spec's, which reach the station only through the environment of
     the process that starts it, never a file. `model` and `effort` default to the crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
@@ -701,6 +702,8 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
         enabled = dict(settings["enabledPlugins"]) if isinstance(settings.get("enabledPlugins"), dict) else {}
         enabled.update({name: True for name in plugins})
         settings["enabledPlugins"] = enabled
+    if (parent_role(parent, paths) if role == "helper" else role) != "orchestrator":
+        settings["autoMemoryEnabled"] = False
     args = lean_args(fill_placeholders(spec["command"], values))
     servers = mcp_servers(paths, station, role, parent, client.env)
     if servers:

@@ -418,6 +418,7 @@ exit: 0
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -479,6 +480,7 @@ exit: 0
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

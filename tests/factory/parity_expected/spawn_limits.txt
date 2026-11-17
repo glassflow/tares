@@ -357,6 +357,7 @@ exit: 0
 @project 
 == file crew/stations/blog-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -422,6 +423,7 @@ exit: 0
 @project 
 == file crew/stations/shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -487,6 +489,7 @@ exit: 0
 @project 
 == file crew/stations/shop-build-m2.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

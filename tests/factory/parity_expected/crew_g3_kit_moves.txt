@@ -327,6 +327,7 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -387,6 +388,7 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

@@ -165,6 +165,7 @@ tares factory: crew resumed
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

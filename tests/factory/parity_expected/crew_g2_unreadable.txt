@@ -171,6 +171,7 @@ tares factory: crew-reviewer stopped; reviving it under the same name
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

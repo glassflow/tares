@@ -193,7 +193,9 @@ for i, (station, role, *_rest) in enumerate(CASES):
     at = plan["args"].index("--settings") + 2
     lean = tuple(plan["args"][at:at + len(LEAN_FLAGS)])
     plan_args = plan["args"][:at] + plan["args"][at + len(LEAN_FLAGS):]
-    plan_settings = {k: v for k, v in plan["settings"].items() if k != "disableClaudeAiConnectors"}
+    plan_settings = {k: v for k, v in plan["settings"].items() if k not in ("disableClaudeAiConnectors", "autoMemoryEnabled")}
+    ck(f"{role}: auto-memory is off for every station but the orchestrator",
+       (plan["settings"].get("autoMemoryEnabled") is False) == (role != "orchestrator"), json.dumps(sorted(plan["settings"])))
     ck(f"{role}: the station starts lean: the flags follow --settings and the connectors are off",
        lean == LEAN_FLAGS and plan["settings"].get("disableClaudeAiConnectors") is True, json.dumps([lean, sorted(plan["settings"])]))
     ck(f"{role}: the arguments are the spec's command with this machine's values",
