@@ -186,7 +186,7 @@ export default function SourceNew() {
           <SourceForm
             connector={connector!}
             spec={spec}
-            submitLabel="Create source"
+            submitLabel="Create connection"
             onSubmit={async (body) => {
               const res = await api.createSource(project ? { ...body, project } : body);
               if (spec.mode !== "push") {
