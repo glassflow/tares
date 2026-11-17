@@ -698,8 +698,9 @@ async def _branch_ok(store, row: dict, t: dict, ans: dict, turn: dict) -> bool:
     has not said whether it merges, or Tares is bringing the branch up to date) or ended (it
     conflicts). A branch that is only behind is updated for a project whose CI is `github` (the
     checks then run on the new commit); with any other CI it merges as it is. Per (repo, base)
-    one row is brought up to date at a time (`turn["by"]` names it): the first to merge moves the
-    base and every other run would be thrown away, so a behind row keeps its place and waits."""
+    one row is brought up to date at a time (`turn["by"]` names it, and the row stays `waiting_ci`
+    until its checks finish): the first to merge moves the base and every other run would be
+    thrown away, so a behind row keeps its place and waits."""
     brief = ans.get("pr") or {}
     mergeable = brief.get("mergeable")
     if mergeable is None:
@@ -724,8 +725,6 @@ async def _branch_ok(store, row: dict, t: dict, ans: dict, turn: dict) -> bool:
                                 f"Could not tell whether the branch is behind: {cmp['error']}")
         return False
     if not cmp["behind_by"]:
-        if str(row.get("reason") or "").startswith(WAITS):
-            await asyncio.to_thread(_set, store, row, "queued", None)
         return True
     if turn.get("by"):
         await asyncio.to_thread(_set, store, row, "queued",
@@ -763,7 +762,8 @@ async def _after_update(store, row: dict, t: dict, ans: dict | None) -> None:
     pr = await factory_github.read_pr(store, row["repo"], int(row["pr"]), t.get("pr"))
     if pr.get("error") or str(pr.get("head") or "") != head:
         return
-    if not pr.get("ci_checks") and ((ans or {}).get("ci") or {}).get("state") != "none":
+    ci_state = ((ans or {}).get("ci") or {}).get("state")
+    if ci_state == "pending" or (not pr.get("ci_checks") and ci_state != "none"):
         await asyncio.to_thread(_set, store, row, "waiting_ci",
                                 "Waiting for checks on the new commit")
         return

@@ -106,6 +106,7 @@ PR_FILES = {}            # (repo, number) -> the pull request's files; missing a
 COMPARE_CODE = {}        # repo -> the status the compare answers with (default 200)
 RAILS = {}               # repo -> the guardrail decisions before a merge (default none)
 CI_NONE = set()          # repos whose CI source says "none"
+CI_PENDING = set()       # (repo, number) pairs whose CI is still running
 COMPARE_BODY = {}        # repo -> a body the compare answers 200 with instead of its own
 
 
@@ -259,6 +260,8 @@ class FakeCI(CISource):
             return CIState(state="failure", head=pr.head, failing=["test"])
         if pr.repo in CI_NONE:
             return CIState(state="none", head=pr.head)
+        if (pr.repo, pr.number) in CI_PENDING:
+            return CIState(state="pending", head=pr.head)
         return CIState(state="success", head=pr.head)
 
 
@@ -1722,8 +1725,15 @@ async def main():
         ck("a new head with no check on it yet: still nobody else goes",
            updated(repo) == [11] and row(repo, 12)["reason"].startswith("waits its turn: "), UPDATES)
         CHECKED.add(new)
+        CI_PENDING.add((repo, 11))
         await tick()
-        ck("the first is queued on its new head, and the others still wait",
+        await tick()
+        ck("checks on the new head are still running: the first holds the turn, nobody else is updated",
+           row(repo, 11)["state"] == "waiting_ci" and updated(repo) == [11] and merged_calls(repo) == []
+           and row(repo, 12)["reason"].startswith("waits its turn: "), (row(repo, 11), UPDATES))
+        CI_PENDING.discard((repo, 11))
+        await tick()
+        ck("the checks finished: the first is queued on its new head, and the others still wait",
            row(repo, 11)["state"] == "queued" and updated(repo) == [11] and merged_calls(repo) == [],
            (row(repo, 11), UPDATES))
         await tick()
@@ -1748,12 +1758,22 @@ async def main():
         up = project("turnfree", "L4-ship", review="fakerev", ci="github")
         ticket(up, repo, "Behind", 1, position=1)
         ticket(up, repo, "Not behind", 2, position=2)
+        ticket(up, repo, "Behind, then caught up", 3, position=3)
         behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        behind(repo, 3, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
         del UPDATES[:], MERGES[:]
         await tick()
         ck("a row that is not behind still merges while another is being brought up to date",
            updated(repo) == [1] and [n for n, _ in merged_calls(repo)] == [2]
            and row(repo, 1)["state"] == "waiting_ci", (UPDATES, MERGES))
+        ck("a behind row waits its turn",
+           row(repo, 3)["state"] == "queued" and row(repo, 3)["reason"].startswith("waits its turn: "),
+           row(repo, 3))
+        BEHIND[(repo, 3)] = 0       # the base moved back under it, or its author rebased: no longer behind
+        await tick()
+        ck("a row that waited its turn and is no longer behind merges without being updated, and keeps no stale reason",
+           [n for n, _ in merged_calls(repo)] == [2, 3] and updated(repo) == [1]
+           and not str(row(repo, 3)["reason"] or "").startswith("waits its turn: "), (MERGES, UPDATES, row(repo, 3)))
 
         print("== health, and what Tares says ==")
         async with mk() as cx:
