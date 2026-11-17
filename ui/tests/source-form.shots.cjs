@@ -6,6 +6,7 @@
 const path = require("path");
 const { chromium } = require(path.join(path.resolve(__dirname, ".."), "node_modules", "playwright"));
 const { startDaemon } = require("./licensed.cjs");
+const { kindButton } = require("./source-new.fixture.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 9965);
 const OUT = process.env.SHOTS_DIR;
@@ -21,7 +22,7 @@ const CONNECTORS = ["loki", "http_poll", "postgres", "prometheus", "github", "re
         const page = await ctx.newPage();
         await page.route("**/api/integrations/github", (r) => r.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
         await page.goto(`${d.base}/sources/new`, { waitUntil: "load" });
-        await page.locator("button.connector-card", { hasText: c }).first().click();
+        await kindButton(page, c).click();
         await page.waitForTimeout(600);
         await page.screenshot({ path: path.join(OUT, `${c}-${width}.png`), fullPage: true });
         await ctx.close();
