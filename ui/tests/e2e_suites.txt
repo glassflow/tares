@@ -38,6 +38,7 @@ project-idle
 projects-list
 raise-limit
 reads
+redirects
 resources
 session-picker
 settings-people
