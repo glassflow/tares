@@ -22,7 +22,7 @@ os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"),
                   PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring")
 sys.path.insert(0, str(ROOT))
 
-from tares.crew import allow, doctor, launch, state  # noqa: E402
+from tares.crew import allow, dispatch, doctor, launch, state  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -107,6 +107,20 @@ ck("a name that looks like a flag is refused", run(["builder", "mcp", "--all"])[
 crew_json({"builder": {"model": "sonnet"}})
 code, out, err = run(["builder", "plugins", "slack@claude-plugins"])
 ck("it keeps the role's model", code == 0 and state.ccfg("stations", "builder", "model", paths=paths) == "sonnet" and launch.allow_lists(paths, "builder")[1] == ["slack@claude-plugins"], (out, err))
+write(CREW / "crew.json", {"stations": []})
+code, out, err = run(["builder", "mcp", "github"])
+ck("stations that is a list is refused, not a traceback", code == 1 and "stations" in err and "Traceback" not in err, (out, err))
+write(CREW / "crew.json", {"stations": None})
+code, out, err = run(["builder", "mcp", "github"])
+ck("stations that is null is made into an object", code == 0 and launch.allow_lists(paths, "builder")[0] == ["github"], (out, err))
+crew_json({"builder": {"mcp": ["github"]}})
+os.environ["FACTORY_CREW_HOME"] = str(CREW)
+_cmd = dispatch.find(["allow", "builder"])
+_out, _err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
+    _code = _cmd(["allow", "builder"], ENV) if _cmd else None
+del os.environ["FACTORY_CREW_HOME"]
+ck("tares factory allow is routed by the dispatcher", _code == 0 and _out.getvalue() == "builder keeps mcp github; plugins none\n", (_code, _out.getvalue(), _err.getvalue()))
 (CREW / "crew.json").unlink()
 ck("without a crew it says so", run([])[0] == 1 and "no crew" in run([])[2])
 

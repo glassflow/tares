@@ -66,11 +66,15 @@ def set_list(paths: CrewPaths, role: str, kind: str, names: list) -> None:
     cfg = state.read_json(paths.crew_cfg)
     if not isinstance(cfg, dict):
         raise CrewError(f"{paths.shown('crew.json')} is not an object")
-    stations = cfg.setdefault("stations", {})
+    stations = cfg.get("stations")
+    if stations is None:
+        stations = cfg["stations"] = {}
+    if not isinstance(stations, dict):
+        raise CrewError(f"stations in {paths.shown('crew.json')} is not an object")
     row = stations.get(role)
     if row is None:
         row = stations[role] = {}
-    if not isinstance(stations, dict) or not isinstance(row, dict):
+    if not isinstance(row, dict):
         raise CrewError(f"stations.{role} in {paths.shown('crew.json')} is not an object")
     row[kind] = names
     state.write_json(paths.crew_cfg, cfg)
