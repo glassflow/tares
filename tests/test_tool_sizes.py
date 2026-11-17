@@ -378,6 +378,9 @@ async def main():
                 "bouncing": [{"ticket": "T3"}], "led_projects": [{"project": "A"}],
                 "desk": [{"label": "D1", "question": "q one"}], "spec_questions": [{"id": "Q1"}]}
         bfp = mf._work_fingerprint(base)
+        ck("every part of the REST answer is a part the fingerprint covers",
+           set(mf.WORK_PARTS) == set(rest) - {"person", "crew"} == set(base) - {"person", "crew"},
+           (mf.WORK_PARTS, sorted(rest)))
         for part in mf.WORK_PARTS:
             bump = [{"label": "D1", "question": "q changed"}] if part == "desk" else [{"x": part}]
             ans = mf._work_since({**base, part: bump}, bfp)
@@ -392,15 +395,78 @@ async def main():
         ck("the unchanged answer stays under 300 bytes with 40 desk items open",
            len(json.dumps(mf._work_since(many, mf._work_fingerprint(many)))) < 300)
         import inspect
-        rq = json.loads(await mf.review_queue())
-        ck("review_queue still takes no parameters and answers a list", isinstance(rq, list)
-           and not inspect.signature(mf.review_queue).parameters, rq)
+        ck("review_queue takes `since`", "since" in inspect.signature(mf.review_queue).parameters)
+        rq0 = json.loads(await mf.review_queue())
+        ck("an empty queue answers a fingerprint and an empty list", rq0["queue"] == [] and rq0["fingerprint"], rq0)
         await mf.set_stage("T1", "review", pr="https://github.com/acme/shop/pull/7", project="Shop")
         rq = json.loads(await mf.review_queue())
         keys = {"project_name", "ticket", "title", "holder", "pr", "head", "waiting_minutes",
                 "blocks_milestone", "layer1_clean", "verdict_note"}
-        ck("and each row keeps the keys it had", all(set(r) == keys for r in rq) and len(rq) >= 1,
-           [sorted(r) for r in rq][:1])
+        ck("each row keeps the keys it had", set(rq) == {"fingerprint", "queue"} and len(rq["queue"]) >= 1
+           and all(set(r) == keys for r in rq["queue"]), [sorted(r) for r in rq["queue"]][:1])
+        ck("a queue with a new ticket has another fingerprint", rq["fingerprint"] != rq0["fingerprint"])
+        raw = await mf.review_queue(since=rq["fingerprint"])
+        ck("review_queue(since=<same fingerprint>) answers {\"unchanged\": true} and nothing else",
+           json.loads(raw) == {"unchanged": True} and len(raw.encode()) < 300, raw)
+        full = json.loads(await mf.review_queue(since="not-a-fingerprint"))
+        ck("a since that is not the fingerprint gets the whole queue", full == rq, full)
+        keep_get = mf._cx
+
+        class _Later:
+            def __init__(self, real, minutes):
+                self.real, self.minutes = real, minutes
+
+            async def __aenter__(self):
+                self.cx = await self.real.__aenter__()
+                return self
+
+            async def __aexit__(self, *a):
+                return await self.real.__aexit__(*a)
+
+            async def get(self, url, **kw):
+                r = await self.cx.get(url, **kw)
+                if url.endswith("/api/review-queue"):
+                    d = r.json()
+                    for q in d["queue"]:
+                        q["waiting_minutes"] = (q.get("waiting_minutes") or 0) + self.minutes
+                    return httpx.Response(200, json=d, request=httpx.Request("GET", url))
+                return r
+
+        mf._cx = lambda timeout=10: _Later(keep_get(timeout), 7)
+        try:
+            ck("minutes spent waiting are no change", json.loads(await mf.review_queue(
+                since=rq["fingerprint"])) == {"unchanged": True})
+        finally:
+            mf._cx = keep_get
+        await m.write_ticket("Refund", project="Shop")
+        await mf.set_stage("T3", "review", pr="https://github.com/acme/shop/pull/8", project="Shop")
+        ch = json.loads(await mf.review_queue(since=rq["fingerprint"]))
+        ck("a second ticket in review shows in the next since= answer",
+           "unchanged" not in ch and len(ch["queue"]) == len(rq["queue"]) + 1
+           and ch["fingerprint"] != rq["fingerprint"], ch)
+        await mf.set_stage("T3", "doing", project="Shop")
+        back = json.loads(await mf.review_queue(since=ch["fingerprint"]))
+        ck("a ticket leaving the queue shows too", "unchanged" not in back and back["fingerprint"] == rq["fingerprint"],
+           back)
+
+        print("== review_brief and the repo map ==")
+        mapbody = "# acme/shop\n\n## Layout\n" + "- `src/` the shop code\n" * 80
+        wm = json.loads(await mf.write_repo_map("acme/shop", mapbody, "first map", project="Shop"))
+        ver = wm["version"]
+        b1 = await mf.review_brief("T1", project="Shop")
+        ck("a brief with no known_map carries the map whole",
+           "## Repo map: acme/shop" in b1 and f"version {ver}" in b1 and "the shop code" in b1, b1[-600:])
+        b2 = await mf.review_brief("T1", project="Shop", known_map=ver)
+        ck("a brief with the map's version carries one line for it",
+           "the shop code" not in b2 and f"Version {ver}, the one you already read: unchanged" in b2
+           and len(b2) < len(b1) - len(mapbody) + 300, (len(b1), len(b2)))
+        ck("and the rest of the brief is the same", b1.split("## Repo map")[0] == b2.split("## Repo map")[0])
+        b3 = await mf.review_brief("T1", project="Shop", known_map="0000000")
+        ck("a version that is not the map's gets the map whole", "the shop code" in b3, b3[-300:])
+        await mf.write_repo_map("acme/shop", mapbody + "- `docs/` the docs\n", "added docs", ver, project="Shop")
+        b4 = await mf.review_brief("T1", project="Shop", known_map=ver)
+        ck("a map changed since comes whole again, with its new version", "the shop code" in b4 and "`docs/`" in b4
+           and "the one you already read" not in b4, b4[-300:])
 
 
 if __name__ == "__main__":

@@ -101,6 +101,16 @@ builder = open(os.path.join(SKILLS, "station-builder", "SKILL.md"), encoding="ut
 ck("station-builder: the tick reads a ticket with get_ticket(since=), and without it when refused",
    "`get_ticket(ticket, since=<the fingerprint of your last read>)`" in builder
    and "whenever the tool refuses `since` or answers with neither `unchanged` nor `fingerprint`" in builder)
+rev = open(os.path.join(SKILLS, "station-reviewer", "SKILL.md"), encoding="utf-8").read()
+ck("station-reviewer: the queue is read with review_queue(since=), whole after a compaction or when refused",
+   "`review_queue(since=<the fingerprint of your last answer>)`" in rev
+   and "Call it without `since` after a compaction or a revive" in rev
+   and "whenever the tool refuses `since` or answers with neither `unchanged` nor `fingerprint`" in rev
+   and "an older Tares answers the bare list" in rev)
+ck("station-reviewer: the brief is asked with known_map, left empty after a compaction, fine when refused",
+   "`review_brief(ticket, head, project, known_map=<the repo map version an earlier brief in this context showed for this repo>)`" in rev
+   and "leave `known_map` empty after a compaction or a revive" in rev
+   and "when the tool refuses it the map just comes whole" in rev)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
