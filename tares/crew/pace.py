@@ -39,7 +39,7 @@ import time
 
 from . import claude, locks, state, watch_revive
 from .client import TaresClient, TaresHTTPError
-from .errors import CrewError, SessionListUnreadableError
+from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -428,7 +428,10 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
             return   # it started something since the first check
         client.say(f"pacing: telling {s} ({want}) in the same conversation")
         try:
-            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin)
+            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True)
+        except NotBetweenTurnsError:
+            client.say(f"{s} started a turn; not telling it about the pace, will look again next round")
+            return
         except (CrewError, OSError) as e:   # bash: any failure of the restart (a file it cannot write) is the same
             sys.stdout.flush()
             print(e.line if isinstance(e, CrewError) else e, file=sys.stderr)
