@@ -331,6 +331,78 @@ async def main():
             mf._cx = keep
 
 
+        print("== my_work and review_queue ==")
+        await mf.hand_over(project="Shop", repos=[{"path": "/w/shop", "name": "acme/shop"}])
+        first = json.loads(await mf.my_work())
+        ck("my_work lists a ready ticket and carries a fingerprint",
+           any(r["project"] == "Shop" for r in first["ready"]) and first["fingerprint"].startswith("w1."),
+           sorted(first))
+        async with m._cx(10) as cx:
+            rest = (await cx.get("/api/crew/my-work")).json()
+        ck("the answer keeps every key the REST answer has, and REST has no fingerprint",
+           set(rest) <= set(first) and "fingerprint" not in rest and set(first) - set(rest) == {"fingerprint"},
+           (sorted(rest), sorted(first)))
+        same_raw = await mf.my_work(since=first["fingerprint"])
+        ck("my_work(since=<same fingerprint>) answers under 300 bytes",
+           len(same_raw.encode()) < 300 and json.loads(same_raw) == {"unchanged": True}, same_raw)
+        nw = json.loads(await m.write_ticket("Gift cards", project="Shop"))
+        moved = json.loads(await mf.my_work(since=first["fingerprint"]))
+        ck("a new ready ticket shows in the next since= answer, the other parts only named",
+           any(r["ticket"] == nw["label"] for r in moved["ready"])
+           and moved["fingerprint"] != first["fingerprint"] and "ready" not in moved["same"]
+           and "desk" in moved["same"] and "desk" not in moved, moved)
+        await mf.assign_ticket(nw["label"], "shop-build-m1", project="Shop")
+        held = json.loads(await mf.my_work(since=moved["fingerprint"]))
+        ck("a ticket a station now holds shows in the next since= answer's in_progress",
+           any(r["ticket"] == nw["label"] for r in held["in_progress"]) and "in_progress" not in held["same"]
+           and "ready" not in held["same"], held)
+        await mf.desk_add("Ship the cart first?", "yes", "it is small", options=["yes", "no"], project="Shop")
+        d1 = json.loads(await mf.my_work(since=moved["fingerprint"]))
+        ck("a new desk item comes whole", [d["label"] for d in d1["desk"]] == ["D1"]
+           and d1["desk"][0]["question"] == "Ship the cart first?" and "seen" not in d1["desk"][0]
+           and d1["desk_closed"] == [], d1)
+        await mf.desk_add("Pay by card?", "yes", "everyone does", options=["yes", "no"], project="Shop")
+        d2 = json.loads(await mf.my_work(since=d1["fingerprint"]))
+        ck("a desk item already seen comes as its label and question, a new one whole",
+           d2["desk"][0] == {"label": "D1", "question": "Ship the cart first?", "seen": True}
+           and d2["desk"][1]["label"] == "D2" and "options" in d2["desk"][1], d2["desk"])
+        fp = mf._work_fingerprint({**first, "desk": first["desk"] + [{"label": "D9", "question": "q"}]})
+        gone = mf._work_since({**first, "desk": first["desk"]}, fp)
+        ck("a desk item that closed is named in desk_closed", gone["desk_closed"] == ["D9"], gone)
+        stale = json.loads(await mf.my_work(since="0123456789ab"))
+        ck("a fingerprint it does not know gives everything again, with a new one",
+           {"ready", "desk", "in_progress", "person"} <= set(stale) and stale["fingerprint"].startswith("w1."), sorted(stale))
+        older = json.loads(await mf.my_work(since="w1.a.b.c.d.e.f.g.h"))
+        ck("so does one of another shape", "ready" in older and "same" not in older and "unchanged" not in older, sorted(older))
+        base = {"person": {"id": "p"}, "crew": "c", "ready": [{"ticket": "T1"}], "in_progress": [{"ticket": "T2"}],
+                "bouncing": [{"ticket": "T3"}], "led_projects": [{"project": "A"}],
+                "desk": [{"label": "D1", "question": "q one"}], "spec_questions": [{"id": "Q1"}]}
+        bfp = mf._work_fingerprint(base)
+        for part in mf.WORK_PARTS:
+            bump = [{"label": "D1", "question": "q changed"}] if part == "desk" else [{"x": part}]
+            ans = mf._work_since({**base, part: bump}, bfp)
+            ck(f"a changed {part} comes in full and the other parts are named", ans[part] == bump
+               and part not in ans["same"] and sorted(ans["same"] + [part]) == sorted(mf.WORK_PARTS), ans)
+        ck("a desk item whose words changed comes whole, not as seen",
+           "seen" not in mf._work_since({**base, "desk": [{"label": "D1", "question": "q changed"}]}, bfp)["desk"][0])
+        ck("a change to one desk item leaves the others as seen", [d.get("seen") for d in mf._work_since(
+              {**base, "desk": [{"label": "D1", "question": "q one"}, {"label": "D2", "question": "new"}]},
+              bfp)["desk"]] == [True, None])
+        many = {**base, "desk": [{"label": f"D{i}", "question": "q " * 40, "options": ["a", "b"]} for i in range(1, 41)]}
+        ck("the unchanged answer stays under 300 bytes with 40 desk items open",
+           len(json.dumps(mf._work_since(many, mf._work_fingerprint(many)))) < 300)
+        import inspect
+        rq = json.loads(await mf.review_queue())
+        ck("review_queue still takes no parameters and answers a list", isinstance(rq, list)
+           and not inspect.signature(mf.review_queue).parameters, rq)
+        await mf.set_stage("T1", "review", pr="https://github.com/acme/shop/pull/7", project="Shop")
+        rq = json.loads(await mf.review_queue())
+        keys = {"project_name", "ticket", "title", "holder", "pr", "head", "waiting_minutes",
+                "blocks_milestone", "layer1_clean", "verdict_note"}
+        ck("and each row keeps the keys it had", all(set(r) == keys for r in rq) and len(rq) >= 1,
+           [sorted(r) for r in rq][:1])
+
+
 if __name__ == "__main__":
     helpers()
     url_patterns()

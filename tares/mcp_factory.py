@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 import re
 
-from .mcp_server import (LIST_CAP, TARESD, _caller, _clip, _cx, _default_project, _fit, _out,
-                         _person_in, _project_id, mcp, writable)
+from .mcp_server import (LIST_CAP, TARESD, _caller, _clip, _cx, _default_project, _fingerprint, _fit,
+                         _out, _person_in, _project_id, mcp, writable)
 
 
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
@@ -857,8 +857,45 @@ async def set_later(later: bool = True, project: str = "") -> str:
     return ("Kept for later: it is off the home, under Later in All projects, until someone starts it."
             if later else "Started again: it is back on the home.")
 
+WORK_PARTS = ("ready", "in_progress", "bouncing", "led_projects", "desk", "spec_questions")
+
+
+def _work_fingerprint(data: dict) -> str:
+    """"w1.<part hashes>.<desk label+hash, ...>": what my_work(since=) compares against, part by
+    part and desk item by desk item, so the answer can carry only what changed."""
+    parts = ".".join(_fingerprint(data.get(k) or [])[:6] for k in WORK_PARTS)
+    desk = "-".join(f"{d['label']}{_fingerprint(d)[:4]}" for d in data.get("desk") or [])
+    return f"w1.{parts}.{desk}"
+
+
+def _work_since(data: dict, since: str) -> dict:
+    """The my_work answer against an earlier `fingerprint`: the parts that changed, in full,
+    except desk items the caller has already seen, which come as their label and question."""
+    fp = _work_fingerprint(data)
+    old = since.split(".")
+    if since == fp:
+        return {"unchanged": True}
+    if len(old) != len(WORK_PARTS) + 2 or old[0] != "w1":
+        return {**data, "fingerprint": fp}
+    out: dict = {"fingerprint": fp, "same": []}
+    seen = set(old[-1].split("-")) if old[-1] else set()
+    for i, k in enumerate(WORK_PARTS):
+        if _fingerprint(data.get(k) or [])[:6] == old[i + 1]:
+            out["same"].append(k)
+        elif k == "desk":
+            rows = data.get("desk") or []
+            out["desk"] = [{"label": d["label"], "question": _clip(d.get("question"), 100),
+                            "seen": True}
+                           if f"{d['label']}{_fingerprint(d)[:4]}" in seen else d for d in rows]
+            now = {d["label"] for d in rows}
+            out["desk_closed"] = sorted({s[:-4] for s in seen} - now)
+        else:
+            out[k] = data.get(k)
+    return out
+
+
 @mcp.tool()
-async def my_work(crew: str = "", project: str = "") -> str:
+async def my_work(crew: str = "", project: str = "", since: str = "") -> str:
     """What belongs to the person whose key this is, across the projects handed to a crew that
     they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
     (their tickets a station holds, with the holder and stage), `bouncing` (those of them that
@@ -872,13 +909,24 @@ async def my_work(crew: str = "", project: str = "") -> str:
     only its own person's tickets. `project` (a name or an id) keeps `spec_questions` to that
     project: question numbers restart in each project, so name it when you work on one. Empty
     lists the questions of every project; a name or id you cannot see is an error 404 ("no
-    project 'x' you can see"), so name it exactly. Needs a key with a person."""
+    project 'x' you can see"), so name it exactly. Needs a key with a person.
+
+    Every answer carries a `fingerprint`. Pass the last one back as `since` on each tick: when
+    nothing changed the answer is {"unchanged": true} alone (keep the fingerprint you hold);
+    otherwise only the parts that changed come with a new `fingerprint`, `same` names the others, desk items you have already seen
+    come as their label and question (`seen`), and `desk_closed` lists the ones gone. Call it
+    without `since` after a compaction or a restart, to have everything again."""
     params = {"crew": crew or _caller("crew")}
     if project.strip():
         params["project"] = project.strip()
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/crew/my-work", params=params)
-    return _out(r)
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    if since.strip():
+        return json.dumps(_work_since(data, since.strip()), default=str)
+    return json.dumps({**data, "fingerprint": _work_fingerprint(data)}, default=str)
 
 
 @mcp.tool()
