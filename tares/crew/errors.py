@@ -17,6 +17,17 @@ class CrewError(Exception):
         return f"{ME}: {self}"
 
 
+class CrewHomeUntrusted(CrewError):
+    """Claude Code has not trusted the crew home. `folder` is the home as the system writes it, so a caller can
+    open Claude Code there."""
+
+    code = "crew_home_untrusted"
+
+    def __init__(self, message: str, folder: str):
+        super().__init__(message)
+        self.folder = folder
+
+
 class NotSignedInError(CrewError):
     """No Tares to talk to and none configured: no saved `tares login`, no address in the environment or
     crew.json, and nothing answers at the local default."""
