@@ -183,8 +183,9 @@ try:
         ck(f"{label}: the environment equals the filled env, but for FACTORY_TARES", env == want["env"],
            {k: (env.get(k), want["env"].get(k)) for k in set(env) | set(want["env"]) if env.get(k) != want["env"].get(k)})
         ck(f"{label}: the plan turns the claude.ai connectors off", plan["settings"].get("disableClaudeAiConnectors") is True)
-        bare = {k: v for k, v in plan["settings"].items() if k != "disableClaudeAiConnectors"}
-        ck(f"{label}: the settings equal the filled settings, deep, but for the connectors key", bare == want["settings"])
+        ck(f"{label}: the plan starts the station without auto-memory", plan["settings"].get("autoMemoryEnabled") is False)
+        bare = {k: v for k, v in plan["settings"].items() if k not in ("disableClaudeAiConnectors", "autoMemoryEnabled")}
+        ck(f"{label}: the settings equal the filled settings, deep, but for the connectors and auto-memory keys", bare == want["settings"])
         ck(f"{label}: the plan names the station, role and the project the cell resolved",
            plan["env"]["FACTORY_STATION"] == station and plan["env"]["FACTORY_ROLE"] == role
            and plan["env"].get("TARES_PROJECT") == ("uc_links" if project else None), str(plan["env"])[:300])

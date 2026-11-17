@@ -55,5 +55,6 @@
       "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
     ]
   },
-  "disableClaudeAiConnectors": true
+  "disableClaudeAiConnectors": true,
+  "autoMemoryEnabled": false
 }
