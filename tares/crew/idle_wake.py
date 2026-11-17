@@ -35,6 +35,7 @@ from .errors import CrewError, NotBetweenTurnsError
 from .paths import CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
+STALL_AFTER = 45 * 60   # seconds a held ticket may go without news before the orchestrator is told
 DEFAULT_SETTLE = 600   # seconds a session may be active after a wake before the clock restarts (FACTORY_WAKE_SETTLE)
 
 _RELEASE = re.compile(r"(^|[^A-Za-z])RELEASE([^A-Za-z]|$)")
@@ -224,13 +225,42 @@ def _work_items(doc) -> list:
     return items
 
 
+def _stall_items(doc, client: TaresClient, paths: CrewPaths) -> list:
+    """The held tickets that stopped moving, as [{key, text}]: a ticket whose builder owes the next step (stage todo,
+    doing or changes) with no news for STALL_AFTER seconds, and a ticket in changes whose holder is no longer
+    running. A ticket whose row has no `updated_at` (a Tares before that field) gives no stall signal; the
+    liveness signal needs only the stage and the holder."""
+    items, now, running = [], state.now_s(), {}
+    for t in _list(_get(doc, "in_progress")):
+        project, ticket = _text(_get(t, "project")), _text(_get(t, "ticket"))
+        stage, holder = _get(t, "stage"), _get(t, "holder")
+        if stage not in ("todo", "doing", "changes"):
+            continue
+        at = _get(t, "updated_at")
+        when = _secs(at)
+        if when is not None and now - when > STALL_AFTER:
+            items.append({"key": f"st:{project}/{ticket}@{at}",
+                          "text": f"ticket {ticket} of {project} has had no news for {(now - when) // 60} minutes"})
+        if stage == "changes" and isinstance(holder, str) and holder:
+            if holder not in running:
+                try:
+                    running[holder] = claude.is_alive(holder, "", claude.claude_bin(client.env), paths)
+                except (SessionListUnreadableError, CrewError):
+                    running[holder] = True   # not known to be gone: no wake on a reading that failed
+            if not running[holder]:
+                items.append({"key": f"gone:{project}/{ticket}@{_text(_alt(_get(t, 'head'), ''))}",
+                              "text": f"ticket {ticket} of {project} is in changes and {holder} is not running"})
+    return items
+
+
 def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
-    """Desk answers closed, projects handed over, tickets ready, tickets bouncing to a new ladder step and
-    milestones ready to check, since the baseline; the first look only sets it."""
+    """Desk answers closed, projects handed over, tickets ready, tickets bouncing to a new ladder step, milestones
+    ready to check and held tickets that stalled or lost their holder, since the baseline; the first look only
+    sets it."""
     desk = _json(client, "/api/desk?state=answered&mine=1")
     projs = _json(client, "/api/crew/projects")
     work = _my_work(client)
-    items = None if work is None else _work_items(work)
+    items = None if work is None else _work_items(work) + _stall_items(work, client, paths)
     work_keys = [] if items is None else [i["key"] for i in items]
     orch = state.crew_orchestrator(paths)
     base = state.wake_read(orch, paths)["baseline"]

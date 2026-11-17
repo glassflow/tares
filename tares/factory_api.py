@@ -1307,14 +1307,19 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if p is None or uid in hidden:
                 continue
             tickets = store.list_tickets(uid)
+            notes = None    # the working docs' last edits, read once a project has a held ticket
             wait = factory_mod.readiness(tickets)
             for t in tickets:
                 if not is_mine(t, me["id"], p, o) or factory_mod.finished(t):
                     continue
                 if t["holder"]:
+                    if notes is None:
+                        notes = {d["id"]: d["updated_at"] for d in store.list_docs(uid, "working")}
+                    news = [x for x in (t.get("updated_at"), notes.get(t.get("working_doc"))) if x]
                     doing.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "holder": t["holder"],
-                                  "stage": t["stage"] or ""})
+                                  "stage": t["stage"] or "", "head": (t.get("pr") or {}).get("head") or "",
+                                  "updated_at": max(str(x) for x in news) if news else None})
                 elif wait[t["id"]]["ready"]:
                     ready.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "repo": t.get("repo") or ""})
@@ -1350,7 +1355,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def my_work(request: Request, crew: str | None = None, project: str | None = None):
         """What belongs to the caller's person (TR-633), across the projects that have an open
         hand-over and that the caller can see: `ready` (their tickets that can start),
-        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
+        `in_progress` (their tickets a station holds, each with its pull request's `head` and
+        `updated_at`, the later of the ticket's last change and its working doc's, so a stage change or a
+        check; a ticket with no assignee is its project
         lead's, or `local`'s when the project has no lead), `bouncing` (those of them that came
         back from review three or more times, each with `count`, `ladder` (3 or 5) and the last
         `reason`; TR-1092), and `led_projects` with the milestones

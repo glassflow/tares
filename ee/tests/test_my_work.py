@@ -220,9 +220,11 @@ async def main():
         print("== a ticket held by a station is in progress, and no longer ready ==")
         store.update_ticket(t2["id"], holder="a-shop-build-m1", stage="doing", status="in_progress")
         wp = (await work("P")).json()
-        ck("P's second ticket is in progress with its holder and stage",
+        stamp = next(t for t in store.list_tickets(shop) if t["id"] == t2["id"])["updated_at"]
+        ck("P's second ticket is in progress with its holder, stage, head and last news",
            wp["in_progress"] == [{"project": "Shop", "ticket": "T2", "title": "P second",
-                                  "holder": "a-shop-build-m1", "stage": "doing"}], wp["in_progress"])
+                                  "holder": "a-shop-build-m1", "stage": "doing", "head": "",
+                                  "updated_at": str(stamp)}], wp["in_progress"])
         ck("and P's ready is the first only", names(wp["ready"]) == ["T1"], wp["ready"])
         ck("Q sees none of P's", (await work("Q")).json()["in_progress"] == [])
 
