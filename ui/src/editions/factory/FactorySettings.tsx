@@ -9,7 +9,7 @@ import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import { AgentLimitsPanel, CLOUD_BACK, McpToolsPanel } from "../../pages/Security";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
-import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
+import WorkspaceSettings, { TeamPanel } from "../settings/WorkspacePanels";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
 import { TracingPanel } from "../settings/TracingPanel";
 import { GithubPanel } from "../settings/GithubPanel";
@@ -179,8 +179,8 @@ function CloudPeople({ apiUrl }: { apiUrl: string }) {
   const ov = useWorkspaceOverview(apiUrl);
   const access = useAccessData();
   const r = ov.result;
-  if (!r) return <div className="panel"><div className="muted">loading…</div></div>;
-  if (r.status !== "ok") return <WorkspaceSettings cloud={cloud} apiUrl={apiUrl} onOpenTab={() => undefined} />;
+  if (!r) return <LoadingBlocks data-testid="people-loading" widths={["40%", "25%"]} />;
+  if (r.status !== "ok") return <WorkspaceSettings cloud={cloud} apiUrl={apiUrl} />;
   return (
     <TeamPanel apiUrl={apiUrl} slug={r.data.slug || slugFromHost()} loginUrl={cloud.health?.login_url}
                isOwner={r.data.role === "owner"} you={r.data.you?.email}
@@ -323,7 +323,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 
       {tab === "people" && <div className={HEADED}><PeoplePane /></div>}
       {tab === "keys" && <div className={HEADED}><KeysPane /></div>}
-      {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={() => undefined} noTeam />}
+      {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} noTeam />}
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
       {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}
