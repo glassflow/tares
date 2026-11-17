@@ -1663,12 +1663,16 @@ class FactoryStore:
                                  "number = ?", [ref, int(m.group(1)) if m else -1]).fetchone()
         return self._dk_people([self._dk_row(r)])[0] if r else None
 
-    def list_desk(self, state: str | None = "open", project: str | None = None) -> list[dict]:
+    def list_desk(self, state: str | None = "open", project: str | None = None,
+                  closed_since=None) -> list[dict]:
+        """Desk items by state and project; `closed_since` (a datetime) keeps only the items closed at or after it."""
         q, vals = f"SELECT {self._DK_COLS} FROM desk_items WHERE 1 = 1", []
         if state:
             q += " AND state = ?"; vals.append(state)
         if project:
             q += " AND project = ?"; vals.append(project)
+        if closed_since is not None:
+            q += " AND closed_at >= ?"; vals.append(closed_since)
         with self._sread:
             rows = self.sc.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
         return self._dk_people([self._dk_row(r) for r in rows])
