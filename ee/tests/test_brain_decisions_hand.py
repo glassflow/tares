@@ -57,6 +57,7 @@ def H(tok):
 
 BRAIN_KEY = "brain-" + "key-test-hand"   # gitleaks:allow
 MB5 = 5 * 1024 * 1024
+MB1 = 1024 * 1024
 RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
@@ -97,7 +98,7 @@ def make_pdf(text: str) -> bytes:
 
 def unit():
     print("== the pieces ==")
-    ck("the source, kind and prefix", (dh.SOURCE, dh.KIND, dh.PREFIX, dh.MAX_BYTES) == ("decisions", "decision", "hand:", 5 * 1024 * 1024))
+    ck("the source, kind and prefix", (dh.SOURCE, dh.KIND, dh.PREFIX, dh.MAX_BYTES, dh.TEXT_MAX) == ("decisions", "decision", "hand:", 5 * 1024 * 1024, 1024 * 1024))
     ck("a summary is the first sentence", dh.summary_of("We chose X.  Then more. And more.") == "We chose X.")
     ck("... on one line", dh.summary_of("Line one\nline two. Next") == "Line one line two.")
     ck("... without a full stop it is the whole text, cut at 200 characters",
@@ -260,18 +261,48 @@ async def main():
         r = await add({"title": "T", "text": "", "file": good_file})
         ck("an empty text next to a file is fine (a form sends both)", r.status_code == 201 and r.json()["summary"] == "# Title Body.", r.text[:200])
 
-        print("== the 5 MB limit ==")
+        print("== the 5 MB file limit and the 1 MB text limit ==")
         reset()
-        r = await add({"title": "At the limit", "file": file_of("big.md", b"a" * MB5)})
-        ck("a file of exactly 5 MB is taken", r.status_code == 201 and len(lore.documents[("decisions", r.json()["id"])]["text"]) == MB5, f"{r.status_code} {r.text[:120]}")
+        r = await add({"title": "At the limit", "file": file_of("big.md", b"a" * MB1)})
+        ck("a file whose text is exactly 1 MiB is taken", r.status_code == 201 and len(lore.documents[("decisions", r.json()["id"])]["text"]) == MB1, f"{r.status_code} {r.text[:120]}")
         reset()
+        r = await add({"title": "Over", "file": file_of("big.md", b"a" * (MB1 + 1))})
+        ck("a file whose text is one byte over 1 MiB is 413 in plain words", r.status_code == 413 and "1 MB" in r.text, f"{r.status_code} {r.text[:160]}")
+        r = await add({"title": "Over", "file": file_of("big.md", b"a" * MB5)})
+        ck("a file of exactly 5 MB is 413 too (its text is over 1 MB)", r.status_code == 413 and "1 MB" in r.text, f"{r.status_code} {r.text[:160]}")
         r = await add({"title": "Over", "file": file_of("big.md", b"a" * (MB5 + 1))})
-        ck("a file one byte over is 413 in plain words", r.status_code == 413 and "5 MB" in r.text, f"{r.status_code} {r.text[:120]}")
+        ck("a file one byte over 5 MB is 413 in plain words", r.status_code == 413 and "5 MB" in r.text, f"{r.status_code} {r.text[:120]}")
         r = await add({"title": "Over", "file": {"name": "big.md", "content_base64": "QUFB" * (MB5 // 2)}})
         ck("a file far over is 413 without being decoded", r.status_code == 413, f"{r.status_code}")
+        r = await add({"title": "Over", "text": "a" * (MB1 + 1)})
+        ck("pasted text one byte over 1 MiB is 413 in plain words", r.status_code == 413 and "1 MB" in r.text, f"{r.status_code} {r.text[:160]}")
+        r = await add({"title": "Over", "text": "é" * (MB1 // 2 + 1)})
+        ck("the limit counts bytes, not characters (512K+1 two-byte characters)", r.status_code == 413, f"{r.status_code}")
         r = await add({"title": "Over", "text": "a" * (MB5 + 1)})
         ck("pasted text over 5 MB is 413", r.status_code == 413, f"{r.status_code}")
         ck("... nothing was written", not puts() and not held())
+        r = await add({"title": "At the limit", "text": "a" * MB1})
+        ck("pasted text of exactly 1 MiB is taken", r.status_code == 201 and len(lore.documents[("decisions", r.json()["id"])]["text"]) == MB1, f"{r.status_code} {r.text[:120]}")
+        reset()
+        try:
+            async with repos_mod.lore_client() as lc:
+                await lc.put_documents("decisions", [{"external_id": "hand:x", "title": "T", "text": "a" * (MB1 + 1), "kind": "decision",
+                                                     "metadata": {"decided_by": ["A"], "decided_at": "2026-01-01T00:00:00Z"}}])
+            fake_limit = False
+        except Exception:   # noqa: BLE001
+            fake_limit = True
+        ck("the fake lore refuses a text over 1 MiB, like lore", fake_limit and not held())
+
+        print("== a NUL character ==")
+        reset()
+        r = await add({"title": "Nu\x00l", "text": "before\x00after"})
+        doc = lore.documents[("decisions", r.json()["id"])] if r.status_code == 201 else {}
+        ck("NUL is taken out of a pasted text and a title (lore would refuse it)", r.status_code == 201 and doc.get("text") == "beforeafter" and doc.get("title") == "Nul", f"{r.status_code} {r.text[:160]}")
+        r = await add({"title": "Only NUL text", "text": "\x00\x00 "})
+        ck("a text of only NUL is 400", r.status_code == 400, f"{r.status_code} {r.text[:120]}")
+        r = await add({"title": "\x00", "text": "t"})
+        ck("a title of only NUL is 400", r.status_code == 400, f"{r.status_code} {r.text[:120]}")
+        ck("... nothing more was written", len(held()) == 1)
 
         print("== a Markdown and a text upload ==")
         reset()

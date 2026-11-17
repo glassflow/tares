@@ -17,8 +17,9 @@ Add: the JSON body is
      "decided_by": "Ana Lopez"}                           # optional
 
 `file` is a Markdown (.md, .markdown), plain text (.txt) or PDF (.pdf) file, sent as base64 inside
-the JSON, at most 5 MB once decoded (413 above that). A text file must be UTF-8. A PDF becomes text
-on the cell with `pypdf` (the `ee` extra of the package; without it a PDF answers 501 and pasting
+the JSON, at most 5 MB once decoded (413 above that). The text of a decision, pasted or read from a
+file, is at most 1 MB (lore's limit; 413 in plain words above that, nothing is sent to lore). A text
+file must be UTF-8. A PDF becomes text on the cell with `pypdf` (the `ee` extra of the package; without it a PDF answers 501 and pasting
 still works); a PDF with no text in it (a scan), a password-protected one and a corrupt one are each
 a 400 in plain words. Everything is checked before anything is sent to lore: a refused request writes
 nothing. A null, empty or blank `text` or `file` counts as not given.
@@ -71,13 +72,14 @@ from tares import licence
 from . import repos as repos_mod
 from .lore import LoreClient, LoreError
 
-__all__ = ["KIND", "MAX_BYTES", "PREFIX", "SOURCE", "WHERE", "register_routes"]
+__all__ = ["KIND", "MAX_BYTES", "PREFIX", "SOURCE", "TEXT_MAX", "WHERE", "register_routes"]
 
 SOURCE = "decisions"                  # the lore source decisions added by hand live under
 KIND = "decision"
 PREFIX = "hand:"                      # every external id added by hand starts with this
 WHERE = ("repo_folder", "factory_project", "by_hand")
-MAX_BYTES = 5 * 1024 * 1024           # a file, decoded, and the text of a decision
+MAX_BYTES = 5 * 1024 * 1024           # a file, decoded
+TEXT_MAX = 1024 * 1024                # the text of a decision: lore refuses a document text over 1 MiB
 TITLE_MAX = 200                       # characters
 NAME_BYTES = 256                      # lore's limit for a name
 SUMMARY_MAX = 200                     # characters
@@ -125,7 +127,7 @@ def pdf_text(data: bytes) -> str:
         raise
     except Exception:   # noqa: BLE001  (a corrupt file raises anything; its words may be odd, so say our own)
         raise ValueError("This file could not be read as a PDF. Check that it is a PDF and not damaged.") from None
-    text = "\n\n".join(parts).strip()
+    text = "\n\n".join(parts).replace("\x00", "").strip()
     if not text:
         raise ValueError("This PDF holds no text to read (it may be a scan). Paste the text instead.")
     return text
@@ -223,7 +225,9 @@ def register_routes(app, host) -> None:
         title = body.get("title")
         if not isinstance(title, str) or not title.strip():
             host.err(ValueError("title: give the decision a title."))
-        title = title.strip()
+        title = title.replace("\x00", "").strip()
+        if not title:
+            host.err(ValueError("title: give the decision a title."))
         if len(title) > TITLE_MAX:
             host.err(ValueError(f"title: at most {TITLE_MAX} characters (this one has {len(title)})."))
         text, file = body.get("text"), body.get("file")
@@ -250,9 +254,13 @@ def register_routes(app, host) -> None:
         if has_file:
             text = await file_text(file)
         else:
-            text = text.strip()
-            if len(text.encode("utf-8")) > MAX_BYTES:
-                host.err(ValueError("text: at most 5 MB."), 413)
+            text = text.replace("\x00", "").strip()
+        if not text:
+            host.err(ValueError("text: the text has nothing in it."))
+        size = len(text.encode("utf-8"))
+        if size > TEXT_MAX:
+            host.err(ValueError(f"The text of a decision is at most 1 MB and this one is {size / 1048576:.1f} MB. "
+                                "Paste or upload the part that records the decision."), 413)
         added_by = _clip(" ".join(str(adder.get("name") or "").split())) if adder else ""
         added_by = added_by or _clip(" ".join(host.by(request).split())) or "Cell admin"
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

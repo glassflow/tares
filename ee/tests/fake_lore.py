@@ -227,6 +227,10 @@ class FakeLore:
             if d.get("kind") not in (None, "", "note", "doc", "decision"):
                 return _err(400, "kind must be note or doc, or decision")
             kind = d.get("kind") or "note"
+            if len(d["text"].encode("utf-8")) > 1024 * 1024:   # lore: documents.rs refuses a text over 1 MiB
+                return _err(413, f"documents[{i}].text is over 1 MiB")
+            if "\x00" in d["text"] or "\x00" in d["title"]:   # lore refuses a NUL in a text or a title
+                return _err(400, f"documents[{i}] holds a NUL character")
             meta = d.get("metadata")
             if meta is not None and not isinstance(meta, dict):
                 return _err(400, f"documents[{i}].metadata must be an object")
