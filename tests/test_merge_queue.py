@@ -1688,6 +1688,73 @@ async def main():
         ck("a ticket that has merged leaves the list", "lad3only" not in {b["project"] for b in wk["bouncing"]},
            [b["project"] for b in wk["bouncing"]])
 
+        print("== one branch is brought up to date at a time per (repo, base) ==")
+        repo = "acme/turn"
+        up = project("turn", "L4-ship", review="fakerev", ci="github")
+        tt = {n: ticket(up, repo, f"Turn {n}", n + 10, position=n) for n in (1, 2, 3)}
+        name = {n: factory_mod.label(store.get_ticket(up, tt[n])) for n in tt}
+        for n in tt:        # the pull requests are 11, 12 and 13: their heads are new to every check above
+            behind(repo, n + 10, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        other = "acme/turn-other"
+        upo = project("turnother", "L4-ship", review="fakerev", ci="github")
+        ticket(upo, other, "Other repo", 1)
+        behind(other, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+
+        def updated(r):
+            return [u[1] for u in UPDATES if u[0] == r]
+
+        await tick()
+        ck("three ready rows behind main: one update call for the first, in the queue's order",
+           updated(repo) == [11] and row(repo, 11)["state"] == "waiting_ci", (UPDATES, row(repo, 11)))
+        ck("the others keep their place and say whose turn it is",
+           all(row(repo, n + 10)["state"] == "queued"
+               and row(repo, n + 10)["reason"] == f"waits its turn: {name[1]} is being brought up to date"
+               for n in (2, 3)), [row(repo, n + 10) for n in (2, 3)])
+        ck("another repo has its own turn", updated(other) == [1] and row(other, 1)["state"] == "waiting_ci",
+           (UPDATES, row(other, 1)))
+        await tick()
+        await tick()
+        ck("while the first waits for its checks nothing else is updated",
+           updated(repo) == [11] and merged_calls(repo) == [], (UPDATES, merged_calls(repo)))
+        new = land(repo, 11, PENDING.pop((repo, 11)))
+        await tick()
+        ck("a new head with no check on it yet: still nobody else goes",
+           updated(repo) == [11] and row(repo, 12)["reason"].startswith("waits its turn: "), UPDATES)
+        CHECKED.add(new)
+        await tick()
+        ck("the first is queued on its new head, and the others still wait",
+           row(repo, 11)["state"] == "queued" and updated(repo) == [11] and merged_calls(repo) == [],
+           (row(repo, 11), UPDATES))
+        await tick()
+        ck("it merges, and the next one is brought up to date in that tick, the third waits for it",
+           [n for n, _ in merged_calls(repo)] == [11] and updated(repo) == [11, 12]
+           and row(repo, 12)["state"] == "waiting_ci"
+           and row(repo, 13)["reason"] == f"waits its turn: {name[2]} is being brought up to date",
+           (MERGES, UPDATES, row(repo, 13)))
+        PRS[(repo, 12)]["state"] = "closed"
+        store.update_ticket(tt[2], stage="doing")
+        await tick()
+        ck("when the one being updated leaves, the next goes", updated(repo) == [11, 12, 13]
+           and row(repo, 13)["state"] == "waiting_ci", (UPDATES, row(repo, 13)))
+        new = land(repo, 13, PENDING.pop((repo, 13)))
+        CHECKED.add(new)
+        await tick()
+        await tick()
+        ck("and it merges in its turn; nothing was updated twice",
+           [n for n, _ in merged_calls(repo)] == [11, 13] and updated(repo) == [11, 12, 13], (MERGES, UPDATES))
+
+        repo = "acme/turn-free"
+        up = project("turnfree", "L4-ship", review="fakerev", ci="github")
+        ticket(up, repo, "Behind", 1, position=1)
+        ticket(up, repo, "Not behind", 2, position=2)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        ck("a row that is not behind still merges while another is being brought up to date",
+           updated(repo) == [1] and [n for n, _ in merged_calls(repo)] == [2]
+           and row(repo, 1)["state"] == "waiting_ci", (UPDATES, MERGES))
+
         print("== health, and what Tares says ==")
         async with mk() as cx:
             h = (await cx.get("/health")).json()

@@ -9,6 +9,8 @@ A row of the `merge_queue` table is one pull request. Its states:
                     dependencies are merged (and, at L3-review, once it is approved)
 - waiting_ci        Tares updated the pull request's branch to the base (CI integration `github`)
                     and the row waits for checks on the new commit
+                    One row per (repo, base) is in this state at a time: a ready row that is
+                    behind waits queued ("waits its turn") until it merges or leaves
 - waiting_approval  L3-review: a desk item asks the person; nothing merges until a yes
 - merging           claimed by a tick, the merge call in flight (one per repo and base)
 - merged            GitHub shows it merged (by Tares or by anyone)
@@ -688,13 +690,16 @@ async def _merge_moved(store, row: dict, message: str) -> None:
 
 
 UPDATING = "bringing the branch up to date"
+WAITS = "waits its turn: "
 
 
-async def _branch_ok(store, row: dict, t: dict, ans: dict) -> bool:
+async def _branch_ok(store, row: dict, t: dict, ans: dict, turn: dict) -> bool:
     """Whether the queued row may go on to its approval and its claim. False when it waits (GitHub
     has not said whether it merges, or Tares is bringing the branch up to date) or ended (it
     conflicts). A branch that is only behind is updated for a project whose CI is `github` (the
-    checks then run on the new commit); with any other CI it merges as it is."""
+    checks then run on the new commit); with any other CI it merges as it is. Per (repo, base)
+    one row is brought up to date at a time (`turn["by"]` names it): the first to merge moves the
+    base and every other run would be thrown away, so a behind row keeps its place and waits."""
     brief = ans.get("pr") or {}
     mergeable = brief.get("mergeable")
     if mergeable is None:
@@ -719,12 +724,19 @@ async def _branch_ok(store, row: dict, t: dict, ans: dict) -> bool:
                                 f"Could not tell whether the branch is behind: {cmp['error']}")
         return False
     if not cmp["behind_by"]:
+        if str(row.get("reason") or "").startswith(WAITS):
+            await asyncio.to_thread(_set, store, row, "queued", None)
         return True
+    if turn.get("by"):
+        await asyncio.to_thread(_set, store, row, "queued",
+                                f"{WAITS}{turn['by']} is being brought up to date")
+        return False
     saved = json.dumps({"head": row["head"], "files": _slim(cmp["files"])})
     await asyncio.to_thread(store.merge_queue_update, row["id"], before_files=saved)
     up = await factory_github.update_branch(store, row["repo"], int(row["pr"]), row["head"])
     if up["ok"]:
         await asyncio.to_thread(_set, store, row, "waiting_ci", UPDATING, before_files=saved)
+        turn["by"] = factory_mod.label(t)
         return False
     await asyncio.to_thread(_set, store, row, "queued", None, before_files=None)
     if up["conflict"]:
@@ -788,6 +800,10 @@ async def _run_queue(store, g: dict, fresh: dict[str, dict]) -> None:
     for row in g["rows"]:
         groups.setdefault((row["repo"], row["base"]), []).append(row)
     for (repo, base), rows in groups.items():
+        turn: dict = {}         # the ticket whose branch is being brought up to date, if any
+        for row in sorted(rows, key=lambda r: _key(g, r)):
+            if row["state"] == "waiting_ci" and g["by_id"].get(row["ticket"]):
+                turn.setdefault("by", factory_mod.label(g["by_id"][row["ticket"]]))
         for row in sorted(rows, key=lambda r: _key(g, r)):
             if row["state"] not in ("queued", "waiting_ci"):
                 continue
@@ -813,7 +829,7 @@ async def _run_queue(store, g: dict, fresh: dict[str, dict]) -> None:
                     await asyncio.to_thread(_set, store, row, "queued",
                                             "; ".join(ans.get("reasons") or []))
                     continue
-                if ans is not None and not await _branch_ok(store, row, t, ans):
+                if ans is not None and not await _branch_ok(store, row, t, ans, turn):
                     continue
                 level = g["level"].get(row["project_uid"], "L3-review")
                 if level != AUTO and row.get("approved_head") != row["head"]:
