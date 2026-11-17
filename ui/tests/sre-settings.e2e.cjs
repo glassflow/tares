@@ -373,6 +373,49 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // ---- 8c. Settings, Advanced, Edition (TR-1392, on the edition kit): one row per edition, the one
+    // shown now marked, a Switch to for each other that asks first. The switch itself is answered by a
+    // stand-in, so the cell stays AI SRE for the rest of the suite.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=edition`, { waitUntil: "load" });
+      await T(p, "edition-row").first().waitFor();
+      const rows = await p.locator('[data-testid="edition-row"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-id")));
+      ck(`${w}: Edition has a row per edition`, JSON.stringify([...rows].sort()) === JSON.stringify(["factory", "platform", "sre"]), JSON.stringify(rows));
+      ck(`${w}: AI SRE is the one shown now, and has no switch`, (await p.locator('[data-id="sre"] [data-testid="edition-now"]').innerText()).trim().toLowerCase() === "shown now"
+        && (await T(p, "edition-to-sre").count()) === 0 && (await p.locator('[data-testid="edition-now"]').count()) === 1);
+      ck(`${w}: the other two can be switched to`, (await T(p, "edition-to-factory").innerText()) === "Switch to Software Factory" && (await T(p, "edition-to-platform").count()) === 1);
+      ck(`${w}: Edition has its title`, (await T(p, "edition").getByRole("heading", { name: "Edition", exact: true }).count()) === 1);
+      ck(`${w}: Edition does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await checkWords(p, ck, `edition ${w}`);
+      await shot(p, `advanced-edition-${w}.png`);
+      if (w === 1440) {
+        await T(p, "edition-to-factory").click();
+        const dlg = T(p, "edition-dialog");
+        await dlg.waitFor();
+        const said = (await dlg.innerText()).replace(/\s+/g, " ");
+        ck("the switch asks first, and says what stays", /Switch to Software Factory\?/.test(said) && /Your projects, data and crew stay as they are\./.test(said) && /from AI SRE to Software Factory/.test(said), said);
+        await shot(p, "advanced-edition-dialog-1440.png");
+        await T(p, "edition-cancel").click();
+        ck("Cancel closes it and nothing is sent", (await dlg.count()) === 0);
+        let sent = 0;
+        await p.route("**/api/settings/edition", (r) => r.request().method() === "PUT"
+          ? (sent++, r.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "the cell is busy" }) })) : r.continue());
+        await T(p, "edition-to-factory").click();
+        await T(p, "edition-confirm").click();
+        await T(p, "edition-error").waitFor();
+        ck("a refusal is said in a banner, as a sentence, and the dialog closes", (await T(p, "edition-error").innerText()).trim() === "The cell is busy" && (await dlg.count()) === 0 && sent === 1);
+        await p.unroute("**/api/settings/edition");
+        let body;
+        await p.route("**/api/settings/edition", (r) => r.request().method() === "PUT"
+          ? (body = r.request().postDataJSON(), r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) })) : r.continue());
+        await T(p, "edition-to-factory").click();
+        await Promise.all([p.waitForEvent("load"), T(p, "edition-confirm").click()]);
+        ck("Switch sends the edition and reloads the console", body && body.edition === "factory", JSON.stringify(body));
+      }
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);
@@ -410,6 +453,14 @@ async function waitFor(url, tries = 150) {
       await T(p, "access").waitFor();
       await settle(p);
       ck(`read key ${width}: Access shows no Agent tools`, (await T(p, "mcp-tools").count()) === 0 && (await p.getByRole("switch", { name: "Let agents use the building blocks" }).count()) === 0);
+      await p.goto(`${RO_BASE}/settings/advanced?tab=edition`, { waitUntil: "load" });
+      await T(p, "edition-readonly").waitFor();
+      ck(`read key ${width}: Edition says which one, and that only an admin switches`, (await T(p, "edition-readonly").innerText()).trim() === "Now AI SRE. Only an admin can switch the edition."
+        && (await T(p, "edition-row").count()) === 0 && (await T(p, "edition").getByRole("button").count()) === 0, await T(p, "edition-readonly").innerText());
+      await shot(p, `advanced-edition-ro-${width}.png`);
+      await p.goto(`${RO_BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      await T(p, "access").waitFor();
+      await settle(p);
       if (width === 390) ck("read key 390: no sideways scroll", (await overflow(p)) <= 0, String(await overflow(p)));
       await checkWords(p, ck, `read key ${width}`);
       await shot(p, `live-ro-${width}.png`);
