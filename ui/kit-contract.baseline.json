@@ -50,7 +50,6 @@
   "src/components/setup/tryit.tsx": 4,
   "src/components/SkillsPanel.tsx": 34,
   "src/components/SlackPick.tsx": 3,
-  "src/components/SourceForm.tsx": 242,
   "src/components/Standup.tsx": 6,
   "src/components/TemplateParams.tsx": 5,
   "src/components/TriggerEditor.tsx": 31,
@@ -82,11 +81,9 @@
   "src/ee/project/grants.tsx": 4,
   "src/ee/project/signoffs.tsx": 5,
   "src/ee/settings/AreasPanel.tsx": 12,
-  "src/pages/Activity.tsx": 47,
   "src/pages/AgentDetail.tsx": 38,
   "src/pages/CatalogExport.tsx": 20,
   "src/pages/Crew.tsx": 52,
-  "src/pages/Explore.tsx": 23,
   "src/pages/McpServers.tsx": 23,
   "src/pages/ProjectNew.tsx": 4,
   "src/pages/ProjectNewCustom.tsx": 7,
@@ -94,12 +91,10 @@
   "src/pages/ProjectNewSharedContext.tsx": 40,
   "src/pages/Projects.tsx": 7,
   "src/pages/ProjectShell.tsx": 30,
-  "src/pages/Resources.tsx": 7,
   "src/pages/Security.tsx": 21,
   "src/pages/SourceClaudeCode.tsx": 11,
   "src/pages/SourceDetail.tsx": 38,
   "src/pages/SourceDiscover.tsx": 8,
   "src/pages/SourceNew.tsx": 20,
-  "src/pages/Sources.tsx": 10,
-  "src/pages/WorkspaceSettings.tsx": 46
+  "src/pages/Sources.tsx": 10
 }
