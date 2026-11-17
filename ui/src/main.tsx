@@ -180,9 +180,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <EditionProvider>
         <LicenceProvider>
           <EeLoader />
-          {/* a page change is a transition: while the next page's code loads, the current page stays instead
-              of a skeleton flashing in between (TR-1433) */}
-          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          {/* Not v7_startTransition: it makes every router update a transition, a tab's search param too, so the
+              page lags its own address by a render and 30 e2e checks read the old page. The menu preloads a
+              page's code on hover and focus instead, and the Suspense fallback waits 200ms (TR-1433). */}
+          <RouterProvider router={router} />
         </LicenceProvider>
       </EditionProvider>
     </AuthGate>

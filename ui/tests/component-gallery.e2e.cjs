@@ -54,6 +54,8 @@ async function checkStatuses(page, theme) {
 
 // TR-1264: one Loading and one EmptyState. Loading tells a screen reader the area is busy and holds only
 // Skeleton bars; EmptyState is a titled block for a page with nothing in it, or a line for an empty section.
+// The suites run under reduced motion (tests/browser.cjs), where the bars hold still on purpose, so the pulse is
+// asked of the class here; motion.e2e.cjs sees it move.
 async function checkStates(page) {
   const got = await page.evaluate(() => {
     const busy = (id) => {
@@ -61,7 +63,7 @@ async function checkStates(page) {
       if (!e) return null;
       const bars = [...e.querySelectorAll("[aria-hidden=true]")];
       return { role: e.getAttribute("role"), busy: e.getAttribute("aria-busy"), label: e.getAttribute("aria-label"),
-               bars: bars.length, pulse: bars.every((b) => getComputedStyle(b).animationName !== "none"), words: e.textContent.trim() };
+               bars: bars.length, pulse: bars.length > 0 && bars.every((b) => b.classList.contains("animate-pulse")), words: e.textContent.trim() };
     };
     const empty = (id) => {
       const e = document.querySelector(`[data-testid=${id}]`);

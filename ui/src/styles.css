@@ -29,7 +29,7 @@
    - dur-3, 260ms: a page's content, the phone drawer, a toast, a row moving
    - dur-4, 900ms: the wash on a value that just changed, fading out
    - dur-wait, 200ms: how long a skeleton holds back, so a fast read never shows one
-   - dur-instant, 1ms: what every duration becomes under prefers-reduced-motion
+   - dur-instant, 1ms: what every animation becomes under prefers-reduced-motion (transitions: 0s)
    Things arrive on ease-out (fast, then settle) and leave on ease-in, faster than they came.
    Under prefers-reduced-motion every one of them collapses to an instant (the guard in @layer base).
    `static`: Tailwind emits these even where no utility names them, since the CSS below reads them. */
@@ -2464,7 +2464,10 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
    which ticket wants it. The rule is in .impeccable.md (Motion); the tokens are at the top of this file. */
 
 /* The guard. A person who asked the OS for less motion gets none: every transition and animation
-   ends at once. 1ms, not 0, so an exit still fires its animationend and the element leaves. In @layer
+   ends at once. An animation gets 1ms, not 0, so an exit still finishes and the element leaves. A
+   transition gets 0s: transition-property defaults to `all`, so a 1ms duration on every element would
+   start a transition on any style change anywhere, and a colour read in the same tick would get the
+   old value. 0s is the default, the browser's "no transition". In @layer
    base and important: an important declaration in an earlier layer beats every later layer, so no
    utility or component can win it back. Skeleton delays drop too, since nothing then fades them in. */
 @layer base {
@@ -2482,7 +2485,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
       animation-duration: var(--dur-instant) !important;
       animation-delay: 0s !important;
       animation-iteration-count: 1 !important;
-      transition-duration: var(--dur-instant) !important;
+      transition-duration: 0s !important;
       transition-delay: 0s !important;
       scroll-behavior: auto !important;
     }

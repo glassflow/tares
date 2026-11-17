@@ -188,6 +188,16 @@ const followAfter = (page, click, watch, gone, want) => page.evaluate(async ([c,
     await calm.getByTestId("moving-shuffle").click();
     const calmGlide = await calm.evaluate(() => [...document.querySelectorAll("[data-testid=moving-row]")].reduce((n, e) => n + e.getAnimations().length, 0));
     ck("reduced motion: rows change places without gliding", calmGlide === 0, String(calmGlide));
+    // transition-property defaults to all: a guard that gave transitions any duration would start one on every
+    // style change of every element, and a colour read in the same tick would still be the old one.
+    const calmPaint = await calm.evaluate(() => {
+      const i = document.createElement("i"); document.body.appendChild(i);
+      i.style.backgroundColor = "rgb(0, 0, 0)"; getComputedStyle(i).backgroundColor;
+      i.style.backgroundColor = "rgb(255, 0, 0)";
+      const out = { now: getComputedStyle(i).backgroundColor, running: i.getAnimations().length }; i.remove(); return out;
+    });
+    ck("reduced motion: a style change applies at once, with no transition started", calmPaint.now === "rgb(255, 0, 0)" && calmPaint.running === 0,
+       JSON.stringify(calmPaint));
 
     ck("no page errors", errors.length === 0, errors.join(" | "));
   } catch (e) {
