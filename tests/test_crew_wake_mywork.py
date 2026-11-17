@@ -122,7 +122,7 @@ def wake():
     return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
 
 
-def fake_restart(cl, pth, args, *, claude_bin):
+def fake_restart(cl, pth, args, *, claude_bin, **_kw):
     restarted.append(args)
 
 
