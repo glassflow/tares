@@ -201,6 +201,7 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -297,7 +298,8 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -384,7 +386,8 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -471,7 +474,8 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -531,6 +535,7 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -597,7 +602,8 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -654,7 +660,8 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -711,7 +718,8 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

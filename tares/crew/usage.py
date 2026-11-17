@@ -104,6 +104,12 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             crew's own folders (instead of rm, which can stop a
                                             station on a prompt); --force for your own worktree
                                             with uncommitted or unpushed work
+  tares factory report log "<text>"         add a line to your station's log for today
+                                            (reports/log/<station>/<day>.md); your report keeps
+                                            only the current state
+  tares factory report grep [--station <s>] [--days <n>] <regex>
+                                            matching lines of the logs and reports, newest first,
+                                            at most 40 lines and 4 KB
   tares factory retire <station>
   tares factory heavy <seconds> <command...>
                                             run a heavy command (a docker build, a big scan) alone on

@@ -204,6 +204,14 @@ def _doctor(argv: list[str], env: dict) -> int:
 PORTED[("doctor",)] = _doctor
 
 
+def _report(argv: list[str], env: dict) -> int:
+    from .report import cmd_report  # imported when used
+    return cmd_report(argv, env)
+
+
+PORTED[("report",)] = _report  # new in Python: a station's dated log, apart from its report
+
+
 def find(argv: list[str]) -> Callable[[list[str], dict], int] | None:
     """The ported function for argv: the longest key that starts argv wins, so `crew status` and
     `crew` can both be keys. None when the command is not ported."""
