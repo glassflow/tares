@@ -615,6 +615,20 @@ class Doctor:
                 self.no(f"project_{p}_{rid}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
                         "push branches and open PRs", "ask for write access to the repo")
 
+    def check_allow(self) -> None:
+        """One line per role: the MCP servers and plugins its stations keep, a warning for a name Claude Code lacks."""
+        if not self.paths.crew_cfg.is_file():
+            return
+        from . import allow
+        for r in allow.ALLOW_ROLES:
+            text = allow.line(self.paths, r)
+            missing = allow.unknown_names(self.paths, r, self.home)
+            if missing:
+                names = ", ".join(f"{n}" for v in missing.values() for n in v)
+                self.warn(f"allow_{r}", f"{text}; Claude Code has no {names}", f"{ME} allow {r} mcp|plugins <names>", True)
+            else:
+                self.ok(f"allow_{r}", text, True)
+
     def check_cmux(self) -> None:
         found = doctor_lsp.cmux_check(self.env)
         if found:
@@ -768,6 +782,7 @@ class Doctor:
             self.check_trust_and_plugin()
             self.check_mcp(c)
             self.check_crew(c) if on else self.check_crew_offline()
+            self.check_allow()
             self.check_cmux()
             if on:
                 self.check_lsp(c)

@@ -12,6 +12,10 @@ tares factory doctor
   ok    Claude Code trusts <TMP>/crew
   ok    stations load the plugin at <REPO>/claude-plugin
   FIX   no MCP server answers at http://127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
 -- stderr --
 tares factory: warning: Tares at http://127.0.0.1:<PORT> refuses key dead0000 from the environment; the crew keeps the key it has
 -- after --
@@ -29,6 +33,10 @@ tares factory doctor
   ok    Claude Code trusts <TMP>/crew
   ok    stations load the plugin at <REPO>/claude-plugin
   FIX   no MCP server answers at http://127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
 -- stderr --
 
 == file crew/.tares-token ==

@@ -61,7 +61,15 @@ def _secrets(argv: list[str], env: dict) -> int:
 
 
 PORTED[("with-secrets",)] = _with_secrets  # new in Python (TR-775): bash has no such command
+
 PORTED[("secrets",)] = _secrets            # new in Python (TR-775)
+
+def _allow(argv: list[str], env: dict) -> int:
+    from .allow import cmd_allow  # imported when used
+    return cmd_allow(argv, env)
+
+
+PORTED[("allow",)] = _allow  # new in Python: bash has no such command
 
 
 def _spawn(argv: list[str], env: dict) -> int:
