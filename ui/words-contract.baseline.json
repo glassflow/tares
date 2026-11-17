@@ -30,7 +30,6 @@
   "src/components/setup/planWatches.tsx": 18,
   "src/components/setup/tryit.tsx": 7,
   "src/components/SkillsPanel.tsx": 2,
-  "src/components/SourceForm.tsx": 42,
   "src/components/TriggerEditor.tsx": 24,
   "src/components/UsagePanels.tsx": 5,
   "src/pages/Activity.tsx": 46,
@@ -51,7 +50,7 @@
   "src/pages/SourceClaudeCode.tsx": 8,
   "src/pages/SourceDetail.tsx": 9,
   "src/pages/SourceDiscover.tsx": 7,
-  "src/pages/SourceNew.tsx": 19,
+  "src/pages/SourceNew.tsx": 18,
   "src/pages/Sources.tsx": 14,
   "src/pages/TriggerNew.tsx": 2,
   "src/pages/WorkspaceSettings.tsx": 2

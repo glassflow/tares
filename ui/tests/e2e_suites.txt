@@ -35,6 +35,7 @@ projects-list
 raise-limit
 session-picker
 settings-people
+source-form
 sre-guards
 sre-home
 sre-incidents
