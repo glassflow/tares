@@ -178,10 +178,10 @@ function loadTimeWords() {
       Object.defineProperty(navigator, "clipboard", { value: { writeText: (t) => { window.__copied.push(t); return Promise.resolve(); } }, configurable: true });
     };
     const copyPages = [
-      ["Claude Code source page", "/sources/claude-code", async (page) => { const b = page.locator("button.copybtn").first(); await b.waitFor(); return b; }],
+      ["Claude Code page", "/sources/claude-code", async (page) => { const b = page.getByTestId("claude-code-install").getByRole("button"); await b.waitFor(); return b; }],
       ["catalog export", "/sources/export", async (page) => {
-        await page.getByRole("button", { name: /^Export \d+ source/ }).click();
-        const b = page.getByRole("button", { name: /^(Copy|Copied)/ });
+        await page.getByTestId("export-run").click();
+        const b = page.getByTestId("export-copy");
         await b.waitFor();
         return b;
       }],

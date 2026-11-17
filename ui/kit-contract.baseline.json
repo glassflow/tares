@@ -82,7 +82,6 @@
   "src/ee/project/signoffs.tsx": 5,
   "src/ee/settings/AreasPanel.tsx": 12,
   "src/pages/AgentDetail.tsx": 38,
-  "src/pages/CatalogExport.tsx": 20,
   "src/pages/CatalogImport.tsx": 8,
   "src/pages/Crew.tsx": 52,
   "src/pages/McpServers.tsx": 23,
@@ -93,8 +92,6 @@
   "src/pages/Projects.tsx": 7,
   "src/pages/ProjectShell.tsx": 30,
   "src/pages/Security.tsx": 21,
-  "src/pages/SourceClaudeCode.tsx": 11,
   "src/pages/SourceDetail.tsx": 38,
-  "src/pages/SourceDiscover.tsx": 8,
-  "src/pages/SourceNew.tsx": 20
+  "src/pages/SourceDiscover.tsx": 8
 }
