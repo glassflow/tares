@@ -5,6 +5,22 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.59.0-rc.1] - 2026-11-17
+
+### Added
+- The Tickets page shows who each ticket is assigned to, on Board cards, List rows and Swimlanes, and filters by assignee: a person, Mine or No assignee. Swimlanes can group by assignee. `GET /api/factory/tickets` returns `assignee`, `assignee_raw`, `assignees` and `me`, and takes `assignee`.
+
+### Changed
+- A station that has Linear's own tools now reads one short page (`factory-protocol/linear.md`) before using them: `list_issues` with a `fields` list and a `limit` of 25 or less, `get_issue` with `fields`, at most one `list_issues(updatedAt=...)` look per tick, and one `save_issue` carrying every field. A Linear listing of 25 issues no longer carries every description into the station's context.
+- The station-orchestrator skill is now under 16,000 characters. Rare procedures (a project takeover, finishing a project, a mock approval, a refused permission, the milestone assumptions) moved to pages next to it that the orchestrator reads when the situation comes up. Claude Code no longer cuts the skill after a compaction, so the orchestrator no longer reloads it every time.
+- The station-builder skill is now under 15,000 characters. The steps for a screen ticket (the mock first) and for a stop from the orchestrator moved to pages next to it that the builder reads when the situation comes up. Claude Code no longer cuts the skill after a compaction, so the builder no longer reloads it every time.
+- The station-reviewer skill is now under 8,000 characters. The design check for a screen ticket moved to a page next to it that the reviewer reads when a pull request changes a screen. Claude Code no longer cuts the skill after a compaction, so the reviewer no longer reloads it every time.
+- The factory-protocol skill is now under 14,000 characters. The notes for a Tares before 1.56 (no people, no `my_work`) moved to a page next to it that a station reads only when those tools are missing. Claude Code no longer cuts the skill after a compaction, so stations no longer reload it every time.
+- The spec-project skill is now under 16,000 characters. The contributor and light-mode procedures, the area owner notes and the write-out of milestones, tickets and working docs moved to pages next to it that a session reads only when it reaches them.
+- A crew station reloads a skill after a compaction only when its re-attached copy says it was cut, or a rule it needs is missing, instead of after every compaction; this saves about 20,000 characters of context each time. A revive still loads both skills. A new test, `tests/test_skill_sizes.py`, keeps every SKILL.md at most 16,000 characters.
+- A ticket read through the Tares tools (`get_ticket`) now answers in a few KB: a working doc over 4,000 characters comes as its Goal, Steps and Progress with the list of its other sections, and only the latest 8 messages and checks, the first 5 decisions and the open review findings come. `section="<heading>"` or `section="all"` reads more of the doc, `detail="status"` gives only where the ticket stands, `detail="full"` the whole answer as before, and `since=<fingerprint>` answers `{"unchanged": true}` when nothing moved. A skill that asks for a new option still works on an older Tares, which ignores it and sends the whole answer.
+- The GitHub Issues connect form offers the repositories GitHub lets the cell see: the Repository box lists them, typing narrows the list, and any owner/name can still be typed. When GitHub lists nothing, the form says why.
+
 ## [1.58.0] - 2026-11-16
 
 The Software Factory becomes modular: tickets, review, CI, memory, monitoring, guardrails and the runtime are integrations chosen once for the factory, and a factory is set up in one place, Set up your factory, with Integrations in the menu to change them later. On a licensed cell the second brain connects GitHub repos, keeps them indexed and answers the crew's questions about them with citations.
