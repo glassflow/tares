@@ -34,7 +34,7 @@ milestones with acceptance checks, and a ticket list (in Tares, or synced from L
 ticket has a milestone and the tickets it depends on. To spec a new project, use the
 `spec-project` skill. When told to work on a Tares project, start with its `start` doc
 (`list_docs`, `get_doc`), then work one milestone at a time (`list_milestones`): the ready tickets
-from `list_tickets`, in order, each read with `get_ticket`, which carries the working doc.
+from `list_tickets`, in order, each read with `get_ticket`, which carries the working doc (a long one as its Goal, Steps and Progress, and `section="all"` gives all of it; if the tool refuses `section`, call it without: an older Tares sends the whole doc).
 If a ticket is already in progress when you start, an earlier session stopped on it: call
 `pick_up` first, and finish that ticket. While you build, keep a `## Progress` section at the end
 of the ticket's working doc (done, next, how to run things), so the next session can pick up.

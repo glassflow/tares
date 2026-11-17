@@ -262,6 +262,7 @@ test_tickets_github
 test_tickets_linear
 test_tickets_routing
 test_tickets_tares
+test_tool_sizes
 test_tracing
 test_trigger_debounce
 test_upgrade_hard_stop
