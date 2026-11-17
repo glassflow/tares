@@ -1294,6 +1294,18 @@ def register(app, store, h: Host) -> SimpleNamespace:
         watch reads this (TR-674); a person's own `pace` setting counts for that person."""
         return pace(request)
 
+    def as_utc(x):
+        """A stored time (a datetime, or its text) as an aware UTC datetime; None when there is none or it
+        is not a time. The crew's watch reads the ISO form of this."""
+        if isinstance(x, str):
+            try:
+                x = datetime.fromisoformat(x)
+            except ValueError:
+                return None
+        if not isinstance(x, datetime):
+            return None
+        return (x if x.tzinfo else x.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
     def work_of(me: dict, hidden: set, want: str = "", detail: bool = False) -> dict:
         """What belongs to person `me` ({id, name}) as GET /api/crew/my-work gives it: `ready`,
         `in_progress`, `bouncing`, `led_projects`, `desk` and `spec_questions`, leaving out the projects in
@@ -1308,14 +1320,19 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if p is None or uid in hidden:
                 continue
             tickets = store.list_tickets(uid)
+            notes = None    # the working docs' last edits, read once a project has a held ticket
             wait = factory_mod.readiness(tickets)
             for t in tickets:
                 if not is_mine(t, me["id"], p, o) or factory_mod.finished(t):
                     continue
                 if t["holder"]:
+                    if notes is None:
+                        notes = {d["id"]: d["updated_at"] for d in store.list_docs(uid, "working")}
+                    news = [d for d in (as_utc(t.get("updated_at")), as_utc(notes.get(t.get("working_doc")))) if d]
                     doing.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "holder": t["holder"],
-                                  "stage": t["stage"] or ""})
+                                  "stage": t["stage"] or "", "head": (t.get("pr") or {}).get("head") or "",
+                                  "updated_at": max(news).isoformat() if news else None})
                 elif wait[t["id"]]["ready"]:
                     ready.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "repo": t.get("repo") or ""})
@@ -1351,7 +1368,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def my_work(request: Request, crew: str | None = None, project: str | None = None):
         """What belongs to the caller's person (TR-633), across the projects that have an open
         hand-over and that the caller can see: `ready` (their tickets that can start),
-        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
+        `in_progress` (their tickets a station holds, each with its pull request's `head` and
+        `updated_at`, the later of the ticket's last change and its working doc's, so a stage change or a
+        check; a ticket with no assignee is its project
         lead's, or `local`'s when the project has no lead), `bouncing` (those of them that came
         back from review three or more times, each with `count`, `ladder` (3 or 5) and the last
         `reason`; TR-1092), and `led_projects` with the milestones
@@ -2600,8 +2619,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
         hidden = h.hidden_ids()
         me = work_person(request)["id"] if mine else None
         o = owners_mod.Owners(store)
-        # compared as the text /api/desk sends, which is what the watch keeps as its baseline
-        fresh = [t for d in store.list_desk("answered", None)
+        try:
+            floor = datetime.fromisoformat(since.replace("Z", "+00:00")) if since else None
+            if floor is not None and floor.tzinfo is None:
+                floor = floor.replace(tzinfo=timezone.utc)
+        except ValueError:
+            floor = None   # not a time: the store narrows nothing, the text compare below decides
+        # the store keeps the answers closed at or after `since`; the text compare below is the exact one,
+        # on what /api/desk sends, which is what the watch keeps as its baseline
+        fresh = [t for d in store.list_desk("answered", None, closed_since=floor)
                  if d["project"] not in hidden and (me is None or desk_is_mine(d, me, o))
                  and d.get("command") is None and d.get("closed_at") is not None
                  and (t := str(jsonable_encoder(d["closed_at"]))) > since]
