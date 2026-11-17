@@ -61,5 +61,16 @@ ck("contributor.md: answers go through answer_question with the person's words",
 ck("contributor.md: questions are asked one at a time and numbers restart per project",
    "restart in each project" in contributor and "one at a time" in contributor)
 
+print("factory-protocol pages keep the rules the split moved")
+linear = open(os.path.join(SKILLS, "factory-protocol", "linear.md"), encoding="utf-8").read()
+ck("linear.md: list_issues with fields and a limit of 25 or less",
+   '`list_issues` always with `fields=["id","title","status","assignee","updatedAt"]`' in linear
+   and "`limit` of 25 or less" in linear)
+ck("linear.md: get_issue with fields, one updatedAt look per tick, one save_issue",
+   '`get_issue` with `fields=["status","updatedAt"]`' in linear and 'updatedAt="<your last look' in linear
+   and "One `save_issue` carrying every field" in linear)
+ck("linear.md: a Tares ticket is read with Tares's tools, and a refused fields is called without",
+   "read with the Tares tools" in linear and "If Linear refuses `fields` or `limit`" in linear)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
