@@ -994,9 +994,9 @@ async def get_ticket(ticket: str, project: str = "", detail: str = "", section: 
     crew's messages about it: everything you need to work on it.
     Small by default: a working doc over 4,000 characters comes as its Goal, Steps and Progress
     with `working_doc_sections` (every heading and its size; `section="<heading>"` reads one,
-    `section="all"` the whole doc), the latest 8 messages and checks and the newest 5 decisions
-    (`messages_total`, `checks_total`, `decisions_total` count them all; list_decisions has the
-    rest), and reviews with only their open findings in words. `detail="status"` is only where it stands
+    `section="all"` the whole doc), the latest 8 messages and checks and the first 5 of its
+    decisions (this ticket's first; `messages_total`, `checks_total` count them all,
+    `decisions_total` the decisions the ticket carries; list_decisions has the rest), and reviews with only their open findings in words. `detail="status"` is only where it stands
     (stage, holder, PR, verdict), for a tick; `detail="full"` is everything, uncut. Each answer
     carries a `fingerprint`: pass it back as `since` and an unchanged ticket answers
     {"unchanged": true} alone."""
@@ -1045,12 +1045,18 @@ def _finding(f) -> dict | str:
 
 def _doc_sections(body: str) -> list[tuple[str, str]]:
     """The doc as [(heading, text)], split at its level-1 and level-2 headings; text before the
-    first heading goes under ""."""
-    out, head, start = [], "", 0
-    for m in re.finditer(r"^#{1,2} +(.+)$", body, re.M):
-        if m.start() > start or head:
-            out.append((head, body[start:m.start()]))
-        head, start = m.group(1).strip(), m.start()
+    first heading goes under "". A # line inside a ``` fence is code, not a heading."""
+    out, head, start, pos, fenced = [], "", 0, 0, False
+    for line in body.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            m = re.match(r"#{1,2} +(.+?)\s*$", line)
+            if m:
+                if pos > start or head:
+                    out.append((head, body[start:pos]))
+                head, start = m.group(1).strip(), pos
+        pos += len(line)
     out.append((head, body[start:]))
     return [(h, t) for h, t in out if h or t.strip()]
 
