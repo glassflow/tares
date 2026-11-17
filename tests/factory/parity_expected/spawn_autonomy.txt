@@ -357,6 +357,7 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
 @project 
 == file crew/stations/loose-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -422,6 +423,7 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
 @project 
 == file crew/stations/loose-build-m2.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -487,6 +489,7 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
 @project 
 == file crew/stations/strict-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

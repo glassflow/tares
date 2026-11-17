@@ -421,6 +421,7 @@ stub-token
 - "the reviewer may comment on draft PRs" (<DATE>)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -841,6 +842,7 @@ stub-token
 - "the reviewer may comment on draft PRs" (<DATE>)
 == file crew-two/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
