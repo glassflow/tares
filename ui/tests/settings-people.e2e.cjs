@@ -56,7 +56,7 @@ async function accessText(browser, base, token) {
   await page.getByRole("heading", { name: "People" }).waitFor({ timeout: 15000 });
   await page.locator("table tbody tr").first().waitFor({ timeout: 15000 });
   await page.waitForFunction(() => !document.body.innerText.includes("loading…"), null, { timeout: 15000 });
-  const access = await page.locator(".panel", { has: page.getByRole("heading", { name: "Access" }) }).innerText();
+  const access = await page.getByTestId("access").innerText();
   const people = await page.locator(".panel", { has: page.getByRole("heading", { name: "People" }) }).locator("tbody tr").allInnerTexts();
   await ctx.close();
   return { access, people };
@@ -97,6 +97,8 @@ async function accessText(browser, base, token) {
 
     const o = await accessText(browser, off.base, null);
     ck("open cell: the boot person is still You", o.people.some((x) => x.split("\t")[0].trim() === "You"), JSON.stringify(o.people));
+    ck("open cell: Access says it is open", /This cell is open: anyone who can reach it/.test(o.access), o.access);
+    ck("signed in: Access says a sign-in is asked for", r.access.startsWith("Access") && /The console and the API ask for a sign-in\./.test(r.access), r.access);
     ck("open cell: no Local (no login) row", !o.people.some((x) => x.includes("Local (no login)")), JSON.stringify(o.people));
   } finally {
     await browser.close();

@@ -1,25 +1,23 @@
-import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
+import { Fragment, useContext, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import { api, type AgentLimits } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { licenceWordsOn, useCloud } from "../cloud";
-import type { Edition, EditionSettings, Person, Whoami } from "../types";
+import type { Edition, EditionSettings } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
-import { EE_FAILED_WORDS, EePage, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useLicenceNoAnswer } from "../eeSlots";
-import LicenceNeeded from "../components/LicenceNeeded";
-import { extraEmails, personDraft, type PersonDraft } from "../personDraft";
+import { EePage, useEeLoaded } from "../eeSlots";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../editions/settings/SlackPanels";
 import { TracingPanel } from "../editions/settings/TracingPanel";
 import { GithubPanel } from "../editions/settings/GithubPanel";
 import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
 import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
+import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../editions/settings/AccessPanels";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
-import ActionError from "../components/ActionError";
 import { copyText } from "../editions/copyText";
 
 // Four distinct credential concepts, one box each:
@@ -70,9 +68,6 @@ export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind:
   cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
 };
 
-/** On the factory Settings page the sidebar already says where you are, so these panels drop their
- *  introductions and take the sidebar's words for their headings. */
-export const TerseSettings = createContext(false);
 
 export default function Security({ initialTab }: { initialTab?: SettingsTab } = {}) {
   // The Advanced tab holds the building blocks on the factory and sre editions; a platform cell has no such tab.
@@ -196,160 +191,15 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   );
 }
 
-// Access, people and keys share one load: who is asking (admin or not) and who is on the cell, so
-// a person added in People is there to pick when a key is made. Only an admin credential manages
-// people and keys (the daemon enforces it); the page just does not offer what it would refuse.
-/** Who is asking and who is on the cell: what the people and key panels read. */
-export function useAccessData() {
-  const [me, setMe] = useState<Whoami>();
-  const [people, setPeople] = useState<Person[]>();
-  const [err, setErr] = useState<string>();
-  const reload = () => api.people().then((r) => { setPeople(r.people); setErr(undefined); })
-    .catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => {
-    api.whoami().then(setMe).catch(() => undefined);
-    reload();
-  }, []);
-  return { me, people, err, reload, admin: !!me?.scopes.includes("admin") };
-}
-
-export function PeopleBlock({ access }: { access: ReturnType<typeof useAccessData> }) {
-  const pending = useEePending();
-  const eeFailed = useEeFailed();
-  const noAnswer = useLicenceNoAnswer();
-  const { me, people, err, reload, admin } = access;
-  return (
-    <Slot name="settings.people" people={people} admin={admin} err={err} onChanged={reload} me={me}
-          fallback={pending ? <div className="panel muted">loading…</div>
-                            : eeFailed ? <div className="panel muted" data-testid="ee-failed">{EE_FAILED_WORDS}</div>
-                            : noAnswer ? <div className="panel muted" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</div>
-                            : <YouPanel people={people} admin={admin} err={err} onChanged={reload} me={me} />} />
-  );
-}
-
 function AccessTab() {
   const access = useAccessData();
+  // Kit panels carry no margin of their own; the legacy one (agent tools) loses its own here.
   return (
-    <>
+    <div className="grid min-w-0 gap-4 [&>.panel]:mb-0">
       <AccessPanel me={access.me} />
       <PeopleBlock access={access} />
       <McpToolsPanel />
       <ApiKeysPanel title="API keys" intro people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
-    </>
-  );
-}
-
-// Without the enterprise licence the cell has one person for you to manage: yourself. The row shows
-// the name, email and GitHub login, and Edit changes them (an admin changes all three, anyone else
-// only the name; the daemon decides). Adding anyone else is the licence's, so the line says so.
-function YouPanel({ people, admin, err: loadErr, onChanged, me }: {
-  people?: Person[]; admin: boolean; err?: string; onChanged: () => void; me?: Whoami;
-}) {
-  const mine = people?.find((p) => p.id === me?.person?.id);
-  const [editing, setEditing] = useState<PersonDraft>();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<unknown>();
-  const save = async () => {
-    if (!editing) return;
-    setBusy(true); setErr(undefined);
-    try {
-      await api.updatePerson(editing.id, admin
-        ? { name: editing.name.trim(), email: editing.email.trim(), github: editing.github.trim(), emails: extraEmails(editing) }
-        : { name: editing.name.trim() });
-      setEditing(undefined);
-      onChanged();
-    } catch (e) { setErr(e); }
-    setBusy(false);
-  };
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0, marginBottom: 6 }}>People</h2>
-      <p className="help" style={{ marginTop: 0 }}>
-        You are the one person on this instance. Each API key belongs to a person, so you can tell whose
-        agent or script is acting.
-      </p>
-      {(loadErr || err != null) && <ActionError error={err ?? loadErr} what="Changing your details" />}
-      {!people ? <div className="muted">loading…</div> : mine && (editing ? (
-        <>
-          <div className="row2">
-            <label className="field">
-              <span className="lbl">name</span>
-              <input type="text" value={editing.name} autoFocus onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-            </label>
-            {admin && (
-              <label className="field">
-                <span className="lbl">email</span>
-                <input type="email" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} />
-              </label>
-            )}
-          </div>
-          {admin && (
-            <label className="field">
-              <span className="lbl">GitHub login</span>
-              <input type="text" className="mono" placeholder="e.g. octocat" value={editing.github}
-                     onChange={(e) => setEditing({ ...editing, github: e.target.value })} />
-            </label>
-          )}
-          <div className="btnrow">
-            <button className="primary" disabled={busy || !editing.name.trim()} onClick={save}>{busy ? "…" : "Save"}</button>
-            <button disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
-          </div>
-        </>
-      ) : (
-        <div className="table-scroll">
-        <table>
-          <thead><tr><th>name</th><th>email</th><th>GitHub</th><th aria-label="actions" /></tr></thead>
-          <tbody>
-            <tr data-testid="you-row">
-              <td><strong>{mine.id === "local" && mine.name === "You" && me?.kind !== "open" ? "Local (no login)" : mine.name}</strong></td>
-              <td className="help">{mine.email ?? ""}</td>
-              <td className="mono help">{mine.github ?? ""}</td>
-              <td style={{ textAlign: "right" }}><button onClick={() => { setErr(undefined); setEditing(personDraft(mine)); }}>Edit</button></td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-      ))}
-      <LicenceNeeded what="Adding people" />
-    </div>
-  );
-}
-
-// Auth is set at launch: `tares up` is open; `tares up --auth` requires a login (a root token
-// printed to the terminal). This box states which mode you're in — there's no runtime toggle, so
-// it's status, not a control.
-export function AccessPanel({ me }: { me?: Whoami }) {
-  const terse = useContext(TerseSettings);
-  const [authRequired, setAuthRequired] = useState<boolean>();
-  useEffect(() => {
-    api.health().then((h) => setAuthRequired(h.auth_required)).catch(() => setAuthRequired(undefined));
-  }, []);
-
-  if (terse && authRequired !== false) return null;   // only an open cell has something to say here
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Access</h2>
-      {authRequired === undefined ? <div className="muted">loading…</div>
-        : authRequired ? (
-          <p style={{ margin: 0 }}>
-            <span className="badge ok">auth on</span>{" "}
-            <span className="help">
-              the console and API require a login.{" "}
-              {!me ? null
-                : me.kind === "system" ? <>You signed in with the root token printed by <code>tares up --auth</code>.{" "}</>
-                : me.kind === "project" ? <>You signed in with a project key for {me.project_name ?? me.project}.{" "}</>
-                : <>You signed in with the API key <strong>{me.name}</strong>
-                    {me.person ? <>, which belongs to {me.person.name}</> : <>, which belongs to no one</>}.{" "}</>}
-              Hand machines their own scoped <strong>API keys</strong> below; never the root token.
-            </span>
-          </p>
-        ) : (
-          <div className="alert">
-            <span className="badge">auth off</span> · this instance is <strong>open</strong>: anyone
-            who can reach it can read and write, and API keys are not enforced. Restart with{" "}
-            <code>tares up --auth</code> to require a login.
-          </div>
-        )}
     </div>
   );
 }

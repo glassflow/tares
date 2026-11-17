@@ -7,10 +7,8 @@ import LicencePanel from "../../components/LicencePanel";
 import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
-import {
-  AccessPanel, AgentLimitsPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock,
-  TerseSettings, useAccessData,
-} from "../../pages/Security";
+import { AgentLimitsPanel, CLOUD_BACK, McpToolsPanel } from "../../pages/Security";
+import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
 import { TracingPanel } from "../settings/TracingPanel";
@@ -198,10 +196,10 @@ function PeoplePane() {
 function KeysPane() {
   const access = useAccessData();
   return (
-    <>
+    <div className="grid min-w-0 gap-4">
       <AccessPanel me={access.me} />
       <ApiKeysPanel title="Access keys" people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
-    </>
+    </div>
   );
 }
 
