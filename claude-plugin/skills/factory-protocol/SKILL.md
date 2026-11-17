@@ -51,7 +51,7 @@ You are one station in the **tares-factory crew**: Claude Code sessions on this 
 7. **Evidence before claims.** Say what you ran and what it showed. Run tests on the branch; a CI tick quoted is not verification. When you add a test, break the code it covers, see it fail, restore it.
 8. **Heavy commands one at a time** with a hard timeout, through `tares factory heavy <timeout-seconds> <command...>`: docker builds, many-module builds or tests, dependency or vulnerability scans, cluster bring-ups. Never with `&`, never fanned out to parallel subagents.
 9. **Keep your context small.** Investigations and implementation go to subagents; you keep conclusions. Investigators get read-only agent types (`Explore`): a prompt saying "read-only" does not stop a subagent with write tools.
-10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record and to `$FACTORY_HOME/reports/<your station>.md` before you send the message. A message to a stopped station is lost; a record is not.
+10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record, and what you still owe to your report, before you send the message. A message to a stopped station is lost; a record is not.
 11. **Stay in scope.** Act only on `crew_projects`, their repos, PRs and stations. Other sessions on the machine are not yours.
 12. **No secrets in prompts, messages, reports or commit messages.** Credentials come from the tool's own login (`gh auth`, connectors) or the keychain.
 13. **A permission check denies an action**: don't retry it another way or hand it to a peer. Write the exact command to your report, verbatim, and tell the orchestrator your station name and that command, word for word. Your person can allow it in the console; the factory then restarts you, in the same conversation, with the grant, and says so: run the command again if still needed.
@@ -105,7 +105,7 @@ key: value
 
 ## Shared state, on Tares
 
-Crew settings: `get_crew_settings`. Grants: `read_grants`. Projects and repos: `crew_projects`. Spec, plan, agents doc: `list_docs(kind=...)` then `get_doc(id)`; milestones: `list_milestones`. Tickets: `list_tickets`, `get_ticket`. Assumptions: `assume`, `list_assumptions`. Checks and learnings: `add_check`, `remember_for_project`. Reviews: `record_review` and GitHub. Desk: `desk_add`, `desk_answer`, `list_decisions`. Your notes for your next session: `$FACTORY_HOME/reports/<station>.md`.
+Crew settings: `get_crew_settings`. Grants: `read_grants`. Projects and repos: `crew_projects`. Spec, plan, agents doc: `list_docs(kind=...)` then `get_doc(id)`; milestones: `list_milestones`. Tickets: `list_tickets`, `get_ticket`. Assumptions: `assume`, `list_assumptions`. Checks and learnings: `add_check`, `remember_for_project`. Reviews: `record_review` and GitHub. Desk: `desk_add`, `desk_answer`, `list_decisions`. Your state: `$FACTORY_HOME/reports/<station>.md`, rules in `report.md`.
 
 A ticket's stage is one of `todo`, `doing`, `review`, `changes`, `blocked`, `merged`, `shipped`. Never write a record another station owns (rule 1); message its owner.
 
