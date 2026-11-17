@@ -111,6 +111,13 @@ ck("station-reviewer: the brief is asked with known_map, left empty after a comp
    "`review_brief(ticket, head, project, known_map=<the repo map version an earlier brief in this context showed for this repo>)`" in rev
    and "leave `known_map` empty after a compaction or a revive" in rev
    and "when the tool refuses it the map just comes whole" in rev)
+rel = open(os.path.join(SKILLS, "station-releaser", "SKILL.md"), encoding="utf-8").read()
+ck("station-releaser: the agents doc is read by its Release section, whole when the tool refuses section",
+   '`get_doc(id, section="Release")`' in rel
+   and "if the tool refuses `section` or answers the whole doc, read the Release part from it" in rel)
+orch = open(os.path.join(SKILLS, "station-orchestrator", "SKILL.md"), encoding="utf-8").read()
+ck("station-orchestrator: the spec and agents doc are read whole with section=\"all\"",
+   '`get_doc(id, section="all")`' in orch and "an older Tares ignores it" in orch)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
