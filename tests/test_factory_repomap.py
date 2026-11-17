@@ -273,9 +273,9 @@ async def main():
     dcheck = open(os.path.join(ROOT, "claude-plugin/skills/station-reviewer/design-check.md")).read()
     ck("reviewer step 6 is the design check, names its page, and the page reads the approval with list_decisions",
        "Design check" in rsteps["6"] and "`design-check.md`" in rsteps["6"] and "list_decisions" in dcheck, rsteps["6"][:200])
-    ck("reviewer step 6 reads the choice and compares author dates as timestamps",
+    ck("reviewer step 6 reads the answer and compares author dates as timestamps",
        all(w in dcheck
-           for w in ("`choice`", "%at", "sort -n | head -1", "git fetch origin <base>", "origin/<base>..<head>", "the SHA pinned in step 2", "convert `at` to epoch", "A git error", "on its own and check its exit code", "set -o pipefail", "prints a `fatal:` or `error:` line", "hides a bad ref", "neither its `choice` nor its `words` asks for a change")), rsteps["6"][:300])
+           for w in ("`answer`", "%at", "sort -n | head -1", "git fetch origin <base>", "origin/<base>..<head>", "the SHA pinned in step 2", "convert `at` to epoch", "A git error", "on its own and check its exit code", "set -o pipefail", "prints a `fatal:` or `error:` line", "hides a bad ref", "neither its `answer` nor its `words` asks for a change")), rsteps["6"][:300])
     ck("reviewer step 6 does not take the first UI commit with --reverse, and blocks when a screen ticket has none",
        "log --reverse" not in dcheck
        and "clean run with no output means no UI commit, which for a screen ticket is a `block`" in dcheck, rsteps["6"][:300])
