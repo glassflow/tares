@@ -470,6 +470,15 @@ async def main():
            str(seen))
         ck("and an answer closed at that very time is still counted from just before it",
            (await answered(before["latest"]))["count"] == 1 and everything == before["count"] + 1)
+        floors = []
+        app.state.store.list_desk = lambda *a, **k: floors.append(k.get("closed_since")) or real_list_desk(*a, **k)
+        naive = after["latest"].split("+")[0].split("Z")[0]
+        for form, since in (("with no zone", naive), ("ending in Z", naive + "Z")):
+            floors.clear()
+            await answered(since)
+            ck(f"a since {form} reaches the store as a time with a zone",
+               len(floors) == 1 and floors[0] is not None and floors[0].tzinfo is not None, str(floors))
+        app.state.store.list_desk = real_list_desk
         ck("a since that is not a time is no error", (await answered("not a time")) == {"count": 0, "latest": "not a time"})
         cw = "crew-reviewer may set the review status on this crew's pull requests"
         r = await allow(crewq["label"], {"words": f'"{cw}"', "scope": "all"})
