@@ -3,11 +3,13 @@ a11y
 capped-runs
 choose-edition
 component-gallery
+connect
 crew-people
 edition-routes
 edition-shell
 ee-chunk
 ee-project-access
+explore
 factory-crew
 factory-docs
 factory-github
@@ -33,8 +35,11 @@ login-handoff
 project-idle
 projects-list
 raise-limit
+reads
+resources
 session-picker
 settings-people
+source-form
 sre-guards
 sre-home
 sre-incidents
