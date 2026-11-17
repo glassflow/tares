@@ -136,19 +136,19 @@ async function waitFor(url, tries = 100) {
         && (await page.getByTestId("setup").getByTestId("setup-title").count()) === 0 && (await page.getByTestId("setup").getByTestId("setup-exit").count()) === 0
         && (await page.getByTestId("setup-exit").evaluate((el) => { const c = getComputedStyle(el); return c.borderTopWidth === "1px" && c.textDecorationLine === "none"; })));
       ck("the main menu is hidden", (await page.locator('nav[aria-label="Main"]').count()) === 0);
-      const RAIL = ["crew", "github", ...api.steps.map((x) => x.slot), "terminal"];
-      ck("the rail lists the crew, GitHub, the API's steps and the terminal, in order",
+      const RAIL = ["overview", "crew", "github", ...api.steps.map((x) => x.slot), "terminal"];
+      ck("the rail lists how the factory works, the crew, GitHub, the API's steps and the terminal, in order",
         (await page.getByTestId("rail").locator('button[data-testid^="step-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(5)))).join() === RAIL.join(), RAIL.join());
       ck("monitoring is not a step of setup yet", !RAIL.includes("monitoring"));
       ck("on a wide screen the rail shows and the narrow list does not", (await page.getByTestId("rail").isVisible()) && !(await page.getByTestId("rail-narrow").isVisible()));
       const lines = [];
       for (const x of api.steps) lines.push(await text(page.getByTestId("rail").getByTestId(`step-${x.slot}`).getByTestId("step-line")));
       ck("each integration step's line is the API's", lines.join("|") === api.steps.map((x) => x.line).join("|"), lines.join("|"));
-      ck("the progress is the API's, out of every step", (await text(page.getByTestId("progress-text"))) === api.progress.text && api.progress.total === RAIL.length, await text(page.getByTestId("progress-text")));
+      ck("the progress is the API's, out of every step", (await text(page.getByTestId("progress-text"))) === api.progress.text && api.progress.total === RAIL.length - 1, await text(page.getByTestId("progress-text")));
       ck("steps with a connection other than the built-in one are marked set", (await page.getByTestId("step-tickets").getAttribute("data-state")) === "set"
          && (await page.getByTestId("step-review").getAttribute("data-state")) === "not_set");
-      ck("the first step, how the crew works, is open and current", (await page.getByTestId("step-crew").getAttribute("aria-current")) === "step"
-         && (await text(page.getByTestId("page-title"))) === "How your crew works");
+      ck("with the crew's choices not saved yet, setup opens on how the factory works", (await page.getByTestId("step-overview").getAttribute("aria-current")) === "step"
+         && (await text(page.getByTestId("page-title"))) === "How the factory works");
       await page.getByTestId("step-tickets").click();
       await page.locator("[data-testid=step-view][data-slot=tickets]").waitFor();
       ck("Tickets opens from the rail with the API's words", (await text(page.getByTestId("page-title"))) === "Tickets" && (await text(page.getByTestId("page-sub"))) === stepOf(api, "tickets").why);
@@ -440,7 +440,7 @@ async function waitFor(url, tries = 100) {
       await shot(page, `loading-${width}.png`);
       release();
       await page.getByTestId("step-view").waitFor();
-      ck(`then the first step at ${width}`, (await text(page.getByTestId("page-title"))) === "How your crew works");
+      ck(`then the first step at ${width}`, (await text(page.getByTestId("page-title"))) === "How the factory works");
       await page.unroute("**/api/factory/setup");
       await ctx.close();
     }
@@ -464,7 +464,55 @@ async function waitFor(url, tries = 100) {
       down = false;
       await page.getByTestId("setup-retry").click();
       await page.getByTestId("step-view").waitFor();
-      ck(`Try again reads it once more and shows the setup at ${width}`, (await text(page.getByTestId("page-title"))) === "How your crew works");
+      ck(`Try again reads it once more and shows the setup at ${width}`, (await text(page.getByTestId("page-title"))) === "How the factory works");
+      await ctx.close();
+    }
+
+    // step 0: how the factory works, before any form. A cell with nothing done opens on it; it stays first in the rail.
+    console.log("== how the factory works ==");
+    for (const width of [1440, 390]) {
+      const { ctx, page } = await newPage(width);
+      const live = await read(page);
+      await page.route("**/api/factory/setup", async (r) => {
+        const res = await r.fetch(); const body = await res.json();
+        await r.fulfill({ response: res, json: { ...body, onboarding: { ...body.onboarding, choices: { ...body.onboarding.choices, chosen: false } } } });
+      });
+      await open(page, null);
+      const at = `at ${width}`;
+      ck(`a setup whose crew choices are not saved opens on how the factory works ${at}`, (await page.locator("[data-testid=step-view][data-slot=overview]").count()) === 1
+         && (await text(page.getByTestId("page-title"))) === "How the factory works");
+      if (width > 900) {
+        const first = page.getByTestId("rail").locator("button").first();
+        ck("it is first in the rail, with no number and no tick", (await first.getAttribute("data-testid")) === "step-overview"
+           && (await text(first)) === "How the factory works" && (await first.locator("span[aria-hidden]").count()) === 0);
+        ck("the next step is numbered 1", (await text(page.getByTestId("step-crew"))).startsWith("1. How your crew works"));
+      } else {
+        ck("on a phone the list names it without a step number", (await text(page.getByTestId("rail-narrow").locator("summary"))).startsWith("How the factory works"),
+           await text(page.getByTestId("rail-narrow").locator("summary")));
+      }
+      const members = await page.getByTestId("overview-crew").locator("li").evaluateAll((l) => l.map((x) => x.dataset.testid.slice(7)));
+      ck(`the crew is you, the orchestrator, builders, the reviewer and the releaser ${at}`, members.join() === "you,orchestrator,builders,reviewer,releaser", members.join());
+      const tools = await page.getByTestId("overview-tools").locator("li").evaluateAll((l) => l.map((x) => x.dataset.testid.slice(5)));
+      ck(`the tools follow the setup's order ${at}`, tools.join() === "code,tickets,review,ci,runtime", tools.join());
+      const titles = [...new Set([...stepOf(live, "tickets").connected, ...stepOf(live, "tickets").available].map((x) => x.title))];
+      const opts = await text(page.getByTestId("tool-tickets").getByTestId("tool-options"));
+      ck(`the ticket choices are this cell's ${at}`, titles.every((t) => opts.includes(t)), opts);
+      ck(`each tool names the step that connects it ${at}`, (await text(page.getByTestId("tool-code").getByTestId("tool-step"))) === "Step 2"
+         && (await text(page.getByTestId("tool-tickets").getByTestId("tool-step"))) === "Step 3"
+         && /^Steps \d+ and \d+$/.test(await text(page.getByTestId("tool-runtime").getByTestId("tool-step"))));
+      ck(`the goal's five steps are listed ${at}`, (await page.getByTestId("overview-flow").locator("li").count()) === 5);
+      ck(`no sideways scroll ${at}`, (await overflow(page)) <= 0, String(await overflow(page)));
+      await checkWords(page, ck, `how the factory works ${at}`);
+      await shot(page, `overview-${width}.png`);
+      await page.getByTestId("tool-tickets").getByTestId("tool-step").click();
+      await page.locator("[data-testid=step-view][data-slot=tickets]").waitFor();
+      ck(`a tool's step opens that step ${at}`, (await text(page.getByTestId("page-title"))) === "Tickets");
+      await page.goto(`${BASE}/setup?step=overview`, { waitUntil: "load" });
+      await page.locator("[data-testid=step-view][data-slot=overview]").waitFor();
+      ck(`the button says what it does ${at}`, (await text(page.getByTestId("step-next"))) === "Set up your crew");
+      await page.getByTestId("step-next").click();
+      await page.locator("[data-testid=step-view][data-slot=crew]").waitFor();
+      ck(`Set up your crew opens step 1 ${at}`, (await text(page.getByTestId("page-title"))) === "How your crew works");
       await ctx.close();
     }
 
@@ -474,7 +522,7 @@ async function waitFor(url, tries = 100) {
       const { ctx, page } = await newPage(390);
       await open(page, null);
       ck("the rail is a closed list with the current step", (await page.getByTestId("rail").isVisible()) === false && (await page.getByTestId("rail-narrow").isVisible())
-         && /^Step 1 of \d+: How your crew works/.test(await text(page.getByTestId("rail-narrow").locator("summary"))), await text(page.getByTestId("rail-narrow").locator("summary")));
+         && /^How the factory works/.test(await text(page.getByTestId("rail-narrow").locator("summary"))), await text(page.getByTestId("rail-narrow").locator("summary")));
       await page.getByTestId("rail-narrow").locator("summary").click();
       await page.getByTestId("nstep-tickets").click();
       ck("on a phone the crumb is hidden and Exit setup stays in the header", !(await page.getByTestId("setup-title").isVisible()) && (await page.getByTestId("setup-exit").isVisible()));
@@ -885,8 +933,8 @@ async function waitFor(url, tries = 100) {
     console.log("== the crew and the terminal ==");
     {
       const { ctx, page, writes } = await newPage(1440);
-      await open(page, null);
-      ck("setup opens on how the crew works", (await page.locator("[data-testid=step-view][data-slot=crew]").count()) === 1
+      await open(page, "crew");
+      ck("the crew step is not set yet", (await page.locator("[data-testid=step-view][data-slot=crew]").count()) === 1
          && (await page.getByTestId("step-crew").getAttribute("data-state")) === "not_set");
       ck("the form starts on your approval for each merge", await page.getByTestId("choice-L3-review").isChecked());
       await page.getByTestId("choice-L4-ship").click();
@@ -907,6 +955,9 @@ async function waitFor(url, tries = 100) {
          && put.body.builders_max === n0 + 1 && typeof put.body.releaser === "boolean", JSON.stringify(put));
       await page.waitForFunction(() => document.querySelector("[data-testid=step-crew]")?.dataset.state === "set", null, { timeout: 15000 }).catch(() => {});
       ck("the rail ticks the crew step", (await page.getByTestId("step-crew").getAttribute("data-state")) === "set");
+      await page.goto(`${BASE}/setup`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
+      ck("once the choices are saved, setup opens on step 1", (await page.locator("[data-testid=step-view][data-slot=crew]").count()) === 1);
 
       await page.getByTestId("step-terminal").click();
       await page.locator("[data-testid=step-view][data-slot=terminal]").waitFor();
