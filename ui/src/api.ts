@@ -834,6 +834,12 @@ export const api = {
       unauthorized();
       throw new Error("authentication required");
     }
+    // a refused export (a read-only key gets 403) is an error, not a file to show
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const body = await res.json(); if (typeof body?.detail === "string") detail = body.detail; } catch { /* not JSON */ }
+      throw new ApiError(detail, res.status);
+    }
     return res.text();
   },
   importYaml: (yaml: string, mode: "merge" | "replace") =>

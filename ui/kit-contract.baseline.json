@@ -84,7 +84,6 @@
   "src/ee/settings/AreasPanel.tsx": 12,
   "src/pages/Activity.tsx": 47,
   "src/pages/AgentDetail.tsx": 38,
-  "src/pages/CatalogExport.tsx": 20,
   "src/pages/CatalogImport.tsx": 8,
   "src/pages/Crew.tsx": 52,
   "src/pages/Explore.tsx": 23,
