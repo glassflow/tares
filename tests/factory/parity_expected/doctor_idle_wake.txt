@@ -27,6 +27,10 @@ tares factory doctor
   ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
   ok    the kit follows the plugin checkout (not frozen)
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   ok    gh signed in
   ok    crew-orchestrator runs Claude Code 2.1.310
   ok    crew-reviewer runs Claude Code 2.1.310

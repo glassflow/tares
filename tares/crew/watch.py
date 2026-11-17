@@ -74,6 +74,8 @@ RESTART_FLAGS = ("--restart", "--if-running", "--only-under", "--json")
 STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker", "strays")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
+# What a nap also does on each tick: look for a desk answer, so the orchestrator hears it at once.
+CONSOLE_TICK_NAME = "console"
 # What a round does before its first step: bash reads the pace at the top of a round (TR-1157).
 ROUND_NAME = "round_start"
 
@@ -83,7 +85,7 @@ _STEPS: dict = {}
 def register(name: str, fn) -> None:
     """Give the watch the function for a step: fn(paths) is called once a round (the readings step: once a
     tick of the nap). A name that is not a step is refused, so a typo does not silently do nothing."""
-    if name not in STEP_NAMES and name not in (TICK_NAME, ROUND_NAME):
+    if name not in STEP_NAMES and name not in (TICK_NAME, CONSOLE_TICK_NAME, ROUND_NAME):
         raise ValueError(f"no watch step called {name!r}")
     _STEPS[name] = fn
 
@@ -98,6 +100,14 @@ def _idle_wake_step(paths: CrewPaths) -> None:
 
 
 register("idle_wake", _idle_wake_step)   # TR-961
+
+
+def _console_tick(paths: CrewPaths) -> None:
+    from . import idle_wake
+    idle_wake.console_tick(paths)
+
+
+register(CONSOLE_TICK_NAME, _console_tick)
 
 
 def _updates_step(paths: CrewPaths) -> None:
@@ -373,6 +383,12 @@ def nap(paths: CrewPaths, seconds: float, poll: float = DEFAULT_POLL, *, sleep=t
                 fn(paths)
             except Exception as e:
                 _say(f"the {TICK_NAME} step failed: {type(e).__name__}: {e}")
+        fn = _STEPS.get(CONSOLE_TICK_NAME)
+        if fn is not None:
+            try:
+                fn(paths)
+            except Exception as e:
+                _say(f"the {CONSOLE_TICK_NAME} step failed: {type(e).__name__}: {e}")
         sleep(min(poll, max(end - time.monotonic(), 0)))
     return stop_requested(paths)
 

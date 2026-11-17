@@ -16,6 +16,10 @@ tares factory doctor
   ok    project argus: <TMP>/core is o/core on GitHub (WRITE)
   FIX   project argus: Claude Code has not trusted <TMP>/ro-charts (its git root must be trusted itself); run `claude` there once
   FIX   project argus: gh has READ on o/ro-charts; builders need write access to push branches and open PRs
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   ok    gh signed in
 fix the items marked FIX
 -- stderr --
