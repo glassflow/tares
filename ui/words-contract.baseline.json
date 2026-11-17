@@ -33,7 +33,6 @@
   "src/components/SourceForm.tsx": 42,
   "src/components/TriggerEditor.tsx": 24,
   "src/components/UsagePanels.tsx": 5,
-  "src/pages/Activity.tsx": 17,
   "src/pages/AgentDetail.tsx": 63,
   "src/pages/CatalogExport.tsx": 12,
   "src/pages/CatalogImport.tsx": 12,

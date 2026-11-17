@@ -82,7 +82,6 @@
   "src/ee/project/grants.tsx": 4,
   "src/ee/project/signoffs.tsx": 5,
   "src/ee/settings/AreasPanel.tsx": 12,
-  "src/pages/Activity.tsx": 19,
   "src/pages/AgentDetail.tsx": 38,
   "src/pages/CatalogExport.tsx": 20,
   "src/pages/CatalogImport.tsx": 8,
