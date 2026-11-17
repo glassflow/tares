@@ -1,7 +1,7 @@
 /*
  * Browser e2e for the Second Brain Repos page (TR-1204) on a factory cell.
  *  - Unit checks of the page's pure rules (poll interval, card kind, words), run on the TypeScript as written.
- *  - The Second Brain menu row opens /brain.
+ *  - The Repos row under Knowledge in the menu opens /brain.
  *  - Every card state shows its words: queued, cloning, indexing, ready, ready with failing updates,
  *    not indexed, removing, removal failed. The Decisions row and button are not there (TR-1213).
  *  - An admin sees Connect, Retry and Remove; a read key sees the cards and none of them.
