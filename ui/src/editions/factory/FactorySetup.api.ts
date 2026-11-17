@@ -39,7 +39,9 @@ export interface SetupField {
   /** The help, placeholder and empty-field line while the list is shown instead of the text box. */
   picker_help?: string;
   picker_placeholder?: string;
-  picker_error?: string;
+  picker_loading?: string;
+  /** "{n} more. ..." under a list cut short. */
+  picker_more?: string;
 }
 
 export interface SetupForm {
@@ -158,7 +160,7 @@ export const setupRead = () => request<SetupData>("/api/factory/setup");
 /** The count the Setup menu entry shows. Admins only: any other key gets a refusal, and no entry. */
 /** The repos the GitHub Issues form offers, of `credential` or else of the GitHub App connections. */
 export const setupGithubRepos = (via: "app" | "key", credential = "") =>
-  request<{ repos: string[]; error: string }>(
+  request<{ repos: string[]; error: string; note: string }>(
     `/api/factory/setup/github/repos?via=${via}&credential=${encodeURIComponent(credential)}`);
 export const setupProgress = () => request<SetupProgress & { projects: number }>("/api/factory/setup/progress");
 
