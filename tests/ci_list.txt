@@ -75,6 +75,7 @@ test_crew_strays
 test_crew_tidy_safety
 test_crew_unicode_home
 test_crew_views
+test_crew_wake_midturn
 test_crew_wake_mywork
 test_crew_watch_locks
 test_crew_watch_process

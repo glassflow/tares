@@ -35,6 +35,12 @@ class StationLockedError(CrewError):
         super().__init__(f"another factory command (pid {holder}) is starting or stopping {station}; try again in a minute")
 
 
+class NotBetweenTurnsError(CrewError):
+    """A wake found the station in a turn (or attached) when it came to stop it, so it was left running."""
+
+    code = "not_between_turns"
+
+
 class ClaudeNotFoundError(CrewError):
     """No usable `claude` binary: none on PATH or in the known install folders, and CLAUDE_BIN is not set."""
 

@@ -31,7 +31,7 @@ import sys
 from . import claude, launch, lifecycle, locks, pace, state
 from .claude import SessionListUnreadableError
 from .client import TaresClient, TaresHTTPError, cksum, uri
-from .errors import CrewError
+from .errors import CrewError, NotBetweenTurnsError
 from .paths import CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -416,7 +416,10 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
             return   # it started something since the first check
         client.say(f"waking {s} ({p['reason'].split(':')[0]}); restarting it in the same conversation")
         try:
-            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin)
+            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True)
+        except NotBetweenTurnsError:
+            client.say(f"{s} started a turn; not waking it, will look again next round")
+            return
         except (CrewError, OSError) as e:   # a restart that hits the disk is no different from a refused one
             sys.stdout.flush()
             print(getattr(e, "line", None) or str(e), file=sys.stderr)
