@@ -8930,10 +8930,8 @@ def _plain_bound_ok(ctx: str) -> bool:
 
 
 def _contributor_section() -> str:
-    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "SKILL.md").read_text(encoding="utf-8")
-    start = text.index("\n## Contributor")
-    end = text.index("\n## Light mode", start)
-    return re.sub(r"[ \n]+", " ", text[start:end])
+    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "contributor.md").read_text(encoding="utf-8")
+    return re.sub(r"[ \n]+", " ", text)
 
 
 _CONTRIB = ("TARES_PROJECT=Acme web", "TARES_SESSION_KIND=contributor")
