@@ -32,7 +32,6 @@
   "src/components/TriggerEditor.tsx": 24,
   "src/components/UsagePanels.tsx": 5,
   "src/pages/AgentDetail.tsx": 63,
-  "src/pages/CatalogExport.tsx": 12,
   "src/pages/CatalogImport.tsx": 12,
   "src/pages/Crew.tsx": 18,
   "src/pages/ProjectNew.tsx": 10,
