@@ -124,6 +124,7 @@ tares factory: limits.autocompact_tokens is 100000; stations use 150000, since a
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -195,6 +196,7 @@ tares factory: limits.autocompact_tokens is 100000; stations use 150000, since a
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",

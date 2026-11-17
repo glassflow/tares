@@ -136,7 +136,8 @@ tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the on
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -197,7 +198,8 @@ tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the on
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"

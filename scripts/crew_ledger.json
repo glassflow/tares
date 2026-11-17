@@ -3908,7 +3908,7 @@
       "dropped": false,
       "python": "tares.crew.paths:CrewPaths.reports_dir",
       "ported": true,
-      "note": "Written by the stations; the idle wake reads the orchestrator's RELEASE lines (TR-961)."
+      "note": "Written by the stations: <station>.md is the current state, rewritten in place; log/<station>/<day>.md is the dated log `tares factory report log` appends to. The idle wake reads the orchestrator's RELEASE lines (TR-961)."
     },
     {
       "name": "worktrees",

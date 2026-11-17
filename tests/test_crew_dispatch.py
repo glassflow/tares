@@ -141,6 +141,7 @@ ck("every command the help names is in the table",
        "crew up", "crew status", "crew attach", "crew desk", "crew logs", "crew watch", "crew update", "crew restart",
        "crew halt", "crew resume", "crew freeze", "crew unfreeze", "crew down", "spec", "session", "projects", "finish",
        "restart", "context", "plan", "doctor", "settings", "roster", "spawn", "revive", "tidy", "retire", "heavy",
+       "report",
        "status", "desk", "attach", "logs", "watch", "halt", "resume", "down")),
    short([k for k in dispatch.PORTED]))
 
