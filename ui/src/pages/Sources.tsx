@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { sourceTitle, usePolling } from "../components/bits";
 import {
-  Banner, Button, EmptyState, Input, ListRow, ListSection, LoadingBlocks, Select, StatusLabel, toneOf,
+  Banner, Button, Collapse, EmptyState, Input, ListRow, ListSection, LoadingBlocks, Select, StatusLabel, toneOf,
 } from "../components/edition";
 import { formatCount } from "../lib/number";
 import { ageWords } from "../lib/time";
@@ -94,7 +94,7 @@ export default function Sources() {
         </div>
       </header>
 
-      {error && <Banner tone="error">Tares is not answering: {error}</Banner>}
+      <Collapse>{error && <Banner tone="error">Tares is not answering: {error}</Banner>}</Collapse>
 
       {!sources && !error && <LoadingBlocks />}
 
