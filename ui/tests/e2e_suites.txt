@@ -39,6 +39,7 @@ reads
 resources
 session-picker
 settings-people
+source-discover
 source-form
 sre-guards
 sre-home
