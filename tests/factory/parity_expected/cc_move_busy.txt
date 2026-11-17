@@ -167,6 +167,7 @@ tares factory: crew-releaser runs Claude Code 1.1.0
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

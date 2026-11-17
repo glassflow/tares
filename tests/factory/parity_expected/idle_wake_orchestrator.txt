@@ -1170,6 +1170,7 @@ tares factory: waking crew-releaser (work); restarting it in the same conversati
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1232,6 +1233,7 @@ tares factory: waking crew-releaser (work); restarting it in the same conversati
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

@@ -144,6 +144,7 @@ exit: 0
 }
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

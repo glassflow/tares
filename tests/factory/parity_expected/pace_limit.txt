@@ -697,6 +697,7 @@ revive crew-orchestrator:
 {"stretched":true,"held":false}
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -759,6 +760,7 @@ revive crew-orchestrator:
 {"stretched":true,"held":false}
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -822,6 +824,7 @@ revive crew-orchestrator:
 {"stretched":true,"held":true}
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

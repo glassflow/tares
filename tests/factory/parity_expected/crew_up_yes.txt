@@ -432,6 +432,7 @@ The crew takes a few minutes to check in. Next:
 - "the releaser may restart the staging database" (<DATE>)
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -493,6 +494,7 @@ The crew takes a few minutes to check in. Next:
 - "the releaser may restart the staging database" (<DATE>)
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
