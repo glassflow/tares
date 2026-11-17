@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 
 from . import claude, launch, lifecycle, locks, pace, state
 from .claude import SessionListUnreadableError
@@ -511,5 +512,70 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
                 client.say(f"skipping {s} this round")
             except CrewError as e:
                 client.say(e.message)
+    finally:
+        client.close()
+
+
+_ANSWERED_OFF: dict = {}     # crew home -> when to ask again, for a Tares without /api/desk/answered (the round wakes meanwhile)
+_ANSWERED_DONE: dict = {}    # crew home -> the latest answer time the console tick has already acted on
+_ANSWERED_WAIT: dict = {}    # crew home -> when to try again after a wake that did not happen
+_OFF_FOR = 600.0             # seconds before a Tares that lacked the route is asked again (it may have been upgraded)
+_RETRY_AFTER = 30.0          # seconds before a wake that did not happen is tried again
+
+
+def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
+    """One tick of the nap: a desk answer closed since the orchestrator's baseline wakes it now, not at the next
+    round. One small call asks whether anything was answered; only a yes reads the desk and plans the wake, and
+    only for the orchestrator, between turns. A Tares without the route keeps the round's behaviour."""
+    home = str(paths.home)
+    now = time.monotonic()
+    if now < _ANSWERED_OFF.get(home, 0.0) or now < _ANSWERED_WAIT.get(home, 0.0):
+        return
+    env = os.environ if env is None else env
+    orch = state.crew_orchestrator(paths)
+    if (state.stations_get(orch, "status", paths=paths) != "active" or state.halted(paths)
+            or not state.stations_get(orch, "sessionId", paths=paths)):
+        return
+    base = state.wake_read(orch, paths)["baseline"]
+    if not isinstance(base, dict) or not isinstance(_alt(_get(base, "desk"), ""), str):
+        return   # the first look sets the baseline: the round does that
+    client = TaresClient(paths, env)
+    try:
+        if not client.tares_on():
+            return
+        try:
+            doc = state.loads_json(client.tares_http(
+                "GET", "/api/desk/answered?mine=1&since=" + uri(_alt(_get(base, "desk"), ""))))
+        except TaresHTTPError as e:
+            if e.status == 404:
+                _ANSWERED_OFF[home] = now + _OFF_FOR
+            return
+        except ValueError:
+            return
+        latest, count = _get(doc, "latest"), _get(doc, "count")
+        if not isinstance(latest, str) or not isinstance(count, int) or count < 1:
+            return
+        if latest <= _ANSWERED_DONE.get(home, ""):
+            return
+        if claude_bin is None:
+            claude_bin = claude.claude_bin(env)
+        try:
+            if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
+                    or not claude.between_turns(orch, claude_bin, paths)):
+                return   # not now: the next tick asks again
+            p = plan(client, paths, orch, claude_bin=claude_bin)
+            if p is None or not p["work"]:   # nothing new for it; a release note or a liveness wake waits for the round
+                _ANSWERED_DONE[home] = latest
+                return
+            before = state.wake_read(orch, paths)["last_wake"]
+            send(client, paths, p, claude_bin=claude_bin)
+            if state.wake_read(orch, paths)["last_wake"] != before:
+                _ANSWERED_DONE[home] = latest
+            else:
+                _ANSWERED_WAIT[home] = now + _RETRY_AFTER   # it was not woken: ask again soon, not every tick
+        except SessionListUnreadableError:
+            return
+        except CrewError as e:
+            client.say(e.message)
     finally:
         client.close()

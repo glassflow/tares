@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import Body, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 
 from . import claude_usage
 from . import crew_conversation
@@ -2607,6 +2608,23 @@ def register(app, store, h: Host) -> SimpleNamespace:
         o = owners_mod.Owners(store)
         return {"desk": [desk_out(d) for d in store.list_desk(st, uid)
                          if d["project"] not in hidden and (me is None or desk_is_mine(d, me, o))]}
+
+    @app.get("/api/desk/answered")
+    def desk_answered(request: Request, since: str = "", mine: bool = False):
+        """{count, latest}: how many desk answers closed after `since` (a `closed_at` the caller has
+        already seen; empty counts every answer), and the latest `closed_at` among them (`since` when
+        none). Only the answers the orchestrator's idle wake looks at (a permission grant is not one).
+        The watch asks this every few seconds, so a person's answer in the console reaches the
+        orchestrator without waiting for the round. `mine=1` as on /api/desk."""
+        hidden = h.hidden_ids()
+        me = work_person(request)["id"] if mine else None
+        o = owners_mod.Owners(store)
+        # compared as the text /api/desk sends, which is what the watch keeps as its baseline
+        fresh = [t for d in store.list_desk("answered", None)
+                 if d["project"] not in hidden and (me is None or desk_is_mine(d, me, o))
+                 and d.get("command") is None and d.get("closed_at") is not None
+                 and (t := str(jsonable_encoder(d["closed_at"]))) > since]
+        return {"count": len(fresh), "latest": max(fresh, default=since)}
 
     def desk_or_404(ref: str) -> dict:
         d = store.get_desk_item(ref)
