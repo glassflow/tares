@@ -140,6 +140,7 @@ const router = createBrowserRouter([
       // pages only the factory or sre edition has; a cell of the other edition lands on Home
       { path: "tickets", element: <ByEdition path="/tickets" today={<Navigate to="/" replace />} /> },
       { path: "reviews", element: <ByEdition path="/reviews" today={<Navigate to="/" replace />} /> },
+      { path: "feed", element: <ByEdition path="/feed" today={<Navigate to="/" replace />} /> },
       { path: "docs", element: <ByEdition path="/docs" today={<Navigate to="/" replace />} /> },
       { path: "people", element: <ByEdition path="/people" today={<Navigate to="/" replace />} /> },
       { path: "setup", element: <ByEdition path="/setup" today={<NotFound />} /> },

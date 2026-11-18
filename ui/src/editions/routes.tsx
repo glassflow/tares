@@ -114,6 +114,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-1205
     "/brain/connect": { page: lazyPage(() => import("./factory/BrainConnect")), fallback: "today" },
 
+    // P-TR-273 M2: the human-in-the-loop feed, a mock on samples until it is approved; not in the menu
+    "/feed": { page: lazyPage(() => import("./factory/FactoryFeed")), fallback: { redirect: "/" } },
+
     // TR-732: the factory home is /, so Start (the login landing) goes there
     "/start": { page: null, fallback: { redirect: "/" } },
   },
