@@ -86,5 +86,31 @@ ck("every turn is reachable", set(sw.TURN) <= seen, set(sw.TURN) - seen)
 ck("a person's turn is only ready for you or stuck",
    {k for k, w in sw.TURN_WHOSE.items() if w == "person"} == {"ready_for_you", "stuck"})
 
+# counts (factory.progress): the spec's decision 2, the groups read off the turn
+def tk(i, **k):
+    return {"id": i, "stage": None, "status": "todo", "depends_on": [], "pr": None, **k}
+
+
+eq("a ticket closed with no merge counts as closed, not merged",
+   factory.count_of(tk("a", status="done")), "closed")
+eq("a merged pull request counts as merged whatever the stage",
+   factory.count_of(tk("a", stage="review", pr={"merged": True})), "merged")
+eq("a stage of merged counts as merged", factory.count_of(tk("a", stage="merged")), "merged")
+eq("a wait on another ticket counts as queued", factory.count_of(tk("a"), ["T1"]), "queued")
+eq("a station's stop counts as stuck", factory.count_of(tk("a", stage="blocked")), "stuck")
+eq("work under way counts as doing", factory.count_of(tk("a", stage="changes")), "doing")
+seen_counts = {factory.COUNT_OF_TURN.get(k, "doing") for k in sw.TURN}
+ck("every turn lands in a count group", seen_counts <= set(factory.COUNTS), seen_counts - set(factory.COUNTS))
+
+ts = [tk("m", stage="merged"), tk("c", status="done"), tk("s", stage="blocked"),
+      tk("q", depends_on=["o"]), tk("o"), tk("x", status="canceled"), tk("d", stage="doing")]
+eq("a project's counts: merged, closed, queued and stuck apart, canceled out of the total",
+   factory.progress(ts), {"merged": 1, "closed": 1, "doing": 1, "stuck": 1, "queued": 1, "todo": 1,
+                          "canceled": 1, "total": 6})
+eq("the count line names merged always, the rest when there are some",
+   sw.count_line(factory.progress(ts)), "1 merged, 1 closed, 1 queued, 1 stuck of 6")
+eq("the count line of a project with only merges", sw.count_line({"merged": 2, "total": 3}), "2 merged of 3")
+eq("the count line of an empty project", sw.count_line({"merged": 0, "total": 0}), "No tickets yet")
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

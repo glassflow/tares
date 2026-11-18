@@ -47,6 +47,23 @@ PROJECT_LATER = "Later"
 PROJECT_DONE_ON_LIST = "Done"
 PROJECT_DONE_ON_PAGE = "Finished"
 
+# ── a project's ticket counts (factory.progress) ──────────────────────────────
+
+# the groups the count line names, in its order; to do and work under way are what is left of
+# the total, so the line does not list them
+COUNT_WORD = {"merged": "merged", "closed": "closed", "queued": "queued",
+              "stuck": "stuck"}
+
+
+def count_line(c: dict) -> str:
+    """"5 merged, 2 queued, 1 stuck of 8": a project's or milestone's tickets in one line. Merged
+    always shows; the other groups only when there are some."""
+    if not c.get("total"):
+        return "No tickets yet"
+    parts = [f"{c.get(k) or 0} {w}" for k, w in COUNT_WORD.items() if k == "merged" or c.get(k)]
+    return ", ".join(parts) + f" of {c['total']}"
+
+
 # ── whose turn a ticket is (factory.turn_of) ──────────────────────────────────
 
 # what a ticket waits for, in words; the screen adds the tickets a queued one waits on

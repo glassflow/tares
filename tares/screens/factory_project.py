@@ -62,9 +62,9 @@ _PR_NUMBER = re.compile(r"/pull/(\d+)")
 # the states that move now, in the order the page lists them, and the key each state counts under
 _MOVING = ("changes asked", "in review", "in progress", "blocked")
 _MOVING_CAP = 5
-_COUNT_KEY = {"to do": "to_do", "in progress": "in_progress", "in review": "in_review",
-              "changes asked": "changes_asked", "blocked": "blocked", "merged": "merged",
-              "canceled": "canceled"}
+# a count group (factory.count_of) as the page's counts key it; work under way splits by its state
+_COUNT_KEY = {"todo": "to_do", "in progress": "in_progress", "in review": "in_review",
+              "changes asked": "changes_asked"}
 # a station whose newest session shows one of these plays no part now
 _GONE = ("ended", "stopped", "replaced")
 
@@ -357,9 +357,14 @@ def register(app, store, h, ctx):
                     **turns.of(uid, t, blocked_by, reviews.get(t["id"]))}
 
         states = {t["id"]: ticket_state(t, rd[t["id"]]["blocked_by"]) for t in tickets}
-        counts = {"total": len(tickets), **{k: 0 for k in _COUNT_KEY.values()}}
+        group = {t["id"]: factory_mod.count_of(t, rd[t["id"]]["blocked_by"]) for t in tickets}
+        counts = {"total": len(tickets), **dict.fromkeys(
+            ("to_do", "in_progress", "in_review", "changes_asked", "queued", "stuck", "merged",
+             "closed", "canceled"), 0)}
         for t in tickets:
-            counts[_COUNT_KEY[states[t["id"]]]] += 1
+            g = group[t["id"]]
+            counts[_COUNT_KEY.get(states[t["id"]], "in_progress") if g == "doing" else _COUNT_KEY.get(g, g)] += 1
+        counts["label"] = status_words.count_line(factory_mod.progress(tickets))
         # the tickets that move now: changes asked, then in review, in progress, blocked; each
         # state in the project's own order
         movers = sorted((t for t in tickets if states[t["id"]] in _MOVING),
@@ -376,15 +381,20 @@ def register(app, store, h, ctx):
         crew_with_it = fw.crew_has(store, p)
         accepted = store.milestone_acceptances([m["id"] for m in milestones])
         for i, m in enumerate(milestones):
-            ts = [t for t in tickets if t.get("milestone") == m["id"] and states[t["id"]] != "canceled"]
-            merged = sum(1 for t in ts if states[t["id"]] == "merged")
+            ts = [t for t in tickets if t.get("milestone") == m["id"] and group[t["id"]] != "canceled"]
+            merged = sum(1 for t in ts if group[t["id"]] == "merged")
+            closed = sum(1 for t in ts if group[t["id"]] == "closed")
+            mc = {"total": len(ts), "merged": merged, "closed": closed,
+                  **{k: sum(1 for t in ts if group[t["id"]] == k) for k in ("queued", "stuck")}}
             res = results.get(m["id"]) or {}
             st = factory_mod.milestone_state(m, [t for t in tickets if t.get("milestone") == m["id"]],
                                              res, accepted.get(m["id"]), crew_with_it)
             out_ms.append({"id": m["id"], "number": f"M{i + 1}", "name": m["name"],
                            "goal": clean(m["goal"]),
-                           "done": bool(ts) and merged == len(ts),
-                           "counts": {"total": len(ts), "merged": merged},
+                           # done: every ticket finished, merged or closed without a merge
+                           "done": bool(ts) and merged + closed == len(ts),
+                           "counts": {"total": len(ts), "merged": merged, "closed": closed,
+                                      "label": status_words.count_line(mc)},
                            # each check with who it is for and its latest result (TR-1017)
                            "checks": [{"n": j + 1, "check": clean(c.get("check")),
                                        "expect": clean(c.get("expect")),

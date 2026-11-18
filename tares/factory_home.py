@@ -199,7 +199,7 @@ def project_state(p: dict, tickets: list[dict], handover: dict | None, waiting: 
     prog = factory_mod.progress(tickets)
     if factory_mod.ready_to_close(p, tickets):
         return "ready_to_close"
-    if prog["done"] == 0 and prog["doing"] == 0:
+    if prog["merged"] == 0 and prog["closed"] == 0 and prog["doing"] == 0:
         return "not_started"
     mine = [w for w in waiting if (w.get("project") or {}).get("id") == p["id"]]
     # a ticket whose pull request waits for the person's merge is not the crew's work any more
@@ -256,7 +256,9 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
     return {"id": p["id"], "name": p["name"], "icon": p.get("icon"), "goal": p.get("goal") or "",
             "state": state,
             "state_label": STATE_LABEL[state], "milestone": milestone,
-            "tickets": {"merged": prog["done"], "blocked": prog["blocked"], "total": prog["total"]},
+            # merged only for a merge; queued (waits on a ticket) and stuck (a station stopped) apart
+            "tickets": {**{k: prog[k] for k in ("merged", "closed", "queued", "stuck", "total")},
+                        "label": status_words.count_line(prog)},
             "repos": repos, "builders": builders, "last_activity_at": _iso(at),
             "last_activity": ago or None, "meta": " · ".join(meta),
             # whether this caller may close it is the screen's to add (caller_owns)

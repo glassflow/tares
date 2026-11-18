@@ -275,6 +275,7 @@ test_store_methods
 test_team_interface
 test_terminal_waiting
 test_ticket_assignee_single
+test_ticket_counts_golden
 test_ticket_turn
 test_tickets_daemon
 test_tickets_github

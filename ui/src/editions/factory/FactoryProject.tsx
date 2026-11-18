@@ -263,7 +263,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
 const SHOW_MOVING = 3;
 
 function Moving({ d }: { d: FactoryProjectData }) {
-  const { total, merged, canceled } = d.counts;
+  const { total, merged, closed, canceled } = d.counts;
   const live = total - canceled;
   const shown = d.moving.slice(0, SHOW_MOVING);
   const rest = d.moving_total - shown.length;
@@ -276,7 +276,9 @@ function Moving({ d }: { d: FactoryProjectData }) {
   } else if (d.moving.length === 0) {
     body = (
       <EmptyState data-testid="moving-empty">
-        {merged === live ? `Nothing is moving. All ${live} tickets are merged.` : "Nothing is moving right now."}
+        {merged + closed === live
+          ? `Nothing is moving. All ${live} tickets are ${closed ? "finished" : "merged"}.`
+          : "Nothing is moving right now."}
       </EmptyState>
     );
   } else {
@@ -297,7 +299,7 @@ function Moving({ d }: { d: FactoryProjectData }) {
       <SectionHead title="Moving now" aside={allLink} />
       {total > 0 && (
         <div className={cn(MUTED, "-mt-1 mb-2")} data-testid="moving-caption">
-          {merged} of {live} tickets merged{canceled > 0 && `, ${canceled} canceled`}
+          {d.counts.label}{canceled > 0 && `, ${canceled} canceled`}
         </div>
       )}
       <div className={CARD}>
@@ -386,7 +388,7 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
   onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
   onAccept?: (m: ProjectMilestone) => Promise<void>;
 }) {
-  const { total, merged } = m.counts;
+  const { total, merged, closed } = m.counts;
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const accept = async () => {
@@ -443,9 +445,9 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
           )}
         </div>
         <div className="flex items-center gap-2.5 pt-0.5 text-[13px] md:self-start">
-          <ProgressBar value={pct(merged, total)} aria-label={`${merged} of ${total} tickets merged`}
+          <ProgressBar value={pct(merged + closed, total)} aria-label={m.counts.label}
                        className="flex-1 [&>div:first-child]:bg-foreground" />
-          <Link to={m.tickets_href} className={cn("whitespace-nowrap", LINK)} data-testid="milestone-count">{merged} of {total} merged</Link>
+          <Link to={m.tickets_href} className={cn("whitespace-nowrap", LINK)} data-testid="milestone-count">{m.counts.label}</Link>
         </div>
       </div>
     </div>
@@ -717,7 +719,7 @@ function Summary({ d }: { d: FactoryProjectData }) {
                      : "Each pull request the crew opens shows here."}
                    more={prTotal > 0 ? `All ${plural(prTotal, "pull request", "pull requests")}` : "Pull requests"} />
       <SummaryCard testid="summary-milestones" to={pageHref(d.id, "milestones")} title="Milestones"
-                   big={now ? `${now.counts.merged} of ${now.counts.total} merged` : "None yet"}
+                   big={now ? now.counts.label : "None yet"}
                    line={now ? <span data-user-text>{now.name}</span> : "The crew adds them when it plans the build."}
                    more={ms.length > 0 ? `All ${plural(ms.length, "milestone", "milestones")}` : "Milestones"} />
       <SummaryCard testid="summary-decisions" to={open > 0 ? pageHref(d.id, "decisions") : `/projects/${encodeURIComponent(d.id)}/decisions`}

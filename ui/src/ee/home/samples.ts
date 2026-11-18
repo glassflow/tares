@@ -1,6 +1,10 @@
 // Tares enterprise licence, see ee/LICENSE
+import { countLine } from "@/components/ProgressRing";
 import type { HomeArea, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeRef, HomeSample, HomeTeamCrew, HomeWaitingOn } from "./home.types";
 import { busy, project } from "@/editions/factory/homeSamples";
+
+/** A row's ticket counts with their line, as the server sends them. */
+const counted = <T extends { merged: number; total: number }>(c: T) => ({ ...c, label: countLine(c) });
 
 // Sample bodies of the factory home on a cell with more than one person (the keys tares/factory_team.py
 // adds). They show only behind the sample flag, never on a live cell. Every name here is invented.
@@ -79,26 +83,26 @@ function row(id: string, lead: HomeRef, members: HomeRef[], over: Partial<HomePr
 const TEAM_PROJECTS: HomeProject[] = [
   row("project-y", alex, [kim], {
     scope: "private", goal: "A nickname field on the API, shown on the web page.", state: "waiting_on_you", state_label: "Waiting on you",
-    milestone: "M1 ready to check", tickets: { merged: 1, blocked: 1, total: 2 }, yours: 1, yours_text: "1 ticket yours, 1 Kim's", mine: true,
+    milestone: "M1 ready to check", tickets: counted({ merged: 1, closed: 0, queued: 0, stuck: 1, total: 2 }), yours: 1, yours_text: "1 ticket yours, 1 Kim's", mine: true,
   }),
   row("project-x", kim, [alex], {
     goal: "Bill teams per seat, monthly or yearly.", state: "not_started", state_label: "Not started",
-    milestone: "Waiting on your answer", tickets: { merged: 0, blocked: 0, total: 7 }, yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
+    milestone: "Waiting on your answer", tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 7 }), yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
   }),
   row("project-z", alex, [], {
     goal: "About 1,000 answer articles so AI assistants cite the product.", milestone: "Now on M4: 1,000 articles live",
-    tickets: { merged: 13, blocked: 6, total: 20 }, yours: 20, yours_text: "20 tickets yours", mine: true,
+    tickets: counted({ merged: 13, closed: 0, queued: 5, stuck: 1, total: 20 }), yours: 20, yours_text: "20 tickets yours", mine: true,
   }),
   row("project-w", kim, [lee], {
-    goal: "A new sign-in page for the web app.", milestone: "Now on M2: sign-in page", tickets: { merged: 4, blocked: 0, total: 9 },
+    goal: "A new sign-in page for the web app.", milestone: "Now on M2: sign-in page", tickets: counted({ merged: 4, closed: 0, queued: 0, stuck: 0, total: 9 }),
   }),
   row("project-v", lee, [], {
     goal: "Move the build to a faster runner.", state: "not_started", state_label: "Not started", milestone: "3 milestones",
-    tickets: { merged: 0, blocked: 0, total: 5 },
+    tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 5 }),
   }),
   row("project-u", kim, [], {
     goal: "Fix the date shown on invoices.", state: "ready_to_close", state_label: "Ready to close", milestone: "Ready to close",
-    tickets: { merged: 6, blocked: 0, total: 6 },
+    tickets: counted({ merged: 6, closed: 0, queued: 0, stuck: 0, total: 6 }),
   }),
 ];
 
@@ -107,7 +111,7 @@ const LONG_PROJECT = row("project-long", LONG_LEAD, [kim, lee], {
   name: "project-for-the-enterprise-edition-with-a-name-that-keeps-going-on-and-on-and-on-2026-v2-b",
   scope: "private", mine: true, yours: 2, yours_text: "2 tickets yours, 1 Alexandria Kimberley-Lee-Hargreaves-Montgomery's",
   goal: "A goal written as a long sentence that goes on to describe the whole piece of work in some detail so the row has to wrap onto several lines on a phone.",
-  milestone: "Now on M2: a milestone with a long name that also has to wrap", tickets: { merged: 2, blocked: 1, total: 9 },
+  milestone: "Now on M2: a milestone with a long name that also has to wrap", tickets: counted({ merged: 2, closed: 0, queued: 0, stuck: 1, total: 9 }),
 });
 
 const LEADS = [alex, kim, lee];

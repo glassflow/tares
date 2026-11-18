@@ -50,7 +50,7 @@ const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0)
 function Row({ p, error, onClose, team, me }: {
   p: FactoryProjectRow; error?: string; onClose: (p: FactoryProjectRow) => void; team: boolean; me?: string;
 }) {
-  const { merged, blocked, total } = p.tickets;
+  const { merged, closed, queued, stuck, total } = p.tickets;
   const repos = p.repo_names.join(", ");
   return (
     <div className="border-b border-border px-4 py-3.5 last:border-b-0 hover:bg-row-hover" data-testid="project-row" data-state={p.state} data-project={p.id}>
@@ -82,11 +82,16 @@ function Row({ p, error, onClose, team, me }: {
         </div>
       )}
       {team && <Slot name="projects.lead" p={p} me={me} />}
-      <ProgressBar value={pct(merged, total)} blocked={pct(blocked, total)} aria-label={`${merged} of ${total} tickets merged`}
+      <ProgressBar value={pct(merged + closed, total)} blocked={pct(stuck, total)} aria-label={p.tickets.label}
                    className={cn("my-2 [&>div:first-child]:bg-foreground", p.state === "done" && "[&>div:first-child]:bg-faint")} />
-      <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground" data-testid="project-tickets">
-        <span>{merged} of {total} tickets merged</span>
-        {blocked > 0 && <span className="text-err">{blocked} blocked</span>}
+      {/* the server's count line, with stuck in the error tone: it is the group a glance is for */}
+      <div className="text-xs text-muted-foreground" data-testid="project-tickets" aria-label={p.tickets.label}>
+        {total === 0 ? p.tickets.label : (
+          <span aria-hidden="true">
+            {merged} merged{closed > 0 && `, ${closed} closed`}{queued > 0 && `, ${queued} queued`}
+            {stuck > 0 && <>, <span className="text-err" data-testid="project-stuck">{stuck} stuck</span></>} of {total}
+          </span>
+        )}
       </div>
       {p.milestone && <div data-user-text data-testid="project-milestone" className="mt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">{p.milestone}</div>}
       {error && <div role="alert" data-user-text data-testid="project-error" className="mt-2 text-[13px] text-err [overflow-wrap:anywhere]">{error}</div>}

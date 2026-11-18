@@ -157,7 +157,7 @@ async function waitFor(url, tries = 100) {
 
     // moving now: at most three on Overview, a link to all
     ck("three tickets are moving here, never more", (await T("moving-row").count()) === 3, String(await T("moving-row").count()));
-    ck("the caption says how many are merged", (await txt(T("moving-caption"))) === "2 of 11 tickets merged", await txt(T("moving-caption")));
+    ck("the caption is the count line: merged, then queued apart from stuck", (await txt(T("moving-caption"))) === "2 merged, 1 queued, 1 stuck of 11", await txt(T("moving-caption")));
     ck("the rest is counted, with a link to all tickets",
        (await txt(T("moving-more"))).startsWith("5 more tickets are moving.") && (await T("all-tickets-more").getAttribute("href")) === `/projects/${y}/tickets`
        && (await txt(T("all-tickets-more"))) === "All 11 tickets ›", await txt(T("moving-more")));
@@ -174,7 +174,7 @@ async function waitFor(url, tries = 100) {
     ck("the pull requests card: how many are open, the newest one, and it opens Pull requests",
        JSON.stringify(await card("prs")) === JSON.stringify(["3 open", "#15 Add the search box, CI failing", `/projects/${y}/github`]), JSON.stringify(await card("prs")));
     ck("the milestones card: the milestone under way, and it opens Milestones",
-       JSON.stringify(await card("milestones")) === JSON.stringify(["2 of 3 merged", "M1: The first articles", `/projects/${y}/milestones`]), JSON.stringify(await card("milestones")));
+       JSON.stringify(await card("milestones")) === JSON.stringify(["2 merged of 3", "M1: The first articles", `/projects/${y}/milestones`]), JSON.stringify(await card("milestones")));
     ck("the decisions card: the calls to confirm come first, and it opens them",
        JSON.stringify(await card("decisions")) === JSON.stringify(["2 to confirm", "Which date format?", `/projects/${y}/calls`]), JSON.stringify(await card("decisions")));
     ck("Overview has no milestone rows, decisions, docs or people", (await T("milestone-row").count()) === 0 && (await T("decision-row").count()) === 0
@@ -193,8 +193,9 @@ async function waitFor(url, tries = 100) {
     ck("a milestone has no ticket list", (await T("milestones").locator("[data-testid=moving-row], [data-ref]").count()) === 0
        && (await T("milestones").locator("a[href*='/tickets/']").count()) === 0);
     const count0 = mrows.nth(0).getByTestId("milestone-count");
-    ck("its count links to its tickets, on the project's Tickets page", (await txt(count0)) === "2 of 3 merged" && /^\/projects\/uc_projecty\/tickets\?milestone=ms_/.test(await count0.getAttribute("href")), await count0.getAttribute("href"));
-    ck("the other milestones count too", (await txt(mrows.nth(1).getByTestId("milestone-count"))) === "0 of 5 merged");
+    ck("its count links to its tickets, on the project's Tickets page", (await txt(count0)) === "2 merged of 3" && /^\/projects\/uc_projecty\/tickets\?milestone=ms_/.test(await count0.getAttribute("href")), await count0.getAttribute("href"));
+    ck("the other milestones count too", (await txt(mrows.nth(1).getByTestId("milestone-count"))) === "0 merged of 5",
+       await txt(mrows.nth(1).getByTestId("milestone-count")));
     const checks = mrows.nth(0).getByTestId("milestone-checks");
     ck("the checks are folded away, with their number", (await txt(checks)).includes("2 checks to pass") && !(await checks.evaluate((e) => e.open)));
     await checks.locator("summary").click();

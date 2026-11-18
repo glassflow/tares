@@ -262,7 +262,7 @@ const pctOf = (x: number) => (x > 0 && x < 0.005 ? "under 1%" : `${Math.round(x 
 
 function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProject; builders: CrewStation[]; all: CrewStation[]; selected: string; week?: ProjectUsage; now?: ProjectUsage }) {
   // the ring's counts when the row has them (canceled tickets kept out), so the text matches it
-  const done = p.progress ? p.progress.done : p.tickets_done;
+  const done = p.progress ? p.progress.merged + p.progress.closed : p.tickets_done;
   const total = p.progress ? p.progress.total : p.tickets_total;
   const left = total - done;
   const shares = [

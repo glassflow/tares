@@ -117,8 +117,8 @@ async def main():
            and p["progress"]["total"] == 4, p["progress"])
         md = rep["markdown"]
         ck("the markdown has the project's heading and groups",
-           "## Shop: 1/4 done" in md and "**Done**" in md and "**Blocked**" in md
-           and "**Needs you**" in md and "**No movement:** Blog (0/1)" in md, md)
+           "## Shop: 1 merged, 1 stuck of 4" in md and "**Done**" in md and "**Blocked**" in md
+           and "**Needs you**" in md and "**No movement:** Blog (0 merged of 1)" in md, md)
         ck("no em dashes in the report", "\u2014" not in md, md)
 
         async with mk() as cx:
@@ -168,7 +168,7 @@ async def main():
         s = r.json()
         ck("with a model the summary sits in the markdown under the project",
            s["summary_error"] is None and s["summary"]["projects"] == {shop: "T1 merged; T3 waits on a key."}
-           and "## Shop: 1/4 done\n\nT1 merged; T3 waits on a key." in s["markdown"]
+           and "## Shop: 1 merged, 1 stuck of 4\n\nT1 merged; T3 waits on a key." in s["markdown"]
            and "Shop shipped T1." in s["markdown"], s)
         ck("the model gets the facts without links, and no tools",
            "Which payment provider?" in seen["messages"][0]["content"]
@@ -185,7 +185,7 @@ async def main():
                  "until": datetime.fromisoformat(rep["until"])}
         md = standup.markdown(dated, parsed)
         ck("the summary sits under the project's heading",
-           "## Shop: 1/4 done\n\nT1 merged." in md and "One shipped" in md, md)
+           "## Shop: 1 merged, 1 stuck of 4\n\nT1 merged." in md and "One shipped" in md, md)
 
         print("== what happened inside the range counts ==")
         mid = datetime.now(timezone.utc)

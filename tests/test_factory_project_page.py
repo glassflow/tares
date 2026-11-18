@@ -278,7 +278,7 @@ async def main():
         ms_a = store.create_milestone(ps, "M1: base", "The base is in.", [])
         ms_b = store.create_milestone(ps, "M2: extras", "", [])
         ticket(ps, "Merged by stage", milestone=ms_a, stage="merged", status="in_progress", holder=STATIONS[0])
-        ticket(ps, "Merged by status", milestone=ms_a, status="done")
+        ticket(ps, "Closed by status", milestone=ms_a, status="done")
         ticket(ps, "Dropped idea", milestone=ms_a, status="canceled")
 
         # project-t: a hand-over path that ends in a slash, named in a ticket, a goal, a check
@@ -332,15 +332,18 @@ async def main():
                                       "needs_person", "can_accept", "checks_for", "yours", "tickets_href"}
                        for m in a["milestones"]), ms)
             ck("a milestone counts its tickets and leaves the canceled one out",
-               ms["M1: pages"]["counts"] == {"total": 3, "merged": 1}
-               and ms["M2: search"]["counts"] == {"total": 3, "merged": 0}, [m["counts"] for m in a["milestones"]])
+               ms["M1: pages"]["counts"] == {"total": 3, "merged": 1, "closed": 0, "label": "1 merged of 3"}
+               and ms["M2: search"]["counts"] == {"total": 3, "merged": 0, "closed": 0,
+                                                  "label": "0 merged, 1 queued of 3"}, [m["counts"] for m in a["milestones"]])
             ck("a milestone links to its tickets", ms["M1: pages"]["tickets_href"]
                == f"/projects/{px}/tickets?milestone={m1}" and ms["M2: search"]["tickets_href"]
                == f"/projects/{px}/tickets?milestone={m2}", [m["tickets_href"] for m in a["milestones"]])
             ck("the project links to its tickets", a["tickets_href"] == f"/projects/{px}/tickets", a["tickets_href"])
-            ck("counts: every ticket by state, canceled in the total", a["counts"] == {
-                "total": 9, "merged": 1, "to_do": 2, "in_progress": 1, "in_review": 1, "changes_asked": 1,
-                "blocked": 2, "canceled": 1}, a["counts"])
+            ck("counts: every ticket by state, canceled in the total; a wait on a ticket is queued, a stop is stuck",
+               a["counts"] == {
+                "total": 9, "merged": 1, "closed": 0, "to_do": 2, "in_progress": 1, "in_review": 1,
+                "changes_asked": 1, "queued": 1, "stuck": 1, "canceled": 1,
+                "label": "1 merged, 1 queued, 1 stuck of 8"}, a["counts"])
             tk = {t["title"]: t for t in a["moving"]}
             ck("a ticket has the fields of the page", tk and all(
                 set(t) == {"ref", "title", "state", "who", "pr", "review", "blocked_by", "href",
@@ -518,8 +521,9 @@ async def main():
                == ["Changes one", "Changes two", "Review one", "Doing one", "Status only"],
                [n["moving_total"], [t["title"] for t in n["moving"]]])
             ck("counts hold all seven", n["counts"] == {
-                "total": 7, "merged": 0, "to_do": 0, "in_progress": 2, "in_review": 1, "changes_asked": 2,
-                "blocked": 2, "canceled": 0}, n["counts"])
+                "total": 7, "merged": 0, "closed": 0, "to_do": 0, "in_progress": 2, "in_review": 1,
+                "changes_asked": 2, "queued": 0, "stuck": 2, "canceled": 0,
+                "label": "0 merged, 2 stuck of 7"}, n["counts"])
             mv = {t["title"]: t for t in n["moving"]}
             ck("a status of in progress with no stage shows as in progress", mv["Status only"]["state"] == "in progress"
                and mv["Doing one"]["state"] == "in progress", {k: v["state"] for k, v in mv.items()})
@@ -530,13 +534,16 @@ async def main():
 
             print("== merged by stage, and milestones ==")
             c = (await cx.get(f"/api/factory/projects/{ps}")).json()
-            ck("a ticket merged by its stage counts as merged and the project is done", c["stage"] == "done"
-               and c["counts"] == {"total": 3, "merged": 2, "to_do": 0, "in_progress": 0, "in_review": 0,
-                                   "changes_asked": 0, "blocked": 0, "canceled": 1}
+            ck("a ticket merged by its stage counts as merged, one done with no merge as closed, and the project is done",
+               c["stage"] == "done"
+               and c["counts"] == {"total": 3, "merged": 1, "closed": 1, "to_do": 0, "in_progress": 0,
+                                   "in_review": 0, "changes_asked": 0, "queued": 0, "stuck": 0,
+                                   "canceled": 1, "label": "1 merged, 1 closed of 2"}
                and c["moving"] == [] and c["moving_total"] == 0, [c["stage"], c["counts"]])
-            ck("a milestone is done when every ticket but the canceled ones is merged; an empty one is not",
+            ck("a milestone is done when every ticket but the canceled ones is merged or closed; an empty one is not",
                [(m["number"], m["done"], m["counts"]) for m in c["milestones"]]
-               == [("M1", True, {"total": 2, "merged": 2}), ("M2", False, {"total": 0, "merged": 0})],
+               == [("M1", True, {"total": 2, "merged": 1, "closed": 1, "label": "1 merged, 1 closed of 2"}),
+                   ("M2", False, {"total": 0, "merged": 0, "closed": 0, "label": "No tickets yet"})],
                c["milestones"])
             ck("tickets_href of the milestones", [m["tickets_href"] for m in c["milestones"]]
                == [f"/projects/{ps}/tickets?milestone={ms_a}", f"/projects/{ps}/tickets?milestone={ms_b}"])

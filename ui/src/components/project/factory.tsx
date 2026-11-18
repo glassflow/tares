@@ -5,7 +5,7 @@ import { api } from "../../api";
 import { CrewState, Desk, attachCmd, onCrewSide } from "../../pages/Crew";
 import { CopyButton, TimeAgo, usePolling } from "../bits";
 import { StatusLabel, STATUS_TONES } from "../edition";
-import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
+import { ProgressRing, countLine, ticketBucket, ticketProgress } from "../ProgressRing";
 import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
 import { Slot } from "../../eeSlots";
 import { AccessMark } from "./accessMark";
@@ -47,7 +47,7 @@ const STATUS_TEXT: Record<Ticket["status"], string> = {
 };
 // a ticket's cell in the progress bar, by its bucket in the ring
 const BAR_CLASS: Record<ReturnType<typeof ticketBucket>, string> = {
-  done: "done", doing: "run", blocked: "blocked", todo: "", canceled: "",
+  merged: "done", closed: "closed", doing: "run", stuck: "stuck", queued: "queued", todo: "", canceled: "",
 };
 
 export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
@@ -83,7 +83,8 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   // counted like the ring in the header, so the ring and the counts below it agree
   const prog = ticketProgress(tickets);
   const live = tickets.filter((t) => ticketBucket(t) !== "canceled");
-  const { done, doing } = prog;
+  const { doing } = prog;
+  const done = prog.merged + prog.closed;   // finished, with a merge or without
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
   const building = tickets.some((t) => t.status === "in_progress");
@@ -162,12 +163,14 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       {live.length > 0 && (
         <div className="fo-progress">
           <div className="fo-progress-row">
-            <span><b>{done} of {live.length} tickets done</b> · tickets live {where}</span>
+            <span><b>{countLine(prog)}</b> · tickets live {where}</span>
             <span className="fo-counts">
               <span><b>{prog.todo}</b> to do</span>
               <span><b>{doing}</b> in progress</span>
-              {prog.blocked > 0 && <span><b>{prog.blocked}</b> blocked</span>}
-              <span><b>{done}</b> done</span>
+              {prog.queued > 0 && <span><b>{prog.queued}</b> queued</span>}
+              {prog.stuck > 0 && <span><b>{prog.stuck}</b> stuck</span>}
+              <span><b>{prog.merged}</b> merged</span>
+              {prog.closed > 0 && <span><b>{prog.closed}</b> closed</span>}
             </span>
           </div>
           <div className="fo-bar" aria-hidden="true">

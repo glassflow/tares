@@ -203,8 +203,9 @@ async def main():
             ck("the counts are by state and add up", a["counts"] == {
                 "all": 8, "building": 2, "waiting_on_you": 1, "not_started": 2, "ready_to_close": 1,
                 "later": 0, "done": 2}, a["counts"])
-            ck("tickets merged and total", by["project-b1"]["tickets"] == {"merged": 1, "blocked": 0, "total": 4}
-               and by["project-z"]["tickets"] == {"merged": 2, "blocked": 0, "total": 2}, by["project-b1"])
+            ck("tickets merged and total", by["project-b1"]["tickets"]["merged"] == 1
+               and by["project-b1"]["tickets"]["total"] == 4 and by["project-z"]["tickets"]["merged"] == 2
+               and by["project-z"]["tickets"]["total"] == 2, by["project-b1"])
 
             print("== close ==")
             ck("only the fully merged project can be closed",

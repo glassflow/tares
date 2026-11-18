@@ -52,10 +52,11 @@ export const pageHref = (id: string, page: ProjectPage) =>
 
 /** The row the cell does not send: every ticket merged and the project still open. */
 function readyRow(d: FactoryProjectData): HomeItem {
-  const merged = d.counts.merged;
+  const { merged, closed } = d.counts;
+  const n = merged + closed;
   return {
     id: "ready_to_close", kind: "signoff", label: "Ready to close",
-    title: `All ${merged} ${merged === 1 ? "ticket is" : "tickets are"} merged`,
+    title: `All ${n} ${n === 1 ? "ticket is" : "tickets are"} ${closed ? "finished" : "merged"}`,
     detail: "Close the project when you have checked the result.", meta: "",
     project: { id: d.id, name: d.name }, repo: null, from: null, since: null, waited: "", actions: [
       { label: "Close project", primary: true, do: "close" },

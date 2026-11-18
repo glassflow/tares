@@ -2,6 +2,7 @@
 // sample flag (see sample.ts). It is invented: project-x, project-y, project-z, example-org/docs-site,
 // Alex, Kim, Lee. No sample is real cell data.
 
+import { countLine } from "@/components/ProgressRing";
 import type { HomeAction, HomeItem } from "./home.types";
 import type { FactoryProjectData, MovingTicket, ProjectCall, ProjectMilestone, TicketState, TicketTurn, TurnWhose } from "./FactoryProject.api";
 
@@ -9,9 +10,9 @@ const NOW = "2026-11-02T10:00:00+00:00";
 const PID = "uc_sample";
 const TICKETS = `/projects/${PID}/tickets`;
 
-const COUNT_KEY: Record<TicketState, keyof FactoryProjectData["counts"]> = {
+const COUNT_KEY: Record<TicketState, Exclude<keyof FactoryProjectData["counts"], "label">> = {
   "to do": "to_do", "in progress": "in_progress", "in review": "in_review", "changes asked": "changes_asked",
-  blocked: "blocked", merged: "merged", canceled: "canceled",
+  blocked: "stuck", merged: "merged", canceled: "canceled",
 };
 
 // a sample ticket's turn from its state, as factory.turn_of would read it with no verdict yet
@@ -37,7 +38,7 @@ const ms = (n: number, name: string, goal: string, total: number, merged: number
   const full = checks.map((c, i) => ({ n: i + 1, for: "crew" as const, result: done ? "pass" as const : null, note: null, by: done ? "the crew" : null, ...c }));
   const open = full.some((c) => c.for === "person" && !c.result);
   return {
-    id: `ms${n}`, number: `M${n}`, name, goal, done, counts: { total, merged }, checks: full,
+    id: `ms${n}`, number: `M${n}`, name, goal, done, counts: { total, merged, closed: 0, label: countLine({ merged, total }) }, checks: full,
     accepted: done && !open, needs_person: done && open, can_accept: false,
     tickets_href: `${TICKETS}?milestone=ms${n}`,
   };
@@ -109,9 +110,10 @@ interface Parts {
 
 function make(p: Parts): FactoryProjectData {
   const moving = p.moving ?? [];
-  const counts = { total: p.total ?? 0, to_do: 0, in_progress: 0, in_review: 0, changes_asked: 0, blocked: 0,
-                   merged: p.merged ?? 0, canceled: p.canceled ?? 0 };
-  for (const t of moving) counts[COUNT_KEY[t.state]] += 1;
+  const counts = { total: p.total ?? 0, to_do: 0, in_progress: 0, in_review: 0, changes_asked: 0, queued: 0,
+                   stuck: 0, merged: p.merged ?? 0, closed: 0, canceled: p.canceled ?? 0, label: "" };
+  for (const t of moving) (counts[COUNT_KEY[t.state]] as number) += 1;
+  counts.label = countLine({ ...counts, total: counts.total - counts.canceled });
   const state = p.state ?? "building";
   return {
     id: PID, name: p.name, goal: p.goal, stage: p.stage ?? "build",

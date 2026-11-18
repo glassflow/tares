@@ -124,10 +124,10 @@ const today = () => {
     ck("the state is in words", (await b1.getByTestId("project-state").textContent()).trim() === "Building" &&
        (await row("project-w").getByTestId("project-state").textContent()).trim() === "Waiting on you" &&
        (await row("project-y").getByTestId("project-state").textContent()).trim() === "Not started");
-    ck("tickets merged and blocked", (await b1.getByTestId("project-tickets").innerText()).replace(/\s+/g, " ").trim() === "1 of 4 tickets merged 1 blocked",
+    ck("tickets merged and stuck, in one count line", (await b1.getByTestId("project-tickets").innerText()).replace(/\s+/g, " ").trim() === "1 merged, 1 stuck of 4",
        await b1.getByTestId("project-tickets").innerText());
-    ck("a project with nothing blocked says nothing about it", !/blocked/.test(await row("project-b2").getByTestId("project-tickets").innerText()));
-    ck("the bar says what it measures", (await b1.getByRole("progressbar").getAttribute("aria-label")) === "1 of 4 tickets merged");
+    ck("a project with nothing stuck says nothing about it", !/stuck/.test(await row("project-b2").getByTestId("project-tickets").innerText()));
+    ck("the bar says what it measures", (await b1.getByRole("progressbar").getAttribute("aria-label")) === "1 merged, 1 stuck of 4");
     ck("the milestone line", (await b1.getByTestId("project-milestone").innerText()).trim() === "Now on M1: Foundations");
     ck("a project not started says how many milestones", (await row("project-y").getByTestId("project-milestone").innerText()).trim() === "2 milestones");
     ck("the repos are listed in full, then who and when",

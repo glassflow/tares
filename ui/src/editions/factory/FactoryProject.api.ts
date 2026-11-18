@@ -43,7 +43,9 @@ export interface ProjectMilestone {
   name: string;
   goal: string;
   done: boolean;
-  counts: { total: number; merged: number };
+  /** Merged only for a merge, closed for done without one; `label` is the count line
+   *  ("1 merged, 1 closed of 2", status_words.count_line). */
+  counts: { total: number; merged: number; closed: number; label: string };
   /** Each acceptance check: `for` the crew (it runs and records them) or a person; `result` the latest run, null before one. */
   checks: { n: number; check: string; expect: string; for: "crew" | "person"; result: "pass" | "fail" | null; note: string | null; by: string | null }[];
   /** Accepted: its checks passed, or the person accepted it as it is. */
@@ -116,8 +118,11 @@ export interface FactoryProjectData {
    *  else: labelled for that person, with nothing to press (only they may answer). */
   waiting_others?: HomeItem[];
   counts: {
-    total: number; to_do: number; in_progress: number; in_review: number;
-    changes_asked: number; blocked: number; merged: number; canceled: number;
+    total: number; to_do: number; in_progress: number; in_review: number; changes_asked: number;
+    /** queued waits on another ticket, stuck a station stopped (tares/factory.py `count_of`) */
+    queued: number; stuck: number; merged: number; closed: number; canceled: number;
+    /** "5 merged, 2 queued, 1 stuck of 8": canceled ones left out (status_words.count_line) */
+    label: string;
   };
   moving: MovingTicket[];
   moving_total: number;

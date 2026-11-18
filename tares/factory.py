@@ -492,20 +492,31 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
     return out
 
 
+# the groups a project counts its tickets in (status-words spec, decision 2), read off the
+# ticket's turn so a count and the ticket's own word never disagree: merged only for a merge, a
+# ticket closed without one apart, a wait on another ticket (queued) apart from a stop (stuck).
+# Every other turn is work under way.
+COUNTS = ("merged", "closed", "doing", "stuck", "queued", "todo", "canceled")
+COUNT_OF_TURN = {"merged": "merged", "closed": "closed", "canceled": "canceled", "stuck": "stuck",
+                 "queued": "queued", "to_do": "todo"}
+
+
+def count_of(t: dict, blocked_by: list[str] | None = None) -> str:
+    """The group of COUNTS a ticket counts in. Read without the review verdict, so a ticket
+    counts as stuck only when a station stopped it, not while the reviewer's block is on it."""
+    return COUNT_OF_TURN.get(turn_of(t, blocked_by), "doing")
+
+
 def progress(tickets: list[dict]) -> dict:
-    """{done, doing, blocked, todo, canceled, total}: a project's tickets as its progress ring
-    shows them. Done goes by the stage as much as the status: a Linear or GitHub ticket keeps
-    its home's status, which can still say in progress after the crew merged it. Blocked is a
-    station's "blocked", or a ticket to do that waits on one not delivered. Canceled ones stay
-    out of the total. The project page counts its ring the same way
-    (ui/src/components/ProgressRing.tsx)."""
+    """{merged, closed, doing, stuck, queued, todo, canceled, total}: a project's tickets as its
+    progress ring and its count line show them (count_of). Canceled ones stay out of the total;
+    closed ones count in it, as finished without a merge. The project page counts its ring the
+    same way (ui/src/components/ProgressRing.tsx)."""
     waits = readiness(tickets)
-    n = {"done": 0, "doing": 0, "blocked": 0, "todo": 0, "canceled": 0}
-    ring = {"merged": "done", "canceled": "canceled", "blocked": "blocked", "in progress": "doing",
-            "in review": "doing", "changes asked": "doing", "to do": "todo"}
+    n = dict.fromkeys(COUNTS, 0)
     for t in tickets:
-        n[ring[state_of(t, waits[t["id"]]["blocked_by"])]] += 1
-    return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
+        n[count_of(t, waits[t["id"]]["blocked_by"])] += 1
+    return {**n, "total": sum(v for k, v in n.items() if k != "canceled")}
 
 
 def activity_at(updated_at, tickets: list[dict]):

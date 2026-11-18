@@ -1,6 +1,7 @@
 // Sample data for the Projects list, shown at /projects?sample=<name> when the browser has the
 // sample flag (see sample.ts). It is invented: project-x, project-y, example-org/service-a, Alex, Kim.
 
+import { countLine } from "@/components/ProgressRing";
 import type { FactoryProjectRow, FactoryProjectsData, ProjectState } from "./FactoryProjects.api";
 
 const NOW = "2026-11-02T10:00:00+00:00";
@@ -14,12 +15,18 @@ const C = "example-org/docs";
 
 export interface Spec {
   id: string; name: string; state: ProjectState; goal: string; merged: number; total: number;
-  blocked?: number; milestone?: string; repos?: string[]; builders?: number; meta?: string;
+  closed?: number; queued?: number; stuck?: number; milestone?: string; repos?: string[]; builders?: number; meta?: string;
+}
+
+/** The row's ticket counts and their line, as tares/status_words.py `count_line` writes it. */
+function countsOf(s: Spec): FactoryProjectRow["tickets"] {
+  const c = { merged: s.merged, closed: s.closed ?? 0, queued: s.queued ?? 0, stuck: s.stuck ?? 0, total: s.total };
+  return { ...c, label: countLine(c) };
 }
 
 export const row = (s: Spec): FactoryProjectRow => ({
   id: s.id, name: s.name, goal: s.goal, state: s.state, state_label: LABEL[s.state],
-  milestone: s.milestone ?? "", tickets: { merged: s.merged, blocked: s.blocked ?? 0, total: s.total },
+  milestone: s.milestone ?? "", tickets: countsOf(s),
   repos: (s.repos ?? [A]).map((r) => r.split("/").pop() ?? r), builders: s.builders ?? 0,
   last_activity_at: NOW, last_activity: null, meta: s.meta ?? "",
   can_close: s.state === "ready_to_close", repo_names: s.repos ?? [A],
@@ -27,13 +34,13 @@ export const row = (s: Spec): FactoryProjectRow => ({
 
 export const BUSY: Spec[] = [
   { id: "p1", name: "project-x", state: "waiting_on_you", goal: "Publish 1,000 answer articles on the docs site.",
-    merged: 15, total: 21, blocked: 4, milestone: "Now on M4: 1,000 articles live", repos: [C], builders: 1,
+    merged: 15, total: 21, queued: 3, stuck: 1, milestone: "Now on M4: 1,000 articles live", repos: [C], builders: 1,
     meta: "1 builder · Active 1 day ago · 2 PRs to review" },
   { id: "p2", name: "project-y", state: "building", goal: "Give the console an edition for each kind of team.",
-    merged: 34, total: 61, blocked: 23, milestone: "Now on 1. Foundations", repos: [A, B, C], builders: 3,
+    merged: 34, total: 61, queued: 21, stuck: 2, milestone: "Now on 1. Foundations", repos: [A, B, C], builders: 3,
     meta: "3 builders · Active 1 minute ago" },
   { id: "p3", name: "project-z", state: "not_started", goal: "Let customers connect their own tools, with a setup page for each.",
-    merged: 0, total: 15, blocked: 11, milestone: "6 milestones", repos: [A], meta: "No builders yet · Written 5 days ago" },
+    merged: 0, total: 15, queued: 11, milestone: "6 milestones", repos: [A], meta: "No builders yet · Written 5 days ago" },
   { id: "p4", name: "project-v", state: "ready_to_close", goal: "Let a team share one crew.", merged: 27, total: 27,
     milestone: "All milestones done", repos: [A, B, C], meta: "No builders working · Merged 3 days ago" },
   { id: "p5", name: "project-a", state: "done", goal: "Track how often AI assistants name the product.", merged: 15, total: 15,
@@ -66,7 +73,7 @@ const LONG_GOAL =
   "and then do the same for the how-to guides, one section at a time until the last one is done.";   // 300+ characters
 export const LONG: Spec[] = [
   { id: "l1", name: "project-with-a-very-long-name-that-goes-on-and-on-without-a-break-1",
-    state: "building", goal: LONG_GOAL, merged: 3, total: 15, blocked: 11,
+    state: "building", goal: LONG_GOAL, merged: 3, total: 15, queued: 10, stuck: 1,
     milestone: "Now on M1: A very long milestone name that should wrap and never push the bar out of its card",
     repos: [A, B, C, "example-org/another-service-with-a-long-name"], builders: 4,
     meta: "4 builders · Active 12 minutes ago" },
