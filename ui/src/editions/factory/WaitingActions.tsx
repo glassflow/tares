@@ -19,7 +19,8 @@ export function optionAnswer(options: string[], index: number, desk: boolean): {
   return desk && index < LETTERS.length ? { words: LETTERS[index], choice: o } : { words: o, choice: o };
 }
 
-/** Answer, open under its row: one button per option, or a text box and Send. */
+/** Answer, open under its row: one button per option, and a text box and Send under them for an
+ *  answer none of them gives (TR-1452). */
 export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
   item: HomeItem; action: HomeAction; busy: boolean;
   onSend: (given: AnswerGiven) => void; onCancel: () => void;
@@ -33,7 +34,7 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
   return (
     <div data-testid="answer-panel" className="basis-full pl-10">
       <div className="flex max-w-[640px] flex-col gap-3 border border-border bg-muted p-3">
-        {options.length > 0 ? (
+        {options.length > 0 && (
           <div className="flex flex-wrap gap-2" role="group" aria-label={`Answers to ${item.title}`}>
             {options.map((o, i) => (
               <Button key={i} variant="secondary" className="h-8 text-[13px]" disabled={busy}
@@ -42,18 +43,20 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
               </Button>
             ))}
           </div>
-        ) : (
-          <Textarea label="Your answer" rows={3} value={text} disabled={busy} maxLength={ANSWER_MAX} data-testid="answer-text"
-            onChange={(e) => setText(e.target.value)} />
         )}
+        {/* none of the options fits: the desk takes words for any question (TR-1452) */}
+        <Textarea label={options.length > 0 ? "Or in your own words" : "Your answer"} rows={options.length > 0 ? 2 : 3}
+          value={text} disabled={busy} maxLength={ANSWER_MAX} data-testid="answer-text" data-user-text
+          onChange={(e) => setText(e.target.value)} />
         {canStand && (
           <Checkbox label="Let this answer stand for next time" checked={standing} disabled={busy} data-testid="answer-standing"
             onCheckedChange={(v) => setStanding(v === true)} />
         )}
         <div className="flex gap-2">
-          {options.length === 0 && (
-            <Button className="h-8 text-[13px]" busy={busy} disabled={!words} onClick={() => onSend({ words, standing })}>Send</Button>
-          )}
+          {/* the desk records an option for every question that has them (TR-1018): an answer none of
+              them gives is its own choice */}
+          <Button className="h-8 text-[13px]" busy={busy} disabled={!words}
+            onClick={() => onSend(options.length > 0 ? { words, choice: words, standing } : { words, standing })}>Send</Button>
           <Button variant="secondary" className="h-8 text-[13px]" disabled={busy} onClick={onCancel}>Cancel</Button>
         </div>
       </div>

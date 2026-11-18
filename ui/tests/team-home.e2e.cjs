@@ -464,7 +464,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await optPanel.waitFor();
       ck(t("a question with options shows one button each"), (await optPanel.getByRole("button", { name: "blue", exact: true }).count()) === 1
          && (await optPanel.getByRole("button", { name: "green", exact: true }).count()) === 1 && (await optPanel.getByRole("button", { name: "b!", exact: true }).count()) === 1
-         && (await optPanel.getByTestId("answer-text").count()) === 0);
+         && (await optPanel.getByTestId("answer-text").count()) === 1);
+      ck(t("TR-1452: and words under them, Send off while they are empty"),
+         await optPanel.getByRole("button", { name: "Send" }).isDisabled());
       ck(t("a crew question can stand for next time"), (await optPanel.getByTestId("answer-standing").count()) === 1);
       await optPanel.getByTestId("answer-standing").click();
       await optPanel.getByRole("button", { name: "b!", exact: true }).click();
@@ -509,6 +511,30 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const fontDecided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which font for the shop/.test(d.question));
       ck(t("TR-1021: the daemon recorded it from the console"), !!fontDecided && fontDecided.via === "console" && fontDecided.choice === "sans", JSON.stringify(fontDecided));
       ck(t("TR-1021: four remain again"), (await rows.count()) === 4, String(await rows.count()));
+
+      // TR-1452: a question with options answered in words none of them gives
+      const size = await api("POST", "/api/desk", { question: "Which size for the shop logo?", options: ["small", "large"],
+        recommendation: "small", why: "it fits the header", project: ids.project, to: ids.people.alex });
+      ck(t("TR-1452: a question with options is put on the desk"), size.status < 300, JSON.stringify(size));
+      await page.reload();
+      const sz = row(page, "Which size for the shop logo");
+      await sz.waitFor();
+      await sz.getByRole("button", { name: "Answer" }).click();
+      const szPanel = sz.getByTestId("answer-panel");
+      await szPanel.waitFor();
+      await szPanel.getByTestId("answer-text").fill("Medium, the same height as the menu.");
+      await checkWords(page, ck, t("answer box with options"));
+      ctl.posts.length = 0;
+      await szPanel.getByRole("button", { name: "Send" }).click();
+      await sz.waitFor({ state: "detached" });
+      const szPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
+      const szBody = JSON.parse((szPost && szPost.body) || "{}");
+      ck(t("TR-1452: the words are sent as the reply and as the choice, none of the options"),
+         szBody.words === "Medium, the same height as the menu." && szBody.choice === szBody.words, JSON.stringify(szPost));
+      const szDecided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which size for the shop logo/.test(d.question));
+      ck(t("TR-1452: the daemon recorded the words from the console"), !!szDecided && szDecided.via === "console"
+         && JSON.stringify(szDecided).includes("Medium, the same height as the menu."), JSON.stringify(szDecided));
+      ck(t("TR-1452: four remain"), (await rows.count()) === 4, String(await rows.count()));
 
       // Kim, who leads Shop, waits on nobody once her home is read again: Alex answered her question
       await new Promise((r) => setTimeout(r, 5500));   // the daemon keeps /api/home for 5 seconds per credential
