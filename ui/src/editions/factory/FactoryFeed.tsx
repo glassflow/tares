@@ -74,7 +74,7 @@ function Card({ card, top, focused, now, deeper, state, panel, onPress, onDeeper
 }) {
   const id = `feed-more-${card.id.replace(/[^a-zA-Z0-9-]/g, "-")}`;
   return (
-    <ListRow id={cardDomId(card.id)} className={cn("flex-col items-stretch gap-y-3 scroll-mt-6", focused && "border-l-2 border-l-foreground bg-muted pl-3")}
+    <ListRow id={cardDomId(card.id)} className={cn("flex-col items-stretch gap-y-3 scroll-mt-6", focused && "shadow-[inset_3px_0_0_var(--accent)] bg-muted pl-3")}
       data-testid="feed-card" data-kind={card.kind} data-focus={focused ? "1" : undefined} aria-current={focused ? "true" : undefined}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span className="font-mono text-[12px] uppercase tracking-wide text-muted-foreground">
