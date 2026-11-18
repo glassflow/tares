@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- A link can open the feed at one item: `/feed?item=<id>` puts that card first and marks it "From your link". When the item no longer waits, the page says who answered it, with what, where and when, from the answers record of any day, or that it no longer waits, and shows the rest of the feed under it. `GET /api/answers` takes `item=<home item id>` and then looks back over every day unless `since` is given; a desk item is found under any of its ids.
+
 ## [1.59.0] - 2026-11-17
 
 Crew stations carry much less context: every skill fits under its size limit and a ticket read answers in a few KB. The Tickets page shows who each ticket is assigned to, and GitHub Issues picks its repository from a list.

@@ -171,6 +171,20 @@ async def main():
         old = store.add_answer("question:D99", "question", "uc_shop", "Old?", None, "yes", "console", None,
                                now_utc() - timedelta(days=2))
         ck("a row from two days ago is not today's", all(a["at"] != old["at"] for a in (await listed()).json()["answers"]))
+
+        print("== item: the answers to one item, of any day (TR-1459) ==")
+        got = (await listed(item="question:D99")).json()["answers"]
+        ck("an item answered two days ago is found", [x["id"] for x in got] == ["question:D99"] and got[0]["said"] == "yes", got)
+        got = (await listed(item="desk:D99")).json()["answers"]
+        ck("a team cell's desk id finds the answer the desk recorded", [x["id"] for x in got] == ["question:D99"], got)
+        ck("only that item", (await listed(item="question:D98")).json()["answers"][0]["ask"] == "Theirs?"
+           and len((await listed(item="question:D98")).json()["answers"]) == 1)
+        ck("since still narrows it", (await listed(item="question:D99", since=now_utc().isoformat())).json()["answers"] == [])
+        ck("an item never answered has none", (await listed(item="question:NOPE")).json()["answers"] == [])
+        store.add_answer("milestone_to_check:uc_vault:m7", "milestone_to_check", "uc_vault", "Check M7 of Vault",
+                         "yes", "Accepted", "console", None, now_utc() - timedelta(days=3))
+        ck("the root key reads an old answer on any project",
+           len((await listed(item="milestone_to_check:uc_vault:m7")).json()["answers"]) == 1)
         try:
             store.add_answer("x", "question", None, "a", "maybe", "b", "console", None, now_utc())
             ck("a choice other than yes or no is refused", False)

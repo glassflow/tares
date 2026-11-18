@@ -52,4 +52,7 @@ export interface FeedData {
   /** The day's answers. Live: the cell's record (GET /api/answers) and what was answered on this page
    *  before the record is read again. */
   answered: FeedAnswered[];
+  /** The item a link opened the feed at (`/feed?item=<id>`, TR-1459) and, when it no longer waits, its
+   *  latest answer of any day (null: never answered, or not found). */
+  focus?: { id: string; answer: FeedAnswered | null };
 }

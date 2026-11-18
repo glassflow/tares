@@ -586,6 +586,17 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
             "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
+def _item_ids(item: str) -> list[str]:
+    """The ids the answers record may hold for one home item. A desk item is `question:D7` or
+    `permission:D7` on a cell of one and `desk:D7` on a team cell's Home, so a link that names any
+    of them finds the answer recorded under another."""
+    item = item.strip()
+    kind, _, rest = item.partition(":")
+    if kind in ("question", "permission", "desk") and rest and ":" not in rest:
+        return [f"question:{rest}", f"permission:{rest}", f"desk:{rest}"]
+    return [item]
+
+
 def register(app, store, h: Host) -> SimpleNamespace:
     """Add the crew's routes. `h` is the daemon's Host (tares/host.py), which documents the helpers
     it carries: err, project_or_404, by, current_person, is_admin, area_owner and the rest. Returns
@@ -2666,18 +2677,23 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"count": len(fresh), "latest": max(fresh, default=since)}
 
     @app.get("/api/answers")
-    def answers_list(request: Request, since: str = "", mine: bool = False):
+    def answers_list(request: Request, since: str = "", mine: bool = False, item: str = ""):
         """The answers people gave to what waited for them since `since` (default: the start of
         today, UTC), newest first (TR-1451): each the home item it answered (`item`), its ask as it
         read then, yes or no where it had two ways, the words or option given, who, when and where
         (`via`: console, feed, session, message). An answer about a project the caller cannot see
-        is left out. `mine=1` keeps the caller's own."""
+        is left out. `mine=1` keeps the caller's own. `item=<home item id>` keeps the answers to
+        that item, of any day unless `since` is given (TR-1459: a link to an item opened later says
+        who answered it); a desk item matches under any of its ids (`question:`, `permission:`,
+        `desk:`)."""
         try:
             floor = datetime.fromisoformat(since.replace("Z", "+00:00")) if since.strip() else None
         except ValueError:
             h.err(ValueError("since is a time, like 2026-11-18T00:00:00Z"))
+        items = _item_ids(item) if item.strip() else None
         if floor is None:
-            floor = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
+            floor = (datetime(1970, 1, 1, tzinfo=timezone.utc) if items
+                     else now_utc().replace(hour=0, minute=0, second=0, microsecond=0))
         elif floor.tzinfo is None:
             floor = floor.replace(tzinfo=timezone.utc)
         me = answerer(request)
@@ -2688,7 +2704,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # project hidden from them (a grant over a repo they own) stays, its ask already kept to what
         # they saw, and names no project; their other answers there do not (their ids and asks would)
         hidden = h.hidden_ids()
-        rows = store.list_answers(floor, hidden=sorted(hidden), person=me if mine else None, own=me)
+        rows = store.list_answers(floor, hidden=sorted(hidden), person=me if mine else None, own=me,
+                                 items=items)
         return {"answers": [{"id": r["item"], "kind": r["kind"], "ask": r["ask"],
                              "project": None if r["project"] in hidden else r["project"],
                              "choice": r["choice"], "said": r["said"], "via": r["via"], "at": r["at"],

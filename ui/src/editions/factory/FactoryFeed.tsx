@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import {
   Banner, Button, Collapse, EmptyState, ListRow, ListSection, SkeletonRows, StatusLabel, Toaster,
@@ -11,7 +11,7 @@ import { usePagePolling } from "../usePagePolling";
 import { CACHE_MS, POLL_MS, useHomeActions, type Done, type RowState } from "./FactoryHome";
 import { setSurface } from "../../api";
 import { getHome } from "./FactoryHome.api";
-import { getAnsweredToday } from "./feed.api";
+import { getAnswerTo, getAnsweredToday } from "./feed.api";
 import { Detail } from "./HomeDetail";
 import type { HomeAction, HomeData } from "./home.types";
 import type { FeedAnswered, FeedCard, FeedData } from "./feed.types";
@@ -22,6 +22,10 @@ import { FEED_SAMPLES } from "./feedSamples";
 // from a phone. Yes takes what the card offers, No puts it off or answers in words, More opens the
 // context. The buttons are the items' own actions run by Home's handler, so the feed and Home cannot
 // disagree on what an answer does. An answered card stays for the day, greyed, saying who, how and when.
+//
+// `/feed?item=<id>` (the link a Slack message carries, TR-1459) puts that card first and marks it. When it
+// no longer waits the page says who answered it and when, from the answers record of any day, or that it
+// is gone, and shows the rest of the feed either way.
 //
 // Live it reads GET /api/home every 15 seconds, as Home does, and the desk's answers of the day. `?sample=busy|empty|down|loading` behind
 // the sample flag shows samples, which send nothing.
@@ -61,15 +65,20 @@ function ActionButton({ action, variant, state, onPress, testId }: {
   );
 }
 
-function Card({ card, top, now, deeper, state, panel, onPress, onDeeper }: {
-  card: FeedCard; top: boolean; now: number; deeper: boolean; state?: RowState; panel?: React.ReactNode;
+/** The DOM id of a card, for the link that opens the feed at it. */
+const cardDomId = (id: string) => `feed-card-${id.replace(/[^a-zA-Z0-9-]/g, "-")}`;
+
+function Card({ card, top, focused, now, deeper, state, panel, onPress, onDeeper }: {
+  card: FeedCard; top: boolean; focused: boolean; now: number; deeper: boolean; state?: RowState; panel?: React.ReactNode;
   onPress: (action: HomeAction, choice: "yes" | "no") => void; onDeeper: () => void;
 }) {
   const id = `feed-more-${card.id.replace(/[^a-zA-Z0-9-]/g, "-")}`;
   return (
-    <ListRow className="flex-col items-stretch gap-y-3" data-testid="feed-card" data-kind={card.kind}>
+    <ListRow id={cardDomId(card.id)} className={cn("flex-col items-stretch gap-y-3 scroll-mt-6", focused && "border-l-2 border-l-foreground bg-muted pl-3")}
+      data-testid="feed-card" data-kind={card.kind} data-focus={focused ? "1" : undefined} aria-current={focused ? "true" : undefined}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span className="font-mono text-[12px] uppercase tracking-wide text-muted-foreground">
+          {focused && <span className="text-foreground" data-testid="feed-focus-label">From your link · </span>}
           {card.label}
           {card.project && <> · <span data-user-text>{card.project.name}</span></>}
         </span>
@@ -130,12 +139,33 @@ function Card({ card, top, now, deeper, state, panel, onPress, onDeeper }: {
   );
 }
 
+const CHOICE = (a: FeedAnswered) => (a.choice === "yes" ? "Yes" : a.choice === "no" ? "No" : "Answered");
+
+/** What the page says when the item a link named no longer waits: who answered it and when, or that it is gone. */
+function FocusNote({ answer, now, more }: { answer: FeedAnswered | null; now: number; more: boolean }) {
+  const rest = more ? " Here is what still waits." : "";
+  if (!answer) {
+    return <Banner data-testid="feed-focus-gone">The item that link named no longer waits for you.{rest}</Banner>;
+  }
+  return (
+    <Banner data-testid="feed-focus-answered" data-choice={answer.choice ?? "answered"}>
+      <span>
+        Already answered: <span data-user-text>{answer.ask}</span>{/[.?!]$/.test(answer.ask) ? " " : ". "}
+        {/* an option or words alone when it was neither yes nor no, as the record says it */}
+        {answer.choice && <>{CHOICE(answer)}{answer.said && answer.said !== CHOICE(answer) ? ", " : ""}</>}
+        {answer.said && answer.said !== CHOICE(answer) && <span data-user-text>{answer.said}</span>}
+        , by {answer.by}, {VIA[answer.via]}, {sinceWords(Date.parse(answer.at), now)}.{rest}
+      </span>
+    </Banner>
+  );
+}
+
 function AnsweredRow({ a, now }: { a: FeedAnswered; now: number }) {
   return (
     <ListRow className="flex-col items-stretch gap-y-1 text-muted-foreground" data-testid="feed-answered" data-choice={a.choice ?? "answered"}>
       <span className="text-[15px] [overflow-wrap:anywhere]" data-user-text><Detail text={a.ask} /></span>
       <span className="text-[13px]">
-        <StatusLabel tone="done" className="mr-2">{a.choice === "yes" ? "Yes" : a.choice === "no" ? "No" : "Answered"}</StatusLabel>
+        <StatusLabel tone="done" className="mr-2">{CHOICE(a)}</StatusLabel>
         {a.said && <><span data-user-text>{a.said}</span>, </>}by {a.by}, {VIA[a.via]}, {sinceWords(Date.parse(a.at), now)}
       </span>
     </ListRow>
@@ -171,10 +201,25 @@ function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean
   };
   const { rows, onAction, dialogs, panels } = useHomeActions(live, changed);
 
+  const focus = data.focus?.id;
+  const isFocus = (c: FeedCard) => (focus && sameItem(c.id, focus) ? 1 : 0);
   const cards = data.items
     .filter((i) => { const until = hidden.get(i.id); return until === undefined || (live && Date.now() >= until); })
     .map(toFeedCard)
-    .sort(feedOrder);
+    .sort((a, b) => isFocus(b) - isFocus(a) || feedOrder(a, b));
+  const focusCard = focus ? cards.find((c) => isFocus(c)) : undefined;
+  const focusWaits = !!focusCard;
+  // answered here or today first (the newest), then the record of any day the link's read found
+  const focusAnswer = !focus || focusWaits ? null
+    : answered.find((a) => sameItem(a.id, focus)) ?? data.focus?.answer ?? null;
+
+  // the linked card is first; bring it into view once, when it is there
+  const scrolled = React.useRef(false);
+  React.useEffect(() => {
+    if (!focusWaits || scrolled.current) return;
+    scrolled.current = true;
+    document.getElementById(cardDomId(focusCard!.id))?.scrollIntoView?.({ block: "nearest" });
+  }, [focusWaits, focusCard]);
 
   const press = (card: FeedCard, action: HomeAction, choice: "yes" | "no") => {
     // an answer given in the panel is neither yes nor no; which option or words it was, the panel knows
@@ -199,6 +244,7 @@ function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean
         <p className="m-0 text-[15px] text-muted-foreground" data-testid="feed-headline">{headline(cards)}</p>
       </div>
       {stale && <Banner tone="warn" data-testid="feed-stale">Could not refresh. Showing what we had.</Banner>}
+      {focus && !focusWaits && <FocusNote answer={focusAnswer} now={now} more={cards.length > 0} />}
       {!data.crew.running && (
         <Banner tone="warn" data-testid="feed-crew-down">
           The crew is not running{data.crew.since ? `, last heard ${sinceWords(Date.parse(data.crew.since), now)}` : ""}. Nothing new reaches this feed until it is back.
@@ -210,7 +256,7 @@ function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean
             {data.crew.running ? `Nothing needs you right now. ${data.crew.summary}` : "Nothing here, because nothing is being built."}
           </EmptyState>
         ) : cards.map((c, i) => (
-          <Card key={c.id} card={c} top={i === 0} now={now} deeper={deeper.has(c.id)} state={rows[c.id]} panel={panels[c.id]}
+          <Card key={c.id} card={c} top={i === 0} focused={isFocus(c) === 1} now={now} deeper={deeper.has(c.id)} state={rows[c.id]} panel={panels[c.id]}
             onPress={(a, choice) => press(c, a, choice)} onDeeper={() => toggle(c.id)} />
         ))}
       </ListSection>
@@ -226,8 +272,9 @@ function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean
 }
 
 /** The home and the desk's answers of the day, read into the feed's shape. */
-function fromHome(h: HomeData, answered: FeedAnswered[]): FeedData {
+function fromHome(h: HomeData, answered: FeedAnswered[], focus?: FeedData["focus"]): FeedData {
   return {
+    focus,
     now: h.now,
     crew: { running: h.crew.running, since: h.crew.heard_at, summary: h.crew.summary },
     items: h.waiting_for_you,
@@ -239,16 +286,25 @@ function Loading() {
   return <div className={PAGE} data-testid="feed-loading"><SkeletonRows /></div>;
 }
 
-function LiveFeed() {
+/** The item a link opened the feed at, `?item=<id>`, or null. */
+function useFocusItem(): string | null {
+  const { search } = useLocation();
+  return new URLSearchParams(search).get("item")?.trim() || null;
+}
+
+function LiveFeed({ item }: { item: string | null }) {
   // the answers sent from here say so (TR-1451)
   React.useEffect(() => {
     setSurface("feed");
     return () => setSurface(null);
   }, []);
   // the answers are a nicety: when they fail to load, the cards still show
+  // with a link's item, its answer of any day too, read with the rest so the page never says "gone" first
   const { data, error, reload } = usePagePolling(
-    () => Promise.all([getHome(), getAnsweredToday().catch(() => [])]), POLL_MS);
-  const feed = React.useMemo(() => (data ? fromHome(data[0], data[1]) : null), [data]);
+    () => Promise.all([getHome(), getAnsweredToday().catch(() => []),
+                       item ? getAnswerTo(item).catch(() => null) : Promise.resolve(null)]), POLL_MS);
+  const feed = React.useMemo(
+    () => (data ? fromHome(data[0], data[1], item ? { id: item, answer: data[2] } : undefined) : null), [data, item]);
   if (!feed) {
     return error ? (
       <div className={PAGE}>
@@ -264,7 +320,10 @@ function LiveFeed() {
 
 export default function FactoryFeed() {
   const sample = useSample();
+  const item = useFocusItem();
   if (sample === "loading") return <Loading />;
   const data = sample ? FEED_SAMPLES[sample] : undefined;
-  return data ? <FeedPage key={sample} data={data} live={false} /> : <LiveFeed />;
+  return data
+    ? <FeedPage key={`${sample}-${item}`} data={item ? { ...data, focus: { id: item, answer: null } } : data} live={false} />
+    : <LiveFeed key={item ?? ""} item={item} />;
 }

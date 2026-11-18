@@ -12,7 +12,9 @@
  * start, a milestone with a check for the person, ahead of one still open), opens /feed without the flag and answers each card
  * with one tap: Yes on the suggested option, No (Later) on the hand-over, Yes (Accept) on the
  * milestone. Each card leaves, and after a reload Answered today is the cell's own record
- * (GET /api/answers), every answer from the feed (TR-1451). Merging a PR from a card is covered by
+ * (GET /api/answers), every answer from the feed (TR-1451). A link to one item (`/feed?item=<id>`,
+ * TR-1459): an open item's card first and marked, an unknown item's note with the feed under it, and
+ * after the answers an answered item's who, what, where and when. Merging a PR from a card is covered by
  * tests/test_pr_one_tap.py, since the merge queue needs GitHub.
  * Run:  npm run test:factory-feed     (builds first: the daemon serves ui/dist)
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
@@ -91,8 +93,11 @@ async function filledButtons(page) {
       if (flag) await ctx.addInitScript(() => { try { window.localStorage.setItem("taresSamples", "1"); } catch { /* blocked */ } });
       return { ctx, page: await ctx.newPage() };
     };
-    const open = async (page, sample) => {
-      await page.goto(`${BASE}/feed${sample ? `?sample=${sample}` : ""}`, { waitUntil: "load" });
+    const open = async (page, sample, item) => {
+      const q = new URLSearchParams();
+      if (sample) q.set("sample", sample);
+      if (item) q.set("item", item);
+      await page.goto(`${BASE}/feed${q.size ? `?${q}` : ""}`, { waitUntil: "load" });
       await page.getByTestId("factory-feed").waitFor();
       await page.waitForLoadState("networkidle");
     };
@@ -185,6 +190,32 @@ async function filledButtons(page) {
       await checkWords(page, ck, `feed live @${width}`);
       await shot(page, `live-${width}`);
 
+      // a link to one item (TR-1459): the Slack message's /feed?item=<id>
+      const ids = Object.fromEntries((await api("GET", "/api/home")).waiting_for_you.map((i) => [i.ask, i.id]));
+      const redesign = ids["Ship the redesign this week?"], store = ids["Which store should sessions use?"];
+      ck(L("the home names both questions"), !!redesign && !!store, JSON.stringify(ids));
+      await open(page, "", redesign);
+      const first = cards(page).first();
+      ck(L("link to an open item: its card is first and marked"), (await first.getAttribute("data-focus")) === "1"
+         && (await first.getByTestId("feed-ask").innerText()) === "Ship the redesign this week?"
+         && (await page.locator('[data-testid="feed-card"][data-focus="1"]').count()) === 1, await first.innerText());
+      ck(L("it says it came from the link, and its yes is the filled one"),
+         (await first.getByTestId("feed-focus-label").count()) === 1 && (await filledButtons(page)).length === 1
+         && (await filledButtons(page))[0] === (await first.getByTestId("feed-yes").innerText()), JSON.stringify(await filledButtons(page)));
+      ck(L("the rest of the feed is there, and no note"), (await cards(page).count()) === 4
+         && (await page.getByTestId("feed-focus-answered").count()) === 0 && (await page.getByTestId("feed-focus-gone").count()) === 0);
+      await checkWords(page, ck, `feed link open @${width}`);
+      ck(L("link open: no sideways scroll"), (await overflow(page)) <= 0);
+      await shot(page, `link-open-${width}`);
+      await open(page, "", "question:NOPE");
+      const gone = page.getByTestId("feed-focus-gone");
+      ck(L("link to an unknown item: says it no longer waits, then the feed"), (await gone.count()) === 1
+         && (await gone.innerText()).includes("no longer waits for you") && (await gone.innerText()).includes("Here is what still waits")
+         && (await cards(page).count()) === 4 && (await page.locator('[data-focus="1"]').count()) === 0, await gone.innerText().catch(() => ""));
+      await checkWords(page, ck, `feed link gone @${width}`);
+      await shot(page, `link-gone-${width}`);
+      await open(page, "");
+
       const answer = async (ask, button, label) => {
         const c = card(page, ask);
         const b = c.getByTestId(button);
@@ -218,6 +249,22 @@ async function filledButtons(page) {
          && (await rows.filter({ hasText: "Check M1 of Cart" }).getAttribute("data-choice")) === "yes");
       await checkWords(page, ck, `feed live answered @${width}`);
       await shot(page, `live-answered-${width}`);
+
+      // a link to an item already answered: who, how and when, from the record
+      await open(page, "", store);
+      const note = page.getByTestId("feed-focus-answered");
+      const said = await note.innerText().catch(() => "");
+      ck(L("link to an answered item: who answered it, with what, where and when"), (await note.count()) === 1
+         && said.includes("Already answered: Which store should sessions use?") && said.includes("Postgres")
+         && said.includes("Postgres, by you, from the feed, ") && !said.includes("?.")
+         && (await cards(page).count()) === 0, said);
+      // the page asks the record for the item itself, so an answer of another day is found too
+      // (test_answers covers one two days old)
+      const rec = (await api("GET", `/api/answers?item=${encodeURIComponent(redesign)}`)).answers;
+      ck(L("the record finds an answer by its item"), rec.length === 1 && rec[0].id === redesign, JSON.stringify(rec));
+      await checkWords(page, ck, `feed link answered @${width}`);
+      ck(L("link answered: no sideways scroll"), (await overflow(page)) <= 0);
+      await shot(page, `link-answered-${width}`);
       await ctx.close();
     }
 
