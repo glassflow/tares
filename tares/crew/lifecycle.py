@@ -112,7 +112,8 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     old_id = get("id")
     skill = launch.parent_role(parent, paths) if role == "helper" else role
     prompt = rest[0] if rest else ""
-    again = (f"Reload the skills factory-protocol and station-{skill}, re-read your report and your work on "
+    again = (f"Reload the skills factory-protocol and station-{skill}, re-read your report (a short state "
+             "file; for older events use `tares factory report grep`, never cat or tail a file) and your work on "
              f"Tares, {rearm_text(client)}, then carry on where your report left off.")
     if not prompt and fresh:
         prompt = ("You were started again under the same name, in a new conversation: the last one kept "
