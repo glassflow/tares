@@ -33,6 +33,7 @@ Standard library plus the crew modules (no duckdb, fastapi or daemon).
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import sys
 import time
@@ -386,7 +387,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, reading: Reading, *, cla
         return None
     if state.halted(paths) or not state.stations_get(s, "sessionId", paths=paths):
         return None
-    if claude.attached(s, paths) or not claude.between_turns(s, claude_bin, paths):
+    if claude.attached(s, paths) or not claude.at_rest(s, claude_bin, paths):
         return None
 
     note = reading.note
@@ -424,11 +425,12 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
         if idle_wake_state(fresh) != "off":
             return   # the setting changed since the round began
         if (state.halted(paths) or claude.attached(s, paths)
-                or not claude.between_turns(s, claude_bin, paths)):
-            return   # it started something since the first check
+                or not claude.at_rest(s, claude_bin, paths)):
+            return   # it started something since the first check, or it waits on a prompt
         client.say(f"pacing: telling {s} ({want}) in the same conversation")
         try:
-            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True)
+            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True,
+                              prompt_wait=math.inf)
         except NotBetweenTurnsError:
             client.say(f"{s} started a turn; not telling it about the pace, will look again next round")
             return

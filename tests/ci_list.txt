@@ -62,6 +62,7 @@ test_crew_mcp_headers
 test_crew_pace
 test_crew_packaging
 test_crew_person
+test_crew_prompt_wait
 test_crew_readings
 test_crew_regrant
 test_crew_report

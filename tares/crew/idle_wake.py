@@ -24,6 +24,7 @@ Standard library plus the crew modules.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import sys
@@ -39,6 +40,7 @@ ROLES = ("orchestrator", "reviewer", "releaser", "builder")
 STALL_AFTER = 45 * 60   # seconds a held ticket may go without news before the orchestrator is told
 DESK_ASK_EVERY = 3600   # seconds an open desk item waits before the orchestrator is told to ask again
 KEYS_SHOWN = 5
+KEY_CHARS = 80
 DEFAULT_SETTLE = 600   # seconds a session may be active after a wake before the clock restarts (FACTORY_WAKE_SETTLE)
 
 _RELEASE = re.compile(r"(^|[^A-Za-z])RELEASE([^A-Za-z]|$)")
@@ -375,8 +377,12 @@ def work_prompt(role: str, items: str) -> str:
 
 
 def woke_on(keys: list) -> str:
-    """The keys that woke a station, in one short line."""
-    shown = ", ".join(keys[:KEYS_SHOWN])
+    """The keys that woke a station, in one short line: each key on one line and cut at KEY_CHARS."""
+    def one(key) -> str:
+        text = " ".join(str(key).split())
+        return text if len(text) <= KEY_CHARS else text[:KEY_CHARS - 3].rstrip() + "..."
+
+    shown = ", ".join(one(k) for k in keys[:KEYS_SHOWN])
     more = f" and {len(keys) - KEYS_SHOWN} more" if len(keys) > KEYS_SHOWN else ""
     return f"Woke on: {shown}{more}."
 
@@ -429,7 +435,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
             return None
     elif st != "on":
         return None
-    if claude.attached(s, paths) or not claude.between_turns(s, claude_bin, paths):
+    if claude.attached(s, paths) or not claude.at_rest(s, claude_bin, paths):
         return None
     now = state.now_s() if now is None else now
     out = {"station": s, "state": st, "now": now, "keys": [], "baseline": None, "n": 0, "work": False}
@@ -498,11 +504,12 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
         if launch.idle_wake_state(fresh) != p["state"]:
             return   # the setting changed since the round began
         if (state.halted(paths) or claude.attached(s, paths)
-                or not claude.between_turns(s, claude_bin, paths)):
-            return   # it started something since the first check
+                or not claude.at_rest(s, claude_bin, paths)):
+            return   # it started something since the first check, or it waits on a prompt
         client.say(f"waking {s} ({p['reason'].split(':')[0]}); restarting it in the same conversation")
         try:
-            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True)
+            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True,
+                              prompt_wait=math.inf)
         except NotBetweenTurnsError:
             client.say(f"{s} started a turn; not waking it, will look again next round")
             return
@@ -615,7 +622,7 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             claude_bin = claude.claude_bin(env)
         try:
             if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
-                    or not claude.between_turns(orch, claude_bin, paths)):
+                    or not claude.at_rest(orch, claude_bin, paths)):
                 return   # not now: the next tick asks again
             p = plan(client, paths, orch, claude_bin=claude_bin)
             if p is None or not p["work"]:   # nothing new for it; a release note or a liveness wake waits for the round

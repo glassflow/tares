@@ -26,6 +26,7 @@ import httpx
 import fake_cp
 import fake_lore
 from tares import github_credentials
+from tares_ee.brain import decisions_repo as decisions_repo_mod
 from tares_ee.brain import folders as folders_mod
 from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
@@ -204,6 +205,10 @@ async def main():
             raise got
         return got
     github_credentials.git_tree = fake_tree
+
+    def no_github(request):   # the decision importer (TR-1210) hangs on the same hook: it must never reach a real GitHub here
+        return httpx.Response(404, json={"message": "Not Found"})
+    decisions_repo_mod.TRANSPORT = httpx.MockTransport(no_github)
 
     changes = []
 
