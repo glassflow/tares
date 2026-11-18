@@ -81,7 +81,6 @@
   "src/ee/project/signoffs.tsx": 5,
   "src/ee/settings/AreasPanel.tsx": 12,
   "src/pages/AgentDetail.tsx": 38,
-  "src/pages/CatalogImport.tsx": 8,
   "src/pages/Crew.tsx": 52,
   "src/pages/McpServers.tsx": 23,
   "src/pages/ProjectNew.tsx": 4,
