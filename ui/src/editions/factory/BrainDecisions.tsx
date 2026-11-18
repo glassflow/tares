@@ -10,7 +10,7 @@ import { addDecision, brainDecisions, deleteDecision, type DecisionRow, type Dec
 import {
   ADD_HEADING, ADD_LINE, addErrorWords, DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, FILE_TYPES, fileProblem, formProblem, HEADING,
   isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, MAX_TITLE, NOT_SET_UP_WORDS, READ_ONLY_LINE, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
-  whenWords, whereParts, whoWords,
+  whenWords, originOf, whoWords,
 } from "./brainDecisionsText";
 
 // Decisions (TR-1444): every decision the brain holds, from repo folders, shared factory projects and
@@ -32,15 +32,17 @@ interface ListState {
 
 type Load = { state: "loading" } | { state: "ready"; list: ListState } | { state: "error"; message: string; list?: ListState } | { state: "no-brain" };
 
-function Where({ r }: { r: DecisionRow }) {
-  const w = whereParts(r);
-  if (!w) return <span />;
+function OriginCell({ r }: { r: DecisionRow }) {
+  const o = originOf(r);
+  if (!o) return <span />;
+  const name = o.name && (
+    !o.href ? <span data-user-text>{o.name}</span>
+      : isOnCell(o.href) ? <Link to={o.href} className="text-foreground" data-user-text data-testid="brain-decision-origin-link">{o.name}</Link>
+      : <a href={o.href} target="_blank" rel="noreferrer" className="text-foreground" data-user-text data-testid="brain-decision-origin-link">{o.name}</a>
+  );
   return (
-    <span className="min-w-0 text-[13px] [overflow-wrap:anywhere]" data-testid="brain-decision-where">
-      {w.label}
-      {w.name && <> <span className="font-mono text-[12.5px]" data-user-text>{w.name}</span></>}
-      {w.kind && <>, {w.kind}</>}
-      {w.path && <span className="block font-mono text-[12.5px]" data-user-text>{w.path}</span>}
+    <span className="min-w-0 text-[13px] [overflow-wrap:anywhere]" data-testid="brain-decision-origin">
+      {o.label}{name && <> {name}</>}
     </span>
   );
 }
@@ -62,7 +64,7 @@ function Row({ r, now, onDelete }: { r: DecisionRow; now: number; onDelete: (r: 
         <Title r={r} />
         {r.summary && <div className={MUTED} data-user-text data-testid="brain-decision-summary">{r.summary}</div>}
       </div>
-      <Where r={r} />
+      <OriginCell r={r} />
       <div className="min-w-0 text-[13px] [overflow-wrap:anywhere]">
         {who && <span className="block" data-user-text data-testid="brain-decision-who">{who}</span>}
         {when && <span className="block text-muted-foreground" data-testid="brain-decision-when">{when}</span>}
@@ -104,7 +106,7 @@ function List({ load, tab, repo, canAdd, now, more, loadingMore, onMore, onDelet
       {list && list.rows.length > 0 && (
         <>
           <div className={cn(ROW, "hidden py-2 text-xs text-muted-foreground md:grid")} aria-hidden="true">
-            <span>Decision</span><span>Where it lives</span><span>Decided by</span>
+            <span>Decision</span><span>Origin</span><span>Decided by</span>
           </div>
           {list.rows.map((r) => <Row key={r.id} r={r} now={now} onDelete={onDelete} />)}
           {more && (

@@ -137,7 +137,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
   // ---- 0. the pure rules
   {
     eq("tabOf: known tabs, else All", [T.tabOf("by_hand"), T.tabOf("repo_folder"), T.tabOf("nope"), T.tabOf(null)], ["by_hand", "repo_folder", "all", "all"]);
-    eq("tabLabel: with counts", [T.tabLabel("all", COUNTS, true), T.tabLabel("repo_folder", COUNTS, true), T.tabLabel("by_hand", { ...COUNTS, by_hand: 1200 }, true)], ["All 5", "Repo folders 1", "Added by hand 1,200"]);
+    eq("tabLabel: with counts", [T.tabLabel("all", COUNTS, true), T.tabLabel("repo_folder", COUNTS, true), T.tabLabel("by_hand", { ...COUNTS, by_hand: 1200 }, true)], ["All 5", "GitHub repos 1", "Second Brain 1,200"]);
     eq("tabLabel: without counts", [T.tabLabel("factory_project", COUNTS, false), T.tabLabel("all", null, true)], ["Factory projects", "All"]);
     eq("joinNames", [T.joinNames([]), T.joinNames(["Ana"]), T.joinNames(["Ana", "Kiran"]), T.joinNames(["Ana", " ", "Kiran", "Lee"])], ["", "Ana", "Ana and Kiran", "Ana, Kiran and Lee"]);
     eq("whoWords: decided, and changed by someone else", [T.whoWords(ADR), T.whoWords(SPEC), T.whoWords({ decided_by: ["A"], changed_by: ["A"], added_by: null })], ["Ada Lovelace, changed by Kiran", "Ada Lovelace", "A"]);
@@ -147,11 +147,10 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     eq("whenWords: a bare day today says today", T.whenWords({ decided_at: day(0), changed_at: null }, NOW), "today");
     eq("whenWords: the last change wins", T.whenWords(ADR, NOW), "90 days ago");
     eq("whenWords: none", T.whenWords({ decided_at: null, changed_at: null }, NOW), "");
-    eq("repoPath: the repo's short name and the file", T.repoPath(ADR), "tares-cloud/docs/adr/0007-alembic.md");
-    eq("whereParts: repo folder", T.whereParts(ADR), { label: "Repo folder", path: "tares-cloud/docs/adr/0007-alembic.md" });
-    eq("whereParts: a project spec", T.whereParts(SPEC), { label: "Factory project", name: "software-second-brain", kind: "spec" });
-    eq("whereParts: a project row stored before the kind existed has no kind", T.whereParts(OLD_PLAN), { label: "Factory project", name: "state-store" });
-    eq("whereParts: by hand, and none", [T.whereParts(HAND), T.whereParts(D({ id: "x" }))], [{ label: "Added by hand" }, null]);
+    eq("originOf: a GitHub repo, linked to the repo", T.originOf(ADR), { label: "GitHub repo", name: "glassflow/tares-cloud", href: "https://github.com/glassflow/tares-cloud" });
+    eq("originOf: a factory project, linked to the project", T.originOf(SPEC), { label: "Factory project", name: "software-second-brain", href: "/projects/p1" });
+    eq("originOf: Second Brain, and none", [T.originOf(HAND), T.originOf(D({ id: "x" }))], [{ label: "Second Brain" }, null]);
+    eq("repoHref: only owner/name", [T.repoHref("a/b"), T.repoHref("a/b/c"), T.repoHref("javascript:x"), T.repoHref(null)], ["https://github.com/a/b", "", "", ""]);
     eq("safeLink: http, https, the cell; nothing else", [T.safeLink(ADR.link), T.safeLink("/projects/p1/docs"), T.safeLink("javascript:alert(1)"), T.safeLink("//evil.example"), T.safeLink("/\\evil"), T.safeLink(null)],
        [ADR.link, "/projects/p1/docs", "", "", "", ""]);
     eq("titleOf", [T.titleOf({ title: " A " }), T.titleOf({ title: null })], ["A", "Untitled"]);
@@ -217,13 +216,14 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const mock = brainMock({ rows: [], counts: { all: 0, repo_folder: 0, factory_project: 0, by_hand: 0 } });
       const { ctx, page, T } = await open({ mock, url: "/projects", wait: null });
       await T("menu-brain-decisions").waitFor({ timeout: 15000 });
+      await page.waitForLoadState("networkidle");   // the Projects page has finished its own reads
       const oneRead = expectOneCall(page, "/api/brain/decisions");
       await T("menu-brain-decisions").click();
       await T("brain-decisions-empty").waitFor({ timeout: 15000 });
       ck("Knowledge, Decisions opens /brain/decisions", new URL(page.url()).pathname === "/brain/decisions", page.url());
       eq("the heading", await text(page.locator("h1")), "Decisions");
       ck("the line under it", (await text(T("brain-decisions"))).includes("Why things are the way they are, and who decided. The crew reads these before it changes the code they describe."));
-      eq("the empty line says what fills the page", await text(T("brain-decisions-empty")), "No decisions yet. They show here from repo folders you pick, from specs and plans in shared factory projects, and from ones you add below.");
+      eq("the empty line says what fills the page", await text(T("brain-decisions-empty")), "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you add below.");
       ck("an admin sees the add form", (await T("brain-decision-add").count()) === 1);
       await page.waitForLoadState("networkidle");
       await oneRead(ck, "from the menu");
@@ -238,21 +238,23 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("one read, no filter, limit 50", mock.reads, [{ limit: "50" }]);
       eq("every row shows", await T("brain-decision-row").count(), 5);
       const tabs = await page.getByRole("tab").allInnerTexts();
-      eq("the tabs carry the cell's counts", tabs.map((t) => t.replace(/\s+/g, " ").trim()), ["All 5", "Repo folders 1", "Factory projects 2", "Added by hand 2"]);
+      eq("the tabs carry the cell's counts and match the origins", tabs.map((t) => t.replace(/\s+/g, " ").trim()), ["All 5", "Factory projects 2", "GitHub repos 1", "Second Brain 2"]);
       const spec = T("brain-decision-row").nth(0);
-      eq("a spec: where it lives", await text(spec.getByTestId("brain-decision-where")), "Factory project software-second-brain, spec");
+      eq("a project doc: its origin", await text(spec.getByTestId("brain-decision-origin")), "Factory project software-second-brain");
+      eq("the project name opens the project", await spec.getByTestId("brain-decision-origin-link").getAttribute("href"), "/projects/p1");
       eq("a spec: who and when", [await text(spec.getByTestId("brain-decision-who")), await text(spec.getByTestId("brain-decision-when"))], ["Ada Lovelace", "today"]);
       eq("a spec's title opens the project doc in the console", await spec.getByTestId("brain-decision-title").getAttribute("href"), "/projects/p1/docs?doc=d1");
       const hand = T("brain-decision-row").nth(1);
-      eq("by hand: where, and its summary", [await text(hand.getByTestId("brain-decision-where")), await text(hand.getByTestId("brain-decision-summary"))], ["Added by hand", HAND.summary]);
-      ck("by hand: the title is not a link", (await hand.locator("a").count()) === 0);
+      eq("by hand: its origin is Second Brain, and its summary shows", [await text(hand.getByTestId("brain-decision-origin")), await text(hand.getByTestId("brain-decision-summary"))], ["Second Brain", HAND.summary]);
+      ck("Second Brain: the title is not a link", (await hand.locator("a").count()) === 0);
       ck("Delete shows where the row allows it", (await hand.getByTestId("brain-decision-delete").count()) === 1);
       ck("Delete does not show on someone else's row", (await T("brain-decision-row").nth(2).getByTestId("brain-decision-delete").count()) === 0);
       const old = T("brain-decision-row").nth(3);
-      eq("a project row with no kind says no kind, never null", await text(old.getByTestId("brain-decision-where")), "Factory project state-store");
+      eq("another project's origin", await text(old.getByTestId("brain-decision-origin")), "Factory project state-store");
       ck("the page never says null", !/\bnull\b/.test(await text(T("brain-decisions"))));
       const adr = T("brain-decision-row").nth(4);
-      eq("a repo file: where it lives, with its path", await text(adr.getByTestId("brain-decision-where")), "Repo folder tares-cloud/docs/adr/0007-alembic.md");
+      eq("a repo file: its origin", await text(adr.getByTestId("brain-decision-origin")), "GitHub repo glassflow/tares-cloud");
+      ck("the repo name opens the repo on GitHub in a new tab", (await adr.getByTestId("brain-decision-origin-link").getAttribute("href")) === "https://github.com/glassflow/tares-cloud" && (await adr.getByTestId("brain-decision-origin-link").getAttribute("target")) === "_blank");
       eq("a repo file: who decided and who changed it", await text(adr.getByTestId("brain-decision-who")), "Ada Lovelace, changed by Kiran");
       const a = adr.getByTestId("brain-decision-title");
       ck("a repo file's title opens GitHub in a new tab", (await a.getAttribute("href")) === ADR.link && (await a.getAttribute("target")) === "_blank");
@@ -264,10 +266,10 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("idle for 3 seconds: no more reads", mock.reads.length, 1);
 
       // a tab asks with where
-      await page.getByRole("tab", { name: /Added by hand/ }).click();
+      await page.getByRole("tab", { name: /Second Brain/ }).click();
       await until(() => mock.reads.length === 2);
       await until(async () => (await T("brain-decision-row").count()) === 2);
-      eq("the Added by hand tab asks with where=by_hand", mock.reads[1], { where: "by_hand", limit: "50" });
+      eq("the Second Brain tab asks with where=by_hand", mock.reads[1], { where: "by_hand", limit: "50" });
       eq("it shows only those", await T("brain-decision-row").count(), 2);
       ck("the tab is in the address", new URL(page.url()).searchParams.get("where") === "by_hand", page.url());
       await ctx.close();
@@ -302,11 +304,11 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("it posts the title, the text and who decided", mock.posts[0], { title: "Use Postgres for the state store", text: "We chose Postgres. It is what the cloud runs.", decided_by: grace.id });
       await until(async () => (await text(T("brain-decision-row").first())).includes("Use Postgres"));
       const top = T("brain-decision-row").first();
-      ck("the new row is at the top, added by hand, decided by that person",
-         (await text(top)).includes("Use Postgres for the state store") && (await text(top.getByTestId("brain-decision-where"))) === "Added by hand"
+      ck("the new row is at the top, from Second Brain, decided by that person",
+         (await text(top)).includes("Use Postgres for the state store") && (await text(top.getByTestId("brain-decision-origin"))) === "Second Brain"
          && (await text(top.getByTestId("brain-decision-who"))) === "Grace Hopper", await text(top));
-      await until(async () => (await page.getByRole("tab", { name: /Added by hand/ }).innerText()).includes("3"));
-      ck("the Added by hand count went up", (await page.getByRole("tab", { name: /Added by hand/ }).innerText()).includes("3"));
+      await until(async () => (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("3"));
+      ck("the Second Brain count went up", (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("3"));
       eq("the form is empty again", await T("brain-decision-add-title").inputValue(), "");
 
       // a file over 5 MB is refused before anything is sent
@@ -359,7 +361,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("it deletes that id", mock.deletes, [HAND.id]);
       await until(async () => (await T("brain-decision-row").count()) === 4);
       ck("the row leaves the list", !(await text(T("brain-decisions-list"))).includes("Enterprise code lives in ee/"));
-      await until(async () => (await page.getByRole("tab", { name: /Added by hand/ }).innerText()).includes("1"));
+      await until(async () => (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("1"));
       ck("the counts drop", (await page.getByRole("tab", { name: /^All/ }).innerText()).includes("4"));
       ck("the dialog closed", (await T("brain-decision-delete-dialog").count()) === 0);
       await ctx.close();

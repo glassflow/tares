@@ -10,9 +10,9 @@ export const SUBTITLE = "Why things are the way they are, and who decided. The c
 
 export const TABS: { value: DecisionTab; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "repo_folder", label: "Repo folders" },
   { value: "factory_project", label: "Factory projects" },
-  { value: "by_hand", label: "Added by hand" },
+  { value: "repo_folder", label: "GitHub repos" },
+  { value: "by_hand", label: "Second Brain" },
 ];
 
 const TAB_VALUES = new Set<string>(TABS.map((t) => t.value));
@@ -28,13 +28,13 @@ export function tabLabel(tab: DecisionTab, counts: DecisionCounts | null | undef
   return Number.isFinite(n) ? `${label} ${formatCount(Math.max(0, n))}` : label;
 }
 
-export const EMPTY_ALL = "No decisions yet. They show here from repo folders you pick, from specs and plans in shared factory projects, and from ones you add below.";
-export const EMPTY_ALL_READ_ONLY = "No decisions yet. They show here from repo folders, from specs and plans in shared factory projects, and from ones people add by hand.";
+export const EMPTY_ALL = "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you add below.";
+export const EMPTY_ALL_READ_ONLY = "No decisions yet. They show here from the decisions folders of GitHub repos, from specs and plans in shared factory projects, and from ones people add by hand.";
 
 export const EMPTY_TAB: Record<Exclude<DecisionTab, "all">, string> = {
   repo_folder: "Pick a decisions folder on a repo's card to see its files here.",
   factory_project: "The specs, plans and notes of shared factory projects linked to a repo show here.",
-  by_hand: "Decisions added by hand show here.",
+  by_hand: "Decisions added on this page show here.",
 };
 
 /** The empty line of a tab, or of the list for one repo. */
@@ -78,32 +78,32 @@ export function whenWords(r: Pick<DecisionRow, "decided_at" | "changed_at">, now
   return ageWords(Math.max(0, now - t));
 }
 
-export const KIND_WORDS = { spec: "spec", plan: "plan", note: "note" } as const;
+/** A decision's origin, as the page lays it out: a label, then the project or repo it came from, with a link. */
+export interface Origin { label: string; name?: string; href?: string }
 
-/** Where a decision lives, as parts the page lays out: a plain label, then a name or a path. */
-export interface WhereParts { label: string; name?: string; path?: string; kind?: string }
-
-/** The path of a repo file, from its id `<repo>:<path>`, shown with the repo's short name: `tares-cloud/docs/adr/0007.md`. */
-export function repoPath(r: Pick<DecisionRow, "id" | "repo">): string {
-  const id = r.id ?? "";
-  const repo = (r.repo ?? "").trim();
-  const cut = repo && id.toLowerCase().startsWith(`${repo.toLowerCase()}:`) ? id.slice(repo.length + 1) : id.includes(":") ? id.slice(id.indexOf(":") + 1) : "";
-  const short = repo.includes("/") ? repo.slice(repo.indexOf("/") + 1) : repo;
-  if (!cut) return repo;
-  return short ? `${short}/${cut}` : cut;
+/** The repo's page on GitHub, from `owner/name`; "" for anything else. */
+export function repoHref(repo: string | null | undefined): string {
+  const r = (repo ?? "").trim();
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r)) return "";
+  return `https://github.com/${r.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-export function whereParts(r: DecisionRow): WhereParts | null {
+/** The project's page on this cell, from its id; "" without one. */
+export const projectHref = (id: string | null | undefined): string => ((id ?? "").trim() ? `/projects/${encodeURIComponent((id ?? "").trim())}` : "");
+
+/** Where a decision came from: one of the three tabs. */
+export function originOf(r: DecisionRow): Origin | null {
   switch (r.where) {
-    case "repo_folder":
-      return { label: "Repo folder", path: repoPath(r) };
-    case "factory_project":
-      return {
-        label: "Factory project", name: (r.project_name ?? "").trim() || (r.project ?? "").trim() || undefined,
-        kind: r.doc_kind && r.doc_kind in KIND_WORDS ? KIND_WORDS[r.doc_kind] : undefined,
-      };
+    case "factory_project": {
+      const name = (r.project_name ?? "").trim() || (r.project ?? "").trim();
+      return { label: "Factory project", name: name || undefined, href: projectHref(r.project) || undefined };
+    }
+    case "repo_folder": {
+      const repo = (r.repo ?? "").trim();
+      return { label: "GitHub repo", name: repo || undefined, href: repoHref(repo) || undefined };
+    }
     case "by_hand":
-      return { label: "Added by hand" };
+      return { label: "Second Brain" };
     default:
       return null;
   }
@@ -126,7 +126,7 @@ export const isOnCell = (href: string) => href.startsWith("/");
 // ---- adding one
 
 export const ADD_HEADING = "Add a decision by hand";
-export const ADD_LINE = "For decisions that live nowhere else. Decisions in repo folders and factory projects are added for you.";
+export const ADD_LINE = "For decisions that live nowhere else. Decisions in GitHub repos and factory projects are added for you.";
 export const READ_ONLY_LINE = "Your key can only read, so it cannot add decisions.";
 export const MAX_TITLE = 200;
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
