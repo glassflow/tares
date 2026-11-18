@@ -607,7 +607,7 @@ async def get_crew_settings() -> str:
     default. `kit.frozen` is null while the crew follows the plugin checkout, else
     when and by whom the person froze it (`tares factory crew freeze`): the watch then moves no
     station onto a newer kit. Read only here; the person freezes and unfreezes from the CLI.
-    `idle_wake` (null or false: off): when true the factory's watch wakes you with a message when
+    `idle_wake` (on unless false): the factory's watch wakes you with a message when
     you have work and holds your liveness tick, so you arm no schedule of your own. `pace` (null or
     false: off): when true the watch slows the crew before the plan's limits: no new builders, a
     45-minute tick, and builders wait near the 5-hour limit; its notes to you say what to do.
@@ -635,8 +635,8 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
     that person; on a single-user cell they are the cell's. A personal autonomy or challenger
     can be as strict as the team's or stricter, not looser. `clear` names settings to unset, so
     a person's own fall back to the team's. Only the person's own session or the orchestrator
-    may. `idle_wake` true has the watch wake idle stations when they have work, instead of each
-    ticking on its own. `pace` true slows the crew before the plan's limits are hit.
+    may. `idle_wake` (on unless false) has the watch wake idle stations when they have work, instead of
+    each ticking on its own; false goes back to the fixed ticks. `pace` true slows the crew before the plan's limits are hit.
     `docker_cleanup` false stops the daily Docker cleanup; `docker_keep` (image names, `*` as a
     wildcard) replaces the list of images it never removes."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,

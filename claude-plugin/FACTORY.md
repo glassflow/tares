@@ -109,7 +109,7 @@ checkout has a newer one, but moves no station onto it. A station that starts or
 of the kit as it was frozen; a station already running keeps reading the checkout until it restarts.
 `tares factory crew unfreeze` lets the stations follow the checkout again.
 
-The crew setting `idle_wake` (off by default; `set_crew_settings(idle_wake=True)` or the crew's settings API) swaps the stations' fixed ticks for wakes. The watch, which makes no model call, asks Tares
+The crew setting `idle_wake` (on unless false; `set_crew_settings(idle_wake=False)` or the crew's settings API turns it off) swaps the stations' fixed ticks for wakes. The watch, which makes no model call, asks Tares
 what each station has to do and sends an idle station one message only when there is something: a
 pull request in the review queue without a verdict for the reviewer, changes asked for, a verdict or
 failed CI on its own ticket for a builder, a `RELEASE` under Undelivered in the orchestrator's
