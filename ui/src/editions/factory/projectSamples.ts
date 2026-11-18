@@ -3,7 +3,7 @@
 // Alex, Kim, Lee. No sample is real cell data.
 
 import type { HomeAction, HomeItem } from "./home.types";
-import type { FactoryProjectData, MovingTicket, ProjectCall, ProjectMilestone, TicketState } from "./FactoryProject.api";
+import type { FactoryProjectData, MovingTicket, ProjectCall, ProjectMilestone, TicketState, TicketTurn, TurnWhose } from "./FactoryProject.api";
 
 const NOW = "2026-11-02T10:00:00+00:00";
 const PID = "uc_sample";
@@ -14,9 +14,21 @@ const COUNT_KEY: Record<TicketState, keyof FactoryProjectData["counts"]> = {
   blocked: "blocked", merged: "merged", canceled: "canceled",
 };
 
-const ticket = (ref: string, title: string, state: TicketState, extra: Partial<MovingTicket> = {}): MovingTicket => ({
-  ref, title, state, who: null, pr: null, review: null, blocked_by: [], href: `/projects/${PID}/tickets/${ref}`, ...extra,
-});
+// a sample ticket's turn from its state, as factory.turn_of would read it with no verdict yet
+const TURN: Record<TicketState, [TicketTurn, string, TurnWhose]> = {
+  "to do": ["to_do", "To do", "crew"], "in progress": ["building", "Building", "crew"],
+  "in review": ["reviewing", "Reviewing", "crew"], "changes asked": ["changes_asked", "Changes asked", "crew"],
+  blocked: ["queued", "Queued", "nobody"], merged: ["merged", "Merged", "nobody"], canceled: ["canceled", "Canceled", "nobody"],
+};
+
+const ticket = (ref: string, title: string, state: TicketState, extra: Partial<MovingTicket> = {}): MovingTicket => {
+  const [turn, label, whose] = TURN[state];
+  const blocked_by = extra.blocked_by ?? [];
+  return {
+    ref, title, state, who: null, pr: null, review: null, blocked_by, href: `/projects/${PID}/tickets/${ref}`,
+    turn, whose, turn_label: turn === "queued" && blocked_by.length ? `${label} after ${blocked_by.join(", ")}` : label, ...extra,
+  };
+};
 
 type SampleCheck = { check: string; expect: string } & Partial<ProjectMilestone["checks"][number]>;
 const ms = (n: number, name: string, goal: string, total: number, merged: number,

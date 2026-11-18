@@ -184,7 +184,8 @@ function cleanEnv(extra) {
         await col("to_do").getByTestId("cell-more").click();
         ck(`${tag("board")}: Show 8 more shows the rest`, (await col("to_do").getByTestId("ticket-card").count()) === 16
            && (await col("to_do").getByTestId("cell-more").count()) === 0);
-        ck(`${tag("board")}: the blocked card names what blocks it, in red`, (await text(col("blocked").getByTestId("ticket-card"))).includes("Blocked by T13"));
+        ck(`${tag("board")}: a card waiting on another is queued after it, not blocked`, (await text(col("blocked").getByTestId("ticket-card"))).includes("Queued after T13")
+           && (await col("blocked").getByTestId("ticket-card").getAttribute("data-turn")) === "queued", await text(col("blocked").getByTestId("ticket-card")));
         ck(`${tag("board")}: a card in progress with a pull request says so`, /PR 113 open/.test(await text(col("in_progress").getByTestId("ticket-card").first()))
            || /PR 21 open/.test(await text(col("in_progress").getByTestId("ticket-card").first())));
       } else {
@@ -267,11 +268,11 @@ function cleanEnv(extra) {
       // a row: words and one link
       await openLive(`?project=${X}&state=blocked`);
       const row = rows.first();
-      ck(`${tag("row")}: the blocked row says what blocks it as its state`, /Blocked by T13/.test(await text(row.getByTestId("ticket-state"))));
+      ck(`${tag("row")}: a row waiting on another says it is queued after it`, (await text(row.getByTestId("ticket-state"))) === "Queued after T13", await text(row.getByTestId("ticket-state")));
       ck(`${tag("row")}: it is one link to the ticket`, (await row.getAttribute("href")) === `/projects/${X}/tickets/T16`);
       await openLive(`?project=${X}&state=in-review`);
       ck(`${tag("row")}: ref, title, state, pull request`, (await text(rows.first().getByTestId("ticket-ref"))) === "T14" && (await text(rows.first().getByTestId("ticket-title"))) === "Cache the counts"
-         && (await text(rows.first().getByTestId("ticket-state"))) === "In review" && /PR 114 /.test(await text(rows.first())), await text(rows.first()));
+         && (await text(rows.first().getByTestId("ticket-state"))) === "Reviewing" && /PR 114 /.test(await text(rows.first())), await text(rows.first()));
       await rows.first().click();
       await page.waitForURL(new RegExp(`/projects/${X}/tickets/T14`));
       ck(`${tag("row")}: the row opens the ticket inside its project`, new URL(page.url()).pathname === `/projects/${X}/tickets/T14`, page.url());

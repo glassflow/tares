@@ -234,27 +234,24 @@ function Waiting({ items, onClose, onKeep, onAllow }: {
 
 function TicketRow({ t }: { t: MovingTicket }) {
   const sub = [t.who, t.review].filter(Boolean).join(" · ");
+  // a queued ticket's turn already names what it waits for ("Queued after T4")
+  const waits = t.turn === "queued" ? [] : t.blocked_by;
   return (
-    <Link to={t.href} data-testid="moving-row" data-ref={t.ref}
+    <Link to={t.href} data-testid="moving-row" data-ref={t.ref} data-turn={t.turn}
           className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground no-underline last:border-b-0 hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
       <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{t.ref}</span>
       <span className="min-w-0">
         <span className="line-clamp-2 block font-semibold [overflow-wrap:anywhere]" data-user-text>{t.title}</span>
-        {(sub || t.blocked_by.length > 0) && (
+        {(sub || waits.length > 0) && (
           <span className={cn(MUTED, "mt-0.5 block [overflow-wrap:anywhere]")}>
             {sub}
-            {t.blocked_by.length > 0 && (
-              <>
-                {sub && " · "}
-                <span className="text-err">waits for {t.blocked_by.join(", ")}</span>
-              </>
-            )}
+            {waits.length > 0 && <>{sub && " · "}waits for {waits.join(", ")}</>}
           </span>
         )}
       </span>
       <span className="col-start-2 flex items-center gap-[7px] whitespace-nowrap pt-px text-[13px] md:col-start-auto">
-        <StatusDot tone={toneOf("ticket", t.state)} className="size-[9px]" />
-        {sentence(t.state)}
+        <StatusDot tone={toneOf("turn", t.turn)} className="size-[9px]" />
+        <span data-testid="moving-turn">{t.turn_label}</span>
       </span>
       <span className="col-start-2 pt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere] md:col-start-auto md:row-start-auto">{t.pr?.state_text ?? ""}</span>
       <span aria-hidden className="col-start-3 row-start-1 text-right text-muted-foreground md:col-start-auto md:row-start-auto">{"›"}</span>

@@ -12,7 +12,21 @@ export type ProjectPageState = "building" | "waiting_on_you" | "not_started" | "
 /** A ticket's state in words, as the cell says it. */
 export type TicketState = "to do" | "in progress" | "in review" | "changes asked" | "blocked" | "merged" | "canceled";
 
-export interface MovingTicket {
+/** Whose turn a ticket is, by key (tares/status_words.py TURN, factory.turn_of). */
+export type TicketTurn = "to_do" | "queued" | "building" | "reviewing" | "changes_asked" | "checks_running"
+  | "checks_failing" | "ready_for_you" | "merging" | "stuck" | "merged" | "closed" | "canceled";
+
+/** Who moves the ticket next. */
+export type TurnWhose = "crew" | "person" | "github" | "nobody";
+
+/** The turn as every ticket row carries it: the key, its words ("Queued after T4") and whose it is. */
+export interface TicketTurnFields {
+  turn: TicketTurn;
+  turn_label: string;
+  whose: TurnWhose;
+}
+
+export interface MovingTicket extends TicketTurnFields {
   ref: string;
   title: string;
   state: TicketState;

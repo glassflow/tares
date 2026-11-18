@@ -3,6 +3,7 @@
 // A sample answers the page's read the way the cell does: it filters, sorts, pages and
 // counts the same invented tickets, so the filters, the layouts and Show more all work on it.
 
+import type { TicketTurn, TurnWhose } from "./FactoryProject.api";
 import type { FactoryTicketsData, StateKey, TicketRow, TicketsQuery } from "./FactoryTickets.api";
 import { ageWords, MIN } from "../../lib/time";
 
@@ -14,6 +15,14 @@ const KEY: Record<Kind, StateKey> = {
   todo: "to_do", prog: "in_progress", review: "in_review", changes: "changes_asked",
   blocked: "blocked", merged: "merged", canceled: "canceled",
 };
+// the turn factory.turn_of gives each kind; a reviewed one with CI passed is the person's to merge
+const TURN: Record<Kind, [TicketTurn, string, TurnWhose]> = {
+  todo: ["to_do", "To do", "crew"], prog: ["building", "Building", "crew"], review: ["reviewing", "Reviewing", "crew"],
+  changes: ["changes_asked", "Changes asked", "crew"], blocked: ["queued", "Queued", "nobody"],
+  merged: ["merged", "Merged", "nobody"], canceled: ["canceled", "Canceled", "nobody"],
+};
+const READY: [TicketTurn, string, TurnWhose] = ["ready_for_you", "Ready for you", "person"];
+
 const WORD: Record<Kind, string> = {
   todo: "to do", prog: "in progress", review: "in review", changes: "changes asked",
   blocked: "blocked", merged: "merged", canceled: "canceled",
@@ -101,8 +110,11 @@ function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number>
         : i === 21 ? "Lead" : `Builder for ${number}`;
       const [assignee, assignee_raw] = assigneeOf(n + pi);
       const withPr = kind === "merged" || kind === "changes" || kind === "review" || (kind === "prog" && i % 2 === 0);
+      const waits = (blocked ?? []).map((b) => `${p.tag}-${b}`);
+      const [turn, turnWords, whose] = kind === "review" && i % 2 ? READY : TURN[kind];
       const row: TicketRow = {
-        ref,
+        ref, turn, whose,
+        turn_label: turn === "queued" && waits.length ? `${turnWords} after ${waits.join(", ")}` : turnWords,
         title: long && ref === "Z-4" ? LONG_TITLES[0] : long && ref === "DS-26" ? LONG_TITLES[1] : title,
         state: WORD[kind], state_key: KEY[kind],
         project: { id: p.id, name: p.name },
@@ -114,7 +126,7 @@ function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number>
           url: `https://github.com/${REPO}/pull/${pr}`,
           state_text: kind === "merged" ? "merged" : kind === "changes" ? "open, CI failing" : i % 2 ? "open, CI passed" : "open, CI in progress",
         } : null,
-        blocked_by: (blocked ?? []).map((b) => `${p.tag}-${b}`),
+        blocked_by: waits,
         changed: ago(minutes),
         changed_at: NOW,
         href: `/projects/${p.id}/tickets/${ref}`,
