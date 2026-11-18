@@ -277,6 +277,49 @@ c = client()
 ck("no report: nothing pending, live", IW.scan_releaser(c, paths, "crew-releaser") == {"pending": [], "live": True})
 c.close()
 
+# the report as a state file (Now, Waiting on, Desk, Undelivered, Bouncing, Taken): only Undelivered counts
+STATE = """# crew-orchestrator
+
+## Now
+RELEASE shop 1.3 is being prepared, not sent yet
+## Waiting on
+- [TF:RELEASE] waiting on a builder, not for the releaser
+## Desk
+D4: RELEASE or not?
+## Bouncing
+RELEASE shop 1.1 bounced twice
+## Taken
+RELEASE shop 1.0 taken by crew-releaser
+## Undelivered
+- [TF:RELEASE] ship shop 1.4 to staging
+"""
+def pending(text, name="crew-releaser"):
+    reset({name: row("releaser")}, report=text)
+    c = client()
+    s = IW.scan_releaser(c, paths, name)
+    c.close()
+    return s
+s = pending(STATE)
+ck("a state file: only the RELEASE under Undelivered, the last section, is found",
+   [p["text"] for p in s["pending"]] == ["- [TF:RELEASE] ship shop 1.4 to staging"], str(s))
+ck("a RELEASE under Now, Waiting on, Desk, Bouncing or Taken is not pending",
+   pending(STATE.replace("## Undelivered\n- [TF:RELEASE] ship shop 1.4 to staging\n", "## Undelivered\nnone\n"))["pending"] == [])
+ck("`none` under Undelivered is nothing pending", pending("# r\n\n## Undelivered\nnone\n")["pending"] == [])
+ck("Undelivered in the middle ends at the next section",
+   [p["text"] for p in pending("## Undelivered\nRELEASE a\n## Taken\nRELEASE b\n")["pending"]] == ["RELEASE a"])
+moved = STATE.replace("## Now\nRELEASE shop 1.3 is being prepared, not sent yet\n", "## Now\nSomething else entirely\n")
+ck("the key is the checksum of the line: the same line gives the same key after the rest of the report changed",
+   pending(STATE)["pending"][0]["key"] == pending(moved)["pending"][0]["key"])
+ck("a reworded line is a new key", pending(STATE)["pending"][0]["key"]
+   != pending(STATE.replace("ship shop 1.4", "ship shop 1.4 now"))["pending"][0]["key"])
+reset({"crew-releaser": row("releaser")}, report=STATE)
+(CREW / "reports" / "crew-orchestrator.next.md").write_text("## Undelivered\nRELEASE from the next file\n", encoding="utf-8")
+c = client()
+s = IW.scan_releaser(c, paths, "crew-releaser")
+c.close()
+ck("a .next.md file (the archive's new report, not yet swapped in) is ignored",
+   [p["text"] for p in s["pending"]] == ["- [TF:RELEASE] ship shop 1.4 to staging"], str(s))
+
 # ------------------------------------------------------------------------------------------------
 print("the orchestrator's scan")
 DESK = {"desk": [
