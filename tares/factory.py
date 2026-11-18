@@ -57,6 +57,17 @@ def state_of(t: dict, blocked_by: list[str] | None = None) -> str:
 TURNS = tuple(status_words.TURN)
 
 
+def queue_state_of(row: dict | None) -> str | None:
+    """The merge queue row's state as turn_of reads it: a row a person said yes to for its
+    current head (`approved_head`, set by the approval) is `approved` until the queue merges it."""
+    if not row:
+        return None
+    if row["state"] in ("queued", "waiting_ci") and row.get("approved_head") \
+            and row.get("approved_head") == row.get("head"):
+        return "approved"
+    return row["state"]
+
+
 def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None = None,
             autonomy: str = "L3-review", queue_state: str | None = None) -> str:
     """Whose turn a ticket is, as a key of status_words.TURN. state_of says where the crew's
@@ -67,7 +78,8 @@ def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None =
     It splits what state_of runs together: a ticket waiting on another is `queued`, one a
     station stopped is `stuck`, and `in review` becomes reviewing, checks running or failing,
     ready for you (L3: the merge is a person's) or merging (L4, or the queue is merging it).
-    A queue row sent back reads changes asked; one the queue cannot merge reads stuck.
+    A queue row sent back reads changes asked; one the queue cannot merge reads stuck; one a
+    person said yes to reads next to merge (queue_state_of).
     A done status with no merge is `closed`, not merged."""
     pr = t.get("pr") or {}
     stage, status = t.get("stage"), t.get("status")
@@ -106,6 +118,9 @@ def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None =
         # passed and green, but it merges after a ticket it depends on: nobody's merge yet
         if blocked_by:
             return "queued"
+        # a person said yes to this commit: the queue merges it when its turn comes
+        if queue_state == "approved":
+            return "next_to_merge"
         # passed, no checks on the repo, or checks the cell cannot read: the merge is next
         return "merging" if autonomy == "L4-ship" else "ready_for_you"
     if status == "in_progress":

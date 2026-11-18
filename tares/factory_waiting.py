@@ -242,7 +242,7 @@ def review_split(store, fx, rows: list[dict] | None = None
     held: dict[str, str | None] = {}
     mine, theirs, nobody = [], [], []
     # the merge queue's open rows by pull request: one the queue is merging is the crew's now
-    merging = {(r["repo"], r["pr"]): r["state"] for r in store.merge_queue_open()}
+    merging = {(r["repo"], r["pr"]): factory_mod.queue_state_of(r) for r in store.merge_queue_open()}
     for q in rows:
         pid = q["project"]
         if pid not in level:
@@ -267,6 +267,8 @@ def review_split(store, fx, rows: list[dict] | None = None
             nobody.append({**q, "why": NOBODY[held[pid]]})
         elif q["turn"] == "merging":
             theirs.append({**q, "why": "The crew merges it"})
+        elif q["turn"] == "next_to_merge":
+            theirs.append({**q, "why": "Approved; the merge queue merges it when its turn comes"})
         elif (has := _crew_has(q, level[pid])):
             theirs.append({**q, "why": has})
         else:

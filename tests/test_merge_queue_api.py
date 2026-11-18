@@ -444,6 +444,7 @@ async def main():
                       short="71be5d4")
         d1 = ask(r1, question(uid, t1, lee["id"], 21))
         answer(d1, t1, uid, "Yes, merge", "Yes, merge", "console", lee["id"], 2)
+        yes_uid, yes_row = uid, r1      # moved on by the queue in "whose turn"
         ck("answered yes: the row is still waiting_approval in the store",
            store.merge_queue_get(r1["id"])["state"] == "waiting_approval")
         done = {"kind": "done",
@@ -789,7 +790,7 @@ async def main():
             ("Waiting for approval", "ORD-47", "waiting_approval"): ("ready_for_you", "Ready for you", "person"),
             ("Waiting for approval", "ORD-50", "queued"): ("queued", "Queued after ORD-47", "nobody"),
             ("Waiting for CI", "ORD-41", "waiting_ci"): ("checks_running", "Checks running", "github"),
-            ("Answered yes", "ORD-51", "waiting_approval"): ("merging", "Merging", "crew"),
+            ("Answered yes", "ORD-51", "waiting_approval"): ("next_to_merge", "Next to merge", "crew"),
             ("Answered no", "ORD-52", "waiting_approval"): ("stuck", "Stuck", "person"),
             ("Moved", "ORD-53", "waiting_approval"): ("reviewing", "Reviewing", "crew"),
             ("Blocked", "ORD-55", "blocked"): ("stuck", "Stuck", "person"),
@@ -797,6 +798,17 @@ async def main():
             ("Sent back", "ORD-61", "sent_back"): ("changes_asked", "Changes asked", "crew"),
         }.items():
             ck(f"turn: {pj}, {ref} ({st}) reads {want[1]}", tw.get((pj, ref, st)) == want, tw.get((pj, ref, st)))
+        # the queue takes the yes: the row goes back in line, approved for its head, desk item closed
+        async def turn_after(**fields):
+            store.merge_queue_update(yes_row["id"], **fields)
+            rows_ = [r for g in ((await page(yes_uid)).get("groups") or []) for r in g["rows"]]
+            r = next((r for r in rows_ if r["ticket"]["ref"] == "ORD-51"), {})
+            return r.get("turn"), r.get("turn_label")
+        got = await turn_after(state="queued", desk_item=None, approved_head=yes_row["head"])
+        ck("approved for its head, back in line: next to merge, not ready for you",
+           got == ("next_to_merge", "Next to merge"), got)
+        got = await turn_after(approved_head="0000000")
+        ck("approved for an older head: the merge is yours again", got == ("ready_for_you", "Ready for you"), got)
         # ── the sentences ───────────────────────────────────────────────────────────────────────
         print("== the sentences ==")
         FORBIDDEN = ("waiting_approval", "waiting_ci", "sent_back", "merge_ready", "merge_queue",

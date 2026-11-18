@@ -14,7 +14,7 @@ export type TicketState = "to do" | "in progress" | "in review" | "changes asked
 
 /** Whose turn a ticket is, by key (tares/status_words.py TURN, factory.turn_of). */
 export type TicketTurn = "to_do" | "queued" | "building" | "reviewing" | "changes_asked" | "checks_running"
-  | "checks_failing" | "ready_for_you" | "merging" | "stuck" | "merged" | "closed" | "canceled";
+  | "checks_failing" | "ready_for_you" | "next_to_merge" | "merging" | "stuck" | "merged" | "closed" | "canceled";
 
 /** Who moves the ticket next. */
 export type TurnWhose = "crew" | "person" | "github" | "nobody";

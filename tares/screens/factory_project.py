@@ -131,7 +131,8 @@ class Turns:
 
     def __init__(self, store):
         self.store, self._level = store, {}
-        self._queue = {r["ticket"]: r["state"] for r in store.merge_queue_open() if r.get("ticket")}
+        self._queue = {r["ticket"]: factory_mod.queue_state_of(r) for r in store.merge_queue_open()
+                       if r.get("ticket")}
 
     def level(self, uid: str) -> str:
         if uid not in self._level:

@@ -378,11 +378,11 @@ def register(app, store, h, ctx):
                 bounce = {"count": n, "text": LADDER_SENTENCES[step].format(n=n)}
             if held_by_person:
                 blocked = False
-            # the row's own state, with a recorded answer read in: a yes makes it the queue's
-            # merge, a no holds it until a person moves it
-            turn_state = state
+            # the row's own state, with a recorded answer read in: a yes makes it next to merge,
+            # a no holds it until a person moves it
+            turn_state = factory_mod.queue_state_of(row)
             if answer and answer["kind"] == "done":
-                turn_state = "merging" if answer["decision"] == "yes" else "blocked"
+                turn_state = "approved" if answer["decision"] == "yes" else "blocked"
             pr_n = row["pr"]
             return {
                 "id": row["id"], "position": pos, "state": state, "chip": chip,

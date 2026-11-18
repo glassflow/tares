@@ -25,7 +25,8 @@ const LADDER = [
 const turnOf = (s: Spec): TicketTurnFields => {
   const k = s.chip[0];
   if (k === "approval") return { turn: "ready_for_you", turn_label: "Ready for you", whose: "person" };
-  if (k === "approved" || s.state === "merging") return { turn: "merging", turn_label: "Merging", whose: "crew" };
+  if (s.state === "merging") return { turn: "merging", turn_label: "Merging", whose: "crew" };
+  if (k === "approved") return { turn: "next_to_merge", turn_label: "Next to merge", whose: "crew" };
   if (k === "moved") return { turn: "reviewing", turn_label: "Reviewing", whose: "crew" };
   if (k === "hold" || s.state === "blocked") return { turn: "stuck", turn_label: "Stuck", whose: "person" };
   if (s.state === "sent_back") return { turn: "changes_asked", turn_label: "Changes asked", whose: "crew" };

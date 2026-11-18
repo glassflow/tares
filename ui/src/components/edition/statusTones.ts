@@ -62,7 +62,7 @@ const turn = {
   changes_asked: "working",
   checks_running: "working",
   checks_failing: "bad",
-  ready_for_you: "waiting",
+  ready_for_you: "waiting", next_to_merge: "working",
   merging: "working",
   stuck: "bad",
   merged: "ready",

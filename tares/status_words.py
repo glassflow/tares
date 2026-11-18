@@ -54,11 +54,11 @@ PROJECT_DONE_ON_PAGE = "Finished"
 TURN = {"to_do": "To do", "queued": "Queued", "building": "Building", "reviewing": "Reviewing",
         "changes_asked": "Changes asked", "checks_running": "Checks running",
         "checks_failing": "Checks failing", "ready_for_you": "Ready for you",
-        "merging": "Merging", "stuck": "Stuck", "merged": "Merged", "closed": "Closed",
+        "next_to_merge": "Next to merge", "merging": "Merging", "stuck": "Stuck", "merged": "Merged", "closed": "Closed",
         "canceled": "Canceled"}
 
 # who moves it next: the crew, a person, GitHub (its checks), or nobody (it waits or is over)
 TURN_WHOSE = {"to_do": "crew", "queued": "nobody", "building": "crew", "reviewing": "crew",
               "changes_asked": "crew", "checks_running": "github", "checks_failing": "crew",
-              "ready_for_you": "person", "merging": "crew", "stuck": "person",
+              "ready_for_you": "person", "next_to_merge": "crew", "merging": "crew", "stuck": "person",
               "merged": "nobody", "closed": "nobody", "canceled": "nobody"}

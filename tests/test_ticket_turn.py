@@ -53,6 +53,15 @@ eq("passed and green but its dependency is open: queued, not ready for you",
    turn("review", ci="success", verdict="pass", blocked_by=["T1"]), "queued")
 eq("the same at L4: queued, not merging",
    turn("review", ci="success", verdict="pass", blocked_by=["T1"], autonomy="L4-ship"), "queued")
+eq("a person said yes at L3: next to merge, not ready for you",
+   turn("review", ci="success", verdict="pass", queue="approved"), "next_to_merge")
+eq("said yes but CI fails since: checks failing",
+   turn("review", ci="failure", verdict="pass", queue="approved"), "checks_failing")
+eq("a queued row approved for its head reads approved", factory.queue_state_of(
+   {"state": "queued", "head": "h2", "approved_head": "h2"}), "approved")
+eq("approved for an older head: just queued", factory.queue_state_of(
+   {"state": "queued", "head": "h2", "approved_head": "h1"}), "queued")
+eq("no row: none", factory.queue_state_of(None), None)
 eq("queue sent it back at L4: changes asked, not merging",
    turn("review", ci="success", verdict="pass", autonomy="L4-ship", queue="sent_back"), "changes_asked")
 eq("queue cannot merge it at L4: stuck, not merging",
@@ -69,7 +78,7 @@ seen = set()
 for stage, status, ci, verdict, cur, blocked, auto, q in itertools.product(
         [None, *factory.STAGES], [None, "todo", "in_progress", "in_review", "done", "canceled"],
         [None, "success", "failure", "pending", "none"], [None, *factory.VERDICTS], [True, False],
-        [None, ["T1"]], ["L3-review", "L4-ship"], [None, "queued", "waiting_ci", "waiting_approval", "merging", "blocked", "sent_back"]):
+        [None, ["T1"]], ["L3-review", "L4-ship"], [None, "queued", "waiting_ci", "waiting_approval", "merging", "blocked", "sent_back", "approved"]):
     seen.add(turn(stage, status, ci, False, verdict, cur, blocked, auto, q))
 ck("every answer has words", seen <= set(sw.TURN), seen - set(sw.TURN))
 ck("every answer has an owner", seen <= set(sw.TURN_WHOSE), seen - set(sw.TURN_WHOSE))
