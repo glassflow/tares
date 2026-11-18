@@ -347,6 +347,22 @@ ck("--yes with nothing saved: the recommended answers are used and saved, nothin
 c.close()
 
 # ====================================================================================
+print("crew up --no-watch says idle wake needs the watch, only when idle_wake is on")
+LINE = "idle_wake is on and the watch is off"
+for label, extra, argv, want in (
+        ("idle_wake on, --no-watch", {"idle_wake": True}, ["crew", "up", "--yes", "--no-watch"], True),
+        ("idle_wake off, --no-watch", {"idle_wake": False}, ["crew", "up", "--yes", "--no-watch"], False),
+        ("idle_wake on, the watch left to the harness switch", {"idle_wake": True}, ["crew", "up", "--yes"], False)):
+    c = Case(settings={**SAVED, **extra}, grants=['- "%s" (2026-01-01)' % GRANT])
+    r = c.run(argv)
+    ck(f"{label}: the line is {'said' if want else 'not said'}", (LINE in r.stderr) is want and r.returncode == 0,
+       (r.returncode, r.stderr[-300:]))
+    if want:
+        ck("...and names the command that starts the watch", "crew watch" in r.stderr.split(LINE)[1].split("\n")[0], r.stderr[-300:])
+        ck("...and starts no watch", not (c.crew / "watch.pid").exists())
+    c.close()
+
+# ====================================================================================
 print("routing: crew up runs in Python, whatever TARES_FACTORY_ENGINE says (TR-1069, TR-975)")
 ck("crew up and crew setup are in the ported table", dispatch.find(["crew", "up"]) is not None and dispatch.find(["crew", "setup"]) is not None)
 calls = []
