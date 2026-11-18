@@ -10,6 +10,8 @@ hand-overs, the open assumptions, the desk and the milestones. Nothing is kept f
 """
 from __future__ import annotations
 
+import re
+
 from . import factory as factory_mod
 from . import factory_home as fh
 from . import factory_owners as owners_mod
@@ -88,6 +90,44 @@ def ask_prs(rows: list[dict], project: str) -> str:
         return f"Merge {len(rows)} PRs on {project}"
     r = rows[0]
     return f"Merge PR {r['number']}" if r.get("number") else "Merge " + _trim(r["title"], 100)
+
+
+def holds_tickets(refs: list[str]) -> str | None:
+    """T4; T4 and T5; T4 and 2 more tickets: what waits, by name (TR-1448)."""
+    if not refs:
+        return None
+    if len(refs) <= 2:
+        return _and(refs)
+    return f"{refs[0]} and {len(refs) - 1} more tickets"
+
+
+def holds_desk(d: dict) -> str | None:
+    """What a desk item holds up (TR-1448): what the crew said it blocks, else the tickets it
+    names, else, for a refused command, the work of the station that ran it."""
+    said = _trim(str(d.get("blocks") or ""), 140)
+    if said:
+        return said
+    named = holds_tickets([str(t) for t in d.get("tickets") or [] if str(t).strip()])
+    if named:
+        return named
+    if d.get("command"):
+        return f"{_role_of_station(d.get('station'))}'s work"
+    return None
+
+
+_NUMBERED = re.compile(r"^\s*(?:M\s*)?\d+\s*[.:)\-]", re.I)
+
+
+def milestone_name(milestones: list[dict], mid: str | None) -> str | None:
+    """A milestone as people read it: its own name when already numbered ("1. Foundations",
+    "M2: Search"), else "M3: Name" with its place in the project's list, "M3" without a name."""
+    for i, m in enumerate(milestones, 1):
+        if m["id"] == mid:
+            name = str(m.get("name") or "").strip()
+            if not name:
+                return f"M{i}"
+            return name if _NUMBERED.match(name) else f"M{i}: {name}"
+    return None
 
 
 def _ref(project: dict) -> dict:
@@ -232,6 +272,23 @@ def waits_for_person(store, fx) -> list[dict]:
     return review_split(store, fx)[0]
 
 
+def holds_prs(rows: list[dict], tickets: list[dict], milestones: list[dict]) -> str | None:
+    """What merging these pull requests unblocks (TR-1448): the open tickets that depend on
+    theirs, else the milestone one of them is the last open ticket of, else nothing."""
+    by_label = {factory_mod.label(t): t for t in tickets}
+    mine = {by_label[r["ticket"]]["id"] for r in rows if r["ticket"] in by_label}
+    after = [factory_mod.label(t) for t in tickets
+             if t["id"] not in mine and not factory_mod.finished(t)
+             and mine.intersection(t.get("depends_on") or ())]
+    if after:
+        return holds_tickets(after)
+    for r in rows:
+        named = milestone_name(milestones, r.get("milestone")) if r.get("blocks_milestone") else None
+        if named:
+            return named
+    return None
+
+
 def prs_to_review(store, fx, now) -> list[dict]:
     """Per project, the pull requests that wait for the person (waits_for_person): the reviewer
     passed them on their current commit and the project's autonomy leaves the merge to the person.
@@ -242,6 +299,8 @@ def prs_to_review(store, fx, now) -> list[dict]:
     rows_in = waits_for_person(store, fx)
     owners = pr_owners(store, rows_in, o)
     projects = {p["id"]: p for p in store.list_projects()}
+    pids = sorted({q["project"] for q in rows_in})
+    tickets, milestones = store.tickets_by_project(pids), store.milestones_by_project(pids)
     # a pull request waits for the owner of its ticket: one item per project and set of owners
     by: dict[tuple, list[dict]] = {}
     for q in rows_in:
@@ -271,6 +330,7 @@ def prs_to_review(store, fx, now) -> list[dict]:
             since=since, now=now, project={"id": pid, "name": rows[0]["project_name"]},
             repo=repos[0] if len(repos) == 1 else None, id=key,
             ask=ask_prs(rows, rows[0]["project_name"]),
+            holds_up=holds_prs(rows, tickets.get(pid) or [], milestones.get(pid) or []),
             actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
             blocking=True,
             # whose merge waits for the person: not in the crew's hands (project_state)
@@ -309,6 +369,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
                    "The crew has not picked it up.",
             meta="Spec written " + fh.plain_ago(since, now), since=since, now=now,
             project=_ref(p), id=f"ready_to_start:{p['id']}", ask=f"Hand {p['name']} to the crew",
+            holds_up=fh._count(len(ts), "ticket"),
             actions=[{"label": "Read the spec", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Later", "primary": False, "do": "later", "project": p["id"]},
                      {"label": "Copy the hand-over command", "primary": True, "do": "copy",
@@ -405,7 +466,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`",
                 meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"permission:{d['label']}",
-                blocking=True, ask=ask_permission(d["command"]),
+                blocking=True, ask=ask_permission(d["command"]), holds_up=holds_desk(d),
                 actions=[{**answer, "primary": False},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
                           "may_limit": may_limit}]), o, ids, fell))
@@ -415,6 +476,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 detail=d["question"], meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"question:{d['label']}",
                 blocking=desk_blocks(d), question=desk_question(d), ask=ask_question(d["question"]),
+                holds_up=holds_desk(d),
                 actions=[answer]), o, ids, fell))
     return out
 
@@ -464,7 +526,8 @@ def milestones_to_check(store, fx, now) -> list[dict]:
     for p in projects:
         if factory_mod.ready_to_close(p, tickets.get(p["id"]) or []):
             continue
-        for i, m, st, mine in states.get(p["id"]) or []:
+        rows = states.get(p["id"]) or []
+        for i, m, st, mine in rows:
             if not st["needs_person"]:
                 continue
             live = [t for t in mine if t["status"] != "canceled"]
@@ -483,6 +546,8 @@ def milestones_to_check(store, fx, now) -> list[dict]:
                 detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
                 project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
                 ask=f"Check M{i} of {p['name']}",
+                # the next milestone starts when this one is accepted
+                holds_up=milestone_name([r[1] for r in rows], rows[i][1]["id"]) if i < len(rows) else None,
                 actions=[{"label": "Check it", "primary": True,
                           "href": f"/projects/{p['id']}#milestone-{m['id']}"}]), o, o.project(p), p))
     return out

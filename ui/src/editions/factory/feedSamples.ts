@@ -29,7 +29,7 @@ const ITEMS: HomeItem[] = [
   item("prs_to_review:atlas", {
     kind: "prs_to_review", label: "1 PR to review", project: atlas, blocking: true,
     title: "atlas", detail: "The reviewer passed PR 336 on its second round. It adds the expiry column and its migration.",
-    ask: "Merge PR 336",
+    ask: "Merge PR 336", holds_up: "AT-4",
     since: "2026-11-17T11:02:00Z", waited: "22 hours", tickets: ["AT-3"],
     from: { name: "the reviewer" },
     actions: [{ label: "Review", primary: true, href: "/reviews?project=atlas" }],
@@ -37,7 +37,7 @@ const ITEMS: HomeItem[] = [
   item("permission:D8", {
     kind: "permission", label: "Permission", project: linkExpiry, blocking: true,
     title: "link-expiry", detail: "The builder wants to use: `git push --force-with-lease`",
-    ask: "Allow `git push --force-with-lease`",
+    ask: "Allow `git push --force-with-lease`", holds_up: "the builder's work",
     since: "2026-11-18T07:55:00Z", waited: "1 hour",
     from: { name: "the builder" },
     actions: [
@@ -47,7 +47,7 @@ const ITEMS: HomeItem[] = [
   }),
   item("milestone_to_check:atlas:M1", {
     kind: "milestone_to_check", label: "Milestone to check", project: atlas,
-    title: "M1: sign in works end to end", ask: "Check M1 of atlas",
+    title: "M1: sign in works end to end", ask: "Check M1 of atlas", holds_up: "M2: billing hooks",
     detail: "All 4 tickets of M1 are merged. Check it on staging before M2 starts.",
     lines: ["Open staging and sign in with a new account", "Sign out, sign in again: the session is kept"],
     since: "2026-11-17T16:20:00Z", waited: "17 hours",
@@ -66,7 +66,7 @@ const ITEMS: HomeItem[] = [
   item("ready_to_start:billing", {
     kind: "ready_to_start", label: "Ready to start", project: billing,
     title: "billing", detail: "Spec and plan written, 11 tickets. The crew has not picked it up.",
-    ask: "Hand billing to the crew",
+    ask: "Hand billing to the crew", holds_up: "11 tickets",
     since: "2026-11-15T09:30:00Z", waited: "3 days",
     actions: [
       { label: "Read the spec", primary: false, href: "/projects/billing" },
@@ -79,11 +79,8 @@ const ITEMS: HomeItem[] = [
 const EXTRAS: FeedData["extras"] = {
   "question:D7": { why: "Sessions are rows we already back up; Redis would be the only thing holding them." },
   "prs_to_review:atlas": {
-    holds_up: "AT-4, the next ticket",
     checks: "Checks green. Main moved 2 commits since the review.",
   },
-  "permission:D8": { holds_up: "PR 12" },
-  "milestone_to_check:atlas:M1": { holds_up: "M2: billing hooks" },
 };
 
 const ANSWERED: FeedData["answered"] = [

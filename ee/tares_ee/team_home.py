@@ -123,7 +123,7 @@ def question_items(t: HomeRead) -> list[dict]:
             detail=q["text"], meta="Asked " + fh.plain_ago(q["asked_at"], t.now),
             since=q["asked_at"], now=t.now, project=project, repo=q["repo"],
             from_=_ref(q["asked_by_person"]), id=f"question:{project['id']}:{q['id']}",
-            ask=fw.ask_question(q["text"]),
+            ask=fw.ask_question(q["text"]), holds_up=f"the spec of {project['name']}",
             actions=[{"label": "Answer", "primary": True, "do": "answer",
                       "project": project["id"], "question": q["id"]}]), ids, q["project"], to is None))
     return out
@@ -239,7 +239,7 @@ def desk_items(t: HomeRead) -> list[dict]:
             item = fh.home_item(
                 "desk", label="Permission",
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`", **base,
-                ask=fw.ask_permission(d["command"]),
+                ask=fw.ask_permission(d["command"]), holds_up=fw.holds_desk(d),
                 actions=[{"label": "Answer", "primary": False, "do": "answer", "desk": d["label"],
                           "options": list(d.get("options") or [])},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
@@ -247,7 +247,7 @@ def desk_items(t: HomeRead) -> list[dict]:
         else:
             item = fh.home_item(
                 "desk", label="Question for you", detail=d["question"], question=fw.desk_question(d), **base,
-                ask=fw.ask_question(d["question"]),
+                ask=fw.ask_question(d["question"]), holds_up=fw.holds_desk(d),
                 actions=[{"label": "Answer", "primary": True, "do": "answer",
                           "desk": d["label"], "options": list(d.get("options") or [])}])
         out.append(_owned(t, item, ids, d["project"], fell))

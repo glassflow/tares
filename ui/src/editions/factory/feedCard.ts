@@ -70,7 +70,8 @@ export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
     from: item.from?.name ?? null,
     waited: item.waited,
     since: item.since,
-    holds_up: extra.holds_up !== undefined ? extra.holds_up : item.question?.blocks ?? null,
+    // the cell's own (TR-1448); a cell from before it sends it only on a question
+    holds_up: item.holds_up !== undefined ? item.holds_up : item.question?.blocks ?? null,
     blocking: item.blocking === true,
     recommendation: recommendation ? { answer: recommendation, why: extra.why ?? item.question?.why ?? null } : null,
     yes,

@@ -421,7 +421,7 @@ async def main():
                and not any(w["id"] == x["id"] for w in ry["waiting"] for x in a["waiting"]), ry["waiting"])
             ck("a waiting item has the shape of the home page's", all(
                 set(w) == {"id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-                           "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask",
+                           "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask", "holds_up",
             "for_people", "for_admin", "no_lead"} for w in a["waiting"]), [sorted(w) for w in a["waiting"]][:1])
 
             print("== nothing of the crew's machine ==")

@@ -74,6 +74,8 @@ export interface HomeItem {
   /** The decision in one line, verb first ("Merge PR 336"); a question's is the question (TR-1447).
    *  Absent on a cell from before it. */
   ask?: string | null;
+  /** What waits on the answer ("T4 and 2 more tickets", "M2: search"); null when nothing does (TR-1448). */
+  holds_up?: string | null;
   /** Holds crew work up until the person answers; such items come first (TR-1021). */
   blocking?: boolean;
   /** Waited more than a week and holds nothing up: folded under "N older things". */

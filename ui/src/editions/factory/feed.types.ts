@@ -13,8 +13,6 @@ export type FeedVia = "feed" | "console" | "session" | "message";
 
 /** What the home does not send yet. The live feed reads none of it; the samples fill it by hand. */
 export interface FeedExtra {
-  /** Gap: what it holds up, on every kind. A question already sends it as `question.blocks`. */
-  holds_up?: string | null;
   /** Gap on prs_to_review: "Checks green. Main moved 2 commits since the review." */
   checks?: string | null;
   /** Why the crew suggests its answer, for a sample. A question sends it as `question.why`. */

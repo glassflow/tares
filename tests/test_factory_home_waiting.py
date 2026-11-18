@@ -216,7 +216,7 @@ async def main():
         ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-            "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask",
+            "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask", "holds_up",
             "for_people", "for_admin", "no_lead"} for i in w))
         ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
         ck("waited is in words, oldest first within each group", [i["waited"] for i in w] == [
@@ -326,6 +326,26 @@ async def main():
         ck("a permission's ask is what the crew wants to run",
            px_perm["ask"] == "Allow `gh api repos/example-org/docs-site/statuses/abc`", px_perm["ask"])
         ck("a milestone is checked by its number", mc["ask"] == "Check M1 of project-w", mc["ask"])
+
+        print("== what it holds up (TR-1448) ==")
+        ck("a PR that closes its milestone holds the milestone up", pr["holds_up"] == "M1: pages", pr["holds_up"])
+        ck("a project not started holds its tickets", rs["holds_up"] == "2 tickets", rs["holds_up"])
+        ck("a milestone holds the next one", mc["holds_up"] == "M2: search", mc["holds_up"])
+        ck("a refused command holds its station's work",
+           px_perm["holds_up"] == "the builder's work", px_perm["holds_up"])
+        ck("calls and a question that names nothing hold nothing",
+           cc["holds_up"] is None and q["holds_up"] is None, (cc["holds_up"], q["holds_up"]))
+        ck("a desk item says what it blocks, else the tickets it names",
+           fw.holds_desk({"blocks": "the login flow", "tickets": ["T4"]}) == "the login flow"
+           and fw.holds_desk({"blocks": "", "tickets": ["T4", "T5"]}) == "T4 and T5"
+           and fw.holds_desk({"blocks": None, "tickets": [], "command": None}) is None)
+        ck("many tickets are counted", fw.holds_tickets(["T4", "T5", "T6"]) == "T4 and 2 more tickets")
+        dep = [{"id": "a", "identifier": "T1", "status": "in_progress", "depends_on": []},
+               {"id": "b", "identifier": "T2", "status": "todo", "depends_on": ["a"]},
+               {"id": "c", "identifier": "T3", "status": "done", "depends_on": ["a"]}]
+        ck("a PR holds the open tickets that depend on its own, before its milestone",
+           fw.holds_prs([{"ticket": "T1", "blocks_milestone": True, "milestone": "m"}], dep,
+                        [{"id": "m", "name": "M1: pages"}]) == "T2")
 
         print("== who it is not for ==")
         names = {(i["project"] or {}).get("name") for i in w}

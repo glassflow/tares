@@ -282,6 +282,10 @@ async def main():
            (dp["ask"], db["ask"], dq["ask"]) == ("Allow `gh api repos/acme/web/statuses/abc`",
                                                  "Keep the crew's calls on Shop", "Which colour for the links?"),
            (dp["ask"], db["ask"], dq["ask"]))
+        ck("what each holds up (TR-1448): the spec, the station's work, nothing for a grant or a batch",
+           (q["holds_up"], g["holds_up"], dp["holds_up"], db["holds_up"], dq["holds_up"])
+           == ("the spec of Shop", None, "the builder's work", None, None),
+           (q["holds_up"], g["holds_up"], dp["holds_up"], db["holds_up"], dq["holds_up"]))
         ck("they come from Alex's own crew", dp["from"] == {"crew": True, "name": "Your crew"}
            and dq["from"]["name"] in ("Your crew", "Alex", "Kim", "Lee"), (dp["from"], dq["from"]))
         ck("Lee has only the item for Lee, Kim has none", len(by_kind(await home("lee")).get("desk", [])) == 1

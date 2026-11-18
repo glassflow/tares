@@ -108,7 +108,7 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
               from_: dict | None = None, id: str | None = None,
               tickets: list[str] | None = None, blocking: bool = False,
               question: dict | None = None, lines: list[str] | None = None,
-              ask: str | None = None) -> dict:
+              ask: str | None = None, holds_up: str | None = None) -> dict:
     """One thing that waits for the person, in the shape every list of waiting items uses.
     `project` and `from_` are {id, name} (`from_` is {crew: True, name: "Your crew"} for the
     crew); `since` is when it began to wait. An action is a link (`href`) or something the page
@@ -117,7 +117,9 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
     pull requests to review), empty for an item about no ticket. `lines` are short lines shown one
     under the other below the detail (the calls in a "calls to confirm" item). `ask` is the
     decision in one line that starts with its verb ("Merge PR 336", "Check M1 of atlas"), what a
-    feed card leads with (TR-1447); a question's ask is the question itself."""
+    feed card leads with (TR-1447); a question's ask is the question itself. `holds_up` names
+    what waits on the answer ("T4 and 2 more tickets", "M2: billing hooks"), None when nothing
+    does (TR-1448)."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}; one of: " + ", ".join(KINDS))
     acts = []
@@ -137,7 +139,7 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             "blocking": bool(blocking), "older": False,
             # a desk question's own options and the crew's recommendation, answerable on the row
             "question": question, "lines": list(lines or []),
-            "ask": ask,
+            "ask": ask, "holds_up": holds_up,
             # whom it waits for (factory_owners.tag): the people, whether any admin may act, and
             # whether it fell to the admins because its project has no lead
             "for_people": [], "for_admin": False, "no_lead": False}
