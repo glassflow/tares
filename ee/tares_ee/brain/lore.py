@@ -252,6 +252,26 @@ class LoreClient:
             docs.append(dict(d))
         return await self._call("POST", "/v1/documents", json={"source": source, "documents": docs})
 
+    async def list_documents(self, *, kind: Sequence[str] | str | None = None, source: str | None = None,
+                             limit: int = 50, cursor: str | None = None) -> dict:
+        """`GET /v1/documents`: one page of `{"documents": [{id, source, external_id, kind, title, uri,
+        metadata, updated_at}], "next_cursor"}`, newest first. `next_cursor` is null on the last page;
+        pass it back as `cursor` for the next one. `limit` is 1 to 200. Blank `kind` entries, a blank
+        `source` and a blank `cursor` are left out."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise LoreError("The limit must be a whole number from 1 to 200.")
+        params: dict[str, Any] = {"limit": limit}
+        kinds = _kinds(kind)
+        if kinds:
+            params["kind"] = ",".join(kinds)
+        source = _opt_text(source, "The source")
+        if source:
+            params["source"] = source
+        cursor = _opt_text(cursor, "The cursor")
+        if cursor:
+            params["cursor"] = cursor
+        return await self._call("GET", "/v1/documents", params=params)
+
     async def get_document(self, document_id: str) -> dict:
         """`GET /v1/documents/{id}`: one document's `kind`, `title`, `uri`, `metadata`, `text`."""
         return await self._call("GET", f"/v1/documents/{_seg(document_id, 'The document id')}")
