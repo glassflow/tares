@@ -18,13 +18,14 @@ from fastapi import Request
 
 from ..envelope import now_utc
 from .. import factory_owners as owners_mod
+from .. import status_words
 from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
                             caller_owns, caller_waiting)
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
-DONE_LABEL = "Done"
-LATER_LABEL = "Later"
+DONE_LABEL = status_words.PROJECT_DONE_ON_LIST
+LATER_LABEL = status_words.PROJECT_LATER
 STATES = ("building", "waiting_on_you", "not_started", "ready_to_close", "later", "done")
 _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 

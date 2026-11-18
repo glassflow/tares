@@ -17,6 +17,7 @@ import posixpath
 import re
 from datetime import datetime, timezone
 
+from . import status_words
 from .docs import DocError, title_ok
 
 MAX_GOAL = 500
@@ -28,9 +29,7 @@ MAX_DEPENDS = 30
 DONE_STATUSES = ("done", "canceled")
 # the stages of a ticket still in the work; a done or canceled status clears them (TR-1008)
 OPEN_STAGES = ("todo", "doing", "review", "changes", "blocked")
-STAGE_WORD = {"todo": "to do", "doing": "in progress", "review": "in review",
-              "changes": "changes asked", "blocked": "blocked", "merged": "merged",
-              "shipped": "merged", "canceled": "canceled"}
+STAGE_WORD = status_words.TICKET_STAGE
 
 
 def state_of(t: dict, blocked_by: list[str] | None = None) -> str:

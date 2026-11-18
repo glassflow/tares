@@ -35,6 +35,7 @@ from .. import factory_home as fh
 from .. import factory_waiting as fw
 from .. import licence
 from .. import project_secrets
+from .. import status_words
 from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import plain_ago
@@ -42,12 +43,13 @@ from ..factory_home import plain_ago
 # ── words ─────────────────────────────────────────────────────────────────────
 
 STAGE_LABEL = {"spec": "Spec", "build": "Build", "review": "Review", "done": "Done"}
-STATE_LABEL = {**fh.STATE_LABEL, "finished": "Finished", "later": "Later"}
+STATE_LABEL = {**fh.STATE_LABEL, "finished": status_words.PROJECT_DONE_ON_PAGE,
+               "later": status_words.PROJECT_LATER}
 
 # a ticket's state in words, by its stage key
 _STAGE_WORD = factory_mod.STAGE_WORD
-_VERDICT_WORD = {"pass": "passed", "changes": "changes asked", "block": "blocked"}
-_CI_WORD = {"success": "CI green", "failure": "CI failing", "pending": "CI running"}
+_VERDICT_WORD = status_words.VERDICT
+_CI_WORD = status_words.CI_ON_PROJECT
 # the crew's roles as a person says them, as the author of a call: "by the builder"
 _ROLE_BY = {"orchestrator": "the orchestrator", "reviewer": "the reviewer", "releaser": "the releaser",
             "builder": "the builder", "helper": "a helper"}
@@ -146,8 +148,7 @@ def _pr_out(t: dict) -> dict | None:
     return {"number": number, "url": url, "state_text": text}
 
 
-_PR_STATE_LABEL = {"open": "Open", "draft": "Draft", "merged": "Merged",
-                   "closed": "Closed without merging"}
+_PR_STATE_LABEL = status_words.PR_STATE
 _PR_ORDER = {"open": 0, "draft": 0, "merged": 1, "closed": 2}
 
 

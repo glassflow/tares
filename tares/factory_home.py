@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from . import claude_usage
 from . import factory as factory_mod
 from . import factory_owners as owners_mod
+from . import status_words
 from . import crew_onboarding, start_steps
 from .envelope import now_utc
 
@@ -33,8 +34,7 @@ KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "per
 ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later",
            "approve_merge", "accept_milestone")
 
-STATE_LABEL = {"building": "Building", "waiting_on_you": "Waiting on you",
-               "not_started": "Not started", "ready_to_close": "Ready to close"}
+STATE_LABEL = status_words.PROJECT_STATE
 _STATE_ORDER = {"waiting_on_you": 0, "building": 1, "not_started": 2, "ready_to_close": 3}
 
 ROLE_LINE = {"orchestrator": "Hands out work and brings you what needs you.",

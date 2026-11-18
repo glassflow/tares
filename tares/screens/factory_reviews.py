@@ -21,6 +21,7 @@ from fastapi import Query, Request
 
 from .. import factory_home as fh
 from .. import factory_waiting as fw
+from .. import status_words
 from ..envelope import now_utc
 
 AUTONOMY_TEXT = {
@@ -28,9 +29,9 @@ AUTONOMY_TEXT = {
     "L4-ship": "The crew merges after its review and green CI.",
 }
 # the dot of a CI sentence: ok (green), bad (red), go (amber, still going), none (grey)
-CI = {"success": ("CI passed", "ok"), "failure": ("CI failing", "bad"),
-      "pending": ("CI in progress", "go")}
-NO_CI = ("No CI", "none")
+_CI_TONE = {"success": "ok", "failure": "bad", "pending": "go"}
+CI = {k: (status_words.CI_ON_REVIEWS[k], tone) for k, tone in _CI_TONE.items()}
+NO_CI = (status_words.NO_CI, "none")
 _PULL = re.compile(r"/pull/(\d+)")
 
 
