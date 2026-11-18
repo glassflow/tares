@@ -7,7 +7,7 @@ import type { AvailableRepo } from "./BrainConnect.api";
 export const MAX_CONNECT = 50;
 
 export const NOTICE_WORDS = "Everyone on this cell will be able to ask about the code in these repos, including people who cannot open them on GitHub.";
-export const SLOW_WORDS = "The first index of a large repo can take a while. Its card shows how far it has got, and the crew keeps working with grep meanwhile.";
+export const SLOW_WORDS = "The first index of a large repo can take a while. Its card shows how far it has got.";
 export const SUBTITLE_WORDS = "Repos the GitHub connection can read. Pick the ones the brain should know.";
 export const NOT_SET_UP_WORDS = "The second brain is not set up on this cell.";
 export const NO_GITHUB_WORDS = "The GitHub connection is not set up yet.";

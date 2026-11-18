@@ -74,6 +74,15 @@ def _count(v) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
 
 
+def record_update(store, repo: str, kind: str, ok: bool, **fields) -> None:
+    """Keep a first index or a later update in the repo's history (TR-1463). The history is for people to
+    read: a failure to write it is logged and never stops the index or the sync."""
+    try:
+        store.add_brain_repo_update(repo, kind, ok, now_utc(), **fields)
+    except Exception as e:   # noqa: BLE001
+        log.warning("brain update history of %s not kept: %s", repo, type(e).__name__)
+
+
 def _line(text, secrets=()) -> str:
     """One line of someone else's text, safe to keep: no token, no line breaks, not too long."""
     out = " ".join(scrub(text, secrets).split())
@@ -332,10 +341,11 @@ class Indexer:
             return self._fail(repo, f"The index of {repo} finished, but the brain could not take it over.")
         total = max(row["files_total"] or 0, _count(report.get("files_indexed")) + _count(report.get("files_unchanged")))
         commit = report.get("indexed_commit")
-        self.store.update_brain_repo(repo, {
-            "state": "ready", "files_done": total, "files_total": total,
-            "indexed_commit": commit if isinstance(commit, str) and commit else None,
-            "last_synced": now_utc(), "error": None, "place": None}, only_in=RUNNING)
+        commit = commit if isinstance(commit, str) and commit else None
+        if self.store.update_brain_repo(repo, {
+                "state": "ready", "files_done": total, "files_total": total, "indexed_commit": commit,
+                "last_synced": now_utc(), "error": None, "place": None}, only_in=RUNNING):
+            record_update(self.store, repo, "index", True, commit=commit, files_changed=total, files_total=total)
 
     def _miss(self, repo: str, words: str) -> None:
         """The control plane did not answer: keep the state, show why, give up after MAX_MISSES."""
@@ -347,8 +357,9 @@ class Indexer:
 
     def _fail(self, repo: str, words: str) -> None:
         self._misses.pop(repo, None)
-        self.store.update_brain_repo(repo, {"state": "failed", "error": _line(words), "place": None},
-                                     only_in=RUNNING)
+        if self.store.update_brain_repo(repo, {"state": "failed", "error": _line(words), "place": None},
+                                        only_in=RUNNING):
+            record_update(self.store, repo, "index", False, error=_line(words))
 
     # -- the task ---------------------------------------------------------------------------
 

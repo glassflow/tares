@@ -96,11 +96,12 @@ def lore_name(repo: str) -> str:
 
 
 def row_view(r: dict, removing: bool = False, remove_error: str | None = None,
-             folders: list[str] | None = None, decisions: int = 0) -> dict:
+             folders: list[str] | None = None, decisions: int = 0, last_update: dict | None = None) -> dict:
     """What the routes return for one row: the table's columns, the name of who added it, `removing`
     (a removal is running in the background), `remove_error` (why the last removal gave up, None
     otherwise), `folders` (the paths of its chosen decision folders) and `decisions` (how many decisions the
-    brain holds from the files of those folders). `repo_source_id` stays inside the cell."""
+    brain holds from the files of those folders) and `last_update` (the repo's newest first index or update,
+    as GET .../updates gives each, or None). `repo_source_id` stays inside the cell."""
     return {"repo": r["repo"], "state": r["state"], "files_done": r["files_done"],
             "files_total": r["files_total"], "indexed_commit": r["indexed_commit"],
             "last_synced": r["last_synced"], "error": r["error"], "place": r["place"],
@@ -108,7 +109,7 @@ def row_view(r: dict, removing: bool = False, remove_error: str | None = None,
             "added_by": r["added_by"],
             "added_by_name": r["added_by_name"], "added_at": r["added_at"],
             "removing": removing, "remove_error": None if removing else remove_error,
-            "folders": list(folders or []), "decisions": decisions}
+            "folders": list(folders or []), "decisions": decisions, "last_update": last_update}
 
 
 def register_routes(app, host) -> None:
@@ -126,10 +127,10 @@ def register_routes(app, host) -> None:
     removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
     remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
 
-    def view(r: dict) -> dict:
+    def view(r: dict, last: dict | None = None) -> dict:
         folders = [f["path"] for f in store.list_brain_folders(r["repo"])]
         return row_view(r, r["repo"] in removals, remove_errors.get(r["repo"]), folders,
-                        repo_decisions.count(r["repo"], folders))   # from memory: this route is polled
+                        repo_decisions.count(r["repo"], folders), last)   # from memory: this route is polled
 
     def need_licence():
         if not licence.ee_allowed():
@@ -156,11 +157,13 @@ def register_routes(app, host) -> None:
         last reason, and from the third in a row `error` shows it too. `removing` is true while a removal
         runs in the background; `remove_error` says why the last one gave up; `folders` lists the paths of
         the repo's chosen decision folders and `decisions` how many decisions the brain holds from their
-        files (0 with no folders or before the first import; kept in memory, no lore call)."""
+        files (0 with no folders or before the first import; kept in memory, no lore call). `last_update` is
+        the repo's newest first index or update (TR-1463), or null before the first one ends."""
         need_licence()
         if not LoreClient.configured():
             return {"configured": False, "repos": []}
-        return {"configured": True, "repos": [view(r) for r in store.list_brain_repos()]}
+        last = store.last_brain_repo_updates()
+        return {"configured": True, "repos": [view(r, last.get(r["repo"])) for r in store.list_brain_repos()]}
 
     async def visible_repos() -> tuple[list, dict[str, dict], list[str], int]:
         """(credentials, {repo: {repo, private, connected}}, failures, answered): what the cell's GitHub
@@ -410,6 +413,19 @@ def register_routes(app, host) -> None:
             return await asyncio.wait_for(run(), SCAN_TIMEOUT)
         except asyncio.TimeoutError:
             raise ValueError("GitHub took too long to answer")
+
+    @app.get("/api/brain/repos/{owner}/{name}/updates")
+    def get_updates(owner: str, name: str):
+        """{repo, updates: [{at, kind, ok, indexed_commit, files_changed, files_deleted, files_total, error}]},
+        newest first, at most 20 (TR-1463). `kind` is "index" for a first index (or one after a Retry) and
+        "update" for one that followed a push to main. `files_changed` is how many files it indexed,
+        `files_deleted` how many it took out, `files_total` the repo's count after it. A failed one has
+        `ok: false` and `error` in plain words. Anyone on the cell may read it; no lore call."""
+        need_brain()
+        repo = repo_from(owner, name)
+        if store.get_brain_repo(repo) is None:
+            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        return {"repo": repo, "updates": store.list_brain_repo_updates(repo, 20)}
 
     @app.get("/api/brain/repos/{owner}/{name}/folders")
     async def get_folders(owner: str, name: str):

@@ -405,6 +405,22 @@ FACTORY_SCHEMA = [
       chosen_at TIMESTAMPTZ,
       PRIMARY KEY (repo, path)
     )""",
+    # Each first index and each later update of a connected repo (TR-1463, ee): when, which commit, how many
+    # files it changed or deleted, the repo's file count after it, and whether it worked (and why not). The
+    # newest 50 per repo are kept; the Repos page shows the last one and a history.
+    """CREATE TABLE IF NOT EXISTS brain_repo_updates (
+      id            TEXT PRIMARY KEY,
+      repo          TEXT,
+      "at"          TIMESTAMPTZ,
+      kind          TEXT,
+      ok            INTEGER,
+      indexed_commit TEXT,
+      files_changed INTEGER,
+      files_deleted INTEGER,
+      files_total   INTEGER,
+      error         TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_brain_repo_updates_repo ON brain_repo_updates (repo, \"at\")",
     # Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked
     # (the station and person the call came with, `via` mcp or console), what, which repos it used,
     # how long it took and the tokens lore reported. The daily caps count the ask rows.
@@ -2160,7 +2176,46 @@ class FactoryStore:
             hit = self.sc.execute("DELETE FROM brain_repos WHERE repo = ? RETURNING repo",
                                   [repo]).fetchone()
             self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ?", [repo])
+            self.sc.execute("DELETE FROM brain_repo_updates WHERE repo = ?", [repo])
         return hit is not None
+
+    BRAIN_UPDATES_KEPT = 50
+    _BU_COLS = 'id, repo, "at", kind, ok, indexed_commit, files_changed, files_deleted, files_total, error'
+
+    def add_brain_repo_update(self, repo: str, kind: str, ok: bool, at, *, commit: str | None = None,
+                              files_changed: int = 0, files_deleted: int = 0, files_total: int = 0,
+                              error: str | None = None) -> None:
+        """Keep one first index (`kind` "index") or later update ("update") of a repo, and drop all but
+        the newest BRAIN_UPDATES_KEPT of that repo."""
+        with self._swrite:
+            self.sc.execute(f"INSERT INTO brain_repo_updates ({self._BU_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            [uuid.uuid4().hex, repo, at, kind, 1 if ok else 0, commit or None,
+                             int(files_changed or 0), int(files_deleted or 0), int(files_total or 0), error or None])
+            old = self.sc.execute('SELECT id FROM brain_repo_updates WHERE repo = ? ORDER BY "at" DESC, id DESC',
+                                  [repo]).fetchall()[self.BRAIN_UPDATES_KEPT:]
+            for (i,) in old:
+                self.sc.execute("DELETE FROM brain_repo_updates WHERE id = ?", [i])
+
+    @staticmethod
+    def _bu_row(r) -> dict:
+        return {"at": r[2], "kind": r[3], "ok": bool(r[4]), "indexed_commit": r[5], "files_changed": r[6] or 0,
+                "files_deleted": r[7] or 0, "files_total": r[8] or 0, "error": r[9]}
+
+    def list_brain_repo_updates(self, repo: str, limit: int = 20) -> list[dict]:
+        """The repo's first index and later updates, newest first."""
+        with self._sread:
+            rows = self.sc.execute(f'SELECT {self._BU_COLS} FROM brain_repo_updates WHERE repo = ? '
+                                   'ORDER BY "at" DESC, id DESC LIMIT ?', [repo, int(limit)]).fetchall()
+        return [self._bu_row(r) for r in rows]
+
+    def last_brain_repo_updates(self) -> dict[str, dict]:
+        """The newest update of every repo that has one, by repo."""
+        with self._sread:
+            rows = self.sc.execute(f'SELECT {self._BU_COLS} FROM brain_repo_updates ORDER BY repo, "at" DESC, id DESC').fetchall()
+        out: dict[str, dict] = {}
+        for r in rows:
+            out.setdefault(r[1], self._bu_row(r))
+        return out
 
     def list_brain_folders(self, repo: str) -> list[dict]:
         """The decision folders chosen for `repo`, by path: {path, chosen_by, chosen_by_name, chosen_at}."""

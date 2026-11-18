@@ -1,3 +1,4 @@
+import type { FolderScan, RepoUpdate } from "./BrainFolders.api";
 import type { BrainReposData, BrainRepoRow } from "./BrainRepos.api";
 
 // Sample bodies of the Repos page, in the shape of GET /api/brain. They show only behind the sample
@@ -22,6 +23,8 @@ const indexing = row({ repo: "glassflow/tares", state: "indexing", files_done: 8
 const ready = row({
   repo: "glassflow/tares-cloud", state: "ready", files_done: 640, files_total: 640,
   indexed_commit: "8c41d2e9a7b0c3d4e5f60718293a4b5c6d7e8f90", last_synced: before(2), added_at: before(300),
+  folders: ["docs/adr"], decisions: 21,
+  last_update: { at: before(2), kind: "update", ok: true, indexed_commit: "8c41d2e9a7b0c3d4e5f60718293a4b5c6d7e8f90", files_changed: 3, files_deleted: 0, files_total: 640, error: null },
 });
 const syncing = row({
   repo: "glassflow/fernpage", state: "ready", files_done: 212, files_total: 212,
@@ -39,6 +42,21 @@ const removeFailed = row({
 });
 
 const data = (...repos: BrainRepoRow[]): BrainReposData => ({ configured: true, repos });
+
+/** The history a sample card's History opens. */
+export const SAMPLE_UPDATES: RepoUpdate[] = [
+  { at: before(2), kind: "update", ok: true, indexed_commit: "8c41d2e9a7b0c3d4e5f60718293a4b5c6d7e8f90", files_changed: 3, files_deleted: 0, files_total: 640, error: null },
+  { at: before(95), kind: "update", ok: false, indexed_commit: null, files_changed: 0, files_deleted: 0, files_total: 640, error: "GitHub did not answer when the brain asked for the latest push." },
+  { at: before(180), kind: "update", ok: true, indexed_commit: "3fa91b07c2d84e5f6a7b8c9d0e1f2a3b4c5d6e7f", files_changed: 12, files_deleted: 2, files_total: 640, error: null },
+  { at: before(300), kind: "index", ok: true, indexed_commit: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", files_changed: 642, files_deleted: 0, files_total: 642, error: null },
+];
+
+/** The folders a sample card's Decision folders opens. */
+export const SAMPLE_FOLDERS = (repo: string): FolderScan => ({
+  repo, partial: false, scanned: true, scan_error: null,
+  folders: [{ path: "docs/adr", chosen_by: "p1", chosen_by_name: "Ashish Bagri", chosen_at: before(300), files: 21 }],
+  suggested: [{ path: "docs/adr", files: 21, why: "known", chosen: true }, { path: "docs/design", files: 4, why: "numbered", chosen: false }],
+});
 
 export const BRAIN_SAMPLES: Record<string, BrainReposData> = {
   queued: data(indexing, queued, queuedThird),
