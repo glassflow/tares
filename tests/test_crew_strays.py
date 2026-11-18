@@ -338,7 +338,7 @@ asked = []
 in_turn = [False]
 
 
-def _restart(client, paths_, args, *, claude_bin, only_between_turns=False):
+def _restart(client, paths_, args, *, claude_bin, only_between_turns=False, prompt_wait=0):
     asked.append(only_between_turns)
     if only_between_turns and in_turn[0]:
         raise NotBetweenTurnsError("orch is in a turn; not stopping it")

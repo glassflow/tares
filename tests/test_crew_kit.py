@@ -255,13 +255,15 @@ upgrades: list = []   # the watch restarting itself
 
 
 guards: list = []   # the only_between_turns each restart was asked with
+waits: list = []   # and the prompt_wait
 in_a_turn = [False]   # the station starts a turn after the round looked, before the restart
 
 
-def fake_restart(client, paths, args, claude_bin=None, only_between_turns=False):
+def fake_restart(client, paths, args, claude_bin=None, only_between_turns=False, prompt_wait=0):
     if only_between_turns and in_a_turn[0]:
         raise NotBetweenTurnsError(f"{args[0]} is in a turn; not stopping it")
     guards.append(only_between_turns)
+    waits.append(prompt_wait)
     restarts.append(list(args))
     state.stations_put(args[0], {"kit": kit.kit_version(KITDIR)}, paths)
 
@@ -647,6 +649,7 @@ with FakeTares() as ft:
         rc = kit.upgrade_station(CP, c, "shop-build-m1", kit.kit_version(KITDIR), claude_bin=BIN)
 ck("(control) an idle one is: rc 0, restarted, upgraded recorded", rc == 0 and len(restarts) == 1 and len(kinds("upgraded")) == 1, str((rc, restarts, kinds())))
 ck("the restart is asked to stop the station only between turns", bool(guards) and all(guards), str(guards))
+ck("and to look at a prompt with the same 30 minute wait as the round did", bool(waits) and all(w is None for w in waits), str(waits))
 
 # it starts a turn after the last look: the restart refuses, nothing is recorded, the station is not stopped
 world({"shop-build-m1": station()}, IDLE)
