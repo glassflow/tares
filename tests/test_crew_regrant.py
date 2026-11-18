@@ -234,6 +234,47 @@ for what, err in (("a refused restart", CrewError("no room")), ("a restart that 
           state.stations_get("s", "grants_tried", paths=paths) == str(grants_sum(A + B))
           and not regrant.regranted(paths, Client(A + B), "s"))
 
+# a restart refused because the station started a turn meanwhile did not fail: it was never told, so the next round tries again
+from tares.crew.errors import NotBetweenTurnsError  # noqa: E402
+
+seen = []
+
+
+def run_refused(prior):
+    paths = crew({"s": {"grants": str(grants_sum(A)), "sessionId": "abc", "status": "active", **prior}})
+    client = RestartClient(A + B)
+    saved = (regrant.TaresClient, claude.between_turns, launch._ccfg_or, regrant._new_rules, lifecycle.restart,
+             lifecycle.rearm_text)
+    try:
+        regrant.TaresClient = lambda p, e: client
+        claude.between_turns = lambda *a, **k: True
+        launch._ccfg_or = lambda *a, **k: "Kiran"
+        regrant._new_rules = lambda *a, **k: ["may merge"]
+        lifecycle.rearm_text = lambda c: ""
+
+        def refuse(client_, paths_, args, *, claude_bin, only_between_turns=False):
+            seen.append(only_between_turns)
+            if only_between_turns:
+                raise NotBetweenTurnsError("s is in a turn; not stopping it")
+        lifecycle.restart = refuse
+        regrant.regrant_station(paths, "s", claude_bin="claude", env={})
+    finally:
+        (regrant.TaresClient, claude.between_turns, launch._ccfg_or, regrant._new_rules, lifecycle.restart,
+         lifecycle.rearm_text) = saved
+    return paths, client
+
+
+paths, client = run_refused({})
+check("the restart is asked to stop the station only between turns", seen == [True])
+check("a restart refused because the station is in a turn leaves grants_tried unset",
+      not state.stations_get("s", "grants_tried", paths=paths))
+check("...so the next round finds the station due again", regrant.regranted(paths, Client(A + B), "s"))
+check("...and it says it will look again, not that the restart failed",
+      any("started a turn" in line for line in client.said) and not any("could not restart" in line for line in client.said))
+paths, client = run_refused({"grants_tried": "12345"})
+check("a refused restart puts back the grants_tried the station had",
+      state.stations_get("s", "grants_tried", paths=paths) == "12345")
+
 # registered with the skeleton
 check("the watch runs this step under the name the skeleton reserves", watch._STEPS.get("regrant") is regrant.step)
 check("that name is one of the skeleton's", "regrant" in watch.STEP_NAMES)
