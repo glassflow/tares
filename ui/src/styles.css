@@ -2582,7 +2582,8 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   .motion-tabs[data-line="on"] > [data-tab-line] {
     transition: transform var(--dur-2) var(--ease-out), inline-size var(--dur-2) var(--ease-out);
   }
-  .motion-tabs[data-line="on"] > [role="tab"] { border-bottom-color: transparent !important; }
+  /* the border goes at once, not through the tab's colour transition: that would be a fade on first paint */
+  .motion-tabs[data-line="on"] > [role="tab"] { border-bottom-color: transparent !important; transition-property: color, background-color; }
 
   /* TR-1436: the theme switch crossfades the whole page (a view transition, where the browser has them). */
   ::view-transition-old(root) { animation: m-fade-out var(--dur-3) var(--ease-in-out) both; }

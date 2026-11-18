@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import { api, ApiError } from "../api";
 import { useEdition } from "../editions/edition";
-import { Banner, Button, Dialog, Switch, Textarea } from "../components/edition";
+import { Banner, Button, Collapse, Dialog, Switch, Textarea } from "../components/edition";
 
 type Counts = Awaited<ReturnType<typeof api.importYaml>>;
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -46,18 +46,18 @@ export default function CatalogImport() {
         </p>
       </header>
 
-      {admin === false && (
+      <Collapse>{admin === false && (
         <Banner tone="note" data-testid="import-admin-only">
           This key can read but not import. Use a key that can write to import a file.
         </Banner>
-      )}
+      )}</Collapse>
 
       {done && <Done {...done} rule={rule} />}
-      {err && (
+      <Collapse>{err && (
         <Banner tone="error" data-testid="import-error">
           Could not import the file: <span data-user-text>{err}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
       <section className="grid gap-4">
         <Textarea id="import-yaml" data-testid="import-yaml" data-words-exempt label="The file" rows={14}
