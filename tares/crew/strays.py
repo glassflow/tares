@@ -474,7 +474,7 @@ def _deliver(paths: CrewPaths, env: dict, prompt: str) -> bool:
         with TaresClient(paths, env) as fresh:
             if not fresh.tares_on():
                 return False
-            lifecycle.restart(fresh, paths, [orch, prompt], claude_bin=claude_bin)
+            lifecycle.restart(fresh, paths, [orch, prompt], claude_bin=claude_bin, only_between_turns=True)
         return True
 
     try:
