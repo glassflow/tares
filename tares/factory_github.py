@@ -229,7 +229,7 @@ def _check_list(statuses: list[dict], runs: list[dict], replaced=frozenset(), wa
         else:
             state = "failure"
         out.append({"name": str(r.get("name") or ""), "state": state})
-    out += [{"name": str(n), "state": "pending"} for n in waiting or ()]
+    out += [{"name": str(n), "state": "pending", "waiting": True} for n in waiting or ()]
     return out
 
 

@@ -506,12 +506,23 @@ for st in ("queued", "in_progress", "waiting", "requested", "pending"):
     ck(f"the cancel is dropped but the replacing run is {st} with no jobs yet: pending, nothing failing",
        (out.state, out.failing) == ("pending", []) and got["ci"] == "pending", out)
 ck("...and ci_checks lists it as a pending check, so the queue waits",
-   {"name": "CI", "state": "pending"} in got["ci_checks"]
+   {"name": "CI", "state": "pending", "waiting": True} in got["ci_checks"]
    and [c["name"] for c in got["ci_checks"] if c["state"] == "failure"] == [], got["ci_checks"])
 reset(runs=partial_jobs, wruns=[wrun(1), wrun(2)])
 ck("the replacing run finished: its checks are all there is, no pending entry",
-   ci().state == "success" and {"name": "CI", "state": "pending"} not in
-   asyncio.run(fg.read_pr(store, REPO, N))["ci_checks"])
+   ci().state == "success" and not [c for c in asyncio.run(fg.read_pr(store, REPO, N))["ci_checks"] if c.get("waiting")])
+reset(runs=partial_jobs, wruns=[wrun(1), wrun(2, status="queued")])
+out = ci(required=["test (duckdb)"])
+ck("required names: a required job that passed elsewhere does not hide the run still to come (T50 F4)",
+   (out.state, out.failing) == ("pending", []), out)
+out = ci(required=["test (duckdb)", "test (postgres)"])
+ck("...a required name whose cancel was dropped is pending too", (out.state, out.failing) == ("pending", []), out)
+reset(runs=partial_jobs, wruns=[wrun(1), wrun(2)])
+ck("...and once the replacing run has finished, the required name that passed is success",
+   ci(required=["test (duckdb)"]).state == "success")
+reset(runs=partial_jobs + [real_run("lint", 14, DRAFT, conclusion="failure")], wruns=[wrun(1), wrun(2, status="queued")])
+ck("...a required failure is still named while the run waits",
+   (ci(required=["lint"]).state, ci(required=["lint"]).failing) == ("failure", ["lint"]))
 reset(runs=partial_jobs, wruns=[wrun(1), wrun(2, event="workflow_dispatch", status="queued")])
 out = ci()
 ck("an unfinished run of another event is no replacement and no wait: the cancel still fails",

@@ -72,8 +72,8 @@ class GithubCI(CISource):
         names = [n for n in (str(x or "").strip() for x in required or []) if n]
         missing = False
         if names:
-            checks = [c for c in checks if c.get("name") in names]
-            have = {c.get("name") for c in checks}
+            checks = [c for c in checks if c.get("name") in names or c.get("waiting")]
+            have = {c.get("name") for c in checks if not c.get("waiting")}
             missing = any(n not in have for n in names)
         failing = [str(c.get("name") or "") for c in checks if c.get("state") == "failure"]
         if failing:
