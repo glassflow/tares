@@ -491,7 +491,7 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
                     lifecycle.restart(fresh, paths, [station, (
                         "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with "
                         f"fresh settings. Reload the skills factory-protocol and station-{skill} (they may have changed), "
-                        f"re-read your report, {lifecycle.rearm_text(fresh)}, then carry on where you were.")],
+                        f"{lifecycle.REPORT_READ}, {lifecycle.rearm_text(fresh)}, then carry on where you were.")],
                         claude_bin=claude_bin, only_between_turns=True)
                     state.event("upgraded", station, kit, paths=paths)
         except NotBetweenTurnsError:
