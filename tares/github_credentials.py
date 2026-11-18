@@ -230,3 +230,31 @@ async def list_tree(token: str, repo: str, ref: str = "", path: str = "",
     files = sorted(e["name"] for e in entries if isinstance(e, dict) and e.get("type") == "file")
     md = [f for f in files if f.lower().endswith((".md", ".mdx"))]
     return {"ref": ref, "path": clean, "dirs": dirs, "files": files, "markdown": md, "exists": True}
+
+
+async def git_tree(token: str, repo: str, ref: str = "HEAD", api_url: str | None = None) -> dict:
+    """The whole tree of `repo` at `ref` (the default branch's head when `ref` is HEAD), in one call to the
+    git trees API with `recursive=1`: `{entries: [{path, type}], truncated: bool}`, `type` being `blob`
+    (a file) or `tree` (a folder). GitHub cuts a huge tree short and says `truncated: true`; this never
+    pages on, so the caller must treat a truncated answer as partial. An empty repo answers 409 and
+    gives `{entries: [], truncated: False}`; a repo GitHub does not know (or the token cannot see) is a
+    ValueError."""
+    api = (api_url or API_DEFAULT).rstrip("/")
+    async with httpx.AsyncClient(timeout=30) as cx:
+        try:
+            r = await cx.get(f"{api}/repos/{repo}/git/trees/{ref}", headers=_headers(token),
+                             params={"recursive": "1"})
+        except Exception as e:
+            raise ValueError(f"could not reach GitHub: {type(e).__name__}")
+    if r.status_code == 409:   # an empty repo has no tree
+        return {"entries": [], "truncated": False}
+    if r.status_code == 404:
+        raise ValueError(f"GitHub does not show {repo}: the token cannot read it")
+    if r.status_code == 401:
+        raise ValueError("GitHub rejected the token (401 unauthorized)")
+    if r.status_code != 200:
+        raise ValueError(f"GitHub returned {r.status_code} for the tree of {repo}")
+    body = r.json()
+    entries = [{"path": str(e["path"]), "type": e.get("type")}
+               for e in (body.get("tree") or []) if isinstance(e, dict) and e.get("path")]
+    return {"entries": entries, "truncated": bool(body.get("truncated"))}
