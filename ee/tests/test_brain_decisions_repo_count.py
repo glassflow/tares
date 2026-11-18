@@ -239,7 +239,8 @@ async def main():
 
         print("== a lore that cannot list leaves the count at 0 and does not crash ==")
         blind = dr.RepoDecisions(store, lambda: lore.client(), app.state.brain_repo_decisions._token)
-        lore.fail("list_documents", 500, "no list " + BRAIN_KEY)
+        for _ in range(8):   # start-up's read, and the retry before each prune and import (TR-1455): lore stays unreadable
+            lore.fail("list_documents", 500, "no list " + BRAIN_KEY)
         gh.budget = 0
         await blind.startup()
         await blind.wait()
