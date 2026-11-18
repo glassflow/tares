@@ -17,6 +17,7 @@ lookup by email and chat.postMessage are stubbed. Checked here:
   - an item that goes with no answer recorded says it no longer waits; an edit Slack refuses for
     a while is tried again;
   - a restart (a new reader on the same store) sends nothing again and still edits what it sent;
+  - a message Slack refuses for good is shown in the person's Settings until one goes;
   - an email Slack does not know, and a bot without users:read.email, send nothing and say so.
 
 Run: .venv/bin/python tests/test_waiting_slack.py
@@ -326,7 +327,14 @@ async def main():
     await read()
     ck("a refusal that will not change is not tried every minute",
        len(slack.refused) == 1 and slack.take() == [], slack.refused)
-    for d in (busy, gone):      # off Alex's list again, for the checks below
+    ck("Settings says the last message could not be sent",
+       "could not be sent" in str(reader.status_for(alex)["problem"]), reader.status_for(alex))
+    ck("only to the person it was for", reader.status_for(kim)["problem"] is None, reader.status_for(kim))
+    opened = ask("Ship it to an open channel?", to=alex["id"])
+    await read()
+    ck("the next message that goes clears it",
+       len(slack.take()) == 1 and reader.status_for(alex)["problem"] is None, reader.status_for(alex))
+    for d in (busy, gone, opened):      # off Alex's list again, for the checks below
         store.close_desk_item(d["id"], "dismissed", None, now_utc())
     await read()
     slack.edits()

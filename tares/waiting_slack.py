@@ -161,6 +161,7 @@ class WaitingSlack:
         self.problem: str | None = None        # a cell-wide reason nobody is found (Settings shows it)
         self._no_scope = False                 # the last lookup said the bot lacks users:read.email
         self.not_found: set[str] = set()       # people whose email Slack does not know
+        self.send_failed: dict[str, str] = {}  # person -> why Slack refused their last message
 
     # ── Slack ──
     async def _call(self, method: str, token: str, msg: dict) -> tuple[dict | None, str | None, bool]:
@@ -308,8 +309,12 @@ class WaitingSlack:
                 if retry:
                     # Slack was busy or down: the items are new again for the next read
                     again += [i["id"] for i in its]
+                else:
+                    # Slack will not take it (a closed DM, a deactivated user): say so in Settings
+                    self.send_failed[pid] = f"the last message could not be sent ({err})"
                 continue
             sent += 1
+            self.send_failed.pop(pid, None)
             if ref.get("channel") and ref.get("ts"):
                 await asyncio.to_thread(self.store.set_told_message, pid, [(i["id"], _ask(i)) for i in its],
                                         ref["channel"], ref["ts"])
@@ -357,7 +362,8 @@ class WaitingSlack:
 
     def status_for(self, person: dict | None) -> dict:
         """What Settings shows the person: their choice, whether Slack is connected, whether the
-        reader could find them there (None until it tried), and a cell-wide problem. `claimed` is
+        reader could find them there (None until it tried), and a problem: the cell-wide one, else
+        why Slack refused this person's last message. `claimed` is
         false for the unclaimed `local` of a cell of one, whom the reader never messages."""
         pid = (person or {}).get("id")
         connected = bool(slack_mod.resolve_token(self.store)[0])
@@ -369,7 +375,7 @@ class WaitingSlack:
         return {"on": bool(pid) and is_on(self.store, pid), "connected": connected,
                 "claimed": bool(person) and owners_mod.claimed(person),
                 "has_email": bool((person or {}).get("email")), "found": found,
-                "problem": self.problem if connected else None}
+                "problem": (self.problem or (self.send_failed.get(pid) if pid else None)) if connected else None}
 
 
 def register(app, store, h, reader: WaitingSlack) -> None:
