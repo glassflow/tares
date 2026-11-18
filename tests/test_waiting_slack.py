@@ -17,7 +17,10 @@ lookup by email and chat.postMessage are stubbed. Checked here:
   - an item that goes with no answer recorded says it no longer waits; an edit Slack refuses for
     a while is tried again;
   - a restart (a new reader on the same store) sends nothing again and still edits what it sent;
-  - an email Slack does not know, and a bot without users:read.email, send nothing and say so.
+  - a message Slack refuses for good is shown in the person's Settings until one goes;
+  - an email Slack does not know, and a bot without users:read.email, send nothing and say so,
+    the scope notice until a lookup works;
+  - an ask in a private project the person is not on never reaches them.
 
 Run: .venv/bin/python tests/test_waiting_slack.py
 """
@@ -120,8 +123,8 @@ async def main():
     store.create_project(uid, "custom", "shop", {}, goal="Sell things")
     store.set_project_kind(uid, "software_factory")
 
-    def ask(question, to=None, blocks=""):
-        return store.add_desk_item(uid, question, "", ["Yes", "No"], "Yes", "", blocks, [], True,
+    def ask(question, to=None, blocks="", project=uid):
+        return store.add_desk_item(project, question, "", ["Yes", "No"], "Yes", "", blocks, [], True,
                                    "crew-builder-1", [], now_utc(), to_person_id=to)
 
     async def read(minutes=1, r=None):
@@ -325,7 +328,14 @@ async def main():
     await read()
     ck("a refusal that will not change is not tried every minute",
        len(slack.refused) == 1 and slack.take() == [], slack.refused)
-    for d in (busy, gone):      # off Alex's list again, for the checks below
+    ck("Settings says the last message could not be sent",
+       "could not be sent" in str(reader.status_for(alex)["problem"]), reader.status_for(alex))
+    ck("only to the person it was for", reader.status_for(kim)["problem"] is None, reader.status_for(kim))
+    opened = ask("Ship it to an open channel?", to=alex["id"])
+    await read()
+    ck("the next message that goes clears it",
+       len(slack.take()) == 1 and reader.status_for(alex)["problem"] is None, reader.status_for(alex))
+    for d in (busy, gone, opened):      # off Alex's list again, for the checks below
         store.close_desk_item(d["id"], "dismissed", None, now_utc())
     await read()
     slack.edits()
@@ -355,6 +365,10 @@ async def main():
     async with cx(secret) as c:
         r = await c.get("/api/me/slack")
         ck("Settings names the missing scope", "users:read.email" in str(r.json()["problem"]), r.text)
+    await read()
+    async with cx(secret) as c:
+        r = await c.get("/api/me/slack")
+        ck("and still does a read later, with nothing new", "users:read.email" in str(r.json()["problem"]), r.text)
     slack.error = "ratelimited"
     ask("Add search?", to=kim["id"])
     await read()
@@ -363,6 +377,24 @@ async def main():
     await read()
     ck("the next read sends what waited for the lookup", [m["text"] for m in slack.take()]
        == ["Waiting for you: Add search?"])
+    async with cx(secret) as c:
+        r = await c.get("/api/me/slack")
+        ck("a lookup that worked clears the scope notice", r.json()["problem"] is None, r.text)
+
+    print("== an ask in a private project she is not on never reaches her ==")
+    vault = "uc_vault"
+    store.create_project(vault, "custom", "vault", {}, goal="Keep secrets")
+    store.set_project_kind(vault, "software_factory")
+    store.set_project_scope(vault, "private")
+    store.set_project_lead(vault, alex["id"])
+    ask("Rotate the vault keys?", to=kim["id"], project=vault)
+    await read()
+    to_kim = [m for m in slack.take() if m["channel"] == "U_KIM"]
+    ck("nothing to Kim, so the project is named to her nowhere", to_kim == [], to_kim)
+    store.add_project_member(vault, kim["id"], alex["id"])
+    await read()
+    ck("once she is on it, the ask reaches her (so it was the privacy rule that held it)",
+       [(m["channel"], m["text"]) for m in slack.take()] == [("U_KIM", "Waiting for you: Rotate the vault keys?")])
 
     print("== someone who joins later: what already waits for them is not sent ==")
     lee = store.create_person("Lee", email="lee@example.com")
