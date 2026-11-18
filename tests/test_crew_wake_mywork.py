@@ -176,7 +176,7 @@ for label, doc, key, text in (
     reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
     p = round_(doc)
     ck("it wakes the orchestrator", p and p["work"] and p["keys"] == [key] and p["reason"] == f"work: {text}"
-       and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + launch.idle_wake_note() + " Carry on from your report.", str(p))
+       and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + IW.woke_on(p["keys"]) + " " + launch.idle_wake_note() + " Carry on from your report.", str(p))
     ck("...with one restart", len(restarted) == 1 and restarted[0][0] == ORCH, str(restarted))
     ck("...and remembers the key", wake()["seen"] == [key] and key in wake()["baseline"]["work"], str(wake()))
     del restarted[:]
