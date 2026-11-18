@@ -140,8 +140,10 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     eq("tabLabel: with counts", [T.tabLabel("all", COUNTS, true), T.tabLabel("repo_folder", COUNTS, true), T.tabLabel("by_hand", { ...COUNTS, by_hand: 1200 }, true)], ["All 5", "GitHub repos 1", "Second Brain 1,200"]);
     eq("tabLabel: without counts", [T.tabLabel("factory_project", COUNTS, false), T.tabLabel("all", null, true)], ["Factory projects", "All"]);
     eq("joinNames", [T.joinNames([]), T.joinNames(["Ana"]), T.joinNames(["Ana", "Kiran"]), T.joinNames(["Ana", " ", "Kiran", "Lee"])], ["", "Ana", "Ana and Kiran", "Ana, Kiran and Lee"]);
-    eq("whoWords: decided, and changed by someone else", [T.whoWords(ADR), T.whoWords(SPEC), T.whoWords({ decided_by: ["A"], changed_by: ["A"], added_by: null })], ["Ada Lovelace, changed by Kiran", "Ada Lovelace", "A"]);
-    eq("whoWords: falls back to who added it, or says only who changed it", [T.whoWords({ decided_by: [], changed_by: [], added_by: "Lee" }), T.whoWords({ decided_by: [], changed_by: ["Kiran"], added_by: null })], ["Lee", "Changed by Kiran"]);
+    eq("whoParts: decided, and updated by someone else", [T.whoParts(ADR), T.whoParts(SPEC), T.whoParts({ decided_by: ["A"], changed_by: ["A"], added_by: null })],
+       [{ decided: "Ada Lovelace", updated: "Updated by Kiran" }, { decided: "Ada Lovelace", updated: "" }, { decided: "A", updated: "" }]);
+    eq("whoParts: falls back to who added it, or says only who updated it", [T.whoParts({ decided_by: [], changed_by: [], added_by: "Lee" }), T.whoParts({ decided_by: [], changed_by: ["Kiran"], added_by: null })],
+       [{ decided: "Lee", updated: "" }, { decided: "", updated: "Updated by Kiran" }]);
     eq("timeOf: a bare day is midnight UTC", T.timeOf("2026-11-12"), Date.parse("2026-11-12T00:00:00Z"));
     ck("timeOf: none is NaN", Number.isNaN(T.timeOf(null)) && Number.isNaN(T.timeOf("")));
     eq("whenWords: a bare day today says today", T.whenWords({ decided_at: day(0), changed_at: null }, NOW), "today");
@@ -256,7 +258,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const adr = T("brain-decision-row").nth(4);
       eq("a repo file: its origin, the repo on a second line", await lines(adr.getByTestId("brain-decision-origin")), ["GitHub repo", "glassflow/tares-cloud"]);
       ck("the repo name opens the repo on GitHub in a new tab", (await adr.getByTestId("brain-decision-origin-link").getAttribute("href")) === "https://github.com/glassflow/tares-cloud" && (await adr.getByTestId("brain-decision-origin-link").getAttribute("target")) === "_blank");
-      eq("a repo file: who decided and who changed it", await text(adr.getByTestId("brain-decision-who")), "Ada Lovelace, changed by Kiran");
+      eq("a repo file: who decided, then who updated it on the next line", [await text(adr.getByTestId("brain-decision-who")), await text(adr.getByTestId("brain-decision-updated"))], ["Ada Lovelace", "Updated by Kiran"]);
       const a = adr.getByTestId("brain-decision-title");
       ck("a repo file's title opens GitHub in a new tab", (await a.getAttribute("href")) === ADR.link && (await a.getAttribute("target")) === "_blank");
       await checkWords(page, ck, "filled");

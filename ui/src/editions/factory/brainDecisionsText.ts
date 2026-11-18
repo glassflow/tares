@@ -51,12 +51,12 @@ export function joinNames(names: readonly string[] | null | undefined): string {
   return `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}`;
 }
 
-/** Who decided, and who changed it when that is someone else: "Ana, changed by Kiran". */
-export function whoWords(r: Pick<DecisionRow, "decided_by" | "changed_by" | "added_by">): string {
+/** Who decided, and who updated it when that is someone else: `{decided: "Ana", updated: "Updated by Kiran"}`.
+ *  The page shows them on two lines. */
+export function whoParts(r: Pick<DecisionRow, "decided_by" | "changed_by" | "added_by">): { decided: string; updated: string } {
   const decided = joinNames(r.decided_by) || (r.added_by ?? "").trim();
   const changed = joinNames(r.changed_by);
-  if (!changed || changed === decided) return decided;
-  return decided ? `${decided}, changed by ${changed}` : `Changed by ${changed}`;
+  return { decided, updated: changed && changed !== decided ? `Updated by ${changed}` : "" };
 }
 
 /** Milliseconds of a time from the cell: an RFC 3339 time (no zone is UTC) or a bare day. NaN when there is none. */

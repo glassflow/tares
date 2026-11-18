@@ -10,7 +10,7 @@ import { addDecision, brainDecisions, deleteDecision, type DecisionRow, type Dec
 import {
   ADD_HEADING, ADD_LINE, addErrorWords, DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, FILE_TYPES, fileProblem, formProblem, HEADING,
   isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, MAX_TITLE, NOT_SET_UP_WORDS, READ_ONLY_LINE, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
-  whenWords, originOf, whoWords,
+  whenWords, originOf, whoParts,
 } from "./brainDecisionsText";
 
 // Decisions (TR-1444): every decision the brain holds, from repo folders, shared factory projects and
@@ -57,7 +57,7 @@ function Title({ r }: { r: DecisionRow }) {
 }
 
 function Row({ r, now, onDelete }: { r: DecisionRow; now: number; onDelete: (r: DecisionRow) => void }) {
-  const who = whoWords(r);
+  const who = whoParts(r);
   const when = whenWords(r, now);
   return (
     <div className={cn(ROW, "border-t border-border")} data-testid="brain-decision-row" data-id={r.id}>
@@ -67,7 +67,8 @@ function Row({ r, now, onDelete }: { r: DecisionRow; now: number; onDelete: (r: 
       </div>
       <OriginCell r={r} />
       <div className="min-w-0 text-[13px] [overflow-wrap:anywhere]">
-        {who && <span className="block" data-user-text data-testid="brain-decision-who">{who}</span>}
+        {who.decided && <span className="block" data-user-text data-testid="brain-decision-who">{who.decided}</span>}
+        {who.updated && <span className="block" data-user-text data-testid="brain-decision-updated">{who.updated}</span>}
         {when && <span className="block text-muted-foreground" data-testid="brain-decision-when">{when}</span>}
         {r.can_delete && (
           <Button variant="quiet" className="-ml-2 h-7 px-2 text-[13px]" onClick={() => onDelete(r)} data-testid="brain-decision-delete">Delete</Button>
