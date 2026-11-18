@@ -1,6 +1,8 @@
 {
  "queue": [
   {
+   "base": null,
+   "behind_by": null,
    "blocks_milestone": true,
    "ci": null,
    "head": null,
@@ -21,6 +23,8 @@
    "verdict": null
   },
   {
+   "base": null,
+   "behind_by": null,
    "blocks_milestone": false,
    "ci": null,
    "head": "0000000000000000000000000000000000000018",
@@ -47,6 +51,8 @@
    }
   },
   {
+   "base": null,
+   "behind_by": null,
    "blocks_milestone": false,
    "ci": null,
    "head": "0000000000000000000000000000000000000008",
@@ -73,6 +79,8 @@
    }
   },
   {
+   "base": null,
+   "behind_by": null,
    "blocks_milestone": false,
    "ci": null,
    "head": "0000000000000000000000000000000000000008",
@@ -99,6 +107,8 @@
    }
   },
   {
+   "base": null,
+   "behind_by": null,
    "blocks_milestone": false,
    "ci": null,
    "head": null,
@@ -119,6 +129,8 @@
    "verdict": null
   },
   {
+   "base": null,
+   "behind_by": null,
    "blocks_milestone": false,
    "ci": null,
    "head": "0000000000000000000000000000000000000010",
