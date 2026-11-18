@@ -117,7 +117,8 @@ report for the releaser, a desk answer or a newly handed-over project for the or
 station with nothing to do gets a liveness wake after 15 minutes (reviewer), 20 (orchestrator) or
 30 (releaser, and a builder while a PR of its is open), then after 30, then every 45; a session
 that did something itself starts the count over. A busy or attached station and a halted crew are
-not woken. Turn the setting off and each station is told once to arm its tick again.
+not woken, and neither is one stopped on a question or a permission prompt: a restart would lose the prompt, so
+the wake (and the pace note) waits until it answers or moves on. Turn the setting off and each station is told once to arm its tick again.
 
 The crew setting `pace` (off by default; `set_crew_settings(pace=True)` or the Crew page) slows the crew before the plan's
 limit instead of hitting it and restarting every station at once. The watch reads the plan usage Tares keeps
@@ -202,7 +203,9 @@ When it is done, the session asks you whether the project is finished and keeps 
   grant, choose this project or every project (a crew station such as the reviewer works for
   every project, so its grant is for every project), and click **Allow for <station>**. The
   crew's watch restarts that station with the permission once it is between turns, in the same
-  conversation, and it runs the command again. No terminal needed. A station you have open with
+  conversation, and it runs the command again; the station is waiting on that very prompt, so a grant
+  that names it restarts it at once. Any other change of grants waits until it has been stopped on a
+  prompt for 30 minutes, so the prompt is not lost. No terminal needed. A station you have open with
   `crew attach` waits until you leave it.
 
 ## When a project is done

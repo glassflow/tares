@@ -19,6 +19,7 @@ suite never reads the machine's real processes.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -469,12 +470,13 @@ def _deliver(paths: CrewPaths, env: dict, prompt: str) -> bool:
         claude_bin = claude.claude_bin(env)
         if state.halted(paths) or claude.attached(orch, paths):
             return False
-        if not claude.is_alive(orch, "", claude_bin, paths) or not claude.between_turns(orch, claude_bin, paths):
+        if not claude.is_alive(orch, "", claude_bin, paths) or not claude.at_rest(orch, claude_bin, paths):
             return False
         with TaresClient(paths, env) as fresh:
             if not fresh.tares_on():
                 return False
-            lifecycle.restart(fresh, paths, [orch, prompt], claude_bin=claude_bin, only_between_turns=True)
+            lifecycle.restart(fresh, paths, [orch, prompt], claude_bin=claude_bin, only_between_turns=True,
+                              prompt_wait=math.inf)
         return True
 
     try:
