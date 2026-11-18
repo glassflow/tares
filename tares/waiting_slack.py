@@ -159,6 +159,7 @@ class WaitingSlack:
         self._users: dict[str, tuple[str | None, datetime]] = {}
         self._logged: set[str] = set()
         self.problem: str | None = None        # a cell-wide reason nobody is found (Settings shows it)
+        self._no_scope = False                 # the last lookup said the bot lacks users:read.email
         self.not_found: set[str] = set()       # people whose email Slack does not know
 
     # ── Slack ──
@@ -211,9 +212,17 @@ class WaitingSlack:
         hit = self._users.get(key)
         if hit and now - hit[1] < LOOKUP_TTL:
             return hit[0], None
+        return await self._look_up(token, key, now)
+
+    async def _look_up(self, token: str, key: str, now: datetime) -> tuple[str | None, str | None]:
+        """One lookup by email, kept when Slack answered. It is also what says whether the bot can
+        look people up at all: a missing scope stays known until a lookup gets an answer again."""
         uid, err = await self._lookup(token, key)
         if err is None:
             self._users[key] = (uid, now)
+            self._no_scope = False
+        elif err == "missing_scope":
+            self._no_scope = True
         return uid, err
 
     def _log_once(self, key: str, text: str) -> None:
@@ -238,10 +247,15 @@ class WaitingSlack:
         last = _parse(self.store.get_setting(LAST_READ))
         away = last is None or now - last > GAP
         self.store.set_setting(LAST_READ, now.isoformat())
-        sent, problem = 0, None
-        for p in self.people():
+        people = self.people()
+        if self._no_scope and people:
+            # the scope was missing: ask once whether it is there now, so the notice in Settings
+            # goes as soon as the app is reinstalled, not only when something new waits
+            await self._look_up(token, people[0]["email"].strip().lower(), now)
+        sent = 0
+        for p in people:
             try:
-                n, problem_here = await self._read_person(token, p, now, away)
+                n = await self._read_person(token, p, now, away)
             except asyncio.CancelledError:
                 raise
             except Exception as e:      # one person's list never stops the others'
@@ -249,11 +263,10 @@ class WaitingSlack:
                                f"could not read what waits for {p['id']}: {type(e).__name__}: {e}")
                 continue
             sent += n
-            problem = problem or problem_here
-        self.problem = problem
+        self.problem = NO_SCOPE if self._no_scope else None
         return {"sent": sent}
 
-    async def _read_person(self, token: str, p: dict, now: datetime, away: bool) -> tuple[int, str | None]:
+    async def _read_person(self, token: str, p: dict, now: datetime, away: bool) -> int:
         pid = p["id"]
         items = await asyncio.to_thread(self.waiting_for, p, now)
         await self._close_gone(token, pid, {i["id"] for i in items})
@@ -262,22 +275,22 @@ class WaitingSlack:
         if SEEN not in told or away or not is_on(self.store, pid):
             # what waits now was not new to this reader: recorded, never sent
             await asyncio.to_thread(self.store.mark_waiting_told, pid, [SEEN, *[i["id"] for i in new]], False, now)
-            return 0, None
+            return 0
         if not new:
-            return 0, None
+            return 0
         user, err = await self.slack_user(token, p["email"], now)
         if err == "missing_scope":
             self._log_once("missing_scope", NO_SCOPE)
             await asyncio.to_thread(self.store.mark_waiting_told, pid, [i["id"] for i in new], False, now)
-            return 0, NO_SCOPE
+            return 0
         if err:
             # Slack could not say who they are this time: the items stay new for the next read
             self._log_once(f"lookup:{err}", f"could not find {pid} on Slack: {err}")
-            return 0, None
+            return 0
         if user is None:
             self.not_found.add(pid)
             await asyncio.to_thread(self.store.mark_waiting_told, pid, [i["id"] for i in new], False, now)
-            return 0, None
+            return 0
         self.not_found.discard(pid)
         # recorded first: a crash between the two can lose a message, never send one twice
         await asyncio.to_thread(self.store.mark_waiting_told, pid, [i["id"] for i in new], True, now)
@@ -302,7 +315,7 @@ class WaitingSlack:
                                         ref["channel"], ref["ts"])
         if again:
             await asyncio.to_thread(self.store.forget_waiting_told, pid, again)
-        return sent, None
+        return sent
 
     async def _close_gone(self, token: str, pid: str, waiting: set[str]) -> None:
         """Edit the message of every item it told about that no longer waits, to say who answered it
