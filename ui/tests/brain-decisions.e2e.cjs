@@ -7,7 +7,7 @@
  *  - Empty: the line says what fills the page. Filled: each row has its title (a link to GitHub in a new tab, a
  *    project doc in the console, none for one added by hand), where it lives, who decided and when; a project
  *    row without a kind never says "null". The tabs carry the cell's counts; a tab asks with `where`.
- *  - Show more asks with the cursor and adds the next page.
+ *  - Previous and Next move a page at a time with the cursor the cell gave, and say "1 to 50 of 238".
  *  - Record a decision (top right) opens /brain/decisions/new; it posts {title, text, decided_by} and goes back to
  *    the list with the new row at the top, and the counts are read again. A file
  *    over 5 MB is refused before anything is sent; a 400 shows the cell's sentence; a 501 says PDF files can't
@@ -166,6 +166,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
         "That file is over 5 MB. Upload a smaller one, or paste the text.", "That file is empty.", ""]);
     eq("addErrorWords", [T.addErrorWords({ status: 400, message: "decided_by: nobody on the cell is called Zed" }), T.addErrorWords({ status: 413 }), T.addErrorWords({ status: 501 }), T.addErrorWords({ status: 502 }), T.addErrorWords({ status: 403 }), T.addErrorWords(null)],
        ["Decided_by: nobody on the cell is called Zed.", T.TOO_BIG_WORDS, "This cell can't read PDF files yet. Paste the text or upload a Markdown file.", "Couldn't save it. Try again.", T.NO_WRITE_WORDS, "Couldn't save it. Try again."]);
+    eq("rangeWords", [T.rangeWords(1, 50, 238), T.rangeWords(51, 100, 238), T.rangeWords(5, 5, 5), T.rangeWords(51, 100, null), T.rangeWords(1, 1200, 1500), T.rangeWords(3, 2, 9)],
+       ["1 to 50 of 238", "51 to 100 of 238", "5 of 5", "51 to 100", "1 to 1,200 of 1,500", ""]);
     eq("deleteErrorWords", [T.deleteErrorWords({ status: 404 }), T.deleteErrorWords({ status: 403 }), T.deleteErrorWords({ status: 502 })], [T.ALREADY_GONE_WORDS, T.NOT_YOURS_WORDS, T.DELETE_FAILED_WORDS]);
     eq("emptyWords: the whole cell, a tab, a repo", [T.emptyWords("all", null, true), T.emptyWords("repo_folder", null, true), T.emptyWords("by_hand", "a/b", true)],
        [T.EMPTY_ALL, "Pick a decisions folder on a repo's card to see its files here.", "No decisions for this repo yet."]);
@@ -279,19 +281,33 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await ctx.close();
     }
 
-    // ---- show more
+    // ---- pages: Previous and Next, with where the page is
     {
       const mock = brainMock({ pageSize: 2 });
       const { ctx, T } = await open({ mock });
       eq("a page of two", await T("brain-decision-row").count(), 2);
-      await T("brain-decisions-more").click();
-      await until(async () => (await T("brain-decision-row").count()) === 4);
-      eq("Show more asks with the cursor", mock.reads[1], { cursor: "2", limit: "50" });
-      eq("and adds the next page", await T("brain-decision-row").count(), 4);
-      await T("brain-decisions-more").click();
-      await until(async () => (await T("brain-decision-row").count()) === 5);
-      ck("Show more leaves on the last page", (await T("brain-decisions-more").count()) === 0);
+      eq("the first page says where it is", await text(T("brain-decisions-range")), "1 to 2 of 5");
+      ck("Previous is off on the first page", await T("brain-decisions-prev").isDisabled());
+      await T("brain-decisions-next").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
+      eq("the second page says where it is", await text(T("brain-decisions-range")), "3 to 4 of 5");
+      eq("Next asks with the cursor", mock.reads[1], { cursor: "2", limit: "50" });
+      eq("and shows only the next page", (await T("brain-decision-row").allInnerTexts()).map((t) => t.split("\n")[0]), [HAND_OTHER.title, OLD_PLAN.title]);
+      await T("brain-decisions-next").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "5 of 5");
+      eq("the last page says where it is", await text(T("brain-decisions-range")), "5 of 5");
+      ck("Next is off on the last page", await T("brain-decisions-next").isDisabled());
+      await T("brain-decisions-prev").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
+      eq("Previous goes back with the cursor it had", mock.reads[mock.reads.length - 1], { cursor: "2", limit: "50" });
+      await T("brain-decisions-prev").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "1 to 2 of 5");
+      eq("back on the first page, it says so", await text(T("brain-decisions-range")), "1 to 2 of 5");
+      eq("back on the first page, no cursor", mock.reads[mock.reads.length - 1], { limit: "50" });
       await ctx.close();
+      const one = await open();
+      ck("one page only: no page bar", (await one.T("brain-decisions-pages").count()) === 0);
+      await one.ctx.close();
     }
 
     // ---- record a decision: the button opens /brain/decisions/new, the form sends, the list has it at the top

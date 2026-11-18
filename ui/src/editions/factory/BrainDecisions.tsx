@@ -8,7 +8,7 @@ import { useEdition } from "../edition";
 import { brainDecisions, deleteDecision, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
 import {
   DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, HEADING,
-  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, RECORD_WORDS, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
+  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, rangeWords, RECORD_WORDS, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
   whenWords, originOf, whoParts,
 } from "./brainDecisionsText";
 
@@ -87,9 +87,13 @@ function Loading() {
   );
 }
 
-function List({ load, tab, repo, canAdd, now, more, loadingMore, onMore, onDelete, onRetry }: {
-  load: Load; tab: DecisionTab; repo: string | null; canAdd: boolean; now: number; more: boolean; loadingMore: boolean;
-  onMore: () => void; onDelete: (r: DecisionRow) => void; onRetry: () => void;
+function List({ load, tab, repo, canAdd, now, page, before, onPage, onDelete, onRetry }: {
+  load: Load; tab: DecisionTab; repo: string | null; canAdd: boolean; now: number;
+  /** The page shown, from 0. */
+  page: number;
+  /** How many rows the earlier pages held. */
+  before: number;
+  onPage: (to: number) => void; onDelete: (r: DecisionRow) => void; onRetry: () => void;
 }) {
   const list = load.state === "ready" ? load.list : load.state === "error" ? load.list : undefined;
   return (
@@ -111,10 +115,16 @@ function List({ load, tab, repo, canAdd, now, more, loadingMore, onMore, onDelet
             <span>Decision</span><span>Origin</span><span>Decided by</span>
           </div>
           {list.rows.map((r) => <Row key={r.id} r={r} now={now} onDelete={onDelete} />)}
-          {more && (
-            <div className="border-t border-border px-4 py-3">
-              <Button variant="secondary" busy={loadingMore} onClick={onMore} data-testid="brain-decisions-more">Show more</Button>
-            </div>
+          {(page > 0 || list.next) && (
+            <nav aria-label="Pages" className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3" data-testid="brain-decisions-pages">
+              <span className={MUTED} data-testid="brain-decisions-range">
+                {rangeWords(before + 1, before + list.rows.length, repo || !list.counts ? null : list.counts[tab])}
+              </span>
+              <div className="flex gap-2">
+                <Button variant="secondary" disabled={page === 0 || load.state !== "ready"} onClick={() => onPage(page - 1)} data-testid="brain-decisions-prev">Previous</Button>
+                <Button variant="secondary" disabled={!list.next || load.state !== "ready"} onClick={() => onPage(page + 1)} data-testid="brain-decisions-next">Next</Button>
+              </div>
+            </nav>
           )}
         </>
       )}
@@ -134,7 +144,13 @@ export default function BrainDecisions() {
   const { toast } = useToast();
 
   const [load, setLoad] = React.useState<Load>({ state: "loading" });
-  const [loadingMore, setLoadingMore] = React.useState(false);
+  // the cursor of each page seen so far (the first is none), and the page shown; a new tab or repo starts at the first
+  const [pages, setPages] = React.useState<{ key: string; cursors: (string | null)[]; firsts: number[]; at: number }>({ key, cursors: [null], firsts: [0], at: 0 });
+  const at = pages.key === key ? pages.at : 0;
+  const cursor = pages.key === key ? pages.cursors[at] ?? null : null;
+  // how many rows come before the page shown, for "51 to 100 of 238"
+  const before = pages.key === key ? pages.firsts[at] ?? 0 : 0;
+  const listTop = React.useRef<HTMLDivElement>(null);
   const [tick, setTick] = React.useState(0);
   const [asking, setAsking] = React.useState<DecisionRow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
@@ -148,37 +164,37 @@ export default function BrainDecisions() {
   // one read per open, tab, repo or reload; an answer for an older one is dropped
   React.useEffect(() => {
     const mine = ++latest.current;
-    setLoad((l) => (l.state === "ready" && l.list.key === key ? l : { state: "loading" }));
-    brainDecisions({ where: tab, repo }).then(
+    const listKey = `${key}|${at}`;
+    setLoad((l) => (l.state === "ready" && l.list.key === listKey ? l : { state: "loading" }));
+    brainDecisions({ where: tab, repo, cursor }).then(
       (page) => {
         if (mine !== latest.current) return;
         const ids = new Set(page.decisions.map((r) => r.id));
         added.current = added.current.filter((r) => !ids.has(r.id));
-        const fits = (r: DecisionRow) => !repo && (tab === "all" || tab === r.where);
-        setLoad({ state: "ready", list: { key, rows: [...added.current.filter(fits), ...page.decisions], next: page.next_cursor, counts: page.counts } });
+        // a decision recorded here shows at the top of the first page until a read has it
+        const fits = (r: DecisionRow) => at === 0 && !repo && (tab === "all" || tab === r.where);
+        setLoad({ state: "ready", list: { key: listKey, rows: [...added.current.filter(fits), ...page.decisions], next: page.next_cursor, counts: page.counts } });
       },
       (e: unknown) => {
         if (mine !== latest.current) return;
         if (e instanceof ApiError && e.status === 404) { setLoad({ state: "no-brain" }); return; }
         const message = e instanceof ApiError && e.status !== 502 ? (e.message || "") : "The cell did not answer. Try again in a moment.";
-        setLoad((l) => ({ state: "error", message, list: l.state === "ready" && l.list.key === key ? l.list : undefined }));
+        setLoad((l) => ({ state: "error", message, list: l.state === "ready" && l.list.key === listKey ? l.list : undefined }));
       },
     );
-  }, [key, tab, repo, tick]);
+  }, [key, tab, repo, at, cursor, tick]);
 
-  const more = async () => {
-    if (load.state !== "ready" || !load.list.next) return;
-    const list = load.list;
-    setLoadingMore(true);
-    try {
-      const page = await brainDecisions({ where: tab, repo, cursor: list.next });
-      const have = new Set(list.rows.map((r) => r.id));
-      setLoad((l) => (l.state === "ready" && l.list.key === list.key
-        ? { state: "ready", list: { ...l.list, rows: [...l.list.rows, ...page.decisions.filter((r) => !have.has(r.id))], next: page.next_cursor, counts: page.counts } }
-        : l));
-    } catch {
-      toast("More decisions did not load. Try again.");
-    } finally { setLoadingMore(false); }
+  // Next keeps the cursor the read gave, so Previous goes back without asking for it again
+  const goTo = (to: number) => {
+    const next = load.state === "ready" ? load.list.next : null;
+    const shown = load.state === "ready" ? load.list.rows.length : 0;
+    setPages((p) => {
+      const cursors = p.key === key ? [...p.cursors] : [null];
+      const firsts = p.key === key ? [...p.firsts] : [0];
+      if (to === at + 1 && next) { cursors[to] = next; firsts[to] = (firsts[at] ?? 0) + shown; }
+      return { key, cursors, firsts, at: Math.max(0, Math.min(to, cursors.length - 1)) };
+    });
+    listTop.current?.scrollIntoView({ block: "start" });
   };
 
   // back from the form with a new decision: it stays at the top until a read has it, and the address
@@ -240,7 +256,7 @@ export default function BrainDecisions() {
         <Panel><EmptyState title="Not set up" data-testid="brain-decisions-not-set-up">{NOT_SET_UP_WORDS}</EmptyState></Panel>
       ) : (
         <>
-          <div className="min-w-0">
+          <div className="min-w-0 scroll-mt-4" ref={listTop}>
             {repo && (
               <p className={cn("m-0 mb-3 flex flex-wrap items-center gap-x-2", MUTED)} data-testid="brain-decisions-repo-filter">
                 <span>Decisions from <span className="font-mono text-foreground" data-user-text>{repo}</span>. The counts are for the whole cell.</span>
@@ -252,8 +268,8 @@ export default function BrainDecisions() {
                     value: t.value,
                     label: tabLabel(t.value, counts, true),
                     content: (
-                      <List load={load} tab={tab} repo={repo} canAdd={canAdd} now={now} more={Boolean(list?.next)} loadingMore={loadingMore}
-                            onMore={more} onDelete={(r) => { setDeleteError(""); setAsking(r); }} onRetry={reload} />
+                      <List load={load} tab={tab} repo={repo} canAdd={canAdd} now={now} page={at} before={before}
+                            onPage={goTo} onDelete={(r) => { setDeleteError(""); setAsking(r); }} onRetry={reload} />
                     ),
                   }))} />
           </div>

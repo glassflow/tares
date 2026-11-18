@@ -191,6 +191,13 @@ export function deleteErrorWords(e: { status?: number; message?: string } | null
 
 // ---- the list
 
+/** "51 to 100 of 238", or without a total (a repo filter is on, so the cell's counts do not apply) "51 to 100". */
+export function rangeWords(first: number, last: number, total: number | null): string {
+  if (last < first) return "";
+  const span = first === last ? formatCount(first) : `${formatCount(first)} to ${formatCount(last)}`;
+  return total !== null && Number.isFinite(total) && total >= last ? `${span} of ${formatCount(total)}` : span;
+}
+
 export const LOADING_WORDS = "Loading decisions. On a big cell this takes a few seconds.";
 export const LOAD_FAILED_WORDS = "Decisions did not load.";
 export const NOT_SET_UP_WORDS = "The second brain is not set up on this cell.";
