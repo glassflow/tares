@@ -10,7 +10,10 @@ A station's grants are fingerprinted when it starts (launch.launch keeps the cks
 the text in stations/<station>.grants). Each round the step reads the grants on Tares now; a station whose
 fingerprint differs, and that is not the one already acted on (`grants_tried`), is restarted in the same
 conversation with a prompt that quotes the added grants, but only when it is between turns (done or blocked,
-nothing in flight), has a session, is not open in someone's terminal, and the crew is not halted. A station with
+nothing in flight), has a session, is not open in someone's terminal, and the crew is not halted. One blocked on
+a question or a permission prompt is restarted at once only when a grant added since it started names it (the
+answer to its own refused command, `prompt_wait`); any other change waits until it has been blocked for the quiet
+wait of 30 minutes, as the plugin kit move does, so the prompt is not lost. A station with
 a `.done` file is restarted only for a new grant that names it (TR-645); any other change is noted once in the
 event log as `regrant-skipped`. A Tares that does not answer is never a change. Once per change: `grants_tried` is written before the
 restart, so a restart that fails is not tried again every round. A restart that is refused because the station started a
@@ -93,6 +96,28 @@ def _done_regrant_due(paths: CrewPaths, client: TaresClient, station: str) -> bo
     return False
 
 
+def prompt_wait(paths: CrewPaths, station: str, now: str):
+    """How long a station waiting on a person (a question or a permission prompt) must have waited before new
+    grants restart it: 0 when a grant added since it started names it, the answer to its own refused command on
+    the desk, since the restart is what lets it run that command; otherwise None, the quiet wait of 30 minutes
+    the plugin kit move uses, so an unrelated change never cuts off a prompt someone is about to answer."""
+    kept = paths.station_file(station, "grants")
+    added = added_grants(now, state.read_text(kept) if kept.is_file() else None)
+    return 0 if names_station(added, station) else None
+
+
+def _may_restart(paths: CrewPaths, client: TaresClient, station: str, binary: str) -> bool:
+    """True when the station is between turns, has new grants due, and its prompt (if it waits on one) allows
+    the restart now (`prompt_wait`)."""
+    if not claude.between_turns(station, binary, paths) or not regrant_due(paths, client, station):
+        return False
+    try:
+        now = client.grants_read(state.stations_get(station, "project", paths=paths)).rstrip("\n")
+    except CrewError:
+        return False
+    return claude.between_turns(station, binary, paths, wait=prompt_wait(paths, station, now))
+
+
 def _lines(text: str) -> list:
     """The lines of a file as grep reads them: a last line with no newline counts, an empty file has none."""
     lines = text.split("\n")
@@ -152,14 +177,15 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
             if not client.tares_on():
                 return   # without Tares there are no grants to restart it with
             client.crew_settings()
-            if not claude.between_turns(station, claude_bin, paths):
-                return   # it started something since the first check
             project = state.stations_get(station, "project", paths=paths)
             try:
                 now = client.grants_read(project)
             except CrewError:
                 return
             now = now.rstrip("\n")
+            wait = prompt_wait(paths, station, now)
+            if not claude.between_turns(station, claude_bin, paths, wait=wait):
+                return   # it started something since the first check, or waits on a prompt this change does not answer
             total = str(grants_sum(now + "\n"))
             human = launch._ccfg_or("the user", "human", "name", paths=paths) or "the user"
             rules = "\n".join("- " + r for r in _new_rules(client, paths, station, project))
@@ -169,7 +195,8 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
             client.say(f"{station} has new permissions from Tares; restarting it with them now that it's "
                        "between turns, in the same conversation")
             try:
-                lifecycle.restart(client, paths, [station, prompt], claude_bin=claude_bin, only_between_turns=True)
+                lifecycle.restart(client, paths, [station, prompt], claude_bin=claude_bin, only_between_turns=True,
+                                  prompt_wait=wait)
             except NotBetweenTurnsError:
                 state.stations_put(station, {"grants_tried": tried_before}, paths=paths)   # it was never told: the next round tries again
                 client.say(f"{station} started a turn; not restarting it with its new permissions, will look again next round")
@@ -211,8 +238,7 @@ def step(paths: CrewPaths, env=None) -> None:
             role = row.get("role")
             if role == "builder" and paths.done_file(station).exists():
                 # it ended with nothing left to do: only a new grant that names it brings it back
-                if (not state.halted(paths) and claude.between_turns(station, binary, paths)
-                        and regrant_due(paths, client, station)):
+                if not state.halted(paths) and _may_restart(paths, client, station, binary):
                     watch_revive.last.handled.add(station)
                     regrant_station(paths, station, claude_bin=binary, env=env)
                 continue
@@ -229,8 +255,7 @@ def step(paths: CrewPaths, env=None) -> None:
                     continue   # stopped: the revive step starts it with fresh settings
                 if watch_revive.stuck_on_context(paths, binary, station, agents):
                     continue   # the revive step starts it fresh
-            if (not state.halted(paths) and claude.between_turns(station, binary, paths)
-                    and regrant_due(paths, client, station)):
+            if not state.halted(paths) and _may_restart(paths, client, station, binary):
                 # bash's elif chain stops here, whether or not the restart goes through: the steps after this
                 # one (idle wake, pace) leave the station alone this round
                 watch_revive.last.handled.add(station)
