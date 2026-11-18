@@ -225,8 +225,8 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     parked = report.undelivered(paths, station)
     if parked:
         client.say(f"warning: {station}'s report holds {len(parked)} line{'s' if len(parked) != 1 else ''} under "
-                   "## Undelivered; `report grep --section` reads live stations only, so nobody sees them until "
-                   f"someone passes them on ({paths.reports_dir / (station + '.md')})")
+                   "## Undelivered; `report grep --section` skips a retired station, so read them in the file and pass "
+                   f"them on ({paths.reports_dir / (station + '.md')})")
 
 
 def tell_tares_ended(client: TaresClient, paths: CrewPaths, station: str) -> None:
