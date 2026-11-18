@@ -27,7 +27,9 @@ export type HomeVerb =
   | "agree"
   | "decline"
   | "close"
-  | "later";
+  | "later"
+  | "approve_merge"
+  | "accept_milestone";
 
 // A link (`href`) or something the page does (`do`), never both.
 export interface HomeAction {
@@ -76,6 +78,9 @@ export interface HomeItem {
   ask?: string | null;
   /** What waits on the answer ("T4 and 2 more tickets", "M2: search"); null when nothing does (TR-1448). */
   holds_up?: string | null;
+  /** A pull request's CI and drift as Tares last read them (TR-1449); null on every other item.
+   *  `ci` and `behind_by` are null until read; `line` says both in one sentence. */
+  checks?: { ci: "passing" | "failing" | "running" | "none" | null; behind_by: number | null; line: string } | null;
   /** Holds crew work up until the person answers; such items come first (TR-1021). */
   blocking?: boolean;
   /** Waited more than a week and holds nothing up: folded under "N older things". */

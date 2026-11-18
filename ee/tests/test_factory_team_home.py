@@ -311,7 +311,9 @@ async def main():
         ck("Kim leads Shop, so it is Kim's", len(k.get("milestone_to_check", [])) == 1
            and ms["title"] == "Shop, M1: pages" and ms["from"] == {"crew": True, "name": "Your crew"}
            and ms["detail"] == "Every ticket of this milestone merged. 1 check needs you to try it."
-           and ms["actions"] == [{"label": "Check it", "primary": True,
+           and ms["actions"] == [{"label": "Accept", "primary": True, "do": "accept_milestone",
+                                  "project": shop, "milestone": mid},
+                                 {"label": "Check it", "primary": False,
                                   "href": f"/projects/{shop}#milestone-{mid}"}], k)
         ck("not Alex's or Lee's", "milestone_to_check" not in by_kind(await home("alex"))
            and "milestone_to_check" not in by_kind(await home("lee")))
@@ -327,6 +329,37 @@ async def main():
         ck("it is in Kim's list, Kim leads Shop", len(k.get("prs_to_review", [])) == 1
            and pr["project"] == {"id": shop, "name": "Shop"}, k)
         ck("not in Lee's, who is not in Shop", "prs_to_review" not in by_kind(await home("lee")))
+
+        print("== the merge asked of someone else, then of the PR's own person (TR-1450) ==")
+        from tares import merge_queue as mq
+        store.update_ticket(pr_t, pr={"url": "https://github.com/acme/api/pull/7", "repo": "acme/api",
+                                      "number": 7, "head": "aaaaaaa1111"})
+        store.set_handover(shop, [{"path": "/w/shop", "name": "acme/api"}], None, None, now_utc(),
+                           person_id=pid["alex"])
+        row = store.merge_queue_add("acme/api", "main", 7, "aaaaaaa1111", pr_t, shop)
+        mq._ask(store, row, store.get_ticket(shop, pr_t))
+        k = by_kind(await home("kim"))
+        pr = (k.get("prs_to_review") or [{}])[0]
+        ck("the queue asks Alex: Kim's PR item keeps Review, no Merge",
+           [a.get("do") for a in pr.get("actions", [])] == [None], pr.get("actions"))
+        asked = store.get_desk_item(store.merge_queue_get(row["id"])["desk_item"])
+        ck("and Alex has the queue's question", f"desk:{asked['label']}" in [
+            i["id"] for i in (await home("alex"))["waiting_for_you"]])
+        mq._withdraw(store, row, "asked again")
+        store.merge_queue_update(row["id"], state="queued", desk_item=None)
+        store.set_handover(shop, [{"path": "/w/shop", "name": "acme/api"}], None, None, now_utc(),
+                           person_id=pid["kim"])
+        mq._ask(store, store.merge_queue_get(row["id"]), store.get_ticket(shop, pr_t))
+        w = (await home("kim"))["waiting_for_you"]
+        pr = next((i for i in w if i["kind"] == "prs_to_review"), {})
+        ck("asked of Kim, Kim's PR item merges in one tap", (pr.get("actions") or [{}])[0] == {
+            "label": "Merge", "primary": True, "do": "approve_merge", "queue": row["id"]}, pr.get("actions"))
+        asked = store.get_desk_item(store.merge_queue_get(row["id"])["desk_item"])
+        ck("and the queue's question to Kim shows once, as the PR",
+           f"desk:{asked['label']}" not in [i["id"] for i in w], [i["id"] for i in w])
+        r = await call("kim", "POST", f"/api/factory/merge-queue/{row['id']}/approve")
+        ck("Kim approves", r.status_code == 200, r.text)
+        ck("approved, it leaves Kim's list", "prs_to_review" not in by_kind(await home("kim")))
 
         print("== the whole answer ==")
         for who in ("alex", "kim", "lee"):

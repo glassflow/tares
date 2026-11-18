@@ -209,30 +209,37 @@ async def main():
         got = [(i["kind"], (i["project"] or {}).get("name")) for i in w]
         # TR-1021: what holds the crew up first (the refused commands, the PRs waiting for your
         # merge), then the rest, oldest first in each
-        ck("eight items, what holds the crew up first, six kinds", got == [
-            ("permission", "project-x"), ("prs_to_review", "project-x"), ("permission", None),
+        ck("nine items, what holds the crew up first, six kinds", got == [
+            ("permission", "project-x"), ("prs_to_review", "project-x"), ("prs_to_review", "project-x"),
+            ("permission", None),
             ("ready_to_start", "project-y"), ("calls_to_confirm", "project-z"), ("question", "project-w"),
             ("milestone_to_check", "project-w"), ("question", None)], got)
-        ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
+        ck("waiting_total counts them", h["waiting_total"] == 9, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
             "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask", "holds_up",
-            "for_people", "for_admin", "no_lead"} for i in w))
-        ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
+            "checks", "for_people", "for_admin", "no_lead"} for i in w))
+        ck("their ids are all different", len({i["id"] for i in w}) == 9, [i["id"] for i in w])
         ck("waited is in words, oldest first within each group", [i["waited"] for i in w] == [
-            "4 days", "3 days", "40 minutes", "2 days", "1 day", "10 hours", "6 hours", "20 minutes"],
+            "4 days", "3 days", "5 hours", "40 minutes", "2 days", "1 day", "10 hours", "6 hours", "20 minutes"],
            [i["waited"] for i in w])
         ck("the headline says how many and for how long",
-           h["headline"].endswith("8 things wait for you, the oldest for 4 days."), h["headline"])
+           h["headline"].endswith("9 things wait for you, the oldest for 4 days."), h["headline"])
         k = by_kind(h)
 
         print("== pull requests to review ==")
-        pr = k["prs_to_review"][0]
-        ck("one item per project, only the passed pull requests on their current commit",
-           len(k["prs_to_review"]) == 1 and pr["label"] == "2 PRs to review" and pr["title"] == "project-x"
-           and pr["detail"] == "Add the footer, Add the sitemap. One holds up a milestone.", pr)
+        pr, pr2 = k["prs_to_review"]
+        ck("one item per pull request, only the passed ones on their current commit (TR-1450)",
+           len(k["prs_to_review"]) == 2 and pr["label"] == "PR to review"
+           and pr["title"] == "project-x, Add the footer"
+           and pr["detail"] == "T1, Add the footer. It holds up a milestone."
+           and pr2["detail"] == "T2, Add the sitemap.", k["prs_to_review"])
         ck("it says how long and where", pr["meta"] == "Waiting 3 days · example-org/docs-site"
-           and pr["repo"] == "example-org/docs-site" and pr["id"] == f"prs_to_review:{px}", pr)
+           and pr["repo"] == "example-org/docs-site" and pr["id"] == f"prs_to_review:{px}:T1"
+           and pr["tickets"] == ["T1"], pr)
+        ck("checks never read say so (TR-1449)", pr["checks"] == {
+            "ci": None, "behind_by": None, "line": "Checks not read yet."}, pr["checks"])
+        ck("no other item carries checks", all(i["checks"] is None for i in w if i["kind"] != "prs_to_review"))
         ck("one action: review, a link", pr["actions"] == [
             {"label": "Review", "primary": True, "href": f"/reviews?project={px}"}], pr["actions"])
         ck("the changes and the older-commit verdicts are not in it",
@@ -305,8 +312,10 @@ async def main():
            and mc["title"] == "project-w, M1: styles"
            and mc["detail"] == "Every ticket of this milestone merged, but the crew has not recorded its 2 checks. Accept it as it is, or ask the crew."
            and mc["meta"] == "Merged 6 hours ago" and mc["id"] == f"milestone_to_check:{pw}:{mws['M1']}", mc)
-        ck("check it, a link to the milestone", mc["actions"] == [
-            {"label": "Check it", "primary": True, "href": f"/projects/{pw}#milestone-{mws['M1']}"}],
+        ck("accept in one tap (TR-1450), or check it on the milestone", mc["actions"] == [
+            {"label": "Accept", "primary": True, "do": "accept_milestone", "project": pw,
+             "milestone": mws["M1"]},
+            {"label": "Check it", "primary": False, "href": f"/projects/{pw}#milestone-{mws['M1']}"}],
            mc["actions"])
         ck("a milestone with an open ticket, and one with only canceled tickets, show nothing",
            [i["title"] for i in k["milestone_to_check"]] == ["project-w, M1: styles"])
@@ -314,7 +323,7 @@ async def main():
         print("== the ask: the decision, verb first (TR-1447) ==")
         asks = {i["id"]: i["ask"] for i in w}
         ck("every item has an ask", all(isinstance(x, str) and x for x in asks.values()), asks)
-        ck("a PR item merges, two of them by count", pr["ask"] == "Merge 2 PRs on project-x", pr["ask"])
+        ck("a PR item merges its pull request", pr["ask"] == "Merge Add the footer", pr["ask"])
         ck("one PR is merged by its number, else by its ticket's title",
            fw.ask_prs([{"number": 336, "title": "Add the footer"}], "x") == "Merge PR 336"
            and fw.ask_prs([{"number": None, "title": "Add the footer"}], "x") == "Merge Add the footer")
@@ -399,7 +408,7 @@ async def main():
                                         "repo": "example-org/docs-site", "head": "ccccccc3333"})
             pr = by_kind(await get_home())["prs_to_review"][0]
             ck("a new commit makes the old pass stale: one pull request left",
-               pr["label"] == "1 PR to review" and pr["detail"] == "Add the sitemap."
+               len(by_kind(await get_home())["prs_to_review"]) == 1 and pr["detail"] == "T2, Add the sitemap."
                and pr["meta"].startswith("Waiting 5 hours"), pr)
             store.update_ticket(t2, stage="merged", status="done")
             ck("merged, it is gone", "prs_to_review" not in by_kind(await get_home()))

@@ -138,8 +138,8 @@ function cleanEnv(extra) {
          && (await page.getByTestId("project-row").count()) === 0);
       const lead = await filledButtons(page);
       ck(`busy @${width}: one filled primary on the page (TR-1275)`, lead.length === 1, JSON.stringify(lead));
-      ck(`busy @${width}: and it is the top row's main action`, (await rows.first().getByRole("link", { name: "Open Reviews" }).getAttribute("data-primary")) === "true"
-         && lead[0] === "Open Reviews");
+      ck(`busy @${width}: and it is the top row's main action`, (await rows.first().getByRole("button", { name: "Merge" }).getAttribute("data-primary")) === "true"
+         && lead[0] === "Merge");
       ck(`busy @${width}: the other rows' main actions keep the dark outline`,
          (await rows.nth(1).getByRole("button", { name: "Close project" }).getAttribute("data-primary")) === null);
       ck(`busy @${width}: no "more" button with 4 waiting`, (await page.getByRole("button", { name: /\d+ more/ }).count()) === 0);
@@ -148,7 +148,7 @@ function cleanEnv(extra) {
       const second = rows.nth(1).getByRole("button");
       ck(`busy @${width}: a row's outline button comes before its primary one`,
          (await rows.nth(1).locator("a, button").allInnerTexts()).join("|") === "Open project|Close project");
-      ck(`busy @${width}: a link action is a link`, (await rows.nth(0).getByRole("link", { name: "Open Reviews" }).getAttribute("href")) === "/reviews");
+      ck(`busy @${width}: a link action is a link`, (await rows.nth(0).getByRole("link", { name: "Review" }).getAttribute("href")) === "/reviews?project=project-x");
       ck(`busy @${width}: a do action is a button`, (await second.count()) === 1 && (await second.innerText()) === "Close project");
       ck(`busy @${width}: the crew card lists 3 members with their memory`, (await page.getByTestId("crew-member").count()) === 3
          && (await page.getByText("memory 82% full").count()) === 1);
@@ -551,7 +551,7 @@ function cleanEnv(extra) {
       await page.goto(`${BASE}/?sample=busy`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await page.waitForLoadState("networkidle");
-      ck("no flag: ?sample=busy does not show the busy sample", (await page.getByText("4 PRs to review in project-x").count()) === 0
+      ck("no flag: ?sample=busy does not show the busy sample", (await page.getByText("project-x, Add the export button").count()) === 0
          && (await page.getByText("project-x").count()) === 0);
       await ctx.close();
     }

@@ -53,6 +53,19 @@ export function deskReply(ref: string, words: string, standing: boolean, choice?
 }
 
 /** Keep a project for later, off the home until someone starts it, or start it again. */
+/** Approve the merge the merge queue asks the person for (TR-1450). */
+export function approveMerge(queue: string): Promise<unknown> {
+  return request(`/api/factory/merge-queue/${enc(queue)}/approve`, { method: "POST" });
+}
+
+/** Accept a milestone as it is, every ticket merged (TR-1450). */
+export function acceptMilestone(project: string, milestone: string): Promise<unknown> {
+  return request(`/api/projects/${enc(project)}/milestones/${enc(milestone)}/accept`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function keepForLater(project: string, later = true): Promise<unknown> {
   return request(`/api/projects/${enc(project)}/later`, {
     method: "POST",

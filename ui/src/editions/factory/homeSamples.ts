@@ -15,10 +15,15 @@ function item(id: string, over: Partial<HomeItem> & Pick<HomeItem, "kind" | "lab
 const reviewsAction = { label: "Open Reviews", primary: true, href: "/reviews" };
 
 const BUSY_WAITING: HomeItem[] = [
-  item("prs_to_review:project-x", {
-    kind: "prs_to_review", label: "Review", title: "4 PRs to review in project-x",
-    detail: "From the builders. The oldest has waited 10 days.", meta: "project-x", waited: "10 days",
-    project: { id: "project-x", name: "project-x" }, actions: [reviewsAction],
+  item("prs_to_review:project-x:T4", {
+    kind: "prs_to_review", label: "PR to review", title: "project-x, Add the export button",
+    detail: "T4, Add the export button, PR 41. It holds up a milestone.", meta: "project-x", waited: "10 days",
+    project: { id: "project-x", name: "project-x" }, tickets: ["T4"], ask: "Merge PR 41",
+    checks: { ci: "passing", behind_by: 2, line: "Checks pass. main has 2 commits this branch lacks." },
+    actions: [
+      { label: "Merge", primary: true, do: "approve_merge", queue: "mq_sample41" },
+      { label: "Review", primary: false, href: "/reviews?project=project-x" },
+    ],
   }),
   item("signoff:project-y", {
     kind: "signoff", label: "Ready to close", title: "project-y",
@@ -38,10 +43,12 @@ const BUSY_WAITING: HomeItem[] = [
       { label: "Copy the hand-over command", primary: true, do: "copy", text: "/tares:ship project-z" },
     ],
   }),
-  item("prs_to_review:docs-site", {
-    kind: "prs_to_review", label: "Review", title: "2 PRs to review in docs-site",
-    detail: "From the builder. The oldest has waited 2 days.", meta: "docs-site", waited: "2 days",
-    project: { id: "docs-site", name: "docs-site" }, actions: [reviewsAction],
+  item("prs_to_review:docs-site:T2", {
+    kind: "prs_to_review", label: "PR to review", title: "docs-site, Fix the sidebar links",
+    detail: "T2, Fix the sidebar links, PR 7.", meta: "docs-site", waited: "2 days",
+    project: { id: "docs-site", name: "docs-site" }, tickets: ["T2"], ask: "Merge PR 7",
+    checks: { ci: "running", behind_by: 0, line: "Checks are still running. Up to date with main." },
+    actions: [{ label: "Review", primary: true, href: "/reviews?project=docs-site" }],
   }),
 ];
 
@@ -123,7 +130,7 @@ const LONG_NAME = "project-with-a-very-long-name-for-the-enterprise-edition-2026
 const many: HomeItem[] = Array.from({ length: 20 }, (_, i) =>
   i % 3
     ? item(`prs_to_review:project-${i}`, {
-        kind: "prs_to_review", label: "Review", title: `${(i % 4) + 1} PRs to review in project-${i}`,
+        kind: "prs_to_review", label: "Review", title: `project-${i}, Ticket ${(i % 4) + 1}`,
         detail: `From the builders. The oldest has waited ${20 - i} days.`, meta: `project-${i}`, waited: `${20 - i} days`,
         actions: [reviewsAction],
       })
@@ -176,7 +183,7 @@ export const longGoals: HomeData = {
   headline: "1 thing waits for you.",
   waiting_for_you: [
     item("prs_to_review:long", {
-      kind: "prs_to_review", label: "Review", title: `4 PRs to review in ${LONG_NAME}`, detail: LONG_GOAL, meta: LONG_NAME,
+      kind: "prs_to_review", label: "Review", title: `${LONG_NAME}, Rewrite every help article`, detail: LONG_GOAL, meta: LONG_NAME,
       actions: [reviewsAction],
     }),
   ],

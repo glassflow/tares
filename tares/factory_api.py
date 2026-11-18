@@ -450,6 +450,12 @@ async def _refresh(store, uid: str) -> None:
         if factory_github.stale(pr):
             async with sem:
                 pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+                if t["stage"] == "review" and pr.get("state") == "open" and not pr.get("merged"):
+                    # how many commits the base has that the branch lacks, for the merge a person
+                    # is asked for (TR-1449): one compare per read, only for a PR in review
+                    cmp = await factory_github.compare(store, pr["repo"], pr.get("base") or "",
+                                                       pr.get("head") or "")
+                    pr["behind_by"] = cmp["behind_by"] if cmp["ok"] else None
             reread = True
         elif not _follows(t, pr, lasts.get(t["id"])):
             return               # not read again and nothing to write: skip the re-read below
@@ -2021,6 +2027,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "number": (t["pr"] or {}).get("number"),
                         "pr_title": (t["pr"] or {}).get("title"),
                         "ci": (t["pr"] or {}).get("ci"), "milestone": t["milestone"],
+                        # the branch it merges into and how many commits that branch has that
+                        # the pull request lacks, at Tares's last read (TR-1449; null unread)
+                        "base": (t["pr"] or {}).get("base"),
+                        "behind_by": (t["pr"] or {}).get("behind_by"),
                         # open or closed on GitHub when Tares last read it, and whether it was
                         # merged: a pull request closed without merging is nobody's (TR-1009)
                         "pr_state": (t["pr"] or {}).get("state"),
@@ -3053,6 +3063,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                              "not waiting for approval"), 409)
         person = h.current_person(request) or {}
         out = await asyncio.to_thread(merge_queue_mod.approve, store, row, person.get("id"))
+        # the answer to the pull request's home item, whichever surface approved it (TR-1450)
+        t = await asyncio.to_thread(store.get_ticket, row["project_uid"], row["ticket"])
+        ref = factory_mod.label(t) if t else row["ticket"]
+        await asyncio.to_thread(
+            lambda: answers_mod.record(store, request, item=f"prs_to_review:{row['project_uid']}:{ref}",
+                                       kind="prs_to_review", project=row["project_uid"],
+                                       ask=f"Merge PR {row['pr']}", choice="yes", said="Merge",
+                                       person_id=answerer(request)))
         return out
 
     @app.put("/api/projects/{uid}/merge-method")

@@ -90,7 +90,8 @@ export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
       // ask was cut short
       detail: askedInDetail && (item.kind === "permission" || ask === item.detail) ? "" : item.detail,
       lines: item.lines ?? [],
-      checks: extra.checks ?? null,
+      // a pull request's CI and drift in one sentence, the cell's own (TR-1449)
+      checks: item.checks?.line ?? null,
       href: deeperHref(item, yes),
     },
     item,

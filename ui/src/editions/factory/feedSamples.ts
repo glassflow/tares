@@ -26,13 +26,17 @@ const ITEMS: HomeItem[] = [
     question: { desk: "D7", options: ["Redis", "Postgres", "Ask me on a call"], recommendation: "Postgres", blocks: "AT-4 and the 2 tickets after it" },
     actions: [{ label: "Answer", primary: true, href: "/projects/atlas#desk-D7" }],
   }),
-  item("prs_to_review:atlas", {
-    kind: "prs_to_review", label: "1 PR to review", project: atlas, blocking: true,
-    title: "atlas", detail: "The reviewer passed PR 336 on its second round. It adds the expiry column and its migration.",
+  item("prs_to_review:atlas:AT-3", {
+    kind: "prs_to_review", label: "PR to review", project: atlas, blocking: true,
+    title: "atlas, Expire old links", detail: "AT-3, Expire old links, PR 336. It holds up a milestone.",
     ask: "Merge PR 336", holds_up: "AT-4",
     since: "2026-11-17T11:02:00Z", waited: "22 hours", tickets: ["AT-3"],
     from: { name: "the reviewer" },
-    actions: [{ label: "Review", primary: true, href: "/reviews?project=atlas" }],
+    checks: { ci: "passing", behind_by: 2, line: "Checks pass. main has 2 commits this branch lacks." },
+    actions: [
+      { label: "Merge", primary: true, do: "approve_merge", queue: "mq_sample336" },
+      { label: "Review", primary: false, href: "/reviews?project=atlas" },
+    ],
   }),
   item("permission:D8", {
     kind: "permission", label: "Permission", project: linkExpiry, blocking: true,
@@ -51,7 +55,10 @@ const ITEMS: HomeItem[] = [
     detail: "All 4 tickets of M1 are merged. Check it on staging before M2 starts.",
     lines: ["Open staging and sign in with a new account", "Sign out, sign in again: the session is kept"],
     since: "2026-11-17T16:20:00Z", waited: "17 hours",
-    actions: [{ label: "Check it", primary: true, href: "/projects/atlas" }],
+    actions: [
+      { label: "Accept", primary: true, do: "accept_milestone", project: "atlas", milestone: "M1" },
+      { label: "Check it", primary: false, href: "/projects/atlas" },
+    ],
   }),
   item("calls_to_confirm:link-expiry", {
     kind: "calls_to_confirm", label: "2 calls to confirm", project: linkExpiry,
@@ -78,9 +85,6 @@ const ITEMS: HomeItem[] = [
 
 const EXTRAS: FeedData["extras"] = {
   "question:D7": { why: "Sessions are rows we already back up; Redis would be the only thing holding them." },
-  "prs_to_review:atlas": {
-    checks: "Checks green. Main moved 2 commits since the review.",
-  },
 };
 
 const ANSWERED: FeedData["answered"] = [
