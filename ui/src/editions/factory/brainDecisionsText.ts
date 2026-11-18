@@ -157,6 +157,8 @@ export function fileProblem(file: { name: string; size: number }): string {
   return "";
 }
 
+export const WHO_MISSING_WORDS = "Choose who decided.";
+export const PEOPLE_FAILED_WORDS = "The people on this cell did not load. Reload the page to choose who decided.";
 export const PDF_WORDS = "This cell can't read PDF files yet. Paste the text or upload a Markdown file.";
 export const SAVE_FAILED_WORDS = "Couldn't save it. Try again.";
 export const TOO_BIG_WORDS = "That is too big to keep. Upload a file under 5 MB, or paste less than 1 MB of text.";
@@ -164,7 +166,8 @@ export const NO_WRITE_WORDS = READ_ONLY_LINE;
 
 /** The sentence an error from the cell becomes: a capital, a full stop. */
 export function plainError(message: string | undefined, fallback: string): string {
-  const t = (message ?? "").trim();
+  // the cell names the field it refuses ("decided_by: ..."); the person sees only the sentence
+  const t = (message ?? "").trim().replace(/^[a-z_]+:\s+/, "");
   if (!t) return fallback;
   return t.charAt(0).toUpperCase() + t.slice(1) + (/[.!?]$/.test(t) ? "" : ".");
 }
@@ -203,6 +206,8 @@ export function rangeWords(first: number, last: number, total: number | null): s
   return total !== null && Number.isFinite(total) && total >= last ? `${span} of ${formatCount(total)}` : span;
 }
 
+export const EMPTY_PAGE_MORE = "No decisions on this page. Next looks further back.";
+export const EMPTY_PAGE_END = "No more decisions.";
 export const LOADING_WORDS = "Loading decisions. On a big cell this takes a few seconds.";
 export const LOAD_FAILED_WORDS = "Decisions did not load.";
 export const NOT_SET_UP_WORDS = "The second brain is not set up on this cell.";

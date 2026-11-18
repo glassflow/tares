@@ -93,7 +93,7 @@ const COUNTS = { all: 5, repo_folder: 1, factory_project: 2, by_hand: 2 };
 // ---- the brain API, answered here
 function brainMock(extra = {}) {
   const m = {
-    rows: ROWS.slice(), counts: { ...COUNTS }, filters: { repos: ["glassflow/tares-cloud"], projects: [{ id: "p1", name: "software-second-brain" }, { id: "p2", name: "state-store" }] }, status: 200, pageSize: 50, reads: [], posts: [], deletes: [], post: null, del: null, ...extra,
+    rows: ROWS.slice(), counts: { ...COUNTS }, filters: { repos: ["glassflow/tares-cloud"], projects: [{ id: "p1", name: "software-second-brain" }, { id: "p2", name: "state-store" }] }, status: 200, pageSize: 50, trailing: false, gate: null, reads: [], posts: [], deletes: [], post: null, del: null, ...extra,
   };
   m.handle = async (route) => {
     const req = route.request();
@@ -110,7 +110,9 @@ function brainMock(extra = {}) {
         && (!q.project || (r.where === "factory_project" && r.project === q.project)));
       const start = q.cursor ? Number(q.cursor) : 0;
       const page = rows.slice(start, start + m.pageSize);
-      const next = start + m.pageSize < rows.length ? String(start + m.pageSize) : null;
+      // `trailing`: like the real route, a page that ends exactly on the last match still hands out a cursor
+      const next = start + m.pageSize < rows.length || (m.trailing && start + m.pageSize === rows.length) ? String(start + m.pageSize) : null;
+      if (m.gate) await m.gate;
       return route.fulfill({ status: 200, json: { decisions: page, next_cursor: next, counts: m.counts, filters: m.filters } });
     }
     if (req.method() === "POST" && p === "/api/brain/decisions") {
@@ -168,7 +170,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     ], ["Give the decision a title.", "Keep the title to 200 characters.", "Paste the decision, or upload a file.", "", "Upload a Markdown, text or PDF file.",
         "That file is over 5 MB. Upload a smaller one, or paste the text.", "That file is empty.", ""]);
     eq("addErrorWords", [T.addErrorWords({ status: 400, message: "decided_by: nobody on the cell is called Zed" }), T.addErrorWords({ status: 413 }), T.addErrorWords({ status: 501 }), T.addErrorWords({ status: 502 }), T.addErrorWords({ status: 403 }), T.addErrorWords(null)],
-       ["Decided_by: nobody on the cell is called Zed.", T.TOO_BIG_WORDS, "This cell can't read PDF files yet. Paste the text or upload a Markdown file.", "Couldn't save it. Try again.", T.NO_WRITE_WORDS, "Couldn't save it. Try again."]);
+       ["Nobody on the cell is called Zed.", T.TOO_BIG_WORDS, "This cell can't read PDF files yet. Paste the text or upload a Markdown file.", "Couldn't save it. Try again.", T.NO_WRITE_WORDS, "Couldn't save it. Try again."]);
     eq("rangeWords", [T.rangeWords(1, 50, 238), T.rangeWords(51, 100, 238), T.rangeWords(5, 5, 5), T.rangeWords(51, 100, null), T.rangeWords(1, 1200, 1500), T.rangeWords(3, 2, 9)],
        ["1 to 50 of 238", "51 to 100 of 238", "5 of 5", "51 to 100", "1 to 1,200 of 1,500", ""]);
     eq("deleteErrorWords", [T.deleteErrorWords({ status: 404 }), T.deleteErrorWords({ status: 403 }), T.deleteErrorWords({ status: 502 })], [T.ALREADY_GONE_WORDS, T.NOT_YOURS_WORDS, T.DELETE_FAILED_WORDS]);
@@ -188,6 +190,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
   const root = { authorization: `Bearer ${ROOT}` };
   const admin = await call(d.base, "POST", "/api/keys", { name: "ada-laptop", scopes: ["admin"], person: { email: "ada@example.com", name: "Ada Lovelace" } }, root);
   const reader = await call(d.base, "POST", "/api/keys", { name: "grace-laptop", scopes: ["read"], person: { email: "grace@example.com", name: "Grace Hopper" } }, root);
+  const nobody = await call(d.base, "POST", "/api/keys", { name: "deploy-bot", scopes: ["admin"] }, root);
   ck("keys made", admin.status === 201 && reader.status === 201, `${admin.status} ${reader.status}`);
   const people = (await call(d.base, "GET", "/api/people", undefined, root)).json.people;
   const grace = people.find((p) => p.name === "Grace Hopper");
@@ -407,8 +410,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       mock.post = async () => ({ status: 400, json: { detail: "decided_by: nobody on the cell is called that" } });
       await T("brain-decision-add-text").fill("Some text.");
       await T("brain-decision-add-submit").click();
-      await until(async () => (await T("brain-decision-add-error").count()) === 1 && (await text(T("brain-decision-add-error"))).startsWith("Decided_by"));
-      eq("a 400: the cell's own sentence", await text(T("brain-decision-add-error")), "Decided_by: nobody on the cell is called that.");
+      await until(async () => (await T("brain-decision-add-error").count()) === 1 && (await text(T("brain-decision-add-error"))).startsWith("Nobody"));
+      eq("a 400: the cell's own sentence, without the field's name", await text(T("brain-decision-add-error")), "Nobody on the cell is called that.");
       mock.post = async () => ({ status: 502, json: { detail: "lore said no" } });
       await T("brain-decision-add-submit").click();
       await until(async () => (await text(T("brain-decision-add-error"))) === "Couldn't save it. Try again.");
@@ -444,6 +447,109 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await until(async () => (await text(T("brain-decisions-origin"))) === "All (4)");
       eq("the counts drop", await text(T("brain-decisions-origin")), "All (4)");
       ck("the dialog closed", (await T("brain-decision-delete-dialog").count()) === 0);
+      await ctx.close();
+    }
+
+    // ---- review fixes: empty pages, filters start at page 1, counts kept while reading, paging waits for reads
+    {
+      // a page that ends on the last match still has a cursor; Next opens an empty page that says so and keeps Previous
+      const mock = brainMock({ pageSize: 5, trailing: true });
+      const { ctx, T } = await open({ mock });
+      ck("a full page with a trailing cursor offers Next", !(await T("brain-decisions-next").isDisabled()));
+      await T("brain-decisions-next").click();
+      await T("brain-decisions-empty-page").waitFor();
+      eq("an empty page further on says so, not 'No decisions yet'", [await text(T("brain-decisions-empty-page")), await T("brain-decisions-empty").count()], ["No more decisions.", 0]);
+      ck("and keeps Previous, so the person is not stuck", !(await T("brain-decisions-prev").isDisabled()) && await T("brain-decisions-next").isDisabled());
+      await T("brain-decisions-prev").click();
+      await until(async () => (await T("brain-decision-row").count()) === 5);
+      eq("Previous goes back to the rows", await T("brain-decision-row").count(), 5);
+      await ctx.close();
+    }
+    {
+      // deleting the last row of the last page leaves Previous
+      const order = [SPEC, OLD_PLAN, ADR, HAND_OTHER, HAND];
+      const mock = brainMock({ rows: order.slice(), pageSize: 2 });
+      const { ctx, T } = await open({ mock });
+      await T("brain-decisions-next").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
+      await T("brain-decisions-next").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "5 of 5");
+      await T("brain-decision-delete").click();
+      await T("brain-decision-delete-confirm").click();
+      await T("brain-decisions-empty-page").waitFor();
+      ck("the last row of the last page deleted: the page says so and Previous stays", (await text(T("brain-decisions-empty-page"))) === "No more decisions." && !(await T("brain-decisions-prev").isDisabled()));
+      await ctx.close();
+    }
+    {
+      // a filter and back starts at the first page
+      const mock = brainMock({ pageSize: 2 });
+      const { ctx, page, T } = await open({ mock });
+      await T("brain-decisions-next").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
+      await T("brain-decisions-origin").click();
+      await page.getByRole("option", { name: /^Second Brain/ }).click();
+      await until(async () => new URL(page.url()).searchParams.get("where") === "by_hand" && (await T("brain-decision-row").count()) === 2);
+      await T("brain-decisions-clear").click();
+      await until(async () => (await T("brain-decisions-range").count()) === 1 && (await text(T("brain-decisions-range"))) === "1 to 2 of 5");
+      eq("coming back to a filter seen before starts at the first page", await text(T("brain-decisions-range")), "1 to 2 of 5");
+      eq("and asks without a cursor", mock.reads[mock.reads.length - 1], { limit: "25" });
+
+      // while the next page is on its way, Origin keeps its counts and the page buttons wait
+      let go; mock.gate = new Promise((r) => { go = r; });
+      await T("brain-decisions-next").click();
+      await until(async () => (await T("brain-decisions-loading").count()) === 1);
+      eq("Origin keeps its count while a read is on its way", await text(T("brain-decisions-origin")), "All (5)");
+      go(); mock.gate = null;
+      await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
+      await ctx.close();
+    }
+    {
+      // Previous and Next wait for a read in flight (a delete reloads the page)
+      const mock = brainMock({ pageSize: 2 });
+      const { ctx, T } = await open({ mock });
+      let go; mock.gate = new Promise((r) => { go = r; });
+      await T("brain-decision-row").nth(1).getByTestId("brain-decision-delete").click();
+      await T("brain-decision-delete-confirm").click();
+      await until(() => mock.deletes.length === 1);
+      await until(async () => await T("brain-decisions-next").isDisabled());
+      ck("Next waits while the page is read again after a delete", await T("brain-decisions-next").isDisabled());
+      go(); mock.gate = null;
+      await until(async () => !(await T("brain-decisions-next").isDisabled()));
+      await T("brain-decisions-next").click();
+      await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 4");
+      eq("the next page counts only the rows the cell sent", await text(T("brain-decisions-range")), "3 to 4 of 4");
+      await ctx.close();
+    }
+
+    // ---- Decided by: never someone else by accident
+    {
+      const { ctx, page, mock, T } = await open({ token: nobody.json.secret, url: "/brain/decisions/new", wait: "brain-decision-add-title" });
+      await until(async () => !(await T("brain-decision-add-who").isDisabled()));
+      eq("a key with no person: Decided by starts empty", await text(T("brain-decision-add-who")), "Choose who decided");
+      await T("brain-decision-add-title").fill("No one by default");
+      await T("brain-decision-add-text").fill("Some text.");
+      await T("brain-decision-add-submit").click();
+      await T("brain-decision-add-error").waitFor();
+      eq("sending without a choice asks for one, nothing sent", [await text(T("brain-decision-add-error")), mock.posts.length], ["Choose who decided.", 0]);
+      await T("brain-decision-add-who").click();
+      await page.getByRole("option", { name: "Grace Hopper" }).click();
+      await T("brain-decision-add-submit").click();
+      await until(() => mock.posts.length === 1);
+      eq("then it sends the person chosen", mock.posts[0].decided_by, grace.id);
+      await ctx.close();
+    }
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, nobody.json.secret);
+      const page = await ctx.newPage();
+      page.on("pageerror", (e) => errors.push(String(e)));
+      await page.route(isBrainApi, brainMock().handle);
+      await page.route((u) => u.pathname === "/api/people", (r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
+      await page.goto(d.base + "/brain/decisions/new");
+      await page.getByTestId("brain-decision-add-title").waitFor();
+      await until(async () => (await page.getByText("The people on this cell did not load.").count()) === 1);
+      ck("people that don't load: Decided by stays, off, and says why",
+         (await page.getByTestId("brain-decision-add-who").isDisabled()) && (await page.getByText("The people on this cell did not load. Reload the page to choose who decided.").count()) === 1);
       await ctx.close();
     }
 

@@ -252,6 +252,41 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
       await ss.click();
       await page.keyboard.press("Escape");
       ck("search select: Escape closes without a change", (await id("search-select-panel").count()) === 0 && (await ss.innerText()).trim() === "billing-export");
+      const name = async () => (await page.evaluate((el) => {
+        const ids = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+        return ids.map((i) => document.getElementById(i)?.textContent?.trim() ?? "").join(" ");
+      }, await ss.elementHandle()));
+      ck("search select: the button's name says the label and the value chosen", (await name()) === "Project billing-export", await name());
+
+      // Enter right after typing picks the first match, not the All row kept on top
+      await ss.click();
+      await id("search-select-search").fill("state");
+      await page.keyboard.press("Enter");
+      ck("search select: typing then Enter picks the first match", (await ss.innerText()).trim() === "state-store", await ss.innerText());
+      // Enter on open keeps the value chosen
+      await ss.click();
+      await page.keyboard.press("Enter");
+      ck("search select: open then Enter keeps the value chosen", (await ss.innerText()).trim() === "state-store", await ss.innerText());
+      // closing by the button forgets the search
+      await ss.click();
+      await id("search-select-search").fill("zzz");
+      await ss.click();
+      await ss.click();
+      ck("search select: closed by its button, the search starts empty again", (await id("search-select-search").inputValue()) === "" && (await id("search-select-option").count()) === 9);
+      // a press on the no-match line keeps the keys working
+      await id("search-select-search").fill("zzz");
+      await id("search-select-none").click();
+      ck("search select: a press in the panel keeps focus in the search box", await id("search-select-search").evaluate((e) => e === document.activeElement));
+      await page.keyboard.press("Escape");
+      ck("search select: and Escape still closes", (await id("search-select-panel").count()) === 0);
+      // Tab closes and moves on
+      await ss.click();
+      await page.keyboard.press("Tab");
+      ck("search select: Tab closes the list", (await id("search-select-panel").count()) === 0);
+      // a click outside closes without a change
+      await ss.click();
+      await page.mouse.click(5, 5);
+      ck("search select: a click outside closes without a change", (await id("search-select-panel").count()) === 0 && (await ss.innerText()).trim() === "state-store");
     }
 
     // F13, F14: a caller's aria-invalid reaches the control, and an inert link neither runs its onClick nor navigates.

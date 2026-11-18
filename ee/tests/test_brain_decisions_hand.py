@@ -515,6 +515,26 @@ async def main():
         ck("a private project's decisions stay hidden under its own filter", r.json()["decisions"] == [], r.text[:300])
         r = await listing(project="nobody")
         ck("an unknown project lists none", r.status_code == 200 and r.json()["decisions"] == [])
+        # project with paging, as repo and where are
+        seen, cursor = [], None
+        for _ in range(5):
+            jj = (await listing(project="pb", limit=1, **({"cursor": cursor} if cursor else {}))).json()
+            seen += [d["title"] for d in jj["decisions"]]
+            cursor = jj["next_cursor"]
+            if not cursor:
+                break
+        ck("project=pb a page of one at a time lists each of its rows once, then ends", sorted(seen) == sorted(set(seen)) and "Beta plan" in seen and all(t in ("Beta plan", "Odd kind") for t in seen), str(seen))
+        # a row that names a project but lives elsewhere is not that project's and not in the dropdown
+        await put("misc", "stray-1", "Names a project, by hand", D("Dee", "2026-04-05", where="by_hand", project="pa"))
+        r = await listing(project="pa")
+        ck("project= keeps only factory_project rows, not another place's row naming it", [d["title"] for d in r.json()["decisions"]] == ["Alpha spec"], r.text[:300])
+        await put("misc", "stray-2", "Names a new project, by hand", D("Dee", "2026-04-06", where="by_hand", project="pb2"))
+        store.create_project("pb2", "factory", "Beta two", {})
+        f = (await listing()).json()["filters"]
+        ck("filters.projects has only projects with a factory project row", "pb2" not in [p["id"] for p in f["projects"]], str(f))
+        async with lore.client() as c:   # the strays go, so the paging checks below see the same rows as before
+            await c.delete_document("misc", "stray-1")
+            await c.delete_document("misc", "stray-2")
         f = (await listing(where="by_hand", repo="acme/web", limit=1)).json()["filters"]
         ck("filters: every repo with a folder decision, lowercase and sorted, whatever the filters", f["repos"] == ["acme/api", "acme/web"], str(f))
         ck("filters: every project with a visible decision, by name, never a private or unknown one",

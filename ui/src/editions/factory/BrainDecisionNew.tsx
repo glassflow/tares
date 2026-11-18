@@ -7,7 +7,7 @@ import { cn } from "../../lib/utils";
 import type { Person } from "../../types";
 import { useEdition } from "../edition";
 import { addDecision } from "./BrainDecisions.api";
-import { ADD_LINE, addErrorWords, FILE_TYPES, fileProblem, formProblem, MAX_TITLE, READ_ONLY_LINE, RECORD_WORDS } from "./brainDecisionsText";
+import { ADD_LINE, addErrorWords, FILE_TYPES, fileProblem, formProblem, MAX_TITLE, PEOPLE_FAILED_WORDS, READ_ONLY_LINE, RECORD_WORDS, WHO_MISSING_WORDS } from "./brainDecisionsText";
 
 // Record a decision (TR-1444), at /brain/decisions/new: a decision that lives nowhere else, pasted or as a
 // Markdown, text or PDF file, with who decided. It reads the people for Decided by when it opens. Once the
@@ -36,6 +36,7 @@ export default function BrainDecisionNew() {
   const navigate = useNavigate();
   const { canWrite, personId, personName } = useEdition();
   const [people, setPeople] = React.useState<Person[] | null>(null);
+  const [peopleFailed, setPeopleFailed] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [text, setText] = React.useState("");
   const [file, setFile] = React.useState<File | null>(null);
@@ -46,7 +47,7 @@ export default function BrainDecisionNew() {
 
   React.useEffect(() => {
     if (canWrite === false) return;
-    api.people().then((r) => setPeople(r.people), () => { /* the picker keeps you alone */ });
+    api.people().then((r) => setPeople(r.people), () => setPeopleFailed(true));
   }, [canWrite]);
 
   // the viewer first, marked as you; then everyone else by name
@@ -55,7 +56,8 @@ export default function BrainDecisionNew() {
     const list = [...known].sort((a, b) => (a.id === personId ? -1 : b.id === personId ? 1 : a.name.localeCompare(b.name)));
     return list.map((p) => ({ value: p.id, label: p.id === personId ? `${p.name} (you)` : p.name }));
   }, [people, personId, personName]);
-  const chosen = who || (options.some((o) => o.value === personId) ? personId ?? "" : options[0]?.value ?? "");
+  // the signed-in person when they are on the list; otherwise nobody, so a decision is never put on someone by accident
+  const chosen = who || (options.some((o) => o.value === personId) ? personId ?? "" : "");
 
   const pick = (f: File | null) => {
     setFile(f);
@@ -64,14 +66,14 @@ export default function BrainDecisionNew() {
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const p = formProblem({ title, text, file: file ? { name: file.name, size: file.size } : null });
+    const p = formProblem({ title, text, file: file ? { name: file.name, size: file.size } : null }) || (chosen ? "" : WHO_MISSING_WORDS);
     if (p) { setProblem(p); return; }
     setBusy(true); setProblem("");
     try {
       const body = file
         ? { title: title.trim(), file: { name: file.name, content_base64: await readFile(file) } }
         : { title: title.trim(), text };
-      const row = await addDecision(chosen ? { ...body, decided_by: chosen } : body);
+      const row = await addDecision({ ...body, decided_by: chosen });
       navigate("/brain/decisions", { state: { added: row } });
     } catch (err) {
       setProblem(addErrorWords(err as { status?: number; message?: string }));
@@ -94,9 +96,9 @@ export default function BrainDecisionNew() {
         <form className="grid gap-3" onSubmit={submit} noValidate>
           <div className="grid gap-3 md:grid-cols-2">
             <Input label="Title" value={title} maxLength={MAX_TITLE} placeholder="What was decided" onChange={(e) => setTitle(e.target.value)} data-testid="brain-decision-add-title" />
-            {options.length > 0 && (
-              <Select label="Decided by" options={options} value={chosen} onValueChange={setWho} data-testid="brain-decision-add-who" />
-            )}
+            <Select label="Decided by" options={options} value={chosen} onValueChange={setWho} placeholder="Choose who decided"
+                    disabled={options.length === 0} error={peopleFailed && options.length === 0 ? PEOPLE_FAILED_WORDS : undefined}
+                    data-testid="brain-decision-add-who" />
           </div>
           <Textarea label="The decision and why" rows={8} value={text} disabled={file !== null}
                     hint={file ? "The file is added instead of pasted text." : undefined}

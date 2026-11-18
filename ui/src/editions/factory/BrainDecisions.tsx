@@ -8,7 +8,7 @@ import { useEdition } from "../edition";
 import { brainDecisions, deleteDecision, type DecisionFilters, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
 import {
   ALL_PROJECTS, ALL_REPOS, ANY, DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, HEADING,
-  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, originLabel, rangeWords, RECORD_WORDS, safeLink, SUBTITLE, tabOf, TABS, titleOf,
+  EMPTY_PAGE_END, EMPTY_PAGE_MORE, isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, originLabel, rangeWords, RECORD_WORDS, safeLink, SUBTITLE, tabOf, TABS, titleOf,
   whenWords, originOf, whoParts,
 } from "./brainDecisionsText";
 
@@ -29,6 +29,8 @@ interface ListState {
   next: string | null;
   counts: DecisionsPage["counts"] | null;
   filters: DecisionFilters | null;
+  /** How many of `rows` the cell sent: a row recorded here and pinned on top is not one of them. */
+  served: number;
 }
 
 type Load = { state: "loading" } | { state: "ready"; list: ListState } | { state: "error"; message: string; list?: ListState } | { state: "no-brain" };
@@ -88,12 +90,14 @@ function Loading() {
   );
 }
 
-function List({ load, tab, repo, project, canAdd, now, page, before, onPage, onDelete, onRetry }: {
+function List({ load, tab, repo, project, canAdd, now, page, before, reading, onPage, onDelete, onRetry }: {
   load: Load; tab: DecisionTab; repo: string | null; project: string | null; canAdd: boolean; now: number;
   /** The page shown, from 0. */
   page: number;
   /** How many rows the earlier pages held. */
   before: number;
+  /** A read is on its way: the pages wait for it, so a page is never counted from rows about to change. */
+  reading: boolean;
   onPage: (to: number) => void; onDelete: (r: DecisionRow) => void; onRetry: () => void;
 }) {
   const list = load.state === "ready" ? load.list : load.state === "error" ? load.list : undefined;
@@ -107,14 +111,20 @@ function List({ load, tab, repo, project, canAdd, now, page, before, onPage, onD
         </div>
       )}
       {load.state === "loading" && <Loading />}
-      {list && list.rows.length === 0 && (
+      {/* nothing at all only on a first page with no more after it; an empty page further on says so and keeps the pages */}
+      {list && list.rows.length === 0 && page === 0 && !list.next && (
         <EmptyState className="px-4 py-4" data-testid="brain-decisions-empty">{emptyWords(tab, repo, canAdd, project)}</EmptyState>
       )}
-      {list && list.rows.length > 0 && (
+      {list && list.rows.length === 0 && (page > 0 || list.next) && (
+        <EmptyState className="px-4 py-4" data-testid="brain-decisions-empty-page">{list.next ? EMPTY_PAGE_MORE : EMPTY_PAGE_END}</EmptyState>
+      )}
+      {list && (list.rows.length > 0 || page > 0 || list.next) && (
         <>
-          <div className={cn(ROW, "hidden py-2 text-xs text-muted-foreground md:grid")} aria-hidden="true">
-            <span>Decision</span><span>Origin</span><span>Decided by</span>
-          </div>
+          {list.rows.length > 0 && (
+            <div className={cn(ROW, "hidden py-2 text-xs text-muted-foreground md:grid")} aria-hidden="true">
+              <span>Decision</span><span>Origin</span><span>Decided by</span>
+            </div>
+          )}
           {list.rows.map((r) => <Row key={r.id} r={r} now={now} onDelete={onDelete} />)}
           {(page > 0 || list.next) && (
             <nav aria-label="Pages" className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3" data-testid="brain-decisions-pages">
@@ -122,8 +132,8 @@ function List({ load, tab, repo, project, canAdd, now, page, before, onPage, onD
                 {rangeWords(before + 1, before + list.rows.length, repo || project || !list.counts ? null : list.counts[tab])}
               </span>
               <div className="flex gap-2">
-                <Button variant="secondary" disabled={page === 0 || load.state !== "ready"} onClick={() => onPage(page - 1)} data-testid="brain-decisions-prev">Previous</Button>
-                <Button variant="secondary" disabled={!list.next || load.state !== "ready"} onClick={() => onPage(page + 1)} data-testid="brain-decisions-next">Next</Button>
+                <Button variant="secondary" disabled={page === 0 || load.state !== "ready" || reading} onClick={() => onPage(page - 1)} data-testid="brain-decisions-prev">Previous</Button>
+                <Button variant="secondary" disabled={!list.next || load.state !== "ready" || reading} onClick={() => onPage(page + 1)} data-testid="brain-decisions-next">Next</Button>
               </div>
             </nav>
           )}
@@ -155,6 +165,8 @@ export default function BrainDecisions() {
   const listTop = React.useRef<HTMLDivElement>(null);
   // the dropdowns keep the last lists the cell gave while a new read is on its way
   const [filters, setFilters] = React.useState<DecisionFilters | null>(null);
+  const [lastCounts, setLastCounts] = React.useState<DecisionsPage["counts"] | null>(null);
+  const [reading, setReading] = React.useState(true);
   const [tick, setTick] = React.useState(0);
   const [asking, setAsking] = React.useState<DecisionRow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
@@ -170,6 +182,7 @@ export default function BrainDecisions() {
     const mine = ++latest.current;
     const listKey = `${key}|${at}`;
     setLoad((l) => (l.state === "ready" && l.list.key === listKey ? l : { state: "loading" }));
+    setReading(true);
     brainDecisions({ where: tab, repo, project, cursor }).then(
       (page) => {
         if (mine !== latest.current) return;
@@ -177,11 +190,14 @@ export default function BrainDecisions() {
         added.current = added.current.filter((r) => !ids.has(r.id));
         // a decision recorded here shows at the top of the first page until a read has it
         const fits = (r: DecisionRow) => at === 0 && !repo && !project && (tab === "all" || tab === r.where);
-        setLoad({ state: "ready", list: { key: listKey, rows: [...added.current.filter(fits), ...page.decisions], next: page.next_cursor, counts: page.counts, filters: page.filters ?? null } });
+        setLoad({ state: "ready", list: { key: listKey, rows: [...added.current.filter(fits), ...page.decisions], next: page.next_cursor, counts: page.counts, filters: page.filters ?? null, served: page.decisions.length } });
         if (page.filters) setFilters(page.filters);
+        setLastCounts(page.counts);
+        setReading(false);
       },
       (e: unknown) => {
         if (mine !== latest.current) return;
+        setReading(false);
         if (e instanceof ApiError && e.status === 404) { setLoad({ state: "no-brain" }); return; }
         const message = e instanceof ApiError && e.status !== 502 ? (e.message || "") : "The cell did not answer. Try again in a moment.";
         setLoad((l) => ({ state: "error", message, list: l.state === "ready" && l.list.key === listKey ? l.list : undefined }));
@@ -189,10 +205,15 @@ export default function BrainDecisions() {
     );
   }, [key, tab, repo, project, at, cursor, tick]);
 
+  // A change of filter starts at the first page, also when it comes back to a filter seen before.
+  React.useEffect(() => {
+    setPages((p) => (p.key === key && p.at === 0 && p.cursors.length === 1 ? p : { key, cursors: [null], firsts: [0], at: 0 }));
+  }, [key]);
+
   // Next keeps the cursor the read gave, so Previous goes back without asking for it again
   const goTo = (to: number) => {
     const next = load.state === "ready" ? load.list.next : null;
-    const shown = load.state === "ready" ? load.list.rows.length : 0;
+    const shown = load.state === "ready" ? load.list.served : 0;
     setPages((p) => {
       const cursors = p.key === key ? [...p.cursors] : [null];
       const firsts = p.key === key ? [...p.firsts] : [0];
@@ -255,7 +276,8 @@ export default function BrainDecisions() {
   const clearFilters = () => setParams(new URLSearchParams(), { replace: true });
 
   const list = load.state === "ready" ? load.list : load.state === "error" ? load.list : undefined;
-  const counts = list?.counts ?? null;
+  // the last counts the cell gave, so Origin keeps its numbers while the next read is on its way
+  const counts = list?.counts ?? lastCounts;
   const repoOptions = [{ value: ANY, label: ALL_REPOS },
     ...[...new Set([...(filters?.repos ?? []), ...(repo ? [repo.toLowerCase()] : [])])].map((r) => ({ value: r, label: r }))];
   const projectOptions = [{ value: ANY, label: ALL_PROJECTS },
@@ -293,7 +315,7 @@ export default function BrainDecisions() {
                 <Button variant="quiet" className="-ml-2 h-7 px-2 text-[13px]" onClick={clearFilters} data-testid="brain-decisions-clear">Clear filters</Button>
               </div>
             )}
-            <List load={load} tab={tab} repo={repo} project={project} canAdd={canAdd} now={now} page={at} before={before}
+            <List load={load} tab={tab} repo={repo} project={project} canAdd={canAdd} now={now} page={at} before={before} reading={reading}
                   onPage={goTo} onDelete={(r) => { setDeleteError(""); setAsking(r); }} onRetry={reload} />
           </div>
         </>
