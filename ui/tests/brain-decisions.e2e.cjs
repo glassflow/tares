@@ -253,6 +253,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await page.keyboard.press("Escape");
       await T("brain-decisions-project").click();
       eq("Project offers the projects with decisions", (await page.getByRole("option").allInnerTexts()).map((t) => t.trim()), ["All projects", "software-second-brain", "state-store"]);
+      await T("brain-decisions-project-search").fill("STATE");
+      eq("typing in Project keeps the matching projects and All projects", (await page.getByRole("option").allInnerTexts()).map((t) => t.trim()), ["All projects", "state-store"]);
       await page.keyboard.press("Escape");
       ck("no Clear filters while none is on", (await T("brain-decisions-clear").count()) === 0);
       const spec = T("brain-decision-row").nth(0);

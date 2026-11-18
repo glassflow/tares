@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Collapse, Dialog, EmptyState, Panel, Select, Skeleton, Toaster, useToast } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, Panel, SearchSelect, Skeleton, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { brainDecisions, deleteDecision, type DecisionFilters, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
@@ -280,10 +280,13 @@ export default function BrainDecisions() {
         <>
           <div className="grid min-w-0 gap-3 scroll-mt-4" ref={listTop}>
             <div className="grid min-w-0 gap-3 sm:grid-cols-3 sm:items-end" role="group" aria-label="Filters" data-testid="brain-decisions-filters">
-              <Select label="Origin" value={tab} onValueChange={(v) => setFilter({ where: v })} data-testid="brain-decisions-origin"
-                      options={TABS.map((t) => ({ value: t.value, label: originLabel(t.value, counts) }))} />
-              <Select label="Repo" value={repo ? repo.toLowerCase() : ANY} onValueChange={(v) => setFilter({ repo: v })} options={repoOptions} data-testid="brain-decisions-repo" />
-              <Select label="Project" value={project ?? ANY} onValueChange={(v) => setFilter({ project: v })} options={projectOptions} data-testid="brain-decisions-project" />
+              <SearchSelect label="Origin" value={tab} onValueChange={(v) => setFilter({ where: v })} data-testid="brain-decisions-origin"
+                            searchLabel="Search origins" noMatch="No origin matches."
+                            options={TABS.map((t) => ({ value: t.value, label: originLabel(t.value, counts) }))} />
+              <SearchSelect label="Repo" value={repo ? repo.toLowerCase() : ANY} onValueChange={(v) => setFilter({ repo: v })} options={repoOptions}
+                            searchLabel="Search repos" noMatch="No repo matches." data-testid="brain-decisions-repo" />
+              <SearchSelect label="Project" value={project ?? ANY} onValueChange={(v) => setFilter({ project: v })} options={projectOptions}
+                            searchLabel="Search projects" noMatch="No project matches." data-testid="brain-decisions-project" />
             </div>
             {filtered && (
               <div>
