@@ -132,17 +132,28 @@ def _files(paths: CrewPaths, station: str, days: int) -> list[tuple[str, Path]]:
     return found + [(f"{p.stem} report", p) for p in reports if p.is_file()] + archived
 
 
-_EMPTY = ("none", "- none", "* none")
+_EMPTY = ("none", "- none", "* none", "(none)", "- (none)", "* (none)")
 _FENCE = ("```", "~~~")
+
+
+def _unclosed_fence(lines: list) -> int:
+    """Where a code fence opens that nothing closes (len(lines) when there is none): from there on a `## ` line
+    is a heading again, since a half-typed fence must not hide the sections after it."""
+    open_at = None
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith(_FENCE):
+            open_at = None if open_at is not None else i
+    return len(lines) if open_at is None else open_at
 
 
 def _section(lines: list, name: str) -> list:
     """The lines under `## <name>` (or `## <name> (2)`) up to the next `## ` heading, without blanks and a bare
-    `none` or `- none`. A `## ` line inside a code fence is text, not a heading."""
+    `none`, `- none` or `(none)`. A `## ` line inside a closed code fence is text, not a heading."""
     want = name.lower()
+    loose = _unclosed_fence(lines)
     keep, inside, fenced = [], False, False
-    for ln in lines:
-        if ln.lstrip().startswith(_FENCE):
+    for i, ln in enumerate(lines):
+        if i < loose and ln.lstrip().startswith(_FENCE):
             fenced = not fenced
         elif ln.startswith("## ") and not fenced:
             head = ln[3:].strip().lower()
@@ -153,15 +164,26 @@ def _section(lines: list, name: str) -> list:
     return keep
 
 
+def undelivered(paths: CrewPaths, station: str) -> list:
+    """The lines a station's report holds under `## Undelivered` (none when it has no report)."""
+    try:
+        return _section((paths.reports_dir / f"{station}.md").read_text(encoding="utf-8", errors="replace").splitlines(),
+                        "Undelivered")
+    except OSError:
+        return []
+
+
 def _live(paths: CrewPaths) -> set | None:
-    """The names of the stations stations.json holds and has not retired; None when there is no such list
-    (a home that is not a crew home), and then every report counts."""
+    """The names of the stations stations.json holds and has not retired: none at all when every one is retired.
+    None only when there is no stations.json to read (a home that is not a crew home), and then every report
+    counts."""
     try:
         rows = state.stations_load(paths)
     except (CrewError, OSError, ValueError):
         return None
-    live = {n for n, v in rows.items() if isinstance(v, dict) and v.get("status") != "retired"}
-    return live or None
+    if not paths.stations.is_file():
+        return None
+    return {n for n, v in rows.items() if isinstance(v, dict) and v.get("status") != "retired"}
 
 
 def search(paths: CrewPaths, station: str, days: int, pattern: str, section: str = "") -> tuple[list[str], int]:
