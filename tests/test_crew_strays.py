@@ -314,6 +314,58 @@ try:
 finally:
     strays.scan, strays._deliver, watch._say = real_scan, real_deliver, real_say
 
+print("10 the delivery restarts the orchestrator only between turns")
+from tares.crew import claude, lifecycle, state  # noqa: E402
+from tares.crew import client as client_mod  # noqa: E402
+from tares.crew.errors import NotBetweenTurnsError  # noqa: E402
+
+
+class _Fresh:
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def tares_on(self):
+        return True
+
+
+asked = []
+in_turn = [False]
+
+
+def _restart(client, paths_, args, *, claude_bin, only_between_turns=False):
+    asked.append(only_between_turns)
+    if only_between_turns and in_turn[0]:
+        raise NotBetweenTurnsError("orch is in a turn; not stopping it")
+
+
+patches = [(state, "crew_orchestrator", lambda p: "orch"),
+           (state, "stations_load", lambda p: {"orch": {"status": "active", "sessionId": "abc"}}),
+           (state, "halted", lambda p: False),
+           (claude, "claude_bin", lambda e: "claude"),
+           (claude, "attached", lambda *a, **k: False),
+           (claude, "is_alive", lambda *a, **k: True),
+           (claude, "between_turns", lambda *a, **k: True),
+           (client_mod, "TaresClient", _Fresh),
+           (lifecycle, "restart", _restart)]
+kept = [(o, n, getattr(o, n)) for o, n, _ in patches]
+for o, n, v in patches:
+    setattr(o, n, v)
+try:
+    ck("the delivery restarts the orchestrator and says it was told", real_deliver(PATHS, {}, "hi") is True)
+    ck("...asking the restart to stop it only between turns", asked == [True], asked)
+    in_turn[0] = True
+    ck("an orchestrator that started a turn at the restart is not told, and nothing is raised",
+       real_deliver(PATHS, {}, "hi") is False and asked == [True, True], asked)
+finally:
+    for o, n, v in kept:
+        setattr(o, n, v)
+
 print("9 nothing is stopped")
 called = []
 
