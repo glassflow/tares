@@ -38,8 +38,8 @@ const PAGES: { key: ProjectPage; label: string; to: string }[] = [
   { key: "tickets", label: "Tickets", to: "/tickets" },
   { key: "prs", label: "Pull requests", to: "/github" },
   { key: "milestones", label: "Milestones", to: "/milestones" },
-  // Calls is the first of its two tabs: what the crew decided without you, to confirm
-  { key: "decisions", label: "Decisions and calls", to: "/calls" },
+  // Crew questions: the crew's own answers to confirm come first, then the ones you gave
+  { key: "decisions", label: "Crew questions", to: "/calls" },
   { key: "docs", label: "Docs and memory", to: "/docs" },
   { key: "people", label: "People and access", to: "/people" },
   { key: "settings", label: "Settings", to: "/settings" },

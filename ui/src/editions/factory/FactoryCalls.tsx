@@ -7,7 +7,7 @@ import { CallRow } from "./FactoryProject";
 import { DecisionTabs } from "./FactoryDecisions";
 import { PageHead, ProjectShell } from "./ProjectShell";
 
-// /projects/:id/calls, the Calls tab of Decisions and calls (TR-1245): the calls the crew made without the person. The open
+// /projects/:id/calls, the Answered by the crew tab of Crew questions (TR-1245, named in TR-1444): the calls the crew made without the person. The open
 // ones first, each kept or changed here; then the ones already kept or changed, newest first.
 // Waiting for you on the project page and Home show a short item that links here.
 
@@ -52,7 +52,7 @@ function Calls({ d, reload }: { d: FactoryProjectData; reload: () => void }) {
   return (
     <div className="grid min-w-0 gap-6" data-testid="calls-page">
       <div className="grid gap-4">
-        <PageHead title="Decisions and calls" />
+        <PageHead title="Crew questions" />
         <DecisionTabs d={d} on="calls" />
         <p className="m-0 text-xs text-muted-foreground">What the crew decided on <span data-user-text>{d.name}</span> without you, so the work did not stop.</p>
       </div>
