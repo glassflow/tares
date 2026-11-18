@@ -6,8 +6,12 @@
  b. the person's restrictions (permissions.deny and ask, autoMode.soft_deny and environment of their own
     ~/.claude/settings.json) in the station's settings next to its own, so the station's set is a superset
     of the person's; their allow rules are not copied; a settings file that cannot be read stops the start;
- c. the OTEL_* variables (the person's settings env and the spec's, the spec's winning) only in the
-    environment of the process that starts the station, never in a file under the crew home, never printed;
+ c. the telemetry variables (OTEL_* and the two CLAUDE_CODE_*TELEMETRY switches; the person's settings env and
+    the spec's, the spec's winning) in the environment of the process that starts the station and, for the
+    ones that cannot hold a secret, in the station's settings file env, because a session started in a
+    running Claude Code background service gets only the file's env. A name or value that may hold a secret
+    (headers, key, token, secret, auth, password, credential, an address with a user) goes in no file and is
+    never printed; the kept copy of the spec has no OTEL_*;
  d. the settings file with mode 0600.
 Everything runs in a scratch crew home with a fake HOME; the real ~/.claude and ~/factory are never read.
 
@@ -209,27 +213,53 @@ err, seen, crew_home = start()
 ck("a settings file with a byte order mark is read", err is None and "Bash(rm -rf:*)" in settings_in(crew_home)["permissions"]["deny"], str(err))
 
 # ---------------------------------------------------------------------------------------------
-print("c. OTEL_* reaches the station only through its process environment")
+print("c. telemetry reaches the station through its process environment and, without secrets, its settings file")
 person(PERSON)
-spec_otel = {"OTEL_EXPORTER_OTLP_ENDPOINT": SPEC_ENDPOINT, "OTEL_RESOURCE_ATTRIBUTES": "tares.station=crew-reviewer"}
+spec_otel = {"OTEL_EXPORTER_OTLP_ENDPOINT": SPEC_ENDPOINT, "OTEL_RESOURCE_ATTRIBUTES": "tares.station=crew-reviewer",
+             "CLAUDE_CODE_ENABLE_TELEMETRY": "1"}
 err, seen, crew_home = start(spec_env=spec_otel)
 extra = seen.get("kw", {}).get("env_extra", {})
 doc = settings_in(crew_home)
+fenv = doc["env"]
 ck("the process gets the spec's OTEL_* variables", extra.get("OTEL_RESOURCE_ATTRIBUTES") == "tares.station=crew-reviewer", str(sorted(extra)))
-ck("the process gets the person's OTEL_* variables", extra.get("OTEL_METRICS_EXPORTER") == "otlp"
+ck("the process gets the person's OTEL_* variables, the header one too", extra.get("OTEL_METRICS_EXPORTER") == "otlp"
    and extra.get("OTEL_EXPORTER_OTLP_HEADERS") == f"Authorization={SECRET}", str(sorted(extra)))
 ck("the spec's value wins over the person's for the same variable", extra.get("OTEL_EXPORTER_OTLP_ENDPOINT") == SPEC_ENDPOINT, str(extra.get("OTEL_EXPORTER_OTLP_ENDPOINT")))
-ck("only OTEL_* is added to the process besides FORCE_COLOR (and PWD)", not [k for k in extra if not k.startswith("OTEL_") and k not in ("FORCE_COLOR", "PWD")], str(sorted(extra)))
-ck("the settings file's env has no OTEL_* variable", not [k for k in doc["env"] if k.startswith("OTEL_")], str(sorted(doc["env"])))
+ck("only telemetry variables are added to the process besides FORCE_COLOR (and PWD)",
+   not [k for k in extra if not k.startswith(("OTEL_", "CLAUDE_CODE_")) and k not in ("FORCE_COLOR", "PWD")], str(sorted(extra)))
+ck("the settings file's env has the endpoint (the spec's), the exporters, the resource attributes and the switch",
+   fenv.get("OTEL_EXPORTER_OTLP_ENDPOINT") == SPEC_ENDPOINT and fenv.get("OTEL_METRICS_EXPORTER") == "otlp"
+   and fenv.get("OTEL_RESOURCE_ATTRIBUTES") == "tares.station=crew-reviewer"
+   and fenv.get("CLAUDE_CODE_ENABLE_TELEMETRY") == "1", str(sorted(fenv)))
+ck("the settings file's env has no variable that may hold a secret", "OTEL_EXPORTER_OTLP_HEADERS" not in fenv, str(sorted(fenv)))
+ck("a variable that is not telemetry does not reach the file from the person's env", "NOT_TELEMETRY" not in fenv, str(sorted(fenv)))
 leaks = []
 for f in files_under(crew_home):
     body = f.read_bytes().decode("utf-8", "replace")
-    if "OTEL_" in body or SECRET in body or "collector.example.com" in body:
+    if "OTEL_EXPORTER_OTLP_HEADERS" in body or SECRET in body or "person-collector.example.com" in body:
         leaks.append(str(f.relative_to(crew_home)))
-ck("no file under the crew home holds an OTEL_ name or value (settings, kept spec, state, logs)", not leaks and len(files_under(crew_home)) > 3, str(leaks))
+ck("no file under the crew home holds the header variable or its value (settings, kept spec, state, logs)", not leaks and len(files_under(crew_home)) > 3, str(leaks))
 ck("the kept copy of the spec exists, and is a launch spec without OTEL_*",
    (crew_home / "launch" / "crew-reviewer.json").is_file()
    and not [k for k in json.loads((crew_home / "launch" / "crew-reviewer.json").read_text(encoding="utf-8"))["env"] if k.startswith("OTEL_")], "")
+
+plain, held = L.split_telemetry({
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://c.example.com:4318", "OTEL_EXPORTER_OTLP_HEADERS": "a=b",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "a=b", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://u:p@c.example.com",
+    "OTEL_API_KEY": "k", "OTEL_X_TOKEN": "t", "OTEL_RESOURCE_ATTRIBUTES": "tares.station=s", "OTEL_METRICS_EXPORTER": "otlp"})
+ck("split_telemetry keeps headers, keys, tokens and an address with credentials out of the file",
+   sorted(held) == ["OTEL_API_KEY", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                    "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_X_TOKEN"], str(sorted(held)))
+ck("split_telemetry lets the endpoint, the exporters and the resource attributes through",
+   sorted(plain) == ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_METRICS_EXPORTER", "OTEL_RESOURCE_ATTRIBUTES"], str(sorted(plain)))
+
+person({"env": {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://user:pw-fake-9@creds.example.com:4318"}})
+err, seen, crew_home = start()
+body = (crew_home / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8")
+ck("an endpoint with credentials in its address is handed to the process and written to no file",
+   err is None and "pw-fake-9" in seen.get("kw", {}).get("env_extra", {}).get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+   and not [f for f in files_under(crew_home) if "pw-fake-9" in f.read_bytes().decode("utf-8", "replace")], str(err))
+person(PERSON)
 
 _n[0] += 1
 tmp = SCRATCH / f"t{_n[0]}"
@@ -243,8 +273,10 @@ copy.write_text(json.dumps(doc), encoding="utf-8", newline="\n")
 err, seen, crew_home = start(tmp=tmp, tares_up=False)
 extra = seen.get("kw", {}).get("env_extra", {})
 body = (crew_home / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8")
-ck("a start from a kept copy that has OTEL_* gives it to the process and not to the settings file",
-   err is None and extra.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://old-copy.example.com" and "OTEL_" not in body, str((err, sorted(extra))))
+ck("a start from a kept copy that has OTEL_* gives it to the process and to the settings file",
+   err is None and extra.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://old-copy.example.com"
+   and json.loads(body)["env"].get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://old-copy.example.com"
+   and "OTEL_EXPORTER_OTLP_HEADERS" not in body and SECRET not in body, str((err, sorted(extra))))
 ck("a start from a kept copy that has OTEL_* strips it from the file on disk",
    "old-copy.example.com" not in copy.read_text(encoding="utf-8") and "OTEL_" not in copy.read_text(encoding="utf-8"), "")
 ck("the lean flags and the connectors key are there from a kept copy too",
@@ -267,9 +299,11 @@ finally:
     c.close()
     tares.__exit__(None, None, None)
     os.environ.pop("TARES_PLUGIN_DIR", None)
-ck("`launch-plan` shows the lean flags and no OTEL_ name or value", "--no-chrome" in shown and "OTEL_" not in shown
+ck("`launch-plan` shows the lean flags and no OTEL_ name or value", "--no-chrome" in shown and "OTEL_" not in shown and "otel" not in shown
    and SECRET not in shown and "person-collector" not in shown, shown[:200])
 ck("the plan itself carries the person's OTEL_* for launch to hand on", plan["otel"].get("OTEL_METRICS_EXPORTER") == "otlp", str(plan.get("otel")))
+ck("the plan's file part has no header variable", "OTEL_EXPORTER_OTLP_HEADERS" in plan["otel"]
+   and "OTEL_EXPORTER_OTLP_HEADERS" not in plan["otel_file"] and "OTEL_METRICS_EXPORTER" in plan["otel_file"], str(sorted(plan["otel_file"])))
 
 # ---------------------------------------------------------------------------------------------
 print("c2. auto-memory is off for every station but the orchestrator")
