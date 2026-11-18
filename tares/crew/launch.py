@@ -560,7 +560,9 @@ def person_settings(env=None) -> dict:
 
 # The Slack plugin's tools that write (send, draft, schedule, canvas, reaction), as its skills and commands name them
 # (slack-messaging, draft-announcement). A station that keeps Slack reads it and never writes: contacting anyone is
-# the person's call alone (protocol rule 4).
+# the person's call alone (protocol rule 4). These deny rules keep the write tools out of the station's tool list; the
+# guard hook (claude-plugin/hooks/guard.py) is what holds the line: it refuses every tool of a Slack server that is not on
+# its read list, so a write tool these rules do not name, or one of another Slack server, is refused too.
 SLACK_WRITE_TOOLS = ("slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_create_canvas",
                      "slack_update_canvas", "slack_add_reaction")
 # Claude Code matches a `*` in a tool rule (proved on a stub server), so a write tool the plugin adds later with one
