@@ -19,8 +19,20 @@ When it runs: after an admin adds a folder (a hook on `folders.HOOKS`) and once 
 the folders already chosen. Both run in the background, one import per repo at a time (a request that
 comes while one runs is merged into one more run), and one GitHub lookup at a time across the cell. The
 import reads the chosen folders again from the cell before it starts and before each batch, so a folder
-dropped in the meantime is not imported. It only puts documents: removing the documents of a dropped
-folder or a deleted file, and updating on a push, are TR-1219.
+dropped in the meantime is not imported.
+
+It then follows the repo (TR-1219). A push to the default branch (`on_push`, called by the syncer) names the
+files it touched; the tree read decides for each: still there means import it again (the cache below spares a
+file whose blob did not change), gone means delete its lore document. A push that touches no markdown costs
+nothing, and one with no usable file list (GitHub cuts a push's list at 20 commits; a token repo has no push
+events and is looked at when its head moves) runs a full pass over the chosen folders, which also deletes
+every document whose file is gone. A folder an admin drops (a hook on `folders.HOOKS`) deletes every document
+no longer under a chosen folder; start-up does the same once, so a delete that failed is tried again.
+
+How many documents the brain holds for a repo (`count`, shown on each row of `GET /api/brain`, TR-1442) is kept
+here, not asked of lore: the paths of the files put per repo, filled once at start-up from lore's list of the
+source (one walk, never on a request) and added to by each put. `count` is the paths under the folders still
+chosen, so a dropped folder stops counting at once. A request never calls lore or GitHub.
 
 How many documents the brain holds for a repo (`count`, shown on each row of `GET /api/brain`, TR-1442) is kept
 here, not asked of lore: the paths of the files put per repo, filled once at start-up from lore's list of the
@@ -211,6 +223,9 @@ class RepoDecisions:
         self._cache: OrderedDict[tuple, dict] = OrderedDict()   # (repo, path, blob sha) -> what GitHub said
         self._cache_bytes = 0
         self._held: dict[str, set[str]] = {}          # repo -> paths of the files whose documents lore holds
+        self._touched: dict[str, set[str] | None] = {}   # repo -> files pushes touched (None: look at every chosen folder)
+        self._prune: set[str] = set()                 # repos whose documents outside the chosen folders are to be deleted
+        self._gone: set[tuple[str, str]] | None = None   # (repo, path) deleted while the seed walks lore's list
         self.startup_task: asyncio.Task | None = None
         self.calls = 0                                # GitHub calls made, for tests
 
@@ -232,6 +247,7 @@ class RepoDecisions:
         before the first import has run. One walk of lore's list, at start-up only."""
         found: dict[str, set[str]] = {}
         cursor = None
+        self._gone = set()   # a delete that lands during the walk must not be put back by the merge below
         try:
             async with self._lore() as lore:
                 for _ in range(SEED_PAGES):
@@ -256,8 +272,9 @@ class RepoDecisions:
             log.warning("brain repo decisions: could not read what lore holds: %s", _say(e))
         except Exception as e:   # noqa: BLE001
             log.warning("brain repo decisions: could not read what lore holds: %s", type(e).__name__)
+        gone, self._gone = self._gone or set(), None
         for repo, paths in found.items():
-            self._held.setdefault(repo, set()).update(paths)
+            self._held.setdefault(repo, set()).update(p for p in paths if (repo, p) not in gone)
 
     # -- asking for an import ---------------------------------------------------------------
 
@@ -268,28 +285,74 @@ class RepoDecisions:
         if not folders:
             return
         self._pending.setdefault(repo, set()).update(folders)
+        self._kick(repo)
+
+    def _kick(self, repo: str) -> None:
         task = self._tasks.get(repo)
         if task is None or task.done():
             self._tasks[repo] = asyncio.create_task(self._drain(repo))
 
+    def on_push(self, repo: str, paths) -> None:
+        """A push to the repo's default branch touched `paths` (None: the files are not known). Never waits
+        and never raises. Only markdown files count; a push with none of them does nothing."""
+        try:
+            if not self.active() or not repo:
+                return
+            if paths is None:
+                self._touched[repo] = None
+            else:
+                paths = {p for p in paths if isinstance(p, str) and _is_markdown(p)}
+                if not paths:
+                    return
+                if self._touched.get(repo, set()) is not None:
+                    self._touched.setdefault(repo, set()).update(paths)
+            self._kick(repo)
+        except Exception as e:   # noqa: BLE001
+            log.warning("brain repo decisions: could not queue a push of %s: %s", repo, type(e).__name__)
+
     async def _drain(self, repo: str) -> None:
         try:
-            while self._pending.get(repo):
-                wanted = self._pending.pop(repo)
-                try:
-                    await self.import_folders(repo, wanted)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:   # noqa: BLE001  (one bad import must not end the loop)
-                    log.warning("brain repo decisions: the import of %s failed: %s", repo, type(e).__name__)
+            seed = self.startup_task   # what lore holds must be known before anything is deleted
+            if seed is not None and not seed.done() and seed is not asyncio.current_task():
+                await asyncio.wait({seed})
+            while self._pending.get(repo) or repo in self._touched or repo in self._prune:
+                if repo in self._prune:
+                    self._prune.discard(repo)
+                    try:
+                        await self.prune(repo)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:   # noqa: BLE001
+                        log.warning("brain repo decisions: dropping documents of %s failed: %s", repo, type(e).__name__)
+                wanted = self._pending.pop(repo, None)
+                if wanted:
+                    try:
+                        await self.import_folders(repo, wanted)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:   # noqa: BLE001  (one bad import must not end the loop)
+                        log.warning("brain repo decisions: the import of %s failed: %s", repo, type(e).__name__)
+                if repo in self._touched:
+                    paths = self._touched.pop(repo)
+                    try:
+                        await self.import_changed(repo, paths)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:   # noqa: BLE001
+                        log.warning("brain repo decisions: following a push to %s failed: %s", repo, type(e).__name__)
         finally:
             if self._tasks.get(repo) is asyncio.current_task():
                 self._tasks.pop(repo, None)
 
     async def hook(self, repo: str, added: list[str], removed: list[str]) -> None:
-        """The `folders.HOOKS` entry: import what was added. Answers at once."""
+        """The `folders.HOOKS` entry: import what was added, delete what was dropped. Answers at once."""
         try:
-            if added and self.active():
+            if not self.active():
+                return
+            if removed:
+                self._prune.add(repo)
+                self._kick(repo)
+            if added:
                 self.request(repo, added)
         except Exception as e:   # noqa: BLE001
             log.warning("brain repo decisions: could not queue %s: %s", repo, type(e).__name__)
@@ -303,6 +366,9 @@ class RepoDecisions:
             repos = await asyncio.to_thread(self.store.list_brain_repos)
             for r in repos:
                 paths = [f["path"] for f in await asyncio.to_thread(self.store.list_brain_folders, r["repo"])]
+                if self._held.get(r["repo"]):   # documents of a folder dropped while the cell was down
+                    self._prune.add(r["repo"])
+                    self._kick(r["repo"])
                 self.request(r["repo"], paths)
         except asyncio.CancelledError:
             raise
@@ -328,14 +394,65 @@ class RepoDecisions:
         async with self._lock:
             return await self._import(repo, set(wanted))
 
+    async def import_changed(self, repo: str, paths) -> int:
+        """Follow a push: the files `paths` names (None: every chosen folder) are imported again if the tree
+        still has them and deleted from lore if it does not. Returns the number of documents put."""
+        async with self._lock:
+            return await self._import(repo, None, None if paths is None else set(paths))
+
+    async def prune(self, repo: str) -> int:
+        """Delete the documents of `repo` that are no longer under a chosen folder. Returns how many."""
+        async with self._lock:
+            if not self.active():
+                return 0
+            chosen = await self._chosen(repo)
+            stale = [p for p in self._held.get(repo, ()) if not self._under(p, chosen)]
+            return await self._delete(repo, stale)
+
+    async def _delete(self, repo: str, paths) -> int:
+        """Delete the lore documents of `paths` (a document lore no longer has counts as deleted). A lore
+        error is logged and ends the pass; what is left is tried again by the next pass. Returns how many."""
+        paths = sorted(paths)
+        if not paths or not self.active():
+            return 0
+        held, done = self._held.setdefault(repo, set()), 0
+        try:
+            async with self._lore() as lore:
+                for p in paths:
+                    ext = external_id(repo, p)
+                    try:
+                        await lore.delete_document(SOURCE, ext)
+                    except LoreError as e:
+                        if e.status != 404:
+                            raise
+                    held.discard(p)
+                    if self._gone is not None:
+                        self._gone.add((repo, p))
+                    self._sent.pop(ext, None)
+                    done += 1
+        except asyncio.CancelledError:
+            raise
+        except LoreError as e:
+            log.warning("brain repo decisions: could not delete a document of %s: %s", repo, _say(e))
+        except Exception as e:   # noqa: BLE001
+            log.warning("brain repo decisions: could not delete a document of %s: %s", repo, type(e).__name__)
+        if done:
+            log.info("brain repo decisions: %s: deleted %d documents", repo, done)
+        return done
+
     def _under(self, path: str, folders) -> bool:
         return any(path.startswith(f + "/") for f in folders)
 
-    async def _import(self, repo: str, wanted: set[str]) -> int:
+    async def _import(self, repo: str, wanted: set[str] | None, only: set[str] | None = None) -> int:
+        """Import the markdown files of the chosen folders in `wanted` (None: all of them); with `only`, just
+        those paths. Documents whose file the tree no longer has are deleted (every one under the folders, or
+        the ones in `only`), unless GitHub cut the tree short."""
         if not self.active():
             return 0
-        folders = [f for f in await self._chosen(repo) if f in wanted]   # not trust the request: re-read
-        if not folders:
+        folders = [f for f in await self._chosen(repo) if wanted is None or f in wanted]   # not trust the request: re-read
+        if only is not None:   # a push that touched nothing in a chosen folder costs no GitHub call
+            only = {p for p in only if self._under(p, folders)}
+        if not folders or only == set():
             return 0
         try:
             token = await self._token(repo)
@@ -352,15 +469,19 @@ class RepoDecisions:
         async with httpx.AsyncClient(transport=self.transport or TRANSPORT, timeout=TIMEOUT,
                                      headers=github_credentials._headers(token)) as gh:
             try:
-                entries = await self._tree(gh, repo)
+                entries, truncated = await self._tree(gh, repo)
             except _Stop as e:
                 log.warning("brain repo decisions: %s: %s", repo, e.why)
                 return 0
             files = {}
             for e in entries:
                 p = e["path"]
-                if _is_markdown(p) and self._under(p, folders):
+                if _is_markdown(p) and self._under(p, folders) and (only is None or p in only):
                     files[p] = e
+            if not truncated:   # a file the tree no longer has is a deleted (or moved) file
+                here = {e["path"] for e in entries}
+                await self._delete(repo, [p for p in self._held.get(repo, ())
+                                          if self._under(p, folders) and (only is None or p in only) and p not in here])
             names: dict = {}
             batch: list[tuple[dict, str]] = []
             stop: _Stop | None = None
@@ -493,10 +614,11 @@ class RepoDecisions:
             raise _Stop(f"GitHub answered {r.status_code}")
         return r
 
-    async def _tree(self, gh, repo: str) -> list[dict]:
+    async def _tree(self, gh, repo: str) -> tuple[list[dict], bool]:
+        """`(blobs, truncated)`: the files of the repo's default branch, and whether GitHub cut the list short."""
         r = await self._get(gh, repo, "git/trees/HEAD", {"recursive": "1"})
         if r.status_code == 409:   # an empty repo
-            return []
+            return [], False
         if r.status_code != 200:
             raise _Stop(f"GitHub answered {r.status_code} for the tree")
         try:
@@ -505,15 +627,16 @@ class RepoDecisions:
             raise _Stop("GitHub sent a tree that is not JSON")
         if not isinstance(body, dict):
             raise _Stop("GitHub sent a tree that is not JSON")
-        if body.get("truncated"):
-            log.warning("brain repo decisions: GitHub cut the tree of %s short; only the files it sent are imported", repo)
+        truncated = bool(body.get("truncated"))
+        if truncated:
+            log.warning("brain repo decisions: GitHub cut the tree of %s short; only the files it sent are imported and no document is deleted", repo)
         out = []
         for e in body.get("tree") or []:
             if isinstance(e, dict) and e.get("type") == "blob" and isinstance(e.get("path"), str) \
                     and isinstance(e.get("sha"), str):
                 size = e.get("size")
                 out.append({"path": e["path"], "sha": e["sha"], "size": size if isinstance(size, int) else None})
-        return out
+        return out, truncated
 
     def _entry(self, key: tuple) -> dict:
         got = self._cache.get(key)
@@ -651,5 +774,7 @@ class RepoDecisions:
                     await asyncio.gather(*[t for t in tasks if t is not None], return_exceptions=True)
                     self._tasks.clear()
                     self._pending.clear()
+                    self._touched.clear()
+                    self._prune.clear()
 
         app.router.lifespan_context = lifespan
