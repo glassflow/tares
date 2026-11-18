@@ -28,7 +28,7 @@ CACHE_SECONDS = 5
 # project ready to close; `grant` (a grant waiting for your consent) and `desk` (a desk item
 # addressed to you) come with teams; `rule` is a rule the crew proposes (TR-1275)
 KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "permission",
-         "milestone_to_check", "signoff", "grant", "desk", "rule")
+         "milestone_to_check", "signoff", "grant", "desk", "rule", "terminal")
 # what a button does on the page when it is not a link
 ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later",
            "approve_merge", "accept_milestone")

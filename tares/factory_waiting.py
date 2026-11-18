@@ -11,6 +11,7 @@ hand-overs, the open assumptions, the desk and the milestones. Nothing is kept f
 from __future__ import annotations
 
 import re
+from urllib.parse import urlencode
 
 from . import factory as factory_mod
 from . import factory_home as fh
@@ -657,5 +658,58 @@ def rules_to_decide(store, fx, now) -> list[dict]:
     return out
 
 
+# ── a station stuck on a prompt in its terminal ───────────────────────────────
+
+def station_items(stations: list[dict], owners, now, hidden=frozenset(),
+                  projects: dict | None = None) -> list[dict]:
+    """Each station that waits on its person in its terminal (TR-1461): a permission prompt, a
+    question or a dialog Claude Code put up (the plugin reports `waiting` for those only; a turn
+    that ended is `idle`). The item is a link to the station on the Crew page, never yes or no:
+    the answer is typed where the prompt is. It is the crew's person's, and it goes when the
+    station works again. Its id names the waiting spell (its start), so a new prompt is a new item.
+
+    `stations` are rows of factory_api's stations(); `hidden` the projects the reader may not see:
+    a station on one of them says nothing of its reason or project. `projects` ({id: row}) lets a
+    station whose crew has nobody here fall to its project's owner."""
+    out = []
+    for st in stations:
+        if st.get("state") != "waiting":
+            continue
+        since = st.get("state_at") or st.get("last_at")
+        on = {st.get("project"), *(st.get("projects") or ())} - {None}
+        secret = bool(on & set(hidden))
+        pid = None if secret else st.get("project")
+        project = {"id": pid, "name": st.get("project_name") or pid} if pid else None
+        reason = None if secret else str(st.get("state_reason") or "").strip()
+        name, cid = st["name"], st.get("crew_id") or ""
+        ids = owners.here((st.get("person") or {}).get("id"))
+        fell = ids is None
+        if fell:
+            ids = owners.project((projects or {}).get(pid))
+        stamp = int(since.timestamp()) if hasattr(since, "timestamp") else str(since or "")
+        link = "/crew?" + urlencode({"member": name, **({"crew": cid} if cid else {})})
+        out.append(owners_mod.tag(fh.home_item(
+            "terminal", label="In its terminal", title=project["name"] if project else "Every project",
+            detail=f"{_trim(reason, 300)}." if reason else "It waits for you in its terminal.",
+            meta="Asked in its terminal" + (", " + fh.plain_ago(since, now) if since else ""),
+            since=since, now=now, project=project, id=f"terminal:{cid}:{name}:{stamp}",
+            blocking=True, ask=f"Answer {name} in its terminal", holds_up=name,
+            actions=[{"label": "Open in Crew", "primary": True, "href": link}]),
+            owners, ids, (projects or {}).get(pid) if fell and pid else None))
+    return out
+
+
+def stations_waiting(store, fx, now) -> list[dict]:
+    """station_items over the caller's stations (fx.stations already leaves out what the caller
+    may not see)."""
+    read = getattr(fx, "stations", None)
+    rows = read() if read else []
+    if not any(st.get("state") == "waiting" for st in rows):
+        return []
+    projects = {p["id"]: p for p in store.list_projects()}
+    return station_items(rows, owners_mod.Owners(store), now, projects=projects)
+
+
 fh.WAITING_BUILDERS.extend([prs_to_review, ready_to_start, calls_to_confirm, desk_items,
-                            milestones_to_check, projects_to_close, rules_to_decide])
+                            milestones_to_check, projects_to_close, rules_to_decide,
+                            stations_waiting])

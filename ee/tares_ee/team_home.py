@@ -289,8 +289,16 @@ def lead_items(t: HomeRead) -> list[dict]:
 
 # ── the whole answer ─────────────────────────────────────────────────────────
 
+def station_items(t: HomeRead) -> list[dict]:
+    """A station stuck on a prompt in its terminal, for its crew's person (TR-1461)."""
+    rows = t.stations()
+    if not any(st.get("state") == "waiting" for st in rows):
+        return []
+    return fw.station_items(rows, t.owners, t.now, t.hidden, t.projects())
+
+
 BUILDERS = [question_items, grant_items, desk_items, milestone_items, pr_items,
-            lead_items]
+            lead_items, station_items]
 
 
 def all_items(t: HomeRead) -> list[dict]:

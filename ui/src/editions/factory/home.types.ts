@@ -14,7 +14,8 @@ export type HomeItemKind =
   | "signoff"
   | "grant"
   | "desk"
-  | "rule";
+  | "rule"
+  | "terminal";
 
 // What a button does on the page when it is not a link.
 export type HomeVerb =

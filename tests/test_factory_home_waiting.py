@@ -110,7 +110,7 @@ async def main():
         ck("nothing waits", h["waiting_for_you"] == [] and h["waiting_total"] == 0, h["waiting_for_you"])
         ck("the builders are registered once", [f.__name__ for f in fh.WAITING_BUILDERS] == [
             "prs_to_review", "ready_to_start", "calls_to_confirm", "desk_items", "milestones_to_check",
-            "projects_to_close", "rules_to_decide"],
+            "projects_to_close", "rules_to_decide", "stations_waiting"],
            [f.__name__ for f in fh.WAITING_BUILDERS])
 
         # project-x: two passed pull requests (one holds up a milestone), two that do not wait for
