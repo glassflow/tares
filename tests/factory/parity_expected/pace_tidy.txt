@@ -211,7 +211,7 @@ tares factory: the plan's limit is full until <TS>, so a stopped station is not 
 == step: pace_down crew-reviewer:ok ==
 exit: 0
 -- stdout --
-revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, then continue.
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then continue.
 -- stderr --
 
 -- after --

@@ -11,6 +11,7 @@ Run: .venv/bin/python tests/test_crew_lifecycle.py
 """
 import contextlib
 import http.server
+import importlib.util
 import io
 import json
 import os
@@ -290,6 +291,21 @@ ck("it tells Tares: reason retired, JSON", len(ask) == 1 and json.loads(ask[0]["
 ck("...without a key when there is none", ask and ask[0]["auth"] is None, str(ask))
 code, out, err, t = run("retire", ["shop-build-m2"], {"POST /api/crew/shop-build-m2/end?crew=crew": (404, {"detail": "unknown"})})
 ck("a 404 from Tares is fine and silent", code == 0 and said(err) == ["retired shop-build-m2"], str(said(err)))
+reset({"shop-build-m1": station(), "shop-build-m2": station(id="aaaa0002", sessionId="sess-2")},
+      [fake_claude.agent_row("working", "aaaa0001", "shop-build-m1", str(work)),
+       fake_claude.agent_row("working", "aaaa0002", "shop-build-m2", str(work))])
+(CREW / "reports").mkdir()
+(CREW / "reports" / "shop-build-m1.md").write_text(
+    "## Now\n[TF:ASK] not parked\n## Undelivered\n[TF:ASK] parked one\n\n[TF:DONE] parked two\n## Taken\nx\n", encoding="utf-8")
+(CREW / "reports" / "shop-build-m2.md").write_text("## Undelivered\n(none)\n", encoding="utf-8")
+code, out, err, t = run("retire", ["shop-build-m1"], {})
+ck("retire warns when the report has lines under ## Undelivered, and still retires",
+   code == 0 and stations()["shop-build-m1"]["status"] == "retired" and said(err)[0] == "retired shop-build-m1"
+   and len(said(err)) == 2 and said(err)[1].startswith("warning: shop-build-m1's report holds 2 lines under ## Undelivered;")
+   and said(err)[1].endswith("shop-build-m1.md)"), str(said(err)))
+code, out, err, t = run("retire", ["shop-build-m2"], {})
+ck("...and says nothing when the section is empty (`(none)`)", code == 0 and said(err) == ["retired shop-build-m2"], str(said(err)))
+
 reset({"shop-build-m1": station()}, [fake_claude.agent_row("working", "aaaa0001", "shop-build-m1", str(work))])
 code, out, err, t = run("retire", ["shop-build-m1"], {"POST /api/crew/shop-build-m1/end?crew=crew": (500, "boom")})
 ck("any other code says Tares was not told, and retire still succeeds",
@@ -565,6 +581,29 @@ ck("an unwritable stations.json while keeping the earlier session does not crash
 reset({"shop-build-m1": station(status="retired")}, RUNNING)
 code, out, err, _ = run("restart", ["shop-build-m1"])
 ck("a retired station is stopped, then revive refuses it", code == 1 and "was retired; tares factory spawn starts it again" in err, err)
+
+print("one reminder text")
+import re  # noqa: E402
+from tares.crew import regrant  # noqa: E402
+SAME = LC.REPORT_READ
+ck("the shared text says: a short state file, report grep, never cat or tail",
+   "short state file" in SAME and "`tares factory report grep`" in SAME and "never cat or tail" in SAME, SAME)
+for mod in ("cc_update", "kit", "pace", "regrant", "lifecycle"):
+    text = (ROOT / "tares" / "crew" / f"{mod}.py").read_text(encoding="utf-8")
+    bare = [ln.strip()[:90] for ln in text.splitlines()
+            if re.search(r"re-read your\b", ln, re.I) and not ln.startswith("REPORT_READ = ")]
+    ck(f"{mod}.py says re-read your report only through REPORT_READ", not bare, str(bare))
+ck("a grant restart says it, with rules and without", SAME in regrant._prompt("Kiran", "- x", "re-arm it")
+   and SAME[0].upper() + SAME[1:] in regrant._prompt("Kiran", "", "re-arm it"), "")
+hook = importlib.util.spec_from_file_location("hook_session_start", ROOT / "claude-plugin" / "hooks" / "session_start.py")
+hmod = importlib.util.module_from_spec(hook)
+hook.loader.exec_module(hmod)
+ck("the session-start hook, which stands alone, has the same words", hmod.REPORT_READ == SAME, hmod.REPORT_READ)
+os.environ.update(FACTORY_ROLE="builder", FACTORY_STATION="shop-build-m1", TARES_PROJECT="p1")
+for source in ("resume", "compact"):
+    ck(f"...and a {source} session is told them", SAME in hmod.context_for(source), source)
+for var in ("FACTORY_ROLE", "FACTORY_STATION", "TARES_PROJECT"):
+    os.environ.pop(var, None)
 
 L.launch = real_launch
 print(f"{P} passed, {F} failed")

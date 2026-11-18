@@ -59,6 +59,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 from . import claude as cl
 from . import pace, state
@@ -622,6 +623,8 @@ def with_restrictions(settings: dict, person: dict) -> dict:
 TELEMETRY_FLAGS = ("CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
 _SECRET_NAME = re.compile(r"HEADERS|KEY|TOKEN|SECRET|AUTH|PASSWORD|CREDENTIAL", re.I)
 _USERINFO = re.compile(r"://[^/?#\s]*@")
+_BARE_USERINFO = re.compile(r"^[^/?#\s@=,]+(?::[^/?#\s@=,]*)?@[^\s/?#@]+")
+_PAIR_SPLIT = re.compile(r"[,&;?#]")
 
 
 def telemetry_env(person: dict, spec_env: dict) -> dict:
@@ -634,13 +637,32 @@ def telemetry_env(person: dict, spec_env: dict) -> dict:
     return out
 
 
+def holds_secret(name: str, value: str) -> bool:
+    """Whether a telemetry variable may hold a secret: its name has headers, key, token, secret, auth, password or
+    credential in it, or its value has credentials in an address (`https://user:pw@host`), or, in any piece of it
+    (split at `,` `&` `;` `?` `#`, so a query, a fragment or a list such as OTEL_RESOURCE_ATTRIBUTES), has
+    a `name=value` pair whose name is one of those words (`?api_key=...`, `#access_token=...`,
+    `auth_token=...`; a percent-encoded name is read decoded), or a bare `user:pw@host` or `user@host`, alone or
+    as a pair's value. A name that only contains one of those words, such as `author=`, is held too: it fails safe."""
+    if _SECRET_NAME.search(name) or _USERINFO.search(value):
+        return True
+    for piece in _PAIR_SPLIT.split(value):
+        piece = piece.strip()
+        key, eq, _ = piece.partition("=")
+        if eq and _SECRET_NAME.search(unquote(key.strip())):
+            return True
+        if any(_BARE_USERINFO.search(token.strip()) for token in piece.split("=")):
+            return True
+    return False
+
+
 def split_telemetry(otel: dict) -> tuple:
-    """(plain, secret): the telemetry variables a settings file may hold, and the ones that may hold a secret,
-    which no file ever does: a name with headers, key, token, secret, auth, password or credential in it, or a
-    value with credentials in its address."""
+    """(plain, secret): the telemetry variables a settings file may hold, and the ones that may hold a secret
+    (see holds_secret), which no file ever does. A variable that is a path to a key file, such as
+    OTEL_EXPORTER_OTLP_CLIENT_KEY, is held too: its name says key, and it fails safe."""
     plain, secret = {}, {}
     for k, v in otel.items():
-        (secret if _SECRET_NAME.search(k) or _USERINFO.search(v) else plain)[k] = v
+        (secret if holds_secret(k, v) else plain)[k] = v
     return plain, secret
 
 
@@ -793,6 +815,9 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
         print(f"  note: {station} sends its telemetry without {', '.join(held)}: a variable that may hold a secret "
               "never goes in a file, and a running Claude Code background service does not pass on the one a "
               "launch gives it", file=sys.stderr)
+        if any(k.endswith("_CLIENT_KEY") for k in held):
+            print("  note: a client key variable holds a file path, not a secret, but its name says key, so it is held "
+                  "back too; a station on a running background service sends without its client key", file=sys.stderr)
     args = plan["args"]
     kd = kit_dir(client)
     if resume:
