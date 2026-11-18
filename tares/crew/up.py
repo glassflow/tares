@@ -723,10 +723,8 @@ def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
 
 
 def idle_wake_on(c) -> bool:
-    try:
-        return c.crew_settings().get("idle_wake") is True
-    except CrewError:
-        return False
+    from . import launch
+    return launch.idle_wake_on(c)
 
 
 def cmd_crew_setup(argv: list, env: dict) -> int:
