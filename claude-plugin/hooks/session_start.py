@@ -27,6 +27,9 @@ import threading
 import urllib.request
 
 # "compact" + "d" read "compactd" in the bash hook
+# The same words as tares.crew.lifecycle.REPORT_READ: the hook stands alone, so test_crew_lifecycle checks they match.
+REPORT_READ = ("re-read your report (a short state file; for older events use `tares factory report grep`, "
+               "never cat or tail a file)")
 PAST = {"resume": "resumed", "compact": "compacted", "clear": "cleared"}
 COMPAT_SECONDS = 2.0  # the longest the compat check may take when it has to ask a `tares` on PATH
 BRAIN_SECONDS = 1.5   # the longest the brain check may take (TR-1202); the hook as a whole has 5 seconds
@@ -223,11 +226,11 @@ def context_for(source: str) -> str:
         if source == "compact":
             text += (" This session was compacted: your skills are re-attached, so load one again only if its "
                      "re-attached copy says it was truncated or you cannot find a rule you need; a page is never "
-                     "re-attached, so Read it again when a situation needs it. Re-read your report and your work on Tares, check "
+                     "re-attached, so Read it again when a situation needs it. Then " + REPORT_READ + " and your work on Tares, check "
                      "CronList and re-arm your schedule if it is missing (if get_crew_settings shows idle_wake "
                      "true, arm none: the factory wakes you), then carry on where your report left off.")
         else:
-            text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, re-read your report and your work on "
+            text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, " + REPORT_READ + " and your work on "
                      "Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows "
                      "idle_wake true, arm none: the factory wakes you), then carry on where your report left off.")
     home = os.environ.get("FACTORY_HOME", "")

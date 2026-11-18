@@ -272,7 +272,7 @@ def after_move_prompt(skill="builder") -> str:
         from tares.crew import lifecycle
         rearm = lifecycle.rearm_text(sd.client)
     return (f"Claude Code was updated to {NEW}, so the factory restarted you on it, in this same conversation, with "
-            f"fresh settings. Reload the skills factory-protocol and station-{skill}, re-read your report, {rearm}, "
+            f"fresh settings. Reload the skills factory-protocol and station-{skill}, {lifecycle.REPORT_READ}, {rearm}, "
             "then carry on where you were.")
 
 
@@ -283,7 +283,7 @@ def fresh_text(skill="builder") -> str:
     return (f"Claude Code was updated to {NEW}, but your old conversation kept coming back on an older Claude Code, "
             "so the factory started you again under the same name, in a new conversation, on "
             f"{NEW}. Nothing from the old one carries over except your report and what is on Tares. Reload the skills "
-            f"factory-protocol and station-{skill}, re-read your report and your work on Tares, {rearm}, then carry "
+            f"factory-protocol and station-{skill}, {lifecycle.REPORT_READ} and your work on Tares, {rearm}, then carry "
             "on where your report left off.")
 
 
