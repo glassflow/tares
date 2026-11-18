@@ -1,7 +1,7 @@
 /*
  * Browser e2e for TR-734 and TR-1245: the factory project's pages (/projects/:id and its sub-pages).
  *
- * The project sidebar lists Overview, Tickets, Pull requests, Milestones, Decisions and calls, Docs
+ * The project sidebar lists Overview, Tickets, Pull requests, Milestones, Crew questions, Docs
  * and memory, People and access and Settings, each with its own address and count. Overview, from one
  * read of the cell (GET /api/factory/projects/{id}): where it stands (Spec, Build, Review, Done), what
  * waits for you on it, three cards (pull requests, milestones, decisions), the few tickets moving now
@@ -120,7 +120,7 @@ async function waitFor(url, tries = 100) {
     const navPages = await T("project-pages").locator("a").evaluateAll((as) => as.map((a) => [a.textContent.replace(/\d+$/, "").trim(), a.getAttribute("href")]));
     ck("the project sidebar lists every page, each with its own address", JSON.stringify(navPages) === JSON.stringify([
       ["Overview", `/projects/${y}`], ["Tickets", `/projects/${y}/tickets`], ["Pull requests", `/projects/${y}/github`], ["Milestones", `/projects/${y}/milestones`],
-      ["Decisions and calls", `/projects/${y}/calls`], ["Docs and memory", `/projects/${y}/docs`], ["People and access", `/projects/${y}/people`], ["Settings", `/projects/${y}/settings`]]), JSON.stringify(navPages));
+      ["Crew questions", `/projects/${y}/calls`], ["Docs and memory", `/projects/${y}/docs`], ["People and access", `/projects/${y}/people`], ["Settings", `/projects/${y}/settings`]]), JSON.stringify(navPages));
     const navCount = async (k) => ((await T(`project-page-${k}`).getByTestId("project-page-count").count()) ? txt(T(`project-page-${k}`).getByTestId("project-page-count")) : "");
     ck("each item counts what is on its page; Overview counts what waits for you",
        (await navCount("overview")) === "4" && (await navCount("tickets")) === "11" && (await navCount("milestones")) === "3" && (await navCount("prs")) === "5"
@@ -202,12 +202,12 @@ async function waitFor(url, tries = 100) {
     ck("a milestone with open tickets is not marked Done", !/\bDone\b/.test(await txt(mrows.nth(0))), await txt(mrows.nth(0)));
     await checkWords(page, ck, "project-y milestones page");
 
-    // calls: the Calls tab of Decisions and calls; keep removes, change needs words
+    // calls: the Answered by the crew tab of Crew questions; keep removes, change needs words
     await open(page, y, "", "calls");
     await checkPaper(page, ck, "calls page");
     await shot(page, "calls-1440.png");
-    ck("Calls is the first tab of Decisions and calls", JSON.stringify(await T("decision-tabs").locator("a").evaluateAll((as) => as.map((a) => a.dataset.testid))) === JSON.stringify(["tab-calls", "tab-decisions"]));
-    ck("Calls is a tab of Decisions and calls, with its own address, To confirm first",
+    ck("Answered by the crew is the first tab of Crew questions", JSON.stringify(await T("decision-tabs").locator("a").evaluateAll((as) => as.map((a) => a.dataset.testid))) === JSON.stringify(["tab-calls", "tab-decisions"]));
+    ck("Answered by the crew is a tab of Crew questions, with its own address, To confirm first",
        (await T("tab-calls").getAttribute("aria-current")) === "page" && (await T("tab-decisions").getAttribute("href")) === `/projects/${y}/decisions`
        && (await T("project-page-decisions").getAttribute("aria-current")) === "page" && (await T("calls-open").count()) === 1);
     const calls = page.getByTestId("call-row");
@@ -252,7 +252,7 @@ async function waitFor(url, tries = 100) {
        (await txt(T("decision-row").first().getByTestId("decision-answer"))) === "merge main into teams"
        && (await txt(T("decision-row").first().getByTestId("decision-said"))) === "You said: D85 A", await txt(T("decision-row").first()));
     ck("words equal to the answer are not repeated", (await T("decision-row").nth(1).getByTestId("decision-said").count()) === 0);
-    ck("the decisions tab says they are your answers, newest first", /Your answers to the crew, newest first\./.test(await txt(T("decisions-page"))));
+    ck("the Answered by you tab says they are your answers, newest first", /What you told the crew when it asked, newest first\./.test(await txt(T("decisions-page"))));
     await checkWords(page, ck, "project-y decisions page");
     await checkPaper(page, ck, "decisions page");
     await shot(page, "decisions-1440.png");
@@ -353,7 +353,7 @@ async function waitFor(url, tries = 100) {
     ck("#secrets opens People and access, at the secrets", new URL(page.url()).pathname === `/projects/${y}/people` && new URL(page.url()).hash === "#secrets", page.url());
     await page.goto(`${BASE}/projects/${y}#decisions`, { waitUntil: "load" });
     await T("decisions-page").waitFor();
-    ck("#decisions opens Decisions and calls", new URL(page.url()).pathname === `/projects/${y}/decisions`, page.url());
+    ck("#decisions opens Crew questions", new URL(page.url()).pathname === `/projects/${y}/decisions`, page.url());
     await open(page, y, "#desk-D1");
     await page.waitForTimeout(THEME_MS);
     ck("#desk-D1 brings the waiting list into view", Math.abs(await page.evaluate(() => document.getElementById("waiting").getBoundingClientRect().top)) < 40);

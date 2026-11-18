@@ -13,7 +13,7 @@ export interface FieldProps {
 export function useFieldIds(id?: string) {
   const auto = React.useId();
   const base = id ?? auto;
-  return { id: base, hintId: `${base}-hint`, errorId: `${base}-error` };
+  return { id: base, labelId: `${base}-label`, hintId: `${base}-hint`, errorId: `${base}-error` };
 }
 
 type Ids = ReturnType<typeof useFieldIds>;
@@ -49,7 +49,7 @@ export function FieldNote({ ids, hint, error }: { ids: Ids } & Pick<FieldProps, 
 export function StackedField({ ids, label, hint, error, children }: { ids: Ids; children: React.ReactNode } & FieldProps) {
   return (
     <div className="grid gap-1.5">
-      <label htmlFor={ids.id} className="text-xs font-semibold text-foreground">
+      <label id={ids.labelId} htmlFor={ids.id} className="text-xs font-semibold text-foreground">
         {label}
       </label>
       {children}

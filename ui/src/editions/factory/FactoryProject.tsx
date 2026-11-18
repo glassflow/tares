@@ -724,11 +724,11 @@ function Summary({ d }: { d: FactoryProjectData }) {
                    line={now ? <span data-user-text>{now.name}</span> : "The crew adds them when it plans the build."}
                    more={ms.length > 0 ? `All ${plural(ms.length, "milestone", "milestones")}` : "Milestones"} />
       <SummaryCard testid="summary-decisions" to={open > 0 ? pageHref(d.id, "decisions") : `/projects/${encodeURIComponent(d.id)}/decisions`}
-                   title="Decisions and calls"
-                   big={open > 0 ? `${open} to confirm` : d.decisions.length > 0 ? plural(d.decisions.length, "decision", "decisions") : "None yet"}
+                   title="Crew questions"
+                   big={open > 0 ? `${open} to confirm` : d.decisions.length > 0 ? plural(d.decisions.length, "answer", "answers") : "None yet"}
                    line={open > 0 ? <span data-user-text>{d.calls[0].question}</span>
                      : d.decisions[0] ? <span data-user-text>{d.decisions[0].answer}</span> : "When you answer the crew, it is kept here."}
-                   more={open > 0 ? "Calls to confirm" : "All decisions"} />
+                   more={open > 0 ? "Answers to confirm" : "All your answers"} />
     </div>
   );
 }

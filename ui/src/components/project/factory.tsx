@@ -272,7 +272,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       <Desk project={ctx.id} onChange={reloadDecisions} />
 
       {(decisions?.decisions.length ?? 0) > 0 && (
-        <Fold id="decisions" title="Decisions"
+        <Fold id="decisions" title="Answered by you"
               meta={`${decisions!.decisions.length} · your words, newest first`}>
           <ul className="fo-docs">
             {decisions!.decisions.map((d) => (

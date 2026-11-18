@@ -16,6 +16,7 @@ import {
   LoadingBlocks,
   Panel,
   ProgressBar,
+  SearchSelect,
   Select,
   Skeleton,
   SkeletonLines,
@@ -156,6 +157,15 @@ function LinkProbe() {
 
 /** The section's name in the screenshot check (tests/visual): "List section and rows" is list-section-and-rows. */
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+/** A SearchSelect with enough rows to search. */
+function GallerySearchSelect() {
+  const [v, setV] = useState("any");
+  const options = [{ value: "any", label: "All projects" },
+    ...["checkout-redesign", "billing-export", "search-relevance", "mobile-onboarding", "state-store", "software-second-brain", "pricing-page", "audit-log"]
+      .map((n) => ({ value: n, label: n }))];
+  return <SearchSelect label="Project" options={options} value={v} onValueChange={setV} searchLabel="Search projects" noMatch="No project matches." data-testid="search-select" />;
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -522,6 +532,7 @@ export default function Components() {
         <Select label="Service" hint="The service to watch." options={SERVICES} defaultValue="service-a" data-testid="select" />
         <Select label="Owner" options={SERVICES} placeholder="Pick a service" error="Pick one to continue." />
         <Select label="Locked service" options={SERVICES} defaultValue="service-b" disabled />
+        <GallerySearchSelect />
         <Switch label="Notify me" hint="One message a day, at most." defaultChecked data-testid="switch" />
         <Switch label="Weekly summary" error="Connect Slack first." />
         <Switch label="Paused" disabled />

@@ -135,7 +135,7 @@ async function waitFor(url, tries = 100) {
 }
 
 const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "empty-line", "stat",
-  "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
+  "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "search-select", "switch", "checkbox", "banner", "toast-open",
   "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link",
   "collapse-toggle", "collapse-stack", "moving-list", "status-changing"];
 
@@ -231,6 +231,63 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     ck("the chart lists its marks as text, oldest first, out-of-range ones included", JSON.stringify(markLabels) === JSON.stringify(["Deploy of service-d", "Deploy of service-a", "Deploy of service-b", "Deploy of service-c", "Deploy of service-e"]), markLabels.join(" | "));
     ck("each listed mark has a time", (await marks.locator("li time").count()) === 5);
     ck("only the marks inside the range are drawn as lines", (await id("line-chart").locator("svg g[data-mark]").count()) === 3);
+
+    // SearchSelect: typing narrows the rows, the first ("All ...") stays, Enter picks, Escape closes
+    {
+      const ss = id("search-select");
+      ck("search select: the label names the button", (await page.getByRole("button", { name: "Project" }).count()) >= 1);
+      await ss.click();
+      const opts = async () => (await id("search-select-option").allInnerTexts()).map((t) => t.trim());
+      ck("search select: the search box has focus when the list opens", await id("search-select-search").evaluate((e) => e === document.activeElement));
+      ck("search select: every row shows before typing", (await opts()).length === 9, JSON.stringify(await opts()));
+      await id("search-select-search").fill("STATE");
+      ck("search select: typing keeps the rows that hold the words, any case, and the All row", JSON.stringify(await opts()) === JSON.stringify(["All projects", "state-store"]), JSON.stringify(await opts()));
+      await id("search-select-search").fill("nothing-like-this");
+      ck("search select: no match says so", (await id("search-select-none").count()) === 1 && JSON.stringify(await opts()) === JSON.stringify(["All projects"]));
+      await id("search-select-search").fill("bill");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      ck("search select: arrow down and Enter pick a row, the list closes", (await ss.innerText()).trim() === "billing-export" && (await id("search-select-panel").count()) === 0, await ss.innerText());
+      ck("search select: focus goes back to the button", await ss.evaluate((e) => e === document.activeElement));
+      await ss.click();
+      await page.keyboard.press("Escape");
+      ck("search select: Escape closes without a change", (await id("search-select-panel").count()) === 0 && (await ss.innerText()).trim() === "billing-export");
+      const name = async () => (await page.evaluate((el) => {
+        const ids = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+        return ids.map((i) => document.getElementById(i)?.textContent?.trim() ?? "").join(" ");
+      }, await ss.elementHandle()));
+      ck("search select: the button's name says the label and the value chosen", (await name()) === "Project billing-export", await name());
+
+      // Enter right after typing picks the first match, not the All row kept on top
+      await ss.click();
+      await id("search-select-search").fill("state");
+      await page.keyboard.press("Enter");
+      ck("search select: typing then Enter picks the first match", (await ss.innerText()).trim() === "state-store", await ss.innerText());
+      // Enter on open keeps the value chosen
+      await ss.click();
+      await page.keyboard.press("Enter");
+      ck("search select: open then Enter keeps the value chosen", (await ss.innerText()).trim() === "state-store", await ss.innerText());
+      // closing by the button forgets the search
+      await ss.click();
+      await id("search-select-search").fill("zzz");
+      await ss.click();
+      await ss.click();
+      ck("search select: closed by its button, the search starts empty again", (await id("search-select-search").inputValue()) === "" && (await id("search-select-option").count()) === 9);
+      // a press on the no-match line keeps the keys working
+      await id("search-select-search").fill("zzz");
+      await id("search-select-none").click();
+      ck("search select: a press in the panel keeps focus in the search box", await id("search-select-search").evaluate((e) => e === document.activeElement));
+      await page.keyboard.press("Escape");
+      ck("search select: and Escape still closes", (await id("search-select-panel").count()) === 0);
+      // Tab closes and moves on
+      await ss.click();
+      await page.keyboard.press("Tab");
+      ck("search select: Tab closes the list", (await id("search-select-panel").count()) === 0);
+      // a click outside closes without a change
+      await ss.click();
+      await page.mouse.click(5, 5);
+      ck("search select: a click outside closes without a change", (await id("search-select-panel").count()) === 0 && (await ss.innerText()).trim() === "state-store");
+    }
 
     // F13, F14: a caller's aria-invalid reaches the control, and an inert link neither runs its onClick nor navigates.
     const invalid = {};

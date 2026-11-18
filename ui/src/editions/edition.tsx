@@ -20,6 +20,10 @@ export type EditionInfo = {
   needed?: boolean;
   /** the key this console signs in with may change settings; a cell with no sign-in counts as admin */
   admin?: boolean;
+  /** the id of the person behind the sign-in, when it has one */
+  personId?: string;
+  /** the key may write (an `ingest` or `admin` scope); false for a read-only key, true with no sign-in */
+  canWrite?: boolean;
   /** reads whoami again, after the edition was chosen; false when the cell did not answer */
   reload: () => Promise<boolean>;
 };
@@ -52,6 +56,8 @@ function fromWhoami(w: Whoami): Omit<EditionInfo, "reload"> {
     edition: w.edition ?? "platform", name: w.edition_name, open, credentialName: open ? undefined : w.name,
     personName: w.person?.name || undefined, personPicture: w.person?.picture || undefined,
     needed: w.edition_needed === true, admin: open || (w.scopes ?? []).includes("admin"),
+    personId: w.person?.id || undefined,
+    canWrite: open || (w.scopes ?? []).some((s) => s === "ingest" || s === "admin"), // words-ok
   };
 }
 

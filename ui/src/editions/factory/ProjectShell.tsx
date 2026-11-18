@@ -18,7 +18,7 @@ import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSample
 
 // The frame of every page of one factory project (TR-1245): the project sidebar beside the page.
 // On top the project's name, icon and state, then one item per page (Overview, Tickets, Pull
-// requests, Milestones, Decisions and calls, Docs and memory, People and access, Settings), each
+// requests, Milestones, Crew questions, Docs and memory, People and access, Settings), each
 // with its count, then where the tickets live and the builder's session. At phone width the items
 // become a row of buttons under the name that scrolls on its own.
 //
@@ -38,8 +38,8 @@ const PAGES: { key: ProjectPage; label: string; to: string }[] = [
   { key: "tickets", label: "Tickets", to: "/tickets" },
   { key: "prs", label: "Pull requests", to: "/github" },
   { key: "milestones", label: "Milestones", to: "/milestones" },
-  // Calls is the first of its two tabs: what the crew decided without you, to confirm
-  { key: "decisions", label: "Decisions and calls", to: "/calls" },
+  // Crew questions: the crew's own answers to confirm come first, then the ones you gave
+  { key: "decisions", label: "Crew questions", to: "/calls" },
   { key: "docs", label: "Docs and memory", to: "/docs" },
   { key: "people", label: "People and access", to: "/people" },
   { key: "settings", label: "Settings", to: "/settings" },
