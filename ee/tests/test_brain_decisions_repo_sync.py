@@ -19,7 +19,8 @@ truncated tree deletes nothing; a poll that sees a moved head of a token repo re
 same head does not; a dropped folder (and all folders dropped) deletes its documents and no other repo's or
 folder's; a document lore no longer has (404) counts as deleted; another lore error leaves the document and
 the count, tells no lie, and the next pass deletes it; pushes of another branch, from a non-App source or
-before the licence do nothing; a document of a folder dropped while the cell was down goes at start-up; the
+before the licence do nothing; a document of a folder dropped while the cell was down goes at start-up; a delete
+that lands while the seed holds an already-read list is not put back by the seed's merge; the
 pure `pushed_files`.
 
 In process, no ports. With CI's Postgres run (TARES_TEST_PG and tests/pg_harness on PYTHONPATH) the same
@@ -414,6 +415,34 @@ async def main():
         await late.wait()
         ck("once the list arrives the document is deleted and the count is 0 (start-up's own pass settles it)", "docs/adr/a001.md" not in docs()
            and late.count("acme/web", ["docs/adr"]) == 0, f"{sorted(docs())} {late.count('acme/web', ['docs/adr'])}")
+
+        print("== a delete that lands while the seed holds a list it already read is not put back ==")
+        ghost = "acme/web:docs/adr/ghost.md"
+        c = lore.client()
+        await c.put_documents(SOURCE, [{"external_id": ghost, "title": "ghost", "text": "# ghost\n", "kind": "decision",
+                                       "metadata": {"repo": "acme/web", "decided_by": ["Ann A"], "decided_at": "2024-01-01", "where": "repo_folder"}}])
+        read, release = asyncio.Event(), asyncio.Event()
+
+        def late_client():
+            c = lore.client()
+            listed = c.list_documents
+
+            async def after_read(**kw):
+                page = await listed(**kw)    # lore's answer is read (it holds the ghost) ...
+                read.set()
+                await release.wait()         # ... but reaches the seed only after the delete
+                return page
+            c.list_documents = after_read
+            return c
+        seeded = dr.RepoDecisions(store, late_client, rd._token)
+        task = asyncio.create_task(seeded._seed())
+        await read.wait()
+        removed = await seeded._delete("acme/web", ["docs/adr/ghost.md"])
+        release.set()
+        await task
+        ck("the delete went through and the seed's merge did not put the path back", removed == 1 and (SOURCE, ghost) not in lore.documents
+           and "docs/adr/ghost.md" not in seeded._held.get("acme/web", set()), f"{removed} {seeded._held}")
+        ck("a seed with no delete in flight still fills the held paths", seeded._gone is None)
 
         print("== before the licence and without a brain, a push does nothing ==")
         os.environ["TARES_BRAIN_URL"] = ""

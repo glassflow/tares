@@ -225,6 +225,7 @@ class RepoDecisions:
         self._held: dict[str, set[str]] = {}          # repo -> paths of the files whose documents lore holds
         self._touched: dict[str, set[str] | None] = {}   # repo -> files pushes touched (None: look at every chosen folder)
         self._prune: set[str] = set()                 # repos whose documents outside the chosen folders are to be deleted
+        self._gone: set[tuple[str, str]] | None = None   # (repo, path) deleted while the seed walks lore's list
         self.startup_task: asyncio.Task | None = None
         self.calls = 0                                # GitHub calls made, for tests
 
@@ -246,6 +247,7 @@ class RepoDecisions:
         before the first import has run. One walk of lore's list, at start-up only."""
         found: dict[str, set[str]] = {}
         cursor = None
+        self._gone = set()   # a delete that lands during the walk must not be put back by the merge below
         try:
             async with self._lore() as lore:
                 for _ in range(SEED_PAGES):
@@ -270,8 +272,9 @@ class RepoDecisions:
             log.warning("brain repo decisions: could not read what lore holds: %s", _say(e))
         except Exception as e:   # noqa: BLE001
             log.warning("brain repo decisions: could not read what lore holds: %s", type(e).__name__)
+        gone, self._gone = self._gone or set(), None
         for repo, paths in found.items():
-            self._held.setdefault(repo, set()).update(paths)
+            self._held.setdefault(repo, set()).update(p for p in paths if (repo, p) not in gone)
 
     # -- asking for an import ---------------------------------------------------------------
 
@@ -423,6 +426,8 @@ class RepoDecisions:
                         if e.status != 404:
                             raise
                     held.discard(p)
+                    if self._gone is not None:
+                        self._gone.add((repo, p))
                     self._sent.pop(ext, None)
                     done += 1
         except asyncio.CancelledError:
