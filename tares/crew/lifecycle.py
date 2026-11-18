@@ -160,10 +160,13 @@ def _keep_earlier(paths: CrewPaths, station: str, old_id: str, session: str) -> 
 
 
 def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str,
-            only_between_turns: bool = False) -> None:
+            only_between_turns: bool = False, prompt_wait=0) -> None:
     """factory restart <station> [--fresh]: stop it and start it again with freshly generated settings.
     With `only_between_turns` (a wake) the station is looked at again under its lock, right before it is
-    stopped, and left running (NotBetweenTurnsError) when it has started a turn or been attached since."""
+    stopped, and left running (NotBetweenTurnsError) when it has started a turn or been attached since.
+    A station waiting on a person (a question or a permission prompt) is stopped only when it has waited
+    `prompt_wait` seconds (`claude.quiet`'s `wait`: 0 at once, None the quiet wait of 30 minutes, `math.inf`
+    never)."""
     state.require_crew(paths)
     if not args or not args[0]:
         _usage(RESTART_USAGE)
@@ -177,7 +180,7 @@ def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: st
     except SessionListUnreadableError:
         raise SessionListUnreadableError(f"{claude.UNREAD}; not stopping {station} without being able to see it stop") from None
     if only_between_turns and (claude.attached(station, paths)
-                               or not claude.between_turns(station, claude_bin, paths)):
+                               or not claude.between_turns(station, claude_bin, paths, wait=prompt_wait)):
         raise NotBetweenTurnsError(f"{station} is in a turn; not stopping it")
     _stop_session(job_id, claude_bin)
     for _ in range(_stop_wait(client.env)):

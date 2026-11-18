@@ -167,6 +167,9 @@ const followAfter = (page, click, watch, gone, want) => page.evaluate(async ([c,
     });
     ck("then it sits under the chosen tab, as wide as it", placed[0] < 1 && placed[1] < 1, placed.join(" "));
     ck("and the tabs' own borders give way to it", placed[2] === "rgba(0, 0, 0, 0)", placed[2]);
+    // the border goes in the same frame: a tab never transitions it, or placing the line fades on a slow first paint
+    const tabTransitions = await tabs.locator("[role=tab]").evaluateAll((ts) => ts.map((t) => getComputedStyle(t).transitionProperty));
+    ck("a tab transitions its colours, never its border", tabTransitions.every((t) => /color/.test(t) && !/border|all/.test(t)), tabTransitions.join(" | "));
     const press = await id("btn-primary").evaluate((b) => getComputedStyle(b).transitionProperty);
     ck("a button eases its press and its colours", /scale|all/.test(press) && /background-color|all/.test(press), press);
 

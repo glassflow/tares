@@ -21,12 +21,10 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: crew-reviewer has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation
-  ✓ started crew-reviewer (sonnet, high)
 tares factory: shop-build-m1-e2e has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation
   ✓ started shop-build-m1-e2e (sonnet, high)
 -- after --
-5
+4
 == step: watch_regrant ==
 exit: 0
 -- stdout --
@@ -34,6 +32,15 @@ exit: 0
 -- stderr --
 tares factory: shop-build-m1 has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation
   ✓ started shop-build-m1 (sonnet, high)
+-- after --
+5
+== step: watch_regrant ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-reviewer has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation
+  ✓ started crew-reviewer (sonnet, high)
 -- after --
 6
 == file crew/crew.json ==
@@ -87,15 +94,15 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "shop-build-m1"}
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "shop-build-m1-e2e"}
-{"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "2727157353", "event": "regranted", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "00000005", "event": "started", "station": "shop-build-m1-e2e"}
-{"at": "<TS>", "detail": "00000005", "event": "revived", "station": "shop-build-m1-e2e"}
+{"at": "<TS>", "detail": "00000004", "event": "started", "station": "shop-build-m1-e2e"}
+{"at": "<TS>", "detail": "00000004", "event": "revived", "station": "shop-build-m1-e2e"}
 {"at": "<TS>", "detail": "770200294", "event": "regranted", "station": "shop-build-m1-e2e"}
-{"at": "<TS>", "detail": "00000006", "event": "started", "station": "shop-build-m1"}
-{"at": "<TS>", "detail": "00000006", "event": "revived", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "00000005", "event": "started", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "00000005", "event": "revived", "station": "shop-build-m1"}
 {"at": "<TS>", "detail": "770200294", "event": "regranted", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "00000006", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000006", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "2186666751", "event": "regranted", "station": "crew-reviewer"}
 == file crew/launch/crew-reviewer.json ==
 {
   "command": [
@@ -151,7 +158,8 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
         "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
         "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in {REPOS}, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Pat authorized.",
         "Pat granted this on 2026-01-02 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work.",
-        "Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work."
+        "Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work.",
+        "Pat granted this on 2026-02-08 for all projects, in their own words: \"crew-reviewer may label pull requests\". Acting within that grant is expected work."
       ],
       "environment": [
         "$defaults",
@@ -377,6 +385,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 == file crew/stations/crew-reviewer.grants ==
 - "the releaser may restart the staging database" (2026-01-02)
 - "the reviewer may label pull requests" (2026-02-03)
+- "crew-reviewer may label pull requests" (2026-02-08)
 == file crew/stations/crew-reviewer.settings.json ==
 {
   "autoMemoryEnabled": false,
@@ -388,7 +397,8 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
       "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Pat authorized.",
       "Pat granted this on 2026-01-02 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work.",
-      "Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work."
+      "Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work.",
+      "Pat granted this on 2026-02-08 for all projects, in their own words: \"crew-reviewer may label pull requests\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
@@ -665,15 +675,6 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
   {
     "cwd": "<TMP>/crew",
     "id": "<ID>",
-    "name": "crew-reviewer",
-    "pid": "<PID>",
-    "sessionId": "<ID>",
-    "startedAt": "<TS>",
-    "state": "working"
-  },
-  {
-    "cwd": "<TMP>/crew",
-    "id": "<ID>",
     "name": "shop-build-m1-e2e",
     "pid": "<PID>",
     "sessionId": "<ID>",
@@ -684,6 +685,15 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
     "cwd": "<TMP>/crew",
     "id": "<ID>",
     "name": "shop-build-m1",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-reviewer",
     "pid": "<PID>",
     "sessionId": "<ID>",
     "startedAt": "<TS>",
@@ -699,13 +709,6 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["stop", "00000001"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Pat allowed new permissions in Tares, so the factory restarted you in this same conversation with fresh settings. These are in your settings now:\n- Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work.\nIf something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file), re-arm your schedule if you have one, and carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000001"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -726,10 +729,28 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["stop", "00000002"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Pat allowed new permissions in Tares, so the factory restarted you in this same conversation with fresh settings. These are in your settings now:\n- Pat granted this on 2026-01-02 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work.\n- Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work.\n- Pat granted this on 2026-02-04 for project shop, in their own words: \"shop-build-m1 may run gh pr merge 12 --squash in shop\". Acting within that grant is expected work.\nIf something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file), re-arm your schedule if you have one, and carry on where you were."], "cwd": "<TMP>/crew"}
 {"args": ["rm", "00000002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "00000001"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Pat allowed new permissions in Tares, so the factory restarted you in this same conversation with fresh settings. These are in your settings now:\n- Pat granted this on 2026-02-03 for all projects, in their own words: \"the reviewer may label pull requests\". Acting within that grant is expected work.\n- Pat granted this on 2026-02-08 for all projects, in their own words: \"crew-reviewer may label pull requests\". Acting within that grant is expected work.\nIf something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file), re-arm your schedule if you have one, and carry on where you were."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "00000001"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}

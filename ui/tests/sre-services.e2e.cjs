@@ -28,6 +28,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { crossBoundary } = require("./clock.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8863);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -52,12 +53,6 @@ async function waitFor(url, tries = 100) {
   }
   return false;
 }
-
-const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
-  let b = "";
-  r.on("data", (c) => (b += c));
-  r.on("end", () => { try { res(JSON.parse(b)); } catch (e) { rej(e); } });
-}).on("error", rej));
 
 (async () => {
   const bin = path.join(REPO, ".venv/bin");
@@ -102,9 +97,9 @@ const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
     const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(150); };
     const text = (loc) => loc.innerText().then((t) => t.replace(/\s+/g, " ").trim());
 
-    const list0 = await getJson(LIST);
-    const total = list0.services.length;
-    ck("the cell has more services than a page", total > PAGE_SIZE, String(total));
+    // The cell says "Checked N minutes ago" from its own clock, so the page is compared with the answer
+    // it was given, never with a read made earlier.
+    const listOf = (page) => page.waitForResponse((r) => r.request().method() === "GET" && new URL(r.url()).pathname === LIST);
 
     // ── the list, live ───────────────────────────────────────────────────────
     const { ctx, page } = await newPage(1440);
@@ -115,8 +110,12 @@ const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
     page.on("request", (r) => { if (r.method() === "GET" && new URL(r.url()).pathname.startsWith("/api/") && new URL(r.url()).pathname !== "/api/licence") reads.push(r.url().replace(BASE, "")); });
 
     const one = expectOneCall(page, LIST);
-    await page.goto(`${BASE}/services`, { waitUntil: "load" });
+    const [listResp] = await Promise.all([listOf(page), page.goto(`${BASE}/services`, { waitUntil: "load" })]);
+    const list0 = await listResp.json();
+    const total = list0.services.length;
+    ck("the cell has more services than a page", total > PAGE_SIZE, String(total));
     await rows.first().waitFor();
+    await crossBoundary(60e3, "after the list was drawn");
     await one(ck, "/services");
     ck("the page has its heading", await page.getByRole("heading", { name: "Services", exact: true }).isVisible());
     ck("a page of rows, in the order the cell gives", JSON.stringify(await names()) === JSON.stringify(list0.services.slice(0, PAGE_SIZE).map((s) => s.name)), (await names()).join(","));
@@ -140,9 +139,10 @@ const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
     const svc = page.getByTestId("sre-service");
     const putBodies = [];
     page.on("request", (r) => { if (r.method() === "PUT") putBodies.push({ url: new URL(r.url()).pathname, body: JSON.parse(r.postData() || "{}") }); });
-    const edge = await getJson("/api/sre/services/edge-proxy");
     const oneEdge = expectOneCall(page, "/api/sre/services/edge-proxy");
-    await row("edge-proxy").click();
+    const [edgeResp] = await Promise.all([page.waitForResponse((r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/sre/services/edge-proxy"),
+                                          row("edge-proxy").click()]);
+    const edge = await edgeResp.json();
     await page.getByTestId("service-title").waitFor();
     await oneEdge(ck, "edge-proxy");
     ck("the url is the service's own", new URL(page.url()).pathname === "/services/edge-proxy");
