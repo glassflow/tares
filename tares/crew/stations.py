@@ -275,7 +275,7 @@ PLAN_SHOWN = ("args", "env", "settings")
 
 def plan_shown(plan) -> dict:
     """The part of a launch plan that is printed: only the entries in PLAN_SHOWN, and only a value that is plain JSON.
-    A plan that is not a dict, or an entry that cannot be written as JSON, is hidden, never shown as it is."""
+    A plan that is not a dict, or an entry that cannot be written as JSON (with a line on stderr), is hidden, never shown as it is."""
     out = {}
     for key in PLAN_SHOWN:
         if not isinstance(plan, dict) or key not in plan:
@@ -283,6 +283,7 @@ def plan_shown(plan) -> dict:
         try:
             json.dumps(plan[key], ensure_ascii=False)
         except (TypeError, ValueError):
+            print(f"launch-plan: {key} hidden (it is not JSON)", file=sys.stderr)
             continue
         out[key] = plan[key]
     return out
