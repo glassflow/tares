@@ -7,6 +7,7 @@ A scratch crew home and a fake HOME: nothing of the person's is read or written.
 Run: python tests/test_crew_launch_allow.py
 """
 import contextlib
+import fnmatch
 import io
 import json
 import os
@@ -220,6 +221,38 @@ ck("after the --settings value", launch.with_mcp_flag(["-p", "--settings", "s", 
    == ["-p", "--settings", "s", "--mcp-config", "f", "--setting-sources", "project,local"])
 ck("before --plugin-dir without --settings", launch.with_mcp_flag(["--plugin-dir", "k"], "f") == ["--mcp-config", "f", "--plugin-dir", "k"])
 ck("the = form when it has neither", launch.with_mcp_flag(["-p"], "f") == ["-p", "--mcp-config=f"])
+
+print("Slack stays read-only")
+SP = "mcp__plugin_slack_slack__"
+WRITES = ["slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_create_canvas",
+          "slack_update_canvas", "slack_add_reaction"]
+READS = ["slack_read_channel", "slack_read_thread", "slack_read_user_profile", "slack_read_file", "slack_search_public",
+         "slack_search_channels", "slack_list_channel_members", "slack_get_reactions"]
+ck("the list names the write tools", sorted(launch.SLACK_WRITE_TOOLS) == sorted(WRITES))
+ck("no write tool is a read tool", not set(WRITES) & set(READS))
+plan, sdir, said, tmp = plan_of("orchestrator", {"plugins": ["slack@claude-plugins-official"]}, "proj-orch")
+deny = plan["settings"].get("permissions", {}).get("deny", [])
+saved = json.loads((sdir / "proj-orch.settings.json").read_text(encoding="utf-8"))
+ck("a role that allows the Slack plugin denies every write tool by name", [d for d in deny if d.startswith(SP)] == [SP + t for t in WRITES] + [SP + f"slack_{v}*" for v in launch.SLACK_WRITE_VERBS], str(deny))
+ck("no read tool is denied, by name or by a verb rule", not any(d.endswith(t) or fnmatch.fnmatchcase(SP + t, d) for d in deny for t in READS), str(deny))
+ck("every write tool is denied by name and by a verb rule", all(SP + t in deny and any(fnmatch.fnmatchcase(SP + t, d) and "*" in d for d in deny) for t in WRITES))
+ck("the station's own deny rule stays", "Bash(gh pr merge:*)" in deny, str(deny))
+ck("the file the station reads holds the same rules", saved.get("permissions", {}).get("deny") == deny, str(saved.get("permissions")))
+ck("the Slack plugin itself stays enabled", plan["settings"].get("enabledPlugins", {}).get("slack@claude-plugins-official") is True)
+plan, sdir, said, tmp = plan_of("orchestrator", {"mcp": ["slack"]}, "proj-orch")
+deny = [d for d in plan["settings"].get("permissions", {}).get("deny", []) if "slack" in d]
+ck("a user MCP server named slack is denied the same tools", deny[:len(WRITES)] == ["mcp__slack__" + t for t in WRITES] and all(d.startswith("mcp__slack__") for d in deny), str(deny))
+plan, sdir, said, tmp = plan_of("orchestrator", {"plugins": ["slack@claude-plugins-official", "pyright-lsp@claude-plugins"], "mcp": ["slack"]}, "proj-orch")
+deny = [d for d in plan["settings"].get("permissions", {}).get("deny", []) if "slack" in d]
+ck("both routes at once deny both sets", len(deny) == 2 * (len(WRITES) + len(launch.SLACK_WRITE_VERBS)) and SP + "slack_send_message" in deny and "mcp__slack__slack_send_message" in deny, str(deny))
+plan, sdir, said, tmp = plan_of("orchestrator", {"plugins": ["pyright-lsp@claude-plugins"], "mcp": ["linear"]}, "proj-orch")
+ck("a role without Slack has no Slack deny rule", not any("slack" in d for d in plan["settings"].get("permissions", {}).get("deny", [])), str(plan["settings"].get("permissions")))
+plan, sdir, said, tmp = plan_of("orchestrator", {}, "proj-orch")
+ck("a role with no list has no Slack deny rule", not any("slack" in d for d in plan["settings"].get("permissions", {}).get("deny", [])))
+ck("slack_deny is empty with nothing allowed", launch.slack_deny([], []) == [] and launch.slack_deny(["linear"], ["slack-ish@x", "pyright@y"]) == [])
+ck("a plugin whose name only starts with slack is not Slack", launch.slack_deny([], ["slackbot@x"]) == [])
+both = launch.with_restrictions({"permissions": {"deny": [SP + "slack_send_message"]}}, {"permissions": {"deny": ["Bash(rm:*)"]}})
+ck("the person's own deny rules stay beside the Slack ones", both["permissions"]["deny"][0] == SP + "slack_send_message" and "Bash(rm:*)" in both["permissions"]["deny"])
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

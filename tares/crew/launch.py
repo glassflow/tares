@@ -557,6 +557,29 @@ def person_settings(env=None) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
+# The Slack plugin's tools that write (send, draft, schedule, canvas, reaction), as its skills and commands name them
+# (slack-messaging, draft-announcement). A station that keeps Slack reads it and never writes: contacting anyone is
+# the person's call alone (protocol rule 4).
+SLACK_WRITE_TOOLS = ("slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_create_canvas",
+                     "slack_update_canvas", "slack_add_reaction")
+# Claude Code matches a `*` in a tool rule (proved on a stub server), so a write tool the plugin adds later with one
+# of these verbs is denied too. Reads start with read, search, list or get and never match.
+SLACK_WRITE_VERBS = ("send", "schedule", "create", "update", "delete", "edit", "add", "post", "set", "remove", "invite")
+
+
+def slack_deny(mcp_names, plugin_ids) -> list:
+    """The `permissions.deny` rules for every Slack write tool the role can reach: the plugin's server is
+    `mcp__plugin_slack_slack__<tool>`, a user MCP server named slack `mcp__slack__<tool>`. [] when the role keeps
+    neither, so the rules appear exactly when Slack is allowed."""
+    prefixes = []
+    if any(str(p).split("@")[0] == "slack" for p in plugin_ids):
+        prefixes.append("mcp__plugin_slack_slack__")
+    if "slack" in mcp_names:
+        prefixes.append("mcp__slack__")
+    rules = [*SLACK_WRITE_TOOLS, *(f"slack_{v}*" for v in SLACK_WRITE_VERBS)]
+    return [f"{pre}{rule}" for pre in prefixes for rule in rules]
+
+
 def _union(own, extra) -> list:
     """`own` and then each entry of `extra` it does not have yet: nothing of `own` is dropped or moved."""
     out = list(own) if isinstance(own, list) else []
@@ -697,7 +720,12 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
     settings = with_restrictions(fill_placeholders(spec["settings"], values), person)
     settings["disableClaudeAiConnectors"] = True
-    plugins = allow_lists(paths, role, parent)[1]
+    mcp_names, plugins = allow_lists(paths, role, parent)
+    deny = slack_deny(mcp_names, plugins)
+    if deny:
+        perms = dict(settings["permissions"]) if isinstance(settings.get("permissions"), dict) else {}
+        perms["deny"] = _union(perms.get("deny"), deny)
+        settings["permissions"] = perms
     if plugins:
         enabled = dict(settings["enabledPlugins"]) if isinstance(settings.get("enabledPlugins"), dict) else {}
         enabled.update({name: True for name in plugins})
