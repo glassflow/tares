@@ -260,10 +260,10 @@ function Group({ g, pid, sample, rows, hidden, open, onToggle, onChanged }: {
     <section className={cn(CARD, "min-w-0")} aria-label={g.title} data-testid="mq-group">
       <div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 bg-[var(--th-bg)] py-2 pl-2.5 pr-[18px] @max-[559px]/mq:pl-1.5 @max-[559px]/mq:pr-3.5", open && "border-b border-border")}>
         <button type="button" onClick={onToggle} aria-expanded={open} data-testid="mq-group-toggle"
-                className="flex min-w-0 items-center gap-2 border-0 bg-transparent px-2 py-1 text-left font-mono text-sm font-semibold leading-[1.4] text-foreground hover:bg-wash-strong">
+                className="flex min-w-0 items-center gap-2 border-0 bg-transparent px-2 py-1 text-left text-sm font-semibold leading-[1.4] text-foreground hover:bg-wash-strong">
           <Chevron open={open} />
           <span className="min-w-0 [overflow-wrap:anywhere]" data-user-text>
-            {g.repo} <span className="font-sans font-normal text-muted-foreground">into</span> {g.base}
+            {g.repo} <span className="font-normal text-muted-foreground">into</span> {g.base}
           </span>
         </button>
         <span className="whitespace-nowrap font-mono text-xs font-medium text-muted-foreground" data-testid="mq-group-count">{g.count}</span>
