@@ -189,6 +189,21 @@ async def main():
            and j["where"] == "by_hand" and j["summary"] == "We chose Postgres." and j["link"] is None
            and j["repo"] is None and j["project"] is None and j["changed_by"] == [] and j["changed_at"] is None, str(j))
         ck("... no person id in the answer", bo not in r.text and "added_by_id" not in r.text)
+        ck("... and it carries can_delete true for the person who added it, with project_name and doc_kind null",
+           j["can_delete"] is True and j["project_name"] is None and j["doc_kind"] is None, str(j))
+        r = await add({"title": "By the admin", "text": "Admin's."}, ADMIN)
+        ck("the 201 for an admin carries can_delete true", r.status_code == 201 and r.json()["can_delete"] is True, r.text[:200])
+        for who, label in ((BO, "the adder"), (CY, "another member"), (ADMIN, "an admin"), (READ, "a read-only key"), (H(ROOT), "the root token")):
+            added = (await add({"title": "Rule", "text": "Rule."}, BO)).json()["id"]
+            row = [d for d in (await listing(who=who)).json()["decisions"] if d["id"] == added][0]
+            r = await cx.delete(f"/api/brain/decisions/{added}", headers=who)
+            ck(f"can_delete agrees with what DELETE does for {label} ({row['can_delete']} and {r.status_code})",
+               row["can_delete"] == (r.status_code == 200) and (r.status_code == 200 or ("decisions", added) in lore.documents), f"{row['can_delete']} {r.status_code}")
+            lore.documents.pop(("decisions", added), None)
+        lore.documents.pop(("decisions", j["id"]), None)
+        reset()
+        r = await add({"title": "Use Postgres", "text": "We chose Postgres. It scales better.", "decided_by": "Ana Lopez"})
+        j = r.json()
         d = lore.documents[("decisions", j["id"])]
         ck("lore holds it: kind decision, the text whole, the external id hand:<uuid>", d["kind"] == "decision"
            and d["text"] == "We chose Postgres. It scales better." and re.fullmatch(r"hand:[0-9a-f-]{36}", j["id"]), str(d))
@@ -419,8 +434,8 @@ async def main():
         await put("acme_web", "docs/adr/1.md", "Repo one", D("Ann", "2026-03-10", where="repo_folder", repo="acme/web", changed_by=["Bo"], changed_at="2026-03-12"), uri="https://github.com/acme/web/blob/main/docs/adr/1.md")
         await put("acme_web", "docs/adr/2.md", "Repo two", D("Ann", "2026-03-05", where="repo_folder", repo="acme/web"))
         await put("acme_api", "docs/adr/1.md", "Api one", D("Cy", "2026-03-01", where="repo_folder", repo="acme/api"))
-        await put("factory_projects", "project:pa:doc:s1", "Alpha spec", D("Ann", "2026-03-08T10:00:00Z", where="factory_project", project="pa"))
-        await put("factory_projects", "project:pb:doc:s1", "Beta plan", D("Bo", "2026-02-20T10:00:00Z", where="factory_project", project="pb"))
+        await put("factory_projects", "project:pa:doc:s1", "Alpha spec", D("Ann", "2026-03-08T10:00:00Z", where="factory_project", project="pa", doc_kind="spec"))
+        await put("factory_projects", "project:pb:doc:s1", "Beta plan", D("Bo", "2026-02-20T10:00:00Z", where="factory_project", project="pb"))   # put before doc_kind existed
         await put("factory_projects", "project:sec:doc:s1", "Secret spec", D("Ann", "2026-04-01T10:00:00Z", where="factory_project", project="sec"))
         await put("factory_projects", "project:gone:doc:s1", "Gone project", D("Ann", "2026-04-02T10:00:00Z", where="factory_project", project="gone"))
         await put("misc", "m1", "No where", {"decided_by": ["Dee"], "decided_at": "2026-02-15"})
@@ -441,10 +456,36 @@ async def main():
         ck("a repo row: id, source, uri, who decided and changed, dates, repo, no project, no summary", by["Repo one"] == {
             "id": "docs/adr/1.md", "source": "acme_web", "title": "Repo one", "summary": None, "where": "repo_folder", "decided_by": ["Ann"],
             "changed_by": ["Bo"], "decided_at": "2026-03-10", "changed_at": "2026-03-12", "link": "https://github.com/acme/web/blob/main/docs/adr/1.md",
-            "repo": "acme/web", "project": None, "added_by": None}, str(by["Repo one"]))
+            "repo": "acme/web", "project": None, "added_by": None, "can_delete": False, "project_name": None, "doc_kind": None}, str(by["Repo one"]))
         ck("a project row names its project", by["Alpha spec"]["project"] == "pa" and by["Alpha spec"]["where"] == "factory_project" and by["Alpha spec"]["id"] == "project:pa:doc:s1")
         ck("a hand row has its summary and adder", by["Hand A"]["summary"] == "Hand A text." and by["Hand A"]["added_by"] == "Bo Chen" and by["Hand A"]["id"] == hand[0])
         ck("a row with no where lists where null", by["No where"]["where"] is None and by["No where"]["decided_by"] == ["Dee"])
+        ck("a project row has the project's name and its doc kind", (by["Alpha spec"]["project_name"], by["Alpha spec"]["doc_kind"]) == ("Alpha", "spec"), str(by["Alpha spec"]))
+        ck("a project row put before doc_kind existed says doc_kind null, with the name", (by["Beta plan"]["project_name"], by["Beta plan"]["doc_kind"]) == ("Beta", None), str(by["Beta plan"]))
+        ck("every other row has project_name and doc_kind null", all(by[t]["project_name"] is None and by[t]["doc_kind"] is None
+           for t in ("Repo one", "Repo two", "Api one", "Hand A", "Hand B", "No where")))
+        store.update_project("pa", name="Alpha renamed")
+        r = await listing()
+        ck("a renamed project shows its name now", {d["title"]: d["project_name"] for d in r.json()["decisions"]}["Alpha spec"] == "Alpha renamed")
+        await put("factory_projects", "project:pb:doc:odd", "Odd kind", D("Bo", "2026-02-19T10:00:00Z", where="factory_project", project="pb", doc_kind="ticket"))
+        await put("acme_web", "repo-with-kind", "Repo with a kind", D("Ann", "2026-02-18T10:00:00Z", where="repo_folder", repo="acme/web", doc_kind="spec", project="pa"))
+        r = await listing()
+        odd = {d["title"]: d for d in r.json()["decisions"]}
+        ck("a doc_kind that is not spec, plan or note is null", odd["Odd kind"]["doc_kind"] is None and odd["Odd kind"]["project_name"] == "Beta", str(odd["Odd kind"]))
+        ck("a row that is not a factory project's never carries project_name or doc_kind, whatever its metadata says",
+           odd["Repo with a kind"]["doc_kind"] is None and odd["Repo with a kind"]["project_name"] is None, str(odd["Repo with a kind"]))
+        lore.documents.pop(("factory_projects", "project:pb:doc:odd")); lore.documents.pop(("acme_web", "repo-with-kind"))
+        store.update_project("pa", name="Alpha")
+        for who, label, want in ((BO, "the member who added them", {"Hand A": True, "Hand B": True}),
+                                 (CY, "another member", {"Hand A": False, "Hand B": False}),
+                                 (ADMIN, "an admin", {"Hand A": True, "Hand B": True}),
+                                 (READ, "a read-only key of the adder's person (the guard refuses its DELETE)", {"Hand A": False, "Hand B": False}),
+                                 (H(ROOT), "the root token", {"Hand A": True, "Hand B": True})):
+            r = await listing(who=who)
+            rows = {d["title"]: d["can_delete"] for d in r.json()["decisions"]}
+            ck(f"can_delete for {label} on the hand rows", {k: rows[k] for k in want} == want, str(rows))
+            ck(f"... and false on every other row for {label} unless admin or root",
+               all(v is False for k, v in rows.items() if k not in want) and all(isinstance(v, bool) for v in rows.values()), str(rows))
         ck("the private project's and the unknown project's decisions are not listed", not {"Secret spec", "Gone project", "A secret one by its project"} & set(titles))
         ck("... and not in any count (private and unknown dropped from all)", j["counts"]["all"] == 8)
         ck("a note is not a decision", "Not a decision" not in titles)
@@ -561,10 +602,19 @@ async def auth_off():
         ck("it adds with no key: the local person decided and added it", r.status_code == 201 and j["decided_by"] == [local["name"]] and j["added_by"] == local["name"], f"{r.status_code} {r.text[:200]}")
         r = await cx.get("/api/brain/decisions")
         ck("... and lists it", r.status_code == 200 and [d["id"] for d in r.json()["decisions"]] == [j["id"]] and r.json()["counts"]["by_hand"] == 1, r.text[:200])
+        ck("with auth off can_delete is true on a hand-added row, in the 201 and in the list", j["can_delete"] is True and r.json()["decisions"][0]["can_delete"] is True, r.text[:300])
         r = await cx.delete(f"/api/brain/decisions/{j['id']}")
         ck("... and deletes it (the adder and the admin)", r.status_code == 200 and not lore.documents, f"{r.status_code} {r.text[:200]}")
         r = await cx.post("/api/brain/decisions", json={"title": "Mine", "text": "Mine.", "decided_by": local["name"]})
         ck("naming the local person works", r.status_code == 201, r.text[:200])
+        async with lore.client() as c:
+            await c.put_documents("acme_web", [{"external_id": "repo-1", "title": "r", "text": "t", "kind": "decision", "uri": None,
+                                                "metadata": {"where": "repo_folder", "decided_by": ["A"], "decided_at": "2026-01-01"}}])
+            await c.put_documents("factory_projects", [{"external_id": "project:pa:doc:s1", "title": "p", "text": "t", "kind": "decision", "uri": None,
+                                                        "metadata": {"where": "factory_project", "decided_by": ["A"], "decided_at": "2026-01-01", "project": "pa"}}])
+        app.state.store.create_project("pa", "factory", "Alpha", {})
+        r = await cx.get("/api/brain/decisions")
+        ck("... and false on every other row, whoever is asking", {d["id"]: d["can_delete"] for d in r.json()["decisions"] if d["id"].startswith(("repo-", "project:"))} == {"repo-1": False, "project:pa:doc:s1": False}, r.text[:300])
         await cx.aclose()
 
 
