@@ -1857,12 +1857,12 @@ class FactoryStore:
                 "person": self._person_refs([row[4]]).get(row[4])}
 
     def list_answers(self, since, hidden: list[str] | None = None, person: str | None = None,
-                     own: str | None = None) -> list[dict]:
+                     own: str | None = None, items: list[str] | None = None) -> list[dict]:
         """The answers given since `since`, newest first, at most 500 (TR-1451). `hidden` leaves out
         those of these projects, except `own`'s grants (a grant's id and ask never name its project, so
         the caller's answer to one over a repo they own stays theirs; any other kind would); `person` keeps
-        that person's own. Both filter in the query, before the limit, so a busy day of other
-        people's answers never pushes the caller's out."""
+        that person's own; `items` only the answers to these home items. All filter in the query, before
+        the limit, so a busy day of other people's answers never pushes the caller's out."""
         q = ("SELECT id, item, kind, project, ask, choice, said, via, person_id, answered_at FROM answers "
              "WHERE answered_at >= ?")
         vals: list = [since]
@@ -1873,6 +1873,9 @@ class FactoryStore:
         if person is not None:
             q += " AND person_id = ?"
             vals.append(person)
+        if items:
+            q += f" AND item IN ({', '.join('?' for _ in items)})"
+            vals += list(items)
         with self._sread:
             rows = self.sc.execute(q + " ORDER BY answered_at DESC LIMIT 500", vals).fetchall()
         return self._with_people(
