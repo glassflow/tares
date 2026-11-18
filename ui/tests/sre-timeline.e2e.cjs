@@ -32,7 +32,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
-const { crossBoundary } = require("./clock.cjs");
+const { crossBoundary, approachBoundary } = require("./clock.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8871);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -353,10 +353,13 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);
       const one = expectOneCall(page, ROUTE);
-      await page.goto(`${BASE}/timeline?service=service-a-receiver&range=6h`, { waitUntil: "load" });
+      await approachBoundary(60e3, 15e3, "before the empty page");
+      const [emptyResp] = await Promise.all([page.waitForResponse((r) => TL_URL.test(r.url()) && r.request().method() === "GET"),
+                                             page.goto(`${BASE}/timeline?service=service-a-receiver&range=6h`, { waitUntil: "load" })]);
+      const want = (await emptyResp.json()).empty_words;   // "in the last N minutes" counts from the cell's own clock
       await page.getByTestId("timeline-empty").waitFor();
       await one(ck, `empty @${width}`);
-      const want = (await api(`${ROUTE}?service=service-a-receiver&from=${encodeURIComponent(stamp(new Date(T0 - 6 * 3600e3)))}`)).empty_words;
+      await crossBoundary(60e3, "after the empty page was drawn");
       eq(`empty @${width}: the cell's sentence and a hint`, await text(page.getByTestId("timeline-empty")), `Nothing arrived ${want} Try a longer range or all services.`);
       eq(`empty @${width}: no list, no error`, [await page.getByTestId("timeline-list").count(), await page.getByTestId("timeline-error").count()], [0, 0]);
       eq(`empty @${width}: the picker still shows the service`, await text(page.getByTestId("timeline-service")), "Service service-a-receiver");

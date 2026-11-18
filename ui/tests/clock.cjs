@@ -16,4 +16,15 @@ async function crossBoundary(ms, label = "") {
   return true;
 }
 
-module.exports = { crossBoundary, FORCE };
+// Wait until the next mark is at most `within` ms away, so a page that polls every 30 s is drawn and checked
+// before its next poll while crossBoundary still has a mark to cross.
+async function approachBoundary(ms, within, label = "") {
+  if (!FORCE) return false;
+  const wait = ms - (Date.now() % ms) - within;
+  if (wait <= 0) return true;
+  console.log(`  .. approaching the next ${ms / 1000}s mark${label ? ` (${label})` : ""}: waiting ${Math.round(wait / 1000)}s`);
+  await new Promise((r) => setTimeout(r, wait));
+  return true;
+}
+
+module.exports = { crossBoundary, approachBoundary, FORCE };
