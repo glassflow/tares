@@ -153,7 +153,7 @@ ck("wake_base_min: reviewer 15, orchestrator 20, the rest 30",
 ck("work_prompt: reviewer", IW.work_prompt("reviewer", "X") == "There is work in the review queue: X have no current verdict. Work the queue.")
 ck("work_prompt: builder", IW.work_prompt("builder", "X") == "Your tickets changed: X. Read the reviewer's verdict and CI on the current head and act on it, as your manual says.")
 ck("work_prompt: releaser", IW.work_prompt("releaser", "X") == "A RELEASE is waiting for you in the orchestrator's report under Undelivered: X. Take it as your manual says.")
-ck("work_prompt: orchestrator", IW.work_prompt("orchestrator", "X") == "Something is waiting for you: X. Follow the Tick section of your manual.")
+ck("work_prompt: orchestrator", IW.work_prompt("orchestrator", "X") == "Something is waiting for you: X. Run the whole Tick section of your manual, not only that.")
 ck("the after() ladder: base, 30, 45, 45; pacing waits 45 at once",
    [IW._after(n, 15, 0) for n in (0, 1, 2, 9)] == [900, 1800, 2700, 2700] and IW._after(0, 15, 1) == 2700)
 ck("the step is registered with the watch", "idle_wake" in watch._STEPS)
@@ -402,7 +402,7 @@ reset({"crew-reviewer": row("reviewer")}, {"crew-reviewer": {"released": True, "
 p = planned()
 ck("new work wakes a quiet reviewer at once", p and p["reason"] == "work: Shop T1 at abcdef1; p2 T3 at 2222222" and p["work"] and p["n"] == 0
    and p["prompt"] == "There is work in the review queue: Shop T1 at abcdef1; p2 T3 at 2222222 have no current verdict. Work the queue. "
-   + launch.idle_wake_note() + " Carry on from your report.", str(p))
+   + "Woke on: rv:p1/T1@abcdef1234567, rv:p2/T3@2222222333. " + launch.idle_wake_note() + " Carry on from your report.", str(p))
 ck("...and tells send the keys and the setting", p["keys"] == ["rv:p1/T1@abcdef1234567", "rv:p2/T3@2222222333"] and p["state"] == "on", str(p))
 ck("the plan writes the clock and the pruned seen list", wake("crew-reviewer")["clock"] == NOW - 60 and wake("crew-reviewer")["seen"] == [])
 reset({"crew-reviewer": row("reviewer")}, {"crew-reviewer": {"released": True, "clock": NOW - 60,
