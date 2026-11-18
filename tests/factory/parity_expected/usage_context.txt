@@ -2,6 +2,7 @@
 exit: 0
 -- stdout --
 crew-orchestrator: 95300 of 200000 tokens (48%), sent to Tares
+launch: 37700 tokens before messages; tools by server: tares 1; skills: 1; memory: off
 -- stderr --
 
 == step: context nobody ==
@@ -58,6 +59,103 @@ tares factory: unknown station nobody
     "url": null
   }
 }
+== file crew/launch/crew-orchestrator.json ==
+{
+  "command": [
+    "--bg",
+    "-n",
+    "crew-orchestrator",
+    "--model",
+    "opus",
+    "--effort",
+    "xhigh",
+    "--permission-mode",
+    "auto",
+    "--settings",
+    "{SETTINGS_FILE}",
+    "--autocompact",
+    "200000",
+    "--append-system-prompt",
+    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
+    "--plugin-dir",
+    "{PLUGIN_DIR}"
+  ],
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "{CREW_HOME}",
+    "FACTORY_HOME": "{CREW_HOME}",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "orchestrator",
+    "FACTORY_STATION": "crew-orchestrator",
+    "FACTORY_WORKTREES": "{CREW_HOME}/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "placeholders": {
+    "CREW_HOME": "the crew's own folder on the machine that starts the station",
+    "PLUGIN_DIR": "the Tares plugin folder the station runs on (a frozen crew runs from its frozen copy)",
+    "PLUGIN_DIR_SHELL": "the same folder written as one word for the shell that runs the status line",
+    "SETTINGS_FILE": "the settings file the station is started with (--settings)",
+    "WT_REPOS": "the sentence naming the repositories whose worktree folders the station may use"
+  },
+  "role": "orchestrator",
+  "runtime": "claude_code",
+  "settings": {
+    "autoMode": {
+      "allow": [
+        "$defaults",
+        "Creating and editing files under {CREW_HOME} (the crew's own folder), and git worktrees under the .factory/worktrees folder of {WT_REPOS} or under {CREW_HOME}/worktrees, is expected work for this crew station.",
+        "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+        "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+        "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in {CREW_HOME}/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that the user authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
+      ],
+      "environment": [
+        "$defaults",
+        "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      ],
+      "soft_deny": [
+        "$defaults",
+        "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+      ]
+    },
+    "crossSessionInbound": "accept",
+    "enabledPlugins": {
+      "tares@inline": true
+    },
+    "permissions": {
+      "allow": [
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
+        "Bash(tares factory spawn *)",
+        "Bash(tares factory revive *)",
+        "Bash(tares factory restart *)",
+        "Bash(tares factory retire *)",
+        "Bash(tares factory roster)",
+        "Bash(tares factory projects)",
+        "Bash(tares factory crew status)",
+        "Bash(tares factory crew halt)",
+        "Bash(tares factory crew halt *)",
+        "Bash(tares factory crew resume)"
+      ],
+      "deny": [
+        "Bash(gh pr merge:*)"
+      ]
+    },
+    "statusLine": {
+      "command": "tares hook statusline --plugin-root {PLUGIN_DIR_SHELL}",
+      "padding": 0,
+      "type": "command"
+    },
+    "worktree": {
+      "bgIsolation": "none"
+    }
+  },
+  "station": "crew-orchestrator"
+}
 == file crew/stations.json ==
 {
   "crew-orchestrator": {
@@ -70,10 +168,13 @@ tares factory: unknown station nobody
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["-p", "--no-session-persistence", "--settings", "<SETTINGS-FILE>", "--output-format", "stream-json", "--verbose", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-orch-1", "--fork-session", "/context"], "cwd": "<TMP>/work"}
+{"args": ["-p", "--no-session-persistence", "--settings", "<SETTINGS-FILE>", "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local", "--no-chrome", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-orch-1", "--fork-session", "/context"], "cwd": "<TMP>/work"}
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
+GET /health key=no 
+GET /api/factory/stations/crew-orchestrator/launch?role=orchestrator&crew=crew&orchestrator=crew-orchestrator&cluster=factory&model=opus&effort=xhigh&autocompact=200000&tares_url=http://127.0.0.1:<PORT>&mcp_url=http://127.0.0.1:8788/mcp key=no 
+GET /api/crew/projects?crew=crew key=no 
 POST /ingest/claude_code key=no {
   "context_usage": {
     "categories": [

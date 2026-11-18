@@ -244,7 +244,9 @@ def claude(args: list[str]) -> int:
             prev = a
         print('{"type":"system","subtype":"init"}')
         if "/context" in args:
-            print(CONTEXT_REPLY)
+            # $FAKE_CLAUDE_CONTEXT_FILE: a file holding the reading to answer with, in place of the stock one
+            reply = env.get("FAKE_CLAUDE_CONTEXT_FILE")
+            print(Path(reply).read_text(encoding="utf-8").strip() if reply else CONTEXT_REPLY)
         elif "/usage" in args and not env.get("FAKE_CLAUDE_NO_PLAN"):
             print(USAGE_REPLY)
         print('{"type":"result","subtype":"success"}')
