@@ -6,6 +6,7 @@ test_brain_decisions_hand
 test_brain_decisions_projects
 test_brain_decisions_repo
 test_brain_folders
+test_brain_folders_available
 test_brain_index
 test_brain_lore_client
 test_brain_remove
