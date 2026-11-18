@@ -550,7 +550,9 @@ async def main():
             took.append((time.perf_counter() - t0) * 1000)
         p95 = sorted(took)[18]
         print(f"       home() over 55 projects, {n} waiting: p95 {p95:.0f} ms, slowest {max(took):.0f} ms")
-        ck("p95 under 300 ms", p95 < 300, f"{p95:.0f} ms")
+        # 500 ms, not 300 (TR-1467): a laptop takes 100 to 150 ms, a GitHub runner anywhere from 180 to
+        # 310 ms for the same code. A real regression (one query per project) costs far more than that.
+        ck("p95 under 500 ms", p95 < 500, f"{p95:.0f} ms")
         h2 = fh.waiting_items(store, fx, now_utc())
         rest = [i for i in h2 if i["kind"] != "signoff"]
         key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
