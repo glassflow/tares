@@ -5,8 +5,10 @@ Covered: success, failure, pending and none from GitHub fixtures; how each check
 fail; a run still going is pending); a commit with no checks is pending when the repository has
 workflow files (or GitHub cannot say) and none when it has none; the "no CI" setting, factory or
 project, answers none without asking GitHub; the reviewer's `factory/review` status is never a check;
-required names (only those count, a missing one is pending, a failure beats a missing one, blank
-names are ignored); `read_pr` gives `ci_checks` and leaves `ci` as it was; `has_workflows` (a folder
+a job cancelled in a workflow run that a later run of the same workflow on the same commit replaced
+(a draft run cancelled by marking the PR ready) is no failure, any other cancel still is, and the
+workflow runs are asked for only when a job was cancelled; required names (only those count, a
+missing one is pending, a failure beats a missing one, blank names are ignored); `read_pr` gives `ci_checks` and leaves `ci` as it was; `has_workflows` (a folder
 with files, an empty or missing folder, no answer, a second credential, a path that is a file,
 caching of True and False but not of no answer); empty and null inputs (no store, no repository,
 no required list, no head, a PR that cannot be read, no credential).
@@ -53,13 +55,14 @@ calls: list[str] = []
 
 
 def reset(statuses=None, runs=None, workflows=(200, [{"type": "file", "name": "ci.yml"}]),
-          head=HEAD, pr_status=200, st_code=200, runs_code=200, st_total=None, runs_total=None):
+          head=HEAD, pr_status=200, st_code=200, runs_code=200, st_total=None, runs_total=None,
+          wruns=None, wruns_code=200):
     fg._workflows.clear()
     calls.clear()
     G.clear()
     G.update(statuses=statuses or [], runs=runs or [], workflows=workflows, head=head,
              pr_status=pr_status, st_code=st_code, runs_code=runs_code, st_total=st_total,
-             runs_total=runs_total)
+             runs_total=runs_total, wruns=wruns or [], wruns_code=wruns_code)
 
 
 def handler(req: httpx.Request):
@@ -90,6 +93,12 @@ def handler(req: httpx.Request):
         if G["runs_total"] is not None:
             body["total_count"] = G["runs_total"]
         return httpx.Response(200, json=body)
+    if path.endswith("/actions/runs"):
+        if G["wruns_code"] == "raise":
+            raise httpx.ConnectError("down")
+        if G["wruns_code"] != 200:
+            return httpx.Response(G["wruns_code"], json={})
+        return httpx.Response(200, json={"workflow_runs": G["wruns"]})
     if path.endswith("/contents/.github/workflows"):
         code, body = G["workflows"]
         return httpx.Response(code, json=body)
@@ -397,6 +406,98 @@ reset(runs=[old, new])
 ck("a run with no started_at is ordered by created_at, not by id", ci().state == "success")
 reset(runs=[new, old])
 ck("...in either order", ci().state == "success")
+
+print("== a job cancelled because a later run of its workflow replaced it ==")
+
+
+def wrun(rid, workflow=306034208, head=HEAD):
+    """A workflow run as GitHub's actions/runs endpoint sends it (the fields the gate reads)."""
+    return {"id": rid, "workflow_id": workflow, "name": "CI", "head_sha": head, "event": "pull_request"}
+
+
+TEMPLATE = "e2e (${{ matrix.shard }}/2)"   # a matrix job cancelled before it expanded keeps its template name
+draft_jobs = [real_run("parity (1/2)", 11, DRAFT, conclusion="cancelled"),
+              real_run(TEMPLATE, 12, DRAFT, conclusion="cancelled")]
+ready_jobs = [real_run("parity (1/2)", 21, READY), real_run("e2e (1/2)", 22, READY),
+              real_run("e2e (2/2)", 23, READY)]
+for j, rid in zip(draft_jobs + ready_jobs, (1, 1, 2, 2, 2)):
+    j["html_url"] = f"https://github.com/{REPO}/actions/runs/{rid}/job/{j['id']}"
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("a cancel in a run a later run of the same workflow replaced is no failure, whatever its name",
+   got["ci"] == "success" and TEMPLATE not in [c["name"] for c in got["ci_checks"]], got)
+ck("...the later run's own checks are all listed",
+   sorted(c["name"] for c in got["ci_checks"]) == ["e2e (1/2)", "e2e (2/2)", "parity (1/2)"], got["ci_checks"])
+out = ci()
+ck("...and the gate says success with nothing failing", (out.state, out.failing) == ("success", []), out)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(2), wrun(1)])
+ck("...whichever order GitHub lists the runs in", ci().state == "success")
+reset(runs=draft_jobs, wruns=[wrun(1)])
+out = ci()
+ck("a cancel with no later run of its workflow still fails, named",
+   (out.state, out.failing) == ("failure", ["parity (1/2)", TEMPLATE]), out)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2, workflow=410143077)])
+out = ci()
+ck("a later run of another workflow does not replace it", out.state == "failure" and TEMPLATE in out.failing, out)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2, head="other")])
+ck("a later run on another commit does not replace it", TEMPLATE in ci().failing)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1)])
+ck("a replacing run GitHub does not list does not replace it", TEMPLATE in ci().failing)
+reset(runs=draft_jobs + ready_jobs, wruns=[], wruns_code=500)
+ck("the workflow runs cannot be read (500): cancels count as before", TEMPLATE in ci().failing)
+reset(runs=draft_jobs + ready_jobs, wruns=[], wruns_code="raise")
+ck("...or the call raises", TEMPLATE in ci().failing)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)])
+failed = real_run("lint", 13, DRAFT, conclusion="failure")
+failed["html_url"] = f"https://github.com/{REPO}/actions/runs/1/job/13"
+reset(runs=draft_jobs + ready_jobs + [failed], wruns=[wrun(1), wrun(2)])
+ck("a job that failed in a replaced run still fails", ci().failing == ["lint"])
+timed = real_run("lint", 13, DRAFT, conclusion="timed_out")
+timed["html_url"] = failed["html_url"]
+reset(runs=draft_jobs + ready_jobs + [timed], wruns=[wrun(1), wrun(2)])
+ck("...a timed out one too", ci().failing == ["lint"])
+pending = [dict(j) for j in ready_jobs]
+pending[1] = real_run("e2e (1/2)", 22, READY, status="in_progress")
+pending[1]["html_url"] = ready_jobs[1]["html_url"]
+reset(runs=draft_jobs + pending, wruns=[wrun(1), wrun(2)])
+out = ci()
+ck("the replacing run still going: pending, the replaced cancel not counted", (out.state, out.failing) == ("pending", []), out)
+cancelled_later = [dict(j) for j in ready_jobs]
+cancelled_later[1] = real_run("e2e (1/2)", 22, READY, conclusion="cancelled")
+cancelled_later[1]["html_url"] = ready_jobs[1]["html_url"]
+reset(runs=draft_jobs + cancelled_later, wruns=[wrun(1), wrun(2)])
+ck("a cancel in the newest run still fails", ci().failing == ["e2e (1/2)"])
+bare = real_run("lone", 14, DRAFT, conclusion="cancelled")
+bare["html_url"] = ""
+reset(runs=[bare, real_run("other", 21, READY)], wruns=[wrun(1), wrun(2)])
+ck("a cancelled check with no run in its URL still fails", ci().failing == ["lone"])
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)])
+asyncio.run(fg.read_pr(store, REPO, N))
+ck("a commit with a cancelled job costs one more call, for the workflow runs",
+   [c for c in calls if c.endswith("/actions/runs")] == [f"/repos/{REPO}/actions/runs"] and len(calls) == 4, calls)
+reset(runs=[real_run("test", 22, READY)], wruns=[wrun(2)])
+asyncio.run(fg.read_pr(store, REPO, N))
+ck("a commit with no cancelled job costs no extra call", len(calls) == 3, calls)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)], head="")
+asyncio.run(fg.read_pr(store, REPO, N))
+ck("a PR with no head asks nothing about workflow runs", not [c for c in calls if c.endswith("/actions/runs")], calls)
+
+print("== _replaced_runs ==")
+ck("no runs, None, junk: nothing replaced",
+   fg._replaced_runs([], HEAD) == set() and fg._replaced_runs(None, HEAD) == set()
+   and fg._replaced_runs([None, "x", {}, {"id": "no", "workflow_id": 1}, {"id": 5}], HEAD) == set())
+ck("two runs of one workflow: the lower one is replaced", fg._replaced_runs([wrun(1), wrun(2)], HEAD) == {1})
+ck("three runs: only the newest is left", fg._replaced_runs([wrun(3), wrun(1), wrun(2)], HEAD) == {1, 2})
+ck("each workflow keeps its own newest",
+   fg._replaced_runs([wrun(1), wrun(4), wrun(2, workflow=7), wrun(3, workflow=7)], HEAD) == {1, 2})
+ck("string ids are read as numbers", fg._replaced_runs([wrun("1"), wrun("2")], HEAD) == {1})
+ck("a run of another commit is ignored", fg._replaced_runs([wrun(1), wrun(2, head="x")], HEAD) == set())
+ck("a run with no head_sha counts for the commit asked about",
+   fg._replaced_runs([wrun(1), {"id": 2, "workflow_id": 306034208}], HEAD) == {1})
+ck("_run_id reads the run, not the job",
+   fg._run_id({"html_url": "https://github.com/a/b/actions/runs/44240624428/job/134587351900"}) == 44240624428
+   and fg._run_id({"html_url": None}) is None and fg._run_id({}) is None and fg._run_id(None) is None
+   and fg._run_id({"html_url": "https://github.com/a/b/pull/1"}) is None)
 
 print("== has_workflows ==")
 fg._workflows.clear()
