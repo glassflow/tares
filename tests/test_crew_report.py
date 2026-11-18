@@ -179,6 +179,37 @@ code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-b03"
 ck("--station narrows --section; a station with only `none` is no match", code == 0 and out.strip() == "no match", out)
 code, out, err = run("grep", "--section", env=SENV)
 ck("--section with no name is the usage", code == 1 and "usage:" in err, err)
+code, out, err = run("grep", "--section", "--days", "1", env=SENV)
+ck("a flag-looking section name is the usage, not a name", code == 1 and "usage:" in err, (code, err))
+code, out, err = run("grep", "--section", "Undelivered", "--days", "1", env=SENV)
+ck("--days with --section is refused, not ignored", code == 1 and "--days does not apply" in err, (code, err))
+(SEC / "reports" / "crew-fence.md").write_text(
+    "## Undelivered (2)\n[TF:ASK] counted heading\n- none\n```\n## Taken\n[TF:ASK] inside a fence\n```\n## Now\nx\n",
+    newline="\n")
+code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-fence", env=SENV)
+ck("`## Undelivered (2)` is the section, `- none` is empty, a `## ` in a code fence is no heading",
+   code == 0 and "counted heading" in out and "crew-fence report: ## Taken" in out and "inside a fence" in out and "- none" not in out, out)
+
+print("grep --section on a home that was never archived")
+OLD = TMP / "unarchived-home"
+OENV = {"FACTORY_CREW_HOME": str(OLD), "HOME": str(TMP)}
+(OLD / "reports").mkdir(parents=True)
+rows = {"crew-orchestrator": {"status": "running"}, "crew-zz-builder": {"status": "running"}, "dead-old": {"status": "retired"}}
+(OLD / "stations.json").write_text(json.dumps(rows), newline="\n")
+for i in range(30):  # dead stations, sorted before the live ones, each with a long Undelivered section
+    (OLD / "reports" / f"a-dead-{i:02d}.md").write_text(
+        "## Undelivered\n" + "".join(f"[TF:ASK] dead {i} line {n}\n" for n in range(5)), newline="\n")
+(OLD / "reports" / "dead-old.md").write_text("## Undelivered\n[TF:ASK] retired station line\n", newline="\n")
+(OLD / "reports" / "crew-zz-builder.md").write_text("## Undelivered\n[TF:ASK] live peer parked T99\n", newline="\n")
+code, out, err = run("grep", "--section", "Undelivered", env=OENV)
+ck("only live stations are read: a live peer's parked ASK is shown among 150 dead lines",
+   code == 0 and out.splitlines() == ["crew-zz-builder report: [TF:ASK] live peer parked T99"], out)
+code, out, err = run("grep", "--section", "Undelivered", "--station", "dead-old", env=OENV)
+ck("...a retired station is skipped even when named", code == 0 and out.strip() == "no match", out)
+(OLD / "stations.json").unlink()
+code, out, err = run("grep", "--section", "Undelivered", "dead 29", env=OENV)
+ck("without a stations.json every report counts", code == 0 and "a-dead-29 report" in out, out)
+
 code, out, err = run("log", "--section", "Undelivered", "x", env=ENV)
 ck("--section is not an option of log: it stays in the entry", code == 0 and
    any("--section Undelivered x" in f.read_text() for f in LOG.glob("*.md")), (code, err))

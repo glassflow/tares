@@ -11,7 +11,7 @@ after a compaction. What happened goes to the log instead, one dated file per st
                    narrows it to one station, `--days <n>` to the last n days (default 14); the archived
                    files (final.md, archive-until-*.md) are searched too, whatever --days says;
                    `--section <name>` looks only at that `## <name>` section of each live report (no logs, no
-                   archives) and the regex is then optional: `grep --section Undelivered` lists what each
+                   archives; with a stations.json, only the stations it holds and has not retired) and the regex is then optional: `grep --section Undelivered` lists what each
                    station parked there
   archive          moves the old append-only reports into `reports/log/<station>/`: a report of a station
                    that is not live goes to `final.md`; a live station's report goes to
@@ -132,15 +132,36 @@ def _files(paths: CrewPaths, station: str, days: int) -> list[tuple[str, Path]]:
     return found + [(f"{p.stem} report", p) for p in reports if p.is_file()] + archived
 
 
+_EMPTY = ("none", "- none", "* none")
+_FENCE = ("```", "~~~")
+
+
 def _section(lines: list, name: str) -> list:
-    """The lines under `## <name>` up to the next `## ` heading, without blanks and a bare `none`."""
-    keep, inside = [], False
+    """The lines under `## <name>` (or `## <name> (2)`) up to the next `## ` heading, without blanks and a bare
+    `none` or `- none`. A `## ` line inside a code fence is text, not a heading."""
+    want = name.lower()
+    keep, inside, fenced = [], False, False
     for ln in lines:
-        if ln.startswith("## "):
-            inside = ln[3:].strip().lower() == name.lower()
-        elif inside and ln.strip() and ln.strip().lower() != "none":
+        if ln.lstrip().startswith(_FENCE):
+            fenced = not fenced
+        elif ln.startswith("## ") and not fenced:
+            head = ln[3:].strip().lower()
+            inside = head == want or bool(re.fullmatch(re.escape(want) + r"\s*\(.*\)", head))
+            continue
+        if inside and ln.strip() and ln.strip().lower() not in _EMPTY:
             keep.append(ln)
     return keep
+
+
+def _live(paths: CrewPaths) -> set | None:
+    """The names of the stations stations.json holds and has not retired; None when there is no such list
+    (a home that is not a crew home), and then every report counts."""
+    try:
+        rows = state.stations_load(paths)
+    except (CrewError, OSError, ValueError):
+        return None
+    live = {n for n, v in rows.items() if isinstance(v, dict) and v.get("status") != "retired"}
+    return live or None
 
 
 def search(paths: CrewPaths, station: str, days: int, pattern: str, section: str = "") -> tuple[list[str], int]:
@@ -149,8 +170,11 @@ def search(paths: CrewPaths, station: str, days: int, pattern: str, section: str
     except re.error as e:
         raise CrewError(f"{pattern!r} is not a regular expression: {e}") from None
     shown, size, more = [], 0, 0
+    live = _live(paths) if section else None
     for label, f in _files(paths, station, days):
         if section and not label.endswith(" report"):
+            continue
+        if live is not None and f.stem not in live:  # a dead station's parked lines would crowd out a live one's
             continue
         try:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -323,8 +347,10 @@ def _report(args: list, env: dict) -> int:
     args, section = list(args), ""
     if args[0] == "grep" and "--section" in args[1:]:
         i = args.index("--section", 1)
-        if i + 1 >= len(args) or not args[i + 1].strip():
+        if i + 1 >= len(args) or not args[i + 1].strip() or args[i + 1].startswith("-"):
             raise CrewError(USAGE)
+        if "--days" in args:
+            raise CrewError("--days does not apply to --section: it reads the reports, not the logs")
         section = args[i + 1].strip()
         del args[i:i + 2]
     station, days, rest = _options(args[1:], env.get("FACTORY_STATION", "") if args[0] == "log" else "", args[0] == "log")
@@ -347,7 +373,8 @@ def _report(args: list, env: dict) -> int:
     for ln in shown:
         print(ln)
     if more:
-        print(f"{more} more matching lines not shown: narrow the pattern, --station or --days.")
+        print(f"{more} more matching lines not shown: narrow the pattern or --station." if section
+              else f"{more} more matching lines not shown: narrow the pattern, --station or --days.")
     if not shown:
         print("no match")
     return 0
