@@ -396,6 +396,15 @@ FACTORY_SCHEMA = [
     # failure's words. A success clears both.
     "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_failures INTEGER DEFAULT 0",
     "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_error TEXT",
+    # The decision folders an admin chose for a connected repo (TR-1209, ee): one row per folder, with who
+    # chose it and when. The files in them are the repo's decisions in the brain.
+    """CREATE TABLE IF NOT EXISTS brain_repo_folders (
+      repo      TEXT,
+      path      TEXT,
+      chosen_by TEXT,
+      chosen_at TIMESTAMPTZ,
+      PRIMARY KEY (repo, path)
+    )""",
     # Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked
     # (the station and person the call came with, `via` mcp or console), what, which repos it used,
     # how long it took and the tokens lore reported. The daily caps count the ask rows.
@@ -522,8 +531,9 @@ FACTORY_SCHEMA = [
       updated_at    TIMESTAMPTZ
     )""",
     "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
-    # TR-858: the files (and head) a pull request had before its branch was brought up to date,
-    # as JSON, and how many ticks in a row GitHub could not say whether it merges.
+    # TR-858: the files (and head) a pull request had before its branch was last brought up to
+    # date, as JSON (kept until the row ends: a queued row that has it holds its repo's turn), and
+    # how many ticks in a row GitHub could not say whether it merges.
     "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS before_files TEXT",
     "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS unknown_ticks INTEGER",
     # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
@@ -1995,7 +2005,32 @@ class FactoryStore:
         with self._swrite:
             hit = self.sc.execute("DELETE FROM brain_repos WHERE repo = ? RETURNING repo",
                                   [repo]).fetchone()
+            self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ?", [repo])
         return hit is not None
+
+    def list_brain_folders(self, repo: str) -> list[dict]:
+        """The decision folders chosen for `repo`, by path: {path, chosen_by, chosen_by_name, chosen_at}."""
+        with self._sread:
+            rows = self.sc.execute("SELECT path, chosen_by, chosen_at FROM brain_repo_folders "
+                                   "WHERE repo = ? ORDER BY path", [repo]).fetchall()
+        refs = self._person_refs(r[1] for r in rows)
+        return [{"path": r[0], "chosen_by": r[1], "chosen_by_name": (refs.get(r[1]) or {}).get("name"),
+                 "chosen_at": r[2]} for r in rows]
+
+    def set_brain_folders(self, repo: str, paths: list[str], by: str | None, at) -> tuple[list[str], list[str]]:
+        """Make `paths` the repo's chosen folders. A folder already chosen keeps its chooser and date.
+        Returns (added, removed), each sorted. The read, the deletes and the inserts are one step under
+        the write lock."""
+        with self._swrite:
+            have = {r[0] for r in self.sc.execute(
+                "SELECT path FROM brain_repo_folders WHERE repo = ?", [repo]).fetchall()}
+            want = set(paths)
+            for p in sorted(have - want):
+                self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ? AND path = ?", [repo, p])
+            for p in sorted(want - have):
+                self.sc.execute("INSERT INTO brain_repo_folders (repo, path, chosen_by, chosen_at) "
+                                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [repo, p, by or None, at])
+        return sorted(want - have), sorted(have - want)
 
     def requeue_brain_repo(self, repo: str, from_state: str = "failed") -> bool:
         """Put a repo that is in `from_state` back to queued for a new index job: the error, the

@@ -59,6 +59,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 from . import claude as cl
 from . import pace, state
@@ -369,7 +370,13 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     plan = plan or launch_plan(client, station, role, parent, project, repo)
     file, shown = settings_path(client, station)
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
-    state.write_json(file, {"env": plan["env"], **plan["settings"]}, mode=0o600)
+    state.write_json(file, {"env": {**plan["env"], **plan.get("otel_file", {})}, **plan["settings"]}, mode=0o600)
+    servers = plan.get("mcp") or {}
+    mcp_path = mcp_file(paths, station)[0]
+    if servers:
+        state.write_json(mcp_path, {"mcpServers": servers}, mode=0o600)
+    else:
+        mcp_path.unlink(missing_ok=True)
     pid = plan["env"].get("TARES_PROJECT")
     if project and pid:
         state.stations_put(station, {"project_id": pid}, paths)
@@ -551,6 +558,33 @@ def person_settings(env=None) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
+# The Slack plugin's tools that write (send, draft, schedule, canvas, reaction), as its skills and commands name them
+# (slack-messaging, draft-announcement). A station that keeps Slack reads it and never writes: contacting anyone is
+# the person's call alone (protocol rule 4).
+SLACK_WRITE_TOOLS = ("slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_create_canvas",
+                     "slack_update_canvas", "slack_add_reaction")
+# Claude Code matches a `*` in a tool rule (proved on a stub server), so a write tool the plugin adds later with one
+# of these verbs is denied too. Reads start with read, search, list or get and never match.
+SLACK_WRITE_VERBS = ("send", "schedule", "create", "update", "delete", "edit", "add", "post", "set", "remove", "invite",
+                     "reply", "upload", "share", "react", "pin", "unpin", "join", "leave", "archive", "unarchive",
+                     "kick", "rename", "mark", "move", "publish", "write", "save", "open", "close", "start", "stop",
+                     "approve", "request", "copy", "transfer", "forward", "mute", "unmute", "star", "unstar")
+
+
+def slack_deny(mcp_names, plugin_ids) -> list:
+    """The `permissions.deny` rules for every Slack write tool the role can reach: the plugin's server is
+    `mcp__plugin_slack_slack__<tool>`, a user MCP server with slack in its name (any case) `mcp__<name>__<tool>`. [] when the role keeps
+    neither, so the rules appear exactly when Slack is allowed."""
+    prefixes = []
+    if any(str(p).split("@")[0] == "slack" for p in plugin_ids):
+        prefixes.append("mcp__plugin_slack_slack__")
+    for name in mcp_names:
+        if "slack" in str(name).lower():   # Claude Code writes a server name with every other character as _
+            prefixes.append(f"mcp__{re.sub(r'[^A-Za-z0-9_-]', '_', str(name))}__")
+    rules = [*SLACK_WRITE_TOOLS, *(f"slack_{v}*" for v in SLACK_WRITE_VERBS)]
+    return [f"{pre}{rule}" for pre in prefixes for rule in rules]
+
+
 def _union(own, extra) -> list:
     """`own` and then each entry of `extra` it does not have yet: nothing of `own` is dropped or moved."""
     out = list(own) if isinstance(own, list) else []
@@ -584,34 +618,121 @@ def with_restrictions(settings: dict, person: dict) -> dict:
     return out
 
 
+TELEMETRY_FLAGS = ("CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+_SECRET_NAME = re.compile(r"HEADERS|KEY|TOKEN|SECRET|AUTH|PASSWORD|CREDENTIAL", re.I)
+_USERINFO = re.compile(r"://[^/?#\s]*@")
+_BARE_USERINFO = re.compile(r"^[^/?#\s@=,]+(?::[^/?#\s@=,]*)?@[^\s/?#@]+")
+_PAIR_SPLIT = re.compile(r"[,&;?#]")
+
+
 def telemetry_env(person: dict, spec_env: dict) -> dict:
-    """The OTEL_* variables a station starts with: the person's (their settings' env) under the spec's."""
+    """The telemetry variables a station starts with: OTEL_* and the two that switch Claude Code's telemetry on,
+    the person's (their settings' env) under the spec's."""
     out = {}
     for source in (person.get("env"), spec_env):
         if isinstance(source, dict):
-            out.update({k: str(v) for k, v in source.items() if str(k).startswith("OTEL_")})
+            out.update({k: str(v) for k, v in source.items() if str(k).startswith("OTEL_") or k in TELEMETRY_FLAGS})
     return out
 
 
+def holds_secret(name: str, value: str) -> bool:
+    """Whether a telemetry variable may hold a secret: its name has headers, key, token, secret, auth, password or
+    credential in it, or its value has credentials in an address (`https://user:pw@host`), or, in any piece of it
+    (split at `,` `&` `;` `?` `#`, so a query, a fragment or a list such as OTEL_RESOURCE_ATTRIBUTES), has
+    a `name=value` pair whose name is one of those words (`?api_key=...`, `#access_token=...`,
+    `auth_token=...`; a percent-encoded name is read decoded), or a bare `user:pw@host` or `user@host`, alone or
+    as a pair's value. A name that only contains one of those words, such as `author=`, is held too: it fails safe."""
+    if _SECRET_NAME.search(name) or _USERINFO.search(value):
+        return True
+    for piece in _PAIR_SPLIT.split(value):
+        piece = piece.strip()
+        key, eq, _ = piece.partition("=")
+        if eq and _SECRET_NAME.search(unquote(key.strip())):
+            return True
+        if any(_BARE_USERINFO.search(token.strip()) for token in piece.split("=")):
+            return True
+    return False
+
+
+def split_telemetry(otel: dict) -> tuple:
+    """(plain, secret): the telemetry variables a settings file may hold, and the ones that may hold a secret
+    (see holds_secret), which no file ever does. A variable that is a path to a key file, such as
+    OTEL_EXPORTER_OTLP_CLIENT_KEY, is held too: its name says key, and it fails safe."""
+    plain, secret = {}, {}
+    for k, v in otel.items():
+        (secret if holds_secret(k, v) else plain)[k] = v
+    return plain, secret
+
+
 def lean_args(args: list) -> list:
-    """`args` with the flags that keep the person's own sources out of a station, right after --settings."""
-    if "--setting-sources" in args:
-        return list(args)
-    at = args.index("--settings") + 2 if "--settings" in args and args.index("--settings") + 1 < len(args) else len(args)
-    return [*args[:at], *LEAN_FLAGS, *args[at:]]
+    """`args` with the flags that keep the person's own sources out of a station, right after --settings:
+    --setting-sources is always project,local (a value the spec carries, in either form, is replaced),
+    --no-chrome is added when missing."""
+    out = [a for a in args if not a.startswith("--setting-sources=")]
+    if "--setting-sources" in out:
+        at = out.index("--setting-sources")
+        if at + 1 < len(out):
+            out[at + 1] = LEAN_FLAGS[1]
+        else:
+            out.append(LEAN_FLAGS[1])
+        if "--no-chrome" not in out:
+            out.insert(at + 2, "--no-chrome")
+        return out
+    flags = LEAN_FLAGS if "--no-chrome" not in out else LEAN_FLAGS[:2]
+    at = out.index("--settings") + 2 if "--settings" in out and out.index("--settings") + 1 < len(out) else len(out)
+    return [*out[:at], *flags, *out[at:]]
+
+
+def mcp_file(paths: CrewPaths, station: str) -> tuple:
+    """(the file, the path as bash prints it) of the MCP servers a station launches with (--mcp-config)."""
+    return paths.station_file(station, "mcp.json"), f"{_forward(paths.raw)}/stations/{station}.mcp.json"
+
+
+def with_mcp_flag(args: list, file: str) -> list:
+    """`args` with `--mcp-config <file>` placed before another flag (the option takes every word up to the next
+    flag, so one at the end would swallow the prompt): after the --settings value, else before --plugin-dir,
+    else in the `--mcp-config=<file>` form at the end."""
+    for flag, shift in (("--settings", 2), ("--plugin-dir", 0)):
+        if flag in args:
+            at = args.index(flag) + shift
+            return [*args[:at], "--mcp-config", file, *args[at:]]
+    return [*args, f"--mcp-config={file}"]
+
+
+def mcp_servers(paths: CrewPaths, station: str, role: str, parent: str, env=None) -> dict:
+    """The role's allow-listed MCP servers (stations.<role>.mcp) as the person's ~/.claude.json defines them,
+    {name: config}. A name that file does not have is skipped with one line on stderr; the configs are never
+    printed or logged, since they can hold credentials."""
+    names = allow_lists(paths, role, parent)[0]
+    if not names:
+        return {}
+    doc = state.read_json(Path(cl._home(env)) / ".claude.json", None)
+    have = doc.get("mcpServers") if isinstance(doc, dict) and isinstance(doc.get("mcpServers"), dict) else {}
+    out = {}
+    for name in names:
+        if isinstance(have.get(name), dict):
+            out[name] = have[name]
+        else:
+            print(f"  ! {station}: MCP server '{name}' is not in ~/.claude.json, so it is not loaded", file=sys.stderr)
+    return out
 
 
 def launch_plan(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
                 model: str | None = None, effort: str | None = None) -> dict:
-    """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel}.
+    """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel, otel_file}.
 
     args: the `claude` arguments up to and including --plugin-dir, with --setting-sources project,local and
-    --no-chrome after --settings; no --resume and no prompt, which `launch` adds. env and settings: the two
+    --no-chrome after --settings, and `--mcp-config <file>` before them when the role keeps MCP servers; no
+    --resume and no prompt, which `launch` adds. mcp: those servers, {name: config}, which write_settings puts
+    in the file. env and settings: the two
     halves of the settings document (env, and everything else); the file is `{"env": env, **settings}`. The
-    settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors and, for every role but the
-    orchestrator (and the helpers under it), autoMemoryEnabled false. otel: the
-    OTEL_* variables, the person's and the spec's, which reach the station only through the environment of
-    the process that starts it, never a file. `model` and `effort` default to the crew's (see model_effort).
+    settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors, the role's
+    allow-listed plugins in enabledPlugins and, for every role but the orchestrator (and the helpers under it),
+    autoMemoryEnabled false. otel: the telemetry variables, the person's and the spec's, given to the process
+    that starts the station. That alone does not reach a session started in a running Claude Code background
+    service, so otel_file, the ones that cannot hold a secret (see split_telemetry), also go in the settings
+    file's env; the rest never touch a file and are never printed. `model` and `effort` default to the
+    crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
     this fills the placeholders of this machine and adds FACTORY_TARES, the `tares` that started the crew.
     Dies (CrewError) for a model that cannot run auto mode, a name that is not a station name, a helper whose
@@ -641,12 +762,26 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     person = person_settings(client.env)
     otel = telemetry_env(person, env)
     env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
+    plain, _ = split_telemetry(otel)
     settings = with_restrictions(fill_placeholders(spec["settings"], values), person)
     settings["disableClaudeAiConnectors"] = True
+    mcp_names, plugins = allow_lists(paths, role, parent)
+    deny = slack_deny(mcp_names, plugins)
+    if deny:
+        perms = dict(settings["permissions"]) if isinstance(settings.get("permissions"), dict) else {}
+        perms["deny"] = _union(perms.get("deny"), deny)
+        settings["permissions"] = perms
+    if plugins:
+        enabled = dict(settings["enabledPlugins"]) if isinstance(settings.get("enabledPlugins"), dict) else {}
+        enabled.update({name: True for name in plugins})
+        settings["enabledPlugins"] = enabled
     if (parent_role(parent, paths) if role == "helper" else role) != "orchestrator":
         settings["autoMemoryEnabled"] = False
-    return {"args": lean_args(fill_placeholders(spec["command"], values)), "env": env, "settings": settings,
-            "otel": otel}
+    args = lean_args(fill_placeholders(spec["command"], values))
+    servers = mcp_servers(paths, station, role, parent, client.env)
+    if servers:
+        args = with_mcp_flag(args, mcp_file(paths, station)[1])
+    return {"args": args, "env": env, "settings": settings, "otel": otel, "otel_file": plain, "mcp": servers}
 
 
 # ---------- starting a station ----------
@@ -673,6 +808,14 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
         grants = gsum = ""
     plan = launch_plan(client, station, role, parent, project, repo, model, effort)
     settings = write_settings(client, station, role, parent, project, repo, plan)
+    held = sorted(set(plan["otel"]) - set(plan["otel_file"]))
+    if held:
+        print(f"  note: {station} sends its telemetry without {', '.join(held)}: a variable that may hold a secret "
+              "never goes in a file, and a running Claude Code background service does not pass on the one a "
+              "launch gives it", file=sys.stderr)
+        if any(k.endswith("_CLIENT_KEY") for k in held):
+            print("  note: a client key variable holds a file path, not a secret, but its name says key, so it is held "
+                  "back too; a station on a running background service sends without its client key", file=sys.stderr)
     args = plan["args"]
     kd = kit_dir(client)
     if resume:

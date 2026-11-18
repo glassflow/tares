@@ -37,6 +37,8 @@ from .paths import CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
 STALL_AFTER = 45 * 60   # seconds a held ticket may go without news before the orchestrator is told
+DESK_ASK_EVERY = 3600   # seconds an open desk item waits before the orchestrator is told to ask again
+KEYS_SHOWN = 5
 DEFAULT_SETTLE = 600   # seconds a session may be active after a wake before the clock restarts (FACTORY_WAKE_SETTLE)
 
 _RELEASE = re.compile(r"(^|[^A-Za-z])RELEASE([^A-Za-z]|$)")
@@ -255,6 +257,40 @@ def _stall_items(doc, client: TaresClient, paths: CrewPaths) -> list:
     return items
 
 
+def _desk_items(doc, now: int) -> list:
+    """The open desk items to ask about again, as [{key, text}]: one per full hour an item has been open, so each
+    wakes the orchestrator at most once an hour and never the moment it is filed. An item whose `created_at`
+    is not a time is keyed on the clock hour instead."""
+    items = []
+    for d in _list(_get(doc, "desk")):
+        label = _text(_alt(_get(d, "label"), ""))
+        if not label:
+            continue
+        since = _secs(_get(d, "created_at"))
+        hours = now // DESK_ASK_EVERY if since is None else (now - since) // DESK_ASK_EVERY
+        if hours < 1:
+            continue
+        project = _get(d, "project_name")
+        where = f" of {_text(project)}" if project else ""
+        items.append({"key": f"dk:{label}@{hours}", "text": f"desk item {label}{where} is still open, ask again"})
+    return items
+
+
+def _takeover_items(projs) -> list:
+    """The projects the person took over and the orchestrator has not released, as [{key, text}]."""
+    items = []
+    for p in _list(_get(projs, "releasing")):
+        pid = _text(_get(p, "id"))
+        items.append({"key": f"rl:{pid}", "text": f"project {_text(_alt(_get(p, 'name'), pid))} was taken over, release it"})
+    return items
+
+
+def _keep_seen(seen: list, current: list) -> list:
+    """The work keys already told, without the desk and takeover keys that no longer show: an item answered, or a
+    project released, is forgotten, so the same project taken over again wakes it again."""
+    return [k for k in seen if not (isinstance(k, str) and k.startswith(("dk:", "rl:"))) or k in current]
+
+
 def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
     """Desk answers closed, projects handed over, tickets ready, tickets bouncing to a new ladder step, milestones
     ready to check and held tickets that stalled or lost their holder, since the baseline; the first look only
@@ -262,7 +298,8 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
     desk = _json(client, "/api/desk?state=answered&mine=1")
     projs = _json(client, "/api/crew/projects")
     work = _my_work(client)
-    items = None if work is None else _work_items(work) + _stall_items(work, client, paths)
+    items = None if work is None else (_work_items(work) + _stall_items(work, client, paths)
+                                       + _desk_items(work, state.now_s()) + _takeover_items(projs))
     work_keys = [] if items is None else [i["key"] for i in items]
     orch = state.crew_orchestrator(paths)
     base = state.wake_read(orch, paths)["baseline"]
@@ -307,7 +344,13 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
                     state.wake_update(orch, {"baseline": {**base, "work": sorted(set(work_keys))}}, paths)
                 except OSError:
                     pass
-            baseline["work"] = sorted(set(seen_work + work_keys))
+            kept = _keep_seen(seen_work, work_keys)
+            if kept != seen_work:   # forgotten now, not at the next wake, so a quick second takeover still wakes it
+                try:
+                    state.wake_update(orch, {"baseline": {**base, "work": sorted(set(kept))}}, paths)
+                except OSError:
+                    pass
+            baseline["work"] = sorted(set(kept + work_keys))
         elif isinstance(_get(base, "work"), list):
             baseline["work"] = base["work"]
         return {"live": True, "pending": pending, "baseline": baseline}
@@ -328,7 +371,19 @@ def work_prompt(role: str, items: str) -> str:
     if role == "releaser":
         return (f"A RELEASE is waiting for you in the orchestrator's report under Undelivered: {items}. Take it "
                 "as your manual says.")
-    return f"Something is waiting for you: {items}. Follow the Tick section of your manual."
+    return f"Something is waiting for you: {items}. Run the whole Tick section of your manual, not only that."
+
+
+def woke_on(keys: list) -> str:
+    """The keys that woke a station, in one short line."""
+    shown = ", ".join(keys[:KEYS_SHOWN])
+    more = f" and {len(keys) - KEYS_SHOWN} more" if len(keys) > KEYS_SHOWN else ""
+    return f"Woke on: {shown}{more}."
+
+
+def liveness_prompt(role: str) -> str:
+    what = ("run the whole Tick section of your manual" if role == "orchestrator" else "check your queue")
+    return f"Liveness check, nothing is known to be pending: {what} once, then end the turn."
 
 
 # ---------- deciding and waking ----------
@@ -418,15 +473,14 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
     if new:
         texts = "; ".join(p["text"] for p in new)
         out.update(work=True, n=0, reason=f"work: {texts}",
-                   prompt=f"{work_prompt(role, texts)} {note} Carry on from your report.")
+                   prompt=f"{work_prompt(role, texts)} {woke_on([p['key'] for p in new])} {note} Carry on from your report.")
     elif scan["live"] and w["released"] is not True:
         # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
         out.update(n=0, reason="release: idle_wake was switched on, telling the station to drop its tick",
                    prompt=f"idle_wake was switched on. {note} Carry on from your report.")
     elif due:
         out.update(n=n + 1, reason=f"liveness: wake {n + 1} with nothing pending",
-                   prompt=("Liveness check, nothing is known to be pending: check your queue once, then end the "
-                           f"turn. {note} Carry on from your report."))
+                   prompt=f"{liveness_prompt(role)} {note} Carry on from your report.")
     else:
         return None
     return out

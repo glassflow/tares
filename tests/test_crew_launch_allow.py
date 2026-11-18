@@ -7,9 +7,12 @@ A scratch crew home and a fake HOME: nothing of the person's is read or written.
 Run: python tests/test_crew_launch_allow.py
 """
 import contextlib
+import fnmatch
 import io
 import json
 import os
+import stat
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -18,12 +21,15 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path(tempfile.mkdtemp(prefix="tares-crew-allow-"))
 for _k in [k for k in os.environ if k.startswith(("TARES", "FACTORY"))]:
     del os.environ[_k]
-os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"),
-                  PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring")
+os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"), TARES_HOME=str(SCRATCH / "tares-home"),
+                  PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", FACTORY_PAUSE="0", FACTORY_NO_WATCH="1")
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests" / "factory"))
 
-from tares.crew import allow, dispatch, doctor, launch, state  # noqa: E402
+from tares.crew import allow, dispatch, doctor, launch, state, stations  # noqa: E402
+from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
+import launch_support as LS  # noqa: E402
 
 P = F = 0
 
@@ -41,7 +47,9 @@ def write(path, doc):
 
 
 HOME = SCRATCH / "home"
-write(HOME / ".claude.json", {"mcpServers": {"github": {"command": "x"}, "linear": {"command": "y"}}})
+MCP_SECRET = "fake-mcp-secret-9911"
+write(HOME / ".claude.json", {"mcpServers": {"github": {"command": "x"}, "linear": {"command": "y", "env": {"TOKEN": MCP_SECRET}},
+                                              "other": {"command": "z"}}})
 write(HOME / ".claude" / "settings.json", {"enabledPlugins": {"slack@claude-plugins": True}})
 CREW = SCRATCH / "crew"
 paths = CrewPaths.at(CREW)
@@ -136,6 +144,122 @@ ck("an unknown name does not fail the doctor", all(c.ok for c in rows.values()))
 ck("with no ~/.claude.json an MCP name is not called unknown", doctor_rows()["allow_orchestrator"].level == "ok")
 (CREW / "crew.json").unlink()
 ck("no crew.json, no lines", doctor_rows() == {})
+
+print("the launch")
+write(HOME / ".claude.json", {"mcpServers": {"github": {"command": "x"}, "linear": {"command": "y", "env": {"TOKEN": MCP_SECRET}},
+                                              "other": {"command": "z"}}})
+_n = [0]
+SHOWN = [""]
+
+
+def plan_of(role, lists, station="proj-build-m1"):
+    """(plan, the station's folder, what was printed, the crew home) of launch_plan and write_settings for a role."""
+    _n[0] += 1
+    tmp = SCRATCH / f"l{_n[0]}"
+    tmp.mkdir()
+    LS.make_crew(tmp, {"token": "tok-fake-allow-0123456789", "crew": {"stations": {role: lists}}})
+    os.environ["TARES_PLUGIN_DIR"] = str(LS.make_kit(tmp))
+    tares = LS.FakeTares({"projects": []})
+    tares.__enter__()
+    c = TaresClient(CrewPaths.at(tmp / "crew"), env={**os.environ, "TARESD_URL": tares.url})
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        c.prime(offline_ok=True)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            plan = launch.launch_plan(c, station, role, "", "", str(tmp / "repo"))
+            launch.write_settings(c, station, role, "", "", str(tmp / "repo"), plan)
+        with contextlib.redirect_stderr(io.StringIO()):
+            SHOWN[0] = stations.launch_plan(c, c.paths, [station, role, "-", "-", "-"])
+    finally:
+        c.close()
+        tares.__exit__(None, None, None)
+        os.environ.pop("TARES_PLUGIN_DIR", None)
+    return plan, tmp / "crew" / "stations", out.getvalue() + err.getvalue(), tmp
+
+
+plan, sdir, said, tmp = plan_of("builder", {"mcp": ["linear", "ghost"], "plugins": ["pyright-lsp@claude-plugins"]})
+mcp_file = sdir / "proj-build-m1.mcp.json"
+doc = json.loads(mcp_file.read_text(encoding="utf-8")) if mcp_file.exists() else {}
+args = plan["args"]
+at = args.index("--mcp-config") if "--mcp-config" in args else -1
+ck("a role with an MCP server starts with --mcp-config and the file", at > 0 and args[at + 1].endswith("/stations/proj-build-m1.mcp.json"), str(args))
+ck("the flag is followed by another flag, so it never takes the prompt", at > 0 and args[at + 2].startswith("--"), str(args))
+ck("the file holds only the named server", sorted(doc.get("mcpServers", {})) == ["linear"], str(doc)[:80])
+ck("the file is for its owner only", mcp_file.exists() and stat.S_IMODE(mcp_file.stat().st_mode) == 0o600 if os.name != "nt" else True)
+ck("a name ~/.claude.json lacks is skipped with one line", said.count("'ghost' is not in ~/.claude.json") == 1, said)
+ck("no server config text reaches the output", MCP_SECRET not in said and "TOKEN" not in said, said)
+settings = json.loads((sdir / "proj-build-m1.settings.json").read_text(encoding="utf-8"))
+ck("an allow-listed plugin is enabled in the station's settings", settings.get("enabledPlugins", {}).get("pyright-lsp@claude-plugins") is True, str(settings.get("enabledPlugins")))
+ck("the Tares plugin stays enabled beside it", settings.get("enabledPlugins", {}).get("tares@inline") is True, str(settings.get("enabledPlugins")))
+ck("the settings file holds no server config", MCP_SECRET not in json.dumps(settings))
+shown = SHOWN[0]
+ck("`launch-plan` shows the flag and the file, and no server config", "--mcp-config" in shown and ".mcp.json" in shown
+   and MCP_SECRET not in shown and '"mcp"' not in shown and '"mcpServers"' not in shown, shown[:200])
+
+plan, sdir, said, tmp = plan_of("builder", {})
+ck("a role with no list has no --mcp-config and no file", "--mcp-config" not in plan["args"] and not any("--mcp-config=" in a for a in plan["args"])
+   and not (sdir / "proj-build-m1.mcp.json").exists() and plan["mcp"] == {}, str(plan["args"]))
+ck("a role with no list enables only the Tares plugin", list(plan["settings"].get("enabledPlugins", {})) == ["tares@inline"], str(plan["settings"].get("enabledPlugins")))
+
+mcp_file = sdir / "proj-build-m1.mcp.json"
+mcp_file.write_text("{}", encoding="utf-8")
+plan, sdir, said, tmp = plan_of("builder", {"mcp": ["ghost"]})
+ck("a list whose names are all missing writes no file and no flag", "--mcp-config" not in plan["args"] and not (sdir / "proj-build-m1.mcp.json").exists(), str(plan["args"]))
+
+print("an older file goes when the list empties")
+_n[0] += 1
+t2 = SCRATCH / f"l{_n[0]}"
+t2.mkdir()
+(t2 / "crew" / "stations").mkdir(parents=True)
+(t2 / "crew" / "stations" / "x.mcp.json").write_text("{}", encoding="utf-8")
+c2 = type("C", (), {"paths": CrewPaths.at(t2 / "crew")})()
+launch.write_settings(c2, "x", "builder", "", "", "", {"env": {}, "settings": {}, "mcp": {}})
+ck("write_settings removes a stale MCP file", not (t2 / "crew" / "stations" / "x.mcp.json").exists())
+
+print("with_mcp_flag")
+ck("after the --settings value", launch.with_mcp_flag(["-p", "--settings", "s", "--setting-sources", "project,local"], "f")
+   == ["-p", "--settings", "s", "--mcp-config", "f", "--setting-sources", "project,local"])
+ck("before --plugin-dir without --settings", launch.with_mcp_flag(["--plugin-dir", "k"], "f") == ["--mcp-config", "f", "--plugin-dir", "k"])
+ck("the = form when it has neither", launch.with_mcp_flag(["-p"], "f") == ["-p", "--mcp-config=f"])
+
+print("Slack stays read-only")
+SP = "mcp__plugin_slack_slack__"
+WRITES = ["slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_create_canvas",
+          "slack_update_canvas", "slack_add_reaction"]
+READS = ["slack_read_channel", "slack_read_thread", "slack_read_user_profile", "slack_read_file", "slack_search_public",
+         "slack_search_channels", "slack_list_channel_members", "slack_get_reactions"]
+ck("the list names the write tools", sorted(launch.SLACK_WRITE_TOOLS) == sorted(WRITES))
+ck("no write tool is a read tool", not set(WRITES) & set(READS))
+plan, sdir, said, tmp = plan_of("orchestrator", {"plugins": ["slack@claude-plugins-official"]}, "proj-orch")
+deny = plan["settings"].get("permissions", {}).get("deny", [])
+saved = json.loads((sdir / "proj-orch.settings.json").read_text(encoding="utf-8"))
+ck("a role that allows the Slack plugin denies every write tool by name", [d for d in deny if d.startswith(SP)] == [SP + t for t in WRITES] + [SP + f"slack_{v}*" for v in launch.SLACK_WRITE_VERBS], str(deny))
+ck("no read tool is denied, by name or by a verb rule", not any(d.endswith(t) or fnmatch.fnmatchcase(SP + t, d) for d in deny for t in READS), str(deny))
+ck("every write tool is denied by name and by a verb rule", all(SP + t in deny and any(fnmatch.fnmatchcase(SP + t, d) and "*" in d for d in deny) for t in WRITES))
+ck("the station's own deny rule stays", "Bash(gh pr merge:*)" in deny, str(deny))
+ck("the file the station reads holds the same rules", saved.get("permissions", {}).get("deny") == deny, str(saved.get("permissions")))
+ck("the Slack plugin itself stays enabled", plan["settings"].get("enabledPlugins", {}).get("slack@claude-plugins-official") is True)
+plan, sdir, said, tmp = plan_of("orchestrator", {"mcp": ["slack"]}, "proj-orch")
+deny = [d for d in plan["settings"].get("permissions", {}).get("deny", []) if "slack" in d]
+ck("a user MCP server named slack is denied the same tools", deny[:len(WRITES)] == ["mcp__slack__" + t for t in WRITES] and all(d.startswith("mcp__slack__") for d in deny), str(deny))
+plan, sdir, said, tmp = plan_of("orchestrator", {"plugins": ["slack@claude-plugins-official", "pyright-lsp@claude-plugins"], "mcp": ["slack"]}, "proj-orch")
+deny = [d for d in plan["settings"].get("permissions", {}).get("deny", []) if "slack" in d]
+ck("both routes at once deny both sets", len(deny) == 2 * (len(WRITES) + len(launch.SLACK_WRITE_VERBS)) and SP + "slack_send_message" in deny and "mcp__slack__slack_send_message" in deny, str(deny))
+plan, sdir, said, tmp = plan_of("orchestrator", {"plugins": ["pyright-lsp@claude-plugins"], "mcp": ["linear"]}, "proj-orch")
+ck("a role without Slack has no Slack deny rule", not any("slack" in d for d in plan["settings"].get("permissions", {}).get("deny", [])), str(plan["settings"].get("permissions")))
+plan, sdir, said, tmp = plan_of("orchestrator", {}, "proj-orch")
+ck("a role with no list has no Slack deny rule", not any("slack" in d for d in plan["settings"].get("permissions", {}).get("deny", [])))
+ck("slack_deny is empty with nothing allowed", launch.slack_deny([], []) == [] and launch.slack_deny(["linear"], ["slack-ish@x", "pyright@y"]) == [])
+for _tool in ("slack_reply_to_thread", "slack_upload_file", "slack_share_message", "slack_react", "slack_pin_message",
+              "slack_join_channel", "slack_archive_channel", "slack_mark_read"):
+    ck(f"{_tool}, a write tool not in the exact list, matches a verb rule", any(fnmatch.fnmatchcase(SP + _tool, d) for d in launch.slack_deny([], ["slack@x"])), _tool)
+ck("no verb rule matches a read tool of the plugin", not any(fnmatch.fnmatchcase(SP + t, d) for d in launch.slack_deny([], ["slack@x"]) for t in READS))
+for _name, _pre in (("Slack", "mcp__Slack__"), ("slack-mcp", "mcp__slack-mcp__"), ("my slack", "mcp__my_slack__")):
+    ck(f"an MCP server named '{_name}' is denied under {_pre}", launch.slack_deny([_name], [])[0] == _pre + "slack_send_message" and all(d.startswith(_pre) for d in launch.slack_deny([_name], [])))
+ck("an MCP server with no slack in its name gets no rule", launch.slack_deny(["linear", "github"], []) == [])
+ck("a plugin whose name only starts with slack is not Slack", launch.slack_deny([], ["slackbot@x"]) == [])
+both = launch.with_restrictions({"permissions": {"deny": [SP + "slack_send_message"]}}, {"permissions": {"deny": ["Bash(rm:*)"]}})
+ck("the person's own deny rules stay beside the Slack ones", both["permissions"]["deny"][0] == SP + "slack_send_message" and "Bash(rm:*)" in both["permissions"]["deny"])
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

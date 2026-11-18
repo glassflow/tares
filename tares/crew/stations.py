@@ -281,7 +281,7 @@ def launch_plan(client: TaresClient, paths: CrewPaths, argv: list) -> str:
     if parent:
         parent = station_name(parent, paths)
     plan = launch.launch_plan(client, station, argv[1], parent, project, repo)
-    shown = {k: v for k, v in plan.items() if k != "otel"}   # the telemetry variables are never printed
+    shown = {k: v for k, v in plan.items() if k not in ("otel", "otel_file", "mcp")}   # telemetry values and server configs are never printed
     return json.dumps(shown, indent=2, ensure_ascii=False) + "\n"
 
 

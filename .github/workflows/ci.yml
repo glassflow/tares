@@ -188,7 +188,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Enterprise tests
         run: |
-          pip install -e ".[postgres-state]"
+          pip install -e ".[postgres-state,ee]"
           bash tests/check_ci_list.sh ee/tests/ci_list.txt
           if [ "${{ matrix.db }}" = postgres ]; then
             export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
