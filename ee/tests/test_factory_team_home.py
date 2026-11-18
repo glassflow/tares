@@ -711,7 +711,35 @@ async def main():
            [w for w in ("Vault", "launch codes") if w in json.dumps(h)])
         ck("Lee leads the project: he reads the reason word for word",
            kim_doing(await home_of("lee")) == "Waiting for the Vault launch codes", kim_doing(await home_of("lee")))
+        print("== part two: a station stuck on a prompt in its terminal (TR-1461) ==")
+        stuck = lambda h: [i for i in h["waiting_for_you"] if i["kind"] == "terminal"]
+        k_items = stuck(await home("kim"))
+        ck("Kim: her builder's prompt waits for her, one item", [i["ask"] for i in k_items]
+           == ["Answer k-build-x in its terminal"], [i["ask"] for i in k_items])
+        ki = k_items[0] if k_items else {}
+        ck("... on a project she cannot see: no project, no reason, the plain words",
+           ki.get("project") is None and ki.get("detail") == "It waits for you in its terminal."
+           and not any(w in json.dumps(ki) for w in ("Vault", "launch codes")), ki)
+        ck("... a link to the station on the Crew page, never yes or no",
+           [(a.get("href") or "").split("&")[0] for a in ki.get("actions", [])] == ["/crew?member=k-build-x"]
+           and "crew=" in ki["actions"][0]["href"] and not any("do" in a for a in ki["actions"]), ki.get("actions"))
+        ck("... it holds the station up", ki.get("blocking") is True and ki.get("holds_up") == "k-build-x", ki)
+        ck("Alex and Lee are not asked: it is Kim's terminal",
+           stuck(await home("alex")) == [] and stuck(await home("lee")) == [])
+        await push("kim", [state_line("k1", "waiting", 3, "Claude Code needs your permission to use Bash")])
+        k_items = {i["holds_up"]: i for i in stuck(await home("kim"))}
+        ko = k_items.get("k-orchestrator") or {}
+        ck("her orchestrator's permission prompt, on no project: its reason is the detail",
+           ko.get("detail") == "Claude Code needs your permission to use Bash."
+           and ko.get("title") == "Every project", ko)
+        ck("an idle station is not an item (a turn that ended is not a prompt)",
+           sorted(k_items) == ["k-build-x", "k-orchestrator"], sorted(k_items))
+        await push("kim", [state_line("k1", "working", 2)])
+        ck("back at work: the orchestrator's item is gone",
+           [i["holds_up"] for i in stuck(await home("kim"))] == ["k-build-x"])
+        await push("kim", [state_line("k1", "idle", 1)])   # as it was, for the crew's line below
         await push("kim", [state_line("k2b", "working", 2)])
+        ck("the builder at work again: nothing is left", stuck(await home("kim")) == [])
         h = await home_of("alex")
         ck("Alex: the same crew at work on it reads 'At work.', never 'Building Vault.'",
            kim_doing(h) == "At work." and "Vault" not in json.dumps(h), kim_doing(h))
@@ -994,7 +1022,7 @@ async def main():
         print("== kinds, actions and words ==")
         items = [i for i in SEEN.values() if "kind" in i]
         ck("the run saw items of every team kind", {i["kind"] for i in items} >= {
-            "question", "signoff", "grant", "desk", "milestone_to_check", "prs_to_review"},
+            "question", "signoff", "grant", "desk", "milestone_to_check", "prs_to_review", "terminal"},
            sorted({i["kind"] for i in items}))
         for i in items:
             ck(f"{i['id']} has a known kind", i["kind"] in fh.KINDS, i["kind"])
