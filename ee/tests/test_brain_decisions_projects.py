@@ -20,7 +20,7 @@ script keeps its state in Postgres.
 
 Run: .venv/bin/python ee/tests/test_brain_decisions_projects.py
 """
-import asyncio, logging, os, sys, tempfile, time
+import asyncio, json, logging, os, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings, puts the repo, ee/ and tests/ on sys.path
@@ -206,12 +206,26 @@ async def main():
         ck("the spec: kind decision, title, text, uri", (e["kind"], e["title"], e["text"], e["uri"]) ==
            ("decision", "The spec", "spec body", f"{PUBLIC}/projects/pa/docs?doc={d_spec}"), str(e))
         ck("... and metadata: where, project, one author, the last change as RFC 3339", e["metadata"] == {
-            "where": "factory_project", "project": "pa", "decided_by": ["Ann Lee"], "decided_at": dec_mod._when(full["updated_at"])}, str(e["metadata"]))
+            "where": "factory_project", "project": "pa", "doc_kind": "spec", "decided_by": ["Ann Lee"], "decided_at": dec_mod._when(full["updated_at"])}, str(e["metadata"]))
         ck("the plan and the note carry their own title and text", (h[f"project:pa:doc:{d_plan}"]["title"], h[f"project:pa:doc:{d_note}"]["text"]) == ("The plan", "note body"))
         ck("one put under the source factory_projects, one listing, no delete", len(puts()) == 1 and puts()[0].json["source"] == SOURCE
            and len(lore.calls("GET", "list_documents")) == 1 and not dels(), str([(c.method, c.route) for c in lore.requests]))
         q = lore.calls("GET", "list_documents")[0].query
         ck("the listing asks for the source's decisions", q.get("source") == SOURCE and q.get("kind") == "decision", str(q))
+
+        ck("each carries its own doc_kind: spec, plan, note",
+           [h[f"project:pa:doc:{d}"]["metadata"]["doc_kind"] for d in (d_spec, d_plan, d_note)] == ["spec", "plan", "note"])
+        # a row put before doc_kind existed has no doc_kind; a process that starts later puts it again, with the kind
+        plan_ext = f"project:pa:doc:{d_plan}"
+        old = json.loads(json.dumps(h[plan_ext]))
+        del old["metadata"]["doc_kind"]
+        lore.documents[(SOURCE, plan_ext)] = old
+        dec._sent.clear()   # what a restart does
+        await go()
+        ck("an older row without doc_kind is put again by the next pass after a start, now with its kind",
+           held()[plan_ext]["metadata"].get("doc_kind") == "plan", str(held()[plan_ext]["metadata"]))
+        ck("build_document says doc_kind null for a kind it does not know",
+           dec_mod.build_document("pa", {"id": "x", "kind": "ticket", "title": "T", "body": "b"})["metadata"]["doc_kind"] is None)
 
         print("== an idempotent second pass ==")
         n = len(lore.requests)

@@ -40,7 +40,13 @@ the cell's brain key, newest first, from the repos' folders (`repo_folder`), sha
 (`factory_project`) and by hand (`by_hand`). A row has `id` (the external id), `source`, `title`,
 `summary` (null when lore's listing has none: it carries no text, and only a decision added by hand
 keeps a summary), `where` (null when missing or unknown), `decided_by`, `changed_by`, `decided_at`,
-`changed_at`, `link`, `repo`, `project`, `added_by`. `where` and `repo` (`owner/name`, any case)
+`changed_at`, `link`, `repo`, `project`, `added_by`, `can_delete`, `project_name` and `doc_kind` (TR-1443).
+`can_delete` is true only for a decision added by hand that the viewer added or that the viewer may
+delete as an admin, the rule DELETE enforces (with auth off, true on every hand-added row); it is
+false on every other row, and the 201 from add carries it too. `project_name` is the name the
+project has on the cell now and `doc_kind` is `spec`, `plan` or `note`, both only on a factory
+project's row and null on any other; a row put into lore before `doc_kind` existed says null until
+the project pass puts it again (the next pass after the cell starts). `where` and `repo` (`owner/name`, any case)
 filter on the cell; `cursor` is lore's own and opaque: pass back `next_cursor` for the next page
 (null on the last). A page holds exactly the matching rows lore's page showed, so a filter never skips
 a row or repeats one. `counts` is `{all, repo_folder, factory_project, by_hand}` over every visible
@@ -70,6 +76,7 @@ from fastapi import Body, HTTPException, Request
 from tares import licence
 
 from . import repos as repos_mod
+from .decisions import DOC_KINDS
 from .lore import LoreClient, LoreError
 
 __all__ = ["KIND", "MAX_BYTES", "PREFIX", "SOURCE", "TEXT_MAX", "WHERE", "register_routes"]
@@ -194,7 +201,21 @@ def register_routes(app, host) -> None:
                 return
             seen.add(cursor)
 
-    def row_of(d: dict) -> dict:
+    def project_names() -> dict[str, str]:
+        """The names the cell's projects have now, by project id."""
+        return {p["id"]: (p.get("name") or "").strip() or p["id"] for p in store.list_projects()}
+
+    def viewer_of(request: Request) -> tuple[str | None, bool, bool]:
+        """Who is asking, for can_delete: their person id (None for a key with no person), whether
+        they are an admin (with auth off, everyone is) and whether the credential may write at all
+        (the guard refuses DELETE for a read-only key before this route runs; auth off sets no
+        scopes and lets everyone through)."""
+        person = host.current_person(request)
+        scopes = getattr(request.state, "scopes", None)
+        writes = scopes is None or "ingest" in scopes or "admin" in scopes
+        return (person["id"] if person else None), bool(host.is_admin(request)), writes
+
+    def row_of(d: dict, viewer: tuple[str | None, bool, bool] = (None, False, False), pnames: dict[str, str] | None = None) -> dict:
         m = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
         where = m.get("where") if m.get("where") in WHERE else None
 
@@ -205,11 +226,22 @@ def register_routes(app, host) -> None:
         def names(k):
             v = m.get(k)
             return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+        ext = d.get("external_id")
+        # the rule DELETE enforces: a decision added by hand, taken back by its adder or an admin
+        by_hand = d.get("source") == SOURCE and isinstance(ext, str) and _ID.fullmatch(ext) is not None
+        adder = m.get("added_by_id")
+        can_delete = by_hand and viewer[2] and (viewer[1] or (viewer[0] is not None and adder == viewer[0]))
+        project = text("project")
+        in_project = where == "factory_project" and project is not None
+        kind = m.get("doc_kind")
         return {"id": d.get("external_id"), "source": d.get("source"), "title": d.get("title"),
                 "summary": text("summary"), "where": where, "decided_by": names("decided_by"),
                 "changed_by": names("changed_by"), "decided_at": text("decided_at"),
                 "changed_at": text("changed_at"), "link": d.get("uri") or None,
-                "repo": text("repo"), "project": text("project"), "added_by": text("added_by")}
+                "repo": text("repo"), "project": project, "added_by": text("added_by"),
+                "can_delete": bool(can_delete),
+                "project_name": (pnames or {}).get(project) if in_project else None,
+                "doc_kind": kind if in_project and kind in DOC_KINDS else None}
 
     # -- add --------------------------------------------------------------------------------
 
@@ -275,7 +307,8 @@ def register_routes(app, host) -> None:
                 await lore.put_documents(SOURCE, [doc])
         except LoreError as e:
             lore_fail(e)
-        return row_of({"external_id": ext, "source": SOURCE, "title": title, "uri": None, "metadata": meta})
+        return row_of({"external_id": ext, "source": SOURCE, "title": title, "uri": None, "metadata": meta},
+                      viewer_of(request))
 
     async def file_text(file) -> str:
         """The text of an uploaded file, or a 400 (413 when it is too big, 501 for a PDF without pypdf)."""
@@ -353,7 +386,7 @@ def register_routes(app, host) -> None:
     # -- list -------------------------------------------------------------------------------
 
     @app.get("/api/brain/decisions")
-    async def list_decisions(where: str | None = None, repo: str | None = None,
+    async def list_decisions(request: Request, where: str | None = None, repo: str | None = None,
                              cursor: str | None = None, limit: int = 50):
         """Every decision from every place, newest first, with `counts` (see the module's docstring):
         {decisions: [...], next_cursor, counts: {all, repo_folder, factory_project, by_hand}}."""
@@ -367,6 +400,7 @@ def register_routes(app, host) -> None:
         if not 1 <= limit <= 200:
             host.err(ValueError("limit: a whole number from 1 to 200."))
         private, known = privacy()
+        viewer, pnames = viewer_of(request), project_names()
 
         def wanted(d: dict) -> bool:
             if not visible(d, private, known):
@@ -383,7 +417,7 @@ def register_routes(app, host) -> None:
                     # ask for only as many as are still missing: a page never overshoots, so the cursor
                     # lore gives back is exactly where this page ended
                     page = await lore.list_documents(kind=KIND, limit=limit - len(rows), cursor=nxt)
-                    rows += [row_of(d) for d in page.get("documents") or [] if isinstance(d, dict) and wanted(d)]
+                    rows += [row_of(d, viewer, pnames) for d in page.get("documents") or [] if isinstance(d, dict) and wanted(d)]
                     nxt = page.get("next_cursor") or None
                     if len(rows) >= limit or not nxt:
                         break
