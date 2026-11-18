@@ -270,6 +270,15 @@ finally:
 ck("`launch-plan` shows the lean flags and no OTEL_ name or value", "--no-chrome" in shown and "OTEL_" not in shown
    and SECRET not in shown and "person-collector" not in shown, shown[:200])
 ck("the plan itself carries the person's OTEL_* for launch to hand on", plan["otel"].get("OTEL_METRICS_EXPORTER") == "otlp", str(plan.get("otel")))
+ck("`launch-plan` prints only args, env and settings", sorted(json.loads(shown)) == ["args", "env", "settings"], str(sorted(json.loads(shown))))
+ck("`launch-plan` has no otel entry and no mcp entry", '"otel"' not in shown and '"mcp"' not in shown, shown[:200])
+_odd = {"args": ["a"], "env": {"K": "v"}, "settings": {}, "otel": {"OTEL_X": SECRET}, "mcp": {"s": {"env": {"T": SECRET}}},
+        "future": {"token": SECRET}, "unreadable": object()}
+_got = stations.plan_shown(_odd)
+ck("an entry the list does not name is hidden, known or new", sorted(_got) == ["args", "env", "settings"] and SECRET not in json.dumps(_got), str(sorted(_got)))
+ck("a named entry that cannot be written as JSON is hidden", sorted(stations.plan_shown({"args": ["a"], "env": object(), "settings": {}})) == ["args", "settings"])
+ck("a plan that is not a dict shows nothing", stations.plan_shown(None) == {} and stations.plan_shown([("otel", 1)]) == {})
+ck("the entries shown are the ones the plan gave, unchanged", _got == {"args": ["a"], "env": {"K": "v"}, "settings": {}})
 
 # ---------------------------------------------------------------------------------------------
 print("c2. auto-memory is off for every station but the orchestrator")
