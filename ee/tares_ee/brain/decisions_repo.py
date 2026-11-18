@@ -34,6 +34,11 @@ here, not asked of lore: the paths of the files put per repo, filled once at sta
 source (one walk, never on a request) and added to by each put. `count` is the paths under the folders still
 chosen, so a dropped folder stops counting at once. A request never calls lore or GitHub.
 
+How many documents the brain holds for a repo (`count`, shown on each row of `GET /api/brain`, TR-1442) is kept
+here, not asked of lore: the paths of the files put per repo, filled once at start-up from lore's list of the
+source (one walk, never on a request) and added to by each put. `count` is the paths under the folders still
+chosen, so a dropped folder stops counting at once. A request never calls lore or GitHub.
+
 GitHub's rate limit (the token's hourly budget) is the thing to spare. The tree is one call. Per file the
 import needs the blob, the latest commit, the first commit (the last page of a one-per-page list) and that
 commit's pull request. What was learned for a file is kept in memory under (repo, path, blob sha), so a
