@@ -57,13 +57,15 @@ function deeperHref(item: HomeItem, yes: HomeAction | null): string | null {
 export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
   const recommendation = item.question?.recommendation ?? null;
   const { yes, no } = buttons(item);
-  // a question's or a permission's title is the project; what is asked is its detail
+  // the cell's own verb-first line (TR-1447); a cell from before it: a question's or a permission's
+  // title is the project and what is asked is its detail, any other item's title is the ask
   const askedInDetail = item.kind === "question" || item.kind === "permission";
+  const ask = item.ask || (askedInDetail ? item.detail : item.title);
   return {
     id: item.id,
     kind: item.kind,
     label: item.label,
-    ask: extra.ask ?? (askedInDetail ? item.detail : item.title),
+    ask,
     project: item.project,
     from: item.from?.name ?? null,
     waited: item.waited,
@@ -74,7 +76,9 @@ export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
     yes,
     no,
     deeper: {
-      detail: askedInDetail && !extra.ask ? "" : item.detail,
+      // a permission's detail says again what its ask says, and so does a question's unless its
+      // ask was cut short
+      detail: askedInDetail && (item.kind === "permission" || ask === item.detail) ? "" : item.detail,
       lines: item.lines ?? [],
       checks: extra.checks ?? null,
       href: deeperHref(item, yes),

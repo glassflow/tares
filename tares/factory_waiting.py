@@ -63,6 +63,33 @@ def _trim(text: str, n: int = 140) -> str:
     return cut.rstrip(".,;:-( ") + "…"
 
 
+def ask_question(text: str) -> str:
+    """A question's ask is the question itself, on one line (TR-1447)."""
+    return _trim(text, 140)
+
+
+def ask_permission(command: str) -> str:
+    """A permission's ask is what the crew wants to run (TR-1447)."""
+    return "Allow `" + _trim(command, 120) + "`"
+
+
+def ask_calls(n: int, project: str) -> str:
+    """Keep the crew's call on atlas; Keep 2 calls on atlas (TR-1447). A desk batch whose calls
+    were decided one by one has none left open: its ask keeps the batch, without a count."""
+    if n == 1:
+        return f"Keep the crew's call on {project}"
+    return f"Keep {n} calls on {project}" if n > 1 else f"Keep the crew's calls on {project}"
+
+
+def ask_prs(rows: list[dict], project: str) -> str:
+    """Merge PR 336, or Merge 2 PRs on atlas (TR-1447). A pull request Tares has not read the
+    number of yet goes by its ticket's title."""
+    if len(rows) > 1:
+        return f"Merge {len(rows)} PRs on {project}"
+    r = rows[0]
+    return f"Merge PR {r['number']}" if r.get("number") else "Merge " + _trim(r["title"], 100)
+
+
 def _ref(project: dict) -> dict:
     return {"id": project["id"], "name": project["name"]}
 
@@ -243,6 +270,7 @@ def prs_to_review(store, fx, now) -> list[dict]:
             meta="Waiting " + waited + (" · " + ", ".join(repos) if repos else ""),
             since=since, now=now, project={"id": pid, "name": rows[0]["project_name"]},
             repo=repos[0] if len(repos) == 1 else None, id=key,
+            ask=ask_prs(rows, rows[0]["project_name"]),
             actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
             blocking=True,
             # whose merge waits for the person: not in the crew's hands (project_state)
@@ -280,7 +308,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
             detail=f"Spec and plan written, {fh._count(len(ts), 'ticket')}{where}. "
                    "The crew has not picked it up.",
             meta="Spec written " + fh.plain_ago(since, now), since=since, now=now,
-            project=_ref(p), id=f"ready_to_start:{p['id']}",
+            project=_ref(p), id=f"ready_to_start:{p['id']}", ask=f"Hand {p['name']} to the crew",
             actions=[{"label": "Read the spec", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Later", "primary": False, "do": "later", "project": p["id"]},
                      {"label": "Copy the hand-over command", "primary": True, "do": "copy",
@@ -334,7 +362,7 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
             "calls_to_confirm", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
             title=names[pid], detail="The crew decided without you:", lines=shown,
             meta="Made by " + _and(roles), since=since, now=now,
-            project={"id": pid, "name": names[pid]},
+            project={"id": pid, "name": names[pid]}, ask=ask_calls(n, names[pid]),
             id=f"calls_to_confirm:{pid}" + (f":{'+'.join(ids)}" if groups[pid] > 1 else ""),
             actions=[{"label": "Read them", "primary": False, "href": f"/projects/{pid}/calls"},
                      {"label": {"both": "Keep both", "it": "Keep it", "them": "Keep all"}[keep],
@@ -377,7 +405,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`",
                 meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"permission:{d['label']}",
-                blocking=True,
+                blocking=True, ask=ask_permission(d["command"]),
                 actions=[{**answer, "primary": False},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
                           "may_limit": may_limit}]), o, ids, fell))
@@ -386,7 +414,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 "question", label="Question for you", title=names[pid] if pid else "Every project",
                 detail=d["question"], meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"question:{d['label']}",
-                blocking=desk_blocks(d), question=desk_question(d),
+                blocking=desk_blocks(d), question=desk_question(d), ask=ask_question(d["question"]),
                 actions=[answer]), o, ids, fell))
     return out
 
@@ -436,7 +464,7 @@ def milestones_to_check(store, fx, now) -> list[dict]:
     for p in projects:
         if factory_mod.ready_to_close(p, tickets.get(p["id"]) or []):
             continue
-        for _, m, st, mine in states.get(p["id"]) or []:
+        for i, m, st, mine in states.get(p["id"]) or []:
             if not st["needs_person"]:
                 continue
             live = [t for t in mine if t["status"] != "canceled"]
@@ -454,6 +482,7 @@ def milestones_to_check(store, fx, now) -> list[dict]:
                 "milestone_to_check", label="Milestone to check", title=f"{p['name']}, {m['name']}",
                 detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
                 project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
+                ask=f"Check M{i} of {p['name']}",
                 actions=[{"label": "Check it", "primary": True,
                           "href": f"/projects/{p['id']}#milestone-{m['id']}"}]), o, o.project(p), p))
     return out
@@ -492,7 +521,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
                    + "." + note + " Close the project when you have checked the result.",
             meta=_ready_for(since, now), since=since, now=now, project=_ref(p),
-            id=f"signoff:{p['id']}",
+            id=f"signoff:{p['id']}", ask=f"Close {p['name']}",
             actions=[{"label": "Open project", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Close project", "primary": True, "do": "close"}]), o, o.project(p), p))
     return out
@@ -514,6 +543,7 @@ def rules_to_decide(store, fx, now) -> list[dict]:
             detail=rp["text"], meta="Proposed by the crew, " + fh.plain_ago(rp["created_at"], now),
             since=rp["created_at"], now=now, project={"id": pid, "name": names[pid]} if pid else None,
             repo=rp.get("repo"), id=f"rule:{rp['id']}",
+            ask="Decide on a rule: " + _trim(rp["text"], 100),
             actions=[{"label": "Accept or reject", "primary": True, "href": "/crew#rules"}]))
     return out
 

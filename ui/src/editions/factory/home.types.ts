@@ -71,6 +71,9 @@ export interface HomeItem {
   tickets?: string[];
   /** Short lines shown one under the other below the detail (the calls in a "calls to confirm" item). */
   lines?: string[];
+  /** The decision in one line, verb first ("Merge PR 336"); a question's is the question (TR-1447).
+   *  Absent on a cell from before it. */
+  ask?: string | null;
   /** Holds crew work up until the person answers; such items come first (TR-1021). */
   blocking?: boolean;
   /** Waited more than a week and holds nothing up: folded under "N older things". */

@@ -198,6 +198,7 @@ async def main():
            and q["title"] == f"Shop, {qid}" and q["detail"] == "Which page does the checkout live on?"
            and q["repo"] == "acme/web" and q["project"] == {"id": shop, "name": "Shop"}, k)
         ck("it comes from Kim", q["from"] == {"id": pid["kim"], "name": "Kim"}, q.get("from"))
+        ck("its ask is the question (TR-1447)", q["ask"] == "Which page does the checkout live on?", q.get("ask"))
         ck("with one Answer action that does answer", q["actions"] == [
             {"label": "Answer", "primary": True, "do": "answer", "project": shop, "question": qid}],
            q.get("actions"))
@@ -227,6 +228,7 @@ async def main():
         ck("it is in Alex's list as a grant", len(k.get("grant", [])) == 1
            and g["title"] == "merge to acme/web" and g["repo"] == "acme/web"
            and g["project"] == {"id": shop, "name": "Shop"}, k)
+        ck("its ask is to agree to it (TR-1447)", g["ask"] == "Agree to the grant: merge to acme/web", g.get("ask"))
         ck("from Kim, with the reason it waits", g["from"] == {"id": pid["kim"], "name": "Kim"}
            and g["detail"] == "Kim gave this for acme/web, which you own. It takes effect when you "
                               "agree.", g.get("detail"))
@@ -275,6 +277,11 @@ async def main():
         ck("the question has one primary Answer", dq["detail"] == "Which colour for the links?"
            and dq["actions"] == [{"label": "Answer", "primary": True, "do": "answer",
                                   "desk": ask["label"], "options": ["blue", "green"]}], dq)
+        db = next(i for i in k["desk"] if i["id"] == f"desk:{batch['label']}")
+        ck("each desk item's ask starts with its verb (TR-1447)",
+           (dp["ask"], db["ask"], dq["ask"]) == ("Allow `gh api repos/acme/web/statuses/abc`",
+                                                 "Keep the crew's calls on Shop", "Which colour for the links?"),
+           (dp["ask"], db["ask"], dq["ask"]))
         ck("they come from Alex's own crew", dp["from"] == {"crew": True, "name": "Your crew"}
            and dq["from"]["name"] in ("Your crew", "Alex", "Kim", "Lee"), (dp["from"], dq["from"]))
         ck("Lee has only the item for Lee, Kim has none", len(by_kind(await home("lee")).get("desk", [])) == 1

@@ -13,8 +13,6 @@ export type FeedVia = "feed" | "console" | "session" | "message";
 
 /** What the home does not send yet. The live feed reads none of it; the samples fill it by hand. */
 export interface FeedExtra {
-  /** Gap: the ask starts with the verb ("Merge PR 336", not "1 PR to review in atlas"). */
-  ask?: string;
   /** Gap: what it holds up, on every kind. A question already sends it as `question.blocks`. */
   holds_up?: string | null;
   /** Gap on prs_to_review: "Checks green. Main moved 2 commits since the review." */

@@ -20,7 +20,7 @@ const billing = { id: "billing", name: "billing" };
 const ITEMS: HomeItem[] = [
   item("question:D7", {
     kind: "question", label: "Question for you", project: atlas, blocking: true,
-    title: "atlas", detail: "Which store should sessions use?",
+    title: "atlas", detail: "Which store should sessions use?", ask: "Which store should sessions use?",
     since: "2026-11-18T08:41:00Z", waited: "19 minutes",
     from: { name: "the builder" },
     question: { desk: "D7", options: ["Redis", "Postgres", "Ask me on a call"], recommendation: "Postgres", blocks: "AT-4 and the 2 tickets after it" },
@@ -29,6 +29,7 @@ const ITEMS: HomeItem[] = [
   item("prs_to_review:atlas", {
     kind: "prs_to_review", label: "1 PR to review", project: atlas, blocking: true,
     title: "atlas", detail: "The reviewer passed PR 336 on its second round. It adds the expiry column and its migration.",
+    ask: "Merge PR 336",
     since: "2026-11-17T11:02:00Z", waited: "22 hours", tickets: ["AT-3"],
     from: { name: "the reviewer" },
     actions: [{ label: "Review", primary: true, href: "/reviews?project=atlas" }],
@@ -36,6 +37,7 @@ const ITEMS: HomeItem[] = [
   item("permission:D8", {
     kind: "permission", label: "Permission", project: linkExpiry, blocking: true,
     title: "link-expiry", detail: "The builder wants to use: `git push --force-with-lease`",
+    ask: "Allow `git push --force-with-lease`",
     since: "2026-11-18T07:55:00Z", waited: "1 hour",
     from: { name: "the builder" },
     actions: [
@@ -45,7 +47,7 @@ const ITEMS: HomeItem[] = [
   }),
   item("milestone_to_check:atlas:M1", {
     kind: "milestone_to_check", label: "Milestone to check", project: atlas,
-    title: "M1: sign in works end to end",
+    title: "M1: sign in works end to end", ask: "Check M1 of atlas",
     detail: "All 4 tickets of M1 are merged. Check it on staging before M2 starts.",
     lines: ["Open staging and sign in with a new account", "Sign out, sign in again: the session is kept"],
     since: "2026-11-17T16:20:00Z", waited: "17 hours",
@@ -53,7 +55,7 @@ const ITEMS: HomeItem[] = [
   }),
   item("calls_to_confirm:link-expiry", {
     kind: "calls_to_confirm", label: "2 calls to confirm", project: linkExpiry,
-    title: "link-expiry", detail: "The crew decided without you:",
+    title: "link-expiry", detail: "The crew decided without you:", ask: "Keep 2 calls on link-expiry",
     lines: ["Expired links answer 410, not 404", "Expiry is checked on read, no sweeper"],
     since: "2026-11-16T10:00:00Z", waited: "2 days",
     actions: [
@@ -64,6 +66,7 @@ const ITEMS: HomeItem[] = [
   item("ready_to_start:billing", {
     kind: "ready_to_start", label: "Ready to start", project: billing,
     title: "billing", detail: "Spec and plan written, 11 tickets. The crew has not picked it up.",
+    ask: "Hand billing to the crew",
     since: "2026-11-15T09:30:00Z", waited: "3 days",
     actions: [
       { label: "Read the spec", primary: false, href: "/projects/billing" },
@@ -76,13 +79,11 @@ const ITEMS: HomeItem[] = [
 const EXTRAS: FeedData["extras"] = {
   "question:D7": { why: "Sessions are rows we already back up; Redis would be the only thing holding them." },
   "prs_to_review:atlas": {
-    ask: "Merge PR 336", holds_up: "AT-4, the next ticket",
+    holds_up: "AT-4, the next ticket",
     checks: "Checks green. Main moved 2 commits since the review.",
   },
   "permission:D8": { holds_up: "PR 12" },
-  "milestone_to_check:atlas:M1": { ask: "Check M1 of atlas", holds_up: "M2: billing hooks" },
-  "calls_to_confirm:link-expiry": { ask: "Keep 2 calls on link-expiry" },
-  "ready_to_start:billing": { ask: "Hand billing to the crew" },
+  "milestone_to_check:atlas:M1": { holds_up: "M2: billing hooks" },
 };
 
 const ANSWERED: FeedData["answered"] = [

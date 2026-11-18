@@ -123,6 +123,7 @@ def question_items(t: HomeRead) -> list[dict]:
             detail=q["text"], meta="Asked " + fh.plain_ago(q["asked_at"], t.now),
             since=q["asked_at"], now=t.now, project=project, repo=q["repo"],
             from_=_ref(q["asked_by_person"]), id=f"question:{project['id']}:{q['id']}",
+            ask=fw.ask_question(q["text"]),
             actions=[{"label": "Answer", "primary": True, "do": "answer",
                       "project": project["id"], "question": q["id"]}]), ids, q["project"], to is None))
     return out
@@ -165,6 +166,8 @@ def grant_items(t: HomeRead) -> list[dict]:
             "grant", label="Grant to agree to", title=title, detail=detail,
             meta="Asked " + fh.plain_ago(since, t.now), since=since, now=t.now, project=project,
             repo=owned[0] if len(owned) == 1 else None, from_=giver, id=f"grant:{g['id']}",
+            ask="Agree to " + (f"a grant over {fw._and(owned) if owned else 'a repo you own'}"
+                               if g["project"] in t.hidden else "the grant: " + fw._trim(g["words"], 80)),
             actions=[{"label": "Agree", "primary": True, "do": "agree", "grant": g["id"]},
                      {"label": "Decline", "primary": False, "do": "decline", "grant": g["id"]}])
         item["for_admin"] = "admin" in wait   # any admin key may agree (grants.waits_for_me)
@@ -229,12 +232,14 @@ def desk_items(t: HomeRead) -> list[dict]:
                             "primary": True, "do": "keep_batch", "desk": d["label"],
                             "kept": [a["label"] for a in calls]})
             item = fh.home_item("desk", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
-                                detail=d["question"], lines=fw.call_lines(calls), **base, actions=actions)
+                                detail=d["question"], lines=fw.call_lines(calls), **base, actions=actions,
+                                ask=fw.ask_calls(n, project["name"] if project else "every project"))
         elif d.get("command"):
             who = fw._role_of_station(d.get("station"))
             item = fh.home_item(
                 "desk", label="Permission",
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`", **base,
+                ask=fw.ask_permission(d["command"]),
                 actions=[{"label": "Answer", "primary": False, "do": "answer", "desk": d["label"],
                           "options": list(d.get("options") or [])},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
@@ -242,6 +247,7 @@ def desk_items(t: HomeRead) -> list[dict]:
         else:
             item = fh.home_item(
                 "desk", label="Question for you", detail=d["question"], question=fw.desk_question(d), **base,
+                ask=fw.ask_question(d["question"]),
                 actions=[{"label": "Answer", "primary": True, "do": "answer",
                           "desk": d["label"], "options": list(d.get("options") or [])}])
         out.append(_owned(t, item, ids, d["project"], fell))

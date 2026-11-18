@@ -216,7 +216,7 @@ async def main():
         ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-            "waited", "actions", "tickets", "blocking", "older", "question", "lines",
+            "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask",
             "for_people", "for_admin", "no_lead"} for i in w))
         ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
         ck("waited is in words, oldest first within each group", [i["waited"] for i in w] == [
@@ -310,6 +310,22 @@ async def main():
            mc["actions"])
         ck("a milestone with an open ticket, and one with only canceled tickets, show nothing",
            [i["title"] for i in k["milestone_to_check"]] == ["project-w, M1: styles"])
+
+        print("== the ask: the decision, verb first (TR-1447) ==")
+        asks = {i["id"]: i["ask"] for i in w}
+        ck("every item has an ask", all(isinstance(x, str) and x for x in asks.values()), asks)
+        ck("a PR item merges, two of them by count", pr["ask"] == "Merge 2 PRs on project-x", pr["ask"])
+        ck("one PR is merged by its number, else by its ticket's title",
+           fw.ask_prs([{"number": 336, "title": "Add the footer"}], "x") == "Merge PR 336"
+           and fw.ask_prs([{"number": None, "title": "Add the footer"}], "x") == "Merge Add the footer")
+        ck("a project ready to start is handed over", rs["ask"] == "Hand project-y to the crew", rs["ask"])
+        ck("calls are kept, by count", cc["ask"] == "Keep 2 calls on project-z"
+           and fw.ask_calls(1, "atlas") == "Keep the crew's call on atlas"
+           and fw.ask_calls(0, "atlas") == "Keep the crew's calls on atlas", cc["ask"])
+        ck("a question's ask is the question", q["ask"] == "Which colour for the links?", q["ask"])
+        ck("a permission's ask is what the crew wants to run",
+           px_perm["ask"] == "Allow `gh api repos/example-org/docs-site/statuses/abc`", px_perm["ask"])
+        ck("a milestone is checked by its number", mc["ask"] == "Check M1 of project-w", mc["ask"])
 
         print("== who it is not for ==")
         names = {(i["project"] or {}).get("name") for i in w}
@@ -425,6 +441,7 @@ async def main():
         ck("open the project, or close it", so["actions"] == [
             {"label": "Open project", "primary": False, "href": f"/projects/{pv}"},
             {"label": "Close project", "primary": True, "do": "close"}], so["actions"])
+        ck("a project ready to close is closed (TR-1447)", so["ask"] == "Close project-v", so["ask"])
         ck("the project row says so too", {p["name"]: p for p in (await get_home())["projects"]}
            ["project-v"]["can_close"] is True)
         async with cx_() as cx:
