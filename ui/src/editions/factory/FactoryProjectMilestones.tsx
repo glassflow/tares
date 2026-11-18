@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { EmptyState } from "../../components/edition";
 import { MilestoneRow } from "./FactoryProject";
 import { PageHead, ProjectShell } from "./ProjectShell";
 
@@ -13,11 +14,11 @@ export default function FactoryProjectMilestones() {
         <section aria-label="Milestones" className="grid min-w-0 gap-5" data-testid="milestones">
           <PageHead title="Milestones" sub="Each milestone with its checks. Try the checks that are for you, or accept a milestone once its tickets have merged." />
           {d.milestones.length === 0 ? (
-            <div className="border border-border bg-card px-4 py-5 text-muted-foreground" data-testid="milestones-empty">
+            <EmptyState className="border-t border-border py-4" data-testid="milestones-empty">
               No milestones yet. The crew adds them when it plans the build.
-            </div>
+            </EmptyState>
           ) : (
-            <div className="border border-border bg-card">
+            <div className="border-t border-border">
               {d.milestones.map((m) => <MilestoneRow key={m.id} m={m} onAnswer={sample ? undefined : act.answer} onAccept={sample ? undefined : act.accept} />)}
             </div>
           )}

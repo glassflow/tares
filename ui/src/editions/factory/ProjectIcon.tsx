@@ -20,7 +20,7 @@ export function ItemIcon({ project, title }: { project?: { name: string; icon?: 
   return project?.icon && title.startsWith(project.name) ? <InlineIcon icon={project.icon} /> : null;
 }
 
-const GHOST = "bg-transparent! border-0! p-0! shadow-none! font-normal! text-muted-foreground! hover:text-foreground! hover:bg-transparent!";
+const GHOST = "bg-transparent border-0 p-0 shadow-none font-normal text-muted-foreground hover:text-foreground hover:bg-transparent";
 
 export function ProjectIconHeader({ icon, canEdit, onChange, className, children, shown = false }: {
   icon: string | null;
@@ -94,7 +94,7 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
       {icon && canEdit && (
         <button type="button" ref={trigger} onClick={toggle} aria-label="Change icon" aria-haspopup="dialog" aria-expanded={open}
                 data-user-text data-testid="project-icon"
-                className="-ml-0.5 flex! size-11 shrink-0 items-center justify-center border-0! bg-transparent! p-0! text-[32px]! leading-none! shadow-none! hover:bg-[var(--row-hover)]! md:size-12 md:text-[38px]!">
+                className="-ml-0.5 flex size-11 shrink-0 items-center justify-center border-0 bg-transparent p-0 text-[32px] leading-none shadow-none hover:bg-row-hover md:size-12 md:text-[38px]">
           {icon}
         </button>
       )}
@@ -105,7 +105,7 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
       {children}
       {!icon && canEdit && (
         <button type="button" ref={trigger} onClick={toggle} aria-haspopup="dialog" aria-expanded={open} data-testid="project-add-icon"
-                className={cn(GHOST, "h-auto! text-[13px]!", shown ? "text-[color:var(--accent-deep)]! underline!" : "opacity-0 transition-opacity group-hover/icon:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100 [@media(hover:none)]:opacity-100")}>
+                className={cn(GHOST, "h-auto text-[13px]", shown ? "text-foreground underline" : "opacity-0 transition-opacity group-hover/icon:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100 [@media(hover:none)]:opacity-100")}>
           Add icon
         </button>
       )}
@@ -116,21 +116,21 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
             <Input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search emoji" aria-label="Search emoji"
                    autoComplete="off" spellCheck={false}
                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (icons[0]) pick(icons[0].char); } }}
-                   className="h-8 bg-[var(--input-bg)]!" data-testid="icon-search" />
+                   className="h-8 bg-field" data-testid="icon-search" />
             <button type="button" aria-label="Pick a random emoji" data-testid="icon-random"
                     onClick={() => pick(ALL_EMOJI[Math.floor(Math.random() * ALL_EMOJI.length)].char)}
-                    className={cn(GHOST, "h-8 shrink-0 px-1.5! text-[13px]! hover:bg-[var(--row-hover)]!")}>
+                    className={cn(GHOST, "h-8 shrink-0 px-1.5 text-[13px] hover:bg-row-hover")}>
               Random
             </button>
             {icon && (
               <button type="button" onClick={() => pick(null)} data-testid="icon-remove"
-                      className={cn(GHOST, "h-8 shrink-0 px-1.5! text-[13px]! hover:bg-[var(--row-hover)]!")}>
+                      className={cn(GHOST, "h-8 shrink-0 px-1.5 text-[13px] hover:bg-row-hover")}>
                 Remove
               </button>
             )}
           </div>
           <div className="max-h-[280px] overflow-y-auto p-2" data-testid="icon-grid">
-            {groups.length === 0 && <p className="m-0! px-1 py-2 text-[13px] text-muted-foreground" data-testid="icon-none">No emoji matches.</p>}
+            {groups.length === 0 && <p className="m-0 px-1 py-2 text-[13px] text-muted-foreground" data-testid="icon-none">No emoji matches.</p>}
             {groups.map((g) => (
               <div key={g.label} role="group" aria-label={g.label} className="mb-2 last:mb-0">
                 <div className="px-1 pb-1 text-xs font-semibold text-muted-foreground">{g.label}</div>
@@ -138,7 +138,7 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
                   {g.items.map((x) => (
                     <button key={x.char} type="button" aria-label={x.name} title={x.name} data-emoji={x.char} data-user-text data-testid="icon-option"
                             onClick={() => pick(x.char)}
-                            className="flex! h-9 items-center justify-center border-0! bg-transparent! p-0! text-[21px]! font-normal! leading-none! shadow-none! hover:bg-[var(--row-hover)]! focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)]">
+                            className="flex h-9 items-center justify-center border-0 bg-transparent p-0 text-[21px] font-normal leading-none shadow-none hover:bg-row-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand">
                       {x.char}
                     </button>
                   ))}

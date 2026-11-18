@@ -1,0 +1,2 @@
+Changed
+Explore speaks in the page's words: connections, not sources, and labels and values, not entities. The picked value is marked, each event says when it happened ("3 minutes ago" instead of "T-180s"), and the timeline names the window it covers. Adding a filter, choosing where to read from and choosing the window are ordinary dropdowns, so the keyboard and screen readers can use them. While Tares loads, the page shows that it is loading instead of saying there is nothing yet. A failed load offers to try again, and a failed read says so (TR-1395).

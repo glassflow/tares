@@ -47,9 +47,10 @@ Two limits of the check. "runs on" is allowed as a phrase, so "3 runs on main" p
 ## Copy rules
 
 - Plain words for what happened. Name the symptom, then the cause.
-- Durations in words, never raw minutes or ids: "17 seconds ago", "8 minutes ago", "6 days",
-  "1 day, 18 hours". `durationWords(seconds)` in `words.ts` formats them: one unit, floored; when that
-  unit's count is 1 the next unit follows if it is not zero.
+- Durations in words, never raw minutes or ids: "just now", "8 minutes ago", "6 days",
+  "1 hour 4 minutes". `src/lib/time.ts` formats them, the same way the server does: `ageWords` and
+  `spanWords` give one unit, floored; `durationWords` adds the next unit when it is not zero. A time
+  of day is UTC: "14:05", "yesterday, 14:05" (`sinceWords`). Never a locale string.
 - Say who an item is from: "Lee opened this PR", "from the reviewer".
 - Put what needs the person first, and say how long it has waited.
 - No em dashes in any rendered string. Use a comma, a colon or a new sentence.
@@ -65,7 +66,19 @@ Two limits of the check. "runs on" is allowed as a phrase, so "3 runs on main" p
   value.
 
 Nothing else is exempt. The static check (`ui/tests/words.check.cjs`) reads every string in
-`ui/src/editions`, `ui/src/components/edition` and `ui/src/pages/dev`, in `.ts` and `.tsx` files only
+`ui/src/editions`, `ui/src/components/edition`, `ui/src/pages/dev`, `ui/src/ee` and, since TR-1259, the
+rest of `ui/src/pages` and `ui/src/components` (the kit in `ui/src/components/ui` is not read), in `.ts`
+and `.tsx` files only
 (sample data in a JSON or other file is not read, so keep it in a `.ts` file); the browser scripts call
 `checkWords` and `expectOneCall` from `ui/tests/words.cjs`; API tests use `tares/words.py`
 (`python -m tares.words --skip name,goal,title,detail,said,text` reads JSON on stdin).
+
+## The platform pages
+
+One object, one name, across the whole console, so the check reads the platform pages too. They still
+use many of the words above, so each one may keep its count in `ui/words-contract.baseline.json` and
+no more. A new forbidden word on a platform page fails the check, with the word to use instead; an old
+one does not. When a page loses some, the check says so and `npm run words-baseline` writes the lower
+count back. That script never raises a count: a raise is a hand edit with its reason in the pull
+request. Edition screens have no baseline; every word there fails.
+

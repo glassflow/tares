@@ -29,6 +29,7 @@ INCIDENTS_SHOWN = 3
 RAISED_SHOWN = 5
 RAISE_STEP_USD = 25
 CHART_LABEL = "Errors, 2 hours around when it opened"
+CHART_LABEL_TO_NOW = "Errors, from 1 hour before it opened until now"
 RAISED_OFF_NOTE = "The checks before the watcher stopped all came back quiet."
 NOTES_PLACE = {"connect": "/settings#tools", "link_repo": "/settings#tools",
                "service": "/services", "rule": "/settings#watching"}
@@ -354,13 +355,20 @@ def _incident_out(store, catalog, inc, notes, settings, items_by_name, t, hide=(
         cause = _nd(run.get("likely_cause") or parts["likely_cause"])
         next_step = goal.headline_and_next(run)[1] or _nd(parts["next_step"])
     service = inc["service"]
-    window = (opened - timedelta(hours=1), opened + timedelta(hours=1))
+    # The window ends at now, not an hour after it opened: a bucket that has not happened yet
+    # would be drawn as 0 errors, a drop the service never made (TR-1272).
+    window = (opened - timedelta(hours=1), max(min(opened + timedelta(hours=1), t), opened))
     series = store.event_series(service, window[0], window[1], 120, errors_only=True)
     deploys = [d for d in sre.deploys(store, catalog, service, window[0], hide=hide)
                if goal._aware(d["at"]) <= window[1]]
+    # No chart without an error in it. The incident's story comes from the agent's finding; an
+    # error line flat at 0 under "1 in 12 requests return 502" says the opposite, because the
+    # errors it read are in a source this count does not cover. The deploys still show in
+    # based_on and the likely cause (TR-1272).
     chart = None
-    if any(n for _a, n in series) or deploys:
-        chart = {"label": CHART_LABEL, "points": [[a, n] for a, n in series],
+    if any(n for _a, n in series):
+        chart = {"label": CHART_LABEL if window[1] == opened + timedelta(hours=1) else CHART_LABEL_TO_NOW,
+                 "points": [[a, n] for a, n in series],
                  "deploys": [{"at": d["at"], "label": _deploy_label(d)} for d in deploys]}
     posted = None
     slack = inc.get("slack")

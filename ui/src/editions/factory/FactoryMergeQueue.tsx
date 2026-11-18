@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import { request } from "../../api";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import {
   NO, YES, answerRow,
@@ -20,35 +20,35 @@ import {
 // it is an inset card with its chip at the top right and full-width buttons, as in the approved mock.
 
 const CAP = 5;
-const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const CARD = "border border-border bg-card";
+const LINK = "text-brand-deep underline";
 
 const CHIP: Record<MqChipKey, string> = {
   queued: "border-border bg-[var(--chip-bg)] text-muted-foreground",
   next: "border-border bg-[var(--chip-bg)] text-muted-foreground",
   merging: "border-[color-mix(in_srgb,var(--slate)_40%,var(--panel))] bg-[var(--slate-soft)] text-[color:var(--slate)]",
-  ci: "border-[color-mix(in_srgb,var(--warn)_45%,var(--panel))] bg-[var(--warn-soft)] text-[color:var(--warn)]",
-  approval: "border-[color:var(--accent)] bg-[var(--accent)] text-[color:var(--on-accent)] font-semibold",
-  other: "border-[color-mix(in_srgb,var(--warn)_45%,var(--panel))] bg-[var(--warn-soft)] text-[color:var(--warn)]",
-  moved: "border-[color-mix(in_srgb,var(--warn)_45%,var(--panel))] bg-[var(--warn-soft)] text-[color:var(--warn)]",
-  approved: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
+  ci: "border-[color-mix(in_srgb,var(--warn)_45%,var(--panel))] bg-warn-soft text-warn",
+  approval: "border-brand bg-brand text-brand-foreground font-semibold",
+  other: "border-[color-mix(in_srgb,var(--warn)_45%,var(--panel))] bg-warn-soft text-warn",
+  moved: "border-[color-mix(in_srgb,var(--warn)_45%,var(--panel))] bg-warn-soft text-warn",
+  approved: "border-ok-border bg-ok-soft text-ok",
   hold: "border-[color-mix(in_srgb,var(--slate)_40%,var(--panel))] bg-[var(--slate-soft)] text-[color:var(--slate)]",
   asking: "border-border bg-[var(--chip-bg)] text-muted-foreground",
-  blocked: "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]",
-  sent_back: "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]",
+  blocked: "border-err-border bg-err-soft text-err",
+  sent_back: "border-err-border bg-err-soft text-err",
 };
 
 type Phase = "idle" | "saving" | "failed";
 type Tone = "ok" | "warn" | "err" | "none";
 
 const DOT: Record<Tone, string> = {
-  ok: "bg-[color:var(--ok)]", warn: "bg-[color:var(--warn)]", err: "bg-[color:var(--err)]", none: "bg-[color:var(--ink-faint)]",
+  ok: "bg-ok", warn: "bg-warn", err: "bg-err", none: "bg-faint",
 };
 
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg aria-hidden viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
-         className={cn("h-3 w-3 flex-none transition-transform duration-100 motion-reduce:transition-none", !open && "-rotate-90")}>
+         className={cn("h-3 w-3 flex-none transition-transform duration-(--dur-1) ease-out", !open && "-rotate-90")}>
       <path d="M2 4l4 4 4-4" />
     </svg>
   );
@@ -88,7 +88,7 @@ function railTone(t: string): Tone {
 /** The sentence with its lead (the API's first words) in bold; the lead is red on a row held up. */
 function Lead({ text, lead, red }: { text: string; lead: string; red?: boolean }) {
   if (lead && text.startsWith(lead)) {
-    return <><b className={cn(red && "text-[color:var(--err)]")} data-testid="mq-lead-b">{lead}</b>{text.slice(lead.length)}</>;
+    return <><b className={cn(red && "text-err")} data-testid="mq-lead-b">{lead}</b>{text.slice(lead.length)}</>;
   }
   return <>{text}</>;
 }
@@ -163,7 +163,7 @@ function Row({ row, pid, sample, onChanged }: {
       <div className="col-start-2 row-start-1 flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-0.5 @max-[559px]/mq:col-[1/-1] @max-[559px]/mq:row-start-2">
         {row.ticket.ref ? (
           <Link to={`../tickets/${encodeURIComponent(row.ticket.ref)}`} relative="path"
-                className={cn(LINK, "font-mono text-[13px] font-medium no-underline!")} data-testid="mq-ticket" data-user-text>
+                className={cn(LINK, "font-mono text-[13px] font-medium no-underline")} data-testid="mq-ticket" data-user-text>
             {row.ticket.ref}
           </Link>
         ) : null}
@@ -200,7 +200,7 @@ function Row({ row, pid, sample, onChanged }: {
           ) : failed ? (
             <>
               <p className="m-0 [overflow-wrap:anywhere]" data-testid="mq-failed">
-                <b className="text-[color:var(--err)]">Your answer was not saved.</b> The cell did not answer, so the question is still open on every page.
+                <b className="text-err">Your answer was not saved.</b> The cell did not answer, so the question is still open on every page.
               </p>
               <p className="m-0 mt-0.5 text-[13px] text-muted-foreground">Nothing was sent to GitHub. Answer again when you are ready.</p>
             </>
@@ -219,7 +219,7 @@ function Row({ row, pid, sample, onChanged }: {
                   <span aria-hidden className="mr-2 inline-flex gap-[3px]" data-testid="mq-pips">
                     {pips.map((on, i) => (
                       <span key={i} data-on={on ? "yes" : ""}
-                            className={cn("inline-block h-2 w-2 border", on ? "border-[color:var(--err)] bg-[var(--err)]" : "border-[color:var(--ink-soft)]")} />
+                            className={cn("inline-block h-2 w-2 border", on ? "border-err bg-err" : "border-muted-foreground")} />
                     ))}
                   </span>
                   {withLink(row.bounce.text, "Calls page", callsLink)}
@@ -231,7 +231,7 @@ function Row({ row, pid, sample, onChanged }: {
 
         {(ask || approveOnly) && (
           <div className="mt-2.5 flex flex-wrap gap-2" role="group" aria-label={`Answer for ${row.ticket.ref}`} data-testid="mq-actions">
-            <Button className="min-h-9 px-4 text-[13px]! @max-[559px]/mq:flex-1" disabled={saving} busy={saving && choice === "yes"}
+            <Button className="min-h-9 px-4 text-[13px] @max-[559px]/mq:flex-1" disabled={saving} busy={saving && choice === "yes"}
                     onClick={() => send("yes", () => (ask
                       ? answerRow(ask, YES)
                       : request(`/api/factory/merge-queue/${encodeURIComponent(row.id)}/approve`, { method: "POST" })))}
@@ -239,7 +239,7 @@ function Row({ row, pid, sample, onChanged }: {
               {YES.choice}
             </Button>
             {ask && (
-              <Button variant="secondary" className="min-h-9 px-4 text-[13px]! @max-[559px]/mq:flex-1" disabled={saving} busy={saving && choice === "no"}
+              <Button variant="secondary" className="min-h-9 px-4 text-[13px] @max-[559px]/mq:flex-1" disabled={saving} busy={saving && choice === "no"}
                       onClick={() => send("no", () => answerRow(ask, NO))} data-testid="mq-no">
                 {NO.choice}
               </Button>
@@ -260,10 +260,10 @@ function Group({ g, pid, sample, rows, hidden, open, onToggle, onChanged }: {
     <section className={cn(CARD, "min-w-0")} aria-label={g.title} data-testid="mq-group">
       <div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 bg-[var(--th-bg)] py-2 pl-2.5 pr-[18px] @max-[559px]/mq:pl-1.5 @max-[559px]/mq:pr-3.5", open && "border-b border-border")}>
         <button type="button" onClick={onToggle} aria-expanded={open} data-testid="mq-group-toggle"
-                className="flex! min-w-0 items-center gap-2 border-0! bg-transparent! px-2! py-1! text-left font-mono! text-sm font-semibold! leading-[1.4] text-foreground hover:bg-[var(--wash-2)]!">
+                className="flex min-w-0 items-center gap-2 border-0 bg-transparent px-2 py-1 text-left text-sm font-semibold leading-[1.4] text-foreground hover:bg-wash-strong">
           <Chevron open={open} />
           <span className="min-w-0 [overflow-wrap:anywhere]" data-user-text>
-            {g.repo} <span className="font-sans font-normal text-muted-foreground">into</span> {g.base}
+            {g.repo} <span className="font-normal text-muted-foreground">into</span> {g.base}
           </span>
         </button>
         <span className="whitespace-nowrap font-mono text-xs font-medium text-muted-foreground" data-testid="mq-group-count">{g.count}</span>
@@ -282,7 +282,7 @@ function Group({ g, pid, sample, rows, hidden, open, onToggle, onChanged }: {
       {open && g.merged && (
         <div className="border-t border-border" data-testid="mq-merged">
           <button type="button" onClick={() => setMergedOpen(!mergedOpen)} aria-expanded={mergedOpen}
-                  className="flex! w-full items-center gap-2 border-0! bg-transparent! px-[18px]! py-2! text-left text-[13px] text-muted-foreground! hover:bg-[var(--row-hover)]! hover:text-foreground! @max-[559px]/mq:px-3.5!"
+                  className="flex w-full items-center gap-2 border-0 bg-transparent px-[18px] py-2 text-left text-[13px] text-muted-foreground hover:bg-row-hover hover:text-foreground @max-[559px]/mq:px-3.5"
                   data-testid="mq-merged-toggle">
             <Chevron open={mergedOpen} />{g.merged.title}
           </button>
@@ -290,9 +290,9 @@ function Group({ g, pid, sample, rows, hidden, open, onToggle, onChanged }: {
             <ul className="m-0 grid list-none gap-1.5 pb-2.5 pl-[38px] pr-[18px] @max-[559px]/mq:pl-9 @max-[559px]/mq:pr-3.5">
               {g.merged.items.map((m) => (
                 <li key={m.n} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[13px] [overflow-wrap:anywhere]" data-testid="mq-merged-item">
-                  <span aria-hidden className="inline-block h-2 w-2 self-center bg-[color:var(--ok)]" />
+                  <span aria-hidden className="inline-block h-2 w-2 self-center bg-ok" />
                   <Link to={`../tickets/${encodeURIComponent(m.tk)}`} relative="path"
-                        className={cn(LINK, "font-mono font-medium no-underline!")} data-user-text>{m.tk}</Link>
+                        className={cn(LINK, "font-mono font-medium no-underline")} data-user-text>{m.tk}</Link>
                   <span data-user-text>{m.title}</span>
                   <span className="sr-only">Pull request </span>
                   <span>#{m.n}</span>
@@ -343,7 +343,7 @@ function Queue({ d, pid, sample, reload }: { d: MergeQueueData; pid: string; sam
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border border-border bg-card px-[18px] py-2.5 text-[13px] text-muted-foreground @max-[559px]/mq:flex-col @max-[559px]/mq:items-start @max-[559px]/mq:px-3.5"
              data-testid="mq-more">
           <span>{all ? `Showing all ${total} pull requests.` : `Showing ${shown} of ${total} pull requests.`}</span>
-          <Button variant="secondary" className="min-h-[30px] text-[13px]!" onClick={() => setAll(!all)} data-testid="mq-more-toggle">
+          <Button variant="secondary" className="min-h-[30px] text-[13px]" onClick={() => setAll(!all)} data-testid="mq-more-toggle">
             {all ? "Show fewer" : `Show ${total - shown} more`}
           </Button>
         </div>
@@ -357,7 +357,7 @@ function Head({ aside }: { aside?: string }) {
   const at = aside ? aside.indexOf(", ") : -1;
   return (
     <div className="grid gap-1.5 pt-1">
-      <h2 className="m-0! text-[22px]! font-bold! leading-tight tracking-[-0.02em] @max-[559px]/mq:text-[20px]!" id="mq-title" data-testid="mq-heading">Merge queue</h2>
+      <h2 className="m-0 text-[22px] font-bold leading-tight tracking-[-0.02em] @max-[559px]/mq:text-[20px]" id="mq-title" data-testid="mq-heading">Merge queue</h2>
       {aside ? (
         <p className="m-0 text-sm text-muted-foreground" data-testid="mq-aside">
           {at >= 0 ? <><b className="font-semibold text-foreground">{aside.slice(0, at)}</b>{aside.slice(at)}</> : <b className="font-semibold text-foreground">{aside}</b>}
@@ -404,11 +404,11 @@ export function MergeQueuePanel({ id, data, error, reload, prsHref, sample }: {
   return (
     <section className="@container/mq grid min-w-0 gap-4" data-testid="mq-page" aria-labelledby="mq-title">
       <Head aside={data.aside} />
-      {error && (
+      <Collapse>{error && (
         <Banner tone="warn" data-testid="mq-stale">
           <b>The merge queue could not be refreshed.</b> <span className="text-foreground">What shows is from the last time it loaded.</span>
         </Banner>
-      )}
+      )}</Collapse>
       {data.intro && <p className="m-0 max-w-[760px] text-[13px] text-muted-foreground" data-testid="mq-intro">{data.intro}</p>}
       {data.groups.length === 0
         ? <p className={cn(CARD, "m-0 px-[18px] py-4 @max-[559px]/mq:px-3.5")} data-testid="mq-empty">{data.empty}</p>

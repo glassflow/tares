@@ -1,11 +1,11 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, ListRow, ListSection, Skeleton, StatusDot, type Tone } from "../../components/edition";
+import { Banner, Button, ListRow, ListSection, LoadingBlocks, STATUS_TONES, StatusDot } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
-import { factoryReviews, type CiState, type FactoryReviewsData, type ReviewRow } from "./FactoryReviews.api";
+import { factoryReviews, type FactoryReviewsData, type ReviewRow } from "./FactoryReviews.api";
 import { isSample, sampleLoad } from "./reviewsSamples";
 
 // Reviews: every pull request in review, across projects, in three lists: the ones that wait for the
@@ -17,21 +17,13 @@ import { isSample, sampleLoad } from "./reviewsSamples";
 
 const POLL_MS = 20_000;
 const MUTED = "text-[13px] text-muted-foreground";
-const LINK = "text-foreground! underline! decoration-border! underline-offset-[3px]";
-
-const DOT: Record<CiState, { tone: Tone; className?: string }> = {
-  ok: { tone: "ready" },
-  bad: { tone: "bad" },
-  go: { tone: "waiting", className: "bg-[var(--accent)]" },
-  none: { tone: "quiet" },
-};
+const LINK = "text-foreground underline decoration-border underline-offset-[3px]";
 
 /** A link only to a web address; anything else is shown as plain text. */
 const webUrl = (u: string | null): u is string => !!u && /^https?:\/\//i.test(u);
 
 function Row({ r }: { r: ReviewRow }) {
   const { number, url, title, repo } = r.pr;
-  const dot = DOT[r.ci_state] ?? DOT.none;
   return (
     <ListRow className="grid grid-cols-1 items-start gap-x-4 gap-y-1.5 md:grid-cols-[1fr_auto]"
              data-testid="review-row" data-project={r.project.id} data-ci={r.ci_state}>
@@ -46,7 +38,7 @@ function Row({ r }: { r: ReviewRow }) {
             <>
               {" · "}
               {webUrl(url)
-                ? <a href={url} target="_blank" rel="noreferrer" title={title ?? undefined} data-testid="review-pr" className="text-muted-foreground! underline! decoration-border! underline-offset-[3px]">#{number}</a>
+                ? <a href={url} target="_blank" rel="noreferrer" title={title ?? undefined} data-testid="review-pr" className="text-muted-foreground underline decoration-border underline-offset-[3px]">#{number}</a>
                 : <span data-testid="review-pr">#{number}</span>}
               {repo && <> on <span data-user-text>{repo}</span></>}
             </>
@@ -56,13 +48,13 @@ function Row({ r }: { r: ReviewRow }) {
       <div className="whitespace-nowrap font-mono text-[13px] md:text-right" data-testid="review-waited">{r.waited}</div>
       <div className={cn("col-span-full flex flex-wrap gap-x-4 gap-y-1", MUTED)}>
         <span data-testid="review-verdict">{r.review}</span>
-        <span data-testid="review-ci"><StatusDot tone={dot.tone} className={cn("mr-1.5 rounded-full", dot.className)} />{r.ci}</span>
+        <span data-testid="review-ci"><StatusDot tone={STATUS_TONES.ci[r.ci_state] ?? "quiet"} className="mr-1.5 rounded-full" />{r.ci}</span>
       </div>
       {r.why && (
         <div className="col-span-full text-[13px] text-foreground" data-testid="review-why">{r.why}</div>
       )}
       {r.holds_up && (
-        <div className="col-span-full text-[13px] font-semibold text-[color:var(--accent-deep)] [overflow-wrap:anywhere]" data-user-text data-testid="review-holds">
+        <div className="col-span-full text-[13px] font-semibold text-foreground [overflow-wrap:anywhere]" data-user-text data-testid="review-holds">
           {r.holds_up}
         </div>
       )}
@@ -70,15 +62,6 @@ function Row({ r }: { r: ReviewRow }) {
   );
 }
 
-function Loading() {
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card p-4" data-testid="reviews-loading">
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="55%" /><Skeleton width="35%" /><Skeleton width="70%" /></div>
-      ))}
-    </div>
-  );
-}
 
 /** "Kiran", "Kiran and Adam", "Kiran, Adam and Lee"; "no one" for nobody. */
 function names(people: { name: string }[]): string {
@@ -101,13 +84,13 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
       {data.project && (
         <div className={cn("flex flex-wrap items-center gap-2", MUTED)} data-testid="reviews-filter">
           <span>Showing <b data-user-text>{data.project.name}</b>.</span>
-          <Link to="/reviews" className="text-[color:var(--accent-deep)]! underline!">Show all</Link>
+          <Link to="/reviews" className="text-foreground underline">Show all</Link>
         </div>
       )}
       {unknown && (
         <div className={cn("flex flex-wrap items-center gap-2", MUTED)} data-testid="reviews-unknown">
           <span>No project has that address.</span>
-          <Link to="/reviews" className="text-[color:var(--accent-deep)]! underline!">Show all</Link>
+          <Link to="/reviews" className="text-foreground underline">Show all</Link>
         </div>
       )}
       <p className="m-0 text-[13px] text-muted-foreground" data-testid="reviews-autonomy">{data.autonomy_text}</p>
@@ -130,7 +113,7 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
         <div data-testid="reviews-crew">
           <button type="button" aria-expanded={open} aria-controls="reviews-crew-list" data-testid="crew-fold"
                   onClick={() => setFolded(open)}
-                  className="flex! w-full cursor-pointer items-center justify-between! gap-3 border border-border bg-card px-4 py-3 text-left font-semibold hover:bg-[var(--row-hover)]">
+                  className="flex w-full cursor-pointer items-center justify-between gap-3 border border-border bg-card px-4 py-3 text-left font-semibold hover:bg-row-hover">
             <span>With the crew</span>
             <span className="font-mono font-normal" data-testid="crew-count">{theirs.length} {open ? "−" : "+"}</span>
           </button>
@@ -156,7 +139,7 @@ function Reviews({ project }: { project: string }) {
       <b>Reviews did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );
-  if (!data) return <ReviewsHead>{banner || <Loading />}</ReviewsHead>;
+  if (!data) return <ReviewsHead>{banner || <LoadingBlocks data-testid="reviews-loading" widths={["55%", "35%", "70%"]} />}</ReviewsHead>;
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}
@@ -177,8 +160,8 @@ function ReviewsHead({ children }: { children?: React.ReactNode }) {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-reviews">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Reviews</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Every pull request, across projects, that waits for a person.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Reviews</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Every pull request, across projects, that waits for a person.</p>
       </div>
       {children}
     </div>

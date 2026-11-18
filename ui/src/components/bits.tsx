@@ -1,24 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { TriggerCondition } from "../types";
 import { copyText } from "../editions/copyText";
+import { formatRelative, formatStampUTC } from "../lib/time";
 
-export function StatusBadge({ status }: { status: string | undefined }) {
-  const s = status ?? "starting";
-  return <span className={`badge ${s}`}>{s}</span>;
-}
-
-/** "22s ago", "5m ago", "3h ago", "2d ago": what TimeAgo shows, as text for a title. */
-export function agoText(ts: string): string {
-  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
-  if (secs < 60) return `${Math.round(secs)}s ago`;
-  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
-  return `${Math.round(secs / 86400)}d ago`;
-}
-
+/** "3h ago", with the UTC stamp in its tooltip (lib/time.ts). A time that does not parse shows as
+ *  it came, so a bad value is visible. */
 export function TimeAgo({ ts }: { ts: string | null | undefined }) {
   if (!ts) return <span className="dim">—</span>;
-  return <span title={new Date(ts).toLocaleString()}>{agoText(ts)}</span>;
+  return <span title={formatStampUTC(ts)}>{formatRelative(Date.parse(ts), Date.now()) || ts}</span>;
 }
 
 /** Fetch on mount and refetch on an interval; pause when the tab is hidden. */
@@ -73,11 +62,6 @@ export function ErrorState({ error, what, onRetry }: {
       )}
     </div>
   );
-}
-
-/** "There is genuinely nothing here" — only ever rendered when the load SUCCEEDED. */
-export function EmptyState({ children }: { children: React.ReactNode }) {
-  return <div className="empty">{children}</div>;
 }
 
 /** A button that copies `text` and says "Copied" for a moment. `what` names the text for a

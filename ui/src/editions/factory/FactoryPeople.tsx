@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { api, ApiError } from "../../api";
 import LicenceNeeded from "../../components/LicenceNeeded";
-import { Banner, Button, Initials, Input, ListRow, ListSection, Skeleton, StatusDot } from "../../components/edition";
+import { Banner, Button, Collapse, Initials, Input, ListRow, ListSection, LoadingBlocks, StatusDot } from "../../components/edition";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useLicenceNoAnswer } from "../../eeSlots";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
@@ -39,7 +39,7 @@ function PictureEdit({ p, onChanged }: { p: PersonRow; onChanged: () => void }) 
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} data-testid="picture-open"
-              className="cursor-pointer! border-0! bg-transparent! p-0! text-[13px]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]">
+              className="cursor-pointer border-0 bg-transparent p-0 text-[13px] font-normal text-foreground underline decoration-border underline-offset-[3px]">
         {p.picture ? "Change your picture" : "Add your picture"}
       </button>
     );
@@ -79,13 +79,6 @@ function Row({ p, canSetPicture, onChanged }: { p: PersonRow; canSetPicture: boo
   );
 }
 
-function Loading() {
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card p-4" data-testid="people-loading">
-      {[0, 1, 2].map((i) => <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="40%" /><Skeleton width="25%" /></div>)}
-    </div>
-  );
-}
 
 export function FactoryPeopleView({ data, onAdded, note, onPeopleChanged = () => {} }: {
   data: FactoryPeopleData; onAdded: (words: string) => void; note: string;
@@ -95,7 +88,7 @@ export function FactoryPeopleView({ data, onAdded, note, onPeopleChanged = () =>
   const { people } = data;
   return (
     <PeopleHead>
-      {note && <Banner tone="note" data-testid="people-note">{note}</Banner>}
+      <Collapse>{note && <Banner tone="note" data-testid="people-note">{note}</Banner>}</Collapse>
       <ListSection title="On this cell" aside={<span className="font-mono" data-testid="people-count">{people.length}</span>} data-testid="people-list">
         {people.map((p) => <Row key={p.id} p={p} canSetPicture={!data.cloud} onChanged={onPeopleChanged} />)}
       </ListSection>
@@ -126,7 +119,7 @@ export default function FactoryPeople() {
       <b>People did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );
-  if (!data) return <PeopleHead>{banner || <Loading />}</PeopleHead>;
+  if (!data) return <PeopleHead>{banner || <LoadingBlocks data-testid="people-loading" widths={["40%", "25%"]} />}</PeopleHead>;
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}
@@ -139,8 +132,8 @@ function PeopleHead({ children }: { children?: React.ReactNode }) {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-people">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">People</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Who works on this cell.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">People</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Who works on this cell.</p>
       </div>
       {children}
     </div>

@@ -28,8 +28,9 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8833);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -42,6 +43,19 @@ const ck = (label, cond, detail = "") => {
   cond ? pass++ : fail++;
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
 };
+
+/** The filled (primary) buttons and button links in the page, by their text: Home has one, on the
+ *  top decision, and none when nothing waits (TR-1275). Read by colour, so any filled button counts,
+ *  wherever it came from. */
+async function filledButtons(page) {
+  return page.evaluate(() => {
+    const probe = document.createElement("i"); probe.className = "bg-primary"; document.body.appendChild(probe);
+    const fill = getComputedStyle(probe).backgroundColor; probe.remove();
+    return [...document.querySelectorAll("main a, main button")]
+      .filter((e) => e.getBoundingClientRect().width > 0 && getComputedStyle(e).backgroundColor === fill)
+      .map((e) => e.innerText.trim());
+  });
+}
 
 async function waitFor(url, tries = 150) {
   for (; tries > 0; tries--) {
@@ -97,7 +111,6 @@ function cleanEnv(extra) {
     for (const width of [1440, 390]) {
       const { ctx, page } = await flagged(width);
       const rows = page.getByTestId("waiting-row");
-      const projects = page.getByTestId("project-row");
       const tag = (s) => `${s} @${width}`;
       for (const sample of SAMPLES) {
         await open(page, sample);
@@ -108,6 +121,9 @@ function cleanEnv(extra) {
           const w = document.documentElement.clientWidth;
           return [...document.querySelectorAll("main *")].every((e) => e.getBoundingClientRect().right <= w + 1);
         }));
+        // TR-1274: Home sits on the paper. The start checklist is shared with SRE Home and moves with that page.
+        const paper = await checkPaper(page, ck, tag(sample));
+        if (sample !== "error") ck(`${tag(sample)}: the paper check saw the section headings`, paper.heads.length > 0);
         const hello = (await page.locator("h1").first().innerText()).trim();
         ck(`${tag(sample)}: a greeting by the time of day`, /^Good (morning|afternoon|evening)$/.test(hello), hello);
         ck(`${tag(sample)}: Talk to the crew and New project in the top bar`,
@@ -118,7 +134,14 @@ function cleanEnv(extra) {
       // busy
       await open(page, "busy");
       ck(`busy @${width}: 4 waiting rows`, (await rows.count()) === 4, String(await rows.count()));
-      ck(`busy @${width}: 5 project rows`, (await projects.count()) === 5, String(await projects.count()));
+      ck(`busy @${width}: no Projects section on Home (TR-1275)`, (await page.getByRole("region", { name: "Projects" }).count()) === 0
+         && (await page.getByTestId("project-row").count()) === 0);
+      const lead = await filledButtons(page);
+      ck(`busy @${width}: one filled primary on the page (TR-1275)`, lead.length === 1, JSON.stringify(lead));
+      ck(`busy @${width}: and it is the top row's main action`, (await rows.first().getByRole("link", { name: "Open Reviews" }).getAttribute("data-primary")) === "true"
+         && lead[0] === "Open Reviews");
+      ck(`busy @${width}: the other rows' main actions keep the dark outline`,
+         (await rows.nth(1).getByRole("button", { name: "Close project" }).getAttribute("data-primary")) === null);
       ck(`busy @${width}: no "more" button with 4 waiting`, (await page.getByRole("button", { name: /\d+ more/ }).count()) === 0);
       ck(`busy @${width}: the caption says what comes first`, await page.getByText("what holds the crew up first").isVisible());
       ck(`busy @${width}: the headline is the data's`, (await page.getByTestId("home-headline").innerText()).startsWith("4 things wait for you."));
@@ -127,30 +150,14 @@ function cleanEnv(extra) {
          (await rows.nth(1).locator("a, button").allInnerTexts()).join("|") === "Open project|Close project");
       ck(`busy @${width}: a link action is a link`, (await rows.nth(0).getByRole("link", { name: "Open Reviews" }).getAttribute("href")) === "/reviews");
       ck(`busy @${width}: a do action is a button`, (await second.count()) === 1 && (await second.innerText()) === "Close project");
-      const names = await projects.locator("[data-user-text]").first().innerText();
-      ck(`busy @${width}: a project row links to the project`, (await projects.first().getAttribute("href")) === `/projects/${names}`, names);
-      ck(`busy @${width}: the first project says 15 of 21 tickets merged and 4 blocked`,
-         /15 of 21 tickets merged/.test(await projects.first().innerText()) && /4 blocked/.test(await projects.first().innerText()));
-      ck(`busy @${width}: a project with no tickets merged says so`, /0 of 9 tickets merged/.test(await projects.nth(3).innerText()));
-      ck(`busy @${width}: a project with no tickets at all says so`, /No tickets yet/.test(await projects.nth(4).innerText()));
-      const chip = async (i) => projects.nth(i).locator("span.uppercase").evaluate((e) => getComputedStyle(e).backgroundColor);
-      const chips = [0, 1, 2, 3, 4].map(chip);
-      const cols = await Promise.all(chips);
-      ck(`busy @${width}: the state chips have four different tones`, new Set(cols).size === 4, cols.join(" | "));
-      ck(`busy @${width}: the blocked count is red`, await projects.first().getByText("4 blocked").evaluate((e) => {
-        const probe = document.createElement("i"); probe.style.color = "var(--err)"; document.body.appendChild(probe);
-        const c = getComputedStyle(probe).color; probe.remove(); return getComputedStyle(e).color === c;
-      }));
-      ck(`busy @${width}: "All projects, 4 finished" links to /projects`,
-         (await page.getByRole("link", { name: "All projects, 4 finished" }).getAttribute("href")) === "/projects");
       ck(`busy @${width}: the crew card lists 3 members with their memory`, (await page.getByTestId("crew-member").count()) === 3
          && (await page.getByText("memory 82% full").count()) === 1);
-      ck(`busy @${width}: only the member at 80% or more has the amber memory bar`, (await page.getByTestId("memory-warn").count()) === 1
+      ck(`busy @${width}: only the member at 80% or more is marked as nearly full`, (await page.getByTestId("memory-warn").count()) === 1
          && (await page.getByTestId("memory").count()) === 2);
       const fillOf = (loc) => loc.evaluate((e) => {
         const probe = document.createElement("i"); document.body.appendChild(probe);
         const c = (v) => { probe.style.backgroundColor = v; return getComputedStyle(probe).backgroundColor; };
-        probe.className = "bg-foreground";   // the same utility the project bar's merged part uses
+        probe.className = "bg-foreground";   // the same utility an ink bar's fill uses
         const ink = getComputedStyle(probe).backgroundColor; probe.className = "";
         const out = { fill: getComputedStyle(e.querySelector(":scope > div")).backgroundColor, ink, amber: c("var(--kit-accent)") };
         probe.remove(); return out;
@@ -161,16 +168,11 @@ function cleanEnv(extra) {
         const warn = await fillOf(page.getByTestId("memory-warn").first());
         const calm = await fillOf(page.getByTestId("memory").first());
         const plan = await fillOf(page.getByRole("progressbar", { name: "Current 5 hours" }));
-        ck(`busy @${width} (${theme}): the memory bar at 80% or more is amber`, warn.fill === warn.amber, `${warn.fill} vs ${warn.amber}`);
+        ck(`busy @${width} (${theme}): the memory bar at 80% or more is ink too, not amber`, warn.fill === warn.ink && warn.fill !== warn.amber, `${warn.fill} vs ${warn.ink}`);
         ck(`busy @${width} (${theme}): a calmer memory bar is ink`, calm.fill === calm.ink, `${calm.fill} vs ${calm.ink}`);
         ck(`busy @${width} (${theme}): a plan bar is ink`, plan.fill === plan.ink, `${plan.fill} vs ${plan.ink}`);
       }
       await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
-      const link = page.getByRole("link", { name: "All projects, 4 finished" });
-      ck(`busy @${width}: the All projects link takes the deep accent colour`, await link.evaluate((e) => {
-        const probe = document.createElement("i"); probe.style.color = "var(--accent-deep)"; document.body.appendChild(probe);
-        const c = getComputedStyle(probe).color; probe.remove(); return getComputedStyle(e).color === c;
-      }));
       ck(`busy @${width}: Autonomy links to Settings`, (await page.getByRole("link", { name: "Autonomy" }).getAttribute("href")) === "/settings#crew");
       ck(`busy @${width}: the plan card shows both limits`, (await page.getByText("1% used · resets 21:50").count()) === 1
          && (await page.getByText("11% used · resets Fri").count()) === 1);
@@ -187,10 +189,12 @@ function cleanEnv(extra) {
       // empty
       await open(page, "empty");
       ck(`empty @${width}: Nothing waits for you.`, await page.getByText("Nothing waits for you.", { exact: true }).isVisible());
-      ck(`empty @${width}: no waiting rows and no project rows`, (await rows.count()) === 0 && (await projects.count()) === 0);
+      ck(`empty @${width}: no waiting rows`, (await rows.count()) === 0);
+      ck(`empty @${width}: no filled primary when nothing waits (TR-1275)`, (await filledButtons(page)).length === 0, JSON.stringify(await filledButtons(page)));
       const projBox = page.getByRole("region", { name: "Projects" });
-      ck(`empty @${width}: the projects box says how to plan the first project, with the command to copy`,
-        (await projBox.getByTestId("plan-first").count()) === 1 && (await projBox.getByRole("heading", { name: "Plan your first project" }).count()) === 1
+      ck(`empty @${width}: no project rows, only how to plan the first project, with the command to copy`,
+        (await page.getByTestId("project-row").count()) === 0
+        && (await projBox.getByTestId("plan-first").count()) === 1 && (await projBox.getByRole("heading", { name: "Plan your first project" }).count()) === 1
         && (await projBox.getByTestId("plan-first").locator("code").innerText()) === "tares factory spec"
         && (await projBox.getByTestId("start-copy").count()) === 1);
       ck(`empty @${width}: and a link to start one in the console instead`, (await projBox.getByRole("link", { name: "start one here" }).getAttribute("href")) === "/projects/new");
@@ -205,7 +209,8 @@ function cleanEnv(extra) {
 
       // nothingWaiting
       await open(page, "nothingWaiting");
-      ck(`nothingWaiting @${width}: Nothing waits for you. and 2 projects`, await page.getByText("Nothing waits for you.", { exact: true }).isVisible() && (await projects.count()) === 2);
+      ck(`nothingWaiting @${width}: Nothing waits for you.`, await page.getByText("Nothing waits for you.", { exact: true }).isVisible());
+      ck(`nothingWaiting @${width}: and no filled primary`, (await filledButtons(page)).length === 0, JSON.stringify(await filledButtons(page)));
 
       // manyWaiting
       await open(page, "manyWaiting");
@@ -221,15 +226,9 @@ function cleanEnv(extra) {
 
       // longGoals
       await open(page, "longGoals");
-      const goal = projects.first().locator("[title]").first();
-      const full = await goal.getAttribute("title");
-      const box = await goal.evaluate((e) => ({ h: e.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(e).lineHeight), sh: e.scrollHeight }));
-      ck(`longGoals @${width}: the goal holds 300+ characters in its title`, (full || "").length > 300, String((full || "").length));
-      ck(`longGoals @${width}: and shows 2 lines at most`, box.h <= box.lh * 2 + 1 && box.sh > box.h, JSON.stringify(box));
       const detail = rows.first().locator("[title]").first();
       const dbox = await detail.evaluate((e) => ({ h: e.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(e).lineHeight), sh: e.scrollHeight }));
       ck(`longGoals @${width}: a waiting detail shows 3 lines at most`, dbox.h <= dbox.lh * 3 + 1 && dbox.sh > dbox.h, JSON.stringify(dbox));
-      ck(`longGoals @${width}: the 60 character name stays inside its row`, await projects.first().evaluate((e) => e.scrollWidth <= e.clientWidth + 1));
 
       // loading, error
       await open(page, "loading");
@@ -333,7 +332,6 @@ function cleanEnv(extra) {
       for (const width of [390, 1440]) {
         const { ctx, page, ctl } = await liveContext(width);
         const rows = page.getByTestId("waiting-row");
-        const projects = page.getByTestId("project-row");
         const t = (s) => `live @${width}: ${s}`;
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
@@ -349,13 +347,15 @@ function cleanEnv(extra) {
            && (await rows.count()) === 7 && (await moreBtn.count()) === 0, `${await rows.count()} rows, ${await moreBtn.count()} more`);
         if (await moreBtn.count()) await moreBtn.click();
         ck(t("7 waiting rows: two Close, a call, a spec, three permissions"), (await rows.count()) === 7, String(await rows.count()));
-        ck(t("4 project rows, 1 finished"), (await projects.count()) === 4 && (await page.getByRole("link", { name: "All projects, 1 finished" }).count()) === 1);
+        ck(t("no Projects section (TR-1275)"), (await page.getByRole("region", { name: "Projects" }).count()) === 0);
+        const lead = await filledButtons(page);
+        ck(t("one filled primary, the top row's main action (TR-1275)"), lead.length === 1
+           && (await rows.first().locator("[data-primary]").count()) === 1, JSON.stringify(lead));
         ck(t("a link action keeps the daemon's address"),
            (await row(page, "2 calls to confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${ids["Billing export"]}/calls`
            && (await row(page, "Docs search").getByRole("link", { name: "Read the spec" }).getAttribute("href")) === `/projects/${ids["Docs search"]}`
            && (await row(page, "reviewer").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/crew#desk-${ids["allow-crew"]}`);
         ck(t("the permission names its command in a monospace span"), (await row(page, "npm run test").locator("code").innerText()) === "npm run test -- --watch=false");
-        ck(t("a project row links to the project"), (await projects.filter({ hasText: "Billing export" }).getAttribute("href")) === `/projects/${ids["Billing export"]}`);
         if (width === 390) { await ctx.close(); continue; }
 
         // Copy
@@ -460,7 +460,7 @@ function cleanEnv(extra) {
         ck(t("Close refused: the daemon's sentence in the box, the box open"), /still has open tickets: T2/.test(await closer.getByTestId("dialog-error").innerText()), await closer.getByTestId("dialog-error").innerText());
         await closer.getByRole("button", { name: "Cancel" }).click();
         await closer.waitFor({ state: "detached" });
-        ck(t("Close refused: the row stays"), (await retry.count()) === 1 && (await projects.filter({ hasText: "Retry uploads" }).count()) === 1);
+        ck(t("Close refused: the row stays"), (await retry.count()) === 1);
         const link = row(page, "Link counter");
         await link.getByRole("button", { name: "Close project" }).click();
         await closer.waitFor();
@@ -473,11 +473,9 @@ function cleanEnv(extra) {
         await link.waitFor({ state: "detached" });
         ck(t("Close: confirmed, one call to finish the project, and Cancel made none"), ctl.finishes.length === asked + 1 && ctl.finishes.at(-1) === `/api/projects/${ids["Link counter"]}/finish`, ctl.finishes.join());
         await page.getByText("Link counter is closed. It moved to Done.", { exact: true }).waitFor();
-        ck(t("Close: the project leaves the list at once and joins the finished"), (await projects.filter({ hasText: "Link counter" }).count()) === 0
-           && (await page.getByRole("link", { name: "All projects, 2 finished" }).count()) === 1);
+        ck(t("Close: the row leaves the list at once"), (await link.count()) === 0);
         await page.waitForTimeout(6500);
-        ck(t("Close: and it stays closed after the daemon's own answer"), (await projects.filter({ hasText: "Link counter" }).count()) === 0 && (await link.count()) === 0
-           && (await page.getByRole("link", { name: "All projects, 2 finished" }).count()) === 1);
+        ck(t("Close: and it stays gone after the daemon's own answer"), (await link.count()) === 0);
         await liveShot(page, "after", width);
 
         // a read that fails after data: the old data stays under a warning with the time of the last good read
@@ -486,7 +484,7 @@ function cleanEnv(extra) {
         const stale = page.getByTestId("stale-banner");
         await stale.waitFor();
         ck(t("stale: the warning names the time of the last good read"), /^Could not refresh\. Showing what we had at ([01]\d|2[0-3]):[0-5]\d\.$/.test((await stale.innerText()).trim()), await stale.innerText());
-        ck(t("stale: and the page still shows what it had"), (await rows.count()) >= 3 && (await projects.count()) === 3);
+        ck(t("stale: and the page still shows what it had"), (await rows.count()) >= 3);
         await liveShot(page, "stale", width);
         await checkWords(page, ck, t("stale"));
         ctl.fail = false;

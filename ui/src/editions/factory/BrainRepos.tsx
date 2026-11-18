@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, Dialog, EmptyState, Panel, ProgressBar, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, Panel, ProgressBar, Skeleton, StatusLabel, Toaster, type Tone, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";
@@ -102,19 +102,19 @@ function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval }: {
   const kind = cardKind(r);
   return (
     <article className={cn("flex min-w-0 flex-col gap-2.5 border bg-card p-4 [overflow-wrap:anywhere]",
-                           TONE[kind] === "bad" ? "border-[color:var(--danger-border)]" : "border-border")}
+                           TONE[kind] === "bad" ? "border-err-border" : "border-border")}
              data-testid="brain-card" data-repo={r.repo} data-state={kind}>
       <div className="flex items-start justify-between gap-2">
-        <h2 className="m-0! font-mono text-[14px]! font-medium! leading-snug!" data-user-text data-testid="brain-name">{r.repo}</h2>
-        <StatusLabel tone={TONE[kind]} className={cn("shrink-0 font-sans text-[13px] font-semibold normal-case tracking-normal", INK.has(kind) && "text-foreground!")} data-testid="brain-state">
+        <h2 className="m-0 text-[15px] font-medium leading-snug" data-user-text data-testid="brain-name">{r.repo}</h2>
+        <StatusLabel tone={TONE[kind]} className={cn("shrink-0 font-sans text-[13px] font-semibold normal-case tracking-normal", INK.has(kind) && "text-foreground")} data-testid="brain-state">
           {STATE_WORDS[kind]}
         </StatusLabel>
       </div>
       <Lines r={r} all={all} now={now} />
       {admin && (kind === "ready" || kind === "failed" || kind === "remove_failed") && (
         <div className="flex flex-wrap gap-2">
-          {kind === "failed" && <Button variant="secondary" busy={busy} className={cn(SMALL_BUTTON, "border-foreground!")} onClick={() => onRetry(r.repo)} data-testid="brain-retry">Retry</Button>}
-          {kind === "remove_failed" && <Button variant="secondary" busy={busy} className={cn(SMALL_BUTTON, "border-foreground!")} onClick={() => onRetryRemoval(r.repo)} data-testid="brain-retry-removal">Retry removal</Button>}
+          {kind === "failed" && <Button variant="secondary" busy={busy} className={cn(SMALL_BUTTON, "border-foreground")} onClick={() => onRetry(r.repo)} data-testid="brain-retry">Retry</Button>}
+          {kind === "remove_failed" && <Button variant="secondary" busy={busy} className={cn(SMALL_BUTTON, "border-foreground")} onClick={() => onRetryRemoval(r.repo)} data-testid="brain-retry-removal">Retry removal</Button>}
           {kind !== "remove_failed" && <Button variant="secondary" disabled={busy} className={SMALL_BUTTON} onClick={() => onRemove(r.repo)} data-testid="brain-remove">Remove</Button>}
         </div>
       )}
@@ -169,8 +169,8 @@ function BrainHead({ children, action }: { children?: React.ReactNode; action?: 
     <div className="grid gap-5 md:gap-6" data-testid="brain-repos">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Repos</h1>
-          <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">
+          <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Repos</h1>
+          <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">
             The code the brain knows. Each repo is indexed once, then kept up to date with every push to main.
           </p>
         </div>
@@ -264,7 +264,7 @@ export default function BrainRepos() {
                 </>
               }>
         <p className="m-0 font-mono text-[14px] [overflow-wrap:anywhere]" data-user-text data-testid="brain-remove-name">{asking}</p>
-        {askError && <Banner tone="error" data-testid="brain-remove-failed"><span data-user-text>{askError}</span></Banner>}
+        <Collapse>{askError && <Banner tone="error" data-testid="brain-remove-failed"><span data-user-text>{askError}</span></Banner>}</Collapse>
       </Dialog>
       <Toaster />
     </>

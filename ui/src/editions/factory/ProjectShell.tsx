@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, Skeleton, Toaster } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, Loading as KitLoading, Skeleton, STATUS_TONES, StatusLabel, Toaster } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { placeBeforeProject } from "../settingsBack";
@@ -10,7 +10,7 @@ import { useOwnMenu } from "../Shell";
 import { useSample } from "../sample";
 import {
   acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectIcon, setProjectLead,
-  type FactoryProjectData, type ProjectCall, type ProjectMilestone, type ProjectPageState,
+  type FactoryProjectData, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
 import type { HomeItem } from "./home.types";
 import { InlineIcon } from "./ProjectIcon";
@@ -29,8 +29,7 @@ import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSample
 
 const POLL_MS = 15_000;
 const CLOSE_WORDS = "Closed from the project page";
-const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground underline";
 
 export type ProjectPage = "overview" | "tickets" | "prs" | "milestones" | "decisions" | "docs" | "people" | "settings";
 
@@ -46,14 +45,6 @@ const PAGES: { key: ProjectPage; label: string; to: string }[] = [
   { key: "settings", label: "Settings", to: "/settings" },
 ];
 
-const CHIP: Record<ProjectPageState, string> = {
-  waiting_on_you: "text-[color:var(--accent-deep)]",
-  building: "text-[color:var(--accent-deep)]",
-  not_started: "text-muted-foreground",
-  ready_to_close: "text-[color:var(--ok)]",
-  later: "text-muted-foreground",
-  finished: "text-foreground",
-};
 
 /** The address of one page of a project. */
 export const pageHref = (id: string, page: ProjectPage) =>
@@ -184,8 +175,8 @@ function Command({ label, command }: { label: string; command: string }) {
       <div className="mb-1.5 text-[13px]">{label}</div>
       <div className="flex items-stretch gap-2">
         <code data-words-exempt data-testid="command-text"
-              className="flex min-w-0 flex-1 items-center border border-border bg-[var(--input-bg)] px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
-        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
+              className="flex min-w-0 flex-1 items-center border border-border bg-field px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
+        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
       </div>
     </div>
   );
@@ -198,7 +189,7 @@ function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-testid="terminal-open"
-              className={cn("border-0! bg-transparent! p-0! text-left text-[13px]! font-normal! shadow-none!", LINK)}>
+              className={cn("border-0 bg-transparent p-0 text-left text-[13px] font-normal shadow-none", LINK)}>
         Work on it yourself
       </button>
       <Dialog open={open} onOpenChange={setOpen} data-testid="terminal" title="Work on it yourself"
@@ -220,7 +211,7 @@ const BACK_ARROW = (
 function Back() {
   return (
     <Link to={placeBeforeProject()} data-testid="project-back"
-          className="inline-flex! h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">{BACK_ARROW}Back</Link>
+          className="inline-flex h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground no-underline hover:text-foreground">{BACK_ARROW}Back</Link>
   );
 }
 
@@ -240,23 +231,23 @@ function ProjectNav({ d, page, search }: { d: FactoryProjectData; page: ProjectP
       <div className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 px-2.5 lg:px-2.5" data-testid="project-title">
         {d.icon ? <InlineIcon icon={d.icon} className="mr-0 text-[20px] leading-[26px]" /> : <span aria-hidden />}
         <span className={cn("min-w-0 text-[18px] font-bold leading-[26px] [overflow-wrap:anywhere]", !d.icon && "-col-start-1 col-span-2")} data-user-text data-testid="project-name">{d.name}</span>
-        <span className={cn("mt-1 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", d.icon ? "col-start-2" : "col-span-2", CHIP[d.state])} data-testid="project-chip">
+        <StatusLabel tone={STATUS_TONES.project[d.state]} className={cn("mt-1 justify-self-start", d.icon ? "col-start-2" : "col-span-2")} data-testid="project-chip">
           {d.state_label}
-        </span>
+        </StatusLabel>
       </div>
-      <ul ref={row} className="relative m-0! mt-3 flex list-none! gap-1.5 overflow-x-auto p-0! pb-1 lg:mt-4 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0" data-testid="project-pages">
+      <ul ref={row} className="relative m-0 mt-3 flex list-none gap-1.5 overflow-x-auto p-0 pb-1 lg:mt-4 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0" data-testid="project-pages">
         {PAGES.map((p) => {
           const n = countOf(d, p.key);
           const on = p.key === page;
           return (
-            <li key={p.key} className="m-0! flex-none">
+            <li key={p.key} className="m-0 flex-none">
               <Link to={`${pageHref(d.id, p.key)}${search}`} aria-current={on ? "page" : undefined} data-testid={`project-page-${p.key}`}
-                    className={cn("flex items-center justify-between gap-3 whitespace-nowrap border border-border px-3 py-1.5 text-[14px] no-underline! hover:bg-muted",
+                    className={cn("flex items-center justify-between gap-3 whitespace-nowrap border border-border px-3 py-1.5 text-[14px] no-underline hover:bg-muted",
                                   "lg:border-0 lg:px-2.5 lg:py-[7px]",
-                                  on ? "border-foreground bg-card font-semibold text-foreground! lg:border lg:border-border" : "text-muted-foreground!")}>
+                                  on ? "border-foreground bg-card font-semibold text-foreground lg:border lg:border-border" : "text-muted-foreground")}>
                 <span>{p.label}</span>
                 {n > 0 && (
-                  <span className={cn("font-mono text-xs font-normal", p.key === "overview" ? "text-[color:var(--accent-deep)]" : "text-muted-foreground")}
+                  <span className={cn("font-mono text-xs font-normal", p.key === "overview" ? "text-foreground" : "text-muted-foreground")}
                         data-testid="project-page-count">{n}</span>
                 )}
               </Link>
@@ -280,16 +271,16 @@ function ProjectNav({ d, page, search }: { d: FactoryProjectData; page: ProjectP
 
 function Loading() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" data-testid="project-loading" className="grid min-w-0 gap-5">
+    <KitLoading data-testid="project-loading" className="grid min-w-0 gap-5">
       <Skeleton width={160} height={26} />
       <Skeleton width="70%" />
-      <div className="grid gap-2.5 border border-border bg-card p-4">
+      <div className="grid gap-2.5 border-t border-border pt-3">
         {[90, 70, 80, 60].map((w, i) => <Skeleton key={i} width={`${w}%`} />)}
       </div>
-      <div className="grid gap-2.5 border border-border bg-card p-4">
+      <div className="grid gap-2.5 border-t border-border pt-3">
         {[80, 60, 90].map((w, i) => <Skeleton key={i} width={`${w}%`} />)}
       </div>
-    </div>
+    </KitLoading>
   );
 }
 
@@ -298,10 +289,10 @@ export function PageHead({ title, sub, actions, children }: { title: string; sub
   return (
     <div className="grid min-w-0 gap-2">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h1 className="m-0! text-[22px]! md:text-[26px]!" data-testid="page-title">{title}</h1>
+        <h1 className="m-0 text-[22px] md:text-[26px]" data-testid="page-title">{title}</h1>
         {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
       </div>
-      {sub && <div className="m-0! max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{sub}</div>}
+      {sub && <div className="m-0 max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{sub}</div>}
       {children}
     </div>
   );
@@ -349,11 +340,11 @@ export function ProjectShell({ page, onOther, children }: {
     <div className="flex min-w-0 flex-col gap-6 lg:flex-row lg:items-start lg:gap-8" data-testid="project-shell" data-page={page}>
       <ProjectNav d={data} page={page} search={keep} />
       <div className="grid min-w-0 flex-1 content-start gap-6" data-testid="project-page">
-        {error && (
+        <Collapse>{error && (
           <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
             <b>This page did not refresh.</b> <span className="text-foreground">Check your connection, then try again.</span>
           </Banner>
-        )}
+        )}</Collapse>
         {children({ d: data, id, sample, reload, act })}
       </div>
       <Toaster />

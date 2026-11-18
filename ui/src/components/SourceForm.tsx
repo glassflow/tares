@@ -1,33 +1,42 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api";
-import { Combo, Picker, ruleSummary } from "./bits";
-import InfoDialog, { HelpButton } from "./InfoDialog";
-import type { ColumnsProposal, ConnectorField, ConnectorSpec, DiscoverProposal, EnvScan, GithubCredential, TestResult } from "../types";
+import { cn } from "@/lib/utils";
+import { formatCount } from "../lib/number";
+import type { ColumnsProposal, ConnectorField, ConnectorSpec, EnvScan, GithubCredential, TestResult } from "../types";
+import { Banner, Button, Checkbox, Dialog, Input, Panel, Textarea } from "./edition";
+import {
+  AlertRulesCuration, ColumnPicker, ColumnsProposalView, MetricBasket, PromQueriesView, type AlertRule,
+} from "./source-form/discover";
+import { JsonTree, KeyValueRows, ListFieldEditor, ReferenceForm } from "./source-form/fields";
+import { LabelsEditor, labelsToRows, rowToSpec, type Attachment, type LabelRow } from "./source-form/labels";
+import { CODE, GROUP_LABEL, Pick, SuggestInput, TABLE, TEXT, cap } from "./source-form/parts";
 
-// Structured push connectors know their entity shape, so a fresh source starts with sensible
-// label axes (the user can still edit/remove them).
+// Structured push connectors know the shape of what they send, so a fresh connection starts with
+// sensible label axes (the user can still edit or remove them).
 const DEFAULT_LABELS: Record<string, Array<Record<string, unknown>>> = {
+  // "source" is the name of Vercel's own field, not console copy
   vercel: [{ name: "project", field: "project", primary: true },
-           { name: "environment", field: "environment" }, { name: "source", field: "source" }],
+           { name: "environment", field: "environment" }, { name: "source", field: "source" }],   // words-ok
   otlp: [{ name: "service", field: "resourceAttributes.service.name", primary: true }],
 };
 
-// Connector-appropriate example names; the generic fallback suits metric-ish sources.
+// Connector-appropriate example names; the generic fallback suits metric-ish connections.
 const NAME_PLACEHOLDER: Record<string, string> = {
-  github: "e.g. my-repo-commits",
-  postgres: "e.g. orders-table",
+  github: "my-repo-commits",
+  postgres: "orders-table",
 };
 
-// What Discover does, per connector (fallback: the prometheus introspection copy).
+// What Discover does, per connector.
 const DISCOVER_HINT: Record<string, string> = {
-  docker_logs: "list the containers taresd can see, then pick one to fill this form",
-  github: "pick the repo above, then Discover its default branch + author labels",
-  postgres: "enter the DSN above, then Discover; it lists the tables it can see; pick one and it proposes the cursor, entity key and labels from the columns",
-  prometheus: "enter the URL (+ any auth) above, then Discover; it lists the metrics and labels so you can pick what to ingest (by name or by label). No PromQL to write.",
-  prometheus_alerts: "enter the URL (+ any auth) above, then Discover; it lists the alerting rules Prometheus already has, and you ingest them as they fire (optionally filtered by severity).",
-  http_poll: "fill in the request above, then Discover; Tares calls the API once, finds the items in the reply and proposes the fields, labels, time and id from what came back.",
+  docker_logs: "Lists the containers Tares can see. Pick one to fill in this form.",
+  github: "Pick the repo above, then Discover reads its default branch and author labels.",
+  postgres: "Enter the connection URL above, then Discover. It lists the tables it can see; pick one and it proposes the cursor, the key and the labels from its columns.",
+  prometheus: "Enter the URL and any auth above, then Discover. It lists the metrics and labels so you can pick what to receive, by name or by label. No PromQL to write.",
+  prometheus_alerts: "Enter the URL and any auth above, then Discover. It lists the alerting rules Prometheus already has, and Tares receives them as they go off, filtered by severity if you like.",
+  http_poll: "Fill in the request above, then Discover. Tares calls the API once, finds the items in the reply and proposes the fields, labels, time and id from what came back.",
 };
+const DISCOVER_FALLBACK = "Fill in the URL above, then Discover proposes what to receive. No PromQL to write by hand.";
 
 // Postgres form: plain-language field labels + grouping (main poll settings vs collapsed advanced),
 // so the internal schema names don't leak into the UI. Fields not in PG_GROUP go in the main group.
@@ -41,9 +50,34 @@ const PG_LABEL: Record<string, string> = {
 };
 const PG_GROUP: Record<string, "advanced"> = { limit: "advanced" };
 const PROM_LABEL: Record<string, string> = {
-  default_key: "Fallback entity key",
+  default_key: "Fallback key",
 };
 
+/** "a value the daemon wrote" reads as a sentence: capitalised, with a full stop. */
+const sentence = (s?: string) => {
+  const t = s?.trim();
+  if (!t) return "";
+  return cap(t) + (/[.!?]$/.test(t) ? "" : ".");
+};
+
+/** The help under a field, in a person's words, where the daemon's own text is written for agents
+ *  (it says entity, ingest, source). Keyed connector.field, and connector.field.item for a list's columns. */
+const HELP: Record<string, string> = {
+  "prometheus.default_key": "The key for series that carry no key label.",
+  "prometheus.queries": "The metrics to receive, each a PromQL query.",
+  "prometheus.queries.promql": "PromQL. A bare metric name keeps every value as it is.",
+  "prometheus.queries.key_label": "The series label the key is read from, for example service.",
+  "docker_logs.compose_file": "The path to docker-compose.yml, if compose starts the container.",
+  "github.branch": "The branch to follow. Empty follows the repo's default branch, under its real name. One connection follows one branch; add one per branch to follow several.",
+  "postgres.dsn": "postgresql://user:pass@host:port/dbname. The part after the slash picks the database; without it, Postgres uses a database named after the user. Tares must be able to reach it. Stored as a secret: hidden in the API and left out of exports.",
+  "postgres.time_column": "The timestamp column that gives the event's time. Empty uses the cursor column when it is a timestamp, else the time Tares read the row.",
+  "postgres.columns": "Comma-separated columns to pull, for example id,status,amount. Empty pulls every column. The cursor, key and time columns are always pulled, and database and table are available as fields too.",
+};
+
+/** A field's key as words, for a field the daemon gives no label: "bearer_token" reads as "bearer token", "url" as "URL". */
+const words = (key: string) => key.split("_").map((w) => (w === "url" || w === "id" || w === "dsn" ? w.toUpperCase() : w)).join(" ");
+const ADVANCED = "grid gap-4 [&>summary]:cursor-pointer [&>summary]:text-sm [&>summary]:font-semibold [&>summary]:text-foreground";
+const SUMMARY_ROW = "flex flex-wrap items-center gap-x-4 gap-y-2 border border-border bg-muted/40 px-4 py-2.5 text-sm";
 interface Props {
   connector: string;
   spec: ConnectorSpec;
@@ -138,7 +172,6 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     : apiSample
     ? Object.fromEntries(labelFieldOpts.filter((n) => sampleExample.has(n)).map((n) => [n, `e.g. ${sampleExample.get(n)}`]))
     : undefined;
-  const [proposal, setProposal] = useState<DiscoverProposal>();
   const [colProposal, setColProposal] = useState<ColumnsProposal>();
   const [pgColumns, setPgColumns] = useState<string[]>();  // postgres: discovered column names, for the picker
   const [editConn, setEditConn] = useState(false);         // postgres: connection collapsed after discover unless editing
@@ -165,7 +198,6 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
   const [ghTest, setGhTest] = useState<{ busy?: boolean; ok?: boolean; login?: string; error?: string }>();
   const [ghRepos, setGhRepos] = useState<{ full_name: string; default_branch: string; private: boolean }[]>();
   const [ghReposErr, setGhReposErr] = useState<string>();
-  const [ghHelp, setGhHelp] = useState(false);
   const ghOwnToken = connector === "github" && !!initial?.config?.token && !cleared.token;   // editing a source that carries its own token
   useEffect(() => {
     if (connector !== "github") return;
@@ -216,7 +248,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     const errs: Record<string, string> = {};
     for (const f of spec.fields) {
       if ((f.type === "json" || f.type === "map") && values[f.name]?.trim()) {
-        try { JSON.parse(values[f.name]); } catch (e) { errs[f.name] = "invalid JSON: " + ((e as Error).message ?? e); }
+        try { JSON.parse(values[f.name]); } catch (e) { errs[f.name] = "Not valid JSON: " + ((e as Error).message ?? e); }
       }
     }
     return errs;
@@ -230,7 +262,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
           name: a.name.trim(), format: a.format || "txt", content: a.content,
           labels: Object.fromEntries(a.labels.filter(([k, v]) => k.trim() && v.trim())),
         }));
-      if (!attachments.length) throw new Error("add at least one document");
+      if (!attachments.length) throw new Error("Add at least one document.");
       if (!name.trim()) throw required("name");
       // declare the union of label names as real Tares labels, so the source's Labels panel shows
       // them and triggers can correlate on them (field maps to the payload label surfaced by label_context)
@@ -250,14 +282,14 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
           for (const sf of f.item ?? []) {
             const raw = (row[sf.name] ?? "").trim();
             if (!raw) {
-              if (sf.required) throw new Error(`${f.name}: "${sf.name}" is required in every row`);
+              if (sf.required) throw new Error(`Every ${f.name === "queries" ? "query" : "row"} needs its ${words(sf.name)}`);
               continue;
             }
             obj[sf.name] = sf.type === "number" ? Number(raw) : raw;
           }
           out.push(obj);
         }
-        if (f.required && !out.length) throw new Error(`${f.name}: add at least one row`);
+        if (f.required && !out.length) throw new Error(`Add at least one ${f.name === "queries" ? "query" : "row"}`);
         if (out.length) config[f.name] = out;
         continue;
       }
@@ -283,10 +315,19 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     return { name: name.trim(), type, connector, poll: poll.trim() || spec.poll || "5s", config };
   };
 
+  // a list field with its help, and its columns' help, in a person's words
+  const withHelp = (f: ConnectorField): ConnectorField => ({
+    ...f, help: HELP[`${connector}.${f.name}`] ?? f.help,
+    item: f.item?.map((sf) => ({ ...sf, help: HELP[`${connector}.${f.name}.${sf.name}`] ?? sf.help })),
+  });
+  // a field's name as a person reads it: the daemon's label, ours for postgres and prometheus, else its key in words
+  const plainLabel = (f: ConnectorField) =>
+    cap(f.label || (connector === "postgres" && PG_LABEL[f.name]) || (connector === "prometheus" && PROM_LABEL[f.name]) || words(f.name));
   // the field a required-check failed on: its row turns red until it is filled in
   const [missing, setMissing] = useState<string>();
   const required = (field: string) => {
-    const err = new Error(`${field} is required`) as Error & { field?: string };
+    const f = spec.fields.find((x) => x.name === field);
+    const err = new Error(`${f ? plainLabel(f) : cap(field)} is required`) as Error & { field?: string };
     err.field = field;
     return err;
   };
@@ -442,87 +483,106 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     setLabelRows(labelsToRows(c.labels));
   };
 
-  const applyProposal = () => {
-    if (!proposal) return;
-    applyConfig(proposal.proposed_config as unknown as Record<string, unknown>);
-    setProposal(undefined);
-  };
-
   // Editing labels re-processes every stored event for the source; warn before that happens.
   // Only meaningful when editing (initial present) — a fresh source has no stored events.
   const canonRows = (rs: LabelRow[]) =>
     JSON.stringify(rs.filter((r) => r.name.trim()).map(rowToSpec));
   const labelsChanged = !!initial && canonRows(labelRows) !== canonRows(labelsToRows(initial?.config?.labels));
 
-  // The right-column control for one field: postgres column checklist / single-column dropdown, a
-  // json textarea, or a plain input (with secret handling).
+  const fieldLabel = (f: ConnectorField) => plainLabel(f) + (f.required ? " (required)" : "");
+  const fieldDetected = (f: ConnectorField) =>       // value came from Discover, not the user
+    connector === "postgres" && !!pgColumns?.length && !!values[f.name]?.trim()
+    && ["cursor_column", "time_column"].includes(f.name);
+  // The hint under a field: the daemon's help (or what a stored secret does), then where the value came from.
+  const fieldHint = (f: ConnectorField) => [
+    secretSet(f)
+      ? (cleared[f.name] ? "Removed when you save." : "A value is set. Type to replace it, or leave it blank to keep it.")
+      : HELP[`${connector}.${f.name}`] ?? sentence(f.help),
+    fieldDetected(f) ? "Detected by Discover." : "",
+    highlight?.includes(f.name) ? "Yours to fill." : "",
+  ].filter(Boolean).join(" ") || undefined;
+  const isMissing = (f: string, v = values[f]) => missing === f && !v?.trim();
+  const fieldError = (f: ConnectorField) => jsonErrors[f.name] ?? (isMissing(f.name) ? "Fill this in." : undefined);
+  const set = (k: string) => (v: string) => setValues((cur) => ({ ...cur, [k]: v }));
+
+  // One field as a kit control: postgres column checklist or single-column picker, a fixed list of
+  // choices, a checkbox, header rows, a JSON text area, or a plain field (with secret handling).
   const fieldControl = (f: ConnectorField) => {
+    const label = fieldLabel(f), hint = fieldHint(f), error = fieldError(f);
     if (connector === "postgres" && f.name === "columns" && pgColumns?.length) {
       // always keep the cursor/time columns + any column a label reads (the key is a primary label)
       const mandatory = new Set([
         values.cursor_column, values.time_column,
         ...labelRows.filter((r) => r.kind === "field").map((r) => r.value),
       ].map((v) => v?.trim()).filter(Boolean) as string[]);
-      return <ColumnPicker columns={pgColumns} value={values[f.name] ?? ""} mandatory={mandatory}
-                           onChange={(v) => setValues({ ...values, [f.name]: v })} />;
-    }
-    if (connector === "postgres" && pgColumns?.length
-        && ["cursor_column", "time_column"].includes(f.name)) {
-      const opts = pgColumns.includes(values[f.name] ?? "") || !values[f.name]
-        ? pgColumns : [values[f.name], ...pgColumns];   // keep a stale value selectable
       return (
-        <select value={values[f.name] ?? ""} onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}>
-          <option value="">{f.required ? "select…" : "none"}</option>
-          {opts.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <div className="grid gap-1.5">
+          <p className={GROUP_LABEL}>{label}</p>
+          {hint && <p className="m-0 text-xs text-muted-foreground">{hint}</p>}
+          <ColumnPicker columns={pgColumns} value={values[f.name] ?? ""} mandatory={mandatory} onChange={set(f.name)} />
+        </div>
       );
     }
+    if (connector === "postgres" && pgColumns?.length && ["cursor_column", "time_column"].includes(f.name)) {
+      const cur = values[f.name] ?? "";
+      const cols = pgColumns.includes(cur) || !cur ? pgColumns : [cur, ...pgColumns];   // keep a stale value selectable
+      return <Pick label={label} hint={hint} error={error} value={cur} placeholder="Pick a column"
+                   options={f.required ? cols : ["", ...cols]} onChange={set(f.name)} />;
+    }
     if (f.choices?.length) {
-      // the daemon refuses any other value, so the form only offers these; the same picker as
-      // the poll interval's unit, not the browser's own select
+      // the daemon refuses any other value, so the form only offers these
       const cur = values[f.name] ?? "";
       const opts = [...(!f.required && f.default == null ? [""] : []),
                     ...(cur && !f.choices.includes(cur) ? [cur] : []), ...f.choices];
-      return <Picker value={cur} options={opts} labels={{ "": "none" }} ariaLabel={fieldLabel(f)}
-                     style={{ width: 160 }}
-                     onChange={(v) => setValues({ ...values, [f.name]: v })} />;
+      return <Pick label={label} hint={hint} error={error} value={cur} options={opts} onChange={set(f.name)} />;
     }
     if (f.type === "bool")
-      return <input type="checkbox" checked={values[f.name] === "true"}
-                    onChange={(e) => setValues({ ...values, [f.name]: e.target.checked ? "true" : "" })}
-                    style={{ width: "auto" }} />;
+      return <Checkbox label={label} hint={hint} checked={values[f.name] === "true"}
+                       onCheckedChange={(c) => set(f.name)(c === true ? "true" : "")} />;
     if (f.type === "map")
-      return <KeyValueRows value={values[f.name] ?? ""} noun={f.name === "headers" ? "header" : "entry"}
-                           onChange={(v) => setValues({ ...values, [f.name]: v })} />;
+      return (
+        <div className="grid gap-1.5">
+          <p className={GROUP_LABEL}>{label}</p>
+          {hint && <p className="m-0 text-xs text-muted-foreground">{hint}</p>}
+          <KeyValueRows value={values[f.name] ?? ""} noun={f.name === "headers" ? "header" : "entry"} onChange={set(f.name)} />
+        </div>
+      );
     if (f.type === "json")
-      return <textarea className="code" value={values[f.name]}
-                       onChange={(e) => setValues({ ...values, [f.name]: e.target.value })} />;
-    return <input type={f.secret ? "password" : f.type === "number" ? "number" : "text"}
-                  value={values[f.name]} autoComplete={f.secret ? "off" : undefined}
-                  disabled={secretSet(f) && cleared[f.name]}
-                  placeholder={secretSet(f) ? (cleared[f.name] ? "" : "leave blank to keep") : undefined}
-                  onChange={(e) => setValues({ ...values, [f.name]: e.target.value })} />;
+      return <Textarea label={label} hint={hint} error={error} className="min-h-32 font-mono text-[12px]" spellCheck={false}
+                       value={values[f.name]} onChange={(e) => set(f.name)(e.target.value)} />;
+    return (
+      <>
+        <Input label={label} hint={hint} error={error}
+               type={f.secret ? "password" : f.type === "number" ? "number" : "text"}
+               value={values[f.name]} autoComplete={f.secret ? "off" : undefined}
+               disabled={secretSet(f) && cleared[f.name]}
+               placeholder={secretSet(f) && !cleared[f.name] ? "Leave blank to keep" : undefined}
+               onChange={(e) => set(f.name)(e.target.value)} />
+        {secretSet(f) && (
+          <div>
+            {cleared[f.name]
+              ? <Button variant="quiet" onClick={() => setCleared({ ...cleared, [f.name]: false })}>Keep the stored value</Button>
+              : <Button variant="quiet" className="text-err hover:text-err"
+                        onClick={() => { setCleared({ ...cleared, [f.name]: true }); setValues({ ...values, [f.name]: "" }); }}>
+                  Remove the stored value
+                </Button>}
+          </div>
+        )}
+      </>
+    );
   };
 
-  const fieldHelp = (f: ConnectorField) =>
-    secretSet(f) ? (
-      <span className="help">
-        {cleared[f.name]
-          ? <>will be removed on save; <button type="button" className="linklike"
-                onClick={() => setCleared({ ...cleared, [f.name]: false })}>undo</button></>
-          : <>a value is set; type to replace, or leave blank to keep ·{" "}
-              <button type="button" className="linklike"
-                onClick={() => { setCleared({ ...cleared, [f.name]: true }); setValues({ ...values, [f.name]: "" }); }}>remove</button></>}
-      </span>
-    ) : <span className="help">{jsonErrors[f.name] ?? f.help}</span>;
-
-  const fieldLabel = (f: ConnectorField) =>
-    f.label ||
-    (connector === "postgres" && PG_LABEL[f.name]) ||
-    (connector === "prometheus" && PROM_LABEL[f.name]) || f.name;
-  const fieldDetected = (f: ConnectorField) =>       // value came from Discover, not the user
-    connector === "postgres" && !!pgColumns?.length && !!values[f.name]?.trim()
-    && ["cursor_column", "time_column"].includes(f.name);
+  // One field, in a wrapper the required-check can scroll to. (List fields keep their own editor.)
+  const renderField = (f: ConnectorField) => {
+    if (f.type === "list")
+      return <ListFieldEditor key={f.name} field={f} rows={rows[f.name] ?? []}
+                              onChange={(r) => setRows({ ...rows, [f.name]: r })} />;
+    return (
+      <div key={f.name} data-testid={`field-${f.name}`} className={cn("grid min-w-0 gap-1.5", isMissing(f.name) && "missing")}>
+        {fieldControl(f)}
+      </div>
+    );
+  };
 
   // GitHub: access (a stored token, or a new one) and the repo picked from what it can see, in
   // place of the generic repo / credential / token rows.
@@ -533,128 +593,92 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     const stored = !!values.credential && !ghNew;
     const addingNew = ghNew || (ghCreds !== undefined && creds.length === 0 && !ghOwnToken);
     const repoField = spec.fields.find((f) => f.name === "repo")!;
+    const cancelNew = () => { setGhNew(false); setValues((v) => ({ ...v, token: "" })); };
     return (
       <>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">access</span>
-            <span className="help">
-              {stored ? "a token stored in this cell; the source reads it at every poll, so rotating it under Settings rotates this source too"
-                : addingNew ? "a GitHub token; private repos need one, and without one GitHub allows 60 requests an hour"
-                : ghOwnToken ? "this source carries its own token"
-                : "no token: public repos only, 60 requests an hour"}
-            </span>
-          </div>
-          <div className="fld-ctrl">
-            {ghCreds === undefined && <span className="dim">loading…</span>}
-            {ghCreds !== undefined && !addingNew && (
-              <div className="btnrow" style={{ flexWrap: "nowrap" }}>
-                {creds.length > 0 && (
-                  <Picker value={values.credential} onChange={ghPick} ariaLabel="stored token" style={{ flex: 1 }}
-                          options={values.credential && !credOpts.includes(values.credential) ? [values.credential, ...credOpts] : credOpts}
-                          labels={credLabels} />
-                )}
-                {stored && (
-                  <button type="button" onClick={ghTestCred} disabled={ghTest?.busy}>{ghTest?.busy ? "testing…" : "Test"}</button>
-                )}
-                <button type="button" onClick={() => { setGhNew(true); setValues((v) => ({ ...v, token: "" })); }}>Add a new token</button>
-              </div>
-            )}
-            {ghTest && !ghTest.busy && !addingNew && (
-              <div style={{ marginTop: 6 }}>
-                {ghTest.ok ? <span className="badge ok">signed in as {ghTest.login}</span>
-                  : <span className="badge error">{ghTest.error ?? "failed"}</span>}
-              </div>
-            )}
-            {ghOwnToken && !addingNew && !stored && (
-              <div className="help" style={{ marginTop: 6 }}>
-                kept as it is{creds.length > 0 ? "; pick a stored token above to use that instead" : ""}
-              </div>
-            )}
-            {addingNew && (
-              <div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input type="password" className="mono" autoComplete="new-password" data-1p-ignore data-lpignore="true"
-                         value={values.token} placeholder="github_pat_…" style={{ flex: 1 }}
-                         onChange={(e) => setValues({ ...values, token: e.target.value, credential: "" })} />
-                  <HelpButton onClick={() => setGhHelp(true)} label="Which permissions does the token need?" />
-                </div>
-                <label style={{ display: "block", marginTop: 8 }}>
-                  <input type="checkbox" checked={ghSave} onChange={(e) => setGhSave(e.target.checked)} />{" "}
-                  save it in this cell, so other sources and agents can use it too
-                </label>
-                {ghSave ? (
-                  <div className="btnrow" style={{ marginTop: 8, flexWrap: "nowrap" }}>
-                    <input type="text" autoComplete="off" data-1p-ignore data-lpignore="true" value={ghName} onChange={(e) => setGhName(e.target.value)}
-                           placeholder="name" style={{ width: 160 }} aria-label="token name" />
-                    <input type="text" autoComplete="off" data-1p-ignore data-lpignore="true" className="mono" value={ghApi} onChange={(e) => setGhApi(e.target.value)}
-                           placeholder="GitHub Enterprise API URL, optional" style={{ flex: 1 }} aria-label="GitHub Enterprise API URL" />
-                    <button type="button" className="primary" disabled={busy || !values.token.trim() || !ghName.trim()} onClick={ghSaveToken}>Save token</button>
-                    {creds.length > 0 && <button type="button" onClick={() => { setGhNew(false); setValues((v) => ({ ...v, token: "" })); }}>Cancel</button>}
-                  </div>
-                ) : (
-                  <div className="btnrow" style={{ marginTop: 8 }}>
-                    <span className="help">used by this source only; it is stored with the source, never shown again</span>
-                    {creds.length > 0 && <button type="button" onClick={() => { setGhNew(false); setValues((v) => ({ ...v, token: "" })); }}>Cancel</button>}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">repo<span className="req"> *</span></span>
-            <span className="help">
-              {stored
-                ? ghRepos ? `pick one of the ${ghRepos.length} repos the token can see, or type owner/name`
-                  : ghReposErr ? `could not list the token's repos (${ghReposErr}); type owner/name`
-                  : "listing the repos the token can see…"
-                : repoField.help}
-            </span>
-          </div>
-          <div className="fld-ctrl">
-            {stored && ghRepos ? (
-              <Combo className="mono" value={values.repo} placeholder="owner/name"
-                     options={ghRepos.map((r) => r.full_name)}
-                     hints={Object.fromEntries(ghRepos.map((r) => [r.full_name, `${r.private ? "private" : "public"} · ${r.default_branch}`]))}
-                     onChange={(v) => setValues({ ...values, repo: v.trim() })} />
-            ) : (
-              <input type="text" className="mono" value={values.repo} placeholder="owner/name" autoComplete="off"
-                     onChange={(e) => setValues({ ...values, repo: e.target.value })} />
-            )}
-          </div>
-        </div>
-        {ghHelp && (
-          <InfoDialog title="Token permissions" onClose={() => setGhHelp(false)}>
-            <p className="help" style={{ margin: 0 }}>
-              Create a fine-grained personal access token on GitHub (Settings, Developer settings, Personal access tokens, Fine-grained tokens).
-              Under Repository access pick the repos this cell should read. Repository permissions: Contents, Read-only, to read commits and diffs; Metadata, Read-only, added by GitHub automatically, to list the repos.
-              A token that agents also write with needs Contents and Pull requests as Read and write.
+        <div className="grid min-w-0 gap-3" data-testid="github-access">
+          <div className="grid gap-1.5">
+            <p className={GROUP_LABEL}>Access</p>
+            <p className="m-0 text-xs text-muted-foreground">
+              {stored ? "A token stored in this cell. The connection reads it at every poll, so rotating it under Settings rotates this connection too."
+                : addingNew ? "A GitHub token. Private repos need one, and without one GitHub allows 60 requests an hour."
+                : ghOwnToken ? "This connection carries its own token."
+                : "No token: public repos only, 60 requests an hour."}
             </p>
-          </InfoDialog>
-        )}
-      </>
-    );
-  };
-
-  // Two-column row: label + description on the left, control on the right. (list fields keep their
-  // own full-width editor.)
-  const renderField = (f: ConnectorField) => {
-    if (f.type === "list")
-      return <ListFieldEditor key={f.name} field={f} rows={rows[f.name] ?? []}
-                              onChange={(r) => setRows({ ...rows, [f.name]: r })} />;
-    return (
-      <div className={"fld-row" + (jsonErrors[f.name] ? " invalid" : "") + (highlight?.includes(f.name) ? " needs" : "")
-                      + (missing === f.name && !values[f.name]?.trim() ? " missing" : "")} key={f.name}>
-        <div className="fld-meta">
-          <span className="lbl">{fieldLabel(f)}{f.required && <span className="req"> *</span>}
-            {fieldDetected(f) && <span className="badge ok" style={{ marginLeft: 8 }}>detected</span>}
-            {highlight?.includes(f.name) && <span className="badge" style={{ marginLeft: 8 }}>yours to fill</span>}</span>
-          {fieldHelp(f)}
+          </div>
+          {ghCreds === undefined && <p className={TEXT}>Loading the stored tokens…</p>}
+          {ghCreds !== undefined && !addingNew && (
+            <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+              {creds.length > 0 ? (
+                <Pick label="Stored token" value={values.credential} onChange={ghPick} labels={credLabels}
+                      options={values.credential && !credOpts.includes(values.credential) ? [values.credential, ...credOpts] : credOpts} />
+              ) : <span />}
+              {stored ? <Button variant="secondary" busy={ghTest?.busy} onClick={ghTestCred}>Test</Button> : <span />}
+              <Button variant="secondary" onClick={() => { setGhNew(true); setValues((v) => ({ ...v, token: "" })); }}>Add a new token</Button>
+            </div>
+          )}
+          {ghTest && !ghTest.busy && !addingNew && (ghTest.ok
+            ? <p className={TEXT} data-testid="github-test">Signed in as <span className={CODE} data-user-text>{ghTest.login}</span>.</p>
+            : <Banner tone="error" data-testid="github-test"><span data-user-text>{sentence(ghTest.error) || "The test failed."}</span></Banner>)}
+          {ghOwnToken && !addingNew && !stored && (
+            <p className={TEXT}>Kept as it is{creds.length > 0 ? ". Pick a stored token above to use that instead." : "."}</p>
+          )}
+          {addingNew && (
+            <div className="grid gap-3">
+              <Input label="GitHub token" type="password" className="font-mono" autoComplete="new-password" data-1p-ignore data-lpignore="true"
+                     value={values.token} placeholder="github_pat_…"
+                     onChange={(e) => setValues({ ...values, token: e.target.value, credential: "" })} />
+              <div>
+                <Dialog title="Token permissions" description="What the GitHub token needs, to read the repos this cell watches."
+                        trigger={<Button variant="quiet">Which permissions does the token need?</Button>}>
+                  <p className={TEXT}>
+                    Create a fine-grained personal access token on GitHub (Settings, Developer settings, Personal access tokens,
+                    Fine-grained tokens). Under Repository access pick the repos this cell should read. Repository permissions:
+                    Contents, Read-only, to read commits and diffs; Metadata, Read-only, added by GitHub automatically, to list the repos.
+                    A token that agents also write with needs Contents and Pull requests as Read and write.
+                  </p>
+                </Dialog>
+              </div>
+              <Checkbox label="Save it in this cell, so other connections and agents can use it too"
+                        checked={ghSave} onCheckedChange={(c) => setGhSave(c === true)} />
+              {ghSave ? (
+                <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto_auto]">
+                  <Input label="Token name" autoComplete="off" data-1p-ignore data-lpignore="true" value={ghName}
+                         onChange={(e) => setGhName(e.target.value)} />
+                  <Input label="GitHub Enterprise API URL (optional)" autoComplete="off" data-1p-ignore data-lpignore="true"
+                         className="font-mono" value={ghApi} onChange={(e) => setGhApi(e.target.value)} />
+                  <Button variant="primary" disabled={busy || !values.token.trim() || !ghName.trim()} onClick={ghSaveToken}>Save token</Button>
+                  {creds.length > 0 ? <Button variant="secondary" onClick={cancelNew}>Cancel</Button> : <span />}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className={TEXT}>Used by this connection only. It is stored with the connection and never shown again.</p>
+                  {creds.length > 0 && <Button variant="secondary" onClick={cancelNew}>Cancel</Button>}
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        <div className="fld-ctrl">{fieldControl(f)}</div>
-      </div>
+        <div data-testid="field-repo" className={cn("grid min-w-0 gap-1.5", isMissing("repo") && "missing")}>
+          {(() => {
+            const hint = stored
+              ? ghRepos ? `Pick one of the ${formatCount(ghRepos.length)} repos the token can see, or type owner/name.`
+                : ghReposErr ? "Could not list the token's repos. Type owner/name."
+                : "Listing the repos the token can see…"
+              : HELP["github.repo"] ?? (sentence(repoField.help) || undefined);
+            const error = isMissing("repo") ? "Fill this in." : undefined;
+            return stored && ghRepos ? (
+              <SuggestInput label="Repo (required)" hint={hint} error={error} className="font-mono" value={values.repo} placeholder="owner/name"
+                            options={ghRepos.map((r) => r.full_name)}
+                            hints={Object.fromEntries(ghRepos.map((r) => [r.full_name, `${r.private ? "Private" : "Public"}, ${r.default_branch}`]))}
+                            onChange={(e) => setValues({ ...values, repo: e.target.value.trim() })} />
+            ) : (
+              <Input label="Repo (required)" hint={hint} error={error} className="font-mono" value={values.repo} placeholder="owner/name"
+                     autoComplete="off" onChange={(e) => setValues({ ...values, repo: e.target.value })} />
+            );
+          })()}
+        </div>
+      </>
     );
   };
 
@@ -676,39 +700,28 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         {by.method && renderField(by.method)}
         {by.url && renderField(by.url)}
         {credField && headerField && (
-          <div className="fld-row">
-            <div className="fld-meta">
-              <span className="lbl">credentials</span>
-              <span className="help">does the API want a key or a token? It is sent as one request header, stored as a secret.</span>
-            </div>
-            <div className="fld-ctrl">
-              <Picker value={credOn ? "yes" : "no"} options={["no", "yes"]} style={{ width: 120 }} ariaLabel="credentials"
-                      onChange={(v) => (v === "yes" ? setCredOn(true) : turnCredOff())} />
-              {credOn && (
-                <div className="kv-row" style={{ marginTop: 8 }}>
-                  <input type="text" value={values.credential_header ?? ""} placeholder="Authorization" aria-label="credential header"
-                         onChange={(e) => setValues({ ...values, credential_header: e.target.value })} />
-                  <input type="password" autoComplete="off" value={values.credential ?? ""} aria-label="credential value"
-                         disabled={secretSet(credField) && cleared.credential}
-                         placeholder={secretSet(credField) ? "leave blank to keep" : "Bearer xyz, or the API key"}
-                         onChange={(e) => setValues({ ...values, credential: e.target.value })} />
-                  <span />
-                </div>
-              )}
-              {credOn && <span className="help" style={{ marginTop: 4 }}>header name, then the whole value: Authorization and Bearer xyz for a token, X-API-Key and the key when the API says so</span>}
-            </div>
+          <div className="grid min-w-0 gap-3" data-testid="http-credentials">
+            <Pick label="Credentials" hint="Does the API want a key or a token? It is sent as one request header and stored as a secret."
+                  value={credOn ? "yes" : "no"} options={["no", "yes"]} labels={{ no: "None", yes: "A key or a token" }}
+                  onChange={(v) => (v === "yes" ? setCredOn(true) : turnCredOff())} />
+            {credOn && (
+              <div className="grid items-start gap-3 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
+                <Input label="Header name" value={values.credential_header ?? ""} placeholder="Authorization" className="font-mono"
+                       onChange={(e) => setValues({ ...values, credential_header: e.target.value })} />
+                <Input label="Header value" type="password" autoComplete="off" value={values.credential ?? ""}
+                       hint="The whole value: Bearer xyz for a token, or the key when the API says X-API-Key."
+                       disabled={secretSet(credField) && cleared.credential}
+                       placeholder={secretSet(credField) ? "Leave blank to keep" : "Bearer xyz, or the API key"}
+                       onChange={(e) => setValues({ ...values, credential: e.target.value })} />
+              </div>
+            )}
           </div>
         )}
         {by.headers && (
-          <div className="fld-row">
-            <div className="fld-meta">
-              <span className="lbl">additional headers</span>
-              <span className="help">anything else the API wants on every request, e.g. Accept: application/json</span>
-            </div>
-            <div className="fld-ctrl">
-              <KeyValueRows value={values.headers ?? ""} noun="header"
-                            onChange={(v) => setValues({ ...values, headers: v })} />
-            </div>
+          <div className="grid gap-1.5" data-testid="field-headers">
+            <p className={GROUP_LABEL}>Additional headers</p>
+            <p className="m-0 text-xs text-muted-foreground">Anything else the API wants on every request, for example Accept: application/json.</p>
+            <KeyValueRows value={values.headers ?? ""} noun="header" onChange={set("headers")} />
           </div>
         )}
         {by.body && (values.method || "GET").toUpperCase() === "POST" && renderField(by.body)}
@@ -726,13 +739,10 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     if (!apiSample && !mapByHand) {
       return (
         <>
-          <div className="fld-row">
-            <div className="fld-meta"><span className="lbl">what becomes an event</span></div>
-            <div className="fld-ctrl">
-              <span className="help">Run Discover above: Tares reads one real reply and fills this in from it.{" "}
-                <button type="button" className="linklike" onClick={() => setMapByHand(true)}>Set it by hand instead</button>
-              </span>
-            </div>
+          <div className="grid gap-1.5" data-testid="http-mapping-empty">
+            <p className={GROUP_LABEL}>What becomes an event</p>
+            <p className={TEXT}>Discover above reads one real reply and fills this in from it.</p>
+            <div><Button variant="quiet" onClick={() => setMapByHand(true)}>Set it by hand instead</Button></div>
           </div>
           {rest.map(renderField)}
         </>
@@ -741,86 +751,50 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     if (!apiSample) return <>{fields.map(renderField)}</>;
     const names = apiSample.fields.map((f) => f.name);
     const example = (n: string) => { const f = apiSample.fields.find((x) => x.name === n); return f ? String(f.example) : ""; };
-    const labelsFor = (extra: Record<string, string>) => ({ ...extra, ...Object.fromEntries(names.map((n) => [n, n])) });
     const items = values.payload_key?.trim();
     const preview = renderTemplate(values.text_template ?? "", apiSample.sample_item);
     const fixedType = !(values.event_type_field?.trim());
     return (
       <>
-        <div className="opt-row sample-reply">
-          <button type="button" className="opt-head" onClick={() => setSampleOpen((o) => !o)}>
-            <span className="opt-caret">{sampleOpen ? "▾" : "▸"}</span>
-            <span>
-              <span className="opt-title">What Tares fetched</span>
-              <span className="opt-desc help">one reply from the API, as it came back{apiSample.per_poll > 1 ? `; lists cut to their first entry, ${apiSample.per_poll} in the real reply` : ""}. The choices below are read from it.</span>
-            </span>
-            <span className="badge ok">{apiSample.fields.length} fields</span>
-          </button>
-          {sampleOpen && <div className="opt-body"><JsonTree value={apiSample.sample_reply} /></div>}
+        <details className={cn(ADVANCED, "border border-border bg-muted/40 p-4")} data-testid="sample-reply"
+                 open={sampleOpen} onToggle={(e) => setSampleOpen((e.target as HTMLDetailsElement).open)}>
+          <summary>What Tares fetched ({formatCount(apiSample.fields.length)} fields)</summary>
+          <p className={TEXT}>
+            One reply from the API, as it came back
+            {apiSample.per_poll > 1 ? `; lists cut to their first entry, ${formatCount(apiSample.per_poll)} in the real reply` : ""}.
+            The choices below are read from it.
+          </p>
+          <div data-user-text><JsonTree value={apiSample.sample_reply} /></div>
+        </details>
+        <Input label="Payload key" className="font-mono" value={values.payload_key ?? ""} placeholder="Empty for the entire JSON"
+               hint={(items ? `Discover found a list at ${items}, ${formatCount(apiSample.per_poll)} entries, one event each. ` : "")
+                 + "The key in the reply that holds the payload, for example user or data.items. An object there is the event, a list is one event per entry."}
+               onChange={(e) => set("payload_key")(e.target.value)} />
+        <Pick label="Time of the event" value={values.event_time_field ?? ""} options={["", ...names]} labels={{ "": "The poll time" }}
+              hint={values.event_time_field ? `From the item, for example ${example(values.event_time_field)}.` : "When Tares polled."}
+              onChange={set("event_time_field")} />
+        <Pick label="Deduplication key" value={values.id_field ?? ""} options={["", ...names]} labels={{ "": "None, store every poll" }}
+              hint={values.id_field
+                ? (values.id_field === values.event_time_field
+                  ? "The reading's own time, so a reading is stored once however often Tares polls."
+                  : `The entry's ${values.id_field.split(".").pop()}, so an entry already stored is not stored again.`)
+                : "A field whose value is the same for a reading already stored; those are skipped."}
+              onChange={set("id_field")} />
+        <div className="grid items-start gap-3 sm:grid-cols-2" data-testid="event-kind">
+          <Pick label="Kind of event" hint="The word rules filter on and count by." value={values.event_type_field ?? ""}
+                options={["", ...names]} labels={{ "": "The same for every event" }} onChange={set("event_type_field")} />
+          {fixedType
+            ? <Input label="Event type" className="font-mono" value={values.event_type ?? ""} placeholder="api_reading"
+                     onChange={(e) => set("event_type")(e.target.value)} />
+            : <p className={cn(TEXT, "sm:pt-6")}>For example <span className={CODE} data-user-text>{example(values.event_type_field!)}</span>.</p>}
         </div>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">payload key</span>
-            {items && <span className="help">Discover found a list at <span className="mono">{items}</span>, {apiSample.per_poll} entries, one event each</span>}
-          </div>
-          <div className="fld-ctrl">
-            <input type="text" value={values.payload_key ?? ""} placeholder="empty for the entire JSON" className="mono"
-                   onChange={(e) => setValues({ ...values, payload_key: e.target.value })} />
-            <span className="help" style={{ marginTop: 4 }}>the key in the reply that holds the payload, e.g. user or data.items; an object there is the event, a list is one event per entry</span>
-          </div>
-        </div>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">time of the event</span>
-            <span className="help">{values.event_time_field ? <>from the item: {example(values.event_time_field)}</> : "when Tares polled"}</span>
-          </div>
-          <div className="fld-ctrl">
-            <Picker value={values.event_time_field ?? ""} options={["", ...names]} labels={labelsFor({ "": "the poll time" })}
-                    ariaLabel="time of the event" onChange={(v) => setValues({ ...values, event_time_field: v })} />
-          </div>
-        </div>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">deduplication key</span>
-            {values.id_field && (
-              <span className="help">{values.id_field === values.event_time_field
-                ? "the reading's own time, so a reading is stored once however often Tares polls"
-                : `the entry's ${values.id_field.split(".").pop()}, so an entry already stored is not stored again`}</span>
-            )}
-          </div>
-          <div className="fld-ctrl">
-            <Picker value={values.id_field ?? ""} options={["", ...names]} labels={labelsFor({ "": "none, store every poll" })}
-                    ariaLabel="deduplication key" onChange={(v) => setValues({ ...values, id_field: v })} />
-            <span className="help" style={{ marginTop: 4 }}>a field whose value is the same for a reading already stored; those are skipped. Empty stores every poll</span>
-          </div>
-        </div>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">kind of event</span>
-            <span className="help">the word triggers filter on and count by</span>
-          </div>
-          <div className="fld-ctrl">
-            <div className="kv-row">
-              <Picker value={values.event_type_field ?? ""} options={["", ...names]} labels={labelsFor({ "": "the same for every event" })}
-                      ariaLabel="kind of event" onChange={(v) => setValues({ ...values, event_type_field: v })} />
-              {fixedType
-                ? <input type="text" value={values.event_type ?? ""} placeholder="api_reading" aria-label="event type"
-                         onChange={(e) => setValues({ ...values, event_type: e.target.value })} />
-                : <span className="help">e.g. {example(values.event_type_field!)}</span>}
-              <span />
-            </div>
-          </div>
-        </div>
-        <div className="fld-row">
-          <div className="fld-meta">
-            <span className="lbl">event summary</span>
-            <span className="help">one line per event, with values from the payload in braces; empty stores the payload's JSON</span>
-          </div>
-          <div className="fld-ctrl">
-            <input type="text" value={values.text_template ?? ""} placeholder="wind {current_weather.windspeed} km/h" className="mono"
-                   onChange={(e) => setValues({ ...values, text_template: e.target.value })} />
-            <span className="help" style={{ marginTop: 4 }}>reads as: <span className="mono">{preview || JSON.stringify(apiSample.sample_item).slice(0, 120)}</span></span>
-          </div>
+        <div className="grid gap-1.5">
+          <Input label="Event summary" className="font-mono" value={values.text_template ?? ""} placeholder="wind {current_weather.windspeed} km/h"
+                 hint="One line per event, with values from the payload in braces. Empty stores the payload's JSON."
+                 onChange={(e) => set("text_template")(e.target.value)} />
+          <p className={TEXT} data-testid="summary-preview">
+            Reads as: <span className={cn(CODE, "break-all")} data-user-text>{preview || JSON.stringify(apiSample.sample_item).slice(0, 120)}</span>
+          </p>
         </div>
         {rest.map(renderField)}
       </>
@@ -834,19 +808,13 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     const rest = fields.filter((f) => f.name !== "queries");
     return (
       <>
-        {queriesField && (
-          <PromQueriesView rows={rows.queries ?? []}
-                           onChange={(r) => setRows({ ...rows, queries: r })} />
-        )}
-        <details className="fld-group adv-group">
-          <summary>Advanced<span className="caret">›</span></summary>
-          <div>
-            {rest.map(renderField)}
-            {queriesField && (
-              <ListFieldEditor field={queriesField} rows={rows.queries ?? []}
-                               onChange={(r) => setRows({ ...rows, queries: r })} />
-            )}
-          </div>
+        {queriesField && <PromQueriesView rows={rows.queries ?? []} onChange={(r) => setRows({ ...rows, queries: r })} />}
+        <details className={ADVANCED} data-testid="advanced">
+          <summary>Advanced</summary>
+          {rest.map(renderField)}
+          {queriesField && (
+            <ListFieldEditor field={withHelp(queriesField)} rows={rows.queries ?? []} onChange={(r) => setRows({ ...rows, queries: r })} />
+          )}
         </details>
       </>
     );
@@ -859,34 +827,47 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     const found = !!pgColumns?.length;
     return (
       <>
-        <div className="fld-group">
-          <div className="fld-group-head">
-            <h3>{found ? <>What we read from <code>{values.table || "the table"}</code></> : "How to poll the table"}</h3>
-            <p className="help">{found
-              ? "Discover picked these from the columns; adjust any that aren't right."
-              : "Run Discover above to fill these from the table, or set them by hand."}</p>
-          </div>
-          {main.map(renderField)}
+        <div className="grid gap-1.5" data-testid="pg-poll">
+          <p className={GROUP_LABEL}>
+            {found ? <>What Tares reads from <code className={CODE} data-user-text>{values.table || "the table"}</code></> : "How to poll the table"}
+          </p>
+          <p className={TEXT}>{found
+            ? "Discover picked these from the columns; change any that are not right."
+            : "Discover above fills these from the table, or set them by hand."}</p>
         </div>
+        {main.map(renderField)}
         {advanced.length > 0 && (
-          <details className="fld-group adv-group">
-            <summary>Advanced<span className="caret">›</span></summary>
-            <div>{advanced.map(renderField)}</div>
+          <details className={ADVANCED} data-testid="advanced">
+            <summary>Advanced</summary>
+            {advanced.map(renderField)}
           </details>
         )}
       </>
     );
   };
 
-  return (
-    <form ref={formRef} onSubmit={(e) => { e.preventDefault(); run(async () => onSubmit(build())); }}>
+  // Where the connection points, once Discover has confirmed it: the database (and host) or the URL's host.
+  const connectedTo = () => {
+    try {
+      if (connector === "postgres") {
+        const u = new URL(values.dsn); const db = u.pathname.replace(/^\//, "");
+        return <> to <code className={CODE} data-user-text>{db || u.hostname}</code>{db && u.hostname ? <>, <span data-user-text>{u.hostname}</span></> : null}</>;
+      }
+      return <> to <code className={CODE} data-user-text>{new URL(values.url).host}</code></>;
+    } catch { return null; }
+  };
+  const ready = !(connector === "prometheus" && !metricsConfirmed) && !(connector === "prometheus_alerts" && !alertsConfirmed);
 
-      <label className={"field" + (missing === "name" && !name.trim() ? " missing" : "")} style={{ maxWidth: 360 }}>
-        <span className="lbl">name <span className="req">*</span></span>
-        <input type="text" value={name} disabled={lockName}
-               placeholder={NAME_PLACEHOLDER[connector] ?? "e.g. metrics"}
+  return (
+    <form ref={formRef} className="grid min-w-0 max-w-3xl gap-5" data-testid="connection-form"
+          onSubmit={(e) => { e.preventDefault(); run(async () => onSubmit(build())); }}>
+
+      <div data-testid="field-name" className={cn("grid max-w-sm gap-1.5", isMissing("name", name) && "missing")}>
+        <Input label="Name (required)" value={name} disabled={lockName}
+               placeholder={NAME_PLACEHOLDER[connector] ?? "metrics"}
+               error={isMissing("name", name) ? "Fill this in." : undefined}
                onChange={(e) => setName(e.target.value)} />
-      </label>
+      </div>
 
       {spec.mode === "poll" && (() => {
         // split the stored "5m" string into a number + unit so the user can't type a malformed
@@ -895,16 +876,11 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         const num = pm ? pm[1] : "5";
         const unit = pm ? pm[2] : "s";
         return (
-          <div className="field" style={{ maxWidth: 260 }}>
-            <span className="lbl">poll interval</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input type="number" min="1" step="1" value={num} style={{ flex: 1 }}
-                     onChange={(e) => setPoll(`${e.target.value}${unit}`)} />
-              <Picker value={unit} onChange={(v) => setPoll(`${num}${v}`)} style={{ width: 120 }}
-                      ariaLabel="poll interval unit"
-                      options={["s", "m", "h"]}
-                      labels={{ s: "seconds", m: "minutes", h: "hours" }} />
-            </div>
+          <div className="grid max-w-sm grid-cols-2 items-start gap-3" data-testid="poll-interval">
+            <Input label="Poll every" type="number" min="1" step="1" value={num}
+                   onChange={(e) => setPoll(`${e.target.value}${unit}`)} />
+            <Pick label="Unit" value={unit} onChange={(v) => setPoll(`${num}${v}`)}
+                  options={["s", "m", "h"]} labels={{ s: "Seconds", m: "Minutes", h: "Hours" }} />
           </div>
         );
       })()}
@@ -912,17 +888,9 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       {spec.discover && !editConn
         && ((connector === "postgres" && pgColumns?.length) || (connector === "prometheus" && catalog)
             || (connector === "prometheus_alerts" && alertDiscover)) ? (
-        <div className="conn-summary">
-          <span className="tick">✓</span>
-          <span>Connected{connector === "postgres" ? (() => {
-            try { const u = new URL(values.dsn); const db = u.pathname.replace(/^\//, "");
-              return <> to <code>{db || u.hostname}</code>{db && u.hostname ? <> · {u.hostname}</> : null}</>; }
-            catch { return null; }
-          })() : (() => {
-            try { return <> to <code>{new URL(values.url).host}</code></>; } catch { return null; }
-          })()}</span>
-          <button type="button" className="linklike" style={{ marginLeft: "auto" }}
-                  onClick={() => setEditConn(true)}>edit connection</button>
+        <div className={SUMMARY_ROW} data-testid="conn-summary">
+          <span className="min-w-0 flex-1">Connected{connectedTo()}.</span>
+          <Button variant="quiet" onClick={() => setEditConn(true)}>Edit connection</Button>
         </div>
       ) : connector === "reference" ? (
         <ReferenceForm attachments={refAttachments} setAttachments={setRefAttachments} />
@@ -934,96 +902,94 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
           : (spec.discover ? spec.fields.filter((f) => f.discover_input) : spec.fields).map(renderField)
       )}
 
-      {spec.discover && !(connector === "postgres" && pgColumns?.length && !editConn)
+      {/* postgres keeps the panel while a columns proposal waits to be applied: it collapses the
+          connection as the columns arrive, and the proposal lives in this panel */}
+      {spec.discover && !(connector === "postgres" && pgColumns?.length && !editConn && !colProposal)
         && !(connector === "prometheus" && metricsConfirmed)
         && !(connector === "prometheus_alerts" && alertsConfirmed) && (
-        <div className="panel" style={{ background: "var(--th-bg)", marginBottom: 14 }}>
-          {!(connector === "prometheus" && catalog) && !(connector === "prometheus_alerts" && alertDiscover) && (
-            <div className="btnrow" style={{ alignItems: "center" }}>
-              <button type="button" disabled={busy} onClick={() => discover()}>
-                {discovering ? "⏳ discovering…"
-                  : `✦ ${connector === "docker_logs" ? "Discover containers" : "Discover"}`}
-              </button>
-              <span className="help" style={{ margin: 0 }}>
-                {DISCOVER_HINT[connector]
-                  ?? "fill the URL above, then let Tares introspect the source and propose what to ingest; no PromQL to write by hand"}
-              </span>
-            </div>
-          )}
-          {discoverErr && <div className="alert error" style={{ marginTop: 10, marginBottom: 0 }}>{discoverErr}</div>}
-          {proposal && <ProposalView proposal={proposal} onApply={applyProposal} />}
-          {connector === "prometheus" && catalog && !metricsConfirmed && (
-            <MetricBasket catalog={catalog} basket={basket} onAdd={basketAdd} onRemove={basketRemove}
-                          fetchLabelMetrics={fetchLabelMetrics} onConfirm={confirmMetrics} busy={busy} />
-          )}
-          {connector === "prometheus_alerts" && alertDiscover && !alertsConfirmed && (
-            <AlertRulesCuration rules={alertDiscover.rules} severities={alertDiscover.severities}
-              sev={alertSev} onSevToggle={toggleSev} summary={alertDiscover.summary} busy={busy}
-              includePending={values.include_pending === "true"}
-              onIncludePending={(v) => setValues({ ...values, include_pending: v ? "true" : "" })}
-              onConfirm={confirmAlerts} />
-          )}
-          {tables && (
-            <table style={{ marginTop: 10 }}>
-              <thead><tr><th>table</th><th style={{ width: 100 }}></th></tr></thead>
-              <tbody>
-                {tables.map((t) => (
-                  <tr key={t}>
-                    <td className="mono">{t}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <button type="button" disabled={busy} onClick={() => pickTable(t)}>use this</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {colProposal && (
-            <ColumnsProposalView proposal={colProposal}
-              onApply={() => {
-                applyConfig(colProposal.proposed_config);
-                setTest({ ok: true, note: colProposal.summary });
-                setColProposal(undefined);
-              }} />
-          )}
-          {containers && (
-            <table style={{ marginTop: 10 }}>
-              <thead><tr><th>service</th><th>image</th><th></th></tr></thead>
-              <tbody>
-                {containers.map((c) => (
-                  <tr key={c.name}>
-                    <td className="mono">{c.service}</td>
-                    <td className="help">{c.image}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <button type="button" onClick={() => pickContainer(c)}>use this</button>
-                    </td>
-                  </tr>
-                ))}
-                {containers.length === 0 && (
-                  <tr><td colSpan={3} className="help">no containers found</td></tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
+        <Panel title="Discover" data-testid="discover-panel">
+          <div className="grid gap-4">
+            {!(connector === "prometheus" && catalog) && !(connector === "prometheus_alerts" && alertDiscover) && !colProposal && (
+              <div className="grid gap-2">
+                <p className={TEXT}>{DISCOVER_HINT[connector] ?? DISCOVER_FALLBACK}</p>
+                <div>
+                  <Button variant="secondary" busy={discovering} disabled={busy && !discovering} onClick={() => discover()}>
+                    {connector === "docker_logs" ? "Discover containers" : "Discover"}
+                  </Button>
+                </div>
+              </div>
+            )}
+            {discoverErr && <Banner tone="error" data-testid="discover-error"><span data-user-text>{sentence(discoverErr)}</span></Banner>}
+            {connector === "prometheus" && catalog && !metricsConfirmed && (
+              <MetricBasket catalog={catalog} basket={basket} onAdd={basketAdd} onRemove={basketRemove}
+                            fetchLabelMetrics={fetchLabelMetrics} onConfirm={confirmMetrics} busy={busy} />
+            )}
+            {connector === "prometheus_alerts" && alertDiscover && !alertsConfirmed && (
+              <AlertRulesCuration rules={alertDiscover.rules} severities={alertDiscover.severities}
+                sev={alertSev} onSevToggle={toggleSev} summary={alertDiscover.summary} busy={busy}
+                includePending={values.include_pending === "true"}
+                onIncludePending={(v) => setValues({ ...values, include_pending: v ? "true" : "" })}
+                onConfirm={confirmAlerts} />
+            )}
+            {tables && (
+              <table className={TABLE} data-testid="pg-tables">
+                <thead><tr><th>Table</th><th><span className="sr-only">Pick</span></th></tr></thead>
+                <tbody>
+                  {tables.map((t) => (
+                    <tr key={t}>
+                      <td className="font-mono" data-user-text>{t}</td>
+                      <td className="text-right">
+                        <Button variant="secondary" disabled={busy} aria-label={`Use ${t}`} onClick={() => pickTable(t)}>Use this</Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {colProposal && (
+              <ColumnsProposalView proposal={colProposal}
+                onApply={() => {
+                  applyConfig(colProposal.proposed_config);
+                  setTest({ ok: true, note: colProposal.summary });
+                  setColProposal(undefined);
+                }} />
+            )}
+            {containers && (containers.length === 0
+              ? <p className={TEXT}>No containers found.</p>
+              : (
+                <table className={TABLE} data-testid="containers">
+                  <thead><tr><th>Service</th><th>Image</th><th><span className="sr-only">Pick</span></th></tr></thead>
+                  <tbody>
+                    {containers.map((c) => (
+                      <tr key={c.name}>
+                        <td className="font-mono" data-user-text>{c.service}</td>
+                        <td className="break-all text-muted-foreground" data-user-text>{c.image}</td>
+                        <td className="text-right">
+                          <Button variant="secondary" aria-label={`Use ${c.service}`} onClick={() => pickContainer(c)}>Use this</Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ))}
+          </div>
+        </Panel>
       )}
 
       {connector === "prometheus" && metricsConfirmed && (
-        <div className="conn-summary" style={{ marginBottom: 12 }}>
-          <span className="tick">✓</span>
-          <span>{basket.size} metric{basket.size === 1 ? "" : "s"} chosen</span>
-          <button type="button" className="linklike" style={{ marginLeft: "auto" }}
-                  onClick={() => setMetricsConfirmed(false)}>change metrics</button>
+        <div className={SUMMARY_ROW} data-testid="metrics-summary">
+          <span className="min-w-0 flex-1">{formatCount(basket.size)} {basket.size === 1 ? "metric" : "metrics"} chosen.</span>
+          <Button variant="quiet" onClick={() => setMetricsConfirmed(false)}>Change metrics</Button>
         </div>
       )}
 
       {connector === "prometheus_alerts" && alertsConfirmed && (
-        <div className="conn-summary" style={{ marginBottom: 12 }}>
-          <span className="tick">✓</span>
-          <span>ingesting {alertSev.size ? [...alertSev].join(", ") : "all"} alerts
-            {values.include_pending === "true" ? " (incl. pending)" : ""}</span>
-          <button type="button" className="linklike" style={{ marginLeft: "auto" }}
-                  onClick={() => setAlertsConfirmed(false)}>change filter</button>
+        <div className={SUMMARY_ROW} data-testid="alerts-summary">
+          <span className="min-w-0 flex-1">
+            Receiving {alertSev.size ? [...alertSev].join(", ") : "all"} alerts
+            {values.include_pending === "true" ? ", pending ones included" : ""}.
+          </span>
+          <Button variant="quiet" onClick={() => setAlertsConfirmed(false)}>Change filter</Button>
         </div>
       )}
 
@@ -1037,43 +1003,45 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         ? renderHttpPollMapping(spec.fields.filter((f) => !f.discover_input))
         : spec.fields.filter((f) => !f.discover_input).map(renderField))}
 
-      {connector !== "reference"
-        && !(connector === "prometheus" && !metricsConfirmed)
-        && !(connector === "prometheus_alerts" && !alertsConfirmed) && (
+      {connector !== "reference" && ready && (
         <LabelsEditor rows={labelRows} onChange={setLabelRows} sourceName={initial?.name}
                       fields={labelFieldOpts} fieldHints={labelFieldHints}
                       examples={apiSample ? Object.fromEntries(sampleExample) : undefined} />
       )}
 
       {labelsChanged && (
-        <div className="alert info">
-          Label changes apply to new events going forward. Existing events keep the labels they were
-          ingested with; retroactive relabel of stored events is coming soon.
-        </div>
+        <Banner data-testid="labels-changed">
+          Label changes apply to new events from now on. Events already stored keep the labels they arrived with.
+        </Banner>
       )}
 
       {/* Outcomes sit with the buttons that cause them: a test result or a save error at the top
           of a long form is off screen when the button was pressed at the bottom. */}
-      {error && <div className="alert error">{error}</div>}
-      {test && (
-        <div className={`alert ${test.ok ? "ok" : "error"}`}>
-          {test.ok
-            ? <>connection ok; {test.note ?? `${test.events} event(s) on a test poll`}
-                {test.sample?.length ? <pre className="payload">{test.sample.join("\n")}</pre> : null}</>
-            : <>test failed: {test.error}</>}
+      {error && <Banner tone="error" data-testid="form-error"><span data-user-text>{sentence(error)}</span></Banner>}
+      {test && (test.ok ? (
+        <div className="grid gap-2" data-testid="test-result">
+          <Banner>
+            <span>The connection works. <span data-user-text>{test.note ? sentence(test.note) : `${formatCount(test.events ?? 0)} ${test.events === 1 ? "event" : "events"} on a test poll.`}</span></span>
+          </Banner>
+          {test.sample?.length ? (
+            <pre className="m-0 max-h-64 overflow-auto border border-border bg-muted/40 p-3 font-mono text-[12px] text-foreground" data-user-text>
+              {test.sample.join("\n")}
+            </pre>
+          ) : null}
         </div>
-      )}
-      {!(connector === "prometheus" && !metricsConfirmed)
-        && !(connector === "prometheus_alerts" && !alertsConfirmed) && (
-        <div className="btnrow">
-          <button type="submit" className="primary" disabled={busy || Object.keys(jsonErrors).length > 0}>
+      ) : (
+        <Banner tone="error" data-testid="test-result"><span>The test failed: <span data-user-text>{sentence(test.error)}</span></span></Banner>
+      ))}
+      {ready && (
+        <div className="flex flex-wrap gap-3">
+          <Button type="submit" variant="primary" busy={busy && !discovering} disabled={busy || Object.keys(jsonErrors).length > 0}>
             {submitLabel}
-          </button>
+          </Button>
           {spec.mode === "poll" && (
-            <button type="button" disabled={busy}
+            <Button variant="secondary" disabled={busy}
                     onClick={() => run(async () => setTest(await api.testSource(build())))}>
               Test connection
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -1081,396 +1049,6 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
   );
 }
 
-type AlertRule = { name: string; severity: string; group: string; state: string };
-// labels as an ordered [key, value] list (not a Record) so editing a key doesn't change a React
-// key and remount the input — that was eating focus after one character.
-type Attachment = { name: string; format: string; content: string; labels: [string, string][] };
-type MapRow = { from: string; to: string };
-type LabelRow = { name: string; kind: "const" | "field"; value: string; primary: boolean;
-                  type: "string" | "number";
-                  pattern: string; replace: string; map: MapRow[]; normOpen: boolean };
-
-function labelsToRows(arr: unknown): LabelRow[] {
-  if (!Array.isArray(arr)) return [];
-  const rows = arr.map((x) => {
-    const o = x as Record<string, unknown>;
-    const kind: "const" | "field" = "field" in o ? "field" : "const";
-    const map = o.map && typeof o.map === "object"
-      ? Object.entries(o.map as Record<string, string>).map(([from, to]) => ({ from, to: String(to) }))
-      : [];
-    return { name: String(o.name ?? ""), kind, value: String(o[kind] ?? ""), primary: !!o.primary,
-             type: o.type === "number" ? "number" as const : "string" as const,
-             pattern: String(o.pattern ?? ""), replace: String(o.replace ?? ""), map,
-             // Collapsed on load. This used to open every label that had rules, because an
-             // expanded panel was the ONLY way to see a label carried any — the rules column now
-             // says so in a word, and each panel is a few hundred pixels that buried the form.
-             normOpen: false };
-  });
-  if (rows.length && !rows.some((r) => r.primary)) rows[0].primary = true;  // first is the key by default
-  return rows;
-}
-
-/** Row -> label spec, including the optional value normalization (pattern/replace + alias map). */
-function rowToSpec(r: LabelRow): Record<string, unknown> {
-  const spec: Record<string, unknown> = { name: r.name.trim(), [r.kind]: r.value,
-                                          ...(r.primary ? { primary: true } : {}),
-                                          // the key is always a string; number labels are aggregatable
-                                          ...(r.type === "number" && !r.primary ? { type: "number" } : {}) };
-  if (r.kind === "field") {
-    if (r.pattern.trim()) { spec.pattern = r.pattern; spec.replace = r.replace; }
-    const map = Object.fromEntries(r.map.filter((m) => m.from.trim()).map((m) => [m.from, m.to]));
-    if (Object.keys(map).length) spec.map = map;
-  }
-  return spec;
-}
-
-/** What this label does to its values — shared with the read-only tables on the source page, so
- *  both name the same rule the same way. "" means it passes values through untouched, which the
- *  caller also uses to decide the active styling. */
-function normSummary(row: LabelRow): string {
-  return ruleSummary(row.pattern, row.map.length);
-}
-
-function normTitle(row: LabelRow): string {
-  const bits: string[] = [];
-  if (row.pattern) bits.push(`pattern ${row.pattern} → ${row.replace ? `"${row.replace}"` : "(empty)"}`);
-  if (row.map.length) bits.push(`${row.map.length} value rename${row.map.length === 1 ? "" : "s"}`);
-  return bits.length ? `${bits.join(", ")}. Click to edit.` : "No rules. Click to normalize values.";
-}
-
-function LabelsEditor({ rows, onChange, fields = [], fieldHints, sourceName, examples }:
-  { rows: LabelRow[]; onChange: (r: LabelRow[]) => void; fields?: string[];
-    fieldHints?: Record<string, string>; sourceName?: string;
-    examples?: Record<string, string> }) {   // a sample value per field, from Discover
-  const set = (i: number, patch: Partial<LabelRow>) =>
-    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const makePrimary = (i: number) => onChange(rows.map((r, j) =>
-    j === i ? { ...r, primary: true, type: "string" as const } : { ...r, primary: false }));
-  const remove = (i: number) => onChange(rows.filter((_, j) => j !== i));
-  // -1: no key picked; the source keys by its own name (the connector's fallback)
-  const keyIndex = rows.findIndex((r) => r.primary);
-  const keyRow = keyIndex >= 0 ? rows[keyIndex] : undefined;
-  const keyValue = keyRow
-    ? (keyRow.kind === "const" ? keyRow.value : examples?.[keyRow.value])
-    : undefined;
-  return (
-    <div className="field">
-      {/* No blurb here. It used to explain const-vs-field and what the key is — both of which the
-          `from` column and the `entity key` picker now say on their own. */}
-      <span className="lbl">labels &amp; key</span>
-      {/* The key is ONE decision about the source, so it gets ONE control. It used to be a radio
-          per row, which reads as "pick the row I'm editing" rather than "pick the key"; and its
-          consequence (the key's type is forced to string) then looked like a broken type select. */}
-      {rows.length > 0 && (
-        <div className="key-picker">
-          <span className="lbl" style={{ margin: 0 }}>entity key</span>
-          <Picker value={String(keyIndex)} ariaLabel="entity key"
-                  options={["-1", ...rows.map((_, i) => String(i))]}
-                  labels={{ "-1": sourceName ? `none, the source name (${sourceName})` : "none, the source name",
-                            ...Object.fromEntries(rows.map((r, i) =>
-                              [String(i), r.name || `(unnamed label ${i + 1})`])) }}
-                  onChange={(v) => makePrimary(Number(v))} />
-          {keyRow && (
-            <span className="help" style={{ margin: 0 }}>
-              {keyValue ? <>e.g. <span className="mono">{keyValue}</span></> : "the thing each event is about"}
-            </span>
-          )}
-        </div>
-      )}
-      {rows.length > 0 && (
-        <div className="label-head">
-          <span className="help label-col-key" />
-          <span className="help label-col-grow">name</span>
-          <span className="help label-col-from">from</span>
-          <span className="help label-col-grow">value</span>
-          <span className="help" style={{ width: 108, flexShrink: 0 }}>type</span>
-          <span className="help label-col-norm">rules</span>
-          <span className="label-col-x" />
-        </div>
-      )}
-      {rows.map((row, i) => (
-        <div key={i}>
-          <div className="label-row">
-            <span className="label-col-key">
-              {row.primary && <span className="badge key-chip" title="this label is the entity key">key</span>}
-            </span>
-            <input className="label-col-grow" placeholder="e.g. service" value={row.name}
-                   onChange={(e) => set(i, { name: e.target.value })} />
-            <Picker className="label-col-from" value={row.kind} ariaLabel="value comes from"
-                    options={["const", "field"]}
-                    labels={{ const: "const (fixed)", field: "field (per event)" }}
-                    onChange={(v) => set(i, { kind: v as LabelRow["kind"] })} />
-            {row.kind === "field" && fields.length ? (
-              <Combo className="label-col-grow" value={row.value} options={fields}
-                     hints={fieldHints} placeholder="field, e.g. service"
-                     onChange={(v) => set(i, { value: v })} />
-            ) : (
-              <input className="label-col-grow"
-                     placeholder={row.kind === "const" ? "value, e.g. api-server" : "field, e.g. service"}
-                     value={row.value} onChange={(e) => set(i, { value: e.target.value })} />
-            )}
-            <Picker style={{ width: 108, flexShrink: 0 }} ariaLabel="label type"
-                    value={row.primary ? "string" : row.type} disabled={row.primary}
-                    options={["string", "number"]}
-                    title={row.primary ? "the key is always a string"
-                                       : "number labels can be aggregated (avg/max/sum) in triggers"}
-                    onChange={(v) => set(i, { type: v as LabelRow["type"] })} />
-            {/* Says WHAT the rule is, not just that the button exists. Reading the table used to
-                give no way to tell a pass-through field from one rewriting its values: the only
-                difference was `.dim` vs `.active`, and no CSS rule matched a bare `button.active`,
-                so both rendered identically. */}
-            {row.kind === "field" ? (
-              <button type="button" title={normTitle(row)}
-                      className={"label-col-norm norm" + (normSummary(row) ? " active" : "")}
-                      onClick={() => set(i, { normOpen: !row.normOpen })}>
-                {normSummary(row) ? `≈ ${normSummary(row)}` : "≈ none"}
-              </button>
-            ) : (
-              <span className="label-col-norm" />
-            )}
-            <button type="button" className="danger label-col-x" onClick={() => remove(i)}>×</button>
-          </div>
-          {row.kind === "field" && row.normOpen && (
-            <NormalizeEditor row={row} onChange={(patch) => set(i, patch)} sourceName={sourceName} />
-          )}
-        </div>
-      ))}
-      <button type="button"
-              onClick={() => onChange([...rows, { name: "", kind: "const", value: "", primary: rows.length === 0,
-                                                  type: "string", pattern: "", replace: "", map: [], normOpen: false }])}>
-        + Add label
-      </button>
-      {fields.length > 0 && (
-        <>
-          <div className="help" style={{ marginTop: 6 }}>
-            this connector provides: {fields.map((f, i) => <span key={f}><code>{f}</code>{i < fields.length - 1 ? ", " : ""}</span>)}
-            {" "}· pick a <code>field</code> from these (the source's page shows each field's coverage once data flows).
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Merge value variants for one field label. User-first flow: show the values this field
- *  actually has, let the user rename the odd ones onto a canonical one, and reflect the result
- *  live. The regex lives behind an "advanced" toggle for whole families of variants. */
-function NormalizeEditor({ row, onChange, sourceName }:
-  { row: LabelRow; onChange: (patch: Partial<LabelRow>) => void; sourceName?: string }) {
-  const [preview, setPreview] = useState<{ sampled: number; distinct_before: number;
-    distinct_after: number; results: { from: string; to: string; events: number }[] }>();
-  const [pErr, setPErr] = useState<string>();
-  const [advanced, setAdvanced] = useState(!!row.pattern);
-
-  // live preview: on open (bare field -> the observed values), and after every edit (debounced)
-  useEffect(() => {
-    if (!sourceName || !row.value.trim()) return;
-    const t = setTimeout(async () => {
-      try {
-        setPErr(undefined);
-        setPreview(await api.labelPreview(sourceName, rowToSpec(row)));
-      } catch (e) { setPreview(undefined); setPErr(String((e as Error).message ?? e)); }
-    }, 500);
-    return () => clearTimeout(t);
-  }, [sourceName, row.value, row.pattern, row.replace, JSON.stringify(row.map)]);
-
-  const observed = preview?.results ?? [];
-  const merges = observed.filter((r2) => r2.from !== r2.to).length;
-  const fromOpts = observed.map((r2) => r2.from);
-  const fromHints = Object.fromEntries(observed.map((r2) => [r2.from, `${r2.events} events`]));
-
-  const hasRules = !!row.pattern || row.map.length > 0;
-  // Which label this panel is editing. It is a full-width panel under a table row, so without the
-  // name in the heading there is nothing tying it to the row that opened it.
-  const label = row.name.trim();
-
-  return (
-    <div className="panel" style={{ margin: "2px 0 10px 28px", padding: 12 }}>
-      <div className="pagehead" style={{ marginBottom: 6 }}>
-        <strong>
-          Merge value variants{label && <>: <code>{label}</code></>}
-        </strong>
-        <span className="btnrow">
-          {hasRules && (
-            <button type="button" className="danger"
-                    title="discard the pattern rule and all renames for this label"
-                    onClick={() => { onChange({ pattern: "", replace: "", map: [] }); }}>
-              Clear
-            </button>
-          )}
-          <button type="button" onClick={() => onChange({ normOpen: false })}>Done</button>
-        </span>
-      </div>
-      <span className="help" style={{ display: "block", marginTop: 0, marginBottom: 8, whiteSpace: "normal" }}>
-        {/* Kept, unlike the paragraphs removed elsewhere on this page: both sentences carry a fact
-            the screen cannot show. The first is why merging matters at all; the second is what
-            makes someone willing to click. "Rename the variants onto one name here" went; the
-            controls below say that. */}
-        Variants of the same thing
-        (<span className="mono">checkout</span>, <span className="mono">checkout-svc</span>)
-        count as different entities and won&rsquo;t correlate. Renaming makes a copy and the
-        original stays in the stored event.
-      </span>
-
-      {pErr && <div className="alert error">{pErr}</div>}
-
-      {sourceName && preview && (
-        <div style={{ marginBottom: 10 }}>
-          <span className="help">
-            {label ? <code>{label}</code> : "This field"} has{" "}
-            <strong>{preview.distinct_before}</strong> distinct value{preview.distinct_before === 1 ? "" : "s"} in
-            recent events{merges > 0 && <>. With your rules it becomes <strong>{preview.distinct_after}</strong></>}:
-          </span>
-          <table style={{ marginTop: 6 }}>
-            <thead><tr><th>value seen</th><th className="num">events</th><th>will become</th></tr></thead>
-            <tbody>
-              {observed.slice(0, 12).map((r2, k) => (
-                <tr key={k}>
-                  <td className="mono">{r2.from}</td>
-                  <td className="num">{r2.events}</td>
-                  {/* An empty target used to render as a green arrow followed by nothing, which is
-                      indistinguishable from a missing value; and `ok` styling on it reads as
-                      approval of the wrong thing. Blanking a value is a legitimate rule (a pattern
-                      that keeps only what matches), so it needs to be stated, not flagged. */}
-                  <td className="mono">
-                    {r2.from === r2.to
-                      ? <span className="dim">unchanged</span>
-                      : r2.to === ""
-                      ? <><span className="badge blanked" style={{ marginRight: 6 }}>→</span>
-                          <span className="dim"><em>(empty)</em></span></>
-                      : <><span className="badge ok" style={{ marginRight: 6 }}>→</span>{r2.to}</>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {sourceName && !preview && !pErr && <div className="dim" style={{ marginBottom: 10 }}>loading observed values…</div>}
-      {!sourceName && (
-        <span className="help" style={{ display: "block", marginBottom: 10 }}>
-          (once this source has data, its actual values will show here so you can pick what to rename)
-        </span>
-      )}
-
-      {row.map.map((m, j) => (
-        <div key={j} className="btnrow" style={{ marginBottom: 6, alignItems: "center" }}>
-          <span className="help">rename</span>
-          <Combo style={{ flex: 1 }} value={m.from} options={fromOpts} hints={fromHints}
-                 placeholder="value seen in the data"
-                 onChange={(v) => onChange({ map: row.map.map((x, k) => k === j ? { ...x, from: v } : x) })} />
-          <span className="help">to</span>
-          <input className="mono" style={{ flex: 1 }} placeholder="the name it should have"
-                 value={m.to}
-                 onChange={(e) => onChange({ map: row.map.map((x, k) => k === j ? { ...x, to: e.target.value } : x) })} />
-          <button type="button" className="danger" onClick={() => onChange({ map: row.map.filter((_, k) => k !== j) })}>×</button>
-        </div>
-      ))}
-      <div className="btnrow">
-        <button type="button" onClick={() => onChange({ map: [...row.map, { from: "", to: "" }] })}>
-          + Rename a value
-        </button>
-        <button type="button" className="dim" onClick={() => setAdvanced((a) => !a)}>
-          {advanced ? "hide pattern rule" : "advanced: pattern rule…"}
-        </button>
-      </div>
-
-      {advanced && (
-        <PatternRule key={row.pattern === "" ? "empty" : "set"} row={row} onChange={onChange} />
-      )}
-    </div>
-  );
-}
-
-const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-type RuleKind = "suffix" | "prefix" | "after" | "custom";
-
-/** Builds the pattern for the user from plain choices — "remove the ending -svc" — so nobody has
- *  to write a regex unless they pick custom. The stored config is still just pattern/replace. */
-function PatternRule({ row, onChange }:
-  { row: LabelRow; onChange: (patch: Partial<LabelRow>) => void }) {
-  const [kind, setKind] = useState<RuleKind>(row.pattern ? "custom" : "suffix");
-  const [text, setText] = useState("");
-
-  const apply = (k: RuleKind, t: string) => {
-    if (k === "suffix") onChange({ pattern: t ? `${escRe(t)}$` : "", replace: "" });
-    else if (k === "prefix") onChange({ pattern: t ? `^${escRe(t)}` : "", replace: "" });
-    else if (k === "after") onChange({ pattern: t ? `${escRe(t)}.*$` : "", replace: "" });
-  };
-
-  return (
-    <div style={{ marginTop: 8 }}>
-      <span className="help" style={{ display: "block", marginBottom: 6, whiteSpace: "normal" }}>
-        A pattern rule fixes a whole family of values at once (it runs before the renames above).
-        The table shows its effect live.
-      </span>
-      <div className="btnrow" style={{ alignItems: "center" }}>
-        <Picker value={kind} style={{ maxWidth: 260 }} ariaLabel="pattern rule kind"
-                options={["suffix", "prefix", "after", "custom"]}
-                labels={{ suffix: "remove this ending", prefix: "remove this beginning",
-                          after: "cut everything from … onwards", custom: "custom (regular expression)" }}
-                onChange={(v) => { const k = v as RuleKind; setKind(k);
-                                   if (k === "custom") return; apply(k, text); }} />
-        {kind !== "custom" ? (
-          <input className="mono" style={{ flex: 1 }}
-                 placeholder={kind === "suffix" ? "e.g. -svc" : kind === "prefix" ? "e.g. prod-" : "e.g. ."}
-                 value={text}
-                 onChange={(e) => { setText(e.target.value); apply(kind, e.target.value); }} />
-        ) : (
-          <>
-            <input className="mono" style={{ flex: 2 }} placeholder="regex, e.g. -(service|svc)$"
-                   value={row.pattern} onChange={(e) => onChange({ pattern: e.target.value })} />
-            <input className="mono" style={{ flex: 1 }} placeholder="replacement (empty = remove)"
-                   value={row.replace} onChange={(e) => onChange({ replace: e.target.value })} />
-          </>
-        )}
-      </div>
-      {kind === "suffix" && (
-        <span className="help">e.g. entering <span className="mono">-svc</span> turns{" "}
-          <span className="mono">checkout-svc</span> into <span className="mono">checkout</span></span>
-      )}
-      {kind === "prefix" && (
-        <span className="help">e.g. entering <span className="mono">prod-</span> turns{" "}
-          <span className="mono">prod-checkout</span> into <span className="mono">checkout</span></span>
-      )}
-      {kind === "after" && (
-        <span className="help">e.g. entering <span className="mono">.</span> turns{" "}
-          <span className="mono">checkout.internal.eu</span> into <span className="mono">checkout</span></span>
-      )}
-    </div>
-  );
-}
-
-/** A JSON value as a tree: each field of an object folds on its own, scalars inline, nested
- *  objects and lists fold the same way one level down. For reading a reply, not editing it. */
-function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
-  if (value === null || typeof value !== "object") {
-    return <span className={"json-scalar " + (typeof value)}>{JSON.stringify(value)}</span>;
-  }
-  const entries: [string, unknown][] = Array.isArray(value)
-    ? value.map((v, i) => [String(i), v] as [string, unknown])
-    : Object.entries(value as Record<string, unknown>);
-  if (entries.length === 0) return <span className="json-scalar">{Array.isArray(value) ? "[]" : "{}"}</span>;
-  return (
-    <div className="json-tree">
-      {entries.map(([k, v]) => {
-        const nested = v !== null && typeof v === "object" && Object.keys(v as object).length > 0;
-        return nested ? (
-          <details key={k} className="json-node" open={depth === 0}>
-            <summary><span className="json-key">{k}</span> <span className="help">{Array.isArray(v) ? `[${(v as unknown[]).length}]` : `{${Object.keys(v as object).length}}`}</span></summary>
-            <JsonTree value={v} depth={depth + 1} />
-          </details>
-        ) : (
-          <div key={k} className="json-leaf"><span className="json-key">{k}</span>: <JsonTree value={v} depth={depth + 1} /></div>
-        );
-      })}
-    </div>
-  );
-}
-
-/** The connector's text_template rendering, for the live preview: `{a.b}` reads into nested
- *  objects; a missing field empties the line, as the daemon does. */
 function renderTemplate(template: string, item: Record<string, unknown>): string {
   if (!template) return "";
   let missing = false;
@@ -1483,671 +1061,4 @@ function renderTemplate(template: string, item: Record<string, unknown>): string
     return String(cur);
   });
   return missing ? "" : out;
-}
-
-/** Key-value rows for a `map` field, kept in the form as the JSON text the save path already
- *  reads. Empty keys are dropped on the way out, so a half-filled row costs nothing. */
-function KeyValueRows({ value, noun, onChange }: { value: string; noun: string; onChange: (v: string) => void }) {
-  const parsed = useMemo<[string, string][]>(() => {
-    try { const o = JSON.parse(value || "{}"); return typeof o === "object" && o ? Object.entries(o).map(([k, v]) => [k, String(v)]) : []; }
-    catch { return []; }
-  }, [value]);
-  // local rows so a key being typed is not dropped as an empty entry mid-keystroke
-  const [rows, setRows] = useState<[string, string][]>(parsed);
-  useEffect(() => { if (JSON.stringify(parsed) !== JSON.stringify(rows.filter(([k]) => k.trim()))) setRows(parsed); }, [parsed]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const emit = (next: [string, string][]) => {
-    setRows(next);
-    const kept = next.filter(([k]) => k.trim());
-    onChange(kept.length ? JSON.stringify(Object.fromEntries(kept)) : "");
-  };
-  return (
-    <div className="kv-rows">
-      {rows.map(([k, v], i) => (
-        <div className="kv-row" key={i}>
-          <input type="text" value={k} placeholder="name" aria-label={`${noun} name`}
-                 onChange={(e) => emit(rows.map((r, j) => (j === i ? [e.target.value, r[1]] : r)))} />
-          <input type="text" value={v} placeholder="value" aria-label={`${noun} value`}
-                 onChange={(e) => emit(rows.map((r, j) => (j === i ? [r[0], e.target.value] : r)))} />
-          <button type="button" className="dim" aria-label={`remove ${noun}`}
-                  onClick={() => emit(rows.filter((_, j) => j !== i))}>remove</button>
-        </div>
-      ))}
-      <button type="button" onClick={() => emit([...rows, ["", ""]])}>+ Add {noun}</button>
-    </div>
-  );
-}
-
-function ListFieldEditor({ field, rows, onChange }:
-  { field: ConnectorField; rows: Array<Record<string, string>>; onChange: (r: Array<Record<string, string>>) => void }) {
-  const sub = field.item ?? [];
-  const blank = () => Object.fromEntries(sub.map((sf) => [sf.name, ""]));
-  const setCell = (i: number, name: string, val: string) =>
-    onChange(rows.map((r, j) => (j === i ? { ...r, [name]: val } : r)));
-
-  return (
-    <div className="field">
-      <span className="lbl">{field.name} {field.required && <span className="req">*</span>}</span>
-      <span className="help" style={{ marginTop: 0, marginBottom: 6 }}>{field.help}</span>
-      {rows.length === 0 && <div className="empty" style={{ padding: 10 }}>no rows yet; add one below</div>}
-      {rows.map((row, i) => (
-        <div key={i} className="panel" style={{ padding: 10, marginBottom: 8 }}>
-          <div className="btnrow" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-            <span className="help" style={{ margin: 0 }}>#{i + 1}</span>
-            <button type="button" className="danger" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
-              remove
-            </button>
-          </div>
-          {sub.map((sf) => (
-            <label className="field" key={sf.name} style={{ marginBottom: 6 }}>
-              <span className="lbl" style={{ fontSize: 12 }}>
-                {sf.name} {sf.required && <span className="req">*</span>}
-              </span>
-              <input type={sf.type === "number" ? "number" : "text"} value={row[sf.name] ?? ""}
-                     placeholder={sf.help} className={sf.name === "promql" ? "mono" : undefined}
-                     onChange={(e) => setCell(i, sf.name, e.target.value)} />
-            </label>
-          ))}
-        </div>
-      ))}
-      <button type="button" onClick={() => onChange([...rows, blank()])}>
-        + Add {field.name === "queries" ? "query" : "row"}
-      </button>
-    </div>
-  );
-}
-
-// Prometheus family picker: the metric families (name prefixes) as a scannable, sortable list —
-// count-descending, each with a proportional weight bar so the real systems (pg 373) stand out
-// from the long tail. Groups with only 1–2 metrics fold behind a toggle; select-all/none acts on
-// whatever the filter currently shows.
-function FamilyPicker({ groups, sel, q, setQ, onToggle, onSelect, onIntrospect, busy }: {
-  groups: { prefix: string; count: number }[];
-  sel: Set<string>; q: string; setQ: (v: string) => void;
-  onToggle: (p: string) => void; onSelect: (s: Set<string>) => void;
-  onIntrospect: () => void; busy: boolean;
-}) {
-  const max = groups[0]?.count ?? 1;
-  const bar = (n: number) => Math.max(3, Math.round(100 * Math.log(n + 1) / Math.log(max + 1)));
-  const match = (g: { prefix: string }) => !q || g.prefix.toLowerCase().includes(q.toLowerCase());
-  const shown = groups.filter(match);
-  const main = shown.filter((g) => g.count >= 3);
-  const tail = shown.filter((g) => g.count < 3);
-  const totalMetrics = groups.reduce((n, g) => n + g.count, 0);
-
-  const Row = (g: { prefix: string; count: number }) => (
-    <label key={g.prefix} className="fam-row">
-      <input type="checkbox" checked={sel.has(g.prefix)} onChange={() => onToggle(g.prefix)} />
-      <span className="mono fam-name">{g.prefix}<span className="fam-star">_*</span></span>
-      <span className="fam-bar"><span style={{ width: `${bar(g.count)}%` }} /></span>
-      <span className="fam-count">{g.count}</span>
-    </label>
-  );
-
-  return (
-    <div style={{ marginTop: 10 }}>
-      <p className="subtitle" style={{ marginTop: 0 }}>
-        {totalMetrics.toLocaleString()} metrics across {groups.length} systems; each is one exporter
-        or app. Tick the ones you want to ingest.
-      </p>
-      <div className="btnrow" style={{ marginBottom: 6, alignItems: "center", gap: 8 }}>
-        <input type="text" placeholder="filter systems…" value={q}
-               onChange={(e) => setQ(e.target.value)} style={{ flex: 1, margin: 0 }} />
-        <button type="button" onClick={() => onSelect(new Set([...sel, ...shown.map((g) => g.prefix)]))}>
-          select shown
-        </button>
-        <button type="button" onClick={() => onSelect(new Set())}>clear</button>
-      </div>
-      <div className="fam-list">
-        {main.map(Row)}
-        {tail.length > 0 && (
-          <details style={{ marginTop: 4 }}>
-            <summary className="help" style={{ cursor: "pointer", padding: "4px 6px" }}>
-              {tail.length} smaller {tail.length === 1 ? "group" : "groups"} (1–2 metrics each)
-            </summary>
-            <div style={{ marginTop: 4 }}>{tail.map(Row)}</div>
-          </details>
-        )}
-        {shown.length === 0 && <div className="help" style={{ padding: 8 }}>no systems match “{q}”</div>}
-      </div>
-      <div className="btnrow" style={{ marginTop: 8, alignItems: "center" }}>
-        <button type="button" className="primary" disabled={busy || sel.size === 0} onClick={onIntrospect}>
-          Introspect {sel.size || ""} selected
-        </button>
-        <span className="help" style={{ margin: 0 }}>
-          each becomes one compact query that ingests the whole family
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// Reference connector form: upload documents (json/csv/md/txt), attach per-file labels, and pick
-// which label is the entity key. No manual data entry — files are read client-side into text. The
-// stored source mirrors this list (declarative), so re-opening + adding a file extends it.
-// Module-level (NOT defined inside ReferenceForm): a component defined inside another re-mounts on
-// every parent render, which detaches the <input> mid-dialog and drops the file selection.
-function RefUpload({ onFiles, label }: { onFiles: (f: FileList | null) => void; label: string }) {
-  return (
-    <label style={{ display: "inline-flex", cursor: "pointer" }}>
-      <span className="chip" style={{ padding: "8px 14px" }}>{label}</span>
-      <input type="file" accept=".json,.csv,.md,.txt,.markdown,.text" multiple style={{ display: "none" }}
-             onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
-    </label>
-  );
-}
-
-function ReferenceForm({ attachments, setAttachments }: {
-  attachments: Attachment[]; setAttachments: (fn: (prev: Attachment[]) => Attachment[]) => void;
-}) {
-  // which (attachment, label) pairs are open for editing; a filled label shows read-only + pencil
-  const [editing, setEditing] = useState<Set<string>>(new Set());
-  const openEdit = (id: string, on: boolean) =>
-    setEditing((prev) => { const n = new Set(prev); on ? n.add(id) : n.delete(id); return n; });
-
-  const onFiles = (files: FileList | null) => {
-    Array.from(files ?? []).forEach((f) => {
-      const r = new FileReader();
-      r.onload = () => {
-        const ext = (f.name.split(".").pop() ?? "txt").toLowerCase();
-        const format = ["json", "csv", "md", "txt"].includes(ext) ? ext : (ext === "markdown" ? "md" : "txt");
-        setAttachments((prev) => [...prev,
-          { name: f.name, format, content: String(r.result ?? ""), labels: [] }]);
-      };
-      r.readAsText(f);
-    });
-  };
-  const patch = (i: number, labels: [string, string][]) =>
-    setAttachments((prev) => prev.map((a, j) => (j === i ? { ...a, labels } : a)));
-  const remove = (i: number) => setAttachments((prev) => prev.filter((_, j) => j !== i));
-  const setPair = (i: number, li: number, next: [string, string]) =>
-    patch(i, attachments[i].labels.map((p, j) => (j === li ? next : p)));
-  const addPair = (i: number) => {
-    patch(i, [...attachments[i].labels, ["", ""]]);
-    openEdit(`${i}:${attachments[i].labels.length}`, true);
-  };
-  const delPair = (i: number, li: number) => patch(i, attachments[i].labels.filter((_, j) => j !== li));
-
-  return (
-    <div style={{ marginTop: 4 }}>
-      <span className="lbl" style={{ display: "block" }}>documents</span>
-      <p className="help" style={{ marginTop: 2, marginBottom: 10 }}>
-        Upload json / csv / md / txt files and tag each with the entity's labels (e.g.{" "}
-        <span className="mono">service=tares</span>). Those labels become real Tares labels you
-        can correlate on; and the doc is always attached to that entity, no time window.
-      </p>
-
-      {attachments.length === 0 ? (
-        <div style={{ border: "1px dashed var(--line)", borderRadius: 10, padding: 28,
-                      textAlign: "center", marginBottom: 16 }}>
-          <RefUpload onFiles={onFiles} label="Upload documents" />
-          <div className="help" style={{ marginTop: 10 }}>json · csv · md · txt</div>
-        </div>
-      ) : (
-        <>
-          {attachments.map((a, i) => (
-            <div key={i} className="ref-row">
-              <div className="ref-file">
-                <div className="mono" style={{ fontWeight: 600, wordBreak: "break-all" }}>{a.name}</div>
-                <div className="help" style={{ margin: 0 }}>{a.format} · {a.content.length.toLocaleString()} chars</div>
-              </div>
-              <div className="ref-labels">
-                {a.labels.map(([k, v], li) => {
-                  const id = `${i}:${li}`;
-                  const isEditing = editing.has(id) || !k.trim();
-                  return isEditing ? (
-                    <span key={li} className="ref-pair">
-                      <input type="text" placeholder="label" value={k} style={{ width: 120 }} autoFocus
-                             onChange={(e) => setPair(i, li, [e.target.value, v])} />
-                      <span style={{ opacity: 0.5 }}>=</span>
-                      <input type="text" placeholder="value" value={v} style={{ width: 150 }}
-                             onChange={(e) => setPair(i, li, [k, e.target.value])} />
-                      <button type="button" className="ref-x" title="done" style={{ color: "var(--ok)" }}
-                              onClick={() => openEdit(id, false)}>✓</button>
-                      <button type="button" className="ref-x" title="remove label"
-                              onClick={() => delPair(i, li)}>×</button>
-                    </span>
-                  ) : (
-                    <span key={li} className="chip mono" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      {k}={v || <span className="help" style={{ margin: 0 }}>—</span>}
-                      <button type="button" className="ref-x" title="edit" onClick={() => openEdit(id, true)}>✎</button>
-                    </span>
-                  );
-                })}
-                <button type="button" onClick={() => addPair(i)}>+ label</button>
-              </div>
-              <button type="button" className="linklike ref-remove" onClick={() => remove(i)}>remove</button>
-            </div>
-          ))}
-          <div style={{ marginTop: 4, marginBottom: 4 }}><RefUpload onFiles={onFiles} label="+ Upload more" /></div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Prometheus alerts curation: the configured alerting rules (transparency — read-only), an optional
-// severity filter (opt-out; blank = all), and the pending toggle. Unlike metrics you don't pick
-// individual rules — you ingest all fired alerts, narrowed by severity. The list previews exactly
-// what will be ingested as the severity filter changes.
-function AlertRulesCuration({ rules, severities, sev, onSevToggle, includePending, onIncludePending,
-                              onConfirm, busy, summary }: {
-  rules: AlertRule[]; severities: string[]; sev: Set<string>; onSevToggle: (s: string) => void;
-  includePending: boolean; onIncludePending: (v: boolean) => void;
-  onConfirm: () => void; busy: boolean; summary: string;
-}) {
-  const [q, setQ] = useState("");
-  const shown = rules.filter((r) =>
-    (!sev.size || sev.has(r.severity)) &&
-    (!q || `${r.name} ${r.group}`.toLowerCase().includes(q.toLowerCase())));
-  const stateBadge = (s: string) =>
-    s === "firing" ? <span className="badge" style={{ background: "var(--err-soft)", color: "var(--err)" }}>firing</span>
-    : s === "pending" ? <span className="badge" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>pending</span>
-    : null;
-  return (
-    <div style={{ marginTop: 4 }}>
-      <p className="subtitle" style={{ marginTop: 0 }}>
-        {summary}; you'll ingest these as they fire. Optionally narrow by severity.
-      </p>
-      <div className="btnrow" style={{ marginBottom: 8, alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-        <span className="help" style={{ margin: 0 }}>severity:</span>
-        {severities.map((s) => (
-          <button type="button" key={s} className={sev.has(s) ? "primary" : ""} onClick={() => onSevToggle(s)}>{s}</button>
-        ))}
-      </div>
-      <label className="explore-item" style={{ cursor: "pointer", marginBottom: 8 }}>
-        <input type="checkbox" checked={includePending} style={{ marginRight: 8 }}
-               onChange={(e) => onIncludePending(e.target.checked)} />
-        also ingest <span className="mono" style={{ margin: "0 4px" }}>pending</span> alerts (still waiting out their
-        <span className="mono" style={{ marginLeft: 4 }}>for:</span> duration)
-      </label>
-      <input type="text" placeholder="filter rules…" value={q} onChange={(e) => setQ(e.target.value)}
-             style={{ marginBottom: 6 }} />
-      <div className="fam-list" style={{ maxHeight: 300 }}>
-        {shown.map((r, i) => (
-          <div key={`${r.group}/${r.name}/${r.severity}/${i}`} className="fam-row"
-               style={{ gridTemplateColumns: "minmax(0,1fr) auto auto", cursor: "default" }}>
-            <span className="mono fam-name">{r.name}</span>
-            {r.severity ? <span className="chip">{r.severity}</span> : <span />}
-            {stateBadge(r.state) ?? <span />}
-          </div>
-        ))}
-        {!shown.length && <div className="help" style={{ padding: 8 }}>no rules match</div>}
-      </div>
-      <div className="btnrow" style={{ marginTop: 10, alignItems: "center" }}>
-        <button type="button" className="primary" disabled={busy} onClick={onConfirm}>
-          Ingest {sev.size ? `${[...sev].join(", ")} ` : "all "}alerts →
-        </button>
-        <span className="help" style={{ margin: 0 }}>{shown.length} of {rules.length} rules shown</span>
-      </div>
-    </div>
-  );
-}
-
-// Prometheus metric picker: two tabs (by name pattern / by label) that both add to one shared
-// basket. No PromQL — the user picks metric names; the connector compiles the basket into a single
-// {__name__=~"(a|b|…)"} selector on confirm.
-function MetricBasket({ catalog, basket, onAdd, onRemove, fetchLabelMetrics, onConfirm, busy }: {
-  catalog: { metrics: string[]; labels: string[] };
-  basket: Set<string>;
-  onAdd: (names: string[]) => void;
-  onRemove: (name: string) => void;
-  fetchLabelMetrics: (label: string) => Promise<string[]>;
-  onConfirm: () => void;
-  busy: boolean;
-}) {
-  const [tab, setTab] = useState<"name" | "label">("name");
-  const [nameQ, setNameQ] = useState("");
-  const [labelQ, setLabelQ] = useState("");
-  const [pickedLabel, setPickedLabel] = useState<string>();
-  const [labelMetrics, setLabelMetrics] = useState<string[]>();
-  const [loadingLabel, setLoadingLabel] = useState(false);
-
-  const nameMatches = useMemo(() => {
-    const q = nameQ.trim().toLowerCase();
-    if (!q) return [];
-    const star = q.endsWith("*");
-    const pat = star ? q.slice(0, -1) : q;
-    return catalog.metrics
-      .filter((m) => { const lm = m.toLowerCase(); return star ? lm.startsWith(pat) : lm.includes(pat); })
-      .slice(0, 500);
-  }, [nameQ, catalog.metrics]);
-
-  const labelMatches = useMemo(() => {
-    const q = labelQ.trim().toLowerCase();
-    return catalog.labels.filter((l) => !q || l.toLowerCase().includes(q)).slice(0, 300);
-  }, [labelQ, catalog.labels]);
-
-  const pickLabel = async (l: string) => {
-    setPickedLabel(l); setLoadingLabel(true); setLabelMetrics(undefined);
-    try { setLabelMetrics(await fetchLabelMetrics(l)); } finally { setLoadingLabel(false); }
-  };
-
-  const ResultList = ({ items }: { items: string[] }) => (
-    <>
-      <div className="btnrow" style={{ margin: "6px 0", alignItems: "center" }}>
-        <button type="button" disabled={!items.length} onClick={() => onAdd(items)}>
-          add all {items.length}
-        </button>
-        <span className="help" style={{ margin: 0 }}>{items.length} match{items.length === 1 ? "" : "es"}
-          {items.length === 500 ? " (showing first 500; narrow the pattern)" : ""}</span>
-      </div>
-      <div className="fam-list" style={{ maxHeight: 240 }}>
-        {items.map((m) => (
-          <label key={m} className="fam-row" style={{ gridTemplateColumns: "auto minmax(0,1fr) auto" }}>
-            <input type="checkbox" checked={basket.has(m)}
-                   onChange={() => (basket.has(m) ? onRemove(m) : onAdd([m]))} />
-            <span className="mono fam-name">{m}</span>
-            {basket.has(m) && <span className="badge ok">added</span>}
-          </label>
-        ))}
-      </div>
-    </>
-  );
-
-  return (
-    <div style={{ marginTop: 4 }}>
-      <p className="subtitle" style={{ marginTop: 0 }}>
-        Choose the metrics to ingest; by name, or by a label they carry. No PromQL to write.
-      </p>
-      <div className="btnrow" style={{ gap: 6, marginBottom: 8 }}>
-        <button type="button" className={tab === "name" ? "primary" : ""} onClick={() => setTab("name")}>
-          By metric name
-        </button>
-        <button type="button" className={tab === "label" ? "primary" : ""} onClick={() => setTab("label")}>
-          By label
-        </button>
-      </div>
-
-      {tab === "name" && (
-        <div>
-          <input type="text" placeholder="type a metric name or prefix; e.g. node_* or clickhouse"
-                 value={nameQ} onChange={(e) => setNameQ(e.target.value)} />
-          {nameQ.trim()
-            ? <ResultList items={nameMatches} />
-            : <p className="help">{catalog.metrics.length.toLocaleString()} metrics available; start typing to filter (append <span className="mono">*</span> for a prefix match)</p>}
-        </div>
-      )}
-
-      {tab === "label" && (
-        <div>
-          <input type="text" placeholder="filter labels; e.g. namespace, service, clickhouse_org"
-                 value={labelQ} onChange={(e) => setLabelQ(e.target.value)} />
-          <div className="fam-list" style={{ maxHeight: 150, marginTop: 6 }}>
-            {labelMatches.map((l) => (
-              <label key={l} className="fam-row" style={{ gridTemplateColumns: "minmax(0,1fr) auto", cursor: "pointer" }}
-                     onClick={(e) => { e.preventDefault(); void pickLabel(l); }}>
-                <span className="mono fam-name">{l}</span>
-                {pickedLabel === l && <span className="badge">selected</span>}
-              </label>
-            ))}
-          </div>
-          {loadingLabel && <p className="help">loading metrics for <span className="mono">{pickedLabel}</span>…</p>}
-          {labelMetrics && !loadingLabel && (
-            <div style={{ marginTop: 8 }}>
-              <p className="help" style={{ margin: 0 }}>
-                metrics carrying <span className="mono">{pickedLabel}</span>:
-              </p>
-              <ResultList items={labelMetrics} />
-            </div>
-          )}
-        </div>
-      )}
-
-      <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-        <div className="btnrow" style={{ alignItems: "center" }}>
-          <strong>{basket.size} metric{basket.size === 1 ? "" : "s"} selected</strong>
-          {basket.size > 0 && (
-            <button type="button" className="linklike" onClick={() => [...basket].forEach(onRemove)}>clear</button>
-          )}
-          <button type="button" className="primary" style={{ marginLeft: "auto" }}
-                  disabled={busy || basket.size === 0} onClick={onConfirm}>
-            Use these {basket.size || ""} metrics →
-          </button>
-        </div>
-        {basket.size > 0 && (
-          <div style={{ maxHeight: 120, overflowY: "auto", marginTop: 6 }}>
-            {[...basket].map((m) => (
-              <span key={m} className="chip mono" style={{ margin: "2px 4px 2px 0", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                {m}
-                <button type="button" onClick={() => onRemove(m)}
-                        style={{ border: "none", background: "none", cursor: "pointer", padding: 0, color: "inherit", fontWeight: 700 }}>×</button>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Prometheus queries rendered compactly: one line per query (a whole-family {__name__=~"fam_.*"}
-// query or a derived series), with a remove button — instead of a fat multi-input panel per row.
-// Full hand-editing stays available via the raw ListFieldEditor in the Advanced group below.
-function PromQueriesView({ rows, onChange }:
-  { rows: Array<Record<string, string>>; onChange: (r: Array<Record<string, string>>) => void }) {
-  const summarize = (q: Record<string, string>) => {
-    if (q.by_name) {
-      // inner of __name__=~"..." → either a single family (prefix_.*) or an (a|b|c) basket
-      const inner = (q.promql?.match(/=~"(.*)"/)?.[1] ?? "").replace(/^\(|\)$/g, "");
-      if (/^[A-Za-z0-9_]+_\.\*$/.test(inner)) {
-        return { icon: "▦", title: inner.replace(/_\.\*$/, "_*"),
-                 note: `whole family${q.exclude ? ` · excludes ${q.exclude}` : ""}` };
-      }
-      const names = inner.split("|").filter(Boolean);
-      return { icon: "▦", title: `${names.length} metric${names.length === 1 ? "" : "s"}`,
-               note: names.slice(0, 4).join(", ") + (names.length > 4 ? ", …" : "") };
-    }
-    return { icon: "ƒ", title: (q.text ?? "").replace(" {key}={val}", "") || q.event_type || "derived",
-             note: q.promql ?? "" };
-  };
-  return (
-    <div className="field">
-      <span className="lbl">metrics to ingest</span>
-      <span className="help" style={{ marginTop: 0, marginBottom: 6 }}>
-        the metrics this source will ingest. Remove anything you don't want, or “change metrics” above.
-      </span>
-      {rows.length === 0 && (
-        <div className="empty" style={{ padding: 10 }}>none yet; run Discover above and pick metrics</div>
-      )}
-      {rows.map((q, i) => {
-        const s = summarize(q);
-        return (
-          <div key={i} className="conn-summary" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <span aria-hidden style={{ opacity: 0.6, flex: "none" }}>{s.icon}</span>
-            <span className="mono" style={{ flex: "none" }}>{s.title}</span>
-            <span className="help" style={{ margin: 0, flex: 1, minWidth: 0, overflow: "hidden",
-                                            textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.note}</span>
-            <button type="button" className="danger" style={{ marginLeft: "auto", flex: "none" }}
-                    onClick={() => onChange(rows.filter((_, j) => j !== i))}>remove</button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Postgres column selection as a checklist (once discover knows the table's columns). Emits the
-// same comma-separated string the API uses: all columns checked -> "" (SELECT *); a subset ->
-// "a,b,c". The cursor/key/time columns are always pulled, so they're shown checked + locked.
-function ColumnPicker({ columns, value, mandatory, onChange }: {
-  columns: string[]; value: string; mandatory: Set<string>; onChange: (v: string) => void;
-}) {
-  const [q, setQ] = useState("");
-  const listed = value.trim()
-    ? new Set(value.split(",").map((s) => s.trim()).filter(Boolean))
-    : null;   // null = "all"
-  const isChecked = (c: string) => mandatory.has(c) || listed === null || listed.has(c);
-  const emit = (checked: Set<string>) => {
-    mandatory.forEach((m) => checked.add(m));
-    onChange(checked.size >= columns.length ? "" : columns.filter((c) => checked.has(c)).join(","));
-  };
-  const toggle = (c: string) => {
-    const checked = new Set(columns.filter(isChecked));
-    checked.has(c) ? checked.delete(c) : checked.add(c);
-    emit(checked);
-  };
-  const nChecked = columns.filter(isChecked).length;
-  const shown = columns.filter((c) => !q || c.toLowerCase().includes(q.toLowerCase()));
-  return (
-    <div>
-      <div className="btnrow" style={{ marginBottom: 6, alignItems: "center" }}>
-        <button type="button" onClick={() => onChange("")}>All</button>
-        <button type="button" onClick={() => emit(new Set())}>None</button>
-        <span className="help">
-          {nChecked}/{columns.length} selected{nChecked >= columns.length ? "; pulls every column" : ""}
-        </span>
-      </div>
-      {columns.length > 8 && (
-        <input type="text" placeholder="filter columns…" value={q}
-               onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 6 }} />
-      )}
-      <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 6, padding: 4 }}>
-        {shown.map((c) => (
-          <label key={c} className="explore-item"
-                 style={{ cursor: mandatory.has(c) ? "default" : "pointer", opacity: mandatory.has(c) ? 0.7 : 1 }}>
-            <input type="checkbox" checked={isChecked(c)} disabled={mandatory.has(c)}
-                   onChange={() => toggle(c)} style={{ marginRight: 8 }} />
-            <span className="mono">{c}</span>
-            {mandatory.has(c) && <span className="badge push" style={{ marginLeft: 8 }} title="cursor/key/time; always pulled">always</span>}
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Table-shaped discover result (postgres): every column with its type, badged with the role the
-// proposal assigns it (cursor / key / label), so the user sees the possible values before applying.
-function ColumnsProposalView({ proposal, onApply }: { proposal: ColumnsProposal; onApply: () => void }) {
-  const cfg = proposal.proposed_config as { cursor_column?: string; key_column?: string;
-                                            labels?: { field?: string }[] };
-  const labelFields = new Set((cfg.labels ?? []).map((l) => l.field).filter(Boolean));
-  const role = (col: string) =>
-    col === cfg.cursor_column ? "cursor" : col === cfg.key_column ? "key"
-      : labelFields.has(col) ? "label" : "";
-  return (
-    <div style={{ marginTop: 12 }}>
-      <p className="subtitle" style={{ marginTop: 0 }}>{proposal.summary}</p>
-      <table>
-        <thead><tr><th>column</th><th style={{ width: 180 }}>type</th><th style={{ width: 90 }}>proposed as</th></tr></thead>
-        <tbody>
-          {proposal.columns.map((c) => (
-            <tr key={c.name}>
-              <td className="mono">{c.name}</td>
-              <td className="help">{c.type}</td>
-              <td>{role(c.name) && <span className="chip">{role(c.name)}</span>}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <button type="button" className="primary" style={{ marginTop: 10 }} onClick={onApply}>
-        Apply to form
-      </button>
-      <span className="help" style={{ marginLeft: 10 }}>
-        fills the fields below; review, Test connection, then Create
-      </span>
-    </div>
-  );
-}
-
-function ProposalView({ proposal, onApply }: { proposal: DiscoverProposal; onApply: () => void }) {
-  const k = proposal.suggested_key;
-  const families = proposal.families ?? [];
-  // group the sampled preview metrics under the family each belongs to, so the preview is one
-  // collapsible block per family rather than one flat dump across all of them
-  const famOf = (name: string) => families.find((f) => name.startsWith(f + "_")) ?? name.split("_")[0];
-  const byFamily = new Map<string, typeof proposal.metrics>();
-  for (const m of proposal.metrics) {
-    const f = famOf(m.name);
-    (byFamily.get(f) ?? byFamily.set(f, []).get(f)!).push(m);
-  }
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div className="field" style={{ marginBottom: 12 }}>
-        <span className="lbl">will ingest</span>
-        <div>
-          {families.map((f) => <span className="chip mono" key={f}>{f}_*</span>)}
-          <span className="help" style={{ marginLeft: 8 }}>
-            {proposal.summary.total_metrics} metrics
-            {families.length > 1 ? ` · ${families.length} families` : ""}
-            {" "}· each family is one query (histogram buckets excluded)
-          </span>
-        </div>
-      </div>
-
-      <div className="field" style={{ marginBottom: 12 }}>
-        <span className="lbl">entity key</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          <div>
-            <span className="chip mono">{k.name}</span>
-            <span className="help" style={{ marginLeft: 8 }}>
-              {k.cardinality} distinct {k.cardinality === 1 ? "entity" : "entities"}
-            </span>
-          </div>
-          {k.values_preview.length > 0 && (
-            <span className="help" style={{ margin: 0 }}>
-              e.g. {k.values_preview.slice(0, 5).join(", ")}{k.cardinality > 5 ? ", …" : ""}
-            </span>
-          )}
-          {k.alternatives.length > 0 && (
-            <span className="help" style={{ margin: 0 }}>or key on: {k.alternatives.join(", ")}</span>
-          )}
-        </div>
-      </div>
-
-      <div className="field" style={{ marginBottom: 12 }}>
-        <span className="lbl">preview</span>
-        <div>
-          {[...byFamily].map(([f, ms]) => (
-            <details key={f} style={{ marginBottom: 4 }}>
-              <summary className="help" style={{ cursor: "pointer", padding: "2px 0" }}>
-                <span className="mono">{f}_*</span> · {ms.length} sampled
-              </summary>
-              <div style={{ maxHeight: 220, overflowY: "auto", margin: "6px 0 6px 16px" }}>
-                <table>
-                  <thead><tr><th>metric</th><th style={{ width: 84 }}>type</th><th>detail</th></tr></thead>
-                  <tbody>
-                    {ms.map((m) => (
-                      <tr key={m.name}>
-                        <td className="mono">{m.name}</td>
-                        <td><span className="chip">{m.type}</span></td>
-                        <td className="help">{m.help || m.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          ))}
-        </div>
-      </div>
-
-      {proposal.derived_suggestions.length > 0 && (
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span className="lbl">derived series</span>
-          <span className="help" style={{ marginTop: 0, marginBottom: 6 }}>
-            extra computed series added alongside the raw metrics
-          </span>
-          {proposal.derived_suggestions.map((d) => (
-            <div key={d.id} style={{ marginBottom: 4 }}>
-              <span className="chip">{d.label}</span>
-              <span className="help" style={{ marginLeft: 8 }}>{d.reason}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {proposal.proposed_labels.length > 0 && (
-        <div className="field" style={{ marginBottom: 12 }}>
-          <span className="lbl">labels</span>
-          <div>{proposal.proposed_labels.map((l) => <span className="chip mono" key={l}>{l}</span>)}</div>
-        </div>
-      )}
-
-      <button type="button" className="primary" onClick={onApply}>Apply to form</button>
-      <span className="help" style={{ marginLeft: 10 }}>
-        fills the fields below; review, Test connection, then Create
-      </span>
-    </div>
-  );
 }

@@ -25,7 +25,7 @@ import { changeOf, DiffText, JsonText, looksLikeDiff } from "./codeColours";
 const GROUP_AT = 3;
 const NEAR_BOTTOM = 48;
 const MUTED = "text-xs text-muted-foreground";
-const DARK = "bg-[#1e0f00] text-[#efeddb]";
+const DARK = "bg-[var(--code-dark-bg)] text-[color:var(--code-dark-ink)]";
 
 type Row =
   | { kind: "item"; item: ConvoItem; key: string }
@@ -133,7 +133,7 @@ function Prose({ text }: { text: string }) {
 function Copy({ text }: { text: string }) {
   const [done, setDone] = React.useState(false);
   return (
-    <button type="button" className="h-auto! min-h-0! border border-border bg-card px-1.5! py-0.5! text-[11px]! leading-tight! text-foreground"
+    <button type="button" className="h-auto min-h-0 border border-border bg-card px-1.5 py-0.5 text-[11px] leading-tight text-foreground"
             onClick={() => {
               const w = navigator.clipboard?.writeText(text);
               if (w) w.then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => undefined);
@@ -175,7 +175,7 @@ function Block({ label, text, testid, look, copy, extra }: { label: React.ReactN
 function Mark({ ok, children }: { ok: boolean; children: React.ReactNode }) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] normal-case tracking-normal",
-      ok ? "text-[color:var(--ok)]" : "text-[color:var(--err)]")} data-testid="tool-mark" data-ok={ok ? "true" : "false"}>
+      ok ? "text-ok" : "text-err")} data-testid="tool-mark" data-ok={ok ? "true" : "false"}>
       <span aria-hidden className="inline-block size-1.5 bg-current" />{children}
     </span>
   );
@@ -183,8 +183,8 @@ function Mark({ ok, children }: { ok: boolean; children: React.ReactNode }) {
 
 /** Formatted or Raw: the view built for the tool, or the call's input and output as they came. */
 function Switch({ raw, setRaw }: { raw: boolean; setRaw: (raw: boolean) => void }) {
-  const btn = (on: boolean) => cn("h-auto! min-h-0! border-0! px-2! py-0.5! font-mono text-[11px]! leading-tight!",
-    on ? "bg-foreground! text-background!" : "bg-card! text-muted-foreground!");
+  const btn = (on: boolean) => cn("h-auto min-h-0 border-0 px-2 py-0.5 text-[11px] leading-tight",
+    on ? "bg-foreground text-background" : "bg-card text-muted-foreground");
   return (
     <span className="inline-flex border border-border" role="group" aria-label="How to show the call" data-testid="tool-switch">
       <button type="button" className={btn(!raw)} aria-pressed={!raw} onClick={() => setRaw(false)} data-testid="tool-formatted">Formatted</button>
@@ -246,7 +246,7 @@ function OutputPart({ output, loading, missed, label = "Output", mark, text }: {
     <>
       <Block label={<>{rest(loading, label)}{mark}</>} text={shown} copy={output} testid="tool-output"
              look={looksLikeDiff(shown) ? "diff" : "plain"} />
-      {missed && <p className="m-0 px-3 pb-3 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the output did not load.</p>}
+      {missed && <p className="m-0 px-3 pb-3 text-xs text-err" data-testid="tool-output-missed">The rest of the output did not load.</p>}
     </>
   );
 }
@@ -268,7 +268,7 @@ function BashView({ t, input, output, loading, missed, toggle }: ViewArgs) {
       )}
       <Section label="Command" right={<>{!description && toggle}<Copy text={t.input} /></>}>
         <pre data-words-exempt data-testid="tool-command" className={PRE}>
-          <span aria-hidden className="select-none text-[color:var(--kit-accent)]">$ </span>{command}
+          <span aria-hidden className="select-none text-brand">$ </span>{command}
         </pre>
       </Section>
       <OutputPart output={output} loading={loading} missed={missed} mark={mark} text={ended?.text} />
@@ -298,9 +298,9 @@ function PlanView({ t, input, output, loading, missed, toggle }: ViewArgs) {
     <>
       <Section label="Plan" right={<>{toggle}<Copy text={t.input} /></>} testid="tool-plan">
         <div className="mb-2 h-1 border border-border bg-muted" role="img" aria-label={`${done} of ${plan.length} done`}>
-          <i className="block h-full bg-[var(--ok)]" style={{ width: `${Math.round((done / plan.length) * 100)}%` }} />
+          <i className="block h-full bg-ok" style={{ width: `${Math.round((done / plan.length) * 100)}%` }} />
         </div>
-        <ul className="m-0 grid list-none gap-1.5 p-0 pl-0! text-sm" data-words-exempt>
+        <ul className="m-0 grid list-none gap-1.5 p-0 pl-0 text-sm" data-words-exempt>
           {plan.map((s, i) => {
             const isDone = s.status === "completed";
             const now = s.status === "in_progress";
@@ -308,7 +308,7 @@ function PlanView({ t, input, output, loading, missed, toggle }: ViewArgs) {
               <li key={i} className={cn("grid grid-cols-[18px_minmax(0,1fr)] items-start gap-2 [overflow-wrap:anywhere]",
                 isDone && "text-muted-foreground line-through", now && "font-semibold")} data-testid="plan-step" data-status={s.status || "pending"}>
                 <span aria-hidden className={cn("mt-[3px] inline-block size-3.5 border-[1.5px]",
-                  isDone ? "border-[var(--ok)] bg-[var(--ok)]" : now ? "border-[var(--kit-accent)] bg-[var(--accent-soft)]" : "border-muted-foreground")} />
+                  isDone ? "border-ok bg-ok" : now ? "border-brand bg-brand-soft" : "border-muted-foreground")} />
                 <span>{s.content}{now && <small className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-wide text-muted-foreground">now</small>}</span>
               </li>
             );
@@ -333,8 +333,8 @@ function AgentView({ t, input, output, loading, missed, toggle }: ViewArgs) {
         <p className="m-0 px-3 pb-3 text-xs text-muted-foreground" data-testid="tool-no-result">No report yet.</p>
       ) : (
         <Section label={<>{rest(loading, "Report")}{mark}</>} right={<Copy text={output} />} testid="tool-report">
-          <div className="max-h-96 overflow-auto border-l-2 border-border pl-3 text-sm" data-words-exempt><Prose text={output} /></div>
-          {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the report did not load.</p>}
+          <div className="max-h-96 overflow-auto border-l border-border pl-3 text-sm" data-words-exempt><Prose text={output} /></div>
+          {missed && <p className="m-0 mt-2 text-xs text-err" data-testid="tool-output-missed">The rest of the report did not load.</p>}
         </Section>
       )}
     </>
@@ -359,7 +359,7 @@ function MessageView({ t, input, output, loading, missed, toggle }: ViewArgs) {
   return (
     <>
       <Section label="Message" right={<>{toggle}<Copy text={t.input} /></>} testid="tool-message">
-        <div className="border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-sm dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]"
+        <div className="border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-brand-soft px-3 py-2 text-sm dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]"
              data-words-exempt><Prose text={message} /></div>
       </Section>
       {t.failed && <OutputPart output={output} loading={loading} missed={missed} mark={<Mark ok={false}>not sent</Mark>} />}
@@ -404,7 +404,7 @@ function ReadView({ t, input, output, loading, missed, toggle }: ViewArgs) {
           <pre data-words-exempt data-testid="tool-output" data-look="plain" className={PRE}>{output || " "}</pre>
         )}
         {t.failed && <div className="mt-1"><Mark ok={false}>failed</Mark></div>}
-        {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the file did not load.</p>}
+        {missed && <p className="m-0 mt-2 text-xs text-err" data-testid="tool-output-missed">The rest of the file did not load.</p>}
       </Section>
     </>
   );
@@ -466,7 +466,7 @@ function MatchesView({ t, input, output, loading, missed, toggle }: ViewArgs) {
       {m.files.length === 0 ? (
         <p className="m-0 text-sm text-muted-foreground" data-testid="matches-none">No files matched.</p>
       ) : (
-        <ul className="m-0 grid max-h-72 list-none gap-0.5 overflow-auto p-0 pl-0! font-mono text-xs" data-words-exempt>
+        <ul className="m-0 grid max-h-72 list-none gap-0.5 overflow-auto p-0 pl-0 font-mono text-xs" data-words-exempt>
           {m.files.map((f, i) => (
             <li key={i} className="flex min-w-0 justify-between gap-3" data-testid="match-file">
               <span className="min-w-0 truncate" title={f.path}>{strip ? f.path.slice(base.length + 1) : f.path}</span>
@@ -476,7 +476,7 @@ function MatchesView({ t, input, output, loading, missed, toggle }: ViewArgs) {
         </ul>
       )}
       {(m.cut || (t.more && !loading && output === t.output)) && <p className="m-0 mt-1 text-xs text-muted-foreground">The list goes on past these.</p>}
-      {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the list did not load.</p>}
+      {missed && <p className="m-0 mt-2 text-xs text-err" data-testid="tool-output-missed">The rest of the list did not load.</p>}
     </Section>
   );
 }
@@ -526,13 +526,13 @@ function ToolCard({ t, open, onToggle, loadFull }: {
   const note = shaped && input && shaped.note ? shaped.note(t, input, output) : "";
   const meta = [took(t.ms), hm(t.at)].filter(Boolean).join(" · ");
   return (
-    <div className={cn("border bg-card", t.failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-card"
+    <div className={cn("border bg-card", t.failed ? "border-err" : "border-border")} data-testid="tool-card"
          data-failed={t.failed ? "true" : "false"} data-tool={t.name}>
       <button type="button" className="block w-full min-w-0 px-2.5 py-2 text-left" aria-expanded={open}
               onClick={onToggle} data-testid="tool-head">
         <span className="flex w-full min-w-0 items-center gap-2">
         <span className={cn("inline-flex size-6 shrink-0 items-center justify-center border",
-          t.failed ? "border-[var(--err)] text-[color:var(--err)]" : "border-border text-muted-foreground")}>
+          t.failed ? "border-err text-err" : "border-border text-muted-foreground")}>
           <ToolIcon name={t.name} />
         </span>
         <span className="max-w-[45%] shrink-0 truncate font-mono text-[13px] font-semibold" data-words-exempt data-testid="tool-title">{title}</span>
@@ -540,7 +540,7 @@ function ToolCard({ t, open, onToggle, loadFull }: {
               data-words-exempt data-testid="tool-summary">{t.summary}{note && <span className="text-muted-foreground" data-testid="tool-note"> · {note}</span>}</span>
         {tag && <span className="shrink-0 border border-border px-1.5 font-mono text-[10.5px]" data-words-exempt data-testid="tool-tag">{tag}</span>}
         {t.failed && (
-          <span className="shrink-0 border border-[var(--err)] px-1.5 font-mono text-[10px] uppercase text-[color:var(--err)]"
+          <span className="shrink-0 border border-err px-1.5 font-mono text-[10px] uppercase text-err"
                 data-testid="tool-failed">Failed</span>
         )}
         {t.output === null && <span className={cn(MUTED, "shrink-0")}>no answer yet</span>}
@@ -573,7 +573,7 @@ function Group({ tools, openAll, opened, toggle, loadFull }: {
   // a card the reader opened keeps its group open when a refresh folds it into one
   const shown = open || openAll || tools.some((t) => opened.has(t.id));
   return (
-    <div className={cn("border bg-card", failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-group">
+    <div className={cn("border bg-card", failed ? "border-err" : "border-border")} data-testid="tool-group">
       <button type="button" className="block w-full min-w-0 px-2.5 py-2 text-left" aria-expanded={shown}
               onClick={() => setOpen(!open)} data-testid="group-head">
         <span className="flex w-full min-w-0 items-center gap-2">
@@ -582,7 +582,7 @@ function Group({ tools, openAll, opened, toggle, loadFull }: {
         </span>
         <span className="shrink-0 font-mono text-[13px] font-semibold">Ran {tools.length} tools</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" data-words-exempt>{names.join(", ")}</span>
-        {failed > 0 && <span className="shrink-0 border border-[var(--err)] px-1.5 font-mono text-[10px] uppercase text-[color:var(--err)]">{failed} failed</span>}
+        {failed > 0 && <span className="shrink-0 border border-err px-1.5 font-mono text-[10px] uppercase text-err">{failed} failed</span>}
         {span.length > 0 && <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground sm:inline">{[...new Set(span)].join("-")}</span>}
         {shown ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
         </span>
@@ -686,7 +686,7 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
               <div key={r.key} className="ml-auto flex max-w-[88%] justify-end" data-testid="bubble-asked">
                 <div className="min-w-0 text-right">
                   <div className="mb-1 font-mono text-[11px] text-muted-foreground"><span data-user-text>{it.from}</span>{hm(it.at) ? ` · ${hm(it.at)}` : ""}</div>
-                  <div className="inline-block max-w-full border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-left text-sm text-foreground dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]" data-user-text><Prose text={it.text} /></div>
+                  <div className="inline-block max-w-full border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-brand-soft px-3 py-2 text-left text-sm text-foreground dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]" data-user-text><Prose text={it.text} /></div>
                 </div>
               </div>
             );
@@ -696,7 +696,7 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-1.5">
         {follow ? (
           <span className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground" data-testid="conversation-following">
-            <span aria-hidden className="inline-block size-1.5 bg-[var(--ok)]" /> Following live, newest at the bottom
+            <span aria-hidden className="inline-block size-1.5 bg-ok" /> Following live, newest at the bottom
           </span>
         ) : (
           <button type="button" className="linklike text-[12px]" onClick={() => { setFollow(true); const el = box.current; if (el) el.scrollTop = el.scrollHeight; }}

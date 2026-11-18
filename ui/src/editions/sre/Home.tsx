@@ -5,7 +5,7 @@ import { ApiError } from "../../api";
 import { useEdition } from "../edition";
 
 import {
-  Banner, Button, EmptyState, ListSection, ServiceRows, Skeleton, type ServiceRowItem,
+  Banner, Button, Collapse, EmptyState, ListSection, Loading, type ServiceRowItem, ServiceRows, Skeleton, SkeletonLines,
 } from "../../components/edition";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { useSample } from "../sample";
@@ -76,36 +76,37 @@ function Columns({ main, aside }: { main: React.ReactNode; aside: React.ReactNod
 function Head({ title, sub }: { title: React.ReactNode; sub?: string }) {
   return (
     <div className="min-w-0">
-      <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!" data-testid="home-headline" data-user-text>{title}</h1>
-      {sub ? <p className="m-0! max-w-[720px] text-[15px] text-muted-foreground" data-testid="home-sub" data-user-text>{sub}</p> : null}
+      <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]" data-testid="home-headline" data-user-text>{title}</h1>
+      {sub ? <p className="m-0 max-w-[720px] text-[15px] text-muted-foreground" data-testid="home-sub" data-user-text>{sub}</p> : null}
     </div>
   );
 }
 
-function Loading() {
+function HomeSkeleton() {
+  // What loads: a rule and rows, as the sections are (TR-1274).
   const box = (rows: number, key: string) => (
-    <div key={key} className="border border-border bg-card p-4">
+    <div key={key} className="border-t border-border pt-3">
       {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="28%" /><Skeleton width="60%" /><Skeleton width="42%" /></div>
+        <SkeletonLines key={i} widths={["28%", "60%", "42%"]} className="pb-4 pt-1" />
       ))}
     </div>
   );
   return (
-    <div className="grid gap-6 md:gap-8" role="status" aria-busy="true" aria-label="Loading" data-testid="home-loading">
+    <Loading className="grid gap-6 md:gap-8" data-testid="home-loading">
       <StartChecklistLoading title={START_TITLE} />
       <div className="grid gap-2"><Skeleton width="40%" height={28} /><Skeleton width="60%" height={14} /></div>
       <Columns main={[box(3, "a"), box(3, "b")]} aside={[box(2, "c"), box(1, "d")]} />
-    </div>
+    </Loading>
   );
 }
 
 function ServicesBox({ home }: { home: SreHome }) {
   const rows = home.services.slice(0, SERVICES_SHOWN);
   return (
-    <ListSection title="Services" aside={home.services_from_words ? <span data-user-text>{home.services_from_words}</span> : undefined} data-testid="home-services">
+    <ListSection paper title="Services" aside={home.services_from_words ? <span data-user-text>{home.services_from_words}</span> : undefined} data-testid="home-services">
       <ServiceRows rows={rows.map(asRow)} />
       {home.services.length > SERVICES_SHOWN && (
-        <div className="border-t border-border px-[18px] py-3 text-[13px]">
+        <div className="border-t border-border py-3 text-[13px]">
           <Link to="/services" className="text-foreground underline underline-offset-2" data-testid="all-services">All {plural(home.services.length, "service")}</Link>
         </div>
       )}
@@ -117,8 +118,8 @@ function Today({ home }: { home: SreHome }) {
   const t = home.today;
   const quiet = t.quiet >= t.checks ? "all quiet" : `all quiet but ${t.checks - t.quiet}`;
   return (
-    <ListSection title="Today" data-testid="home-today">
-      <div className="grid gap-3 p-[18px]">
+    <ListSection paper title="Today" data-testid="home-today">
+      <div className="grid gap-3 py-3">
         <div className="grid grid-cols-2 gap-4">
           <div><div className="text-[22px] font-semibold leading-tight">{t.checks}</div><div className="text-[13px] text-muted-foreground">{t.checks === 1 ? "check" : "checks"}, {quiet}</div></div>
           <div><div className="text-[22px] font-semibold leading-tight">{t.investigated}</div><div className="text-[13px] text-muted-foreground">investigated</div></div>
@@ -217,7 +218,7 @@ export default function Home() {
     </Banner>
   );
 
-  if (!home) return banner ? <div className="grid gap-6" data-testid="sre-home">{banner}</div> : <div data-testid="sre-home"><Loading /></div>;
+  if (!home) return banner ? <div className="grid gap-6" data-testid="sre-home">{banner}</div> : <div data-testid="sre-home"><HomeSkeleton /></div>;
 
   const canAct = home.can_act !== false;
   const isNew = home.headline.tone === "new";
@@ -229,13 +230,13 @@ export default function Home() {
         <IncidentCard key={i.id} incident={i} busy={busy} canAct={canAct} onPickUp={(id) => change(id, "on_it")} onResolve={(id) => change(id, "resolved")} />
       ))}
       {home.incidents_more > 0 && (
-        <p className="m-0! text-[13px]"><Link to="/incidents" className="text-foreground underline underline-offset-2" data-testid="incidents-more">{home.incidents_more} more open</Link></p>
+        <p className="m-0 text-[13px]"><Link to="/incidents" className="text-foreground underline underline-offset-2" data-testid="incidents-more">{home.incidents_more} more open</Link></p>
       )}
     </>
   );
 
   const main = isNew ? (
-    <div className="border border-border bg-card" data-testid="home-empty">
+    <div className="border-t border-border" data-testid="home-empty">
       <EmptyState
         title="No services yet"
         action={<Button asChild><Link to={SETUP_TO} data-testid="connect-link">Connect</Link></Button>}
@@ -255,17 +256,13 @@ export default function Home() {
     <>
       {home.on_watch.length > 0 && <OnWatch items={home.on_watch} notesGoTo={home.notes_go_to} />}
       {home.watch.on && <Today home={home} />}
-      <BlindSpots items={home.blind_spots} />
-      <Tools items={home.tools} />
+      <BlindSpots paper items={home.blind_spots} />
+      <Tools paper items={home.tools} />
     </>
   );
 
-  return (
-    <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
-      {banner}
-      {!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}
-      {failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}
-      {failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
+  const start = (
+    <>
       {home.start?.show && (
         <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={canAct ? doStart : undefined} doing={doing} notice={startNote}
                         hide={sample ? () => Promise.resolve() : undefined} />
@@ -274,8 +271,21 @@ export default function Home() {
         <StartChecklistHidden block={home.start} title={START_TITLE} onShown={reload}
                               show={sample ? () => Promise.resolve() : undefined} />
       )}
+    </>
+  );
+  // An open incident is why the on-call reader came: it goes first and setup waits below it (TR-1272).
+  const firing = home.incidents.length > 0;
+
+  return (
+    <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
+      {banner}
+      <Collapse>{!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}</Collapse>
+      <Collapse>{failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}</Collapse>
+      <Collapse>{failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}</Collapse>
+      {!firing && start}
       <Head title={home.headline.text} sub={home.headline.sub} />
       <Columns main={main} aside={aside} />
+      {firing && start}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useToast } from "../../components/edition";
+import { EmptyState, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { decideCall, type FactoryProjectData, type PastCall, type ProjectCall } from "./FactoryProject.api";
 import { CallRow } from "./FactoryProject";
@@ -12,11 +12,13 @@ import { PageHead, ProjectShell } from "./ProjectShell";
 // Waiting for you on the project page and Home show a short item that links here.
 
 const MUTED = "text-xs text-muted-foreground";
-const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
+// On the paper (TR-1266): a 1px rule over each section's head, rules between the calls, no cards.
+const HEAD = "mb-2.5 border-t border-border pt-3";
+const ROW = "border-b border-border py-3 last:border-b-0";
 
 function PastRow({ c }: { c: PastCall }) {
   return (
-    <div className={cn(CARD, "px-5 py-4")} data-testid="call-past" data-ref={c.ref}>
+    <div className={ROW} data-testid="call-past" data-ref={c.ref}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <div className="flex min-w-0 items-baseline gap-2.5">
           <span className="font-mono text-xs font-medium">{c.ref}</span>
@@ -24,11 +26,11 @@ function PastRow({ c }: { c: PastCall }) {
         </div>
         <div className={cn(MUTED, "whitespace-nowrap")}>{c.state === "kept" ? "Kept" : "Changed"}{c.decided && `, ${c.decided}`}</div>
       </div>
-      <div className={cn("mt-1.5 border-l-[3px] pl-3 [overflow-wrap:anywhere]",
-                         c.state === "kept" ? "border-[color:var(--accent)] font-medium" : "border-border text-muted-foreground line-through")}
+      <div className={cn("mt-1.5 [overflow-wrap:anywhere]",
+                         c.state === "kept" ? "font-medium" : "text-muted-foreground line-through")}
            data-user-text>{c.choice}</div>
       {c.state === "overturned" && c.words && (
-        <div className="mt-1.5 border-l-[3px] border-[color:var(--accent)] pl-3 font-medium [overflow-wrap:anywhere]" data-testid="call-past-words">
+        <div className="mt-1.5 font-medium [overflow-wrap:anywhere]" data-testid="call-past-words">
           <span className="font-normal text-muted-foreground">You said: </span><span data-user-text>{c.words}</span>
         </div>
       )}
@@ -52,18 +54,18 @@ function Calls({ d, reload }: { d: FactoryProjectData; reload: () => void }) {
       <div className="grid gap-4">
         <PageHead title="Decisions and calls" />
         <DecisionTabs d={d} on="calls" />
-        <p className="m-0! text-xs text-muted-foreground">What the crew decided on <span data-user-text>{d.name}</span> without you, so the work did not stop.</p>
+        <p className="m-0 text-xs text-muted-foreground">What the crew decided on <span data-user-text>{d.name}</span> without you, so the work did not stop.</p>
       </div>
-      <section className="grid gap-3" aria-label="To confirm" data-testid="calls-open">
-        <h2 className="m-0! text-base! font-semibold!">To confirm</h2>
+      <section className="min-w-0" aria-label="To confirm" data-testid="calls-open">
+        <div className={HEAD}><h2 className="m-0 text-base font-semibold">To confirm</h2></div>
         {open.length === 0 ? (
-          <div className={cn(CARD, "px-5 py-4 text-muted-foreground")} data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</div>
-        ) : open.map((c) => <div key={c.ref} className={CARD}><CallRow c={c} onDecide={decide} /></div>)}
+          <EmptyState data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</EmptyState>
+        ) : <div>{open.map((c) => <CallRow key={c.ref} c={c} onDecide={decide} />)}</div>}
       </section>
       {past.length > 0 && (
-        <section className="grid gap-3" aria-label="Already confirmed" data-testid="calls-past">
-          <h2 className="m-0! text-base! font-semibold!">Kept or changed</h2>
-          {past.map((c) => <PastRow key={c.ref} c={c} />)}
+        <section className="min-w-0" aria-label="Already confirmed" data-testid="calls-past">
+          <div className={HEAD}><h2 className="m-0 text-base font-semibold">Kept or changed</h2></div>
+          <div>{past.map((c) => <PastRow key={c.ref} c={c} />)}</div>
         </section>
       )}
     </div>

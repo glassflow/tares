@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
 
 import { Button, Input, ListSection, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
@@ -38,8 +37,8 @@ export default function FactoryNewProject() {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-new-project">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">New project</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">New project</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">
           A project starts as a spec you write with Claude Code, in the repo it builds on.
         </p>
       </div>
@@ -50,16 +49,16 @@ export default function FactoryNewProject() {
           <div className="grid gap-1.5">
             <div className="text-[13px] font-semibold">In a terminal, in the repo the project builds on</div>
             <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
-              <code className="min-w-0 flex-1 border border-border bg-[var(--input-bg)] px-3 py-2 font-mono text-[13px] [overflow-wrap:anywhere]"
+              <code className="min-w-0 flex-1 border border-border bg-field px-3 py-2 font-mono text-[13px] [overflow-wrap:anywhere]"
                     data-testid="new-project-command">{command}</code>
               <Button type="button" onClick={copy} data-testid="new-project-copy">Copy the command</Button>
             </div>
-            <p className={cn("m-0!", MUTED)}>For a project across several repos, use the folder that holds them.</p>
+            <p className={cn("m-0", MUTED)}>For a project across several repos, use the folder that holds them.</p>
           </div>
         </div>
       </ListSection>
       <ListSection title="What happens next" data-testid="new-project-next">
-        <ol className="m-0! grid list-decimal gap-1.5 py-4 pl-9! pr-4 text-[14px]">
+        <ol className="m-0 grid list-decimal gap-1.5 py-4 pl-9 pr-4 text-[14px]">
           {NEXT.map((s) => <li key={s}>{s}</li>)}
         </ol>
       </ListSection>

@@ -25,7 +25,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8381);
@@ -159,7 +159,8 @@ async function waitFor(url, tries = 100) {
          && (await raw(page.getByTestId("connected-tares").getByTestId("tag-built_in"))) === "Built in");
       const look = (loc) => loc.evaluate((el) => { const c = getComputedStyle(el); return { family: c.fontFamily, upper: c.textTransform, border: c.borderTopColor, width: c.borderTopWidth, color: c.color }; });
       const [tagLook, headLook] = [await look(page.getByTestId("connected-linear").getByTestId("tag-default")), await look(page.getByTestId("connected").locator("h2"))];
-      ck("tags and section heads are small mono capitals", /mono/i.test(tagLook.family) && tagLook.upper === "uppercase" && /mono/i.test(headLook.family) && headLook.upper === "uppercase", JSON.stringify([tagLook, headLook]));
+      // a tag is a label in small mono capitals; a section head is a heading, so sans and as written (TR-1270)
+      ck("tags are small mono capitals, section heads are sans and as written", /mono/i.test(tagLook.family) && tagLook.upper === "uppercase" && !/mono/i.test(headLook.family) && headLook.upper === "none", JSON.stringify([tagLook, headLook]));
       const [editLook, makeLook, removeLook] = [await look(page.getByTestId("connected-linear").getByTestId("action-edit")), await look(page.getByTestId("connected-tares").getByTestId("action-make_default")), await look(page.getByTestId("connected-github").getByTestId("action-remove"))];
       ck("Make default is a bordered button, Remove has a red border and red words, Edit settings the dark border", makeLook.width === "1px" && removeLook.width === "1px" && editLook.width === "1px"
         && removeLook.border !== makeLook.border && editLook.border !== makeLook.border && removeLook.color !== makeLook.color, JSON.stringify([editLook, makeLook, removeLook]));

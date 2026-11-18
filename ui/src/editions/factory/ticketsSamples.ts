@@ -4,6 +4,7 @@
 // counts the same invented tickets, so the filters, the layouts and Show more all work on it.
 
 import type { FactoryTicketsData, StateKey, TicketRow, TicketsQuery } from "./FactoryTickets.api";
+import { ageWords, MIN } from "../../lib/time";
 
 const NOW = "2026-11-02T10:00:00+00:00";
 const REPO = "example-org/docs-site";
@@ -80,15 +81,7 @@ function assigneeOf(n: number): [TicketRow["assignee"], string | null] {
   return [PEOPLE[n % PEOPLE.length], null];
 }
 
-function ago(m: number): string {
-  if (m < 1) return "just now";
-  const one = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"} ago`;
-  if (m < 60) return one(m, "minute");
-  if (m < 1440) return one(Math.floor(m / 60), "hour");
-  if (m < 10080) return one(Math.floor(m / 1440), "day");
-  if (m < 43200) return one(Math.floor(m / 10080), "week");
-  return one(Math.floor(m / 43200), "month");
-}
+const ago = (m: number) => ageWords(m * MIN);
 
 function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number> } {
   const rows: TicketRow[] = [];

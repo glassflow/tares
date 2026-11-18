@@ -30,7 +30,7 @@ const path = require("path");
 const vm = require("vm");
 
 const UI_DIR = path.resolve(__dirname, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const ts = require(path.join(UI_DIR, "node_modules", "typescript"));
 const { checkWords, expectOneCall } = require("./words.cjs");
 const { startDaemon } = require("./licensed.cjs");

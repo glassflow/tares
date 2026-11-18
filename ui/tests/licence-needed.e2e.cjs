@@ -24,10 +24,8 @@
  * Needs: tares importable by the python at TARES_E2E_PY (default: the repo .venv, else python3). TARES_E2E_CHROME points Playwright at another Chrome binary when
  * its own browser download is missing.
  */
-const path = require("path");
 
-const UI_DIR = path.resolve(__dirname, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { startDaemon } = require("./licensed.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8816);

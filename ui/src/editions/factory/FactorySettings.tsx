@@ -6,12 +6,13 @@ import { licenceWordsOn, slugFromHost, useCloud, useWorkspaceOverview } from "..
 import LicencePanel from "../../components/LicencePanel";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
-import {
-  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock, ProvidersPanel,
-  TerseSettings, TracingPanel, useAccessData,
-} from "../../pages/Security";
-import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
-import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
+import { AgentLimitsPanel, CLOUD_BACK, McpToolsPanel } from "../../pages/Security";
+import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
+import WorkspaceSettings, { TeamPanel } from "../settings/WorkspacePanels";
+import { TracingPanel } from "../settings/TracingPanel";
+import { ProvidersPanel } from "../settings/ProvidersPanel";
+import { ApiKeysPanel } from "../settings/ApiKeysPanel";
+import { Banner, Button, Collapse, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
 import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
@@ -37,8 +38,7 @@ const SAVE_FAILED = "That change was not saved. Try again in a moment.";
 
 const ROW_TEXT = "min-w-0 flex-[1_1_320px]";
 const HEAD = "flex items-center justify-between gap-3 border-b border-border bg-muted px-4 py-3";
-const CHOICE = "flex! w-full items-start gap-3 border-0! border-b! border-border! bg-transparent! px-4! py-3.5! text-left font-normal! text-foreground! cursor-pointer disabled:cursor-not-allowed hover:bg-[var(--row-hover)]! last:border-b-0!";
-const LINK_BTN = "border-0! bg-transparent! p-0! text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline! cursor-pointer";
+const CHOICE = "flex w-full items-start gap-3 border-0 border-b border-border bg-transparent px-4 py-3.5 text-left font-normal text-foreground cursor-pointer disabled:cursor-not-allowed hover:bg-row-hover last:border-b-0";
 
 function Card({ dim, className, ...props }: { dim?: boolean } & React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("border border-border bg-card", dim && "opacity-50", className)} {...props} />;
@@ -48,8 +48,8 @@ function Heading({ title, why, children }: { title: string; why?: string; childr
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <div className="min-w-0">
-        <h2 className="m-0! text-xl!">{title}</h2>
-        {why && <p className="m-0! text-[13px] text-muted-foreground">{why}</p>}
+        <h2 className="m-0 text-xl">{title}</h2>
+        {why && <p className="m-0 text-[13px] text-muted-foreground">{why}</p>}
       </div>
       {children}
     </div>
@@ -156,8 +156,8 @@ function CloudPeople({ apiUrl }: { apiUrl: string }) {
   const ov = useWorkspaceOverview(apiUrl);
   const access = useAccessData();
   const r = ov.result;
-  if (!r) return <div className="panel"><div className="muted">loading…</div></div>;
-  if (r.status !== "ok") return <WorkspaceSettings cloud={cloud} apiUrl={apiUrl} onOpenTab={() => undefined} />;
+  if (!r) return <LoadingBlocks data-testid="people-loading" widths={["40%", "25%"]} />;
+  if (r.status !== "ok") return <WorkspaceSettings cloud={cloud} apiUrl={apiUrl} />;
   return (
     <TeamPanel apiUrl={apiUrl} slug={r.data.slug || slugFromHost()} loginUrl={cloud.health?.login_url}
                isOwner={r.data.role === "owner"} you={r.data.you?.email}
@@ -173,10 +173,10 @@ function PeoplePane() {
 function KeysPane() {
   const access = useAccessData();
   return (
-    <>
+    <div className="grid min-w-0 gap-4">
       <AccessPanel me={access.me} />
-      <ApiKeysPanel people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
-    </>
+      <ApiKeysPanel title="Access keys" people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
+    </div>
   );
 }
 
@@ -193,8 +193,8 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4" data-testid={`pane-${tab}`}>
-      {dim && <Banner tone="warn" data-testid="read-only">You can look but not change anything here. Ask an admin.</Banner>}
-      {problem && <Banner tone="error" data-testid="problem">{problem}</Banner>}
+      <Collapse>{dim && <Banner tone="warn" data-testid="read-only">You can look but not change anything here. Ask an admin.</Banner>}</Collapse>
+      <Collapse>{problem && <Banner tone="error" data-testid="problem">{problem}</Banner>}</Collapse>
 
       {tab === "crew" && (
         <>
@@ -206,7 +206,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
                 <button key={c.value} type="button" role="radio" aria-checked={level === c.value} disabled={dim} data-testid={`how-${c.value}`} data-ctl
                         onClick={() => { if (c.value === level) return; if (c.value === "L4-ship") setConfirm(true); else void onCrew({ autonomy: c.value }); }}
                         className={CHOICE}>
-                  <span aria-hidden className={cn("mt-[3px] grid size-4 flex-none place-items-center rounded-full border-[1.5px] border-foreground bg-[var(--input-bg)]", level === c.value && "after:size-2 after:rounded-full after:bg-foreground")} />
+                  <span aria-hidden className={cn("mt-[3px] grid size-4 flex-none place-items-center rounded-full border-[1.5px] border-foreground bg-field", level === c.value && "after:size-2 after:rounded-full after:bg-foreground")} />
                   <span className="grid gap-0.5">
                     <span className="font-semibold">{c.title}</span>
                     <span className="text-[13px] text-muted-foreground">{c.text}</span>
@@ -223,14 +223,14 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
           </Card>
           <Card dim={dim}>
             <Row title="Builders at once" text={crew.builders_text} data-testid="row-builders">
-              <div className="flex items-center border border-foreground bg-[var(--input-bg)]">
+              <div className="flex items-center border border-foreground bg-field">
                 <button type="button" aria-label="One builder fewer" disabled={dim || crew.builders_max <= 1} data-ctl data-testid="builders-less"
                         onClick={() => void onCrew({ builders_max: crew.builders_max - 1 })}
-                        className="size-8 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
+                        className="size-8 border-0 bg-transparent p-0 text-lg text-foreground cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
                 <b className="min-w-9 text-center" data-testid="builders-count" aria-live="polite">{crew.builders_max}</b>
                 <button type="button" aria-label="One builder more" disabled={dim || crew.builders_max >= 20} data-ctl data-testid="builders-more"
                         onClick={() => void onCrew({ builders_max: crew.builders_max + 1 })}
-                        className="size-8 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">+</button>
+                        className="size-8 border-0 bg-transparent p-0 text-lg text-foreground cursor-pointer disabled:cursor-not-allowed">+</button>
               </div>
             </Row>
             <Row title="Second check" data-testid="row-challenger"
@@ -251,7 +251,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
           </Heading>
           <Card dim={dim} data-testid="grants">
             {crew.grants.length === 0 ? (
-              <div className="p-4 text-muted-foreground" data-testid="grants-empty">Nothing allowed yet. The crew asks when it needs something.</div>
+              <EmptyState className="p-4" data-testid="grants-empty">Nothing allowed yet. The crew asks when it needs something.</EmptyState>
             ) : crew.grants.map((g) => <GrantRow key={g.id} g={g} />)}
             {crew.grants_total > crew.grants.length && (
               <div className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">Showing the newest {crew.grants.length} of {crew.grants_total}.</div>
@@ -268,7 +268,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
                            onSendNow={onMorningSend ?? (async () => null)} />
       )}
 
-      {tab === "providers" && <div className={HEADED}><ProvidersPanel /></div>}
+      {tab === "providers" && (<><Heading title="Providers" /><ProvidersPanel /></>)}
 
       {tab === "budget" && (
         <>
@@ -280,11 +280,11 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 
       {tab === "people" && <div className={HEADED}><PeoplePane /></div>}
       {tab === "keys" && <div className={HEADED}><KeysPane /></div>}
-      {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={() => undefined} noTeam />}
+      {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} noTeam />}
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
       {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}
-      {tab === "observability" && <div className={HEADED}><TracingPanel /></div>}
+      {tab === "observability" && (<><Heading title="Observability" /><TracingPanel /></>)}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
 
       {tab === "edition" && (
@@ -333,12 +333,12 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 const BACK_ARROW = (
   <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 2L4 6l4 4" /></svg>
 );
-const NAV_ITEM = "flex! w-full min-h-8 items-center justify-between gap-2 border-0! py-1! pr-2.5! pl-[22px]! text-left text-sm! no-underline! cursor-pointer hover:bg-muted!";
+const NAV_ITEM = "flex w-full min-h-8 items-center justify-between gap-2 border-0 py-1 pr-2.5 pl-[22px] text-left text-sm no-underline cursor-pointer hover:bg-muted";
 
 function SettingsBack() {
   return (
     <Link to={placeBeforeSettings()} data-testid="settings-back"
-          className="inline-flex! h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">{BACK_ARROW}Back</Link>
+          className="inline-flex h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground no-underline hover:text-foreground">{BACK_ARROW}Back</Link>
   );
 }
 
@@ -356,7 +356,7 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
     <>
       <div className="md:hidden">
         {back}
-        <h1 className="m-0! mb-3! px-2.5 text-[22px]!">Settings</h1>
+        <h1 className="m-0 mb-3 px-2.5 text-[22px]">Settings</h1>
         <label className="block">
           <span className="sr-only">Settings section</span>
           <select value={tab} data-testid="settings-select" onChange={(e) => go(e.target.value)}>
@@ -370,13 +370,13 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
       </div>
       <nav aria-label="Settings" data-testid="settings-nav" className="hidden w-[216px] flex-none flex-col gap-0.5 md:flex">
         {back}
-        <h1 className="m-0! mb-3.5! px-2.5 text-2xl!">Settings</h1>
+        <h1 className="m-0 mb-3.5 px-2.5 text-2xl">Settings</h1>
         {groups.map((g) => {
           const open = g.items.some((i) => i.id === tab);
           return (
             <div key={g.id} data-testid={`group-${g.id}`} className={g.id === "advanced" ? "mt-2.5 border-t border-border pt-2.5" : ""}>
               <button type="button" aria-expanded={open} data-testid={`group-open-${g.id}`} onClick={() => go(g.items[0].id)}
-                      className="flex! h-9 w-full items-center justify-between border-0! bg-transparent! px-2.5! text-left text-sm! font-semibold! text-foreground! cursor-pointer hover:bg-muted!">
+                      className="flex h-9 w-full items-center justify-between border-0 bg-transparent px-2.5 text-left text-sm font-semibold text-foreground cursor-pointer hover:bg-muted">
                 <span>{g.label}</span>
                 <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" className={cn("opacity-70", open && "rotate-90")}><path d="M4 2l4 4-4 4" /></svg>
               </button>
@@ -392,7 +392,7 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
                         {i.id === "allowed" && grants ? <span className="font-mono text-xs text-muted-foreground" data-testid="nav-grants">{grants}</span> : null}
                       </>
                     );
-                    const cls = cn(NAV_ITEM, on ? "bg-muted! font-semibold! text-foreground!" : "bg-transparent! font-normal! text-muted-foreground!");
+                    const cls = cn(NAV_ITEM, on ? "bg-muted font-semibold text-foreground" : "bg-transparent font-normal text-muted-foreground");
                     return i.to
                       ? <Link key={i.id} to={i.to} data-testid={`nav-${i.id}`} className={cls}>{inner}</Link>
                       : <button key={i.id} type="button" aria-current={on ? "page" : undefined} data-testid={`nav-${i.id}`} onClick={() => onPick(i.id)} className={cls}>{inner}</button>;
@@ -407,15 +407,6 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
   );
 }
 
-function Loading() {
-  return (
-    <Card role="status" aria-busy="true" aria-label="Loading" className="grid gap-2 p-4" data-testid="settings-loading">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="grid gap-2 pb-4"><Skeleton width="35%" /><Skeleton width="60%" /><Skeleton width="80%" /></div>
-      ))}
-    </Card>
-  );
-}
 
 function SettingsPage() {
   const named = useSample();
@@ -540,12 +531,12 @@ function SettingsPage() {
               : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
           </div>
         )}
-        {error && (
+        <Collapse>{error && (
           <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
             <b>Settings did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
           </Banner>
-        )}
-        {(!page || waiting) && !error && <Loading />}
+        )}</Collapse>
+        {(!page || waiting) && !error && <LoadingBlocks data-testid="settings-loading" count={5} widths={["35%", "60%", "80%"]} />}
         {page && !waiting && (
           <TerseSettings.Provider value={true}>
             <FactorySettingsView page={page} tab={tab} agent={new URLSearchParams(loc.search).get("agent") ?? undefined}

@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Panel, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../components/edition";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input as TextInput } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
@@ -22,16 +22,16 @@ import {
 // The notice that everyone on the cell can ask is page chrome: it is under the heading in every state.
 
 const MUTED = "m-0 text-[13px] text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-brand-deep underline";
 const GENERIC_READ = "The cell did not answer. Try again in a moment.";
 
 function Head({ children }: { children?: React.ReactNode }) {
   return (
     <div className="grid max-w-[860px] gap-5" data-testid="brain-connect">
       <div>
-        <Link to="/brain" className="text-[13px]! text-muted-foreground!" data-testid="brain-connect-back">Back to Second Brain</Link>
-        <h1 className="m-0! mb-1! mt-2! text-[26px]! font-bold!">Connect a repo</h1>
-        <p className="m-0! max-w-[640px] text-sm leading-normal text-muted-foreground">{SUBTITLE_WORDS}</p>
+        <Link to="/brain" className="text-[13px] text-muted-foreground" data-testid="brain-connect-back">Back to Second Brain</Link>
+        <h1 className="m-0 mb-1 mt-2 text-[26px] font-bold">Connect a repo</h1>
+        <p className="m-0 max-w-[640px] text-sm leading-normal text-muted-foreground">{SUBTITLE_WORDS}</p>
       </div>
       <Notice />
       {children}
@@ -41,7 +41,7 @@ function Head({ children }: { children?: React.ReactNode }) {
 
 function Notice() {
   return (
-    <div className="border border-foreground bg-[var(--accent-soft)] px-4 py-3 text-sm leading-normal" data-testid="brain-connect-notice">{NOTICE_WORDS}</div>
+    <div className="border border-foreground bg-brand-soft px-4 py-3 text-sm leading-normal" data-testid="brain-connect-notice">{NOTICE_WORDS}</div>
   );
 }
 
@@ -127,7 +127,7 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
         <div className="border-b border-border px-4 py-2.5">
           <label htmlFor="brain-connect-find" className="sr-only">Find a repo</label>
           <TextInput id="brain-connect-find" placeholder="Find a repo" autoComplete="off" value={query} onChange={(e) => setQuery(e.target.value)}
-                     className="bg-[var(--input-bg)]!" data-testid="brain-connect-find" />
+                     className="bg-field" data-testid="brain-connect-find" />
         </div>
         {open.length === 0 ? (
           <p className={cn(MUTED, "border-b border-border px-4 py-3")} data-testid="brain-connect-none-left">{ALL_CONNECTED_WORDS}</p>
@@ -136,7 +136,7 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
             No repo matches <span className="font-mono" data-user-text>{trimmed}</span>.
           </p>
         ) : (
-          <ul className="m-0! list-none! p-0!"data-testid="brain-connect-rows">
+          <ul className="m-0 list-none p-0" data-testid="brain-connect-rows">
             {shown.map((r) => (
               <RepoRow key={r.repo} r={r} checked={chosen.has(r.repo)} disabled={busy} onToggle={toggle} under={chosen.has(r.repo) ? underRepo() : undefined} />
             ))}
@@ -152,7 +152,7 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
       </div>
       {hidden > 0 && <p className={MUTED} data-testid="brain-connect-hidden">{hiddenWords(hidden)}</p>}
       {tooMany && <p className={MUTED} data-testid="brain-connect-too-many">{TOO_MANY_WORDS}</p>}
-      {failure && <Banner tone="error" data-testid="brain-connect-error"><span data-user-text>{failure}</span></Banner>}
+      <Collapse>{failure && <Banner tone="error" data-testid="brain-connect-error"><span data-user-text>{failure}</span></Banner>}</Collapse>
     </>
   );
 }
