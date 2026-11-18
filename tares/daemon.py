@@ -64,7 +64,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import memory_route
 from .integrations.builtin import memory_tares
-from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
+from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -727,6 +727,7 @@ def make_app() -> FastAPI:
         morning_task = asyncio.create_task(_morning.run(loop_stop))
         # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
         licence_task = asyncio.create_task(licence.run(store, loop_stop))
+        waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -749,6 +750,7 @@ def make_app() -> FastAPI:
         pr_sync_task.cancel()
         morning_task.cancel()
         licence_task.cancel()
+        waiting_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -813,6 +815,8 @@ def make_app() -> FastAPI:
                               # not needing the auth token — they have their own scope
         if _public(method, path):
             return None
+        if path == "/api/me/slack":
+            return "any"   # the caller's own Slack messages (TR-1458): the handler needs a person
         if path == "/api/whoami" or path == "/api/home/start/hide":
             return "any"   # the second one only changes what the caller's own home shows
         if method == "PUT" and _AREA_ONE.match(path):
@@ -6238,6 +6242,10 @@ def make_app() -> FastAPI:
         licence_required=licence.licence_required)
     app.state.host = h
     fx = factory_api.register(app, store, h)
+    # a direct message on Slack when something new waits for a person (TR-1458)
+    _waiting_slack = waiting_slack_mod.WaitingSlack(store, fx.waiting_for_person)
+    waiting_slack_mod.register(app, store, h, _waiting_slack)
+    app.state.waiting_slack = _waiting_slack
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)

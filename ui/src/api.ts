@@ -177,6 +177,13 @@ function unauthorized() {
   window.dispatchEvent(new Event("tares-auth-required"));
 }
 
+/** GET /api/me/slack. `found` is null until the cell has looked the person up on Slack;
+ *  `problem` is a cell-wide one (the app cannot look people up by email). */
+export type MySlack = {
+  on: boolean; connected: boolean; claimed: boolean; has_email: boolean;
+  found: boolean | null; problem: string | null;
+};
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -445,6 +452,12 @@ export const api = {
   clearSlackToken: () =>
     request<{ ok: boolean; configured: boolean }>("/api/settings/slack-bot-token",
       { method: "DELETE" }),
+
+  // The caller's own Slack message when something new waits for them (TR-1458). 400 for a key
+  // that is no person.
+  mySlack: () => request<MySlack>("/api/me/slack"),
+  setMySlack: (on: boolean) =>
+    request<MySlack>("/api/me/slack", { method: "PUT", body: JSON.stringify({ on }) }),
 
   // The signing secret that authenticates inbound Slack (`/tares ask …`). Write-only like the
   // others; without it POST /api/slack/events answers 503 rather than trusting the request.

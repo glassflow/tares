@@ -1,8 +1,8 @@
 import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
-import { api } from "../../api";
+import { api, ApiError, type MySlack } from "../../api";
 import { type Cloud, cloudLinkHere } from "../../cloud";
-import { Banner, Button, Collapse, Input, Loading, Panel, SkeletonLines, StatusDot } from "../../components/edition";
+import { Banner, Button, Collapse, Input, Loading, Panel, SkeletonLines, StatusDot, Switch } from "../../components/edition";
 import { TerseSettings } from "./AccessPanels";
 
 // Slack's settings, on the edition kit (TR-1392). Factory Settings and the platform Settings page
@@ -113,7 +113,8 @@ const BOT_TOKEN: SecretSpec = {
       Lets Tares post to Slack, in the channels you pick. Create a Slack app with the bot scopes{" "}
       <code className={CODE}>chat:write</code>, <code className={CODE}>chat:write.public</code> (post to a public channel
       without inviting the app), <code className={CODE}>channels:read</code> and <code className={CODE}>groups:read</code>{" "}
-      (list the channels to pick from), and <code className={CODE}>commands</code> (for <code className={CODE}>/tares ask</code>).
+      (list the channels to pick from), <code className={CODE}>commands</code> (for <code className={CODE}>/tares ask</code>),
+      and <code className={CODE}>users:read.email</code> (find each person by their email, to message them when something waits for them).
       Paste its Bot User OAuth Token here, or set <code className={CODE}>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment.
     </>
   ),
@@ -121,7 +122,8 @@ const BOT_TOKEN: SecretSpec = {
     <>
       The Bot User OAuth Token of your Slack app. The app needs the bot scopes <code className={CODE}>chat:write</code>,{" "}
       <code className={CODE}>chat:write.public</code>, <code className={CODE}>channels:read</code>,{" "}
-      <code className={CODE}>groups:read</code> and <code className={CODE}>commands</code>.
+      <code className={CODE}>groups:read</code>, <code className={CODE}>commands</code> and{" "}
+      <code className={CODE}>users:read.email</code>.
     </>
   ),
   envVar: "TARES_SLACK_BOT_TOKEN",
@@ -161,6 +163,50 @@ const SIGNING_SECRET: SecretSpec = {
   save: api.setSlackSigningSecret,
   clear: api.clearSlackSigningSecret,
 };
+
+/** What stops the message reaching the person, in the order they would fix it; null when nothing does. */
+function blocker(st: MySlack): string | null {
+  if (!st.connected) return "Slack is not connected on this cell yet, so nothing is sent.";
+  if (!st.has_email) return "Tares finds you on Slack by your email, and your account has none, so nothing is sent.";
+  if (st.found === false) return "Slack knows no one by your email, so nothing is sent. Use the email you sign in to Slack with.";
+  return null;
+}
+
+/** The caller's own switch (TR-1458): one direct message on Slack per new thing that waits for
+ *  them. Hidden for a key that is no person and for the unclaimed person of a cell of one, whom
+ *  the cell never messages. */
+export function WaitingDmPanel() {
+  const [st, setSt] = useState<MySlack | null>();
+  const [err, setErr] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.mySlack().then(setSt)
+      .catch((e) => (e instanceof ApiError && e.status === 400 ? setSt(null) : setErr(messageOf(e))));
+  }, []);
+  if (st === null || st?.claimed === false) return null;
+  const flip = async (on: boolean) => {
+    setBusy(true); setErr(undefined);
+    try { setSt(await api.setMySlack(on)); } catch (e) { setErr(sentence(messageOf(e))); }
+    setBusy(false);
+  };
+  const why = st && st.on ? blocker(st) : null;
+  return (
+    <Panel title="Messages to you" data-testid="slack-me">
+      <div className="grid gap-4">
+        <Collapse>{err && <Banner tone="error">{err}</Banner>}</Collapse>
+        {!st ? (!err && <Loading label="Loading your Slack messages"><SkeletonLines widths={["55%"]} /></Loading>) : (
+          <>
+            <Switch checked={st.on} disabled={busy} onCheckedChange={(on) => void flip(on)} data-testid="slack-me-switch"
+                    label="Message me on Slack when something new waits for me"
+                    hint="One direct message for each: what it asks, what it holds up, and a link to it in the feed." />
+            <Collapse>{why && <p className={TEXT} data-testid="slack-me-blocked">{why}</p>}</Collapse>
+            <Collapse>{st.on && st.problem && <Banner tone="warn">{sentence(st.problem)}.</Banner>}</Collapse>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
 
 /** A self-hosted daemon: the bot token for posting, the signing secret for /tares ask. */
 export function SlackSelfHostedPanels() {

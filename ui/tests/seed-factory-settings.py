@@ -8,7 +8,7 @@ Phase 1 writes the desk and the GitHub connection into the database, phase 2 sta
 a token and does the rest through its API, then the daemon is stopped. The e2e then runs its own
 daemon on the same data with TARES_AUTH_TOKEN set. Prints a JSON map on the last line.
 usage: python seed-factory-settings.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
-import json, os, subprocess, sys, time, urllib.error, urllib.request
+import hashlib, json, os, subprocess, sys, time, urllib.error, urllib.request
 from datetime import datetime, timezone
 
 home, port, mcp, dist, tares = sys.argv[1:6]
@@ -23,6 +23,7 @@ from tares.store import Store  # noqa: E402
 QUESTION = "Which branch should the next wave of pull requests target?"
 
 # phase 1: the desk (79 questions, so the last one is a real D79) and the GitHub connection
+SAM_KEY = "e2e-sam-key-settings"
 store = Store(os.path.join(home, "tares.duckdb"))
 now = datetime.now(timezone.utc)
 for i in range(1, 80):
@@ -32,6 +33,10 @@ for i in range(1, 80):
 store.add_decision(None, item["id"], QUESTION, "A", "A", True, "all", True, None, True, [], now)
 assert item["label"] == "D79", item["label"]
 store.upsert_github_credential("main", "ghp_example", "token", "", "example-org")
+# Sam, a person with an email and a key of their own, for Messages to you (TR-1458)
+sam = store.create_person("Sam", email="sam@example.com")
+store.insert_api_key("k_sam", "sam", "nvf_sam", hashlib.sha256(SAM_KEY.encode()).hexdigest(),
+                     ["admin", "read"], person_id=sam["id"])
 store.con.close()
 
 
@@ -44,7 +49,7 @@ def call(path, body=None, method=None):
         raise SystemExit(f"{path} -> {e.code} {e.read().decode()[:300]}")
 
 
-out = {}
+out = {"sam_key": SAM_KEY}
 daemon = subprocess.Popen([tares, "up", "--port", port, "--data-dir", home], env=env,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:

@@ -24,10 +24,11 @@ class HomeRead:
     """One read of the home for one caller: who they are, what they cannot see, who owns what
     (factory_owners), and the crew rows, read once and only when something asks for them."""
 
-    def __init__(self, c, request, me: dict, now):
+    def __init__(self, c, request, me: dict, now, hidden: set | None = None):
         self.c, self.request, self.me, self.now = c, request, me, now
         self.store = c.store
-        self.hidden = c.h.hidden_ids()
+        # `hidden` is given when there is no request to read it from (waiting_for_person)
+        self.hidden = c.h.hidden_ids() if hidden is None else set(hidden)
         self.owners = owners_mod.Owners(c.store)
         self._reads: dict = {}
 
@@ -521,6 +522,17 @@ def team_home(c, request, now) -> dict:
             "summary": summary(waiting, waiting_counts(on)), "you_are_waiting_on": on,
             "crews": crew_rows, "crews_quiet": quiet, "crew_limit": crew_limit(t),
             "areas": areas(t, waiting)}
+
+
+def waiting_for_person(c, person: dict, hidden: set, now) -> list[dict] | None:
+    """What waits for `person`, as their home lists it, built with no request (a message sent to
+    them, TR-1458): every item, kept by the one rule (factory_owners.mine) to those that name
+    them, or wait for any admin when they are one. `hidden` is the private projects they are not
+    on, so a grant there reads as their home reads it. None on a cell of one person."""
+    if c.store.only_local_person():
+        return None
+    t = HomeRead(c, None, person, now, hidden=hidden)
+    return owners_mod.mine(all_items(t), person["id"], admin=bool(person.get("is_admin")))
 
 
 def project_waiting(c, request, now, project: str) -> dict | None:

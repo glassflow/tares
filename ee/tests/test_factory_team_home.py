@@ -926,6 +926,17 @@ async def main():
            g.get("title") == "A grant over acme/web" and "Vault" not in json.dumps(g)
            and "launch codes" not in json.dumps(g), g)
         ck("its ask names the repo Alex owns, not the private project", g.get("ask") == "Agree to a grant over acme/web", g.get("ask"))
+        print("== the Slack reader's list is the person's own Home list (TR-1458) ==")
+        # it builds each person's list with no request; it must be what their Home shows: the
+        # grant on Vault names Alex's repo, never the project he is not on
+        for who in ("alex", "kim", "lee"):
+            built = app.state.waiting_slack.waiting_for(store.get_person(pid[who]), now_utc())
+            shown = (await home_of(who))["waiting_for_you"]
+            ck(f"{who.capitalize()}: the same items as on Home", [i["id"] for i in built]
+               == [i["id"] for i in shown], ([i["id"] for i in built], [i["id"] for i in shown]))
+            ck(f"{who.capitalize()}: the same words as on Home", json.dumps(built) == json.dumps(shown))
+        built = json.dumps(app.state.waiting_slack.waiting_for(store.get_person(pid["alex"]), now_utc()))
+        ck("Alex's holds nothing of Vault", not any(w in built for w in ("Vault", "vault", vault)), built)
         r = await call("alex", "POST", f"/api/grants/{g['id'].split(':', 1)[1]}/consent")
         ck("Alex agrees", r.status_code < 300, r.text)
         rec = [a for a in (await call("alex", "GET", "/api/answers")).json()["answers"] if a["id"] == g["id"]]
