@@ -9,7 +9,7 @@ and runs the guardrails; the review, CI and guardrail lines come from what is al
 
 A group is {repo, base, title, count, auto, sub, line, you, blocked, sent, rows, merged}. A row is
 {id, position, state, chip, ticket, pr, branch, builder, review, ci, guardrail, status, answer,
-bounce, needs_you}:
+bounce, needs_you, turn, turn_label, whose}:
 - `position` is the place in line (1, 2, ...); a pull request sent back to its builder has none.
   It counts this project's pull requests only, so a queued row reads "Next in this project" or
   "2nd in this project", never a place across the projects the crew works on.
@@ -24,6 +24,8 @@ bounce, needs_you}:
   `id` of the row goes to POST /api/factory/merge-queue/{mid}/approve, both only when `can_answer`.
   A transient state of the page (answering, failed) is the page's own.
 - `bounce` is set for a pull request sent back: {count, text}.
+- `turn`, `turn_label`, `whose`: whose turn the ticket is (factory.turn_of), the same words the
+  Tickets, project and Reviews pages show. The chip says what the queue does with it.
 
 Where an answer was given: the decision records only `via`, "console" or "slack" (or nothing, for
 an answer from a session). The console's own merge queue approval records fixed words (see
@@ -284,6 +286,8 @@ def register(app, store, h, ctx):
                 decisions.setdefault(dec["desk_item"], dec)
         from .. import factory_api
         gates: dict = {}
+        from .factory_project import Turns
+        turns = Turns(store)
 
         def builder_of(t: dict) -> dict | None:
             pid = t.get("assignee_person_id") or p.get("lead_person_id") or \
@@ -374,6 +378,11 @@ def register(app, store, h, ctx):
                 bounce = {"count": n, "text": LADDER_SENTENCES[step].format(n=n)}
             if held_by_person:
                 blocked = False
+            # the row's own state, with a recorded answer read in: a yes makes it the queue's
+            # merge, a no holds it until a person moves it
+            turn_state = state
+            if answer and answer["kind"] == "done":
+                turn_state = "merging" if answer["decision"] == "yes" else "blocked"
             pr_n = row["pr"]
             return {
                 "id": row["id"], "position": pos, "state": state, "chip": chip,
@@ -386,6 +395,8 @@ def register(app, store, h, ctx):
                 "ci": ci_text(t, row), "guardrail": guardrail_text(row, history),
                 "status": status, "answer": answer, "bounce": bounce,
                 "needs_you": you or blocked, "_you": you, "_blocked": blocked,
+                **(turns.of(uid, t, waits, reviews[-1] if reviews else None, turn_state) if t else
+                   {"turn": None, "turn_label": "", "whose": None}),
             }
 
         def merged_item(row: dict) -> dict | None:

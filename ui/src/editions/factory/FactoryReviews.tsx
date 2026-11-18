@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, ListRow, ListSection, LoadingBlocks, STATUS_TONES, StatusDot } from "../../components/edition";
+import { Banner, Button, ListRow, ListSection, LoadingBlocks, STATUS_TONES, StatusDot, toneOf } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
@@ -26,7 +26,7 @@ function Row({ r }: { r: ReviewRow }) {
   const { number, url, title, repo } = r.pr;
   return (
     <ListRow className="grid grid-cols-1 items-start gap-x-4 gap-y-1.5 md:grid-cols-[1fr_auto]"
-             data-testid="review-row" data-project={r.project.id} data-ci={r.ci_state}>
+             data-testid="review-row" data-project={r.project.id} data-ci={r.ci_state} data-turn={r.turn}>
       <div className="min-w-0">
         <div className="font-semibold">
           <Link to={r.ticket.href} data-user-text data-testid="review-title" className={LINK}>{r.ticket.title}</Link>
@@ -47,6 +47,9 @@ function Row({ r }: { r: ReviewRow }) {
       </div>
       <div className="whitespace-nowrap font-mono text-[13px] md:text-right" data-testid="review-waited">{r.waited}</div>
       <div className={cn("col-span-full flex flex-wrap gap-x-4 gap-y-1", MUTED)}>
+        <span data-testid="review-turn" className={cn(r.whose === "person" && "font-medium text-foreground")}>
+          <StatusDot tone={toneOf("turn", r.turn)} className="mr-1.5 rounded-full" />{r.turn_label}
+        </span>
         <span data-testid="review-verdict">{r.review}</span>
         <span data-testid="review-ci"><StatusDot tone={STATUS_TONES.ci[r.ci_state] ?? "quiet"} className="mr-1.5 rounded-full" />{r.ci}</span>
       </div>

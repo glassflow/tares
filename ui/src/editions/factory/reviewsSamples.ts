@@ -2,6 +2,7 @@
 // flag (see sample.ts). It is invented: project-x, project-y, example-org/service-a, Alex, Kim.
 
 import type { CiState, FactoryReviewsData, ReviewRow } from "./FactoryReviews.api";
+import type { TicketTurnFields } from "./FactoryProject.api";
 
 const NOW = "2026-11-02T10:00:00+00:00";
 const MERGE = "You merge every pull request after the crew's review.";
@@ -16,6 +17,13 @@ interface Spec {
   review?: string; ci?: CiState; holds?: string | null; repo?: string; why?: string | null;
 }
 
+// whose turn, read off the sample the way turn_of reads a ticket: no why waits for you
+const turnOf = (s: Spec, ci: CiState): TicketTurnFields =>
+  !s.why ? { turn: "ready_for_you", turn_label: "Ready for you", whose: "person" }
+    : s.review?.startsWith("Changes") ? { turn: "changes_asked", turn_label: "Changes asked", whose: "crew" }
+      : ci === "bad" ? { turn: "checks_failing", turn_label: "Checks failing", whose: "crew" }
+        : { turn: "reviewing", turn_label: "Reviewing", whose: "crew" };
+
 const row = (s: Spec): ReviewRow => {
   const id = s.project.replace(/[^a-z0-9]+/g, "-");
   const ci = s.ci ?? "ok";
@@ -24,7 +32,7 @@ const row = (s: Spec): ReviewRow => {
     ticket: { ref: s.ref, title: s.title, href: `/projects/${id}/tickets/${s.ref}` },
     pr: { number: s.number, url: `https://github.com/${s.repo ?? A}/pull/${s.number}`, title: s.title, repo: s.repo ?? A },
     waited: s.waited, since: NOW, review: s.review ?? "Passed, round 1", ci: CI_WORDS[ci], ci_state: ci,
-    holds_up: s.holds ?? null, codex_open: false, why: s.why ?? null,
+    holds_up: s.holds ?? null, codex_open: false, why: s.why ?? null, ...turnOf(s, ci),
   };
 };
 

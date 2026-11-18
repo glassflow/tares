@@ -4,11 +4,13 @@
 // a person's own text, and the page shows every string as text.
 
 import { request } from "../../api";
+import type { TicketTurnFields } from "./FactoryProject.api";
 
 /** The dot of a CI sentence: green, red, still going, or no CI at all. */
 export type CiState = "ok" | "bad" | "go" | "none";
 
-export interface ReviewRow {
+/** `turn`, `turn_label`, `whose`: whose turn the ticket is, the words the Tickets page shows. */
+export interface ReviewRow extends TicketTurnFields {
   project: { id: string; name: string };
   ticket: { ref: string; title: string; href: string };
   pr: { number: number | null; url: string | null; title: string | null; repo: string | null };

@@ -139,11 +139,13 @@ class Turns:
             self._level[uid] = autonomy_of(self.store, uid)
         return self._level[uid]
 
-    def of(self, uid: str, t: dict, blocked_by: list[str], last: dict | None) -> dict:
+    def of(self, uid: str, t: dict, blocked_by: list[str], last: dict | None,
+           queue_state: str | None = None) -> dict:
         """{turn, turn_label, whose} for a ticket; `blocked_by` the refs it waits on
-        (factory.readiness), `last` its last review (store.last_reviews)."""
+        (factory.readiness), `last` its last review (store.last_reviews). `queue_state` is for a
+        screen that holds the ticket's queue row itself; otherwise its open row is looked up."""
         key = factory_mod.turn_of(t, blocked_by, factory_api.verdict_now(t, last), self.level(uid),
-                                  self._queue.get(t["id"]))
+                                  queue_state or self._queue.get(t["id"]))
         label = status_words.TURN[key]
         if key == "queued" and blocked_by:
             label += " after " + ", ".join(blocked_by)

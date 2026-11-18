@@ -3,7 +3,7 @@
 // a row on a sample calls nothing, so the page shows the state and nothing changes.
 
 import type { MergeQueueData, MqAnswer, MqChipKey, MqGroup, MqRow, MqState } from "./FactoryMergeQueue.api";
-import type { ProjectGitHubData } from "./FactoryProject.api";
+import type { ProjectGitHubData, TicketTurnFields } from "./FactoryProject.api";
 
 const API = "example-org/api";
 const WEB = "example-org/web";
@@ -21,6 +21,20 @@ const LADDER = [
   "Sent back {n} times. It is now a question for you on the Calls page.",
 ];
 
+// whose turn, read off the row the way the screen reads it (the queue state, a recorded answer)
+const turnOf = (s: Spec): TicketTurnFields => {
+  const k = s.chip[0];
+  if (k === "approval") return { turn: "ready_for_you", turn_label: "Ready for you", whose: "person" };
+  if (k === "approved" || s.state === "merging") return { turn: "merging", turn_label: "Merging", whose: "crew" };
+  if (k === "moved") return { turn: "reviewing", turn_label: "Reviewing", whose: "crew" };
+  if (k === "hold" || s.state === "blocked") return { turn: "stuck", turn_label: "Stuck", whose: "person" };
+  if (s.state === "sent_back") return { turn: "changes_asked", turn_label: "Changes asked", whose: "crew" };
+  if (s.state === "waiting_ci") return { turn: "checks_running", turn_label: "Checks running", whose: "github" };
+  const after = /^Waiting for (.+) to merge/.exec(s.status ?? "");
+  return after ? { turn: "queued", turn_label: `Queued after ${after[1]}`, whose: "nobody" }
+    : { turn: "merging", turn_label: "Merging", whose: "crew" };
+};
+
 const row = (s: Spec): MqRow => ({
   id: `row-${s.n}`, position: s.pos === undefined ? 1 : s.pos, state: s.state, chip: { key: s.chip[0], text: s.chip[1] },
   ticket: { ref: s.ref, title: s.title }, pr: { number: s.n, url: `https://github.com/${API}/pull/${s.n}` },
@@ -31,6 +45,7 @@ const row = (s: Spec): MqRow => ({
   answer: s.answer ?? null,
   bounce: s.bounce ? { count: s.bounce, text: LADDER[s.bounce < 3 ? 0 : s.bounce < 5 ? 1 : 2].replace("{n}", String(s.bounce)) } : null,
   needs_you: !!s.needs,
+  ...turnOf(s),
 });
 
 const mine = (commit: string, id: string): MqAnswer => ({

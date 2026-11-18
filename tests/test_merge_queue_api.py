@@ -41,6 +41,7 @@ os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx
 
+from tares import status_words as sw
 from tares import factory as factory_mod
 from tares import factory_github, merge_queue, merge_ready, words
 from tares.integrations import registry
@@ -191,8 +192,15 @@ async def main():
 
         BODIES = []          # every answer, for the scans
 
+        TURNS = []           # (project, ticket ref, state, chip key, turn, turn_label, whose) of every row
+
         def expect(label, got, want):
             BODIES.append(got)
+            # the turn words are the ticket's (factory.turn_of), pinned in their own checks at the end
+            for g in got.get("groups") or []:
+                for r in g["rows"]:
+                    TURNS.append((got["project"]["name"], r["ticket"]["ref"], r["state"], r["chip"]["key"],
+                                  r.pop("turn"), r.pop("turn_label"), r.pop("whose")))
             ck(label, got == want, "\n    got : " + repr(got) + "\n    want: " + repr(want))
 
         def me(person, line):
@@ -771,6 +779,24 @@ async def main():
         ck("a review that asked for changes says so",
            (await page(uid))["groups"][0]["rows"][0]["review"] == "The crew reviewer asked for changes")
 
+        # ── whose turn: the ticket's words, read with the queue row ─────────────────────────────
+        print("== whose turn ==")
+        tw = {(pj, ref, st): (turn, label, whose) for pj, ref, st, _c, turn, label, whose in TURNS}
+        ck("every row carries the shared turn words", all(
+            label.startswith(sw.TURN[turn]) and whose == sw.TURN_WHOSE[turn]
+            for _p, _r, _s, _c, turn, label, whose in TURNS), TURNS)
+        for (pj, ref, st), want in {
+            ("Waiting for approval", "ORD-47", "waiting_approval"): ("ready_for_you", "Ready for you", "person"),
+            ("Waiting for approval", "ORD-50", "queued"): ("queued", "Queued after ORD-47", "nobody"),
+            ("Waiting for CI", "ORD-41", "waiting_ci"): ("checks_running", "Checks running", "github"),
+            ("Answered yes", "ORD-51", "waiting_approval"): ("merging", "Merging", "crew"),
+            ("Answered no", "ORD-52", "waiting_approval"): ("stuck", "Stuck", "person"),
+            ("Moved", "ORD-53", "waiting_approval"): ("reviewing", "Reviewing", "crew"),
+            ("Blocked", "ORD-55", "blocked"): ("stuck", "Stuck", "person"),
+            ("Sent back", "ORD-60", "sent_back"): ("changes_asked", "Changes asked", "crew"),
+            ("Sent back", "ORD-61", "sent_back"): ("changes_asked", "Changes asked", "crew"),
+        }.items():
+            ck(f"turn: {pj}, {ref} ({st}) reads {want[1]}", tw.get((pj, ref, st)) == want, tw.get((pj, ref, st)))
         # ── the sentences ───────────────────────────────────────────────────────────────────────
         print("== the sentences ==")
         FORBIDDEN = ("waiting_approval", "waiting_ci", "sent_back", "merge_ready", "merge_queue",

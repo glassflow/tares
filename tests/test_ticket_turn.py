@@ -49,6 +49,14 @@ eq("passed, no CI on the repo, L3: ready for you", turn("review", ci="none", ver
 eq("passed, CI passed, L4: merging",
    turn("review", ci="success", verdict="pass", autonomy="L4-ship"), "merging")
 eq("queue row merging: merging", turn("review", ci="success", queue="merging"), "merging")
+eq("passed and green but its dependency is open: queued, not ready for you",
+   turn("review", ci="success", verdict="pass", blocked_by=["T1"]), "queued")
+eq("the same at L4: queued, not merging",
+   turn("review", ci="success", verdict="pass", blocked_by=["T1"], autonomy="L4-ship"), "queued")
+eq("queue sent it back at L4: changes asked, not merging",
+   turn("review", ci="success", verdict="pass", autonomy="L4-ship", queue="sent_back"), "changes_asked")
+eq("queue cannot merge it at L4: stuck, not merging",
+   turn("review", ci="success", verdict="pass", autonomy="L4-ship", queue="blocked"), "stuck")
 eq("explicit blocked: stuck", turn("blocked"), "stuck")
 eq("reviewer's block on the head: stuck", turn("review", verdict="block"), "stuck")
 eq("pr merged: merged", turn("review", merged=True), "merged")
@@ -61,7 +69,7 @@ seen = set()
 for stage, status, ci, verdict, cur, blocked, auto, q in itertools.product(
         [None, *factory.STAGES], [None, "todo", "in_progress", "in_review", "done", "canceled"],
         [None, "success", "failure", "pending", "none"], [None, *factory.VERDICTS], [True, False],
-        [None, ["T1"]], ["L3-review", "L4-ship"], [None, "queued", "merging"]):
+        [None, ["T1"]], ["L3-review", "L4-ship"], [None, "queued", "waiting_ci", "waiting_approval", "merging", "blocked", "sent_back"]):
     seen.add(turn(stage, status, ci, False, verdict, cur, blocked, auto, q))
 ck("every answer has words", seen <= set(sw.TURN), seen - set(sw.TURN))
 ck("every answer has an owner", seen <= set(sw.TURN_WHOSE), seen - set(sw.TURN_WHOSE))

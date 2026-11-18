@@ -67,6 +67,7 @@ def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None =
     It splits what state_of runs together: a ticket waiting on another is `queued`, one a
     station stopped is `stuck`, and `in review` becomes reviewing, checks running or failing,
     ready for you (L3: the merge is a person's) or merging (L4, or the queue is merging it).
+    A queue row sent back reads changes asked; one the queue cannot merge reads stuck.
     A done status with no merge is `closed`, not merged."""
     pr = t.get("pr") or {}
     stage, status = t.get("stage"), t.get("status")
@@ -85,6 +86,12 @@ def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None =
     if stage == "review":
         if queue_state == "merging":
             return "merging"
+        # the queue sent it back to its builder, or cannot merge it (repo rules, no connection
+        # that can write, GitHub unsure): neither is the crew's merge, whatever the verdict says
+        if queue_state == "sent_back":
+            return "changes_asked"
+        if queue_state == "blocked":
+            return "stuck"
         v = verdict or {}
         if not v.get("current"):
             return "reviewing"
@@ -96,6 +103,9 @@ def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None =
             return "checks_running"
         if pr.get("ci") == "failure":
             return "checks_failing"
+        # passed and green, but it merges after a ticket it depends on: nobody's merge yet
+        if blocked_by:
+            return "queued"
         # passed, no checks on the repo, or checks the cell cannot read: the merge is next
         return "merging" if autonomy == "L4-ship" else "ready_for_you"
     if status == "in_progress":

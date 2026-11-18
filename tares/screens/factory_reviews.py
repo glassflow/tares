@@ -84,6 +84,9 @@ def _row(q: dict, now, milestones: dict[str, list[dict]]) -> dict:
         # who has it next ("The reviewer reviews it"), or why nobody does; null when it waits
         # for the person (TR-1009)
         "why": q.get("why"),
+        # whose turn it is (factory.turn_of, through factory_waiting.review_turn)
+        "turn": q["turn"], "turn_label": status_words.TURN[q["turn"]],
+        "whose": status_words.TURN_WHOSE[q["turn"]],
     }
 
 
