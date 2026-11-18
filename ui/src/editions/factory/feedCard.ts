@@ -1,93 +1,85 @@
-import type { HomeItem, HomeItemKind } from "./home.types";
-import type { FeedCard, FeedExtra, FeedNo, FeedYes } from "./feed.types";
+import type { HomeAction, HomeItem } from "./home.types";
+import type { FeedCard, FeedExtra } from "./feed.types";
 
-// A home item as a feed card. What each answer does follows the M1 spec's table, "What each answer does
-// to the crew": the crew carries on the same way whether the person answered here, on Home or in the
-// crew lead's session, so the feed adds no third way to approve anything.
+// A home item as a feed card. Yes and No are the item's own actions, never invented ones: where the
+// cell has no one-tap action yet (merging a PR, accepting a milestone), Yes is the link to the page
+// that has it, under the label the cell gives it.
 
-interface Answers { yes: FeedYes | null; no: FeedNo }
+const NO_VERBS = ["later", "decline"];
 
-const LATER: FeedNo = { label: "Later", words: "none" };
-
-function answersFor(kind: HomeItemKind, item: HomeItem, recommendation: string | null): Answers {
-  switch (kind) {
-    case "question":
-    case "desk": {
-      const options = item.question?.options ?? [];
-      return {
-        yes: recommendation
-          ? { label: `Yes, ${recommendation}`, does: "Takes the crew's answer. The one who asked carries on." }
-          : null,
-        no: { label: recommendation ? "Something else" : "Answer", words: options.length ? "optional" : "required", options },
-      };
-    }
-    case "permission":
-      return {
-        yes: { label: "Allow once", does: "The crew member asking goes on with this one command." },
-        no: { label: "Decline", words: "optional" },
-      };
-    case "calls_to_confirm":
-      return {
-        yes: { label: "Keep the calls", does: "The crew keeps building on what it chose." },
-        no: { label: "Overturn one", words: "optional", options: item.lines ?? [] },
-      };
-    case "prs_to_review":
-      return {
-        yes: { label: "Merge", does: "Merges the pull request. The next ticket starts." },
-        no: { label: "Ask for changes", words: "required" },
-      };
-    case "ready_to_start":
-      return {
-        yes: { label: "Start", does: "The crew lead hands out the first tickets." },
-        no: LATER,
-      };
-    case "milestone_to_check":
-      return {
-        yes: { label: "Accept", does: "The milestone closes and the next one starts." },
-        no: { label: "Send it back", words: "required" },
-      };
-    case "signoff":
-      return {
-        yes: { label: "Close the project", does: "The project moves to Done." },
-        no: LATER,
-      };
-    case "grant":
-      return {
-        yes: { label: "Agree", does: "The grant is kept for this project." },
-        no: { label: "Decline", words: "optional" },
-      };
-    case "rule":
-      return {
-        yes: { label: "Keep the rule", does: "The crew follows it from its next turn." },
-        no: { label: "Decline", words: "optional" },
-      };
-  }
+/** The desk label a question or permission answers to. A question with options sends it; one without
+ *  has it only in its id (`question:<label>`, factory_waiting.desk_items). */
+function deskOf(item: HomeItem): string | null {
+  const allow = item.actions.find((a) => a.do === "allow");
+  if (typeof allow?.desk === "string") return allow.desk;
+  if (item.question?.desk) return item.question.desk;
+  const m = /^question:(.+)$/.exec(item.id);
+  return m ? m[1] : null;
 }
 
-/** The link one tap deeper leads to, from the item's own actions. */
-function deeperHref(item: HomeItem): string | null {
-  const link = item.actions.find((a) => typeof a.href === "string");
+/** The option a recommendation names: the same words, or words that start with the option. */
+function recommended(options: string[], rec: string | null): number {
+  if (!rec) return -1;
+  const r = rec.trim().toLowerCase();
+  return options.findIndex((o) => r === o.toLowerCase() || r.startsWith(o.toLowerCase()));
+}
+
+function buttons(item: HomeItem): { yes: HomeAction | null; no: HomeAction | null } {
+  const desk = deskOf(item);
+  if (item.kind === "question" && desk) {
+    const options = item.question?.options ?? [];
+    const i = recommended(options, item.question?.recommendation ?? null);
+    // the panel answers with the option's letter, counted over every option, so all of them go in
+    const yes: HomeAction | null = i >= 0
+      ? { label: `Yes, ${options[i]}`, primary: false, do: "choose", desk, choice: options[i], letter: String.fromCharCode(65 + i) }
+      : null;
+    return { yes, no: { label: yes ? "Something else" : "Answer", primary: false, do: "answer", desk, options } };
+  }
+  if (item.kind === "permission" && desk) {
+    const allow = item.actions.find((a) => a.do === "allow") ?? null;
+    return { yes: allow, no: { label: "Answer", primary: false, do: "answer", desk } };
+  }
+  const acts = item.actions.filter((a) => a.do && a.do !== "answer");
+  const yes = acts.find((a) => a.primary && !NO_VERBS.includes(a.do!))
+    ?? acts.find((a) => !NO_VERBS.includes(a.do!))
+    ?? item.actions.find((a) => a.primary && a.href)
+    ?? item.actions.find((a) => a.href)
+    ?? null;
+  return { yes, no: acts.find((a) => NO_VERBS.includes(a.do!)) ?? null };
+}
+
+/** The link one tap deeper: an action's page Yes does not already open, else the project. */
+function deeperHref(item: HomeItem, yes: HomeAction | null): string | null {
+  const link = item.actions.find((a) => typeof a.href === "string" && a !== yes);
   return link?.href ?? (item.project ? `/projects/${encodeURIComponent(item.project.id)}` : null);
 }
 
 export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
   const recommendation = item.question?.recommendation ?? null;
-  const { yes, no } = answersFor(item.kind, item, recommendation);
+  const { yes, no } = buttons(item);
+  // a question's or a permission's title is the project; what is asked is its detail
+  const askedInDetail = item.kind === "question" || item.kind === "permission";
   return {
     id: item.id,
     kind: item.kind,
     label: item.label,
-    ask: extra.ask ?? item.title,
+    ask: extra.ask ?? (askedInDetail ? item.detail : item.title),
     project: item.project,
     from: item.from?.name ?? null,
     waited: item.waited,
     since: item.since,
     holds_up: extra.holds_up !== undefined ? extra.holds_up : item.question?.blocks ?? null,
     blocking: item.blocking === true,
-    recommendation: recommendation ? { answer: recommendation, why: extra.why ?? null } : null,
+    recommendation: recommendation ? { answer: recommendation, why: extra.why ?? item.question?.why ?? null } : null,
     yes,
     no,
-    deeper: { detail: item.detail, lines: item.lines ?? [], checks: extra.checks ?? null, href: deeperHref(item) },
+    deeper: {
+      detail: askedInDetail && !extra.ask ? "" : item.detail,
+      lines: item.lines ?? [],
+      checks: extra.checks ?? null,
+      href: deeperHref(item, yes),
+    },
+    item,
   };
 }
 

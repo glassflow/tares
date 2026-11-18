@@ -81,6 +81,8 @@ def desk_question(d: dict) -> dict | None:
         return None
     return {"desk": d["label"], "options": opts,
             "recommendation": _trim(d.get("recommendation") or "", 400) or None,
+            # why the crew suggests it, so the feed can say so beside the answer (P-TR-273)
+            "why": _trim(str(d.get("why") or ""), 400) or None,
             "blocks": _trim(str(d.get("blocks") or ""), 140) or None}
 
 

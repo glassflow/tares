@@ -76,7 +76,7 @@ export interface HomeItem {
   /** Waited more than a week and holds nothing up: folded under "N older things". */
   older?: boolean;
   /** A desk question's options and the crew's recommendation, answered on the row. */
-  question?: { desk: string; options: string[]; recommendation: string | null; blocks: string | null } | null;
+  question?: { desk: string; options: string[]; recommendation: string | null; why?: string | null; blocks: string | null } | null;
 }
 
 export type HomeProjectState = "building" | "waiting_on_you" | "not_started" | "ready_to_close";

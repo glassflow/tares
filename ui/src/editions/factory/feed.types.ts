@@ -1,49 +1,32 @@
-import type { HomeItem, HomeItemKind, HomeRef } from "./home.types";
+import type { HomeAction, HomeItem, HomeItemKind, HomeRef } from "./home.types";
 
-// The human-in-the-loop feed (P-TR-273, M2 mock). One card per decision a person owes the crew, each
-// answered with one tap either way, one tap deeper for the context. The cards are built from the items
-// GET /api/home already serves (factory_home.py); what the home does not send yet is in FeedExtra, and
-// every field there names the gap of the M1 spec it stands for. Nothing here calls the cell: the page
-// shows samples only until the mock is approved.
+// The human-in-the-loop feed (P-TR-273). One card per decision a person owes the crew, each answered
+// with one tap either way, one tap deeper for the context. The cards are the items GET /api/home already
+// serves (factory_home.py), and their buttons are the items' own actions, run by Home's handler
+// (useHomeActions): an answer from the feed takes the same path as one from Home, so the feed adds no
+// third way to approve anything. What the home does not send yet is in FeedExtra; every field there
+// names the gap it stands for, and only the samples fill it.
 
-/** The two answers. Yes takes what the card offers (the crew's recommendation, the merge, the allow). */
-export type FeedChoice = "yes" | "no";
-
-/** Where an answer was given. `feed` and `message` are new (spec, "What the trail keeps"); the daemon
- *  records `console` and `session` today (factory_store `via`). */
+/** Where an answer was given. `feed` and `message` are new; the daemon records `console` and
+ *  `session` today (factory_store `via`), and does not return the day's answers yet. */
 export type FeedVia = "feed" | "console" | "session" | "message";
 
-/** What No asks for before it is sent. */
-export interface FeedNo {
-  label: string;
-  /** "required": a reason the crew acts on (ask for changes); "optional": a reason it may read; "none": one tap. */
-  words: "required" | "optional" | "none";
-  /** Answers to pick from instead of writing one (a question's own options, the calls to overturn). */
-  options?: string[];
-}
-
-export interface FeedYes {
-  label: string;
-  /** What Yes does to the crew's work, in one sentence, shown one tap deeper. */
-  does: string;
-}
-
-/** What the home does not send yet. Each field is a gap of the M1 spec; the samples fill them by hand. */
+/** What the home does not send yet. The live feed reads none of it; the samples fill it by hand. */
 export interface FeedExtra {
-  /** Spec, "What an item is": the ask starts with the verb ("Merge PR 336", not "1 PR to review"). */
+  /** Gap: the ask starts with the verb ("Merge PR 336", not "1 PR to review in atlas"). */
   ask?: string;
-  /** Spec, "What it holds up". A desk question already sends it as `question.blocks`. */
+  /** Gap: what it holds up, on every kind. A question already sends it as `question.blocks`. */
   holds_up?: string | null;
-  /** Spec, gap on prs_to_review: "checks green, main moved 3 commits" on the item. */
+  /** Gap on prs_to_review: "Checks green. Main moved 2 commits since the review." */
   checks?: string | null;
-  /** The crew's answer and why. A desk question already sends the answer as `question.recommendation`. */
+  /** Why the crew suggests its answer, for a sample. A question sends it as `question.why`. */
   why?: string | null;
 }
 
 export interface FeedCard {
   id: string;
   kind: HomeItemKind;
-  /** The kind in one mono word or two ("Question", "Merge"), from the home's `label`. */
+  /** The kind in a word or two ("Question", "Permission"), from the home's `label`. */
   label: string;
   ask: string;
   project: HomeRef | null;
@@ -53,28 +36,36 @@ export interface FeedCard {
   holds_up: string | null;
   blocking: boolean;
   recommendation: { answer: string; why: string | null } | null;
-  /** Null when there is nothing to take as it is (a question with no recommendation): No is the only way. */
-  yes: FeedYes | null;
-  no: FeedNo;
+  /** Takes what the card offers: one of the item's actions, or a link to the page that has it. */
+  yes: HomeAction | null;
+  /** Declines or puts it off (later, decline, an answer in words); null when the item has none. */
+  no: HomeAction | null;
   deeper: { detail: string; lines: string[]; checks: string | null; href: string | null };
+  /** The item itself: Home's handler takes it with the action. */
+  item: HomeItem;
 }
 
 export interface FeedAnswered {
-  card: FeedCard;
-  choice: FeedChoice;
-  /** The option picked or the words given with No. */
-  words: string | null;
+  id: string;
+  ask: string;
+  /** Null for an answer read back from the desk, which keeps the words but not which way they went. */
+  choice: "yes" | "no" | null;
+  /** What was pressed, in its own words ("Yes, Postgres", "Later"). Null for an answer read back from
+   *  the desk, which keeps who and when but not the words (gap). */
+  said: string | null;
   by: string;
   at: string;
-  via: FeedVia;
+  /** Null when read back from the desk, which does not say where it was answered (gap). */
+  via: FeedVia | null;
 }
 
-/** One sample of the feed. The live page would read /api/home and the day's answers (spec gap: the
- *  desk does not return the choice, who or when). */
+/** One feed: a sample, or the live home read into this shape. */
 export interface FeedData {
   now: string;
   crew: { running: boolean; since: string | null; summary: string };
   items: HomeItem[];
   extras: Record<string, FeedExtra>;
+  /** The day's answers. Live: the desk's answered questions (GET /api/desk?state=answered) and what was
+   *  answered on this page; other kinds leave no record the feed can read yet. */
   answered: FeedAnswered[];
 }

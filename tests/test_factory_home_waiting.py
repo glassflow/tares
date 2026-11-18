@@ -264,6 +264,11 @@ async def main():
            all(i["id"] != f"question:{batch['label']}" for i in w))
 
         print("== the desk ==")
+        qb = fw.desk_question({"label": "D9", "options": ["a", "b"], "recommendation": "a",
+                                   "why": "it is cheaper", "blocks": "T1"})
+        ck("a question with options sends its options, the crew's answer, why, and what it holds up",
+           qb == {"desk": "D9", "options": ["a", "b"], "recommendation": "a", "why": "it is cheaper", "blocks": "T1"}, qb)
+        ck("a question without a why sends none", fw.desk_question({"label": "D9", "options": ["a"]})["why"] is None)
         qs = {i["id"]: i for i in k["question"]}
         q = qs[next(i for i in qs if i.startswith("question:D") and qs[i]["project"])]
         ck("a question for a project: its text, who asked, one primary link", q["label"] == "Question for you"

@@ -2,32 +2,34 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import {
-  Banner, Button, Collapse, EmptyState, ListRow, ListSection, SkeletonRows, StatusLabel, Textarea, Toaster, useToast,
+  Banner, Button, Collapse, EmptyState, ListRow, ListSection, SkeletonRows, StatusLabel, Toaster,
 } from "../../components/edition";
-import { formatStampUTC, sinceWords } from "../../lib/time";
+import { sinceWords, formatStampUTC } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { useSample } from "../sample";
+import { usePagePolling } from "../usePagePolling";
+import { CACHE_MS, POLL_MS, useHomeActions, type Done, type RowState } from "./FactoryHome";
+import { getHome } from "./FactoryHome.api";
+import { getAnsweredToday } from "./feed.api";
 import { Detail } from "./HomeDetail";
-import type { FeedAnswered, FeedCard, FeedChoice, FeedData, FeedVia } from "./feed.types";
+import type { HomeAction, HomeData } from "./home.types";
+import type { FeedAnswered, FeedCard, FeedData } from "./feed.types";
 import { feedOrder, toFeedCard } from "./feedCard";
 import { FEED_SAMPLES } from "./feedSamples";
 
-// The feed (P-TR-273, M2 mock): every decision the crew waits on, one card each, cleared with one tap
-// either way from a phone. Yes takes what the card offers; No asks for a reason or an option when the
-// crew needs one; More opens the context. An answered card stays for the day, greyed, saying who
-// answered, when and from where.
+// The feed (P-TR-273): every decision the crew waits on, one card each, cleared with one tap either way
+// from a phone. Yes takes what the card offers, No puts it off or answers in words, More opens the
+// context. The buttons are the items' own actions run by Home's handler, so the feed and Home cannot
+// disagree on what an answer does. An answered card stays for the day, greyed, saying who, how and when.
 //
-// A mock: it shows samples only (`?sample=busy|empty|down|loading` behind the sample flag) and sends
-// nothing. On a live cell it says so and points at Home. Wiring it to /api/home is M3, after the mock
-// is approved.
+// Live it reads GET /api/home every 15 seconds, as Home does, and the desk's answers of the day. `?sample=busy|empty|down|loading` behind
+// the sample flag shows samples, which send nothing.
 
 const MUTED = "text-[13px] text-muted-foreground";
-const NOTE = "Sample only: nothing was sent to the crew.";
-const VIA: Record<FeedVia, string> = { feed: "from the feed", console: "on Home", session: "in the crew lead's session", message: "from a message" };
-
-function clock(iso: string, now: number): string {
-  return sinceWords(Date.parse(iso), now);
-}
+const PAGE = "mx-auto flex w-full max-w-[640px] min-w-0 flex-col gap-6";
+const VIA: Record<NonNullable<FeedAnswered["via"]>, string> = {
+  feed: "from the feed", console: "on Home", session: "in the crew lead's session", message: "from a message",
+};
 
 /** One sentence from the cards: how many wait, how many hold the crew up, the longest wait. */
 function headline(cards: FeedCard[]): string {
@@ -39,45 +41,26 @@ function headline(cards: FeedCard[]): string {
   return `${n} for you.${held} The oldest has waited ${oldest.waited}.`;
 }
 
-function NoPanel({ card, onSend, onCancel }: {
-  card: FeedCard; onSend: (words: string) => void; onCancel: () => void;
+/** A card's button: a link when the action is a page, else Home's handler runs it. */
+function ActionButton({ action, variant, state, onPress, testId }: {
+  action: HomeAction; variant: "primary" | "secondary"; state?: RowState; onPress: () => void; testId: string;
 }) {
-  const [text, setText] = React.useState("");
-  const words = text.trim();
-  const options = card.no.options ?? [];
+  if (typeof action.href === "string") {
+    return <Button asChild variant={variant} className="h-10" data-testid={testId}><Link to={action.href}>{action.label}</Link></Button>;
+  }
   return (
-    <div className="flex flex-col gap-3 border-t border-border pt-3" data-testid="feed-no-panel">
-      {options.length > 0 && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label={`Answers to ${card.ask}`}>
-          {options.map((o) => (
-            <Button key={o} variant="secondary" className="h-auto min-h-10 whitespace-normal py-2 text-left" onClick={() => onSend(o)} data-user-text>
-              {o}
-            </Button>
-          ))}
-        </div>
-      )}
-      {card.no.words !== "none" && (
-        <Textarea label={card.no.words === "required" ? "What should change" : "Your reason, if you want to give one"} rows={3}
-          value={text} onChange={(e) => setText(e.target.value)} data-testid="feed-no-words" />
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" className="h-10" disabled={card.no.words === "required" && !words}
-          onClick={() => onSend(words)} data-testid="feed-no-send">
-          {card.no.label}
-        </Button>
-        <Button variant="quiet" className="h-10" onClick={onCancel}>Cancel</Button>
-      </div>
-    </div>
+    <Button variant={variant} className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left" busy={state?.busy === action.do}
+      disabled={!!state?.busy} onClick={onPress} data-testid={testId} data-user-text={action.do === "choose" ? true : undefined}>
+      {state?.copied ? "Copied" : action.label}
+    </Button>
   );
 }
 
-function Card({ card, top, now, deeper, noOpen, onAnswer, onDeeper, onNo }: {
-  card: FeedCard; top: boolean; now: number; deeper: boolean; noOpen: boolean;
-  onAnswer: (choice: FeedChoice, words: string | null) => void; onDeeper: () => void; onNo: (open: boolean) => void;
+function Card({ card, top, now, deeper, state, panel, onPress, onDeeper }: {
+  card: FeedCard; top: boolean; now: number; deeper: boolean; state?: RowState; panel?: React.ReactNode;
+  onPress: (action: HomeAction, choice: "yes" | "no") => void; onDeeper: () => void;
 }) {
   const id = `feed-more-${card.id.replace(/[^a-zA-Z0-9-]/g, "-")}`;
-  // No in one tap when it takes no words and offers nothing to pick: Later.
-  const quickNo = card.no.words === "none" && !(card.no.options?.length);
   return (
     <ListRow className="flex-col items-stretch gap-y-3" data-testid="feed-card" data-kind={card.kind}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -87,7 +70,9 @@ function Card({ card, top, now, deeper, noOpen, onAnswer, onDeeper, onNo }: {
         </span>
         <span className="font-mono text-[12px] text-muted-foreground" data-testid="feed-waited">{card.waited}</span>
       </div>
-      <h3 className="m-0 text-[17px] font-semibold leading-snug" data-user-text data-testid="feed-ask">{card.ask}</h3>
+      <h3 className="m-0 text-[17px] font-semibold leading-snug [overflow-wrap:anywhere]" data-user-text data-testid="feed-ask">
+        <Detail text={card.ask} />
+      </h3>
       {card.holds_up && (
         <p className={cn(MUTED, "m-0")} data-testid="feed-holds">
           Holds up <span className="text-foreground" data-user-text>{card.holds_up}</span>
@@ -100,39 +85,35 @@ function Card({ card, top, now, deeper, noOpen, onAnswer, onDeeper, onNo }: {
           {card.recommendation.why && <span className="text-muted-foreground" data-user-text>. {card.recommendation.why}</span>}
         </p>
       )}
-      {!noOpen && (
+      {/* Home's panel is indented under its row's icon; a card has none */}
+      {panel ? <div className="[&>*]:pl-0">{panel}</div> : (
         <div className="flex flex-wrap gap-2">
           {card.yes && (
-            <Button variant={top ? "primary" : "secondary"} className="h-10" onClick={() => onAnswer("yes", null)} data-testid="feed-yes">
-              {card.yes.label}
-            </Button>
+            <ActionButton action={card.yes} variant={top ? "primary" : "secondary"} state={state}
+              onPress={() => onPress(card.yes!, "yes")} testId="feed-yes" />
           )}
-          <Button variant="secondary" className="h-10" data-testid="feed-no"
-            onClick={() => (quickNo ? onAnswer("no", null) : onNo(true))}>
-            {card.no.label}
-          </Button>
+          {card.no && (
+            <ActionButton action={card.no} variant="secondary" state={state} onPress={() => onPress(card.no!, "no")} testId="feed-no" />
+          )}
           <Button variant="quiet" className="h-10" aria-expanded={deeper} aria-controls={id} onClick={onDeeper} data-testid="feed-more">
             {deeper ? "Less" : "More"}
           </Button>
         </div>
       )}
-      <Collapse>
-        {noOpen && <NoPanel card={card} onSend={(w) => onAnswer("no", w || null)} onCancel={() => onNo(false)} />}
-      </Collapse>
+      {state?.error && <p role="alert" className="m-0 text-[13px] text-err" data-testid="feed-error" data-words-exempt>{state.error}</p>}
       <Collapse>
         {deeper && (
           <div id={id} className={cn(MUTED, "flex flex-col gap-2 border-t border-border pt-3")} data-testid="feed-deeper">
-            <p className="m-0 text-foreground" data-user-text><Detail text={card.deeper.detail} /></p>
+            {card.deeper.detail && <p className="m-0 text-foreground" data-user-text><Detail text={card.deeper.detail} /></p>}
             {card.deeper.lines.length > 0 && (
               <ul className="m-0 grid list-none gap-1 p-0">
                 {card.deeper.lines.map((l) => <li key={l} data-user-text><Detail text={l} /></li>)}
               </ul>
             )}
             {card.deeper.checks && <p className="m-0" data-testid="feed-checks">{card.deeper.checks}</p>}
-            {card.yes && <p className="m-0">{card.yes.label}: {card.yes.does}</p>}
             <p className="m-0">
               {card.from && <>From {card.from}. </>}
-              {card.since && <>Waiting since <span className="font-mono" title={clock(card.since, now)}>{formatStampUTC(card.since)}</span>.</>}
+              {card.since && <>Waiting since <span className="font-mono" title={sinceWords(Date.parse(card.since), now)}>{formatStampUTC(card.since)}</span>.</>}
             </p>
             {card.deeper.href && (
               <Link to={card.deeper.href} className="text-foreground underline decoration-border underline-offset-[3px]">Open it in full</Link>
@@ -145,34 +126,58 @@ function Card({ card, top, now, deeper, noOpen, onAnswer, onDeeper, onNo }: {
 }
 
 function AnsweredRow({ a, now }: { a: FeedAnswered; now: number }) {
-  // a picked option is the answer itself; written words follow what No was called
-  const picked = a.words != null && (a.card.no.options ?? []).includes(a.words);
-  const said = a.choice === "yes" ? (a.card.yes?.label ?? "Yes")
-    : picked ? a.words : a.words ? `${a.card.no.label}: ${a.words}` : a.card.no.label;
   return (
-    <ListRow className="flex-col items-stretch gap-y-1 text-muted-foreground" data-testid="feed-answered" data-choice={a.choice}>
-      <span className="text-[15px]" data-user-text>{a.card.ask}</span>
+    <ListRow className="flex-col items-stretch gap-y-1 text-muted-foreground" data-testid="feed-answered" data-choice={a.choice ?? "answered"}>
+      <span className="text-[15px] [overflow-wrap:anywhere]" data-user-text><Detail text={a.ask} /></span>
       <span className="text-[13px]">
-        <StatusLabel tone="done" className="mr-2">{a.choice === "yes" ? "Yes" : "No"}</StatusLabel>
-        <span data-user-text>{said}</span>, by {a.by}, {VIA[a.via]}, {clock(a.at, now)}
+        <StatusLabel tone="done" className="mr-2">{a.choice === "yes" ? "Yes" : a.choice === "no" ? "No" : "Answered"}</StatusLabel>
+        {a.said && <><span data-user-text>{a.said}</span>, </>}by {a.by}{a.via ? `, ${VIA[a.via]}` : ""}, {sinceWords(Date.parse(a.at), now)}
       </span>
     </ListRow>
   );
 }
 
-export function FeedPage({ data }: { data: FeedData }) {
-  const { toast } = useToast();
-  const now = Date.parse(data.now);
-  const [answered, setAnswered] = React.useState<FeedAnswered[]>(data.answered);
+/** The feed for one FeedData. `live` sends the answers to the cell; `reload` reads the home again. */
+function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean; stale?: boolean; reload?: () => void }) {
+  const now = live ? Date.now() : Date.parse(data.now);
+  // answered on this page, kept apart from the day's answers the cell sends, which it replaces on a match
+  const [mine, setMine] = React.useState<FeedAnswered[]>([]);
+  const answered = [...mine, ...data.answered.filter((a) => !mine.some((m) => m.id === a.id))];
+  // ids answered here, hidden until the daemon's cached answer has passed (live) or for good (a sample)
+  const [hidden, setHidden] = React.useState<Map<string, number>>(new Map());
   const [deeper, setDeeper] = React.useState<Set<string>>(new Set());
-  const [noOpen, setNoOpen] = React.useState<string | null>(null);
-  const done = new Set(answered.map((a) => a.card.id));
-  const cards = data.items.map((i) => toFeedCard(i, data.extras[i.id])).filter((c) => !done.has(c.id)).sort(feedOrder);
+  const pressed = React.useRef(new Map<string, Omit<FeedAnswered, "by" | "at" | "via">>());
+  const timer = React.useRef<ReturnType<typeof setTimeout>>();
+  React.useEffect(() => () => clearTimeout(timer.current), []);
 
-  const answer = (card: FeedCard, choice: FeedChoice, words: string | null) => {
-    setAnswered((list) => [{ card, choice, words, by: "you", at: data.now, via: "feed" }, ...list]);
-    setNoOpen(null);
-    toast(NOTE);
+  const changed = (done?: Done) => {
+    const id = done?.item;
+    const p = id ? pressed.current.get(id) : undefined;
+    if (id && p) {
+      pressed.current.delete(id);
+      setMine((list) => [{ ...p, by: "you", at: live ? new Date().toISOString() : data.now, via: "feed" }, ...list]);
+      setHidden((h) => new Map(h).set(id, Date.now() + CACHE_MS));
+    }
+    if (!live || !reload) return;
+    reload();
+    clearTimeout(timer.current);
+    timer.current = setTimeout(reload, CACHE_MS);
+  };
+  const { rows, onAction, dialogs, panels } = useHomeActions(live, changed);
+
+  const cards = data.items
+    .filter((i) => { const until = hidden.get(i.id); return until === undefined || (live && Date.now() >= until); })
+    .map((i) => toFeedCard(i, data.extras[i.id]))
+    .sort(feedOrder);
+
+  const press = (card: FeedCard, action: HomeAction, choice: "yes" | "no") => {
+    // an answer given in the panel is neither yes nor no; which option or words it was, the panel knows
+    const panel = action.do === "answer";
+    pressed.current.set(card.id, {
+      id: card.id, ask: card.ask, choice: panel ? null : choice,
+      said: panel ? (Array.isArray(action.options) && action.options.length ? "Picked another answer" : "Answered in words") : action.label,
+    });
+    onAction(action, card.item);
   };
   const toggle = (id: string) => setDeeper((s) => {
     const next = new Set(s);
@@ -181,15 +186,16 @@ export function FeedPage({ data }: { data: FeedData }) {
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-[640px] min-w-0 flex-col gap-6" data-testid="factory-feed">
+    <div className={PAGE} data-testid="factory-feed" data-live={live ? "1" : undefined}>
       <div>
-        <p className="m-0 mb-1 font-mono text-[12px] uppercase tracking-wide text-muted-foreground">Feed · sample</p>
+        <p className="m-0 mb-1 font-mono text-[12px] uppercase tracking-wide text-muted-foreground">{live ? "Feed" : "Feed · sample"}</p>
         <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Waiting for you</h1>
         <p className="m-0 text-[15px] text-muted-foreground" data-testid="feed-headline">{headline(cards)}</p>
       </div>
+      {stale && <Banner tone="warn" data-testid="feed-stale">Could not refresh. Showing what we had.</Banner>}
       {!data.crew.running && (
         <Banner tone="warn" data-testid="feed-crew-down">
-          The crew is not running{data.crew.since ? ` since ${clock(data.crew.since, now)}` : ""}. Nothing new reaches this feed until it is back.
+          The crew is not running{data.crew.since ? `, last heard ${sinceWords(Date.parse(data.crew.since), now)}` : ""}. Nothing new reaches this feed until it is back.
         </Banner>
       )}
       <ListSection paper title="To answer" aside={cards.length ? `${cards.length}` : undefined}>
@@ -198,34 +204,57 @@ export function FeedPage({ data }: { data: FeedData }) {
             {data.crew.running ? `Nothing needs you right now. ${data.crew.summary}` : "Nothing here, because nothing is being built."}
           </EmptyState>
         ) : cards.map((c, i) => (
-          <Card key={c.id} card={c} top={i === 0} now={now} deeper={deeper.has(c.id)} noOpen={noOpen === c.id}
-            onAnswer={(choice, words) => answer(c, choice, words)} onDeeper={() => toggle(c.id)}
-            onNo={(open) => setNoOpen(open ? c.id : null)} />
+          <Card key={c.id} card={c} top={i === 0} now={now} deeper={deeper.has(c.id)} state={rows[c.id]} panel={panels[c.id]}
+            onPress={(a, choice) => press(c, a, choice)} onDeeper={() => toggle(c.id)} />
         ))}
       </ListSection>
       {answered.length > 0 && (
         <ListSection paper title="Answered today" aside={`${answered.length}`}>
-          {answered.map((a) => <AnsweredRow key={a.card.id} a={a} now={now} />)}
+          {answered.map((a) => <AnsweredRow key={`${a.id}-${a.at}`} a={a} now={now} />)}
         </ListSection>
       )}
+      {dialogs}
       <Toaster />
     </div>
   );
 }
 
-function NotYet() {
-  return (
-    <div className="mx-auto w-full max-w-[640px]" data-testid="factory-feed-mock">
-      <EmptyState title="The feed is a mock for now" action={<Button asChild variant="secondary"><Link to="/">Open Home</Link></Button>}>
-        It shows sample decisions only, while its shape is agreed. Answer what waits for you on Home.
-      </EmptyState>
-    </div>
-  );
+/** The home and the desk's answers of the day, read into the feed's shape. */
+function fromHome(h: HomeData, answered: FeedAnswered[]): FeedData {
+  return {
+    now: h.now,
+    crew: { running: h.crew.running, since: h.crew.heard_at, summary: h.crew.summary },
+    items: h.waiting_for_you,
+    extras: {},
+    answered,
+  };
+}
+
+function Loading() {
+  return <div className={PAGE} data-testid="feed-loading"><SkeletonRows /></div>;
+}
+
+function LiveFeed() {
+  // the answers are a nicety: when they fail to load, the cards still show
+  const { data, error, reload } = usePagePolling(
+    () => Promise.all([getHome(), getAnsweredToday().catch(() => [])]), POLL_MS);
+  const feed = React.useMemo(() => (data ? fromHome(data[0], data[1]) : null), [data]);
+  if (!feed) {
+    return error ? (
+      <div className={PAGE}>
+        <EmptyState title="Could not reach the cell" data-testid="feed-error-page"
+          action={<Button variant="secondary" onClick={reload}>Try again</Button>}>
+          The feed reads what waits for you from the cell, and it did not answer.
+        </EmptyState>
+      </div>
+    ) : <Loading />;
+  }
+  return <FeedPage data={feed} live stale={!!error} reload={reload} />;
 }
 
 export default function FactoryFeed() {
   const sample = useSample();
-  if (sample === "loading") return <div className="mx-auto w-full max-w-[640px]"><SkeletonRows /></div>;
+  if (sample === "loading") return <Loading />;
   const data = sample ? FEED_SAMPLES[sample] : undefined;
-  return data ? <FeedPage key={sample} data={data} /> : <NotYet />;
+  return data ? <FeedPage key={sample} data={data} live={false} /> : <LiveFeed />;
 }
