@@ -275,10 +275,10 @@ ck("split_telemetry holds an address with a ?api_key= query, a bare user:pw@host
 FRAG, PAIRBARE, SEMI, ENC, USER_ONLY = ("https://h.example.com/v1?x=1#access_token=frag-fake-5", "service.name=x,ep=u:pair-fake-6@h.example.com",
                                         "a=b;u:semi-fake-7@h.example.com", "tares.station=s,pass%77ord=enc-fake-8", "token-user@c.example.com:4318")
 plain2, held2 = L.split_telemetry({"OTEL_A": FRAG, "OTEL_B": PAIRBARE, "OTEL_C": SEMI, "OTEL_D": ENC, "OTEL_E": USER_ONLY,
-                                 "OTEL_EXPORTER_OTLP_ENDPOINT": "https://auth.example.com:4318/v1/traces",
-                                 "OTEL_F": "https://h.example.com/v1?x=1#section=top", "OTEL_G": "a=b;c=d"})
-ck("split_telemetry holds a #fragment pair, a bare user:pw@host as a pair's value or after a ;, an encoded name and user@host",
-   sorted(held2) == ["OTEL_A", "OTEL_B", "OTEL_C", "OTEL_D", "OTEL_E"], str(sorted(held2)))
+                                 "OTEL_EXPORTER_OTLP_ENDPOINT": "https://auth.example.com:4318/v1/traces",  # gitleaks:allow
+                                 "OTEL_F": "https://h.example.com/v1?x=1#section=top", "OTEL_G": "a=b;c=d", "OTEL_H": "a=b;api_key=semi-fake-9"})
+ck("split_telemetry holds a #fragment pair, a bare user:pw@host as a pair's value or after a ;, a secret pair after a ;, an encoded name and user@host",
+   sorted(held2) == ["OTEL_A", "OTEL_B", "OTEL_C", "OTEL_D", "OTEL_E", "OTEL_H"], str(sorted(held2)))
 ck("split_telemetry does not hold a value only because a secret word is in its host, or a fragment without one",
    sorted(plain2) == ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_F", "OTEL_G"], str(sorted(plain2)))
 ck("split_telemetry still lets through a query without a secret name, plain resource attributes and the client certificate path",
