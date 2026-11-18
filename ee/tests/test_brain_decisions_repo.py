@@ -254,7 +254,7 @@ async def main():
     index_mod.Indexer.run = never
     sync_mod.Syncer.run = never
     known = ["acme/web", "acme/api", "acme/big", "acme/q", "acme/stale", "acme/cleared", "acme/cut", "acme/drop", "acme/boot",
-             "acme/lorefail", "acme/nul"]
+             "acme/lorefail", "acme/nul", "acme/one"]
 
     async def readable_repos(cred, query=""):      # acme/lost is not readable by any connection
         return [{"full_name": r} for r in known]
@@ -503,6 +503,34 @@ async def main():
         ck("... and the refusal is logged without the key", any("putting them one at a time" in l for l in logs.mine())
            and not any(BRAIN_KEY in l for l in logs.lines))
 
+        print("== a refused document stays out and the rest go in ==")
+        for e in [e for e in docs() if e.startswith("acme/nul:")]:
+            lore.documents.pop((SOURCE, e))
+        rd._sent.clear()
+        before = len(puts())
+        lore.fail("put_documents", 400, "documents[0] is not acceptable " + BRAIN_KEY)   # the batch
+        lore.fail("put_documents", 400, "no " + BRAIN_KEY)                                # the first single put
+        await rd.import_folders("acme/nul", {"docs/adr"})
+        got = {e for e in docs() if e.startswith("acme/nul:")}
+        ck("the refused document is not stored and the other two are", got == {"acme/nul:docs/adr/n001.md", "acme/nul:docs/adr/z-nul.md"}, str(sorted(got)))
+        ck("... and the refusal is logged without the key", any("lore refused acme/nul:docs/adr/n000.md" in l for l in logs.mine())
+           and not any(BRAIN_KEY in l for l in logs.lines))
+        before = len(puts())
+        await rd.import_folders("acme/nul", {"docs/adr"})
+        sent_now = [d["external_id"] for p in puts()[before:] for d in p.json["documents"]]
+        ck("the next pass puts only the refused one again (the others were remembered as sent)", sent_now == ["acme/nul:docs/adr/n000.md"]
+           and len({e for e in docs() if e.startswith("acme/nul:")}) == 3, str(sent_now))
+        for e in [e for e in docs() if e.startswith("acme/nul:")]:
+            lore.documents.pop((SOURCE, e))
+        rd._sent.clear()
+        gh.repos["acme/one"] = simple_files(1, "o")
+        choose(store, "acme/one", ["docs/adr"])
+        lore.fail("put_documents", 400, "no " + BRAIN_KEY)
+        await rd.import_folders("acme/one", {"docs/adr"})
+        ck("a refused batch of one document is logged and skipped, not an error that ends the pass",
+           not any(e.startswith("acme/one:") for e in docs()) and any("lore refused acme/one:docs/adr/o000.md" in l for l in logs.mine())
+           and not any("could not put 1 documents of acme/one" in l for l in logs.mine()), str(logs.mine()[-2:]))
+
         print("== no secret anywhere ==")
         ck("the GitHub token is in no log line and no lore request", not any(GH_TOKEN in l for l in logs.lines)
            and not any(GH_TOKEN in repr(r.json) or GH_TOKEN in r.path for r in lore.requests))
@@ -538,7 +566,7 @@ async def main():
         await rd2.wait()
         ck("the folder chosen in the earlier run is imported by the new app's own start-up pass, nothing asked for",
            {e for e in docs() if e.startswith("acme/web:")} == want, str(sorted(docs())))
-        ck("... and only the repos with chosen folders were read", {x[0].split("/")[3] for x in gh2.requests if x[0].startswith("/repos/")} <= {"web", "api", "big", "q", "stale", "drop", "cut", "boot", "lorefail", "lost", "nul"})
+        ck("... and only the repos with chosen folders were read", {x[0].split("/")[3] for x in gh2.requests if x[0].startswith("/repos/")} <= {"web", "api", "big", "q", "stale", "drop", "cut", "boot", "lorefail", "lost", "nul", "one"})
     ck("and its hook is removed when it stops", rd2.hook not in folders_mod.HOOKS)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

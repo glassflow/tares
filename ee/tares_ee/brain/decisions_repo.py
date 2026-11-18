@@ -379,8 +379,12 @@ class RepoDecisions:
                 try:
                     await lore.put_documents(SOURCE, [b[0] for b in batch])
                 except LoreError as e:
-                    if e.status is None or e.status not in (400, 413, 422) or len(batch) == 1:
+                    if e.status is None or e.status not in (400, 413, 422):
                         raise
+                    if len(batch) == 1:
+                        # the one document lore dislikes stays out; the pass carries on, as it does inside a bigger batch
+                        log.warning("brain repo decisions: lore refused %s: %s", batch[0][0]["external_id"], _say(e))
+                        return True, 0
                     # lore refused the batch for one document it dislikes: put them one at a time, so only that one stays out
                     log.warning("brain repo decisions: lore refused a batch of %d documents of %s (%s); putting them one at a time",
                                 len(batch), repo, _say(e))
