@@ -28,10 +28,24 @@ from tares import licence
 from tares.envelope import now_utc
 from tares.factory_api import caller
 
-__all__ = ["NEEDS_LICENCE", "pending_owners", "pending_lead", "waiting_for", "waits_for_me",
+__all__ = ["NEEDS_LICENCE", "grant_ask", "pending_owners", "pending_lead", "waiting_for", "waits_for_me",
            "waiting_for_me", "settle", "settle_on_read", "grant_or_404", "register_routes"]
 
 NEEDS_LICENCE = "Agreeing to someone else's grant needs an enterprise licence."
+
+
+def grant_ask(g: dict, hidden: bool, owned: list[str]) -> str:
+    """What a grant waiting for a person asks them (TR-1447), the same on Home's row and in the record
+    of their answer (TR-1451). A grant on a project hidden from them names the repos of it they own,
+    never its words, which may name the project."""
+    if hidden:
+        return "Agree to a grant over " + (fw._and(owned) if owned else "a repo you own")
+    return "Agree to the grant: " + fw._trim(g["words"], 80)
+
+
+def owned_by(area_owner, g: dict, person_id: str | None) -> list[str]:
+    """The repos the grant names that this person owns."""
+    return [r for r in g.get("areas") or [] if person_id and (area_owner(r) or {}).get("id") == person_id]
 
 
 def pending_owners(c, areas, given_by, consents) -> list[dict]:
@@ -141,12 +155,11 @@ def register_routes(app, host) -> None:
     def answered(request: Request, g: dict, yes: bool, said: str) -> None:
         """The record of the answer (TR-1451). A grant over a project hidden from the person who
         answers keeps its words out of the record, as Home keeps them off its row."""
-        hidden = g.get("project") and g["project"] in host.hidden_ids()
+        hidden = bool(g.get("project") and g["project"] in host.hidden_ids())
         person = host.current_person(request)
         answers_mod.record(
             store, request, item=f"grant:{g['id']}", kind="grant", project=g.get("project"),
-            ask="Agree to " + ("a grant over a repo you own" if hidden
-                               else "the grant: " + fw._trim(g["words"], 80)),
+            ask=grant_ask(g, hidden, owned_by(host.area_owner, g, person["id"] if person else None)),
             choice="yes" if yes else "no", said=said,
             via=None if console_via(request) else "session",
             person_id=person["id"] if person else None)

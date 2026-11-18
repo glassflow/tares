@@ -925,6 +925,16 @@ async def main():
         ck("Alex sees it, and its title does not name the private project",
            g.get("title") == "A grant over acme/web" and "Vault" not in json.dumps(g)
            and "launch codes" not in json.dumps(g), g)
+        ck("its ask names the repo Alex owns, not the private project", g.get("ask") == "Agree to a grant over acme/web", g.get("ask"))
+        r = await call("alex", "POST", f"/api/grants/{g['id'].split(':', 1)[1]}/consent")
+        ck("Alex agrees", r.status_code < 300, r.text)
+        rec = [a for a in (await call("alex", "GET", "/api/answers")).json()["answers"] if a["id"] == g["id"]]
+        ck("the record of the answer asks what the row asked (TR-1451)",
+           len(rec) == 1 and rec[0]["ask"] == g["ask"] and "launch codes" not in json.dumps(rec), rec)
+        ck("Alex's own answer on the hidden project is listed for him, naming no project",
+           len(rec) == 1 and rec[0]["project"] is None and vault not in json.dumps(rec), rec)
+        rec_k = [a for a in (await call("kim", "GET", "/api/answers")).json()["answers"] if a["id"] == g["id"]]
+        ck("someone else not on the project does not see it", rec_k == [], rec_k)
 
         print("== the Claude plan says whose it is (TR-1020) ==")
         stamp = lambda minutes: ago(minutes=minutes).isoformat().replace("+00:00", "Z")

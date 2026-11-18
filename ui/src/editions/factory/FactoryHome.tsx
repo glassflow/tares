@@ -587,7 +587,7 @@ export function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       update(item.id, () => ({ busy: "keep_assumptions" }));
       void (async () => {
         try {
-          for (const ref of refs) await keepAssumption(project, ref);
+          for (const ref of refs) await keepAssumption(project, ref, item.id);
           toast(`${refs.length === 1 ? "Kept it" : refs.length === 2 ? "Kept both" : `Kept all ${refs.length}`}. The crew carries on.`);
           update(item.id, () => null);
           changed({ item: item.id });
@@ -664,7 +664,7 @@ export function useHomeActions(live: boolean, changed: (done?: Done) => void) {
 
   const sendAnswer = ({ item, action }: { item: HomeItem; action: HomeAction }, given: AnswerGiven) => {
     const desk = typeof action.desk === "string" ? action.desk : "";
-    const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice)
+    const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice, undefined, given.own)
       : () => {
           if (!team.current) return Promise.reject(new ApiError(missing, eeFailed || licenceNoAnswer ? 503 : 402));
           return team.current.answer(String(action.project), String(action.question), given.words);

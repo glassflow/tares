@@ -146,7 +146,7 @@ def grant_items(t: HomeRead) -> list[dict]:
         project = _project(t, g["project"])
         giver = _ref(refs.get(g["given_by"]))
         who = giver["name"] if giver else "Someone"
-        owned = [r for r in g["areas"] if (t.c.h.area_owner(r) or {}).get("id") == t.me["id"]]
+        owned = grants_mod.owned_by(t.c.h.area_owner, g, t.me["id"])
         if owned:
             detail = (f"{who} gave this for {fw._and(owned)}, which you "
                       f"own. It takes effect when you agree.")
@@ -166,8 +166,7 @@ def grant_items(t: HomeRead) -> list[dict]:
             "grant", label="Grant to agree to", title=title, detail=detail,
             meta="Asked " + fh.plain_ago(since, t.now), since=since, now=t.now, project=project,
             repo=owned[0] if len(owned) == 1 else None, from_=giver, id=f"grant:{g['id']}",
-            ask="Agree to " + (f"a grant over {fw._and(owned) if owned else 'a repo you own'}"
-                               if g["project"] in t.hidden else "the grant: " + fw._trim(g["words"], 80)),
+            ask=grants_mod.grant_ask(g, g["project"] in t.hidden, owned),
             actions=[{"label": "Agree", "primary": True, "do": "agree", "grant": g["id"]},
                      {"label": "Decline", "primary": False, "do": "decline", "grant": g["id"]}])
         item["for_admin"] = "admin" in wait   # any admin key may agree (grants.waits_for_me)

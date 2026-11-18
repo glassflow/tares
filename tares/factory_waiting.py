@@ -586,8 +586,9 @@ def milestones_to_check(store, fx, now) -> list[dict]:
                 detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
                 project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
                 ask=milestone_ask(p["name"], i),
-                # the next milestone starts when this one is accepted
-                holds_up=milestone_name([r[1] for r in rows], rows[i][1]["id"]) if i < len(rows) else None,
+                # the next milestone starts when this one is accepted; one accepted already waits on nothing
+                holds_up=milestone_name([r[1] for r in rows], next(
+                    (r[1]["id"] for r in rows[i:] if not r[2]["accepted"]), None)),
                 # accepting is one tap (TR-1450); trying the checks first is the page's
                 actions=[{"label": "Accept", "primary": True, "do": "accept_milestone",
                           "project": p["id"], "milestone": m["id"]},

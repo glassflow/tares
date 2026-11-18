@@ -340,6 +340,12 @@ async def main():
         ck("a PR that closes its milestone holds the milestone up", pr["holds_up"] == "M1: pages", pr["holds_up"])
         ck("a project not started holds its tickets", rs["holds_up"] == "2 tickets", rs["holds_up"])
         ck("a milestone holds the next one", mc["holds_up"] == "M2: search", mc["holds_up"])
+        # M2 accepted out of order: M1 holds up the next one still waiting, M3
+        store.accept_milestone(pw, mws["M2"], "Vladimir", None, now_utc())
+        mc2 = next(i for i in (await get_home())["waiting_for_you"] if i["kind"] == "milestone_to_check")
+        ck("a milestone accepted already is not the one held up", mc2["holds_up"] == "M3: dropped", mc2["holds_up"])
+        with store._swrite:
+            store.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [mws["M2"]])
         ck("a refused command holds its station's work",
            px_perm["holds_up"] == "the builder's work", px_perm["holds_up"])
         ck("calls and a question that names nothing hold nothing",

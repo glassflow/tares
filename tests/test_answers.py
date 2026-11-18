@@ -179,6 +179,48 @@ async def main():
         ck("a record that fails does not fail the answer", answers.record(
             store, None, item="x", kind="question", project=None, ask="a", said="b", via="nowhere") is None)
 
+        print("== words typed for a question with options stay the person's own ==")
+        said = {}
+        for words, own in (("Red", True), ("red", False), ("postgres", True)):
+            d = await desk(f"Which cache, {words} {own}?", "uc_shop", options=["Redis", "Postgres"])
+            await post(f"/api/desk/{d['label']}/reply", {"words": words, "choice": words, **({"own": True} if own else {})})
+            said[(words, own)] = {a["id"]: a for a in (await listed()).json()["answers"]}[f"question:{d['label']}"]["said"]
+        ck("typed in the text box, the start of an option stays as typed", said[("Red", True)] == "Red", said)
+        ck("from a session, the start of an option is the option (TR-1018)", said[("red", False)] == "Redis", said)
+        ck("typed, an option's own words are that option", said[("postgres", True)] == "Postgres", said)
+
+        print("== calls kept from Home are recorded under the item that offered them ==")
+        c1 = await post("/api/projects/uc_shop/assumptions", {"question": "Retry how often?", "choice": "3", "why": "w"}, **ORCH)
+        c2 = await post("/api/projects/uc_shop/assumptions", {"question": "Log where?", "choice": "stdout", "why": "w"}, **ORCH)
+        await post(f"/api/projects/uc_shop/assumptions/{c1['label']}/state",
+                   {"state": "kept", "item": "calls_to_confirm:uc_shop:pe_alice"})
+        await post(f"/api/projects/uc_shop/assumptions/{c2['label']}/state",
+                   {"state": "kept", "item": "calls_to_confirm:uc_billing:pe_alice"})
+        asks = {a["ask"]: a["id"] for a in (await listed()).json()["answers"]}
+        ck("the owners' item id Home showed", asks.get("Keep the call: Retry how often?") == "calls_to_confirm:uc_shop:pe_alice", asks)
+        ck("an item of another project is not taken", asks.get("Keep the call: Log where?") == "calls_to_confirm:uc_shop", asks)
+
+        print("== mine survives a busy day of other people's answers ==")
+        own_n = len((await listed(mine=1)).json()["answers"])
+        for n in range(510):
+            store.add_answer(f"question:X{n}", "question", "uc_shop", "Busy?", None, "yes", "console", "pe_other", now_utc())
+        busy = (await listed(mine=1)).json()["answers"]
+        ck("the caller's own are all there past 500 newer ones", own_n > 0 and len(busy) == own_n
+           and all(a["mine"] for a in busy), (own_n, len(busy)))
+
+        print("== a hidden project keeps only the caller's own grants ==")
+        at = now_utc()
+        store.add_answer("milestone_to_check:uc_vault:m1", "milestone_to_check", "uc_vault", "Check M1 of Vault",
+                         "yes", "Accepted", "console", "pe_me", at)
+        store.add_answer("grant:G9", "grant", "uc_vault", "Agree to a grant over acme/web", "yes", "Agree",
+                         "console", "pe_me", at)
+        store.add_answer("grant:G8", "grant", "uc_vault", "Agree to a grant over acme/api", "yes", "Agree",
+                         "console", "pe_else", at)
+        ids = [r["item"] for r in store.list_answers(at - timedelta(seconds=1), hidden=["uc_vault"], own="pe_me")
+               if r["item"] in ("milestone_to_check:uc_vault:m1", "grant:G9", "grant:G8")]
+        ck("the caller's grant stays, their other answers and other people's grants do not",
+           ids == ["grant:G9"], ids)
+
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

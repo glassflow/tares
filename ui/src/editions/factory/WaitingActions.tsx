@@ -9,7 +9,8 @@ import type { HomeAction, HomeItem } from "./home.types";
 const ANSWER_MAX = 4000;
 
 /** The words a person gives an answer, the option they picked (if they clicked one), and whether it stands for next time. */
-export interface AnswerGiven { words: string; choice?: string; standing: boolean }
+/** `own`: the words were typed in the text box, so the desk keeps them as typed, never as an option they start. */
+export interface AnswerGiven { words: string; choice?: string; standing: boolean; own?: boolean }
 
 const LETTERS = "ABCDEFGH";
 /** A click on an option. A crew question reads a one-letter reply as a pick by position, so a click sends the position and
@@ -54,9 +55,9 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
         )}
         <div className="flex gap-2">
           {/* the desk records an option for every question that has them (TR-1018): an answer none of
-              them gives is its own choice */}
+              them gives is its own choice, kept as typed (`own`), so "Red" never becomes "Redis" */}
           <Button className="h-8 text-[13px]" busy={busy} disabled={!words}
-            onClick={() => onSend(options.length > 0 ? { words, choice: words, standing } : { words, standing })}>Send</Button>
+            onClick={() => onSend(options.length > 0 ? { words, choice: words, standing, own: true } : { words, standing })}>Send</Button>
           <Button variant="secondary" className="h-8 text-[13px]" disabled={busy} onClick={onCancel}>Cancel</Button>
         </div>
       </div>

@@ -1797,7 +1797,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     @app.post("/api/projects/{uid}/assumptions/{ref}/state")
     def decide_assumption(uid: str, ref: str, request: Request, body: dict = Body(...)):
-        """{state: kept|overturned|open, words?, batch?}: what the person said about it. Only the
+        """{state: kept|overturned|open, words?, batch?, item?}: what the person said about it.
+        `item` is the Home item it was kept from, the id the answer is recorded under. Only the
         orchestrator (or a person's own session) records it; an overturned one keeps the
         person's words."""
         h.project_or_404(uid)
@@ -1815,8 +1816,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                 now_utc() if st != "open" else None)
         if st != "open":
             # the record of the answer (TR-1451); a station records what the person said in its session
+            # the Home item that offered it names itself (`calls_to_confirm:<project>:<owners>` when
+            # the project's calls wait for more than one owner); any other id is not this project's
+            item = f"calls_to_confirm:{uid}"
+            said_item = str(body.get("item") or "")
+            if said_item.startswith(item + ":") and len(said_item) <= 300:
+                item = said_item
             answers_mod.record(
-                store, request, item=f"calls_to_confirm:{uid}", kind="calls_to_confirm", project=uid,
+                store, request, item=item, kind="calls_to_confirm", project=uid,
                 ask=f"Keep the call: {a['question']}", choice="yes" if st == "kept" else "no",
                 said=f"Kept: {a['choice']}" if st == "kept" else words or "Overturned",
                 via="session" if caller(request)["station"] else None, person_id=answerer(request))
@@ -2673,14 +2680,21 @@ def register(app, store, h: Host) -> SimpleNamespace:
             floor = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
         elif floor.tzinfo is None:
             floor = floor.replace(tzinfo=timezone.utc)
-        hidden = h.hidden_ids()
         me = answerer(request)
-        out = [{"id": r["item"], "kind": r["kind"], "project": r["project"], "ask": r["ask"],
-                "choice": r["choice"], "said": r["said"], "via": r["via"], "at": r["at"],
-                "by": (r.get("person") or {}).get("name"),
-                "mine": me is not None and (r.get("person") or {}).get("id") == me}
-               for r in store.list_answers(floor) if r["project"] not in hidden]
-        return {"answers": [a for a in out if a["mine"] or not mine]}
+        if mine and me is None:
+            return {"answers": []}
+        # hidden projects and `mine` filter in the query, before its limit (a busy cell's other answers
+        # must not push the caller's own out of the 500 it reads). The caller's own grant answer on a
+        # project hidden from them (a grant over a repo they own) stays, its ask already kept to what
+        # they saw, and names no project; their other answers there do not (their ids and asks would)
+        hidden = h.hidden_ids()
+        rows = store.list_answers(floor, hidden=sorted(hidden), person=me if mine else None, own=me)
+        return {"answers": [{"id": r["item"], "kind": r["kind"], "ask": r["ask"],
+                             "project": None if r["project"] in hidden else r["project"],
+                             "choice": r["choice"], "said": r["said"], "via": r["via"], "at": r["at"],
+                             "by": (r.get("person") or {}).get("name"),
+                             "mine": me is not None and (r.get("person") or {}).get("id") == me}
+                            for r in rows]}
 
     def desk_or_404(ref: str) -> dict:
         d = store.get_desk_item(ref)
@@ -2783,7 +2797,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
             # an item with options always records the option chosen (TR-1018): "D85 A", "B - next
             # week" or the option's own words map to it; the orchestrator's own full choice (a
             # refinement such as "keep all but change A31: ...") is kept as given
-            if choice:
+            if choice and body.get("own"):
+                # the person's own words from the console's text box: an option only when they are
+                # its words exactly, never one they start (or cut short), so "Red" stays "Red"
+                choice = next((o for o in d["options"]
+                               if factory_mod._plain(o) == factory_mod._plain(choice)), choice)
+            elif choice:
                 # "A", or an option's text cut short, becomes the option; a longer refinement stays
                 named = factory_mod.picked_option("", choice, d["options"])
                 bare = re.sub(r"^\(?[a-h][).:]\s*", "", factory_mod._plain(choice))

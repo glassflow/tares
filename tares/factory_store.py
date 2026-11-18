@@ -1764,16 +1764,23 @@ class FactoryStore:
                 "choice": choice, "said": said, "via": via, "at": at,
                 "person": self._person_refs([person_id]).get(person_id)}
 
-    def list_answers(self, since, projects: list[str] | None = None) -> list[dict]:
-        """The answers given since `since`, newest first (TR-1451). `projects` keeps those of
-        these projects and the ones asked of no project."""
+    def list_answers(self, since, hidden: list[str] | None = None, person: str | None = None,
+                     own: str | None = None) -> list[dict]:
+        """The answers given since `since`, newest first, at most 500 (TR-1451). `hidden` leaves out
+        those of these projects, except `own`'s grants (a grant's id and ask never name its project, so
+        the caller's answer to one over a repo they own stays theirs; any other kind would); `person` keeps
+        that person's own. Both filter in the query, before the limit, so a busy day of other
+        people's answers never pushes the caller's out."""
         q = ("SELECT id, item, kind, project, ask, choice, said, via, person_id, answered_at FROM answers "
              "WHERE answered_at >= ?")
         vals: list = [since]
-        if projects is not None:
-            q += " AND (project IS NULL" + (
-                f" OR project IN ({', '.join('?' for _ in projects)})" if projects else "") + ")"
-            vals += projects
+        if hidden:
+            q += f" AND (project IS NULL OR project NOT IN ({', '.join('?' for _ in hidden)})" + (
+                " OR (person_id = ? AND kind = 'grant')" if own else "") + ")"
+            vals += list(hidden) + ([own] if own else [])
+        if person is not None:
+            q += " AND person_id = ?"
+            vals.append(person)
         with self._sread:
             rows = self.sc.execute(q + " ORDER BY answered_at DESC LIMIT 500", vals).fetchall()
         return self._with_people(

@@ -25,11 +25,20 @@ function deskKind(item: HomeItem): "question" | "permission" | null {
   return item.actions.some((a) => a.do === "allow") ? "permission" : "question";
 }
 
-/** The option a recommendation names: the same words, or words that start with the option. */
-function recommended(options: string[], rec: string | null): number {
+/** The option a recommendation names: the same words, else the longest option the recommendation
+ *  starts with up to a word's end. "Not now, after the release" names that option, never "No". */
+export function recommended(options: string[], rec: string | null): number {
   if (!rec) return -1;
   const r = rec.trim().toLowerCase();
-  return options.findIndex((o) => r === o.toLowerCase() || r.startsWith(o.toLowerCase()));
+  const exact = options.findIndex((o) => o.trim().toLowerCase() === r);
+  if (exact >= 0) return exact;
+  let best = -1;
+  options.forEach((o, i) => {
+    const w = o.trim().toLowerCase();
+    if (w && r.startsWith(w) && !/[\p{L}\p{N}]/u.test(r.charAt(w.length))
+        && (best < 0 || w.length > options[best].trim().length)) best = i;
+  });
+  return best;
 }
 
 function buttons(item: HomeItem): { yes: HomeAction | null; no: HomeAction | null } {

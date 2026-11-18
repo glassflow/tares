@@ -159,6 +159,9 @@ async function filledButtons(page) {
     const atlas = await project("Atlas", "Sessions survive a restart");
     await api("POST", "/api/desk", { question: "Which store should sessions use?", options: ["Redis", "Postgres"],
                                      recommendation: "Postgres", why: "We already back it up", project: atlas });
+    // a recommendation that starts with a shorter option ("No") names the longer one it is
+    await api("POST", "/api/desk", { question: "Ship the redesign this week?", options: ["No", "Not now, after the release"],
+                                     recommendation: "Not now, after the release", why: "The release freezes Friday", project: atlas });
     const billing = await project("Billing", "Customers download their invoices");
     await api("POST", `/api/projects/${billing}/docs`, { kind: "spec", title: "Billing spec", body: "# Billing\n\nA download button." });
     await api("POST", `/api/projects/${billing}/tickets`, { title: "Add the download button" });
@@ -177,7 +180,7 @@ async function filledButtons(page) {
       const L = (s) => `live @${width}: ${s}`;
       ck(L("the live feed, not a sample"), (await page.getByTestId("factory-feed").getAttribute("data-live")) === "1");
       const asks = await page.getByTestId("feed-ask").allInnerTexts();
-      const want = ["Which store should sessions use?", "Hand Billing to the crew", "Check M1 of Cart"];
+      const want = ["Which store should sessions use?", "Ship the redesign this week?", "Hand Billing to the crew", "Check M1 of Cart"];
       ck(L("a card for each thing seeded"), want.every((a) => asks.includes(a)), JSON.stringify(asks));
       await checkWords(page, ck, `feed live @${width}`);
       await shot(page, `live-${width}`);
@@ -192,21 +195,23 @@ async function filledButtons(page) {
           .then(() => ck(L(`${ask}: the card leaves`), true), () => ck(L(`${ask}: the card leaves`), false));
       };
       await answer("Which store should sessions use?", "feed-yes", "Yes, Postgres");
+      await answer("Ship the redesign this week?", "feed-yes", "Yes, Not now, after the release");
       await answer("Hand Billing to the crew", "feed-no", "Later");
       await answer("Check M1 of Cart", "feed-yes", "Accept");
 
       const record = (await api("GET", "/api/answers")).answers;
-      ck(L("the cell recorded three answers, every one from the feed"), record.length === 3 && record.every((a) => a.via === "feed"),
+      ck(L("the cell recorded four answers, every one from the feed"), record.length === 4 && record.every((a) => a.via === "feed"),
          JSON.stringify(record.map((a) => [a.id, a.via])));
       const by = Object.fromEntries(record.map((a) => [a.ask, a]));
-      ck(L("the option picked, Later as no, Accept as yes"), by["Which store should sessions use?"]?.said === "Postgres"
+      ck(L("the option picked, the recommended one, Later as no, Accept as yes"), by["Which store should sessions use?"]?.said === "Postgres"
+         && by["Ship the redesign this week?"]?.said === "Not now, after the release"
          && by["Hand Billing to the crew"]?.choice === "no" && by["Check M1 of Cart"]?.choice === "yes",
          JSON.stringify(record));
 
       await open(page, "");
       const rows = page.getByTestId("feed-answered");
       ck(L("after a reload nothing is left to answer"), (await cards(page).count()) === 0);
-      ck(L("Answered today is the cell's record: three, each from the feed"), (await rows.count()) === 3
+      ck(L("Answered today is the cell's record: four, each from the feed"), (await rows.count()) === 4
          && (await rows.allInnerTexts()).every((x) => x.includes("from the feed")), JSON.stringify(await rows.allInnerTexts()));
       ck(L("Later reads as No, Accept as Yes"),
          (await rows.filter({ hasText: "Hand Billing to the crew" }).getAttribute("data-choice")) === "no"
