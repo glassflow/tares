@@ -122,6 +122,7 @@ def register_routes(app, host) -> None:
     decisions.attach(app)   # a repo connected or removed wakes it, so the docs follow at once (TR-1220)
     repo_decisions = decisions_repo_mod.RepoDecisions(store, lambda: lore_client(), indexer.github_token)   # the files of the chosen decision folders (TR-1210)
     repo_decisions.attach(app)
+    syncer.push_listeners.append(repo_decisions.on_push)   # a push to a chosen folder updates its documents (TR-1219)
     removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
     remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
 
