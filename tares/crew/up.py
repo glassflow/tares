@@ -711,12 +711,22 @@ def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
         line = docker_cleanup.onboarding_note(env) if not env.get("FACTORY_NO_WATCH") else None
         if line:
             _err(line + "\n")
+    elif idle_wake_on(c):
+        _err(f"idle_wake is on and the watch is off: nothing wakes the stations and they hold no tick. "
+             f"Run {ME} crew watch.\n")
     _err(f"\nThe crew takes a few minutes to check in. Next:\n"
          f"  Watch it              {c.tares}/crew\n"
          f"  Answer its questions  {ME} crew attach orchestrator   (← to leave it running)\n"
          f"  Give it a project     {ME} spec \"what to build\"   (in the project's repo)\n"
          f"  Stop it               {ME} crew down\n")
     return 0
+
+
+def idle_wake_on(c) -> bool:
+    try:
+        return c.crew_settings().get("idle_wake") is True
+    except CrewError:
+        return False
 
 
 def cmd_crew_setup(argv: list, env: dict) -> int:
