@@ -12,6 +12,7 @@ tares factory doctor
   ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":false}
   ok    the kit follows the plugin checkout (not frozen)
+  warn  idle_wake is off: each station wakes on its own tick (reviewer every 15 minutes, orchestrator 20, releaser 30) even with nothing to do, and every quiet tick re-reads the whole conversation; turn it on so the watch wakes stations only for work
   warn  crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); tares factory crew update moves them
   ok    orchestrator keeps mcp none; plugins none
   ok    reviewer keeps mcp none; plugins none

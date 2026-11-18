@@ -196,7 +196,7 @@ def crew_settings(store, person: dict | None = None, system: bool = False) -> di
         out.update({k: v for k, v in factory_mod.stricter_than_team(
             stored_crew_setting(store, CREW_SETTING), out).items()
             if k in ("autonomy", "challenger")})
-    return out
+    return factory_mod.crew_effective(out)
 
 
 async def mark_merged(store, uid: str, t: dict, reason: str, by: str = "github",
@@ -615,7 +615,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         once, whether the watch moves stations onto a new Claude Code (claude_update, on unless
         false). Unset ones are null. `kit.frozen` says when `factory crew freeze` froze the
         crew's plugin kit, and by whom, or is null while the crew follows the checkout. `idle_wake`
-        (true or false; null counts as false) makes the watch wake an idle station with a message
+        (true or false; null counts as true) makes the watch wake an idle station with a message
         when it has work, and hold the station's liveness tick, instead of each station ticking
         on its own. `pace` (true or false; null counts as false) makes the crew slow down before
         the plan's limits: see GET /api/crew/pace. The caller's own come over the cell's

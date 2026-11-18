@@ -103,7 +103,9 @@ class FakeTares:
                 if w["token"] and self.headers.get("Authorization") != f"Bearer {w['token']}":
                     return self._send(401, {"detail": "unauthorized"})
                 if u.path == "/api/crew/settings":
-                    return self._send(w["settings_status"], {"settings": w["settings"]})
+                    # a world that names no idle_wake is a crew that ticks, as the scenarios were recorded; the default
+                    # (on) is tested by passing idle_wake None
+                    return self._send(w["settings_status"], {"settings": {"idle_wake": False, **w["settings"]}})
                 if u.path == "/api/crew/projects":
                     return self._send(200, {"projects": w["projects"]})
                 if u.path == "/api/grants":

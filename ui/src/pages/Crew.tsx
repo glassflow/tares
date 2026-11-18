@@ -623,7 +623,7 @@ function Settings({ st, grants, onChanged }: { st: CrewSettings; grants: string;
             <dt>Kit</dt>
             <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: stations that start or revive use the frozen kit, running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit</> : "following the checkout"}</dd>
             <dt>Wake on events</dt>
-            <dd>{st.idle_wake ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
+            <dd>{st.idle_wake !== false ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
             <dt>Pace before the plan's limits</dt>
             <dd>{st.pace ? "on: at 85% of the 5-hour window or 90% of the week no new builder starts and stations tick every 45 minutes; at 95% builders finish their step and wait; after the reset the watch resumes them" : "off: the crew runs until a limit stops it"}{" "}
               <button type="button" onClick={togglePace}>{st.pace ? "Turn off" : "Turn on"}</button>
