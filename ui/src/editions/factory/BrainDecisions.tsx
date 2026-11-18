@@ -275,7 +275,12 @@ export default function BrainDecisions() {
   const filtered = tab !== "all" || repo !== null || project !== null;
   const clearFilters = () => setParams(new URLSearchParams(), { replace: true });
 
-  const list = load.state === "ready" ? load.list : load.state === "error" ? load.list : undefined;
+  // Rows are shown only for the filter and page they were read for: right after Next, the old page's rows
+  // would be counted from the new page's position until the read lands, so the list shows loading instead.
+  const here = `${key}|${at}`;
+  const shown: Load = (load.state === "ready" && load.list.key !== here) ? { state: "loading" }
+    : (load.state === "error" && load.list && load.list.key !== here) ? { state: "error", message: load.message } : load;
+  const list = shown.state === "ready" ? shown.list : shown.state === "error" ? shown.list : undefined;
   // the last counts the cell gave, so Origin keeps its numbers while the next read is on its way
   const counts = list?.counts ?? lastCounts;
   const repoOptions = [{ value: ANY, label: ALL_REPOS },
@@ -315,7 +320,7 @@ export default function BrainDecisions() {
                 <Button variant="quiet" className="-ml-2 h-7 px-2 text-[13px]" onClick={clearFilters} data-testid="brain-decisions-clear">Clear filters</Button>
               </div>
             )}
-            <List load={load} tab={tab} repo={repo} project={project} canAdd={canAdd} now={now} page={at} before={before} reading={reading}
+            <List load={shown} tab={tab} repo={repo} project={project} canAdd={canAdd} now={now} page={at} before={before} reading={reading}
                   onPage={goTo} onDelete={(r) => { setDeleteError(""); setAsking(r); }} onRetry={reload} />
           </div>
         </>
