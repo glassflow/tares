@@ -8,11 +8,12 @@
  *    project doc in the console, none for one added by hand), where it lives, who decided and when; a project
  *    row without a kind never says "null". The tabs carry the cell's counts; a tab asks with `where`.
  *  - Show more asks with the cursor and adds the next page.
- *  - Add by hand: posts {title, text, decided_by}, the new row is at the top, the counts are read again. A file
+ *  - Record a decision (top right) opens /brain/decisions/new; it posts {title, text, decided_by} and goes back to
+ *    the list with the new row at the top, and the counts are read again. A file
  *    over 5 MB is refused before anything is sent; a 400 shows the cell's sentence; a 501 says PDF files can't
  *    be read; a file is sent as base64 with its name.
  *  - Delete shows only where can_delete is true, asks first, then the row leaves the list.
- *  - A read-only key: no add form, no Delete, one line saying why. No brain (404): "Not set up". A failed read:
+ *  - A read-only key: no Record a decision, no Delete; the form's address says why. No brain (404): "Not set up". A failed read:
  *    a banner with Try again. `?repo=owner/name` asks for that repo and says so, with a way back.
  *  - No sideways scroll at 390, and the page's words keep the words list.
  * The brain's API is answered by the test; the daemon is real (tests/licensed.cjs), so the console, the keys,
@@ -226,8 +227,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       ck("Knowledge, Decisions opens /brain/decisions", new URL(page.url()).pathname === "/brain/decisions", page.url());
       eq("the heading", await text(page.locator("h1")), "Decisions");
       ck("the line under it", (await text(T("brain-decisions"))).includes("Why things are the way they are, and who decided. The crew reads these before it changes the code they describe."));
-      eq("the empty line says what fills the page", await text(T("brain-decisions-empty")), "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you add below.");
-      ck("an admin sees the add form", (await T("brain-decision-add").count()) === 1);
+      eq("the empty line says what fills the page", await text(T("brain-decisions-empty")), "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you record here.");
+      ck("an admin sees Record a decision", (await T("brain-decision-record").count()) === 1);
       await page.waitForLoadState("networkidle");
       await oneRead(ck, "from the menu");
       await checkWords(page, ck, "empty");
@@ -293,63 +294,90 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await ctx.close();
     }
 
-    // ---- add by hand
+    // ---- record a decision: the button opens /brain/decisions/new, the form sends, the list has it at the top
     {
       const { ctx, page, mock, T } = await open();
+      ck("the list page has no form", (await T("brain-decision-add").count()) === 0);
+      eq("Record a decision is at the top right", await text(T("brain-decision-record")), "Record a decision");
+      await T("brain-decision-record").click();
+      await T("brain-decision-add-title").waitFor();
+      ck("it opens /brain/decisions/new", new URL(page.url()).pathname === "/brain/decisions/new", page.url());
+      eq("the form's heading", await text(page.locator("h1")), "Record a decision");
+      ck("the menu still marks Decisions", (await T("menu-brain-decisions").getAttribute("aria-current")) === "page");
       const who = T("brain-decision-add-who");
+      await until(async () => (await text(who)) === "Ada Lovelace (you)");
       eq("Decided by starts with you", await text(who), "Ada Lovelace (you)");
       await who.click();
       await page.getByRole("option", { name: "Grace Hopper" }).click();
       await T("brain-decision-add-title").fill("Use Postgres for the state store");
       await T("brain-decision-add-text").fill("We chose Postgres. It is what the cloud runs.");
+      const readsBefore = mock.reads.length;
       await T("brain-decision-add-submit").click();
-      await until(() => mock.posts.length === 1 && mock.reads.length === 2);
+      await until(() => mock.posts.length === 1 && new URL(page.url()).pathname === "/brain/decisions");
       eq("it posts the title, the text and who decided", mock.posts[0], { title: "Use Postgres for the state store", text: "We chose Postgres. It is what the cloud runs.", decided_by: grace.id });
-      await until(async () => (await text(T("brain-decision-row").first())).includes("Use Postgres"));
+      ck("then it goes back to Decisions", new URL(page.url()).pathname === "/brain/decisions", page.url());
+      await until(async () => (await T("brain-decision-row").count()) > 0 && (await text(T("brain-decision-row").first())).includes("Use Postgres"));
       const top = T("brain-decision-row").first();
       ck("the new row is at the top, from Second Brain, decided by that person",
          (await text(top)).includes("Use Postgres for the state store") && (await text(top.getByTestId("brain-decision-origin"))) === "Second Brain"
          && (await text(top.getByTestId("brain-decision-who"))) === "Grace Hopper", await text(top));
       await until(async () => (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("3"));
       ck("the Second Brain count went up", (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("3"));
-      eq("the form is empty again", await T("brain-decision-add-title").inputValue(), "");
+      ck("the list was read again", mock.reads.length > readsBefore);
+      await page.reload();
+      await T("brain-decision-row").first().waitFor();
+      ck("a reload does not add the row twice", (await T("brain-decision-row").filter({ hasText: "Use Postgres" }).count()) === 1);
 
+      // Cancel goes back without sending
+      await T("brain-decision-record").click();
+      await T("brain-decision-add-cancel").click();
+      await T("brain-decision-row").first().waitFor();
+      ck("Cancel goes back to Decisions, nothing sent", new URL(page.url()).pathname === "/brain/decisions" && mock.posts.length === 1);
+      await ctx.close();
+    }
+
+    // ---- the form's errors
+    {
+      const { ctx, page, mock, T } = await open({ url: "/brain/decisions/new", wait: "brain-decision-add-title" });
       // a file over 5 MB is refused before anything is sent
       await T("brain-decision-add-title").fill("A big one");
       await T("brain-decision-add-file").setInputFiles({ name: "big.pdf", mimeType: "application/pdf", buffer: Buffer.alloc(6 * 1024 * 1024, 1) });
       await T("brain-decision-add-error").waitFor();
       eq("a 6 MB file: plain words", await text(T("brain-decision-add-error")), "That file is over 5 MB. Upload a smaller one, or paste the text.");
       await T("brain-decision-add-submit").click();
-      ck("nothing was sent", mock.posts.length === 1, String(mock.posts.length));
+      ck("nothing was sent", mock.posts.length === 0, String(mock.posts.length));
       await T("brain-decision-add-file-clear").click();
 
-      // a Markdown file is sent as base64 with its name
-      await T("brain-decision-add-file").setInputFiles({ name: "adr-7.md", mimeType: "text/markdown", buffer: Buffer.from("# ADR 7\n\nWe chose it.\n") });
-      ck("the file's name shows, and the text box is off", (await text(T("brain-decision-add-file-name"))).includes("adr-7.md") && await T("brain-decision-add-text").isDisabled());
-      await T("brain-decision-add-submit").click();
-      await until(() => mock.posts.length === 2);
-      const sent = mock.posts[1];
-      ck("a file goes as {name, content_base64}, no text",
-         sent.file && sent.file.name === "adr-7.md" && Buffer.from(sent.file.content_base64, "base64").toString() === "# ADR 7\n\nWe chose it.\n" && !("text" in sent), JSON.stringify(sent).slice(0, 200));
-
-      // the cell's errors
       mock.post = async () => ({ status: 501, json: { detail: "PDF support is not installed" } });
       await T("brain-decision-add-title").fill("From a PDF");
       await T("brain-decision-add-file").setInputFiles({ name: "a.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 x") });
       await T("brain-decision-add-submit").click();
-      await T("brain-decision-add-error").waitFor();
+      await until(async () => (await T("brain-decision-add-error").count()) === 1 && (await text(T("brain-decision-add-error"))).startsWith("This cell"));
       eq("a 501: this cell can't read PDF files", await text(T("brain-decision-add-error")), "This cell can't read PDF files yet. Paste the text or upload a Markdown file.");
       await T("brain-decision-add-file-clear").click();
       mock.post = async () => ({ status: 400, json: { detail: "decided_by: nobody on the cell is called that" } });
       await T("brain-decision-add-text").fill("Some text.");
       await T("brain-decision-add-submit").click();
-      await until(async () => (await text(T("brain-decision-add-error"))).startsWith("Decided_by"));
+      await until(async () => (await T("brain-decision-add-error").count()) === 1 && (await text(T("brain-decision-add-error"))).startsWith("Decided_by"));
       eq("a 400: the cell's own sentence", await text(T("brain-decision-add-error")), "Decided_by: nobody on the cell is called that.");
       mock.post = async () => ({ status: 502, json: { detail: "lore said no" } });
       await T("brain-decision-add-submit").click();
       await until(async () => (await text(T("brain-decision-add-error"))) === "Couldn't save it. Try again.");
       eq("a 502: try again", await text(T("brain-decision-add-error")), "Couldn't save it. Try again.");
-      await checkWords(page, ck, "add errors");
+      ck("an error keeps the person on the form", new URL(page.url()).pathname === "/brain/decisions/new");
+      await checkWords(page, ck, "form errors");
+
+      // a Markdown file is sent as base64 with its name
+      mock.post = null;
+      await T("brain-decision-add-text").fill("");
+      await T("brain-decision-add-file").setInputFiles({ name: "adr-7.md", mimeType: "text/markdown", buffer: Buffer.from("# ADR 7\n\nWe chose it.\n") });
+      ck("the file's name shows, and the text box is off", (await text(T("brain-decision-add-file-name"))).includes("adr-7.md") && await T("brain-decision-add-text").isDisabled());
+      await T("brain-decision-add-submit").click();
+      await until(() => mock.posts.filter((b) => b.file && b.file.name === "adr-7.md").length === 1);
+      const sent = mock.posts.find((b) => b.file && b.file.name === "adr-7.md");
+      ck("a file goes as {name, content_base64}, no text",
+         Buffer.from(sent.file.content_base64, "base64").toString() === "# ADR 7\n\nWe chose it.\n" && !("text" in sent), JSON.stringify(sent).slice(0, 200));
+      await shot(page, "decision-new-1280.png");
       await ctx.close();
     }
 
@@ -374,10 +402,12 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     {
       const mock = brainMock({ rows: ROWS.map((r) => ({ ...r, can_delete: false })) });
       const { ctx, page, T } = await open({ token: reader.json.secret, mock });
-      ck("a read-only key: no add form", (await T("brain-decision-add").count()) === 0);
-      eq("one line says why", await text(T("brain-decision-add-read-only")), "Your key can only read, so it cannot add decisions.");
+      ck("a read-only key: no Record a decision", (await T("brain-decision-record").count()) === 0);
       ck("no Delete anywhere", (await T("brain-decision-delete").count()) === 0);
       await checkWords(page, ck, "read-only");
+      await page.goto(d.base + "/brain/decisions/new");
+      await T("brain-decision-add-read-only").waitFor();
+      eq("the form's address says why, with no form", [await text(T("brain-decision-add-read-only")), await T("brain-decision-add").count()], ["Your key can only read, so it cannot record decisions.", 0]);
       await ctx.close();
     }
 
@@ -413,8 +443,10 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const { ctx, page, T } = await open({ width: 390 });
       await fits(page, "filled at 390");
       await shot(page, "decisions-390.png");
-      await T("brain-decision-add-title").fill("x");
-      await fits(page, "the add form at 390");
+      await page.goto(d.base + "/brain/decisions/new");
+      await T("brain-decision-add-title").waitFor();
+      await fits(page, "the form at 390");
+      await shot(page, "decision-new-390.png");
       await ctx.close();
     }
   } catch (e) {

@@ -1,21 +1,21 @@
 import * as React from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import { api, ApiError } from "../../api";
-import { Banner, Button, Collapse, Dialog, EmptyState, Input, Panel, Select, Skeleton, Tabs, Textarea, Toaster, useToast } from "../../components/edition";
+import { ApiError } from "../../api";
+import { Banner, Button, Collapse, Dialog, EmptyState, Panel, Skeleton, Tabs, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
-import type { Person } from "../../types";
 import { useEdition } from "../edition";
-import { addDecision, brainDecisions, deleteDecision, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
+import { brainDecisions, deleteDecision, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
 import {
-  ADD_HEADING, ADD_LINE, addErrorWords, DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, FILE_TYPES, fileProblem, formProblem, HEADING,
-  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, MAX_TITLE, NOT_SET_UP_WORDS, READ_ONLY_LINE, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
+  DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, HEADING,
+  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, RECORD_WORDS, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
   whenWords, originOf, whoParts,
 } from "./brainDecisionsText";
 
 // Decisions (TR-1444): every decision the brain holds, from repo folders, shared factory projects and
-// ones added by hand, in tabs with the cell's counts, and a form to add one by hand. The list is read
-// once when the page opens and again after an add, a delete or a change of tab: building the counts
+// ones added by hand, in tabs with the cell's counts. Record a decision opens the form at
+// /brain/decisions/new (BrainDecisionNew.tsx). The list is read once when the page opens and again after a
+// delete, a change of tab, or coming back from the form with a new decision: building the counts
 // walks every decision in the brain, so the page never reads by itself. `?repo=owner/name` narrows the
 // list to one repo. Titles, summaries, names and paths are a person's own text and marked data-user-text.
 
@@ -122,106 +122,20 @@ function List({ load, tab, repo, canAdd, now, more, loadingMore, onMore, onDelet
   );
 }
 
-const readFile = (f: File): Promise<string> => new Promise((resolve, reject) => {
-  const fr = new FileReader();
-  fr.onload = () => { const s = String(fr.result ?? ""); resolve(s.slice(s.indexOf(",") + 1)); };
-  fr.onerror = () => reject(fr.error ?? new Error("read"));
-  fr.readAsDataURL(f);
-});
-
-function AddForm({ people, viewerId, viewerName, onWake, onAdded }: {
-  people: Person[] | null; viewerId?: string; viewerName?: string;
-  /** The form was first touched: the page reads the people for Decided by then, not on open. */
-  onWake: () => void;
-  onAdded: (r: DecisionRow) => void;
-}) {
-  const [title, setTitle] = React.useState("");
-  const [text, setText] = React.useState("");
-  const [file, setFile] = React.useState<File | null>(null);
-  const [who, setWho] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  const [problem, setProblem] = React.useState("");
-  const fileInput = React.useRef<HTMLInputElement>(null);
-
-  // the viewer first, marked as you; then everyone else by name
-  const options = React.useMemo(() => {
-    const known = people ?? (viewerId && viewerName ? [{ id: viewerId, name: viewerName } as Person] : []);
-    const list = [...known].sort((a, b) => (a.id === viewerId ? -1 : b.id === viewerId ? 1 : a.name.localeCompare(b.name)));
-    return list.map((p) => ({ value: p.id, label: p.id === viewerId ? `${p.name} (you)` : p.name }));
-  }, [people, viewerId, viewerName]);
-  const chosen = who || (options.some((o) => o.value === viewerId) ? viewerId ?? "" : options[0]?.value ?? "");
-
-  const pick = (f: File | null) => {
-    setFile(f);
-    setProblem(f ? fileProblem({ name: f.name, size: f.size }) : "");
-  };
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const p = formProblem({ title, text, file: file ? { name: file.name, size: file.size } : null });
-    if (p) { setProblem(p); return; }
-    setBusy(true); setProblem("");
-    try {
-      const body = file
-        ? { title: title.trim(), file: { name: file.name, content_base64: await readFile(file) } }
-        : { title: title.trim(), text };
-      const row = await addDecision(chosen ? { ...body, decided_by: chosen } : body);
-      setTitle(""); setText(""); pick(null); setWho("");
-      if (fileInput.current) fileInput.current.value = "";
-      onAdded(row);
-    } catch (err) {
-      setProblem(addErrorWords(err as { status?: number; message?: string }));
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <Panel title={ADD_HEADING} data-testid="brain-decision-add">
-      <form className="grid gap-3" onSubmit={submit} onFocus={onWake} onPointerDown={onWake} noValidate>
-        <p className={cn("m-0", MUTED)}>{ADD_LINE}</p>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Input label="Title" value={title} maxLength={MAX_TITLE} placeholder="What was decided" onChange={(e) => setTitle(e.target.value)} data-testid="brain-decision-add-title" />
-          {options.length > 0 && (
-            <Select label="Decided by" options={options} value={chosen} onValueChange={setWho} data-testid="brain-decision-add-who" />
-          )}
-        </div>
-        <Textarea label="The decision and why" rows={5} value={text} disabled={file !== null}
-                  hint={file ? "The file is added instead of pasted text." : undefined}
-                  placeholder="Paste the text, or upload a Markdown or PDF file below" onChange={(e) => setText(e.target.value)} data-testid="brain-decision-add-text" />
-        {/* the native file picker, opened by the Upload button; hidden so the button is the one control */}
-        <div className="sr-only" aria-hidden="true">
-          <Input ref={fileInput} label="File" type="file" accept={FILE_TYPES.join(",")} tabIndex={-1}
-                 onChange={(e) => pick(e.target.files?.[0] ?? null)} data-testid="brain-decision-add-file" />
-        </div>
-        {file && (
-          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px]" data-testid="brain-decision-add-file-name">
-            <span className="font-mono [overflow-wrap:anywhere]" data-user-text>{file.name}</span>
-            <Button variant="quiet" className="h-7 px-2 text-[13px]" onClick={() => { pick(null); if (fileInput.current) fileInput.current.value = ""; }} data-testid="brain-decision-add-file-clear">Remove file</Button>
-          </div>
-        )}
-        <Collapse>{problem && <Banner tone="error" data-testid="brain-decision-add-error"><span data-user-text>{problem}</span></Banner>}</Collapse>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" busy={busy} data-testid="brain-decision-add-submit">Add decision</Button>
-          <Button variant="secondary" disabled={busy} onClick={() => fileInput.current?.click()} data-testid="brain-decision-add-upload">
-            {file ? "Choose another file" : "Upload a file"}
-          </Button>
-        </div>
-      </form>
-    </Panel>
-  );
-}
-
 export default function BrainDecisions() {
   const [params, setParams] = useSearchParams();
   const tab = tabOf(params.get("where"));
   const repo = (params.get("repo") ?? "").trim() || null;
   const key = `${tab}|${repo ?? ""}`;
-  const { canWrite, personId, personName } = useEdition();
+  const { canWrite } = useEdition();
+  const location = useLocation();
+  const navigate = useNavigate();
   const canAdd = canWrite !== false;
   const { toast } = useToast();
 
   const [load, setLoad] = React.useState<Load>({ state: "loading" });
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [tick, setTick] = React.useState(0);
-  const [people, setPeople] = React.useState<Person[] | null>(null);
   const [asking, setAsking] = React.useState<DecisionRow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState("");
@@ -252,14 +166,6 @@ export default function BrainDecisions() {
     );
   }, [key, tab, repo, tick]);
 
-  // the people for Decided by, read once when the form is first touched, so opening the page is one read
-  const askedPeople = React.useRef(false);
-  const wakePeople = React.useCallback(() => {
-    if (askedPeople.current) return;
-    askedPeople.current = true;
-    api.people().then((r) => setPeople(r.people), () => { /* the picker keeps you alone */ });
-  }, []);
-
   const more = async () => {
     if (load.state !== "ready" || !load.list.next) return;
     const list = load.list;
@@ -275,11 +181,17 @@ export default function BrainDecisions() {
     } finally { setLoadingMore(false); }
   };
 
-  const onAdded = (r: DecisionRow) => {
-    added.current = [r, ...added.current];
-    toast("Added.");
+  // back from the form with a new decision: it stays at the top until a read has it, and the address
+  // drops the state so a reload does not say it again
+  const justAdded = (location.state as { added?: DecisionRow } | null)?.added;
+  React.useEffect(() => {
+    if (!justAdded) return;
+    added.current = [justAdded, ...added.current.filter((x) => x.id !== justAdded.id)];
+    toast("Recorded.");
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
     reload();
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [justAdded]);
 
   const confirmDelete = async () => {
     if (!asking) return;
@@ -315,9 +227,14 @@ export default function BrainDecisions() {
 
   return (
     <div className="grid min-w-0 gap-5 md:gap-6" data-testid="brain-decisions">
-      <div>
-        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">{HEADING}</h1>
-        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">{SUBTITLE}</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">{HEADING}</h1>
+          <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">{SUBTITLE}</p>
+        </div>
+        {canAdd && load.state !== "no-brain" && (
+          <Button asChild><Link to="/brain/decisions/new" data-testid="brain-decision-record">{RECORD_WORDS}</Link></Button>
+        )}
       </div>
       {load.state === "no-brain" ? (
         <Panel><EmptyState title="Not set up" data-testid="brain-decisions-not-set-up">{NOT_SET_UP_WORDS}</EmptyState></Panel>
@@ -340,11 +257,6 @@ export default function BrainDecisions() {
                     ),
                   }))} />
           </div>
-          {canAdd ? (
-            <AddForm people={people} viewerId={personId} viewerName={personName} onWake={wakePeople} onAdded={onAdded} />
-          ) : (
-            <p className={cn("m-0", MUTED)} data-testid="brain-decision-add-read-only">{READ_ONLY_LINE}</p>
-          )}
         </>
       )}
       <Dialog open={asking !== null} onOpenChange={(o) => { if (!o && !deleting) setAsking(null); }} data-testid="brain-decision-delete-dialog"

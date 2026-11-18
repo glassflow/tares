@@ -111,6 +111,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/brain": { page: lazyPage(() => import("./factory/BrainRepos")), fallback: "today" },
     // TR-1444
     "/brain/decisions": { page: lazyPage(() => import("./factory/BrainDecisions")), fallback: "today" },
+    "/brain/decisions/new": { page: lazyPage(() => import("./factory/BrainDecisionNew")), fallback: "today" },
     // TR-1206
     "/brain/ask": { page: lazyPage(() => import("./factory/BrainAsk")), fallback: "today" },
     // TR-1205

@@ -28,7 +28,7 @@ export function tabLabel(tab: DecisionTab, counts: DecisionCounts | null | undef
   return Number.isFinite(n) ? `${label} ${formatCount(Math.max(0, n))}` : label;
 }
 
-export const EMPTY_ALL = "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you add below.";
+export const EMPTY_ALL = "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you record here.";
 export const EMPTY_ALL_READ_ONLY = "No decisions yet. They show here from the decisions folders of GitHub repos, from specs and plans in shared factory projects, and from ones people add by hand.";
 
 export const EMPTY_TAB: Record<Exclude<DecisionTab, "all">, string> = {
@@ -125,9 +125,10 @@ export const isOnCell = (href: string) => href.startsWith("/");
 
 // ---- adding one
 
-export const ADD_HEADING = "Add a decision by hand";
+export const RECORD_WORDS = "Record a decision";
+export const ADD_HEADING = RECORD_WORDS;
 export const ADD_LINE = "For decisions that live nowhere else. Decisions in GitHub repos and factory projects are added for you.";
-export const READ_ONLY_LINE = "Your key can only read, so it cannot add decisions.";
+export const READ_ONLY_LINE = "Your key can only read, so it cannot record decisions.";
 export const MAX_TITLE = 200;
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const FILE_TYPES = [".md", ".markdown", ".txt", ".pdf"];
@@ -154,7 +155,7 @@ export function fileProblem(file: { name: string; size: number }): string {
 export const PDF_WORDS = "This cell can't read PDF files yet. Paste the text or upload a Markdown file.";
 export const SAVE_FAILED_WORDS = "Couldn't save it. Try again.";
 export const TOO_BIG_WORDS = "That is too big to keep. Upload a file under 5 MB, or paste less than 1 MB of text.";
-export const NO_WRITE_WORDS = "Your key can only read, so it cannot add decisions.";
+export const NO_WRITE_WORDS = READ_ONLY_LINE;
 
 /** The sentence an error from the cell becomes: a capital, a full stop. */
 export function plainError(message: string | undefined, fallback: string): string {
