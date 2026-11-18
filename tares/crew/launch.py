@@ -564,18 +564,22 @@ SLACK_WRITE_TOOLS = ("slack_send_message", "slack_send_message_draft", "slack_sc
                      "slack_update_canvas", "slack_add_reaction")
 # Claude Code matches a `*` in a tool rule (proved on a stub server), so a write tool the plugin adds later with one
 # of these verbs is denied too. Reads start with read, search, list or get and never match.
-SLACK_WRITE_VERBS = ("send", "schedule", "create", "update", "delete", "edit", "add", "post", "set", "remove", "invite")
+SLACK_WRITE_VERBS = ("send", "schedule", "create", "update", "delete", "edit", "add", "post", "set", "remove", "invite",
+                     "reply", "upload", "share", "react", "pin", "unpin", "join", "leave", "archive", "unarchive",
+                     "kick", "rename", "mark", "move", "publish", "write", "save", "open", "close", "start", "stop",
+                     "approve", "request", "copy", "transfer", "forward", "mute", "unmute", "star", "unstar")
 
 
 def slack_deny(mcp_names, plugin_ids) -> list:
     """The `permissions.deny` rules for every Slack write tool the role can reach: the plugin's server is
-    `mcp__plugin_slack_slack__<tool>`, a user MCP server named slack `mcp__slack__<tool>`. [] when the role keeps
+    `mcp__plugin_slack_slack__<tool>`, a user MCP server with slack in its name (any case) `mcp__<name>__<tool>`. [] when the role keeps
     neither, so the rules appear exactly when Slack is allowed."""
     prefixes = []
     if any(str(p).split("@")[0] == "slack" for p in plugin_ids):
         prefixes.append("mcp__plugin_slack_slack__")
-    if "slack" in mcp_names:
-        prefixes.append("mcp__slack__")
+    for name in mcp_names:
+        if "slack" in str(name).lower():   # Claude Code writes a server name with every other character as _
+            prefixes.append(f"mcp__{re.sub(r'[^A-Za-z0-9_-]', '_', str(name))}__")
     rules = [*SLACK_WRITE_TOOLS, *(f"slack_{v}*" for v in SLACK_WRITE_VERBS)]
     return [f"{pre}{rule}" for pre in prefixes for rule in rules]
 

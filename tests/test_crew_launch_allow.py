@@ -250,6 +250,13 @@ ck("a role without Slack has no Slack deny rule", not any("slack" in d for d in 
 plan, sdir, said, tmp = plan_of("orchestrator", {}, "proj-orch")
 ck("a role with no list has no Slack deny rule", not any("slack" in d for d in plan["settings"].get("permissions", {}).get("deny", [])))
 ck("slack_deny is empty with nothing allowed", launch.slack_deny([], []) == [] and launch.slack_deny(["linear"], ["slack-ish@x", "pyright@y"]) == [])
+for _tool in ("slack_reply_to_thread", "slack_upload_file", "slack_share_message", "slack_react", "slack_pin_message",
+              "slack_join_channel", "slack_archive_channel", "slack_mark_read"):
+    ck(f"{_tool}, a write tool not in the exact list, matches a verb rule", any(fnmatch.fnmatchcase(SP + _tool, d) for d in launch.slack_deny([], ["slack@x"])), _tool)
+ck("no verb rule matches a read tool of the plugin", not any(fnmatch.fnmatchcase(SP + t, d) for d in launch.slack_deny([], ["slack@x"]) for t in READS))
+for _name, _pre in (("Slack", "mcp__Slack__"), ("slack-mcp", "mcp__slack-mcp__"), ("my slack", "mcp__my_slack__")):
+    ck(f"an MCP server named '{_name}' is denied under {_pre}", launch.slack_deny([_name], [])[0] == _pre + "slack_send_message" and all(d.startswith(_pre) for d in launch.slack_deny([_name], [])))
+ck("an MCP server with no slack in its name gets no rule", launch.slack_deny(["linear", "github"], []) == [])
 ck("a plugin whose name only starts with slack is not Slack", launch.slack_deny([], ["slackbot@x"]) == [])
 both = launch.with_restrictions({"permissions": {"deny": [SP + "slack_send_message"]}}, {"permissions": {"deny": ["Bash(rm:*)"]}})
 ck("the person's own deny rules stay beside the Slack ones", both["permissions"]["deny"][0] == SP + "slack_send_message" and "Bash(rm:*)" in both["permissions"]["deny"])
