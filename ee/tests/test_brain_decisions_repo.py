@@ -231,6 +231,9 @@ def unit():
     ck("one commit: no changed_*, an empty file still builds", "changed_by" not in same["metadata"] and same["text"] == ""
        and same["metadata"]["pr"] == "https://x/pull/1", str(same))
     ck("no date: no document", dr.build_document("a/b", "x.md", {"text": "", "first": {**first, "date": None}}, {}) is None)
+    nul = dr.build_document("a/b", "docs/adr/x.md", {"text": "# T\x00itle\nbo\x00dy\n", "first": first, "last": first, "pr": None}, {})
+    ck("a NUL is taken out of the text and the title (lore refuses the batch for one)",
+       "\x00" not in nul["text"] and "\x00" not in nul["title"] and nul["title"] == "Title" and nul["text"] == "# Title\nbody\n", str(nul))
 
 
 # -- the scenarios ----------------------------------------------------------------------------
@@ -251,7 +254,7 @@ async def main():
     index_mod.Indexer.run = never
     sync_mod.Syncer.run = never
     known = ["acme/web", "acme/api", "acme/big", "acme/q", "acme/stale", "acme/cleared", "acme/cut", "acme/drop", "acme/boot",
-             "acme/lorefail"]
+             "acme/lorefail", "acme/nul"]
 
     async def readable_repos(cred, query=""):      # acme/lost is not readable by any connection
         return [{"full_name": r} for r in known]
@@ -471,7 +474,7 @@ async def main():
         print("== lore refusing does not crash it, and the key stays out of the log ==")
         gh.repos["acme/lorefail"] = simple_files(2)
         choose(store, "acme/lorefail", ["docs/adr"])
-        for status in (400, 500):
+        for status in (500, 502):
             lore.fail("put_documents", status, "no thanks " + BRAIN_KEY)
             await rd.import_folders("acme/lorefail", {"docs/adr"})
             ck(f"a lore {status} is logged and nothing is stored", not any(e.startswith("acme/lorefail:") for e in docs())
@@ -479,6 +482,26 @@ async def main():
         ck("the key is in no log line", not any(BRAIN_KEY in l for l in logs.lines), str([l[:200] for l in logs.lines if BRAIN_KEY in l]))
         await rd.import_folders("acme/lorefail", {"docs/adr"})
         ck("the next pass puts them (a failed put was not remembered as sent)", len({e for e in docs() if e.startswith("acme/lorefail:")}) == 2)
+
+        print("== a file with a NUL in it, and a batch lore refuses ==")
+        gh.repos["acme/nul"] = {**simple_files(2, "n"),
+                                "docs/adr/z-nul.md": fil("# Bad\x00 title\nbody\x00\n", [cm("zc", "zed", "Zed Z", "2024-01-01T00:00:00Z")])}
+        choose(store, "acme/nul", ["docs/adr"])
+        await rd.import_folders("acme/nul", {"docs/adr"})
+        got = {e: d for e, d in docs().items() if e.startswith("acme/nul:")}
+        ck("a file with a NUL goes in, the NUL taken out, and the other files are not held back",
+           len(got) == 3 and got["acme/nul:docs/adr/z-nul.md"]["title"] == "Bad title"
+           and got["acme/nul:docs/adr/z-nul.md"]["text"] == "# Bad title\nbody\n", str(sorted(got)))
+        for e in [e for e in docs() if e.startswith("acme/nul:")]:
+            lore.documents.pop((SOURCE, e))
+        rd._sent.clear()
+        before = len(puts())
+        lore.fail("put_documents", 400, "documents[1] is not acceptable " + BRAIN_KEY)   # the batch is refused once
+        await rd.import_folders("acme/nul", {"docs/adr"})
+        ck("a refused batch is put again one document at a time, so nothing stays out", len([e for e in docs() if e.startswith("acme/nul:")]) == 3
+           and len(puts()) - before == 4, f"{len(puts()) - before} puts")
+        ck("... and the refusal is logged without the key", any("putting them one at a time" in l for l in logs.mine())
+           and not any(BRAIN_KEY in l for l in logs.lines))
 
         print("== no secret anywhere ==")
         ck("the GitHub token is in no log line and no lore request", not any(GH_TOKEN in l for l in logs.lines)
@@ -515,7 +538,7 @@ async def main():
         await rd2.wait()
         ck("the folder chosen in the earlier run is imported by the new app's own start-up pass, nothing asked for",
            {e for e in docs() if e.startswith("acme/web:")} == want, str(sorted(docs())))
-        ck("... and only the repos with chosen folders were read", {x[0].split("/")[3] for x in gh2.requests if x[0].startswith("/repos/")} <= {"web", "api", "big", "q", "stale", "drop", "cut", "boot", "lorefail", "lost"})
+        ck("... and only the repos with chosen folders were read", {x[0].split("/")[3] for x in gh2.requests if x[0].startswith("/repos/")} <= {"web", "api", "big", "q", "stale", "drop", "cut", "boot", "lorefail", "lost", "nul"})
     ck("and its hook is removed when it stops", rd2.hook not in folders_mod.HOOKS)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

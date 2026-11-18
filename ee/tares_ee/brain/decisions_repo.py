@@ -179,7 +179,7 @@ def build_document(repo: str, path: str, facts: dict, names: dict) -> dict | Non
     if last and last["sha"] != first["sha"] and last.get("date"):
         meta["changed_by"] = [author_name(last, names.get(last.get("login")))]
         meta["changed_at"] = last["date"][:10]
-    text = facts.get("text") or ""
+    text = (facts.get("text") or "").replace("\x00", "")   # lore refuses a NUL in a text or a title (the title comes from it), and the whole batch with it
     return {"external_id": external_id(repo, path), "title": title_of(path, text), "text": text,
             "kind": KIND, "uri": file_uri(repo, path), "metadata": meta}
 
@@ -376,7 +376,25 @@ class RepoDecisions:
             return True, 0
         try:
             async with self._lore() as lore:
-                await lore.put_documents(SOURCE, [b[0] for b in batch])
+                try:
+                    await lore.put_documents(SOURCE, [b[0] for b in batch])
+                except LoreError as e:
+                    if e.status is None or e.status not in (400, 413, 422) or len(batch) == 1:
+                        raise
+                    # lore refused the batch for one document it dislikes: put them one at a time, so only that one stays out
+                    log.warning("brain repo decisions: lore refused a batch of %d documents of %s (%s); putting them one at a time",
+                                len(batch), repo, _say(e))
+                    kept = []
+                    for item in batch:
+                        try:
+                            await lore.put_documents(SOURCE, [item[0]])
+                        except LoreError as one:
+                            if one.status not in (400, 413, 422):
+                                raise
+                            log.warning("brain repo decisions: lore refused %s: %s", item[0]["external_id"], _say(one))
+                        else:
+                            kept.append(item)
+                    batch = kept
         except LoreError as e:
             log.warning("brain repo decisions: could not put %d documents of %s: %s", len(batch), repo, _say(e))
             return False, 0
