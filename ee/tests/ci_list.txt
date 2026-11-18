@@ -4,6 +4,8 @@ test_areas
 test_areas_licence
 test_brain_decisions_hand
 test_brain_decisions_projects
+test_brain_decisions_projects_backfill
+test_brain_decisions_repo
 test_brain_folders
 test_brain_folders_available
 test_brain_index

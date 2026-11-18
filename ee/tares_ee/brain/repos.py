@@ -41,6 +41,7 @@ from tares.envelope import now_utc
 from tares.factory import norm_repo
 
 from . import decisions as decisions_mod
+from . import decisions_repo as decisions_repo_mod
 from . import folders as folders_mod
 from . import index as indexing
 from . import sync as syncing
@@ -116,7 +117,9 @@ def register_routes(app, host) -> None:
     indexer.attach(app)
     syncer = syncing.Syncer(indexer, getattr(host, "runtime", None))   # keeps ready repos current (TR-1201)
     syncer.attach(app)
-    decisions_mod.Decisions(store, lambda: lore_client()).attach(app)   # shared projects' specs, plans and notes (TR-1211)
+    decisions = decisions_mod.Decisions(store, lambda: lore_client())   # shared projects' specs, plans and notes (TR-1211)
+    decisions.attach(app)   # a repo connected or removed wakes it, so the docs follow at once (TR-1220)
+    decisions_repo_mod.RepoDecisions(store, lambda: lore_client(), indexer.github_token).attach(app)   # the files of the chosen decision folders (TR-1210)
     removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
     remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
 
@@ -240,6 +243,7 @@ def register_routes(app, host) -> None:
                             store.set_brain_folders(repo, chosen[repo], by, now_utc())
                     if added:
                         done.append(repo)
+                        decisions.wake()   # its linked projects' docs go in now, not at the next interval
         except LoreError as e:
             kept = f" Connected before it failed: {', '.join(done)}." if done else ""
             host.err(ValueError(f"Could not connect {current}: {e}{kept}"), 502)
@@ -317,6 +321,7 @@ def register_routes(app, host) -> None:
                     if row["repo_source_id"]:
                         await forget_in_lore(repo, row["repo_source_id"])
                     store.delete_brain_repo(repo)
+                    decisions.wake()   # the docs of projects linked only to it go now
             remove_errors.pop(repo, None)
             return None
         except Exception as e:   # host.err raises an HTTPException; anything else is a bug we still report
