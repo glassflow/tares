@@ -334,6 +334,7 @@ tares factory: every station not open in a terminal runs Claude Code 1.4.0; left
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

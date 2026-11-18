@@ -562,6 +562,7 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
 }
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -620,6 +621,7 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
 }
 == file crew/stations/crew-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -678,6 +680,7 @@ tares factory: not every station runs Claude Code 1.12.8: crew-reviewer crew-rel
 }
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

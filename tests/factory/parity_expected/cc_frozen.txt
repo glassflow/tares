@@ -801,6 +801,7 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -861,6 +862,7 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

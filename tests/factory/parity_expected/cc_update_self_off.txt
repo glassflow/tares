@@ -378,6 +378,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -438,6 +439,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

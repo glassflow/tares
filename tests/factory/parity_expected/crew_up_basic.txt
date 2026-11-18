@@ -329,6 +329,7 @@ The crew takes a few minutes to check in. Next:
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

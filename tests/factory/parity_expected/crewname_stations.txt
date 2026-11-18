@@ -75,6 +75,7 @@ b-reviewer	reviewer		working
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -692,6 +693,7 @@ shop-build-m5	builder	shop	working
 
 == file crew/stations/crew-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -752,6 +754,7 @@ shop-build-m5	builder	shop	working
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -813,6 +816,7 @@ shop-build-m5	builder	shop	working
 @project 
 == file crew/stations/shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1545,6 +1549,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-a/stations/a-releaser-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1605,6 +1610,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-a/stations/a-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1665,6 +1671,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-a/stations/a-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1726,6 +1733,7 @@ shop-build-m5	builder	shop	working
 @project 
 == file crew-a/stations/a-shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -2307,6 +2315,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-b/stations/b-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -2368,6 +2377,7 @@ shop-build-m5	builder	shop	working
 @project 
 == file crew-b/stations/b-shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

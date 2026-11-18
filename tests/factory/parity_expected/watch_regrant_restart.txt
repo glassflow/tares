@@ -221,6 +221,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

@@ -354,6 +354,7 @@ b-reviewer	reviewer		working
 
 == file crew-a/stations/a-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -759,6 +760,7 @@ b-reviewer	reviewer		working
 
 == file crew-b/stations/b-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

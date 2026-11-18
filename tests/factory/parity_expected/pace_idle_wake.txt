@@ -577,6 +577,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
 {"stretched":true,"held":false}
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -639,6 +640,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
 {"stretched":true,"held":false}
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -702,6 +704,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
 {"stretched":true,"held":false}
 == file crew/stations/links-app-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

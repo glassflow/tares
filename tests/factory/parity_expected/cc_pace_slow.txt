@@ -782,6 +782,7 @@ tares factory: the plan's limit is full until <TS>, and a restart is a model tur
 {"stretched":true,"held":false}
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -844,6 +845,7 @@ tares factory: the plan's limit is full until <TS>, and a restart is a model tur
 {"stretched":true,"held":false}
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

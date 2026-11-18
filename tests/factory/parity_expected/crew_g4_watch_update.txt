@@ -357,6 +357,7 @@ tares factory: all stations stopped. Tares keeps the projects, tickets and the d
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

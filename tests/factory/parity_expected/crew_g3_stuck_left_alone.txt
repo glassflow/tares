@@ -251,6 +251,7 @@ tares factory: crew-releaser stopped; reviving it under the same name, in a new 
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
