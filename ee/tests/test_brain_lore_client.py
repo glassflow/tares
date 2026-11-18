@@ -189,6 +189,17 @@ async def main():
         e = await refused(lore.list_documents())
         ck("a failed listing is a plain LoreError", e is not None and e.status == 502 and KEY not in str(e), str(e))
 
+        # a decision added by hand keeps keys lore does not know (TR-1212): the listing hands them back
+        await lore.put_documents("hand", [{"external_id": "hand:x", "title": "By hand", "text": "Body. More.", "kind": "decision",
+                                           "metadata": {"where": "by_hand", "decided_by": ["Ana"], "decided_at": "2026-03-01T10:00:00Z",
+                                                        "added_by": "Bo", "added_by_id": "p_1", "summary": "Body."}}])
+        mine = (await lore.list_documents(kind="decision", source="hand"))["documents"][0]
+        ck("a decision's unknown metadata keys (added_by_id, summary) come back in the listing",
+           mine["metadata"]["added_by_id"] == "p_1" and mine["metadata"]["summary"] == "Body." and mine["metadata"]["where"] == "by_hand", str(mine))
+        await lore.delete_document("hand", "hand:x")
+        ck("a colon in an external id is deleted by its own path", not [d for d in (await lore.list_documents(source="hand"))["documents"]]
+           and fake.calls(route="delete_document")[-1].path == "/v1/documents/hand/hand%3Ax", fake.calls(route="delete_document")[-1].path)
+
         # -- decisions in the fake, as lore checks them -------------------------------------
         def one(meta, kind="decision"):
             return [{"external_id": "d1", "title": "T", "text": "t", "kind": kind, "metadata": meta}]
