@@ -12,8 +12,8 @@ A row of the `merge_queue` table is one pull request. Its states:
                     One row per (repo, base) is in this state at a time: a ready row that is
                     behind waits queued ("waits its turn") until it merges or leaves. The turn
                     is kept while the row waits for checks (CI_WAIT), for the person's yes
-                    (ASK_WAIT) and, once the update gave the same changes, until it merges;
-                    a row that waits longer lets the next one go on
+                    (ASK_WAIT) and, once the update gave the same changes, until it merges or
+                    CI_WAIT after its last change; a row that waits longer lets the next one go on
 - waiting_approval  L3-review: a desk item asks the person; nothing merges until a yes
 - merging           claimed by a tick, the merge call in flight (one per repo and base)
 - merged            GitHub shows it merged (by Tares or by anyone)
@@ -705,7 +705,9 @@ def _holds_turn(row: dict, now) -> bool:
     """Whether the row keeps its repo and base's turn: it is waiting for its checks, for the
     person's yes, or (`before_files` still set) has just been brought up to date and goes on to
     merge, and has done so for less than CI_WAIT or ASK_WAIT. A row that waits longer stops
-    blocking the others; it stays in the queue and goes on when its checks or its answer come."""
+    blocking the others; it stays in the queue and goes on when its checks or its answer come.
+    The time counts from the row's last write, so a write that changes its state or its reason
+    (a new reason text too) starts the wait again."""
     state = row["state"]
     if state == "waiting_approval":
         limit = ASK_WAIT
