@@ -370,6 +370,19 @@ finally:
 ck("`launch-plan` shows the lean flags and no OTEL_ name or value", "--no-chrome" in shown and "OTEL_" not in shown and "otel" not in shown
    and SECRET not in shown and "person-collector" not in shown, shown[:200])
 ck("the plan itself carries the person's OTEL_* for launch to hand on", plan["otel"].get("OTEL_METRICS_EXPORTER") == "otlp", str(plan.get("otel")))
+ck("`launch-plan` prints only args, env and settings", sorted(json.loads(shown)) == ["args", "env", "settings"], str(sorted(json.loads(shown))))
+ck("`launch-plan` has no otel entry and no mcp entry", '"otel"' not in shown and '"mcp"' not in shown, shown[:200])
+_odd = {"args": ["a"], "env": {"K": "v"}, "settings": {}, "otel": {"OTEL_X": SECRET}, "otel_file": {"OTEL_Y": SECRET}, "mcp": {"s": {"env": {"T": SECRET}}},
+        "future": {"token": SECRET}, "unreadable": object()}
+_got = stations.plan_shown(_odd)
+ck("an entry the list does not name is hidden, known or new", sorted(_got) == ["args", "env", "settings"] and SECRET not in json.dumps(_got), str(sorted(_got)))
+_err = io.StringIO()
+with contextlib.redirect_stderr(_err):
+    _hid = sorted(stations.plan_shown({"args": ["a"], "env": object(), "settings": {}}))
+ck("a named entry that cannot be written as JSON is hidden", _hid == ["args", "settings"])
+ck("a hidden entry is said on stderr, without its value", _err.getvalue() == "launch-plan: env hidden (it is not JSON)\n", _err.getvalue())
+ck("a plan that is not a dict shows nothing", stations.plan_shown(None) == {} and stations.plan_shown([("otel", 1)]) == {})
+ck("the entries shown are the ones the plan gave, unchanged", _got == {"args": ["a"], "env": {"K": "v"}, "settings": {}})
 ck("the plan's file part has no header variable", "OTEL_EXPORTER_OTLP_HEADERS" in plan["otel"]
    and "OTEL_EXPORTER_OTLP_HEADERS" not in plan["otel_file"] and "OTEL_METRICS_EXPORTER" in plan["otel_file"], str(sorted(plan["otel_file"])))
 
