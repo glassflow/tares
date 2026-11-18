@@ -1073,6 +1073,7 @@ tares factory: could not restart crew-reviewer-probe on Claude Code 1.12.2; the 
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1133,6 +1134,7 @@ tares factory: could not restart crew-reviewer-probe on Claude Code 1.12.2; the 
 
 == file crew/stations/crew-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1193,6 +1195,7 @@ tares factory: could not restart crew-reviewer-probe on Claude Code 1.12.2; the 
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

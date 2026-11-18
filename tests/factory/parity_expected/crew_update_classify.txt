@@ -326,6 +326,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-releaser
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

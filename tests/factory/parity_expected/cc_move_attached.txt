@@ -276,6 +276,7 @@ tares factory: crew-reviewer runs Claude Code 1.1.0
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -336,6 +337,7 @@ tares factory: crew-reviewer runs Claude Code 1.1.0
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",

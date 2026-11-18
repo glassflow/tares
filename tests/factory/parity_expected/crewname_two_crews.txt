@@ -394,6 +394,7 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -799,6 +800,7 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
 
 == file crew-a/stations/a-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1204,6 +1206,7 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
 
 == file crew-b/stations/b-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
