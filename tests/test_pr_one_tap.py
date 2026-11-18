@@ -184,7 +184,7 @@ async def main():
         ck("accepted, it leaves Home", all(i["kind"] != "milestone_to_check" for i in await home()))
         a = (await answers()).get(f"milestone_to_check:{uid}:{mid}") or {}
         ck("the acceptance is recorded", a.get("choice") == "yes" and a.get("said") == "Accepted"
-           and a.get("via") == "console" and a.get("ask") == "Check M1: cart", a)
+           and a.get("via") == "console" and a.get("ask") == mc["ask"] == "Check M1 of shop", a)
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

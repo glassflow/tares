@@ -118,6 +118,12 @@ def holds_desk(d: dict) -> str | None:
 _NUMBERED = re.compile(r"^\s*(?:M\s*)?\d+\s*[.:)\-]", re.I)
 
 
+def milestone_ask(project_name: str, i: int) -> str:
+    """The ask of a milestone to check, as Home shows it and as its answer records it: one
+    definition, so Answered today repeats the words the person saw (TR-1451)."""
+    return f"Check M{i} of {project_name}"
+
+
 def milestone_name(milestones: list[dict], mid: str | None) -> str | None:
     """A milestone as people read it: its own name when already numbered ("1. Foundations",
     "M2: Search"), else "M3: Name" with its place in the project's list, "M3" without a name."""
@@ -579,7 +585,7 @@ def milestones_to_check(store, fx, now) -> list[dict]:
                 "milestone_to_check", label="Milestone to check", title=f"{p['name']}, {m['name']}",
                 detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
                 project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
-                ask=f"Check M{i} of {p['name']}",
+                ask=milestone_ask(p["name"], i),
                 # the next milestone starts when this one is accepted
                 holds_up=milestone_name([r[1] for r in rows], rows[i][1]["id"]) if i < len(rows) else None,
                 # accepting is one tap (TR-1450); trying the checks first is the page's
