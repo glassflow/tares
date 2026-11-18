@@ -113,11 +113,11 @@ def _run_id(check_run: dict) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _replaced_runs(workflow_runs: list[dict], head: str) -> set[int]:
-    """Ids of the workflow runs on `head` that a later run of the same workflow replaced: a
-    workflow run is replaced when the same workflow has a run with a higher id on that commit."""
-    newest: dict = {}
-    seen: list[tuple] = []
+def _run_groups(workflow_runs: list[dict], head: str) -> list[list[dict]]:
+    """The workflow runs on `head` grouped by what a later run can replace: the same workflow,
+    event and branch. Each run is a dict with its id read as a number; a run GitHub gave without a
+    usable id or workflow is left out."""
+    groups: dict = {}
     for w in workflow_runs or []:
         if not isinstance(w, dict) or (w.get("head_sha") and head and w.get("head_sha") != head):
             continue
@@ -125,12 +125,34 @@ def _replaced_runs(workflow_runs: list[dict], head: str) -> set[int]:
             rid = int(w.get("id"))
         except (TypeError, ValueError):
             continue
-        wf = w.get("workflow_id")
-        if wf is None:
+        if w.get("workflow_id") is None:
             continue
-        seen.append((wf, rid))
-        newest[wf] = max(newest.get(wf, rid), rid)
-    return {rid for wf, rid in seen if rid < newest[wf]}
+        key = (w.get("workflow_id"), w.get("event"), w.get("head_branch"))
+        groups.setdefault(key, []).append({**w, "id": rid})
+    return list(groups.values())
+
+
+def _replaced_runs(workflow_runs: list[dict], head: str) -> set[int]:
+    """Ids of the workflow runs on `head` that a later run of the same workflow, event and branch
+    replaced: the run is not the one with the highest id of its group."""
+    out: set[int] = set()
+    for g in _run_groups(workflow_runs, head):
+        top = max(w["id"] for w in g)
+        out |= {w["id"] for w in g if w["id"] < top}
+    return out
+
+
+def _waiting_runs(workflow_runs: list[dict], head: str) -> list[str]:
+    """The names of the newest workflow runs that replaced another and have not finished: their
+    jobs may not exist yet, so the commit's checks are not all in."""
+    out = []
+    for g in _run_groups(workflow_runs, head):
+        if len(g) < 2:
+            continue
+        newest = max(g, key=lambda w: w["id"])
+        if newest.get("status") != "completed":
+            out.append(str(newest.get("name") or newest.get("display_title") or "workflow run"))
+    return out
 
 
 def _without_replaced(runs: list[dict], replaced) -> list[dict]:
@@ -142,12 +164,14 @@ def _without_replaced(runs: list[dict], replaced) -> list[dict]:
             if not (r.get("conclusion") == "cancelled" and _run_id(r) in replaced)]
 
 
-def _ci(statuses: list[dict], runs: list[dict], replaced=frozenset()) -> str:
+def _ci(statuses: list[dict], runs: list[dict], replaced=frozenset(), waiting=()) -> str:
     """One word for CI on a commit, the reviewer's own status left out: success, failure,
-    pending, or none (no checks at all). `replaced` is `_replaced_runs`."""
+    pending, or none (no checks at all). `replaced` is `_replaced_runs`; a name in `waiting`
+    (`_waiting_runs`) is a run still to finish, so the answer is at least pending."""
     statuses = _newest(statuses, "context", ("updated_at", "created_at"))
     runs = _newest(_without_replaced(runs, replaced), "name", ("started_at", "created_at"), by_app=True)
     states = [s.get("state") for s in statuses if s.get("context") != REVIEW_CONTEXT]
+    states += ["pending"] * len(waiting or ())
     for r in runs:
         if r.get("name") == REVIEW_CONTEXT:
             continue
@@ -183,13 +207,14 @@ def _status_state(state) -> str:
     return "failure" if state in ("failure", "error") else "pending"
 
 
-def _check_list(statuses: list[dict], runs: list[dict], replaced=frozenset()) -> list[dict]:
+def _check_list(statuses: list[dict], runs: list[dict], replaced=frozenset(), waiting=()) -> list[dict]:
     """Every check on a commit as {name, state}, one per commit status and check run, the
     reviewer's own status left out, and only the newest run of each name and the newest status of each
     context (see `_newest`). The mapping is the one `_ci` uses: a run still going is
     pending, `success`, `neutral` and `skipped` pass, any other conclusion (`cancelled`,
     `timed_out`, `action_required`, `startup_failure`, `stale`, `failure`) fails. A job cancelled
-    in a workflow run that a later run replaced is left out (see `_replaced_runs`)."""
+    in a workflow run that a later run replaced is left out (see `_replaced_runs`), and each run in
+    `waiting` is one pending check under its name."""
     out = []
     for s in _newest(statuses, "context", ("updated_at", "created_at")):
         if s.get("context") != REVIEW_CONTEXT:
@@ -204,6 +229,7 @@ def _check_list(statuses: list[dict], runs: list[dict], replaced=frozenset()) ->
         else:
             state = "failure"
         out.append({"name": str(r.get("name") or ""), "state": state})
+    out += [{"name": str(n), "state": "pending"} for n in waiting or ()]
     return out
 
 
@@ -234,18 +260,21 @@ def _review_of(statuses: list[dict], runs: list[dict]) -> dict | None:
     return max(found, key=lambda x: x[0])[1]   # the later one; equal stamps keep the first read
 
 
-async def _replaced_of(cx, api: str, repo: str, head: str, check_runs: list[dict]) -> set[int]:
-    """`_replaced_runs` for the commit, asked of GitHub only when a job was cancelled; a read that
-    fails answers an empty set, so a cancel then counts as before."""
+async def _replaced_of(cx, api: str, repo: str, head: str,
+                       check_runs: list[dict]) -> tuple[set[int], list[str], bool]:
+    """(`_replaced_runs`, `_waiting_runs`, whether the read failed) for the commit, asked of GitHub
+    only when a job was cancelled. A read that fails answers nothing replaced, so a cancel counts
+    as before; it needs the `actions: read` permission, which the check-runs read does not."""
     if not head or not any(r.get("conclusion") == "cancelled" and _run_id(r) for r in check_runs or []):
-        return set()
+        return set(), [], False
     try:
         resp = await cx.get(f"{api}/repos/{repo}/actions/runs", params={"head_sha": head, "per_page": 100})
         if resp.status_code != 200:
-            return set()
-        return _replaced_runs(resp.json().get("workflow_runs"), head)
+            return set(), [], True
+        wr = resp.json().get("workflow_runs")
+        return _replaced_runs(wr, head), _waiting_runs(wr, head), False
     except Exception:
-        return set()
+        return set(), [], True
 
 
 async def _tokens(store, repo: str) -> list[tuple[str, str]]:
@@ -288,7 +317,7 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 r.raise_for_status()
                 pr = r.json()
                 head = (pr.get("head") or {}).get("sha") or ""
-                statuses, check_runs, replaced = [], [], set()
+                statuses, check_runs, replaced, waiting = [], [], set(), []
                 partial = False   # a CI read that did not give everything (see ci_partial below)
                 try:   # CI and the verdict are extra: the PR itself is already read
                     st = await cx.get(f"{api}/repos/{repo}/commits/{head}/status",
@@ -305,7 +334,8 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                         body = runs.json()
                         check_runs = body.get("check_runs") or []
                         partial = partial or _more_than_read(body.get("total_count"), check_runs)
-                        replaced = await _replaced_of(cx, api, repo, head, check_runs)
+                        replaced, waiting, failed = await _replaced_of(cx, api, repo, head, check_runs)
+                        partial = partial or failed
                     else:
                         partial = True
                 except Exception:
@@ -316,9 +346,9 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 "head_repo": ((pr.get("head") or {}).get("repo") or {}).get("full_name"),
                 "head": head, "state": pr.get("state"), "merged": bool(pr.get("merged")),
                 "merge_commit": pr.get("merge_commit_sha") if pr.get("merged") else None,
-                "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs, replaced),
-                "ci_checks": _check_list(statuses, check_runs, replaced),
-                # True when a status or check-run read failed or GitHub holds more than was read:
+                "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs, replaced, waiting),
+                "ci_checks": _check_list(statuses, check_runs, replaced, waiting),
+                # True when a status, check-run or workflow-run read failed or GitHub holds more than was read:
                 # `ci` and `ci_checks` then show only part of the commit's checks
                 "ci_partial": partial,
                 # what the change was, for the project's GitHub page: the same read, no extra call

@@ -410,9 +410,10 @@ ck("...in either order", ci().state == "success")
 print("== a job cancelled because a later run of its workflow replaced it ==")
 
 
-def wrun(rid, workflow=306034208, head=HEAD):
+def wrun(rid, workflow=306034208, head=HEAD, status="completed", event="pull_request", branch="factory/T1"):
     """A workflow run as GitHub's actions/runs endpoint sends it (the fields the gate reads)."""
-    return {"id": rid, "workflow_id": workflow, "name": "CI", "head_sha": head, "event": "pull_request"}
+    return {"id": rid, "workflow_id": workflow, "name": "CI", "head_sha": head, "event": event,
+            "head_branch": branch, "status": status}
 
 
 TEMPLATE = "e2e (${{ matrix.shard }}/2)"   # a matrix job cancelled before it expanded keeps its template name
@@ -445,8 +446,19 @@ reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1)])
 ck("a replacing run GitHub does not list does not replace it", TEMPLATE in ci().failing)
 reset(runs=draft_jobs + ready_jobs, wruns=[], wruns_code=500)
 ck("the workflow runs cannot be read (500): cancels count as before", TEMPLATE in ci().failing)
+ck("...and read_pr marks the read partial", asyncio.run(fg.read_pr(store, REPO, N))["ci_partial"] is True)
+reset(runs=draft_jobs + ready_jobs, wruns=[], wruns_code=403)
+ck("...a 403 (no actions:read) is the same: counted as before, partial",
+   TEMPLATE in ci().failing and asyncio.run(fg.read_pr(store, REPO, N))["ci_partial"] is True)
 reset(runs=draft_jobs + ready_jobs, wruns=[], wruns_code="raise")
 ck("...or the call raises", TEMPLATE in ci().failing)
+ck("...and that too is partial", asyncio.run(fg.read_pr(store, REPO, N))["ci_partial"] is True)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)])
+ck("a workflow-run read that worked is not partial", asyncio.run(fg.read_pr(store, REPO, N))["ci_partial"] is False)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2, event="workflow_dispatch")])
+ck("a later run of another event (a manual dispatch) does not replace it", TEMPLATE in ci().failing)
+reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2, branch="other")])
+ck("a later run of another branch does not replace it", TEMPLATE in ci().failing)
 reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)])
 failed = real_run("lint", 13, DRAFT, conclusion="failure")
 failed["html_url"] = f"https://github.com/{REPO}/actions/runs/1/job/13"
@@ -482,6 +494,36 @@ reset(runs=draft_jobs + ready_jobs, wruns=[wrun(1), wrun(2)], head="")
 asyncio.run(fg.read_pr(store, REPO, N))
 ck("a PR with no head asks nothing about workflow runs", not [c for c in calls if c.endswith("/actions/runs")], calls)
 
+print("== the run that replaced it has not finished ==")
+partial_jobs = [real_run("test (duckdb)", 11, DRAFT), real_run(TEMPLATE, 12, DRAFT, conclusion="skipped"),
+                real_run("test (postgres)", 13, DRAFT, conclusion="cancelled")]
+for j in partial_jobs:
+    j["html_url"] = f"https://github.com/{REPO}/actions/runs/1/job/{j['id']}"
+for st in ("queued", "in_progress", "waiting", "requested", "pending"):
+    reset(runs=partial_jobs, wruns=[wrun(1), wrun(2, status=st)])
+    out = ci()
+    got = asyncio.run(fg.read_pr(store, REPO, N))
+    ck(f"the cancel is dropped but the replacing run is {st} with no jobs yet: pending, nothing failing",
+       (out.state, out.failing) == ("pending", []) and got["ci"] == "pending", out)
+ck("...and ci_checks lists it as a pending check, so the queue waits",
+   {"name": "CI", "state": "pending"} in got["ci_checks"]
+   and [c["name"] for c in got["ci_checks"] if c["state"] == "failure"] == [], got["ci_checks"])
+reset(runs=partial_jobs, wruns=[wrun(1), wrun(2)])
+ck("the replacing run finished: its checks are all there is, no pending entry",
+   ci().state == "success" and {"name": "CI", "state": "pending"} not in
+   asyncio.run(fg.read_pr(store, REPO, N))["ci_checks"])
+reset(runs=partial_jobs, wruns=[wrun(1), wrun(2, event="workflow_dispatch", status="queued")])
+out = ci()
+ck("an unfinished run of another event is no replacement and no wait: the cancel still fails",
+   (out.state, out.failing) == ("failure", ["test (postgres)"]), out)
+reset(runs=partial_jobs, wruns=[wrun(1), wrun(2, workflow=410143077, status="queued")])
+ck("...nor an unfinished run of another workflow", ci().failing == ["test (postgres)"])
+reset(runs=partial_jobs + [real_run("lint", 14, DRAFT, conclusion="failure")], wruns=[wrun(1), wrun(2, status="queued")])
+ck("a failure that was read still beats the wait", ci().failing == ["lint"])
+reset(runs=partial_jobs, wruns=[wrun(2, status="queued"), wrun(1), wrun(3, workflow=7, status="queued")])
+ck("two workflows: only the one that replaced a run is waited for",
+   fg._waiting_runs([wrun(2, status="queued"), wrun(1), wrun(3, workflow=7, status="queued")], HEAD) == ["CI"])
+
 print("== _replaced_runs ==")
 ck("no runs, None, junk: nothing replaced",
    fg._replaced_runs([], HEAD) == set() and fg._replaced_runs(None, HEAD) == set()
@@ -493,7 +535,14 @@ ck("each workflow keeps its own newest",
 ck("string ids are read as numbers", fg._replaced_runs([wrun("1"), wrun("2")], HEAD) == {1})
 ck("a run of another commit is ignored", fg._replaced_runs([wrun(1), wrun(2, head="x")], HEAD) == set())
 ck("a run with no head_sha counts for the commit asked about",
-   fg._replaced_runs([wrun(1), {"id": 2, "workflow_id": 306034208}], HEAD) == {1})
+   fg._replaced_runs([wrun(1), {**wrun(2), "head_sha": None}], HEAD) == {1})
+ck("a run of another event or branch is its own group",
+   fg._replaced_runs([wrun(1), wrun(2, event="workflow_dispatch"), wrun(3, branch="x")], HEAD) == set())
+ck("_waiting_runs: a lone unfinished run is nothing to wait for", fg._waiting_runs([wrun(1, status="queued")], HEAD) == [])
+ck("_waiting_runs: none, junk, a finished newest run", fg._waiting_runs(None, HEAD) == []
+   and fg._waiting_runs([None, {"id": 1}], HEAD) == [] and fg._waiting_runs([wrun(1), wrun(2)], HEAD) == [])
+ck("_waiting_runs: a run with no name is named for what it is",
+   fg._waiting_runs([wrun(1), {**wrun(2, status="queued"), "name": None}], HEAD) == ["workflow run"])
 ck("_run_id reads the run, not the job",
    fg._run_id({"html_url": "https://github.com/a/b/actions/runs/44240624428/job/134587351900"}) == 44240624428
    and fg._run_id({"html_url": None}) is None and fg._run_id({}) is None and fg._run_id(None) is None
