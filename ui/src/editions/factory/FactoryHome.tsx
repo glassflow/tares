@@ -201,7 +201,7 @@ function PlanFirst({ command }: { command: string }) {
   return (
     <section aria-label="Projects" className="min-w-0" data-testid="projects">
       <SectionHead title="Projects" />
-      <div className="grid gap-3 border border-border bg-card px-5 py-5" data-testid="plan-first">
+      <div className="grid gap-3 border-t border-border pt-4" data-testid="plan-first">
         <h3 className="m-0 text-base">Plan your first project</h3>
         <p className="m-0 max-w-[640px] text-[13px] text-muted-foreground">
           In your project's repo on this machine, type the command and talk the project through with Claude Code. It writes

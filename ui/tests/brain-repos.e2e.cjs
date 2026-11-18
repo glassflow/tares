@@ -66,7 +66,8 @@ function loadTs(file, requires = {}) {
 const wordsJson = JSON.parse(fs.readFileSync(path.join(UI_DIR, "src", "editions", "words.json"), "utf8"));
 const wordsMod = loadTs("words.ts", { "./words.json": { default: wordsJson } });
 const timeMod = loadTs(path.join("..", "lib", "time.ts"));
-const T = loadTs(path.join("factory", "brainText.ts"), { "../../lib/time": timeMod });
+const numberMod = loadTs(path.join("..", "lib", "number.ts"));
+const T = loadTs(path.join("factory", "brainText.ts"), { "../../lib/time": timeMod, "../../lib/number": numberMod });
 const S = loadTs(path.join("factory", "brainSamples.ts"), {});
 
 // ---- the cell's rows, as GET /api/brain gives them
@@ -232,7 +233,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("one card per repo", await page.getByTestId("brain-card").count(), 8);
       eq("the states, in the cell's order", await page.getByTestId("brain-card").evaluateAll((els) => els.map((e) => e.getAttribute("data-state"))),
          ["indexing", "queued", "cloning", "ready", "ready", "failed", "removing", "remove_failed"]);
-      ck("repo names are mono, and a person's text", await page.getByTestId("brain-name").first().evaluate((e) => getComputedStyle(e).fontFamily.toLowerCase().includes("mono") && e.hasAttribute("data-user-text")));
+      // a repo name heads its card, so it is set as a heading, not in mono (TR-1270)
+      ck("repo names are headings in sans, and a person's text", await page.getByTestId("brain-name").first().evaluate((e) => e.tagName === "H2" && !getComputedStyle(e).fontFamily.toLowerCase().includes("mono") && e.hasAttribute("data-user-text")));
 
       const idx = card(page, "acme/indexer");
       ck("indexing: the state", (await text(idx.getByTestId("brain-state"))) === "Indexing");

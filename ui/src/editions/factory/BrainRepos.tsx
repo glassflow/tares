@@ -105,7 +105,7 @@ function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval }: {
                            TONE[kind] === "bad" ? "border-err-border" : "border-border")}
              data-testid="brain-card" data-repo={r.repo} data-state={kind}>
       <div className="flex items-start justify-between gap-2">
-        <h2 className="m-0 font-mono text-[14px] font-medium leading-snug" data-user-text data-testid="brain-name">{r.repo}</h2>
+        <h2 className="m-0 text-[15px] font-medium leading-snug" data-user-text data-testid="brain-name">{r.repo}</h2>
         <StatusLabel tone={TONE[kind]} className={cn("shrink-0 font-sans text-[13px] font-semibold normal-case tracking-normal", INK.has(kind) && "text-foreground")} data-testid="brain-state">
           {STATE_WORDS[kind]}
         </StatusLabel>

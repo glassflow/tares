@@ -653,7 +653,7 @@ function AvailableRow({ a, onConnect }: { a: SetupAvailable; onConnect: () => vo
 }
 
 function SectionHead({ children, ...props }: { children: React.ReactNode } & React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className="m-0 mb-2 font-mono text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground" {...props}>{children}</h2>;
+  return <h2 className="m-0 mb-2 text-base" {...props}>{children}</h2>;
 }
 
 /** The step after this one in the rail, for the footer's button; null on the last. */
