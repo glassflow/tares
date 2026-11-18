@@ -37,6 +37,7 @@ from tares import licence
 from tares.envelope import now_utc
 from tares.factory import norm_repo
 
+from . import decisions as decisions_mod
 from . import index as indexing
 from . import sync as syncing
 from .cp import CpError
@@ -108,6 +109,7 @@ def register_routes(app, host) -> None:
     indexer.attach(app)
     syncer = syncing.Syncer(indexer, getattr(host, "runtime", None))   # keeps ready repos current (TR-1201)
     syncer.attach(app)
+    decisions_mod.Decisions(store, lambda: lore_client()).attach(app)   # shared projects' specs, plans and notes (TR-1211)
     removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
     remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
 
