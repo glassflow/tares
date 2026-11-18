@@ -425,7 +425,8 @@ with FakeTares({"GET /api/crew/settings": (500, "no")}):
 # ---------------------------------------------------------------------------------------------
 print("revive")
 STOPPED = [fake_claude.agent_row("stopped", "aaaa0001", "shop-build-m1", str(work))]
-AGAIN = ("Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, "
+AGAIN = ("Reload the skills factory-protocol and station-builder, re-read your report (a short state file; for "
+         "older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, "
          "re-arm your schedule if you have one, then carry on where your report left off.")
 reset({"shop-build-m1": station()}, STOPPED)
 del launched[:]

@@ -229,7 +229,8 @@ def said(err: str) -> list:
     return [x[len("tares factory: "):] for x in err.splitlines() if x.startswith("tares factory: ")]
 
 
-AGAIN = ("Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, "
+AGAIN = ("Reload the skills factory-protocol and station-builder, re-read your report (a short state file; for "
+         "older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, "
          "re-arm your schedule if you have one, then carry on where your report left off.")
 
 # ---------------------------------------------------------------------------------------------
