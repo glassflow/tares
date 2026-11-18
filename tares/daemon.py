@@ -797,6 +797,7 @@ def make_app() -> FastAPI:
     _PROJECT_INTEGRATION = re.compile(
         r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks|guardrails/pairs(/[^/]+)?)$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
+    _BRAIN_DECISION_WRITE = re.compile(r"^/api/brain/decisions(/[^/]+)?$")
 
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
@@ -824,6 +825,10 @@ def make_app() -> FastAPI:
             return "ingest"   # an area owner answering a question addressed to them (TR-636), or
                               # a person answering their own desk item from the console (TR-740):
                               # the handler decides by the credential's person
+        if method in ("POST", "DELETE") and _BRAIN_DECISION_WRITE.match(path):
+            return "ingest"   # anyone on the cell adds a decision by hand, and takes back their own
+                              # (TR-1212): the enterprise handler decides who may delete, from the
+                              # credential's person. A read key is refused here
         if method != "GET" and _PROJECT_INTEGRATION.match(path):
             return "ingest"   # a project's own integration choice and its test (TR-842), and
                               # its required checks (TR-854) and its guardrail pairs (TR-863): an admin or the project's lead;
