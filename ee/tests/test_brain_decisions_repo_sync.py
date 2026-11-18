@@ -20,8 +20,10 @@ same head does not; a dropped folder (and all folders dropped) deletes its docum
 folder's; a document lore no longer has (404) counts as deleted; another lore error leaves the document and
 the count, tells no lie, and the next pass deletes it; pushes of another branch, from a non-App source or
 before the licence do nothing; a document of a folder dropped while the cell was down goes at start-up; a delete
-that lands while the seed holds an already-read list is not put back by the seed's merge; the
-pure `pushed_files`.
+that lands while the seed holds an already-read list is not put back by the seed's merge; a force push
+reconciles everything (TR-1455); an edit that makes a file stop counting (over the size limit, its blob gone,
+no usable date) deletes its document; a start-up that could not read lore's list reads it again before a push
+deletes, and a push waits for start-up's read (a slow seed) before it deletes; the pure `pushed_files`.
 
 In process, no ports. With CI's Postgres run (TARES_TEST_PG and tests/pg_harness on PYTHONPATH) the same
 script keeps its state in Postgres.
@@ -99,6 +101,8 @@ class Gh:
         self.requests = []
         self.truncated = False
         self.head = {}
+        self.hidden = set()      # blob shas GitHub no longer has (404)
+        self.undated = set()     # paths whose commits carry no date
 
     def count(self, what):
         return len([p for p in self.requests if f"/{what}/" in p])
@@ -119,15 +123,16 @@ class Gh:
         if rest.startswith("git/blobs/"):
             want = rest[len("git/blobs/"):]
             text = next((t for t in files.values() if sha_of(t) == want), None)
-            if text is None:
+            if text is None or want in self.hidden:
                 return httpx.Response(404, json={"message": "Not Found"})
             return httpx.Response(200, json={"encoding": "base64", "size": len(text),
                                              "content": base64.encodebytes(text.encode()).decode()})
         if rest.endswith("/pulls"):
             return httpx.Response(200, json=[])
         p = unquote(q.get("path", ""))
-        c = {"sha": "c-" + p, "commit": {"author": {"name": "Ann A", "date": "2024-01-01T00:00:00Z"},
-                                         "committer": {"name": "Ann A", "date": "2024-01-01T00:00:00Z"}},
+        when = None if p in self.undated else "2024-01-01T00:00:00Z"
+        c = {"sha": "c-" + p, "commit": {"author": {"name": "Ann A", "date": when},
+                                         "committer": {"name": "Ann A", "date": when}},
              "author": {"login": "ann"}}
         return httpx.Response(200, json=[c] if p in files else [])
 
@@ -144,6 +149,9 @@ def unit():
     ck("19 commits are listed, 20 are GitHub's cap and may be cut: unknown",
        f({"commits": [{"added": [], "modified": [], "removed": []}] * 19}) == set()
        and f({"commits": [{"added": [], "modified": [], "removed": []}] * 20}) is None)
+    one = [{"added": ["a.md"], "modified": [], "removed": []}]
+    ck("a force push: unknown, even with a commit list (the files the rewrite dropped are named nowhere)",
+       f({"commits": one, "forced": True}) is None and f({"commits": one, "forced": False}) == {"a.md"} and f({"commits": one}) == {"a.md"})
     ck("a commit without its file lists: unknown", f({"commits": [{"id": "x"}]}) is None
        and f({"commits": [{"added": [], "modified": []}]}) is None and f({"commits": ["x"]}) is None)
 
@@ -167,7 +175,7 @@ async def main():
     sync_mod.Syncer.run = never
 
     async def readable_repos(cred, query=""):
-        return [{"full_name": r} for r in ("acme/web", "acme/api")]
+        return [{"full_name": r} for r in ("acme/web", "acme/api", "acme/leave")]
     github_credentials.list_repos_for = readable_repos
 
     heads = {}
@@ -195,7 +203,7 @@ async def main():
 
         seq = [0]
 
-        def push(repo, added=(), modified=(), removed=(), commits=None, branch="main", payload_files=True):
+        def push(repo, added=(), modified=(), removed=(), commits=None, branch="main", payload_files=True, forced=False):
             seq[0] += 1
             sha = f"{seq[0]:040x}"
             lst = commits if commits is not None else [{"id": sha, "added": list(added), "modified": list(modified), "removed": list(removed)}]
@@ -203,6 +211,8 @@ async def main():
                 lst = [{"id": sha}]
             payload = {"ref": "refs/heads/" + branch, "after": sha, "commits": lst, "head_commit": {"message": "change"},
                        "repository": {"full_name": repo, "default_branch": "main"}, "pusher": {"name": "kim"}}
+            if forced:
+                payload["forced"] = True
             b = gh_events.build("push", payload)
             return Envelope(source="github", source_type="event_stream", key_value=b["key"], event_type="push",
                             text=b["text"], event_time=b["event_time"], labels=b["labels"], payload=payload)
@@ -443,6 +453,100 @@ async def main():
         ck("the delete went through and the seed's merge did not put the path back", removed == 1 and (SOURCE, ghost) not in lore.documents
            and "docs/adr/ghost.md" not in seeded._held.get("acme/web", set()), f"{removed} {seeded._held}")
         ck("a seed with no delete in flight still fills the held paths", seeded._gone is None)
+
+        print("== a force push reconciles the whole folder ==")
+        choose(store, "acme/leave", ["docs/adr"])
+        gh.repos["acme/leave"] = {"docs/adr/keep.md": "# keep\nv1\n", "docs/adr/rewritten.md": "# rewritten\nv1\n"}
+        rd.request("acme/leave", ["docs/adr"])
+        await rd.wait()
+        ck("both files are in lore", sorted(docs("acme/leave")) == ["docs/adr/keep.md", "docs/adr/rewritten.md"], str(sorted(docs("acme/leave"))))
+        del gh.repos["acme/leave"]["docs/adr/rewritten.md"]     # the rewrite dropped it; the push's commits never name it
+        gh.repos["acme/leave"]["docs/adr/keep.md"] = "# keep\nv2\n"
+        await ingest(push("acme/leave", modified=["docs/adr/keep.md"]))
+        ck("an ordinary push that names only keep.md leaves the dropped file's document (nothing said it was gone)",
+           "docs/adr/rewritten.md" in docs("acme/leave") and docs("acme/leave")["docs/adr/keep.md"]["text"] == "# keep\nv2\n")
+        gh.repos["acme/leave"]["docs/adr/keep.md"] = "# keep\nv3\n"
+        await ingest(push("acme/leave", modified=["docs/adr/keep.md"], forced=True))
+        ck("a force push runs the full pass: the dropped file's document is deleted and the count follows",
+           "docs/adr/rewritten.md" not in docs("acme/leave") and docs("acme/leave")["docs/adr/keep.md"]["text"] == "# keep\nv3\n"
+           and rd.count("acme/leave", ["docs/adr"]) == 1, f"{sorted(docs('acme/leave'))} {rd.count('acme/leave', ['docs/adr'])}")
+
+        print("== an edit that makes a file stop counting deletes its document ==")
+        gh.repos["acme/leave"].update({"docs/adr/big.md": "# big\nsmall\n", "docs/adr/blob.md": "# blob\nv1\n", "docs/adr/undated.md": "# undated\nv1\n"})
+        rd.request("acme/leave", ["docs/adr"])
+        await rd.wait()
+        ck("all four are in lore", sorted(docs("acme/leave")) == ["docs/adr/big.md", "docs/adr/blob.md", "docs/adr/keep.md", "docs/adr/undated.md"],
+           str(sorted(docs("acme/leave"))))
+        gh.repos["acme/leave"]["docs/adr/keep.md"] = "# keep\nv4\n"
+        gh.repos["acme/leave"]["docs/adr/big.md"] = "# big\n" + "x" * 100          # now over the size limit
+        gh.repos["acme/leave"]["docs/adr/blob.md"] = "# blob\nv2\n"
+        gh.hidden.add(sha_of("# blob\nv2\n"))                                     # its blob is gone
+        gh.repos["acme/leave"]["docs/adr/undated.md"] = "# undated\nv2\n"
+        gh.undated.add("docs/adr/undated.md")                                        # no usable commit date
+        dr.MAX_BYTES = 60
+        try:
+            await ingest(push("acme/leave", modified=["docs/adr/keep.md", "docs/adr/big.md", "docs/adr/blob.md", "docs/adr/undated.md"]))
+        finally:
+            dr.MAX_BYTES = 1_000_000
+        left = docs("acme/leave")
+        ck("a file now over the size limit loses its document", "docs/adr/big.md" not in left, str(sorted(left)))
+        ck("a file whose blob is gone loses its document", "docs/adr/blob.md" not in left, str(sorted(left)))
+        ck("a file with no usable date loses its document", "docs/adr/undated.md" not in left, str(sorted(left)))
+        ck("the file that still qualifies is updated, and the count is 1",
+           list(left) == ["docs/adr/keep.md"] and left["docs/adr/keep.md"]["text"] == "# keep\nv4\n" and rd.count("acme/leave", ["docs/adr"]) == 1,
+           f"{sorted(left)} {rd.count('acme/leave', ['docs/adr'])}")
+        gh.hidden.clear()
+        gh.undated.clear()
+
+        print("== a start-up that could not read lore's list reads it again before a push deletes ==")
+        gh.repos["acme/leave"]["docs/adr/old.md"] = "# old\n"
+        rd.request("acme/leave", ["docs/adr"])
+        await rd.wait()
+        ck("old.md is in lore", "docs/adr/old.md" in docs("acme/leave"))
+        del gh.repos["acme/leave"]["docs/adr/old.md"]
+        blind = dr.RepoDecisions(store, lambda: lore.client(), rd._token)
+        lore.fail("list_documents", 500, "boom")
+        await blind._seed()
+        ck("the failed seed is remembered and holds nothing", blind._seed_failed and not blind._held.get("acme/leave"), str(blind._held))
+        lore.fail("list_documents", 500, "boom")      # the first retry fails too
+        blind.on_push("acme/leave", {"docs/adr/old.md"})
+        await blind.wait()
+        ck("while lore's list cannot be read nothing is deleted, and the next pass tries again",
+           "docs/adr/old.md" in docs("acme/leave") and blind._seed_failed)
+        blind.on_push("acme/leave", {"docs/adr/old.md"})
+        await blind.wait()
+        ck("once it can be read, the push deletes the older document", "docs/adr/old.md" not in docs("acme/leave") and not blind._seed_failed
+           and blind.count("acme/leave", ["docs/adr"]) == 1, f"{sorted(docs('acme/leave'))} {blind.count('acme/leave', ['docs/adr'])}")
+
+        print("== a push waits for start-up's read of lore before it deletes ==")
+        gh.repos["acme/leave"]["docs/adr/late.md"] = "# late\n"
+        rd.request("acme/leave", ["docs/adr"])
+        await rd.wait()
+        ck("late.md is in lore", "docs/adr/late.md" in docs("acme/leave"))
+        del gh.repos["acme/leave"]["docs/adr/late.md"]
+        hold = asyncio.Event()
+
+        def held_client():
+            c = lore.client()
+            listed = c.list_documents
+
+            async def after_hold(**kw):
+                await hold.wait()
+                return await listed(**kw)
+            c.list_documents = after_hold
+            return c
+        waiting = dr.RepoDecisions(store, held_client, rd._token)
+        waiting.startup_task = asyncio.create_task(waiting._seed())     # only the read: nothing but the push can delete late.md
+        await asyncio.sleep(0.1)
+        trees = gh.count("git/trees")
+        waiting.on_push("acme/leave", {"docs/adr/late.md"})
+        await asyncio.sleep(0.1)
+        ck("while lore's list is held back the push has not looked at GitHub", gh.count("git/trees") == trees and "docs/adr/late.md" in docs("acme/leave"),
+           f"{gh.count('git/trees') - trees}")
+        hold.set()
+        await waiting.wait()
+        ck("when the list arrives the push deletes the file's document", "docs/adr/late.md" not in docs("acme/leave")
+           and waiting.count("acme/leave", ["docs/adr"]) == 1, f"{sorted(docs('acme/leave'))} {waiting.count('acme/leave', ['docs/adr'])}")
 
         print("== before the licence and without a brain, a push does nothing ==")
         os.environ["TARES_BRAIN_URL"] = ""

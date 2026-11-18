@@ -93,7 +93,10 @@ async def github_head(api_url, token: str, repo: str, known=None) -> tuple[str, 
 def pushed_files(payload) -> set[str] | None:
     """The paths a push event touched (added, modified or removed in any of its commits), or None when the
     event cannot say: no commit list, GitHub's cap of PUSH_COMMITS_CAP commits reached (it cuts the rest),
-    or a commit without its file lists."""
+    a commit without its file lists, or a force push (its commits are the new ones; the files the rewrite
+    dropped are named nowhere)."""
+    if isinstance(payload, dict) and payload.get("forced"):
+        return None
     commits = payload.get("commits") if isinstance(payload, dict) else None
     if not isinstance(commits, list) or not commits or len(commits) >= PUSH_COMMITS_CAP:
         return None

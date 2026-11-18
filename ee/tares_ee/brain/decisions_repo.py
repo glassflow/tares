@@ -26,13 +26,10 @@ files it touched; the tree read decides for each: still there means import it ag
 file whose blob did not change), gone means delete its lore document. A push that touches no markdown costs
 nothing, and one with no usable file list (GitHub cuts a push's list at 20 commits; a token repo has no push
 events and is looked at when its head moves) runs a full pass over the chosen folders, which also deletes
-every document whose file is gone. A folder an admin drops (a hook on `folders.HOOKS`) deletes every document
+every document whose file is gone. A force push has no usable list either (it can drop files its commits never name).
+An edit that makes a file stop counting (over the size limit, its blob gone, no usable commit date) deletes the
+file's document too. A folder an admin drops (a hook on `folders.HOOKS`) deletes every document
 no longer under a chosen folder; start-up does the same once, so a delete that failed is tried again.
-
-How many documents the brain holds for a repo (`count`, shown on each row of `GET /api/brain`, TR-1442) is kept
-here, not asked of lore: the paths of the files put per repo, filled once at start-up from lore's list of the
-source (one walk, never on a request) and added to by each put. `count` is the paths under the folders still
-chosen, so a dropped folder stops counting at once. A request never calls lore or GitHub.
 
 How many documents the brain holds for a repo (`count`, shown on each row of `GET /api/brain`, TR-1442) is kept
 here, not asked of lore: the paths of the files put per repo, filled once at start-up from lore's list of the
@@ -226,6 +223,7 @@ class RepoDecisions:
         self._touched: dict[str, set[str] | None] = {}   # repo -> files pushes touched (None: look at every chosen folder)
         self._prune: set[str] = set()                 # repos whose documents outside the chosen folders are to be deleted
         self._gone: set[tuple[str, str]] | None = None   # (repo, path) deleted while the seed walks lore's list
+        self._seed_failed = False                     # the last read of lore's list failed: `_held` may miss documents
         self.startup_task: asyncio.Task | None = None
         self.calls = 0                                # GitHub calls made, for tests
 
@@ -246,7 +244,7 @@ class RepoDecisions:
         """Fill `_held` from what lore already holds under the source, so the count is right after a restart
         before the first import has run. One walk of lore's list, at start-up only."""
         found: dict[str, set[str]] = {}
-        cursor = None
+        cursor, failed = None, False
         self._gone = set()   # a delete that lands during the walk must not be put back by the merge below
         try:
             async with self._lore() as lore:
@@ -269,12 +267,21 @@ class RepoDecisions:
         except asyncio.CancelledError:
             raise
         except LoreError as e:
+            failed = True
             log.warning("brain repo decisions: could not read what lore holds: %s", _say(e))
         except Exception as e:   # noqa: BLE001
+            failed = True
             log.warning("brain repo decisions: could not read what lore holds: %s", type(e).__name__)
         gone, self._gone = self._gone or set(), None
+        self._seed_failed = failed
         for repo, paths in found.items():
             self._held.setdefault(repo, set()).update(p for p in paths if (repo, p) not in gone)
+
+    async def _known(self) -> None:
+        """A pass deletes by what `_held` says lore holds. When start-up could not read lore's list, `_held`
+        misses the older documents, so read the list again (under the lock, so no delete runs meanwhile)."""
+        if self._seed_failed:
+            await self._seed()
 
     # -- asking for an import ---------------------------------------------------------------
 
@@ -405,6 +412,7 @@ class RepoDecisions:
         async with self._lock:
             if not self.active():
                 return 0
+            await self._known()
             chosen = await self._chosen(repo)
             stale = [p for p in self._held.get(repo, ()) if not self._under(p, chosen)]
             return await self._delete(repo, stale)
@@ -440,6 +448,12 @@ class RepoDecisions:
             log.info("brain repo decisions: %s: deleted %d documents", repo, done)
         return done
 
+    async def _leave(self, repo: str, path: str) -> None:
+        """The file no longer qualifies (too big, its blob gone, no usable commit date): the document lore holds
+        for its earlier text goes, so the brain never answers from a version the repo no longer has."""
+        if path in self._held.get(repo, ()):
+            await self._delete(repo, [path])
+
     def _under(self, path: str, folders) -> bool:
         return any(path.startswith(f + "/") for f in folders)
 
@@ -454,6 +468,7 @@ class RepoDecisions:
             only = {p for p in only if self._under(p, folders)}
         if not folders or only == set():
             return 0
+        await self._known()
         try:
             token = await self._token(repo)
         except asyncio.CancelledError:
@@ -489,17 +504,20 @@ class RepoDecisions:
                 entry = files[path]
                 if entry["size"] is not None and entry["size"] > MAX_BYTES:
                     counts["large"] += 1
+                    await self._leave(repo, path)
                     continue
                 try:
                     facts = await self._facts(gh, repo, path, entry["sha"])
                 except _Gone:
                     counts["gone"] += 1
+                    await self._leave(repo, path)
                     continue
                 except _Stop as e:
                     stop = e
                     break
                 if facts["size_over"]:
                     counts["large"] += 1
+                    await self._leave(repo, path)
                     continue
                 for c in (facts.get("first"), facts.get("last")):
                     if c and c.get("login") and c["login"] not in names:
@@ -508,6 +526,7 @@ class RepoDecisions:
                 doc = build_document(repo, path, facts, {k: v for k, v in names.items() if v})
                 if doc is None:
                     counts["undated"] += 1
+                    await self._leave(repo, path)
                     continue
                 digest = _digest(doc)
                 if self._sent.get(doc["external_id"]) == digest:
