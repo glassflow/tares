@@ -37,6 +37,7 @@ for stage, status, blocked in itertools.product(
     outs.add(factory.state_of({"stage": stage, "status": status}, blocked))
 ck("every state_of answer is a ticket word", outs <= shown, outs - shown)
 ck("factory.STAGE_WORD is the shared table", factory.STAGE_WORD is sw.TICKET_STAGE)
+ck("every turn has words and an owner", set(factory.TURNS) == set(sw.TURN) == set(sw.TURN_WHOSE))
 
 # verdicts, on the project page and on GitHub
 ck("every verdict has words on the project page", set(factory.VERDICTS) <= set(sw.VERDICT))

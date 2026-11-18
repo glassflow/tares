@@ -343,7 +343,8 @@ async def main():
                 "blocked": 2, "canceled": 1}, a["counts"])
             tk = {t["title"]: t for t in a["moving"]}
             ck("a ticket has the fields of the page", tk and all(
-                set(t) == {"ref", "title", "state", "who", "pr", "review", "blocked_by", "href"}
+                set(t) == {"ref", "title", "state", "who", "pr", "review", "blocked_by", "href",
+                           "turn", "turn_label", "whose"}
                 for t in tk.values()), [sorted(t) for t in tk.values()][:1])
             ck("moving: changes asked, in review, in progress, then blocked, in the project's order",
                [t["title"] for t in a["moving"]] == ["Add the sitemap", "Add the footer", "Add the search box",
@@ -373,6 +374,9 @@ async def main():
                and tk["Add the search box"]["review"] is None, [tk[k]["review"] for k in tk])
             ck("a ticket that waits says for what", tk["Add the results page"]["blocked_by"] == ["T4"]
                and tk["Add the footer"]["blocked_by"] == [], tk["Add the results page"])
+            ck("a ticket that waits on another is queued after it, not stuck",
+               (tk["Add the results page"]["turn"], tk["Add the results page"]["turn_label"])
+               == ("queued", "Queued after T4"), tk["Add the results page"])
             ck("next is the first ready ticket that has not started, never one Moving now lists", a["next"] == {
                 "ticket": "T6", "title": "Add the news page", "why": "ready, nothing it depends on is open"}
                and a["next"]["ticket"] not in {m["ref"] for m in a["moving"]}, a["next"])

@@ -125,6 +125,31 @@ def ticket_state(t: dict, blocked_by: list[str]) -> str:
     return factory_mod.state_of(t, blocked_by)
 
 
+class Turns:
+    """Whose turn each ticket is (factory.turn_of), for screens that list tickets of one or more
+    projects. Reads the project's autonomy once per project and the open merge queue once."""
+
+    def __init__(self, store):
+        self.store, self._level = store, {}
+        self._queue = {r["ticket"]: r["state"] for r in store.merge_queue_open() if r.get("ticket")}
+
+    def level(self, uid: str) -> str:
+        if uid not in self._level:
+            from ..merge_queue import autonomy_of   # merge_queue imports the screens' modules
+            self._level[uid] = autonomy_of(self.store, uid)
+        return self._level[uid]
+
+    def of(self, uid: str, t: dict, blocked_by: list[str], last: dict | None) -> dict:
+        """{turn, turn_label, whose} for a ticket; `blocked_by` the refs it waits on
+        (factory.readiness), `last` its last review (store.last_reviews)."""
+        key = factory_mod.turn_of(t, blocked_by, factory_api.verdict_now(t, last), self.level(uid),
+                                  self._queue.get(t["id"]))
+        label = status_words.TURN[key]
+        if key == "queued" and blocked_by:
+            label += " after " + ", ".join(blocked_by)
+        return {"turn": key, "turn_label": label, "whose": status_words.TURN_WHOSE[key]}
+
+
 def _stamp(v) -> float:
     return v.timestamp() if hasattr(v, "timestamp") else 0.0
 
@@ -310,6 +335,7 @@ def register(app, store, h, ctx):
         roles, station_rows = read_roles()
         rd = factory_mod.readiness(tickets)
         reviews = store.last_reviews([t["id"] for t in tickets])
+        turns = Turns(store)
         number = {m["id"]: f"M{i + 1}" for i, m in enumerate(milestones)}
         refs = {t["id"]: factory_mod.label(t) for t in tickets}
 
@@ -324,7 +350,8 @@ def register(app, store, h, ctx):
                     "who": None if done else who_words(t.get("holder"), roles,
                                                        number.get(t.get("milestone"))),
                     "pr": _pr_out(t), "review": _review_out(reviews.get(t["id"]), t),
-                    "blocked_by": blocked_by, "href": f"/projects/{uid}/tickets/{ref}"}
+                    "blocked_by": blocked_by, "href": f"/projects/{uid}/tickets/{ref}",
+                    **turns.of(uid, t, blocked_by, reviews.get(t["id"]))}
 
         states = {t["id"]: ticket_state(t, rd[t["id"]]["blocked_by"]) for t in tickets}
         counts = {"total": len(tickets), **{k: 0 for k in _COUNT_KEY.values()}}

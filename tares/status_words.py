@@ -46,3 +46,19 @@ PROJECT_STATE = {"building": "Building", "waiting_on_you": "Waiting on you",
 PROJECT_LATER = "Later"
 PROJECT_DONE_ON_LIST = "Done"
 PROJECT_DONE_ON_PAGE = "Finished"
+
+# ── whose turn a ticket is (factory.turn_of) ──────────────────────────────────
+
+# what a ticket waits for, in words; the screen adds the tickets a queued one waits on
+# ("Queued after T3") and the reason a stuck one gives
+TURN = {"to_do": "To do", "queued": "Queued", "building": "Building", "reviewing": "Reviewing",
+        "changes_asked": "Changes asked", "checks_running": "Checks running",
+        "checks_failing": "Checks failing", "ready_for_you": "Ready for you",
+        "merging": "Merging", "stuck": "Stuck", "merged": "Merged", "closed": "Closed",
+        "canceled": "Canceled"}
+
+# who moves it next: the crew, a person, GitHub (its checks), or nobody (it waits or is over)
+TURN_WHOSE = {"to_do": "crew", "queued": "nobody", "building": "crew", "reviewing": "crew",
+              "changes_asked": "crew", "checks_running": "github", "checks_failing": "crew",
+              "ready_for_you": "person", "merging": "crew", "stuck": "person",
+              "merged": "nobody", "closed": "nobody", "canceled": "nobody"}

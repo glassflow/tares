@@ -53,6 +53,55 @@ def state_of(t: dict, blocked_by: list[str] | None = None) -> str:
     return "blocked" if blocked_by else "to do"
 
 
+
+TURNS = tuple(status_words.TURN)
+
+
+def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None = None,
+            autonomy: str = "L3-review", queue_state: str | None = None) -> str:
+    """Whose turn a ticket is, as a key of status_words.TURN. state_of says where the crew's
+    workflow has the ticket; this reads the same ticket with what happened since: the reviewer's
+    verdict on the current head (`verdict`, factory_api.verdict_now), CI on the pull request,
+    the project's autonomy (merge_queue.autonomy_of) and the ticket's open merge queue row.
+
+    It splits what state_of runs together: a ticket waiting on another is `queued`, one a
+    station stopped is `stuck`, and `in review` becomes reviewing, checks running or failing,
+    ready for you (L3: the merge is a person's) or merging (L4, or the queue is merging it).
+    A done status with no merge is `closed`, not merged."""
+    pr = t.get("pr") or {}
+    stage, status = t.get("stage"), t.get("status")
+    if stage in ("merged", "shipped") or pr.get("merged"):
+        return "merged"
+    if status == "done":
+        return "closed"
+    if status == "canceled":
+        return "canceled"
+    if stage == "blocked":
+        return "stuck"
+    if stage == "changes":
+        return "changes_asked"
+    if stage == "doing":
+        return "building"
+    if stage == "review":
+        if queue_state == "merging":
+            return "merging"
+        v = verdict or {}
+        if not v.get("current"):
+            return "reviewing"
+        if v.get("verdict") == "changes":
+            return "changes_asked"
+        if v.get("verdict") == "block":
+            return "stuck"
+        if pr.get("ci") == "pending":
+            return "checks_running"
+        if pr.get("ci") == "failure":
+            return "checks_failing"
+        # passed, no checks on the repo, or checks the cell cannot read: the merge is next
+        return "merging" if autonomy == "L4-ship" else "ready_for_you"
+    if status == "in_progress":
+        return "building"
+    return "queued" if blocked_by else "to_do"
+
 def goal_ok(goal) -> str:
     g = " ".join(str(goal or "").split())
     if len(g) > MAX_GOAL:
