@@ -39,9 +39,10 @@ const item = (kind: HomeItem["kind"], label: string, title: string, detail: stri
   from: null, since: NOW, waited: "3 hours", actions,
 });
 
-const REVIEW = item("prs_to_review", "2 PRs to review", "project-y",
-  "Show a last checked date on each answer, Add the answers to the docs sidebar. Each one holds up a milestone.",
-  "Waiting 3 hours · example-org/docs-site", [act("Review", true, { href: `/reviews?project=${PID}` })]);
+const REVIEW = { ...item("prs_to_review", "PR to review", "project-y, Show a last checked date",
+  "T6, Show a last checked date, PR 17. It holds up a milestone.",
+  "Waiting 3 hours · example-org/docs-site", [act("Review", true, { href: `/reviews?project=${PID}` })]),
+  checks: { ci: "passing" as const, behind_by: 0, line: "Checks pass. Up to date with main." } };
 const CALLS = item("calls_to_confirm", "2 calls to confirm", "project-y",
   "The crew decided without you: ISO dates, the standard logger. Keep both?", "Made by the builder and the reviewer",
   [act("Read them", false, { href: `/projects/${PID}/calls` }), act("Keep both", true, { do: "keep_assumptions" })]);
@@ -53,7 +54,8 @@ const QUESTION = item("question", "Question for you", "project-y",
   [act("Answer", true, { href: `/projects/${PID}#desk-D1` })]);
 const CHECK = item("milestone_to_check", "Milestone to check", "project-y, M1: Foundations",
   "Every ticket of this milestone merged. Try its 2 checks.", "Merged 1 day ago",
-  [act("Check it", true, { href: `/projects/${PID}#milestone-ms1` })]);
+  [act("Accept", true, { do: "accept_milestone", project: PID, milestone: "ms1" }),
+   act("Check it", false, { href: `/projects/${PID}#milestone-ms1` })]);
 
 const CALL_LIST: ProjectCall[] = [
   { ref: "A1", question: "Which date format?", choice: "ISO dates", why: "They sort the same as the text.",

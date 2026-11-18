@@ -16,7 +16,7 @@ import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { CopyCommand } from "../StartChecklist";
 import {
-  allowDesk, deskReply, finishProject, getHome, keepAssumption, keepForLater,
+  acceptMilestone, allowDesk, approveMerge, deskReply, finishProject, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
@@ -34,9 +34,9 @@ import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices, topIte
 // otherwise; the buttons that do something are handled there, never in the view.
 
 const SHOW_FIRST = 5;
-const POLL_MS = 15000;
+export const POLL_MS = 15000;
 const COPIED_MS = 2000;
-const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 seconds; read again just after
+export const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 seconds; read again just after
 const GRANT_MAX = 400;
 const WARN_AT = 80;
 
@@ -85,6 +85,7 @@ type OnAction = (a: HomeAction, item?: HomeItem) => void;
 const BUSY_LABEL: Partial<Record<HomeVerb, string>> = {
   keep_assumptions: "Keeping...", allow: "Allowing...", close: "Closing...", agree: "Agreeing...",
   answer: "Sending...", choose: "Sending...", decline: "Declining...", later: "Moving...",
+  approve_merge: "Approving...", accept_milestone: "Accepting...",
 };
 
 function ActionButton({ action, item, onAction, state, top }: {
@@ -416,7 +417,7 @@ function grantWords(who: string, command: string, where: string): string {
   return say(`${cut.slice(0, Math.max(cut.lastIndexOf(" "), 1))} ...`);
 }
 
-interface Done { item?: string; project?: string; later?: string }
+export interface Done { item?: string; project?: string; later?: string }
 
 export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
   item: HomeItem; desk: string; mayLimit: boolean; onClose: () => void; onDone: (r: AllowedGrant) => void;
@@ -510,8 +511,9 @@ const SAMPLE_OPENS = ["answer", "decline"];
 
 /** Everything the buttons of the page do. With `live` off (a sample) Copy works and the answer
  *  and decline panels open, but nothing reaches the cell: the page says so. `changed` tells the page what
- *  to hide at once and to read again. */
-function useHomeActions(live: boolean, changed: (done?: Done) => void) {
+ *  to hide at once and to read again; a sample tells it too, so a page that keeps its own list (the feed)
+ *  can move the row. The feed calls it as well, so an answer there takes the same path as one here. */
+export function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const { toast } = useToast();
   const [rows, setRows] = React.useState<Record<string, RowState>>({});
   const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
@@ -541,7 +543,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   /** One call for one row: the button shows work, the row leaves on success and shows the sentence of a refusal. */
   const run = async (item: HomeItem, verb: HomeVerb, call: () => Promise<unknown>, message: string, finish: () => void) => {
     if (working.current.has(item.id)) return;
-    if (!live) { toast(SAMPLE_NOTE); finish(); return; }   // a sample never calls the cell
+    if (!live) { toast(SAMPLE_NOTE); finish(); changed({ item: item.id }); return; }   // a sample never calls the cell
     working.current.add(item.id);
     update(item.id, () => ({ busy: verb }));
     try {
@@ -576,7 +578,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     }
     if (!item || working.current.has(item.id)) return;
     // A sample opens the panels and dialogs, and says nothing was sent when one is confirmed; the rest only say so.
-    if (!live && !SAMPLE_OPENS.includes(String(a.do))) { toast(SAMPLE_NOTE); return; }
+    if (!live && !SAMPLE_OPENS.includes(String(a.do))) { toast(SAMPLE_NOTE); changed({ item: item.id }); return; }
     if (a.do === "keep_assumptions") {
       const project = String(a.project ?? item.project?.id ?? "");
       const refs = Array.isArray(a.refs) ? a.refs.map(String) : [];
@@ -585,7 +587,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       update(item.id, () => ({ busy: "keep_assumptions" }));
       void (async () => {
         try {
-          for (const ref of refs) await keepAssumption(project, ref);
+          for (const ref of refs) await keepAssumption(project, ref, item.id);
           toast(`${refs.length === 1 ? "Kept it" : refs.length === 2 ? "Kept both" : `Kept all ${refs.length}`}. The crew carries on.`);
           update(item.id, () => null);
           changed({ item: item.id });
@@ -615,6 +617,16 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       if (desk && choice) {
         void run(item, "choose", () => deskReply(desk, letter, false, choice),
           "Answered. It is on its way back to whoever asked.", () => {});
+      }
+    } else if (a.do === "approve_merge") {
+      // the merge queue's question, answered on the pull request it is about (TR-1450)
+      const queue = typeof a.queue === "string" ? a.queue : "";
+      if (queue) void run(item, "approve_merge", () => approveMerge(queue), "Approved. Tares merges it in a moment.", () => {});
+    } else if (a.do === "accept_milestone") {
+      const project = String(a.project ?? item.project?.id ?? "");
+      const milestone = typeof a.milestone === "string" ? a.milestone : "";
+      if (project && milestone) {
+        void run(item, "accept_milestone", () => acceptMilestone(project, milestone), "Accepted. The next milestone can start.", () => {});
       }
     } else if (a.do === "answer") {
       // a spec question is the team's part: without it there is no box to open, so the row says what is missing
@@ -652,7 +664,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
 
   const sendAnswer = ({ item, action }: { item: HomeItem; action: HomeAction }, given: AnswerGiven) => {
     const desk = typeof action.desk === "string" ? action.desk : "";
-    const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice)
+    const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice, undefined, given.own)
       : () => {
           if (!team.current) return Promise.reject(new ApiError(missing, eeFailed || licenceNoAnswer ? 503 : 402));
           return team.current.answer(String(action.project), String(action.question), given.words);

@@ -8,6 +8,7 @@ test_agent_runs_filter
 test_agent_stats
 test_agents
 test_ai_sre_demo
+test_answers
 test_api_keys
 test_areas_single
 test_auth
@@ -207,6 +208,7 @@ test_plugin_resume_ship
 test_plugin_shims
 test_plugin_ship_once
 test_postgres
+test_pr_one_tap
 test_pricing
 test_private_any_licence
 test_project_access_single

@@ -209,30 +209,37 @@ async def main():
         got = [(i["kind"], (i["project"] or {}).get("name")) for i in w]
         # TR-1021: what holds the crew up first (the refused commands, the PRs waiting for your
         # merge), then the rest, oldest first in each
-        ck("eight items, what holds the crew up first, six kinds", got == [
-            ("permission", "project-x"), ("prs_to_review", "project-x"), ("permission", None),
+        ck("nine items, what holds the crew up first, six kinds", got == [
+            ("permission", "project-x"), ("prs_to_review", "project-x"), ("prs_to_review", "project-x"),
+            ("permission", None),
             ("ready_to_start", "project-y"), ("calls_to_confirm", "project-z"), ("question", "project-w"),
             ("milestone_to_check", "project-w"), ("question", None)], got)
-        ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
+        ck("waiting_total counts them", h["waiting_total"] == 9, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-            "waited", "actions", "tickets", "blocking", "older", "question", "lines",
-            "for_people", "for_admin", "no_lead"} for i in w))
-        ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
+            "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask", "holds_up",
+            "checks", "for_people", "for_admin", "no_lead"} for i in w))
+        ck("their ids are all different", len({i["id"] for i in w}) == 9, [i["id"] for i in w])
         ck("waited is in words, oldest first within each group", [i["waited"] for i in w] == [
-            "4 days", "3 days", "40 minutes", "2 days", "1 day", "10 hours", "6 hours", "20 minutes"],
+            "4 days", "3 days", "5 hours", "40 minutes", "2 days", "1 day", "10 hours", "6 hours", "20 minutes"],
            [i["waited"] for i in w])
         ck("the headline says how many and for how long",
-           h["headline"].endswith("8 things wait for you, the oldest for 4 days."), h["headline"])
+           h["headline"].endswith("9 things wait for you, the oldest for 4 days."), h["headline"])
         k = by_kind(h)
 
         print("== pull requests to review ==")
-        pr = k["prs_to_review"][0]
-        ck("one item per project, only the passed pull requests on their current commit",
-           len(k["prs_to_review"]) == 1 and pr["label"] == "2 PRs to review" and pr["title"] == "project-x"
-           and pr["detail"] == "Add the footer, Add the sitemap. One holds up a milestone.", pr)
+        pr, pr2 = k["prs_to_review"]
+        ck("one item per pull request, only the passed ones on their current commit (TR-1450)",
+           len(k["prs_to_review"]) == 2 and pr["label"] == "PR to review"
+           and pr["title"] == "project-x, Add the footer"
+           and pr["detail"] == "T1, Add the footer. It holds up a milestone."
+           and pr2["detail"] == "T2, Add the sitemap.", k["prs_to_review"])
         ck("it says how long and where", pr["meta"] == "Waiting 3 days · example-org/docs-site"
-           and pr["repo"] == "example-org/docs-site" and pr["id"] == f"prs_to_review:{px}", pr)
+           and pr["repo"] == "example-org/docs-site" and pr["id"] == f"prs_to_review:{px}:T1"
+           and pr["tickets"] == ["T1"], pr)
+        ck("checks never read say so (TR-1449)", pr["checks"] == {
+            "ci": None, "behind_by": None, "line": "Checks not read yet."}, pr["checks"])
+        ck("no other item carries checks", all(i["checks"] is None for i in w if i["kind"] != "prs_to_review"))
         ck("one action: review, a link", pr["actions"] == [
             {"label": "Review", "primary": True, "href": f"/reviews?project={px}"}], pr["actions"])
         ck("the changes and the older-commit verdicts are not in it",
@@ -264,6 +271,11 @@ async def main():
            all(i["id"] != f"question:{batch['label']}" for i in w))
 
         print("== the desk ==")
+        qb = fw.desk_question({"label": "D9", "options": ["a", "b"], "recommendation": "a",
+                                   "why": "it is cheaper", "blocks": "T1"})
+        ck("a question with options sends its options, the crew's answer, why, and what it holds up",
+           qb == {"desk": "D9", "options": ["a", "b"], "recommendation": "a", "why": "it is cheaper", "blocks": "T1"}, qb)
+        ck("a question without a why sends none", fw.desk_question({"label": "D9", "options": ["a"]})["why"] is None)
         qs = {i["id"]: i for i in k["question"]}
         q = qs[next(i for i in qs if i.startswith("question:D") and qs[i]["project"])]
         ck("a question for a project: its text, who asked, one primary link", q["label"] == "Question for you"
@@ -300,11 +312,55 @@ async def main():
            and mc["title"] == "project-w, M1: styles"
            and mc["detail"] == "Every ticket of this milestone merged, but the crew has not recorded its 2 checks. Accept it as it is, or ask the crew."
            and mc["meta"] == "Merged 6 hours ago" and mc["id"] == f"milestone_to_check:{pw}:{mws['M1']}", mc)
-        ck("check it, a link to the milestone", mc["actions"] == [
-            {"label": "Check it", "primary": True, "href": f"/projects/{pw}#milestone-{mws['M1']}"}],
+        ck("accept in one tap (TR-1450), or check it on the milestone", mc["actions"] == [
+            {"label": "Accept", "primary": True, "do": "accept_milestone", "project": pw,
+             "milestone": mws["M1"]},
+            {"label": "Check it", "primary": False, "href": f"/projects/{pw}#milestone-{mws['M1']}"}],
            mc["actions"])
         ck("a milestone with an open ticket, and one with only canceled tickets, show nothing",
            [i["title"] for i in k["milestone_to_check"]] == ["project-w, M1: styles"])
+
+        print("== the ask: the decision, verb first (TR-1447) ==")
+        asks = {i["id"]: i["ask"] for i in w}
+        ck("every item has an ask", all(isinstance(x, str) and x for x in asks.values()), asks)
+        ck("a PR item merges its pull request", pr["ask"] == "Merge Add the footer", pr["ask"])
+        ck("one PR is merged by its number, else by its ticket's title",
+           fw.ask_prs([{"number": 336, "title": "Add the footer"}], "x") == "Merge PR 336"
+           and fw.ask_prs([{"number": None, "title": "Add the footer"}], "x") == "Merge Add the footer")
+        ck("a project ready to start is handed over", rs["ask"] == "Hand project-y to the crew", rs["ask"])
+        ck("calls are kept, by count", cc["ask"] == "Keep 2 calls on project-z"
+           and fw.ask_calls(1, "atlas") == "Keep the crew's call on atlas"
+           and fw.ask_calls(0, "atlas") == "Keep the crew's calls on atlas", cc["ask"])
+        ck("a question's ask is the question", q["ask"] == "Which colour for the links?", q["ask"])
+        ck("a permission's ask is what the crew wants to run",
+           px_perm["ask"] == "Allow `gh api repos/example-org/docs-site/statuses/abc`", px_perm["ask"])
+        ck("a milestone is checked by its number", mc["ask"] == "Check M1 of project-w", mc["ask"])
+
+        print("== what it holds up (TR-1448) ==")
+        ck("a PR that closes its milestone holds the milestone up", pr["holds_up"] == "M1: pages", pr["holds_up"])
+        ck("a project not started holds its tickets", rs["holds_up"] == "2 tickets", rs["holds_up"])
+        ck("a milestone holds the next one", mc["holds_up"] == "M2: search", mc["holds_up"])
+        # M2 accepted out of order: M1 holds up the next one still waiting, M3
+        store.accept_milestone(pw, mws["M2"], "Vladimir", None, now_utc())
+        mc2 = next(i for i in (await get_home())["waiting_for_you"] if i["kind"] == "milestone_to_check")
+        ck("a milestone accepted already is not the one held up", mc2["holds_up"] == "M3: dropped", mc2["holds_up"])
+        with store._swrite:
+            store.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [mws["M2"]])
+        ck("a refused command holds its station's work",
+           px_perm["holds_up"] == "the builder's work", px_perm["holds_up"])
+        ck("calls and a question that names nothing hold nothing",
+           cc["holds_up"] is None and q["holds_up"] is None, (cc["holds_up"], q["holds_up"]))
+        ck("a desk item says what it blocks, else the tickets it names",
+           fw.holds_desk({"blocks": "the login flow", "tickets": ["T4"]}) == "the login flow"
+           and fw.holds_desk({"blocks": "", "tickets": ["T4", "T5"]}) == "T4 and T5"
+           and fw.holds_desk({"blocks": None, "tickets": [], "command": None}) is None)
+        ck("many tickets are counted", fw.holds_tickets(["T4", "T5", "T6"]) == "T4 and 2 more tickets")
+        dep = [{"id": "a", "identifier": "T1", "status": "in_progress", "depends_on": []},
+               {"id": "b", "identifier": "T2", "status": "todo", "depends_on": ["a"]},
+               {"id": "c", "identifier": "T3", "status": "done", "depends_on": ["a"]}]
+        ck("a PR holds the open tickets that depend on its own, before its milestone",
+           fw.holds_prs([{"ticket": "T1", "blocks_milestone": True, "milestone": "m"}], dep,
+                        [{"id": "m", "name": "M1: pages"}]) == "T2")
 
         print("== who it is not for ==")
         names = {(i["project"] or {}).get("name") for i in w}
@@ -358,7 +414,7 @@ async def main():
                                         "repo": "example-org/docs-site", "head": "ccccccc3333"})
             pr = by_kind(await get_home())["prs_to_review"][0]
             ck("a new commit makes the old pass stale: one pull request left",
-               pr["label"] == "1 PR to review" and pr["detail"] == "Add the sitemap."
+               len(by_kind(await get_home())["prs_to_review"]) == 1 and pr["detail"] == "T2, Add the sitemap."
                and pr["meta"].startswith("Waiting 5 hours"), pr)
             store.update_ticket(t2, stage="merged", status="done")
             ck("merged, it is gone", "prs_to_review" not in by_kind(await get_home()))
@@ -420,6 +476,7 @@ async def main():
         ck("open the project, or close it", so["actions"] == [
             {"label": "Open project", "primary": False, "href": f"/projects/{pv}"},
             {"label": "Close project", "primary": True, "do": "close"}], so["actions"])
+        ck("a project ready to close is closed (TR-1447)", so["ask"] == "Close project-v", so["ask"])
         ck("the project row says so too", {p["name"]: p for p in (await get_home())["projects"]}
            ["project-v"]["can_close"] is True)
         async with cx_() as cx:

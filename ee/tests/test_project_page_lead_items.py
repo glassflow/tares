@@ -178,7 +178,7 @@ async def main():
             ck("Adam saves L4-ship for his own crew", r.status_code == 200, r.text)
         a = await page("adam", desktop)
         ck("the PR waits for Kiran, who merges at L3-review",
-           any(w["label"] == "1 PR to review for Kiran" for w in a["waiting_others"]),
+           any(w["label"] == "PR to review for Kiran" for w in a["waiting_others"]),
            [w["label"] for w in a["waiting_others"]])
         k = await page("kiran", desktop)
         ck("and it is Kiran's own", any(w["kind"] == "prs_to_review" for w in k["waiting"]),

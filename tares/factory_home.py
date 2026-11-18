@@ -30,7 +30,8 @@ CACHE_SECONDS = 5
 KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "permission",
          "milestone_to_check", "signoff", "grant", "desk", "rule")
 # what a button does on the page when it is not a link
-ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later")
+ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later",
+           "approve_merge", "accept_milestone")
 
 STATE_LABEL = {"building": "Building", "waiting_on_you": "Waiting on you",
                "not_started": "Not started", "ready_to_close": "Ready to close"}
@@ -107,14 +108,22 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
               actions: list[dict], project: dict | None = None, repo: str | None = None,
               from_: dict | None = None, id: str | None = None,
               tickets: list[str] | None = None, blocking: bool = False,
-              question: dict | None = None, lines: list[str] | None = None) -> dict:
+              question: dict | None = None, lines: list[str] | None = None,
+              ask: str | None = None, holds_up: str | None = None,
+              checks: dict | None = None) -> dict:
     """One thing that waits for the person, in the shape every list of waiting items uses.
     `project` and `from_` are {id, name} (`from_` is {crew: True, name: "Your crew"} for the
     crew); `since` is when it began to wait. An action is a link (`href`) or something the page
     does (`do`, one of ACTIONS), never both. `id` is made from the kind, the project and the title
     unless the builder gives a stable one. `tickets` names the tickets the item is about (the
     pull requests to review), empty for an item about no ticket. `lines` are short lines shown one
-    under the other below the detail (the calls in a "calls to confirm" item)."""
+    under the other below the detail (the calls in a "calls to confirm" item). `ask` is the
+    decision in one line that starts with its verb ("Merge PR 336", "Check M1 of atlas"), what a
+    feed card leads with (TR-1447); a question's ask is the question itself. `holds_up` names
+    what waits on the answer ("T4 and 2 more tickets", "M2: billing hooks"), None when nothing
+    does (TR-1448). `checks` is a pull request's CI and drift (TR-1449): {ci: passing, failing,
+    running, none or None unread; behind_by: commits its base has that it lacks, None unread;
+    line: the two in one sentence}, None on every other item."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}; one of: " + ", ".join(KINDS))
     acts = []
@@ -134,6 +143,7 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             "blocking": bool(blocking), "older": False,
             # a desk question's own options and the crew's recommendation, answerable on the row
             "question": question, "lines": list(lines or []),
+            "ask": ask, "holds_up": holds_up, "checks": checks,
             # whom it waits for (factory_owners.tag): the people, whether any admin may act, and
             # whether it fell to the admins because its project has no lead
             "for_people": [], "for_admin": False, "no_lead": False}
@@ -147,6 +157,12 @@ def order_waiting(items: list[dict], now) -> list[dict]:
     first, then the rest, then what has waited more than OLDER_DAYS and holds nothing up (marked
     `older`, folded on the page). A project ready to close comes last among the rest. Oldest
     first within each."""
+    # a merge question the merge queue put on the desk, when a pull request's item already
+    # carries its Merge for the same people, shows once: on the pull request (TR-1450)
+    gone = {lab for i in items for lab in i.pop("absorbs", None) or ()}
+    if gone:
+        items[:] = [i for i in items if not (i["kind"] in ("question", "desk")
+                                             and i["id"].split(":", 1)[-1] in gone)]
     for i in items:
         age = _minutes(i.get("since"), now)
         i["older"] = (not i.get("blocking")) and age is not None and age > OLDER_DAYS * 24 * 60

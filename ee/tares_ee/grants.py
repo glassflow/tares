@@ -21,15 +21,31 @@ from __future__ import annotations
 
 from fastapi import Body, Request
 
+from tares import answers as answers_mod
 from tares import factory as factory_mod
+from tares import factory_waiting as fw
 from tares import licence
 from tares.envelope import now_utc
 from tares.factory_api import caller
 
-__all__ = ["NEEDS_LICENCE", "pending_owners", "pending_lead", "waiting_for", "waits_for_me",
+__all__ = ["NEEDS_LICENCE", "grant_ask", "pending_owners", "pending_lead", "waiting_for", "waits_for_me",
            "waiting_for_me", "settle", "settle_on_read", "grant_or_404", "register_routes"]
 
 NEEDS_LICENCE = "Agreeing to someone else's grant needs an enterprise licence."
+
+
+def grant_ask(g: dict, hidden: bool, owned: list[str]) -> str:
+    """What a grant waiting for a person asks them (TR-1447), the same on Home's row and in the record
+    of their answer (TR-1451). A grant on a project hidden from them names the repos of it they own,
+    never its words, which may name the project."""
+    if hidden:
+        return "Agree to a grant over " + (fw._and(owned) if owned else "a repo you own")
+    return "Agree to the grant: " + fw._trim(g["words"], 80)
+
+
+def owned_by(area_owner, g: dict, person_id: str | None) -> list[str]:
+    """The repos the grant names that this person owns."""
+    return [r for r in g.get("areas") or [] if person_id and (area_owner(r) or {}).get("id") == person_id]
 
 
 def pending_owners(c, areas, given_by, consents) -> list[dict]:
@@ -136,6 +152,18 @@ def register_routes(app, host) -> None:
         """"console" for a person acting on the page (no station header), else None."""
         return None if caller(request)["station"] else "console"
 
+    def answered(request: Request, g: dict, yes: bool, said: str) -> None:
+        """The record of the answer (TR-1451). A grant over a project hidden from the person who
+        answers keeps its words out of the record, as Home keeps them off its row."""
+        hidden = bool(g.get("project") and g["project"] in host.hidden_ids())
+        person = host.current_person(request)
+        answers_mod.record(
+            store, request, item=f"grant:{g['id']}", kind="grant", project=g.get("project"),
+            ask=grant_ask(g, hidden, owned_by(host.area_owner, g, person["id"] if person else None)),
+            choice="yes" if yes else "no", said=said,
+            via=None if console_via(request) else "session",
+            person_id=person["id"] if person else None)
+
     @app.post("/api/grants/{gid}/consent")
     def consent_grant(gid: str, request: Request):
         """The owner of a repo the grant names, or the project's lead (an admin when it has none)
@@ -162,6 +190,7 @@ def register_routes(app, host) -> None:
         # only while it still waits: a decline that came since the read must stay a decline
         if not store.consent_waiting_grant(g["id"], consents):
             host.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to consent to"), 409)
+        answered(request, g, True, "Agree")
         g = settle(c, {**g, "consents": consents}, host.by(request, None))
         if g["state"] == "waiting":
             g = store.get_grant_row(g["id"])
@@ -199,4 +228,5 @@ def register_routes(app, host) -> None:
         # a waiting grant was never in effect, so there is nothing to take out of the grants doc
         if not store.decline_waiting_grant(g["id"], g["consents"] + [entry]):
             host.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to decline"), 409)
+        answered(request, g, False, reason or "Decline")
         return {"grant": c.grants_view([store.get_grant_row(g["id"])])[0]}

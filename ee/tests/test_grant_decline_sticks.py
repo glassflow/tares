@@ -105,6 +105,10 @@ async def main():
         ck("a consent after it: 409", r.status_code == 409, r.text)
         ck("it stays revoked, with only the decline in its consents", row["state"] == "revoked"
            and [c.get("declined") for c in row["consents"]] == [True], str(row))
+        rec = [a for a in (await call("alex", "GET", "/api/answers")).json()["answers"] if a["id"] == f"grant:{g1}"]
+        ck("the decline is recorded once, as no, and the refused consent not at all (TR-1451)",
+           len(rec) == 1 and rec[0]["choice"] == "no" and rec[0]["said"] == "Decline" and rec[0]["mine"]
+           and rec[0]["ask"] == "Agree to the grant: Builders may push to web", rec)
 
         print("== a decline between the consent's read and its write ==")
         g2 = await waiting("Builders may edit the web footer")

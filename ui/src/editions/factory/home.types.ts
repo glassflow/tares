@@ -27,7 +27,9 @@ export type HomeVerb =
   | "agree"
   | "decline"
   | "close"
-  | "later";
+  | "later"
+  | "approve_merge"
+  | "accept_milestone";
 
 // A link (`href`) or something the page does (`do`), never both.
 export interface HomeAction {
@@ -71,12 +73,20 @@ export interface HomeItem {
   tickets?: string[];
   /** Short lines shown one under the other below the detail (the calls in a "calls to confirm" item). */
   lines?: string[];
+  /** The decision in one line, verb first ("Merge PR 336"); a question's is the question (TR-1447).
+   *  Absent on a cell from before it. */
+  ask?: string | null;
+  /** What waits on the answer ("T4 and 2 more tickets", "M2: search"); null when nothing does (TR-1448). */
+  holds_up?: string | null;
+  /** A pull request's CI and drift as Tares last read them (TR-1449); null on every other item.
+   *  `ci` and `behind_by` are null until read; `line` says both in one sentence. */
+  checks?: { ci: "passing" | "failing" | "running" | "none" | null; behind_by: number | null; line: string } | null;
   /** Holds crew work up until the person answers; such items come first (TR-1021). */
   blocking?: boolean;
   /** Waited more than a week and holds nothing up: folded under "N older things". */
   older?: boolean;
   /** A desk question's options and the crew's recommendation, answered on the row. */
-  question?: { desk: string; options: string[]; recommendation: string | null; blocks: string | null } | null;
+  question?: { desk: string; options: string[]; recommendation: string | null; why?: string | null; blocks: string | null } | null;
 }
 
 export type HomeProjectState = "building" | "waiting_on_you" | "not_started" | "ready_to_close";

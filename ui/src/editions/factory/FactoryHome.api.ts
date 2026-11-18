@@ -20,11 +20,12 @@ export function getHome(projects?: "mine" | "team"): Promise<HomeData> {
   return request<HomeData>(projects ? `/api/home?projects=${projects}` : "/api/home");
 }
 
-/** Mark one call the crew made as kept. */
-export function keepAssumption(project: string, ref: string): Promise<unknown> {
+/** Mark one call the crew made as kept. `item` is the Home item that offered it, so the answer is
+ *  recorded under the id the feed and Home showed (a project with calls for two owners has two). */
+export function keepAssumption(project: string, ref: string, item?: string): Promise<unknown> {
   return request(`/api/projects/${enc(project)}/assumptions/${enc(ref)}/state`, {
     method: "POST",
-    body: JSON.stringify({ state: "kept", words: "Kept from the home page" }),
+    body: JSON.stringify({ state: "kept", words: "Kept from the home page", ...(item ? { item } : {}) }),
   });
 }
 
@@ -44,15 +45,29 @@ export function finishProject(id: string): Promise<unknown> {
   });
 }
 
-/** The person answers a crew question from the console. `standing` keeps the answer as a grant. */
-export function deskReply(ref: string, words: string, standing: boolean, choice?: string, kept?: string[]): Promise<unknown> {
+/** The person answers a crew question from the console. `standing` keeps the answer as a grant. `own`
+ *  says the choice is the person's own words, typed: the desk keeps them unless they are an option's exactly. */
+export function deskReply(ref: string, words: string, standing: boolean, choice?: string, kept?: string[], own?: boolean): Promise<unknown> {
   return request(`/api/desk/${enc(ref)}/reply`, {
     method: "POST",
-    body: JSON.stringify({ words, standing, ...(choice ? { choice } : {}), ...(kept ? { kept } : {}) }),
+    body: JSON.stringify({ words, standing, ...(choice ? { choice } : {}), ...(kept ? { kept } : {}), ...(own ? { own } : {}) }),
   });
 }
 
 /** Keep a project for later, off the home until someone starts it, or start it again. */
+/** Approve the merge the merge queue asks the person for (TR-1450). */
+export function approveMerge(queue: string): Promise<unknown> {
+  return request(`/api/factory/merge-queue/${enc(queue)}/approve`, { method: "POST" });
+}
+
+/** Accept a milestone as it is, every ticket merged (TR-1450). */
+export function acceptMilestone(project: string, milestone: string): Promise<unknown> {
+  return request(`/api/projects/${enc(project)}/milestones/${enc(milestone)}/accept`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function keepForLater(project: string, later = true): Promise<unknown> {
   return request(`/api/projects/${enc(project)}/later`, {
     method: "POST",

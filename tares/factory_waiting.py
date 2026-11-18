@@ -10,6 +10,8 @@ hand-overs, the open assumptions, the desk and the milestones. Nothing is kept f
 """
 from __future__ import annotations
 
+import re
+
 from . import factory as factory_mod
 from . import factory_home as fh
 from . import factory_owners as owners_mod
@@ -63,6 +65,77 @@ def _trim(text: str, n: int = 140) -> str:
     return cut.rstrip(".,;:-( ") + "…"
 
 
+def ask_question(text: str) -> str:
+    """A question's ask is the question itself, on one line (TR-1447)."""
+    return _trim(text, 140)
+
+
+def ask_permission(command: str) -> str:
+    """A permission's ask is what the crew wants to run (TR-1447)."""
+    return "Allow `" + _trim(command, 120) + "`"
+
+
+def ask_calls(n: int, project: str) -> str:
+    """Keep the crew's call on atlas; Keep 2 calls on atlas (TR-1447). A desk batch whose calls
+    were decided one by one has none left open: its ask keeps the batch, without a count."""
+    if n == 1:
+        return f"Keep the crew's call on {project}"
+    return f"Keep {n} calls on {project}" if n > 1 else f"Keep the crew's calls on {project}"
+
+
+def ask_prs(rows: list[dict], project: str) -> str:
+    """Merge PR 336, or Merge 2 PRs on atlas (TR-1447). A pull request Tares has not read the
+    number of yet goes by its ticket's title."""
+    if len(rows) > 1:
+        return f"Merge {len(rows)} PRs on {project}"
+    r = rows[0]
+    return f"Merge PR {r['number']}" if r.get("number") else "Merge " + _trim(r["title"], 100)
+
+
+def holds_tickets(refs: list[str]) -> str | None:
+    """T4; T4 and T5; T4 and 2 more tickets: what waits, by name (TR-1448)."""
+    if not refs:
+        return None
+    if len(refs) <= 2:
+        return _and(refs)
+    return f"{refs[0]} and {len(refs) - 1} more tickets"
+
+
+def holds_desk(d: dict) -> str | None:
+    """What a desk item holds up (TR-1448): what the crew said it blocks, else the tickets it
+    names, else, for a refused command, the work of the station that ran it."""
+    said = _trim(str(d.get("blocks") or ""), 140)
+    if said:
+        return said
+    named = holds_tickets([str(t) for t in d.get("tickets") or [] if str(t).strip()])
+    if named:
+        return named
+    if d.get("command"):
+        return f"{_role_of_station(d.get('station'))}'s work"
+    return None
+
+
+_NUMBERED = re.compile(r"^\s*(?:M\s*)?\d+\s*[.:)\-]", re.I)
+
+
+def milestone_ask(project_name: str, i: int) -> str:
+    """The ask of a milestone to check, as Home shows it and as its answer records it: one
+    definition, so Answered today repeats the words the person saw (TR-1451)."""
+    return f"Check M{i} of {project_name}"
+
+
+def milestone_name(milestones: list[dict], mid: str | None) -> str | None:
+    """A milestone as people read it: its own name when already numbered ("1. Foundations",
+    "M2: Search"), else "M3: Name" with its place in the project's list, "M3" without a name."""
+    for i, m in enumerate(milestones, 1):
+        if m["id"] == mid:
+            name = str(m.get("name") or "").strip()
+            if not name:
+                return f"M{i}"
+            return name if _NUMBERED.match(name) else f"M{i}: {name}"
+    return None
+
+
 def _ref(project: dict) -> dict:
     return {"id": project["id"], "name": project["name"]}
 
@@ -81,6 +154,8 @@ def desk_question(d: dict) -> dict | None:
         return None
     return {"desk": d["label"], "options": opts,
             "recommendation": _trim(d.get("recommendation") or "", 400) or None,
+            # why the crew suggests it, so the feed can say so beside the answer (P-TR-273)
+            "why": _trim(str(d.get("why") or ""), 400) or None,
             "blocks": _trim(str(d.get("blocks") or ""), 140) or None}
 
 
@@ -203,49 +278,104 @@ def waits_for_person(store, fx) -> list[dict]:
     return review_split(store, fx)[0]
 
 
+def holds_prs(rows: list[dict], tickets: list[dict], milestones: list[dict]) -> str | None:
+    """What merging these pull requests unblocks (TR-1448): the open tickets that depend on
+    theirs, else the milestone one of them is the last open ticket of, else nothing."""
+    by_label = {factory_mod.label(t): t for t in tickets}
+    mine = {by_label[r["ticket"]]["id"] for r in rows if r["ticket"] in by_label}
+    after = [factory_mod.label(t) for t in tickets
+             if t["id"] not in mine and not factory_mod.finished(t)
+             and mine.intersection(t.get("depends_on") or ())]
+    if after:
+        return holds_tickets(after)
+    for r in rows:
+        named = milestone_name(milestones, r.get("milestone")) if r.get("blocks_milestone") else None
+        if named:
+            return named
+    return None
+
+
+CI_WORD = {"success": "passing", "failure": "failing", "pending": "running", "none": "none"}
+
+
+def pr_checks(q: dict) -> dict:
+    """A pull request's CI and drift in a word, a number and a sentence (TR-1449), from what Tares
+    read last: {ci, behind_by, line}. None where it has not been read."""
+    ci = CI_WORD.get(q.get("ci") or "")
+    behind, base = q.get("behind_by"), q.get("base") or "main"
+    said = {"passing": "Checks pass.", "failing": "Checks fail.", "running": "Checks are still running.",
+            "none": "No checks ran."}.get(ci or "", "Checks not read yet.")
+    if isinstance(behind, int) and behind > 0:
+        said += f" {base} has {fh._count(behind, 'commit')} this branch lacks."
+    elif behind == 0:
+        said += f" Up to date with {base}."
+    return {"ci": ci, "behind_by": behind if isinstance(behind, int) else None, "line": said}
+
+
+def _merge_asks(store) -> tuple[dict[tuple[str, int], tuple[dict, dict]], set]:
+    """({(repo, PR number): (queue row, its open desk question)} for the merges the merge queue
+    asks a person for, {(repo, PR number, head)} approved and on their way) (TR-1450)."""
+    out, approved = {}, set()
+    for r in store.merge_queue_open():
+        if r.get("approved_head"):
+            approved.add((r["repo"], int(r["pr"]), r["approved_head"].lower()))
+        if r["state"] != "waiting_approval" or not r.get("desk_item"):
+            continue
+        d = store.get_desk_item(r["desk_item"])
+        if d and d["state"] == "open":
+            out[(r["repo"], int(r["pr"]))] = (r, d)
+    return out, approved
+
+
 def prs_to_review(store, fx, now) -> list[dict]:
-    """Per project, the pull requests that wait for the person (waits_for_person): the reviewer
-    passed them on their current commit and the project's autonomy leaves the merge to the person.
-    The others wait for the reviewer, the builder or the crew."""
+    """Each pull request that waits for the person (waits_for_person), one item each: the
+    reviewer passed it on its current commit and the project's autonomy leaves the merge to the
+    person. The others wait for the reviewer, the builder or the crew. An item carries its CI
+    and drift (`checks`, TR-1449). When the merge queue asks the same people to approve it, the
+    item's Merge approves it in one tap and the queue's own desk question shows no more
+    (`absorbs`, read by order_waiting, TR-1450); when it asks someone else, both stay. A merge
+    approved for the PR's commit no longer waits: the queue has it."""
     if fx is None:
         return []
     o = owners_mod.Owners(store)
     rows_in = waits_for_person(store, fx)
     owners = pr_owners(store, rows_in, o)
     projects = {p["id"]: p for p in store.list_projects()}
-    # a pull request waits for the owner of its ticket: one item per project and set of owners
-    by: dict[tuple, list[dict]] = {}
-    for q in rows_in:
-        by.setdefault((q["project"], owners[(q["project"], q["ticket"])]), []).append(q)
-    groups: dict[str, int] = {}
-    for pid, _ in by:
-        groups[pid] = groups.get(pid, 0) + 1
+    pids = sorted({q["project"] for q in rows_in})
+    tickets, milestones = store.tickets_by_project(pids), store.milestones_by_project(pids)
+    asks, approved = _merge_asks(store) if rows_in else ({}, set())
     out = []
-    for (pid, ids), rows in by.items():
-        n = len(rows)
-        titles = ", ".join(_trim(r["title"], 80) for r in rows)
-        blocking = sum(1 for r in rows if r["blocks_milestone"])
-        note = ("" if not blocking
-                else (" It holds up a milestone." if n == 1
-                      else " Each one holds up a milestone." if blocking == n
-                      else " One holds up a milestone." if blocking == 1
-                      else f" {blocking} of them hold up a milestone."))
-        since = min((r["waiting_since"] for r in rows if r.get("waiting_since")), default=now,
-                    key=lambda t: fh._dt(t) or now)
-        repos = list(dict.fromkeys(r["repo"] for r in rows if r.get("repo")))
-        waited = _for(fh.plain_wait(fh._minutes(since, now)))
-        key = f"prs_to_review:{pid}" + (f":{'+'.join(ids)}" if groups[pid] > 1 else "")
-        out.append(owners_mod.tag(fh.home_item(
-            "prs_to_review", label="1 PR to review" if n == 1 else f"{n} PRs to review",
-            title=rows[0]["project_name"], detail=titles + "." + note,
-            meta="Waiting " + waited + (" · " + ", ".join(repos) if repos else ""),
-            since=since, now=now, project={"id": pid, "name": rows[0]["project_name"]},
-            repo=repos[0] if len(repos) == 1 else None, id=key,
-            actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
-            blocking=True,
+    for q in rows_in:
+        if q.get("number") and (q.get("repo"), int(q["number"]), (q.get("head") or "").lower()) in approved:
+            continue     # the person said yes to this commit; the queue merges it
+        pid, p = q["project"], projects.get(q["project"])
+        ids = owners[(pid, q["ticket"])]
+        since = q.get("waiting_since") or now
+        detail = f"{q['ticket']}, {_trim(q['title'], 80)}" + (
+            f", PR {q['number']}." if q.get("number") else ".") + (
+            " It holds up a milestone." if q.get("blocks_milestone") else "")
+        acts = [{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}]
+        absorbs = []
+        ask = asks.get((q.get("repo"), int(q["number"]))) if q.get("number") else None
+        if ask and o.desk(ask[1], p) == ids:
+            acts = [{"label": "Merge", "primary": True, "do": "approve_merge", "queue": ask[0]["id"]},
+                    {**acts[0], "primary": False}]
+            absorbs = [ask[1]["label"]]
+        item = owners_mod.tag(fh.home_item(
+            "prs_to_review", label="PR to review", title=f"{q['project_name']}, {_trim(q['title'], 80)}",
+            detail=detail,
+            meta="Waiting " + _for(fh.plain_wait(fh._minutes(since, now)))
+                 + (" · " + q["repo"] if q.get("repo") else ""),
+            since=since, now=now, project={"id": pid, "name": q["project_name"]},
+            repo=q.get("repo"), id=f"prs_to_review:{pid}:{q['ticket']}",
+            ask=ask_prs([q], q["project_name"]),
+            holds_up=holds_prs([q], tickets.get(pid) or [], milestones.get(pid) or []),
+            checks=pr_checks(q), actions=acts, blocking=True,
             # whose merge waits for the person: not in the crew's hands (project_state)
-            tickets=[r["ticket"] for r in rows]), o, ids,
-            projects.get(pid) if ids == o.project(projects.get(pid)) else None))
+            tickets=[q["ticket"]]), o, ids, p if ids == o.project(p) else None)
+        if absorbs:
+            item["absorbs"] = absorbs
+        out.append(item)
     return out
 
 
@@ -278,7 +408,8 @@ def ready_to_start(store, fx, now) -> list[dict]:
             detail=f"Spec and plan written, {fh._count(len(ts), 'ticket')}{where}. "
                    "The crew has not picked it up.",
             meta="Spec written " + fh.plain_ago(since, now), since=since, now=now,
-            project=_ref(p), id=f"ready_to_start:{p['id']}",
+            project=_ref(p), id=f"ready_to_start:{p['id']}", ask=f"Hand {p['name']} to the crew",
+            holds_up=fh._count(len(ts), "ticket"),
             actions=[{"label": "Read the spec", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Later", "primary": False, "do": "later", "project": p["id"]},
                      {"label": "Copy the hand-over command", "primary": True, "do": "copy",
@@ -332,7 +463,7 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
             "calls_to_confirm", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
             title=names[pid], detail="The crew decided without you:", lines=shown,
             meta="Made by " + _and(roles), since=since, now=now,
-            project={"id": pid, "name": names[pid]},
+            project={"id": pid, "name": names[pid]}, ask=ask_calls(n, names[pid]),
             id=f"calls_to_confirm:{pid}" + (f":{'+'.join(ids)}" if groups[pid] > 1 else ""),
             actions=[{"label": "Read them", "primary": False, "href": f"/projects/{pid}/calls"},
                      {"label": {"both": "Keep both", "it": "Keep it", "them": "Keep all"}[keep],
@@ -375,7 +506,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`",
                 meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"permission:{d['label']}",
-                blocking=True,
+                blocking=True, ask=ask_permission(d["command"]), holds_up=holds_desk(d),
                 actions=[{**answer, "primary": False},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
                           "may_limit": may_limit}]), o, ids, fell))
@@ -384,7 +515,8 @@ def desk_items(store, fx, now) -> list[dict]:
                 "question", label="Question for you", title=names[pid] if pid else "Every project",
                 detail=d["question"], meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"question:{d['label']}",
-                blocking=desk_blocks(d), question=desk_question(d),
+                blocking=desk_blocks(d), question=desk_question(d), ask=ask_question(d["question"]),
+                holds_up=holds_desk(d),
                 actions=[answer]), o, ids, fell))
     return out
 
@@ -434,7 +566,8 @@ def milestones_to_check(store, fx, now) -> list[dict]:
     for p in projects:
         if factory_mod.ready_to_close(p, tickets.get(p["id"]) or []):
             continue
-        for _, m, st, mine in states.get(p["id"]) or []:
+        rows = states.get(p["id"]) or []
+        for i, m, st, mine in rows:
             if not st["needs_person"]:
                 continue
             live = [t for t in mine if t["status"] != "canceled"]
@@ -452,8 +585,15 @@ def milestones_to_check(store, fx, now) -> list[dict]:
                 "milestone_to_check", label="Milestone to check", title=f"{p['name']}, {m['name']}",
                 detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
                 project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
-                actions=[{"label": "Check it", "primary": True,
-                          "href": f"/projects/{p['id']}#milestone-{m['id']}"}]), o, o.project(p), p))
+                ask=milestone_ask(p["name"], i),
+                # the next milestone starts when this one is accepted; one accepted already waits on nothing
+                holds_up=milestone_name([r[1] for r in rows], next(
+                    (r[1]["id"] for r in rows[i:] if not r[2]["accepted"]), None)),
+                # accepting is one tap (TR-1450); trying the checks first is the page's
+                actions=[{"label": "Accept", "primary": True, "do": "accept_milestone",
+                          "project": p["id"], "milestone": m["id"]},
+                         {"label": "Check it", "href": f"/projects/{p['id']}#milestone-{m['id']}"}]),
+                o, o.project(p), p))
     return out
 
 
@@ -490,7 +630,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
                    + "." + note + " Close the project when you have checked the result.",
             meta=_ready_for(since, now), since=since, now=now, project=_ref(p),
-            id=f"signoff:{p['id']}",
+            id=f"signoff:{p['id']}", ask=f"Close {p['name']}",
             actions=[{"label": "Open project", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Close project", "primary": True, "do": "close"}]), o, o.project(p), p))
     return out
@@ -512,6 +652,7 @@ def rules_to_decide(store, fx, now) -> list[dict]:
             detail=rp["text"], meta="Proposed by the crew, " + fh.plain_ago(rp["created_at"], now),
             since=rp["created_at"], now=now, project={"id": pid, "name": names[pid]} if pid else None,
             repo=rp.get("repo"), id=f"rule:{rp['id']}",
+            ask="Decide on a rule: " + _trim(rp["text"], 100),
             actions=[{"label": "Accept or reject", "primary": True, "href": "/crew#rules"}]))
     return out
 

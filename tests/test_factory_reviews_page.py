@@ -125,13 +125,10 @@ async def main():
     async def agree(cx, label, query=""):
         """Home's PRs to review, per project, name the same pull requests this page lists as waiting."""
         a = await reviews(cx, query)
-        home = {i["project"]["id"]: i for i in await home_prs(cx)}
-        want = {}
-        for r in a["waiting_for_you"]:
-            want.setdefault(r["project"]["id"], []).append(r)
-        same = set(home) == set(want) and all(
-            home[p]["label"] == ("1 PR to review" if len(rs) == 1 else f"{len(rs)} PRs to review")
-            and all(r["ticket"]["title"] in home[p]["detail"] for r in rs) for p, rs in want.items())
+        # one Home item per pull request (TR-1450)
+        home = sorted((i["project"]["id"], i["tickets"][0]) for i in await home_prs(cx))
+        want = sorted((r["project"]["id"], r["ticket"]["ref"]) for r in a["waiting_for_you"])
+        same = home == want
         ck(f"{label}: the home page and the Reviews page list the same pull requests", same,
            (sorted(home), sorted(want)))
         return a

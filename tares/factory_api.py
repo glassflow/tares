@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from fastapi import Body, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 
+from . import answers as answers_mod
 from . import claude_usage
 from . import crew_conversation
 from . import crew_onboarding
@@ -26,6 +27,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
+from . import factory_waiting as waiting_mod
 from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
@@ -448,6 +450,12 @@ async def _refresh(store, uid: str) -> None:
         if factory_github.stale(pr):
             async with sem:
                 pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+                if t["stage"] == "review" and pr.get("state") == "open" and not pr.get("merged"):
+                    # how many commits the base has that the branch lacks, for the merge a person
+                    # is asked for (TR-1449): one compare per read, only for a PR in review
+                    cmp = await factory_github.compare(store, pr["repo"], pr.get("base") or "",
+                                                       pr.get("head") or "")
+                    pr["behind_by"] = cmp["behind_by"] if cmp["ok"] else None
             reread = True
         elif not _follows(t, pr, lasts.get(t["id"])):
             return               # not read again and nothing to write: skip the re-read below
@@ -1638,6 +1646,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         p = h.current_person(request)
         return p["id"] if p else None
 
+    def answerer(request: Request) -> str | None:
+        """Who an answer is recorded under (TR-1451): the person the caller works as, the system
+        credential's being `local`, as on a desk reply; None for a key with no person."""
+        p = h.current_person(request)
+        return p["id"] if p else ("local" if h.is_system(request) else None)
+
     @app.post("/api/projects/{uid}/tickets/{ref}/assign")
     def assign_ticket(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{holder}: the station that works the ticket. Only the orchestrator (or a person's own
@@ -1783,7 +1797,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     @app.post("/api/projects/{uid}/assumptions/{ref}/state")
     def decide_assumption(uid: str, ref: str, request: Request, body: dict = Body(...)):
-        """{state: kept|overturned|open, words?, batch?}: what the person said about it. Only the
+        """{state: kept|overturned|open, words?, batch?, item?}: what the person said about it.
+        `item` is the Home item it was kept from, the id the answer is recorded under. Only the
         orchestrator (or a person's own session) records it; an overturned one keeps the
         person's words."""
         h.project_or_404(uid)
@@ -1799,6 +1814,19 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(ValueError("an overturned assumption keeps the person's words: say them"))
         store.decide_assumption(a["id"], st, words, str(body.get("batch") or "") or None,
                                 now_utc() if st != "open" else None)
+        if st != "open":
+            # the record of the answer (TR-1451); a station records what the person said in its session
+            # the Home item that offered it names itself (`calls_to_confirm:<project>:<owners>` when
+            # the project's calls wait for more than one owner); any other id is not this project's
+            item = f"calls_to_confirm:{uid}"
+            said_item = str(body.get("item") or "")
+            if said_item.startswith(item + ":") and len(said_item) <= 300:
+                item = said_item
+            answers_mod.record(
+                store, request, item=item, kind="calls_to_confirm", project=uid,
+                ask=f"Keep the call: {a['question']}", choice="yes" if st == "kept" else "no",
+                said=f"Kept: {a['choice']}" if st == "kept" else words or "Overturned",
+                via="session" if caller(request)["station"] else None, person_id=answerer(request))
         return assumption_out(uid, store.get_assumption(uid, a["id"]))
 
     def parse_checks(body: dict) -> list[tuple[str, str, str, str]]:
@@ -2006,6 +2034,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "number": (t["pr"] or {}).get("number"),
                         "pr_title": (t["pr"] or {}).get("title"),
                         "ci": (t["pr"] or {}).get("ci"), "milestone": t["milestone"],
+                        # the branch it merges into and how many commits that branch has that
+                        # the pull request lacks, at Tares's last read (TR-1449; null unread)
+                        "base": (t["pr"] or {}).get("base"),
+                        "behind_by": (t["pr"] or {}).get("behind_by"),
                         # open or closed on GitHub when Tares last read it, and whether it was
                         # merged: a pull request closed without merging is nobody's (TR-1009)
                         "pr_state": (t["pr"] or {}).get("state"),
@@ -2633,6 +2665,37 @@ def register(app, store, h: Host) -> SimpleNamespace:
                  and (t := str(jsonable_encoder(d["closed_at"]))) > since]
         return {"count": len(fresh), "latest": max(fresh, default=since)}
 
+    @app.get("/api/answers")
+    def answers_list(request: Request, since: str = "", mine: bool = False):
+        """The answers people gave to what waited for them since `since` (default: the start of
+        today, UTC), newest first (TR-1451): each the home item it answered (`item`), its ask as it
+        read then, yes or no where it had two ways, the words or option given, who, when and where
+        (`via`: console, feed, session, message). An answer about a project the caller cannot see
+        is left out. `mine=1` keeps the caller's own."""
+        try:
+            floor = datetime.fromisoformat(since.replace("Z", "+00:00")) if since.strip() else None
+        except ValueError:
+            h.err(ValueError("since is a time, like 2026-11-18T00:00:00Z"))
+        if floor is None:
+            floor = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
+        elif floor.tzinfo is None:
+            floor = floor.replace(tzinfo=timezone.utc)
+        me = answerer(request)
+        if mine and me is None:
+            return {"answers": []}
+        # hidden projects and `mine` filter in the query, before its limit (a busy cell's other answers
+        # must not push the caller's own out of the 500 it reads). The caller's own grant answer on a
+        # project hidden from them (a grant over a repo they own) stays, its ask already kept to what
+        # they saw, and names no project; their other answers there do not (their ids and asks would)
+        hidden = h.hidden_ids()
+        rows = store.list_answers(floor, hidden=sorted(hidden), person=me if mine else None, own=me)
+        return {"answers": [{"id": r["item"], "kind": r["kind"], "ask": r["ask"],
+                             "project": None if r["project"] in hidden else r["project"],
+                             "choice": r["choice"], "said": r["said"], "via": r["via"], "at": r["at"],
+                             "by": (r.get("person") or {}).get("name"),
+                             "mine": me is not None and (r.get("person") or {}).get("id") == me}
+                            for r in rows]}
+
     def desk_or_404(ref: str) -> dict:
         d = store.get_desk_item(ref)
         # an item of a project the caller cannot see does not exist for them (TR-629)
@@ -2734,7 +2797,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
             # an item with options always records the option chosen (TR-1018): "D85 A", "B - next
             # week" or the option's own words map to it; the orchestrator's own full choice (a
             # refinement such as "keep all but change A31: ...") is kept as given
-            if choice:
+            if choice and body.get("own"):
+                # the person's own words from the console's text box: an option only when they are
+                # its words exactly, never one they start (or cut short), so "Red" stays "Red"
+                choice = next((o for o in d["options"]
+                               if factory_mod._plain(o) == factory_mod._plain(choice)), choice)
+            elif choice:
                 # "A", or an option's text cut short, becomes the option; a longer refinement stays
                 named = factory_mod.picked_option("", choice, d["options"])
                 bare = re.sub(r"^\(?[a-h][).:]\s*", "", factory_mod._plain(choice))
@@ -2787,7 +2855,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     def record_answer(d: dict, a: dict, plan: list[tuple], giver: str | None, grant,
                       by: str, matched: bool, session: str | None, via: str | None,
-                      person_id: str | None) -> dict:
+                      person_id: str | None, request: Request | None = None) -> dict:
         """Write a desk answer that has been accepted: the grant a standing answer becomes, the
         assumptions it decides, the decision, and the item closed. The response of /answer and
         /reply."""
@@ -2806,6 +2874,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                  matched, session, granted,
                                  d["tickets"], now_utc(), via=via, person_id=person_id)
         store.close_desk_item(d["id"], "answered", None, now_utc())
+        # the record of the answer (TR-1451): matched in a session, or given in the console or feed
+        kind = "permission" if d.get("command") else "question"
+        answers_mod.record(
+            store, request, item=f"{kind}:{d['label']}", kind=kind, project=d["project"],
+            ask=(waiting_mod.ask_permission(d["command"]) if d.get("command")
+                 else waiting_mod.ask_question(d["question"])),
+            said=a["choice"] or a["words"], via="session" if matched else None,
+            person_id=person_id)
         by_id = {t["id"]: t for t in store.list_tickets(d["project"])} if d["project"] else {}
         follow = [{"assumption": c["label"],
                    "tickets": [factory_mod.label(by_id[x]) for x in c["tickets"] if x in by_id]}
@@ -2905,7 +2981,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                  if a["standing"] else None)
         plan = assumption_plan(d, a["kept"], a["over"])
         return record_answer(d, a, plan, me["id"], grant, "the person, in the console", False,
-                             None, "console", me["id"])
+                             None, "console", me["id"], request)
 
     @app.post("/api/desk/{ref}/allow")
     def desk_allow(ref: str, request: Request, body: dict = Body(...)):
@@ -2953,6 +3029,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                  scope, False, None, True, d["tickets"], now_utc(),
                                  via="console", person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
+        answers_mod.record(store, request, item=f"permission:{d['label']}", kind="permission",
+                           project=d["project"], ask=waiting_mod.ask_permission(d["command"]),
+                           choice="yes", said="Allowed for " + (
+                               "this project" if scope == "project" else "every project"),
+                           person_id=answerer(request))
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
                 "station": d["station"], "line": line, "added": added, "scope": scope}
 
@@ -3001,6 +3082,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                              "not waiting for approval"), 409)
         person = h.current_person(request) or {}
         out = await asyncio.to_thread(merge_queue_mod.approve, store, row, person.get("id"))
+        # the answer to the pull request's home item, whichever surface approved it (TR-1450)
+        t = await asyncio.to_thread(store.get_ticket, row["project_uid"], row["ticket"])
+        ref = factory_mod.label(t) if t else row["ticket"]
+        await asyncio.to_thread(
+            lambda: answers_mod.record(store, request, item=f"prs_to_review:{row['project_uid']}:{ref}",
+                                       kind="prs_to_review", project=row["project_uid"],
+                                       ask=f"Merge PR {row['pr']}", choice="yes", said="Merge",
+                                       person_id=answerer(request)))
         return out
 
     @app.put("/api/projects/{uid}/merge-method")
@@ -3077,7 +3166,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 "guardrails": gate["decisions"], "warnings": gate["warnings"]}
 
     @app.post("/api/projects/{uid}/later")
-    def set_later(uid: str, body: dict = Body(default={})):
+    def set_later(uid: str, request: Request, body: dict = Body(default={})):
         """{later: true|false}: keep a project for later, off the home until someone starts it,
         or start it again. Only a project the crew has not been handed, and not a finished one;
         handing it over starts it too."""
@@ -3091,6 +3180,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 h.err(ValueError("the crew has the project: take it back before keeping it for later"), 409)
             if p.get("status") != "later":
                 store.update_project(uid, status="later")
+                answers_mod.record(store, request, item=f"ready_to_start:{uid}", kind="ready_to_start",
+                                   project=uid, ask=f"Hand {p['name']} to the crew", choice="no",
+                                   said="Later", person_id=answerer(request))
         elif p.get("status") == "later":
             store.update_project(uid, status="active")
         return {"later": later}
@@ -3199,6 +3291,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
             row["merged_prs"].sort(key=lambda p: -(p["number"] or 0))
         return rows
 
+    def closed_answer(uid: str, p: dict, words: str, request: Request) -> None:
+        """The record of a person closing a project themselves (TR-1451). One closed on a desk
+        answer is already recorded as that answer."""
+        answers_mod.record(store, request, item=f"signoff:{uid}", kind="signoff", project=uid,
+                           ask=f"Close {p['name']}", choice="yes", said=words,
+                           via="session" if caller(request)["station"] else None,
+                           person_id=answerer(request))
+
     @app.post("/api/projects/{uid}/finish")
     def finish_project(uid: str, request: Request, body: dict = Body(...)):
         """{decision} or {words}: the person said the project is done. A station names the desk
@@ -3239,6 +3339,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             by, _ = who(request, body)
             store.update_project(uid, status="done")
             close_project_desk(uid)
+            closed_answer(uid, p, words, request)
             return {"project": uid, "name": p["name"],
                     "finished": {"at": now_utc(), "words": words, "decision": None, "by": by},
                     "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
@@ -3251,6 +3352,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             store.finish_handover(uid, words, None, by, now_utc(), person_of(request))
             store.update_project(uid, status="done")
             close_project_desk(uid)
+            closed_answer(uid, p, words, request)
             return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
                     "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
         if not ref:

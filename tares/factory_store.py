@@ -543,6 +543,22 @@ FACTORY_SCHEMA = [
       updated_at  TIMESTAMPTZ,
       updated_by  TEXT
     )""",
+    # TR-1451: every answer a person gave to what waited for them, whatever its kind: the home
+    # item it answered (`question:D7`, `grant:G2`), its ask as it read then, yes or no where that
+    # applies, the words or option given, who, and where (console, feed, session, message).
+    """CREATE TABLE IF NOT EXISTS answers (
+      id          TEXT PRIMARY KEY,
+      item        TEXT,
+      kind        TEXT,
+      project     TEXT,
+      ask         TEXT,
+      choice      TEXT,
+      said        TEXT,
+      via         TEXT,
+      person_id   TEXT,
+      answered_at TIMESTAMPTZ
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_answers_at ON answers (answered_at)",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -1727,6 +1743,49 @@ class FactoryStore:
               "tickets": json.loads(r[11]) if r[11] else [], "at": r[12],
               "label": f"D{r[13]}" if r[13] else None, "via": r[14], "person_id": r[15]}
              for r in rows], None)
+
+    ANSWER_VIA = ("console", "feed", "session", "message")
+
+    def add_answer(self, item: str, kind: str, project: str | None, ask: str, choice: str | None,
+                   said: str, via: str, person_id: str | None, at) -> dict:
+        """One answer to what waited for a person (TR-1451). `choice` is yes or no where the item
+        has two ways, else None; `said` is the words or the option given, as given."""
+        if choice not in (None, "yes", "no"):
+            raise ValueError("choice is yes, no or nothing")
+        if via not in self.ANSWER_VIA:
+            raise ValueError("via is one of " + ", ".join(self.ANSWER_VIA))
+        aid = "an_" + uuid.uuid4().hex[:10]
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO answers (id, item, kind, project, ask, choice, said, via, person_id, answered_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [aid, item, kind, project, ask, choice, said, via, person_id or None, at])
+        return {"id": aid, "item": item, "kind": kind, "project": project, "ask": ask,
+                "choice": choice, "said": said, "via": via, "at": at,
+                "person": self._person_refs([person_id]).get(person_id)}
+
+    def list_answers(self, since, hidden: list[str] | None = None, person: str | None = None,
+                     own: str | None = None) -> list[dict]:
+        """The answers given since `since`, newest first, at most 500 (TR-1451). `hidden` leaves out
+        those of these projects, except `own`'s grants (a grant's id and ask never name its project, so
+        the caller's answer to one over a repo they own stays theirs; any other kind would); `person` keeps
+        that person's own. Both filter in the query, before the limit, so a busy day of other
+        people's answers never pushes the caller's out."""
+        q = ("SELECT id, item, kind, project, ask, choice, said, via, person_id, answered_at FROM answers "
+             "WHERE answered_at >= ?")
+        vals: list = [since]
+        if hidden:
+            q += f" AND (project IS NULL OR project NOT IN ({', '.join('?' for _ in hidden)})" + (
+                " OR (person_id = ? AND kind = 'grant')" if own else "") + ")"
+            vals += list(hidden) + ([own] if own else [])
+        if person is not None:
+            q += " AND person_id = ?"
+            vals.append(person)
+        with self._sread:
+            rows = self.sc.execute(q + " ORDER BY answered_at DESC LIMIT 500", vals).fetchall()
+        return self._with_people(
+            [{"id": r[0], "item": r[1], "kind": r[2], "project": r[3], "ask": r[4], "choice": r[5],
+              "said": r[6], "via": r[7], "person_id": r[8], "at": r[9]} for r in rows], None)
 
     def person_turns(self, source: str, sessions: list[str] | None, since,
                      person: str | None = None) -> list[dict]:

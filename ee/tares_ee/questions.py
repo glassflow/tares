@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from fastapi import Body, Request
 
+from tares import answers as answers_mod
 from tares import factory as factory_mod
+from tares import factory_waiting as fw
 from tares import licence
 from tares.envelope import now_utc
 from tares.factory_api import caller
@@ -106,4 +108,7 @@ def register_routes(app, host) -> None:
         if not store.answer_spec_question(uid, q["id"], answer, me["id"], now_utc(),
                                           via=console_via(request)):
             host.err(ValueError(f"{q['id']} is already answered"), 409)
+        answers_mod.record(store, request, item=f"question:{uid}:{q['id']}", kind="question",
+                           project=uid, ask=fw.ask_question(q["text"]), said=answer,
+                           via=None if console_via(request) else "session", person_id=me["id"])
         return store.get_spec_question(uid, q["id"])

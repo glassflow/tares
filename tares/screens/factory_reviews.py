@@ -31,7 +31,6 @@ AUTONOMY_TEXT = {
 CI = {"success": ("CI passed", "ok"), "failure": ("CI failing", "bad"),
       "pending": ("CI in progress", "go")}
 NO_CI = ("No CI", "none")
-_NUMBERED = re.compile(r"^\s*(?:M\s*)?\d+\s*[.:)\-]", re.I)
 _PULL = re.compile(r"/pull/(\d+)")
 
 
@@ -52,13 +51,8 @@ def review_words(verdict: dict | None) -> str:
 def milestone_words(milestones: list[dict], mid: str | None) -> str | None:
     """"Holds up 1. Foundations" for a milestone already named with its number (1. / M2: / 3)),
     else "Holds up M3: Name" with the number of its place in the project's list."""
-    for i, m in enumerate(milestones, 1):
-        if m["id"] == mid:
-            name = str(m["name"] or "").strip()
-            if not name:
-                return f"Holds up M{i}"
-            return f"Holds up {name}" if _NUMBERED.match(name) else f"Holds up M{i}: {name}"
-    return None
+    name = fw.milestone_name(milestones, mid)
+    return f"Holds up {name}" if name else None
 
 
 def _number(q: dict):

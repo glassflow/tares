@@ -64,7 +64,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import memory_route
 from .integrations.builtin import memory_tares
-from . import claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
+from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -5834,6 +5834,16 @@ def make_app() -> FastAPI:
             _err(ValueError("a person accepts a milestone, not a station"), 403)
         person = _current_person(request)
         store.accept_milestone(uid, m["id"], _by(request, body), (person or {}).get("id"), now_utc())
+        # the answer to the milestone's home item (TR-1450), in the words the item asked
+        from . import factory_waiting as _fw
+        place = next((i for i, x in enumerate(store.milestones_by_project([uid]).get(uid) or [], 1)
+                      if x["id"] == m["id"]), 1)
+        answers_mod.record(store, request, item=f"milestone_to_check:{uid}:{m['id']}",
+                           kind="milestone_to_check", project=uid,
+                           ask=_fw.milestone_ask(store.get_project(uid)["name"], place),
+                           choice="yes", said="Accepted",
+                           person_id=(person or {}).get("id")
+                           or ("local" if _is_system(request) else None))
         return next(x for x in _milestones_out(uid) if x["id"] == m["id"])
 
     @app.post("/api/projects/{uid}/milestones", status_code=201)

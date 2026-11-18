@@ -24,6 +24,13 @@ export const auth = {
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
 
+// Where the console's calls come from, when a page other than Home makes them (TR-1451): the feed sets
+// "feed" while it is open, so an answer it sends through Home's handler is recorded as given there.
+let surface: string | null = null;
+export function setSurface(s: string | null): void {
+  surface = s;
+}
+
 export function authHeader(): Record<string, string> {
   const t = auth.get();
   return t ? { Authorization: `Bearer ${t}` } : {};
@@ -176,6 +183,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "content-type": "application/json",
       ...authHeader(),
+      ...(surface ? { "X-Tares-Via": surface } : {}),
       ...(init?.headers as Record<string, string> | undefined),
     },
   });

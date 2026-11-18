@@ -42,12 +42,17 @@ const asked: HomeItem[] = [
     kind: "milestone_to_check", label: "Milestone to check", title: "project-y, M1: API returns nicknames", project: projectY,
     detail: "Your builder merged the API ticket. Check it before Kim's web ticket starts.",
     meta: "Your crew · example-org/service-a", waited: "3 hours",
-    actions: [{ label: "Check it", primary: true, href: "/projects/project-y" }],
+    actions: [
+      { label: "Accept", primary: true, do: "accept_milestone", project: "project-y", milestone: "m1" },
+      { label: "Check it", primary: false, href: "/projects/project-y" },
+    ],
   }),
-  item("prs_to_review:project-y", {
-    kind: "prs_to_review", label: "4 PRs to review", title: "project-y", project: projectY,
-    detail: "Each one holds up a milestone of a project you lead.", meta: "Waiting 6 days · example-org/service-a", waited: "6 days",
-    actions: [{ label: "Review", primary: true, href: "/reviews" }],
+  item("prs_to_review:project-y:T3", {
+    kind: "prs_to_review", label: "PR to review", title: "project-y, Show nicknames", project: projectY,
+    detail: "T3, Show nicknames, PR 88. It holds up a milestone.", meta: "Waiting 6 days · example-org/service-a", waited: "6 days",
+    tickets: ["T3"], ask: "Merge PR 88",
+    checks: { ci: "failing", behind_by: 1, line: "Checks fail. main has 1 commit this branch lacks." },
+    actions: [{ label: "Review", primary: true, href: "/reviews?project=project-y" }],
   }),
 ];
 
