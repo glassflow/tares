@@ -42,7 +42,8 @@ function OriginCell({ r }: { r: DecisionRow }) {
   );
   return (
     <span className="min-w-0 text-[13px] [overflow-wrap:anywhere]" data-testid="brain-decision-origin">
-      {o.label}{name && <> {name}</>}
+      {o.label}
+      {name && <span className="block">{name}</span>}
     </span>
   );
 }

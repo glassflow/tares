@@ -203,6 +203,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     return { ctx, page, mock, one, T: T_(page) };
   };
   const text = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
+  const lines = async (loc) => (await loc.innerText()).split("\n").map((l) => l.trim()).filter(Boolean);
   const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, name), fullPage: true }); };
   const fits = async (page, label) => {
     const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -240,7 +241,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const tabs = await page.getByRole("tab").allInnerTexts();
       eq("the tabs carry the cell's counts and match the origins", tabs.map((t) => t.replace(/\s+/g, " ").trim()), ["All 5", "Factory projects 2", "GitHub repos 1", "Second Brain 2"]);
       const spec = T("brain-decision-row").nth(0);
-      eq("a project doc: its origin", await text(spec.getByTestId("brain-decision-origin")), "Factory project software-second-brain");
+      eq("a project doc: its origin, the name on a second line", await lines(spec.getByTestId("brain-decision-origin")), ["Factory project", "software-second-brain"]);
       eq("the project name opens the project", await spec.getByTestId("brain-decision-origin-link").getAttribute("href"), "/projects/p1");
       eq("a spec: who and when", [await text(spec.getByTestId("brain-decision-who")), await text(spec.getByTestId("brain-decision-when"))], ["Ada Lovelace", "today"]);
       eq("a spec's title opens the project doc in the console", await spec.getByTestId("brain-decision-title").getAttribute("href"), "/projects/p1/docs?doc=d1");
@@ -253,7 +254,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("another project's origin", await text(old.getByTestId("brain-decision-origin")), "Factory project state-store");
       ck("the page never says null", !/\bnull\b/.test(await text(T("brain-decisions"))));
       const adr = T("brain-decision-row").nth(4);
-      eq("a repo file: its origin", await text(adr.getByTestId("brain-decision-origin")), "GitHub repo glassflow/tares-cloud");
+      eq("a repo file: its origin, the repo on a second line", await lines(adr.getByTestId("brain-decision-origin")), ["GitHub repo", "glassflow/tares-cloud"]);
       ck("the repo name opens the repo on GitHub in a new tab", (await adr.getByTestId("brain-decision-origin-link").getAttribute("href")) === "https://github.com/glassflow/tares-cloud" && (await adr.getByTestId("brain-decision-origin-link").getAttribute("target")) === "_blank");
       eq("a repo file: who decided and who changed it", await text(adr.getByTestId("brain-decision-who")), "Ada Lovelace, changed by Kiran");
       const a = adr.getByTestId("brain-decision-title");
