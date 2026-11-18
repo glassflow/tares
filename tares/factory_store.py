@@ -1782,7 +1782,7 @@ class FactoryStore:
                                    [person_id]).fetchall()
         return {r[0] for r in rows}
 
-    def mark_told(self, person_id: str, items: list[str], sent: bool, at) -> None:
+    def mark_waiting_told(self, person_id: str, items: list[str], sent: bool, at) -> None:
         """Record `items` as told to `person_id`: `sent` when a message went, False when they were
         only seen (already waiting, or the person had it switched off). An item already recorded
         keeps its first row."""

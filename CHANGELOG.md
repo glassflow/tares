@@ -5,9 +5,6 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- A person on a crew cell gets a direct message on Slack when something new waits for them: one per item, with what it asks, what it holds up and a link to it in the feed (`/feed?item=<id>`). At most five per minute, then one message that says how many more. Nothing is sent for what already waited when the cell starts reading, after more than an hour without a read, or while the person has it switched off. Each person switches it in Integrations, Notifications (`GET` and `PUT /api/me/slack`); it is on until they switch it off. Tares finds the person on Slack by their email, so the Slack app needs the `users:read.email` bot scope; without it nothing is sent and the switch says so. A cell without Slack sends nothing.
-
 ## [1.59.0] - 2026-11-17
 
 Crew stations carry much less context: every skill fits under its size limit and a ticket read answers in a few KB. The Tickets page shows who each ticket is assigned to, and GitHub Issues picks its repository from a list.

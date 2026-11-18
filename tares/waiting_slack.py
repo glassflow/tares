@@ -201,14 +201,14 @@ class WaitingSlack:
         new = [i for i in items if i["id"] not in told]
         if SEEN not in told or away or not is_on(self.store, pid):
             # what waits now was not new to this reader: recorded, never sent
-            await asyncio.to_thread(self.store.mark_told, pid, [SEEN, *[i["id"] for i in new]], False, now)
+            await asyncio.to_thread(self.store.mark_waiting_told, pid, [SEEN, *[i["id"] for i in new]], False, now)
             return 0, None
         if not new:
             return 0, None
         user, err = await self.slack_user(token, p["email"], now)
         if err == "missing_scope":
             self._log_once("missing_scope", NO_SCOPE)
-            await asyncio.to_thread(self.store.mark_told, pid, [i["id"] for i in new], False, now)
+            await asyncio.to_thread(self.store.mark_waiting_told, pid, [i["id"] for i in new], False, now)
             return 0, NO_SCOPE
         if err:
             # Slack could not say who they are this time: the items stay new for the next read
@@ -216,14 +216,14 @@ class WaitingSlack:
             return 0, None
         if user is None:
             self.not_found.add(pid)
-            await asyncio.to_thread(self.store.mark_told, pid, [i["id"] for i in new], False, now)
+            await asyncio.to_thread(self.store.mark_waiting_told, pid, [i["id"] for i in new], False, now)
             return 0, None
         self.not_found.discard(pid)
         own, rest = new[:MAX_PER_READ], new[MAX_PER_READ:]
         if len(rest) == 1:
             own, rest = new, []       # "1 more thing" is no shorter than the thing itself
         # recorded first: a crash between the two can lose a message, never send one twice
-        await asyncio.to_thread(self.store.mark_told, pid, [i["id"] for i in new], True, now)
+        await asyncio.to_thread(self.store.mark_waiting_told, pid, [i["id"] for i in new], True, now)
         sent = 0
         for item in own:
             ok, err = await self._send(token, message(user, item, feed_link(item["id"])))
