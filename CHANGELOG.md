@@ -5,9 +5,6 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- A crew member stuck on a prompt in its terminal (a permission prompt, a question or a dialog from Claude Code) waits for its crew's person on Home and in the feed: "Answer crew-releaser in its terminal", with the prompt's reason, and a link to the member on the Crew page. There is nothing to say yes or no with, since the answer is typed in the terminal. The item goes when the member works again; a new prompt is a new item. A member silent for 90 minutes reads as quiet and is not listed. On a project the person cannot see, the item names neither the project nor the reason.
-
 ## [1.59.0] - 2026-11-17
 
 Crew stations carry much less context: every skill fits under its size limit and a ticket read answers in a few KB. The Tickets page shows who each ticket is assigned to, and GitHub Issues picks its repository from a list.
