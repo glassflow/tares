@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
-import type { SlackChannels } from "../../api";
 import { Picker } from "../bits";
 import type { PlanAgent, PlanOwnAgent } from "../../types";
 import { Switch } from "./common";

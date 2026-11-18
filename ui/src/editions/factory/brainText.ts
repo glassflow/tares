@@ -1,7 +1,8 @@
 // The words and small rules of the Repos page (TR-1204), kept apart from the page so a script can
-// run them without a browser. No JSX and no imports beyond durationWords.
+// run them without a browser. No JSX and no imports beyond lib/time and lib/number.
 
-import { durationWords } from "../words";
+import { formatCount } from "../../lib/number";
+import { ageWords } from "../../lib/time";
 import type { BrainReposData, BrainRepoRow } from "./BrainRepos.api";
 
 /** While a repo is queued, cloning, indexing or being removed the page reads every 10 seconds. */
@@ -47,7 +48,7 @@ export const NO_ROOM_WORDS = "Starts when the brain has room.";
 export const REMOVE_WORDS = "Removes its index and decisions from the brain.";
 
 /** A whole number with thousands separators: 1,816. */
-export const count = (n: number | null | undefined): string => (Number.isFinite(n) ? Math.max(0, Number(n)) : 0).toLocaleString("en-US");
+export const count = (n: number | null | undefined): string => formatCount(Number.isFinite(n) ? Math.max(0, Number(n)) : 0);
 
 /** The first 7 characters of a commit. */
 export const shortCommit = (c: string | null | undefined): string => (c ? c.slice(0, 7) : "");
@@ -62,7 +63,7 @@ export function timeOf(iso: string | null | undefined): number {
 export function ago(iso: string | null | undefined, now: number): string {
   const t = timeOf(iso);
   if (Number.isNaN(t)) return "";
-  return `${durationWords(Math.max(0, (now - t) / 1000))} ago`;
+  return ageWords(now - t);
 }
 
 const ORDINALS = ["", "First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth"];

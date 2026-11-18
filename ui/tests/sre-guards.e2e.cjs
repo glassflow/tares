@@ -24,7 +24,7 @@ const vm = require("vm");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const ts = require(path.join(UI_DIR, "node_modules", "typescript"));
 const { checkWords } = require("./words.cjs");
 
@@ -46,9 +46,9 @@ async function waitFor(url, tries = 100) {
   return false;
 }
 
-// incidentTime.ts, compiled and run here: pure functions, no page needed
+// lib/time.ts (the helpers the incident screens use), compiled and run here: pure functions, no page needed
 function loadTimeWords() {
-  const src = fs.readFileSync(path.join(UI_DIR, "src", "editions", "sre", "incidentTime.ts"), "utf8");
+  const src = fs.readFileSync(path.join(UI_DIR, "src", "lib", "time.ts"), "utf8");
   const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
   const mod = { exports: {} };
   vm.runInNewContext(js, { module: mod, exports: mod.exports });
@@ -178,10 +178,10 @@ function loadTimeWords() {
       Object.defineProperty(navigator, "clipboard", { value: { writeText: (t) => { window.__copied.push(t); return Promise.resolve(); } }, configurable: true });
     };
     const copyPages = [
-      ["Claude Code source page", "/sources/claude-code", async (page) => { const b = page.locator("button.copybtn").first(); await b.waitFor(); return b; }],
+      ["Claude Code page", "/sources/claude-code", async (page) => { const b = page.getByTestId("claude-code-install").getByRole("button"); await b.waitFor(); return b; }],
       ["catalog export", "/sources/export", async (page) => {
-        await page.getByRole("button", { name: /^Export \d+ source/ }).click();
-        const b = page.getByRole("button", { name: /^(Copy|Copied)/ });
+        await page.getByTestId("export-run").click();
+        const b = page.getByTestId("export-copy");
         await b.waitFor();
         return b;
       }],

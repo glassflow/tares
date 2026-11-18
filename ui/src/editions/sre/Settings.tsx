@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { licenceWordsOn, useCloud } from "../../cloud";
-import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, Loading, Skeleton, StatusLabel, Toaster, type Tone, useToast } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
@@ -16,7 +16,7 @@ import {
   type CreatedKey, type Field, type FieldGroup, type FieldGroupName, type FieldValue, type KeyRow, type Option,
   type SreSettings, type ToolRow,
 } from "./Settings.api";
-import { isSettingsSample, sampleLoad, sampleSettings, SAMPLE_PARTIAL, type SampleName } from "./sample/settings";
+import { isSettingsSample, sampleLoad, SAMPLE_PARTIAL, type SampleName } from "./sample/settings";
 
 // AI SRE Settings: seven groups on one page, from one read (GET /api/sre/settings). Watching,
 // Investigating and Where notes go each save on their own (PUT /api/sre/settings/{group}) and a save
@@ -116,7 +116,7 @@ function Sec({ id, title, sub, children }: { id: string; title: string; sub?: st
   return (
     <section id={id} data-testid={`group-${id}`} className="min-w-0 scroll-mt-20 border border-border bg-card">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-border px-4 py-3.5 md:px-[18px]">
-        <h2 className="m-0! text-[17px]!">{title}</h2>
+        <h2 className="m-0 text-[17px]">{title}</h2>
         {sub && <span className="text-[13px] text-muted-foreground">{sub}</span>}
       </div>
       {children}
@@ -143,7 +143,7 @@ const Help = ({ children, ...p }: React.HTMLAttributes<HTMLParagraphElement>) =>
 
 function SaveBar({ group, dirty, busy, message, onSave }: { group: string; dirty: boolean; busy: boolean; message?: string; onSave: () => void }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-t border-border bg-[var(--wash)] px-4 py-3 md:px-[18px]">
+    <div className="flex items-center justify-between gap-3 border-t border-border bg-wash px-4 py-3 md:px-[18px]">
       <span className="min-w-0 text-[13px] text-muted-foreground" data-testid={`save-msg-${group}`} role="status">
         {message ?? (dirty ? "You have changes that are not saved." : "")}
       </span>
@@ -183,7 +183,7 @@ interface GroupProps {
   children?: React.ReactNode;
 }
 
-function RuleRow({ g, rule, text, editable, value, set }: {
+function RuleRow({ rule, text, editable, value, set }: {
   g: FieldGroup; rule: Field; text?: Field; editable: boolean; value: string[]; set: (v: string[]) => void;
 }) {
   const [adding, setAdding] = React.useState(false);
@@ -205,13 +205,13 @@ function RuleRow({ g, rule, text, editable, value, set }: {
             <span data-user-text>{l}</span>
             {editable && (
               <button type="button" aria-label={`Remove ${l}`} data-testid="rule-chip-remove" onClick={() => set(value.filter((x) => x !== l))}
-                      className="border-0! bg-transparent! p-0! text-muted-foreground! hover:text-foreground!">&times;</button>
+                      className="border-0 bg-transparent p-0 text-muted-foreground hover:text-foreground">&times;</button>
             )}
           </span>
         ))}
         {editable && value.length < limit && !adding && (
           <button type="button" data-testid="rule-add" onClick={() => setAdding(true)}
-                  className="border border-dashed border-border! bg-transparent! px-2.5! py-1! text-[13px]! font-normal! text-muted-foreground!">+ Add</button>
+                  className="border border-dashed border-border bg-transparent px-2.5 py-1 text-[13px] font-normal text-muted-foreground">+ Add</button>
         )}
         {editable && adding && (
           <Input autoFocus aria-label="A label to compare by" placeholder="Label" value={draft} data-testid="rule-add-input"
@@ -221,14 +221,14 @@ function RuleRow({ g, rule, text, editable, value, set }: {
         )}
       </div>
       {text?.text && (
-        <div data-words-exempt data-testid="rule-text" className="max-w-[640px] whitespace-pre-line border border-border bg-[var(--wash)] px-3.5 py-2.5 text-sm [overflow-wrap:anywhere]">
+        <div data-words-exempt data-testid="rule-text" className="max-w-[640px] whitespace-pre-line border border-border bg-wash px-3.5 py-2.5 text-sm [overflow-wrap:anywhere]">
           {text.text}
         </div>
       )}
       {text && (
         <Help>
           The wording of the rule is set in the watcher&apos;s setup, under Advanced.{" "}
-          {text.link && <Link to={text.link.value} data-testid="rule-open" className="text-foreground! underline!">Open it</Link>}
+          {text.link && <Link to={text.link.value} data-testid="rule-open" className="text-foreground underline">Open it</Link>}
         </Help>
       )}
     </Row>
@@ -288,7 +288,7 @@ function FieldGroupSection({ name, group, can, edit, set, busy, message, onSave,
   return (
     <Sec id={name} title={title} sub={SUBTITLE[name]}>
       {readOnlyNote && (
-        <div className="border-b border-border bg-[var(--wash)] px-4 py-2.5 text-[13px] text-muted-foreground md:px-[18px]" data-testid="readonly-note">
+        <div className="border-b border-border bg-wash px-4 py-2.5 text-[13px] text-muted-foreground md:px-[18px]" data-testid="readonly-note">
           You can read these settings but not change them. Ask someone with admin access.
         </div>
       )}
@@ -324,10 +324,9 @@ function ToolsSection({ tools, can }: { tools: SreSettings["tools"]; can: boolea
   return (
     <Sec id="tools" title={tools.title} sub={SUBTITLE.tools}>
       {empty ? (
-        <div className="border-b border-border px-4 py-6 text-center md:px-[18px]" data-testid="tools-empty">
-          <b className="block text-[15px]">Nothing connected yet</b>
-          <span className="text-sm text-muted-foreground">Add what the watcher should look at: logs, metrics, alerts, deploys.</span>
-        </div>
+        <EmptyState title="Nothing connected yet" className="border-b border-border py-6" data-testid="tools-empty">
+          Add what the watcher should look at: logs, metrics, alerts, deploys.
+        </EmptyState>
       ) : (
         <div className="max-h-[330px] overflow-y-auto" data-testid="tools-scroll">
           {tools.rows.map((r) => (
@@ -346,7 +345,7 @@ function ToolsSection({ tools, can }: { tools: SreSettings["tools"]; can: boolea
         </div>
       )}
       {can && (
-        <div className="flex flex-wrap items-center gap-2 bg-[var(--wash)] px-4 py-3 md:px-[18px]" data-testid="tools-add">
+        <div className="flex flex-wrap items-center gap-2 bg-wash px-4 py-3 md:px-[18px]" data-testid="tools-add">
           <span className="mr-1 text-[13px] text-muted-foreground">Add a tool</span>
           {tools.add.map((a) => (
             <Button key={a.label} asChild variant="secondary" className="h-8 px-2.5 text-[13px]">
@@ -378,7 +377,9 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
   onCreate: (name: string, scope: string) => Promise<boolean>; onRevoke: (k: KeyRow) => void; onDismiss: () => void;
   notice?: string; working: string | null;
 }) {
-  const cloud = useCloud();
+  // Not read: the call subscribes this section to /health, so the licence link below appears once a
+  // self-hosted cell answers (licenceWordsOn() alone is a snapshot; see cloud.ts).
+  useCloud();
   const [form, setForm] = React.useState(false);
   const [name, setName] = React.useState("");
   const [scope, setScope] = React.useState("read");
@@ -396,7 +397,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
   return (
     <Sec id="people" title={people.title} sub={SUBTITLE.people}>
       {created && (
-        <div className="grid gap-2 border-b border-border bg-[var(--warn-soft)] px-4 py-3.5 md:px-[18px]" data-testid="created-key" role="status">
+        <div className="grid gap-2 border-b border-border bg-muted px-4 py-3.5 md:px-[18px]" data-testid="created-key" role="status">
           <div className="text-sm">
             <b>Key created: <span data-user-text>{created.name}</span>.</b> {created.scopes_words}. Copy it now, it is not shown again.
           </div>
@@ -407,21 +408,21 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
           </div>
         </div>
       )}
-      {notice && <div className="border-b border-border px-4 py-2.5 text-[13px] text-[color:var(--err)] md:px-[18px]" role="alert" data-testid="people-notice">{notice}</div>}
+      {notice && <div className="border-b border-border px-4 py-2.5 text-[13px] text-err md:px-[18px]" role="alert" data-testid="people-notice">{notice}</div>}
       {people.keys.length === 0 ? (
-        <p className="m-0 border-b border-border px-4 py-3.5 text-sm text-muted-foreground md:px-[18px]" data-testid="keys-empty">{people.empty_words}</p>
+        <EmptyState className="border-b border-border px-4 py-3.5 md:px-[18px]" data-testid="keys-empty">{people.empty_words}</EmptyState>
       ) : (
         <div className="max-h-[330px] overflow-y-auto" data-testid="keys-scroll">
           {people.keys.map((k) => <KeyLine key={k.id ?? k.name} k={k} can={editable} busy={working === k.id} onRevoke={onRevoke} />)}
         </div>
       )}
       {(editable || people.workspace) && (
-        <div className="grid gap-3 bg-[var(--wash)] px-4 py-3 md:px-[18px]">
+        <div className="grid gap-3 bg-wash px-4 py-3 md:px-[18px]">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             {editable && !form && <Button variant="secondary" className="h-8 px-2.5 text-[13px]" data-testid="key-create-open" onClick={() => setForm(true)}>Create a key</Button>}
             {people.workspace && (
               <span className="text-[13px] text-muted-foreground" data-testid="workspace-note">
-                <Link to={people.workspace.link.value} className="text-foreground! underline!">{people.workspace.words}</Link> opens the control plane
+                <Link to={people.workspace.link.value} className="text-foreground underline">{people.workspace.words}</Link> opens the control plane
               </span>
             )}
           </div>
@@ -441,13 +442,13 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
                 <Button type="submit" busy={working === "create"} data-testid="key-create">Create</Button>
                 <Button variant="quiet" onClick={() => { setForm(false); setProblem(""); }}>Cancel</Button>
               </div>
-              {problem && <p className="m-0 text-[13px] text-[color:var(--err)] md:col-span-3" role="alert" data-testid="key-problem">{problem}</p>}
+              {problem && <p className="m-0 text-[13px] text-err md:col-span-3" role="alert" data-testid="key-problem">{problem}</p>}
             </form>
           )}
         </div>
       )}
       {licenceWordsOn() && <div className="border-t border-border px-4 py-3 text-[13px] text-muted-foreground md:px-[18px]" data-testid="licence-link-row">
-        <Link to="/settings/advanced?tab=licence" className="text-foreground! underline!" data-testid="licence-link">Enterprise licence</Link>: see it, paste a key or remove one.
+        <Link to="/settings/advanced?tab=licence" className="text-foreground underline" data-testid="licence-link">Enterprise licence</Link>: see it, paste a key or remove one.
       </div>}
     </Sec>
   );
@@ -475,7 +476,7 @@ function AdvancedSection({ advanced }: { advanced: SreSettings["advanced"] }) {
       <div className="grid md:grid-cols-2">
         {advanced.links.map((l) => (
           <Link key={l.value} to={l.value} data-testid="advanced-link"
-                className="block min-w-0 border-b border-border px-4 py-3 no-underline! hover:bg-[var(--row-hover)] md:px-[18px] md:odd:border-r">
+                className="block min-w-0 border-b border-border px-4 py-3 no-underline hover:bg-row-hover md:px-[18px] md:odd:border-r">
             <span className="block text-[13px] font-bold text-foreground">{l.label}</span>
             <span className="block text-[13px] text-muted-foreground">{l.help}</span>
           </Link>
@@ -491,15 +492,15 @@ function AdvancedSection({ advanced }: { advanced: SreSettings["advanced"] }) {
 function Head({ sub }: { sub?: boolean }) {
   return (
     <div>
-      <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Settings</h1>
-      {sub && <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Change how the watcher and investigator work. Each group saves on its own.</p>}
+      <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Settings</h1>
+      {sub && <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Change how the watcher and investigator work. Each group saves on its own.</p>}
     </div>
   );
 }
 
-function Loading() {
+function SettingsSkeleton() {
   return (
-    <div className="grid gap-6" data-testid="settings-loading" role="status" aria-busy="true" aria-label="Loading">
+    <Loading className="grid gap-6" data-testid="settings-loading">
       {[0, 1, 2].map((i) => (
         <div key={i} className="border border-border bg-card">
           <div className="border-b border-border px-4 py-3.5"><Skeleton width="30%" height={14} /></div>
@@ -510,7 +511,7 @@ function Loading() {
           ))}
         </div>
       ))}
-    </div>
+    </Loading>
   );
 }
 
@@ -694,7 +695,7 @@ function Settings() {
     return (
       <div className="grid gap-6" data-testid="sre-settings">
         <Head />
-        {banner || <Loading />}
+        {banner || <SettingsSkeleton />}
       </div>
     );
   }
@@ -714,16 +715,16 @@ function Settings() {
     <div className="grid gap-6" data-testid="sre-settings">
       <Head sub />
       {banner}
-      {failure && (
+      <Collapse>{failure && (
         <Banner tone="warn" data-testid="partial-banner" role="alert"
                 action={<Button variant="quiet" onClick={() => setFailure(null)}>Dismiss</Button>}>
           <b>{partial ? `Part of ${failedTitle} was saved.` : `${failedTitle} was not saved.`}</b> {failure.text} Fix it and save again.
         </Banner>
-      )}
+      )}</Collapse>
       <nav aria-label="Settings groups" className="flex flex-wrap gap-2" data-testid="settings-nav">
         {NAV.map((n) => (
           <a key={n.id} href={`#${n.id}`} data-testid={`nav-${n.id}`}
-             className="border border-border bg-card px-3 py-1.5 text-[13px] text-foreground! no-underline! hover:bg-muted">{n.label}</a>
+             className="border border-border bg-card px-3 py-1.5 text-[13px] text-foreground no-underline hover:bg-muted">{n.label}</a>
         ))}
       </nav>
 
@@ -744,7 +745,7 @@ function Settings() {
                   <Button busy={switchBusy} onClick={() => void doSwitch()} data-testid="edition-confirm">Switch</Button>
                 </>
               }>
-        {switchProblem && <p className="m-0 text-[13px] text-[color:var(--err)]" role="alert" data-testid="edition-problem">{switchProblem}</p>}
+        {switchProblem && <p className="m-0 text-[13px] text-err" role="alert" data-testid="edition-problem">{switchProblem}</p>}
       </Dialog>
       <Toaster />
     </div>

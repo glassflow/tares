@@ -12,6 +12,7 @@ on:
       - "README.md"
       - "AGENTS.md"
       - "CLAUDE.md"
+      - ".impeccable.md"
       - "SECURITY.md"
       - "THIRD_PARTY_NOTICES.md"
       - "docs/**"
@@ -23,6 +24,7 @@ on:
       - "README.md"
       - "AGENTS.md"
       - "CLAUDE.md"
+      - ".impeccable.md"
       - "SECURITY.md"
       - "THIRD_PARTY_NOTICES.md"
       - "docs/**"
@@ -48,8 +50,14 @@ jobs:
         run: |
           npm ci
           npx tsc --noEmit
+          npm run lint
+          npm run token-contract
+          npm run test:tokens
           node tests/words.selftest.cjs
+          node tests/time.selftest.cjs
           node tests/words.check.cjs
+          npm run design-contract
+          npm run motion-contract
           npm run build
         working-directory: ui
 
@@ -344,6 +352,37 @@ jobs:
         with:
           name: e2e-shots-${{ matrix.shard }}
           path: ${{ runner.temp }}/e2e-shots
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The component gallery against its committed pictures (TR-1269): every section in light, dark and
+  # at 390px. Runs in the Playwright image the baselines were drawn in, so fonts and antialiasing match
+  # to the pixel; its tag moves with @playwright/test in ui/package.json. On a failure the report with
+  # each diff image is uploaded. Updating the pictures on purpose: .impeccable.md, "Pictures of the kit".
+  visual:
+    if: ${{ !github.event.pull_request.draft && github.ref != 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.60.0-noble
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the console and compare the gallery
+        run: |
+          npm ci
+          npm run build
+          npx playwright test -c playwright.visual.config.ts
+      - name: The report with each diff
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-report
+          path: |
+            ui/test-results/visual
+            ui/test-results/visual-report
           if-no-files-found: ignore
           retention-days: 7
 

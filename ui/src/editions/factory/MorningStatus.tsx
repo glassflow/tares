@@ -7,6 +7,7 @@ import { SlackPick } from "../../components/SlackPick";
 import { Switch } from "../../components/ui/switch";
 import type { Person } from "../../types";
 import type { MorningResult, MorningStatus } from "./FactorySettings.api";
+import { viewerZone } from "../../lib/time";
 
 // Settings, Crew, Morning status: the standup report, sent by the cell itself on weekday mornings
 // to Slack, by email, or both. Off until someone turns it on. Email is Tares Cloud only, so on a
@@ -17,7 +18,7 @@ export const MORNING_OFF: MorningStatus = {
   email_available: false, last_result: "",
 };
 
-const here = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const here = viewerZone;
 
 function zones(current: string): { value: string; label: string }[] {
   const all = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? ["UTC"];
@@ -36,7 +37,7 @@ export function missingFor(d: MorningStatus, slackConnected: boolean, emailAvail
 }
 
 const LOWER = (s: string) => s.toLowerCase();
-const TICK = "data-[state=unchecked]:bg-[var(--input-bg)]!";
+const TICK = "data-[state=unchecked]:bg-field";
 
 export function MorningStatusPane({ value, slackConnected, people, dim, onSave, onSendNow }: {
   value: MorningStatus;
@@ -95,8 +96,8 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
   return (
     <div className="grid min-w-0 gap-4" data-testid="morning-status">
       <div className="min-w-0">
-        <h2 className="m-0! text-xl!">Morning status</h2>
-        <p className="m-0! text-[13px] text-muted-foreground">A short report each weekday morning: what got done, what is moving, and what is waiting for you.</p>
+        <h2 className="m-0 text-xl">Morning status</h2>
+        <p className="m-0 text-[13px] text-muted-foreground">A short report each weekday morning: what got done, what is moving, and what is waiting for you.</p>
       </div>
 
       <div className={"border border-border bg-card" + (off ? " opacity-60" : "")}>
@@ -120,13 +121,13 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                         onCheckedChange={(v) => set({ to_slack: v === true })} data-testid="morning-to-slack" />
               {!slackConnected && (
                 <div className="ml-7 text-[13px] text-muted-foreground" data-testid="morning-no-slack">
-                  <b className="text-foreground">Connect Slack first.</b> <Link to="/settings?tab=slack" className="text-[color:var(--accent-deep)]! underline!">Connect Slack</Link>
+                  <b className="text-foreground">Connect Slack first.</b> <Link to="/settings?tab=slack" className="text-foreground underline">Connect Slack</Link>
                 </div>
               )}
               {draft.to_slack && slackConnected && (
                 <div className="ml-7 grid gap-1.5">
                   <SlackPick value={draft.channel} onChange={(c) => set({ channel: c })} disabled={off} emptyLabel="Pick a channel" />
-                  {!draft.channel && <div className="text-[13px] text-[color:var(--err)]" data-testid="morning-need-channel">Pick a channel to send it to.</div>}
+                  {!draft.channel && <div className="text-[13px] text-err" data-testid="morning-need-channel">Pick a channel to send it to.</div>}
                 </div>
               )}
             </div>
@@ -152,7 +153,7 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                 </div>
               )}
               {draft.to_email && emailAvailable && !draft.recipients.length && people !== null && emails.length > 0 && (
-                <div className="ml-7 text-[13px] text-[color:var(--err)]" data-testid="morning-need-people">Pick at least one person to email.</div>
+                <div className="ml-7 text-[13px] text-err" data-testid="morning-need-people">Pick at least one person to email.</div>
               )}
             </div>
           </div>
@@ -163,13 +164,13 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                     onValueChange={(z) => set({ timezone: z })} data-testid="morning-zone" />
           </div>
 
-          {blocked && <div className="text-[13px] text-[color:var(--err)]" role="alert" data-testid="morning-missing">{missing}</div>}
+          {blocked && <div className="text-[13px] text-err" role="alert" data-testid="morning-missing">{missing}</div>}
 
           <div className="flex flex-wrap items-center gap-3">
             <Button busy={busy === "save"} disabled={off || blocked || !draft.time || busy !== null} onClick={() => void save()} data-testid="morning-save">Save</Button>
             <Button variant="secondary" busy={busy === "send"} disabled={!canSend || !draft.time || busy !== null} onClick={() => void sendNow()} data-testid="morning-send-now">Send one now</Button>
             {note && <span className="text-[13px] text-muted-foreground" role="status" data-testid="morning-note">{note}</span>}
-            {error && <span className="text-[13px] text-[color:var(--err)]" role="alert" data-testid="morning-error">{error}</span>}
+            {error && <span className="text-[13px] text-err" role="alert" data-testid="morning-error">{error}</span>}
           </div>
           {lastResult && <div className="text-[13px] text-muted-foreground" data-testid="morning-last-result">{lastResult}</div>}
         </div>

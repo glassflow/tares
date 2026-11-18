@@ -14,13 +14,112 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
+const { checkType } = require("./type.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8831);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
 
 let pass = 0, fail = 0;
+// TR-1265: every status in STATUS_TONES renders from the one StatusLabel, and amber is live work only.
+// The gallery walks the table, so a status or a domain added later is checked here without a new line.
+async function checkStatuses(page, theme) {
+  const got = await page.evaluate(() => {
+    const paint = (v) => { const p = document.createElement("span"); p.style.color = `var(${v})`; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; };
+    const amber = [paint("--accent"), paint("--accent-deep"), paint("--warn")];
+    const labels = [...document.querySelectorAll("[data-testid=status-every] [data-status]")].map((e) => {
+      const s = getComputedStyle(e);
+      return { key: `${e.dataset.domain}:${e.dataset.status}`, tone: e.dataset.tone, text: e.textContent.trim(), color: s.color,
+               line: s.textDecorationLine, lineColor: s.textDecorationColor, lineStyle: s.textDecorationStyle,
+               shown: e.getBoundingClientRect().width > 0 };
+    });
+    return { amber, labels, domains: new Set(labels.map((l) => l.key.split(":")[0])).size };
+  });
+  const { amber, labels } = got;
+  const isAmber = (c) => amber.includes(c);
+  ck(`${theme}: the gallery lists every status table (${got.domains} domains, ${labels.length} statuses)`, got.domains >= 12 && labels.length >= 57, `${got.domains} / ${labels.length}`);
+  ck(`${theme}: every status shows its words`, labels.every((l) => l.shown && l.text.length > 0), labels.filter((l) => !l.shown || !l.text).map((l) => l.key).join(", "));
+  const stray = labels.filter((l) => l.tone !== "working" && (isAmber(l.color) || isAmber(l.lineColor)));
+  ck(`${theme}: no status but live work uses the action amber`, stray.length === 0, stray.map((l) => `${l.key} ${l.color}`).join(", "));
+  const working = labels.filter((l) => l.tone === "working");
+  ck(`${theme}: live work is amber, underlined in the accent`, working.length > 0 && working.every((l) => isAmber(l.color) && l.lineColor === amber[0] && l.line.includes("underline")),
+     working.map((l) => `${l.key} ${l.color} ${l.lineColor}`).join(", "));
+  const waits = labels.filter((l) => l.tone === "waiting");
+  ck(`${theme}: a waiting status has a dashed underline`, waits.length > 0 && waits.every((l) => l.lineStyle === "dashed" && l.line.includes("underline")),
+     waits.map((l) => `${l.key} ${l.lineStyle}`).join(", "));
+  const done = labels.filter((l) => l.tone === "done");
+  ck(`${theme}: a done status is plain`, done.length > 0 && done.every((l) => !l.line.includes("underline")), done.map((l) => `${l.key} ${l.line}`).join(", "));
+}
+
+// TR-1264: one Loading and one EmptyState. Loading tells a screen reader the area is busy and holds only
+// Skeleton bars; EmptyState is a titled block for a page with nothing in it, or a line for an empty section.
+// The suites run under reduced motion (tests/browser.cjs), where the bars hold still on purpose, so the pulse is
+// asked of the class here; motion.e2e.cjs sees it move.
+async function checkStates(page) {
+  const got = await page.evaluate(() => {
+    const busy = (id) => {
+      const e = document.querySelector(`[data-testid=${id}]`);
+      if (!e) return null;
+      const bars = [...e.querySelectorAll("[aria-hidden=true]")];
+      return { role: e.getAttribute("role"), busy: e.getAttribute("aria-busy"), label: e.getAttribute("aria-label"),
+               bars: bars.length, pulse: bars.length > 0 && bars.every((b) => b.classList.contains("animate-pulse")), words: e.textContent.trim() };
+    };
+    const empty = (id) => {
+      const e = document.querySelector(`[data-testid=${id}]`);
+      return e && { kind: e.dataset.empty, heading: !!e.querySelector("h3"), words: e.textContent.trim() };
+    };
+    return { loading: busy("loading"), blocks: busy("loading-blocks"), block: empty("empty-state"), line: empty("empty-line") };
+  });
+  for (const [name, l] of [["Loading", got.loading], ["LoadingBlocks", got.blocks]]) {
+    ck(`${name} is one busy status for a screen reader`, l && l.role === "status" && l.busy === "true" && l.label === "Loading", JSON.stringify(l));
+    ck(`${name} holds pulsing bars and no words`, l && l.bars >= 3 && l.pulse && l.words === "", JSON.stringify(l));
+  }
+  ck("an empty state with a title is a block with a heading", got.block && got.block.kind === "block" && got.block.heading, JSON.stringify(got.block));
+  ck("an empty state without a title is one line in the voice, no heading", got.line && got.line.kind === "line" && !got.line.heading && /yet\./.test(got.line.words),
+     JSON.stringify(got.line));
+}
+
+// TR-1270: a headline numeral is Doto, the face Rius uses, in both themes; its label is Geist Mono. Departure
+// Mono is gone: no font face of that name is left for the page to load.
+async function checkNumerals(page, theme) {
+  const got = await page.evaluate(async () => {
+    const stat = document.querySelector("[data-testid=stat]");
+    const [label, value] = stat ? [...stat.children] : [];
+    const loaded = await document.fonts.load('900 26px "Doto Variable"', "0123456789");
+    return { value: value && getComputedStyle(value).fontFamily, weight: value && getComputedStyle(value).fontWeight,
+             label: label && getComputedStyle(label).fontFamily, doto: loaded.length,
+             departure: [...document.fonts].filter((f) => /departure/i.test(f.family)).length };
+  });
+  ck(`${theme}: a Stat value is set in Doto, black, and the face loads`, /^"?Doto Variable/.test(got.value || "") && got.weight === "900" && got.doto > 0, JSON.stringify(got));
+  ck(`${theme}: a Stat label is Geist Mono`, /^"?Geist Mono/.test(got.label || ""), JSON.stringify(got));
+  ck(`${theme}: no Departure Mono face is left`, got.departure === 0, JSON.stringify(got));
+}
+
+// The kit V2 ladder (TR-1271, argus-ui theme.css --agency-dark-*). Light keeps the values it had.
+const LADDER = {
+  light: { canvas: "rgb(240, 239, 226)", panel: "rgb(250, 249, 236)", popover: "rgb(250, 249, 236)", focus: "rgb(240, 239, 226)" },
+  dark: { canvas: "rgb(43, 22, 0)", panel: "rgb(73, 36, 0)", popover: "rgb(120, 62, 6)", focus: "rgb(88, 47, 6)" },
+};
+async function checkLadder(page, theme) {
+  await page.getByTestId("input").focus();
+  await page.waitForTimeout(400);   // the fill transitions
+  const got = await page.evaluate(() => {
+    const bg = (e) => e && getComputedStyle(e).backgroundColor;
+    const probe = document.createElement("div");
+    probe.className = "bg-popover";
+    document.body.append(probe);
+    const out = { canvas: bg(document.body), panel: bg(document.querySelector("[data-testid=panel]")), popover: bg(probe),
+                  focus: bg(document.activeElement) };
+    probe.remove();
+    return out;
+  });
+  await page.getByTestId("input").blur();
+  for (const k of Object.keys(LADDER[theme])) {
+    ck(`${theme}: the ${k === "focus" ? "focused field" : k} is ${LADDER[theme][k]}`, got[k] === LADDER[theme][k], JSON.stringify(got));
+  }
+}
+
 const ck = (label, cond, detail = "") => {
   cond ? pass++ : fail++;
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
@@ -35,9 +134,10 @@ async function waitFor(url, tries = 100) {
   return false;
 }
 
-const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "stat",
-  "progress", "initials", "status-label", "skeleton", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
-  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link"];
+const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "empty-line", "stat",
+  "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
+  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link",
+  "collapse-toggle", "collapse-stack", "moving-list", "status-changing"];
 
 (async () => {
   const bin = path.join(REPO, ".venv/bin");
@@ -172,6 +272,11 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     }
 
     ck("no horizontal scroll at 1440px", (await wide()) <= 0, `${await wide()}px`);
+    await checkStatuses(page, "light");
+    await checkStates(page);
+    await checkNumerals(page, "light");
+    await checkLadder(page, "light");
+    await checkType(page, ck, "light");
     await page.getByTestId("theme-light").click();
     await shot("gallery-light.png");
 
@@ -180,6 +285,9 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     ck("dark theme applies from storage", (await page.evaluate(() => document.documentElement.getAttribute("data-theme"))) === "dark");
     ck("the page background changes with the theme", (await page.evaluate(() => getComputedStyle(document.body).backgroundColor)) !== "rgb(255, 255, 255)");
     await shot("gallery-dark.png");
+    await checkStatuses(page, "dark");
+    await checkNumerals(page, "dark");
+    await checkLadder(page, "dark");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await open();

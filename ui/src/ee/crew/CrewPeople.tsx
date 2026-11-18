@@ -59,7 +59,7 @@ export default function CrewPeople({ groups, myId, now, stations, selected }: Sl
   return (
     <>
       {!people.has(myId) && (
-        <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>
+        <p className="dim m-0 px-4 py-2.5">
           You have no crew on this cell yet: <span className="mono">tares factory crew up</span>.
         </p>
       )}

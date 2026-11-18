@@ -47,10 +47,10 @@ export function CopyCommand({ command }: { command: string }) {
   // As wide as the command, never the row: a long one is cut with an ellipsis and keeps its title.
   return (
     <div className="inline-flex h-8 max-w-full min-w-0 items-center border border-border bg-background pl-2.5">
-      <code className="min-w-0 truncate bg-transparent! p-0! font-mono text-[12.5px]" title={command}>{command}</code>
+      <code className="min-w-0 truncate bg-transparent p-0 font-mono text-[12.5px]" title={command}>{command}</code>
       <button type="button" onClick={copy} aria-label={copied ? "Copied" : `Copy ${command}`} title={copied ? "Copied" : "Copy"}
               data-testid="start-copy" data-copied={copied}
-              className="ml-2 grid h-full w-8 flex-none cursor-pointer place-items-center border-0! border-l! border-border! bg-transparent! p-0! text-muted-foreground! hover:text-foreground!">
+              className="ml-2 grid h-full w-8 flex-none cursor-pointer place-items-center border-0 border-l border-border bg-transparent p-0 text-muted-foreground hover:text-foreground">
         {copied ? <Check className="size-3.5" aria-hidden /> : <CopyIcon className="size-3.5" aria-hidden />}
       </button>
     </div>
@@ -65,7 +65,7 @@ interface DoProps {
 }
 
 function ActionButton({ action, primary, onDo, doing }: DoProps & { action: Exclude<StartAction, { copy: string }>; primary: boolean }) {
-  const cls = cn("h-8 text-[13px]!", primary && "border-foreground!");
+  const cls = cn("h-8 text-[13px]", primary && "border-foreground");
   if ("do" in action) {
     const busy = doing === action.do;
     return (
@@ -98,7 +98,7 @@ function Actions({ actions, onDo, doing }: DoProps & { actions: StartAction[] })
 function Step({ step, onDo, doing }: DoProps & { step: StartStep }) {
   return (
     <li data-testid="start-step" data-key={step.key} data-done={step.done}
-        className={cn(ROW_CLASS, "items-start gap-y-3 hover:bg-[var(--row-hover)]")}>
+        className={cn(ROW_CLASS, "items-start gap-y-3 hover:bg-row-hover")}>
       <div className="flex min-w-0 flex-[1_1_240px] items-start gap-4">
         <Tick done={step.done} />
         <div className="min-w-0 flex-1">
@@ -114,8 +114,9 @@ function Step({ step, onDo, doing }: DoProps & { step: StartStep }) {
   );
 }
 
-const PANEL = "min-w-0 border border-border bg-card [overflow-wrap:anywhere]";
-const HEAD = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-[18px] py-3.5";
+// On the paper (TR-1274): a rule over the heading, the steps flush with it. Both Homes show it.
+const PANEL = "min-w-0 border-t border-border [--row-x:0px] [overflow-wrap:anywhere]";
+const HEAD = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-3 pt-3";
 
 export interface StartChecklistProps {
   block: StartBlock;
@@ -150,25 +151,25 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo,
     <section aria-label={title} className={PANEL} data-testid="start-checklist">
       <div className={cn(HEAD, "border-b border-border")}>
         <div className="min-w-0">
-          <h2 className="m-0! text-base!">{title}</h2>
+          <h2 className="m-0 text-base">{title}</h2>
           <div className={MUTED} data-testid="start-count">{block.done} of {block.total} done</div>
         </div>
         <div className="flex items-center gap-4">
-          <ProgressBar value={pct} aria-label="Steps done" className="h-1 w-40 [&>div:first-child]:bg-foreground!" />
-          <Button variant="quiet" className="px-1! underline" onClick={onHide}>Hide this list</Button>
+          <ProgressBar value={pct} aria-label="Steps done" className="h-1 w-40 [&>div:first-child]:bg-foreground" />
+          <Button variant="quiet" className="px-1 underline" onClick={onHide}>Hide this list</Button>
         </div>
       </div>
       {error && (
-        <div role="alert" data-testid="start-error" className="border-b border-border px-[18px] py-2.5 text-[13px] text-[color:var(--err)]">
+        <div role="alert" data-testid="start-error" className="border-b border-border py-2.5 text-[13px] text-err">
           {HIDE_FAILED}
         </div>
       )}
       {notice && (
-        <div role="alert" data-testid="start-notice" className="border-b border-border px-[18px] py-2.5 text-[13px] text-[color:var(--err)]">
+        <div role="alert" data-testid="start-notice" className="border-b border-border py-2.5 text-[13px] text-err">
           {notice}
         </div>
       )}
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {block.steps.map((s) => <Step key={s.key} step={s} onDo={onDo} doing={doing} />)}
       </ul>
     </section>
@@ -202,10 +203,10 @@ export function StartChecklistHidden({ block, title, show = showStart, onShown }
   return (
     <div data-testid="start-hidden" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
       <span>The list &ldquo;{title}&rdquo; is hidden.</span>
-      <Button variant="quiet" className="px-1! underline" disabled={busy} onClick={onShow} data-testid="start-show">
+      <Button variant="quiet" className="px-1 underline" disabled={busy} onClick={onShow} data-testid="start-show">
         Show it again
       </Button>
-      {error && <span role="alert" data-testid="start-show-error" className="text-[color:var(--err)]">{SHOW_FAILED}</span>}
+      {error && <span role="alert" data-testid="start-show-error" className="text-err">{SHOW_FAILED}</span>}
     </div>
   );
 }
@@ -216,11 +217,11 @@ export function StartChecklistLoading({ title, rows = 3 }: { title: string; rows
     <section aria-label={title} aria-busy="true" className={PANEL} data-testid="start-checklist-loading">
       <div className={cn(HEAD, "border-b border-border")}>
         <div className="min-w-0">
-          <h2 className="m-0! text-base!">{title}</h2>
+          <h2 className="m-0 text-base">{title}</h2>
           <div className={MUTED}>Checking</div>
         </div>
       </div>
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {Array.from({ length: rows }, (_, i) => (
           <li key={i} className={cn(ROW_CLASS, "items-start")}>
             <span aria-hidden className="mt-0.5 size-5 flex-none border-[1.5px] border-foreground" />

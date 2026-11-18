@@ -33,7 +33,7 @@ function Choice({ checked, name, value, title, text, onChange, disabled }: {
   onChange: () => void; disabled?: boolean;
 }) {
   return (
-    <label className={cn("flex cursor-pointer items-start gap-3 border bg-[var(--input-bg)] px-4 py-3.5",
+    <label className={cn("flex cursor-pointer items-start gap-3 border bg-field px-4 py-3.5",
                          checked ? "border-foreground" : "border-border")}>
       <input type="radio" name={name} value={value} checked={checked} disabled={disabled} onChange={onChange}
              data-testid={`choice-${value}`} className="mt-1 size-4 flex-none accent-[var(--foreground)]" />
@@ -66,12 +66,12 @@ function StepShell({ step, n, current, children, onChange }: {
       <div className="grid min-w-0 flex-1 gap-3">
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
           <div className="min-w-0">
-            <h3 className={cn("m-0! text-base!", step.done && "text-muted-foreground")}>{step.title}</h3>
+            <h3 className={cn("m-0 text-base", step.done && "text-muted-foreground")}>{step.title}</h3>
             {!step.done && <div className={MUTED}>{step.gets}</div>}
             {step.done && step.detail && <div className="mt-0.5 line-clamp-3 text-[13px]" title={step.detail} data-user-text data-testid="step-detail">{step.detail}</div>}
           </div>
           {step.done && onChange && (
-            <Button variant="quiet" className="px-1! underline" onClick={onChange} data-testid="step-change">Change</Button>
+            <Button variant="quiet" className="px-1 underline" onClick={onChange} data-testid="step-change">Change</Button>
           )}
         </div>
         {children}
@@ -122,7 +122,7 @@ export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue" 
         ))}
       </fieldset>
       <div className="flex flex-wrap gap-4">
-        <div className="flex min-w-0 flex-[1_1_240px] items-center justify-between gap-4 border border-border bg-[var(--input-bg)] px-4 py-3.5">
+        <div className="flex min-w-0 flex-[1_1_240px] items-center justify-between gap-4 border border-border bg-field px-4 py-3.5">
           <span className="grid gap-0.5">
             <span id="onb-builders" className="font-semibold">Builders at once</span>
             <span className={MUTED}>One per milestone and repo</span>
@@ -130,14 +130,14 @@ export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue" 
           <span role="group" aria-labelledby="onb-builders" className="flex items-center border border-border">
             <button type="button" aria-label="One builder fewer" disabled={builders <= MIN_BUILDERS} data-testid="builders-less"
                     onClick={() => setBuilders(builders - 1)}
-                    className="size-9 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
+                    className="size-9 border-0 bg-transparent p-0 text-lg text-foreground cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
             <b className="min-w-9 text-center" data-testid="builders-count" aria-live="polite">{builders}</b>
             <button type="button" aria-label="One builder more" disabled={builders >= MAX_BUILDERS} data-testid="builders-more"
                     onClick={() => setBuilders(builders + 1)}
-                    className="size-9 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">+</button>
+                    className="size-9 border-0 bg-transparent p-0 text-lg text-foreground cursor-pointer disabled:cursor-not-allowed">+</button>
           </span>
         </div>
-        <div className="flex min-w-0 flex-[1_1_240px] items-center justify-between gap-4 border border-border bg-[var(--input-bg)] px-4 py-3.5">
+        <div className="flex min-w-0 flex-[1_1_240px] items-center justify-between gap-4 border border-border bg-field px-4 py-3.5">
           <span className="grid gap-0.5">
             <span className="font-semibold">Releases</span>
             <span className={MUTED}>{releases ? "The crew may ship a finished milestone when you say so." : "Off: merged work waits for you to ship it."}</span>
@@ -145,10 +145,10 @@ export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue" 
           <Switch aria-label="Releases" checked={releases} onCheckedChange={setReleases} data-testid="toggle-releases" />
         </div>
       </div>
-      {error && <div role="alert" data-testid="step-error" className="text-[13px] text-[color:var(--err)]">{SAVE_FAILED}</div>}
+      {error && <div role="alert" data-testid="step-error" className="text-[13px] text-err">{SAVE_FAILED}</div>}
       {asking ? (
         <div role="group" aria-labelledby="onb-merge-ask" data-testid="merge-confirm-box"
-             className="grid gap-3 border border-foreground bg-[var(--input-bg)] px-4 py-3.5">
+             className="grid gap-3 border border-foreground bg-field px-4 py-3.5">
           <div className="grid gap-0.5">
             <span id="onb-merge-ask" className="font-semibold">Let the crew merge on its own?</span>
             <span className={MUTED}>
@@ -179,7 +179,7 @@ function MemberLine({ name, who, m }: { name: string; who: string; m: Onboarding
       <div className="flex items-center justify-between gap-3">
         <span className="font-semibold">{name}</span>
         <span className="flex items-center gap-2 text-muted-foreground">
-          <span aria-hidden className={cn("size-2 flex-none", on ? "bg-[var(--ok)]" : "border-[1.5px] border-muted-foreground")} />
+          <span aria-hidden className={cn("size-2 flex-none", on ? "bg-ok" : "border-[1.5px] border-muted-foreground")} />
           <span data-testid={`crew-${who}-state`}>{MEMBER_WORDS[m.state]}</span>
         </span>
       </div>
@@ -194,14 +194,14 @@ export function YourCrew({ o }: { o: HomeOnboarding }) {
   return (
     <aside aria-label="Your crew" className={cn(PANEL, "flex-[1_1_280px]")} data-testid="your-crew">
       <div className="border-b border-border px-[18px] py-3.5">
-        <h2 className="m-0! text-[15px]!">Your crew</h2>
+        <h2 className="m-0 text-[15px]">Your crew</h2>
         <div className="text-xs text-muted-foreground">Fills in as your machine reports</div>
       </div>
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         <li className="flex items-center justify-between gap-3 px-[18px] py-3.5" data-testid="crew-machine">
           <span className="shrink-0 font-semibold">Your machine</span>
           <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
-            <span aria-hidden className={cn("size-2 flex-none", c.machine ? "bg-[var(--ok)]" : "border-[1.5px] border-muted-foreground")} />
+            <span aria-hidden className={cn("size-2 flex-none", c.machine ? "bg-ok" : "border-[1.5px] border-muted-foreground")} />
             <span data-user-text data-testid="crew-machine-state" className="min-w-0 break-all">{c.machine || "Not signed in"}</span>
           </span>
         </li>
@@ -253,7 +253,7 @@ function TerminalStep({ s, n, current, o, showDone }: {
 /** What the terminal steps need on the machine, said once above them. */
 export function Prerequisites() {
   return (
-    <p className="m-0! text-[13px] text-muted-foreground" data-testid="prerequisites">
+    <p className="m-0 text-[13px] text-muted-foreground" data-testid="prerequisites">
       You need, signed in: Claude Code on a plan with background sessions, and gh with write access to your repos. Also uv, git, jq and curl.
     </p>
   );
@@ -264,7 +264,7 @@ export function TerminalSteps({ steps, o, start = 1, current, showDone = false }
 }) {
   return (
     <section aria-label="In your terminal" className="grid gap-3" data-testid="terminal-panel">
-      <ol start={start} className="m-0! grid list-none! gap-3 p-0!">
+      <ol start={start} className="m-0 grid list-none gap-3 p-0">
         {steps.map((s, i) => (
           <TerminalStep key={s.key} s={s} n={start + i} current={s.key === current} o={o} showDone={showDone} />
         ))}

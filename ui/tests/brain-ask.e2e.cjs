@@ -30,7 +30,7 @@ const path = require("path");
 const vm = require("vm");
 
 const UI_DIR = path.resolve(__dirname, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const ts = require(path.join(UI_DIR, "node_modules", "typescript"));
 const { checkWords, expectOneCall } = require("./words.cjs");
 const { startDaemon } = require("./licensed.cjs");
@@ -74,7 +74,8 @@ function loadTs(file, requires = {}) {
 }
 const wordsJson = JSON.parse(fs.readFileSync(path.join(UI_DIR, "src", "editions", "words.json"), "utf8"));
 const wordsMod = loadTs("words.ts", { "./words.json": { default: wordsJson } });
-const T = loadTs(path.join("factory", "brainAskText.ts"), { "../words": wordsMod });
+const timeMod = loadTs(path.join("..", "lib", "time.ts"));
+const T = loadTs(path.join("factory", "brainAskText.ts"), { "../../lib/time": timeMod });
 
 // ---- the cell's rows, as GET /api/brain gives them
 const row = (repo, state = "ready", o = {}) => ({ repo, state, files_done: 0, files_total: 0, removing: false, ...o });

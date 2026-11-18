@@ -129,7 +129,7 @@ export default function AgentDetail() {
   const [err, setErr] = useState<string>();
 
   const { data, error, reload } = usePolling(() => api.builtinAgents(), 10000);
-  const { data: runs, error: runsError } = usePolling(() => api.builtinAgentRuns(name, 50), 10000);
+  const { data: runs } = usePolling(() => api.builtinAgentRuns(name, 50), 10000);
   const { data: triggers } = usePolling(() => api.triggers(), 30000);
 
   if (error) return <div className="alert error">{error}</div>;

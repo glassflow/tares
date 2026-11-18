@@ -1,4 +1,5 @@
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api, auth } from "../api";
@@ -10,10 +11,10 @@ import {
   Activity, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, Grid, HomeIcon, Moon, Plug, Search,
   Settings as SettingsIcon, Sun, Ticket, Users, Zap,
 } from "../components/icons";
-import { ProgressBar } from "../components/edition";
-import { Button } from "../components/edition";
-import { Initials } from "../components/edition/Initials";
+import { Button, ProgressBar, usePresence } from "../components/edition";
+import { Initials, initialsOf } from "../components/edition/Initials";
 import { Input } from "../components/ui/input";
+import { reducedMotion } from "../lib/motion";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
 import { BrainReadContext, type BrainRead } from "./brainRead";
@@ -21,7 +22,7 @@ import { useEdition } from "./edition";
 import { useSample } from "./sample";
 import { askBrainRepos } from "./factory/BrainAsk.api";
 import { SETTINGS_ENTRY, visibleEntries, type MenuEntry } from "./menus";
-import { hasPage } from "./routes";
+import { hasPage, preloadPage } from "./routes";
 import { isSettingsPath, rememberPlace } from "./settingsBack";
 import { setupProgress, type SetupProgress } from "./factory/FactorySetup.api";
 
@@ -44,12 +45,12 @@ function useNarrow(): boolean {
 
 // The console's own `a` and `button` rules are unlayered and beat plain utilities, so the
 // properties they also set are marked important.
-const LINK_BASE = "block px-3 py-2 text-sm no-underline! hover:bg-muted";
+const LINK_BASE = "block px-3 py-2 text-sm no-underline hover:bg-muted";
 const linkClass = (soft: boolean, narrow: boolean) => ({ isActive }: { isActive: boolean }) =>
   [LINK_BASE, narrow ? "py-2.5" : "",
-    isActive ? "bg-muted font-semibold text-foreground! shadow-[inset_2px_0_0_var(--accent)]"
-      : soft ? "text-muted-foreground!" : "text-foreground!"].join(" ");
-const ROW = "flex! w-full items-center justify-between gap-3 border-0! bg-transparent! px-3.5! py-2.5! text-left text-sm! font-normal! text-foreground! no-underline! hover:bg-muted! hover:text-foreground!";
+    isActive ? "bg-muted font-semibold text-foreground shadow-[inset_2px_0_0_var(--accent)]"
+      : soft ? "text-muted-foreground" : "text-foreground"].join(" ");
+const ROW = "flex w-full items-center justify-between gap-3 border-0 bg-transparent px-3.5 py-2.5 text-left text-sm font-normal text-foreground no-underline hover:bg-muted hover:text-foreground";
 
 const groupSlug = (g: string) => g.toLowerCase().replace(/\s+/g, "-");
 
@@ -75,10 +76,10 @@ function EntryLabel({ e }: { e: MenuEntry }) {
 function SetupCard({ setup }: { setup: SetupProgress }) {
   return (
     <NavLink to="/setup" data-testid="menu-setup"
-             className="mb-[18px] grid gap-2 border border-border bg-card px-3 py-2.5 text-sm text-foreground! no-underline! hover:bg-muted">
+             className="mb-[18px] grid gap-2 border border-border bg-card px-3 py-2.5 text-sm text-foreground no-underline hover:bg-muted">
       <span className="font-semibold">Set up your factory</span>
       <ProgressBar value={setup.total ? (setup.set / setup.total) * 100 : 0} aria-label="Setup done"
-                   className="h-1 [&>div:first-child]:bg-foreground!" />
+                   className="h-1 [&>div:first-child]:bg-foreground" />
       <span className="text-xs text-muted-foreground" data-testid="menu-setup-count">{setup.text}</span>
     </NavLink>
   );
@@ -102,8 +103,12 @@ function saveFolded(groups: string[]): void {
 function MenuLinks({ entries, narrow, setup }: {
   entries: MenuEntry[]; narrow: boolean; setup?: SetupProgress | null;
 }) {
+  const { edition } = useEdition();
+  // the page's code starts loading while the pointer rests on its link (TR-1433)
+  const early = (to: string) => () => preloadPage(edition, to);
   const link = (e: MenuEntry) => (
-    <NavLink key={e.key} to={e.to} end={e.to === "/" || e.to === "/brain"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}>
+    <NavLink key={e.key} to={e.to} end={e.to === "/" || e.to === "/brain"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}
+             onMouseEnter={early(e.to)} onFocus={early(e.to)}>
       <EntryLabel e={e} />
     </NavLink>
   );
@@ -131,7 +136,7 @@ function MenuLinks({ entries, narrow, setup }: {
         <div key={b.group} role="group" aria-labelledby={`menu-group-label-${groupSlug(b.group)}`}>
           <button type="button" id={`menu-group-label-${groupSlug(b.group)}`} data-testid={`menu-group-${groupSlug(b.group)}`}
                   aria-expanded={!folded.includes(b.group)} onClick={() => toggle(b.group!)}
-                  className={`group flex! w-full items-center gap-1 border-0! bg-transparent! px-3! pb-1.5! pt-1! text-left text-xs! font-semibold! text-muted-foreground! cursor-pointer hover:text-foreground! ${i > 0 ? "mt-[18px]" : ""}`}>
+                  className={`group flex w-full items-center gap-1 border-0 bg-transparent px-3 pb-1.5 pt-1 text-left text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground ${i > 0 ? "mt-[18px]" : ""}`}>
             <span>{b.group}</span>
             {folded.includes(b.group)
               ? <ChevronRight className="size-3 flex-none" aria-hidden />
@@ -141,7 +146,8 @@ function MenuLinks({ entries, narrow, setup }: {
         </div>
       ) : <Fragment key={`b${i}`}>{b.items.map(link)}</Fragment>)}
       <div className="min-h-6 flex-1" />
-      <NavLink to={SETTINGS_ENTRY.to} data-testid={`menu-${SETTINGS_ENTRY.key}`} className={linkClass(true, narrow)}>
+      <NavLink to={SETTINGS_ENTRY.to} data-testid={`menu-${SETTINGS_ENTRY.key}`} className={linkClass(true, narrow)}
+               onMouseEnter={early(SETTINGS_ENTRY.to)} onFocus={early(SETTINGS_ENTRY.to)}>
         <EntryLabel e={SETTINGS_ENTRY} />
       </NavLink>
     </>
@@ -173,16 +179,21 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
+  // The page crossfades into the other theme instead of every colour flipping at once (TR-1436): a view
+  // transition snapshots the page, swaps the theme, and fades between the two. Where the browser has none,
+  // or the person asked for less motion, it switches at once.
   const toggleTheme = () => {
     const next: Theme = theme === "dark" ? "light" : "dark";
-    applyTheme(next);
-    setTheme(next);
+    const swap = () => { applyTheme(next); flushSync(() => setTheme(next)); };
+    if (!reducedMotion() && typeof document.startViewTransition === "function") document.startViewTransition(swap);
+    else swap();
   };
 
   return (
     <div ref={box} className="relative">
-      <button ref={button} type="button" data-testid="account-button" aria-label="Account menu" aria-haspopup="menu" aria-expanded={open}
-              onClick={() => setOpen((o) => !o)} className="block! border-0! bg-transparent! p-0! hover:bg-transparent!">
+      {/* The name starts with the initials the button shows, so "click AK" works by voice (WCAG 2.5.3, TR-1269). */}
+      <button ref={button} type="button" data-testid="account-button" aria-label={`${initialsOf(who)}, account menu`} aria-haspopup="menu" aria-expanded={open}
+              onClick={() => setOpen((o) => !o)} className="block border-0 bg-transparent p-0 hover:bg-transparent">
         <Initials name={who} picture={picture} aria-hidden data-testid="account-avatar" />
       </button>
       {open && (
@@ -203,7 +214,7 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
             <span aria-hidden data-state={theme === "dark" ? "dark" : "light"}
                   className="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border bg-muted transition-colors motion-reduce:transition-none data-[state=dark]:border-foreground data-[state=dark]:bg-foreground">
               <span data-state={theme === "dark" ? "dark" : "light"}
-                    className="block size-3.5 translate-x-0.5 rounded-full bg-[var(--accent)] transition-transform motion-reduce:transition-none data-[state=dark]:translate-x-[18px] data-[state=dark]:bg-background" />
+                    className="block size-3.5 translate-x-0.5 rounded-full bg-brand transition-transform motion-reduce:transition-none data-[state=dark]:translate-x-[18px] data-[state=dark]:bg-background" />
             </span>
           </button>
           {workspaceUrl && (
@@ -331,6 +342,7 @@ export default function EditionShell() {
   const [crumbEl, setCrumbEl] = useState<HTMLElement | null>(null);
   const [actionsEl, setActionsEl] = useState<HTMLElement | null>(null);
   const slots = useMemo(() => ({ crumb: crumbEl, actions: actionsEl }), [crumbEl, actionsEl]);
+  const drawerShown = usePresence<HTMLDivElement>(narrow && drawer);
 
   useEffect(() => { setDrawer(false); }, [here]);
   useEffect(() => { if (!narrow) setDrawer(false); }, [narrow]);
@@ -350,7 +362,7 @@ export default function EditionShell() {
         <div className="flex min-w-0 items-center gap-2.5">
           {narrow && !noMenu && (
             <Button ref={menuButton} variant="secondary" data-testid="menu-button" aria-expanded={drawer} aria-controls="edition-drawer"
-                    className="mr-1.5 px-3!" onClick={() => setDrawer((d) => !d)}>
+                    className="mr-1.5 px-3" onClick={() => setDrawer((d) => !d)}>
               Menu
             </Button>
           )}
@@ -361,13 +373,13 @@ export default function EditionShell() {
                 className={"whitespace-nowrap text-base text-muted-foreground " + (cellName ? "shrink-0" : "min-w-0 truncate")}>{name}</span>
           {!narrow && switcher && (
             <>
-              <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
-              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0! [&_.ws-switch]:py-1.5!">{switcher}</div>
+              <span aria-hidden className="shrink-0 text-base text-faint">/</span>
+              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0 [&_.ws-switch]:py-1.5">{switcher}</div>
             </>
           )}
           {cellName && (
             <>
-              <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
+              <span aria-hidden className="shrink-0 text-base text-faint">/</span>
               <span data-testid="cell-name" data-user-text title={cellName} className="min-w-0 truncate text-base">{cellName}</span>
             </>
           )}
@@ -376,14 +388,14 @@ export default function EditionShell() {
         <div className="flex shrink-0 items-center gap-2.5">
           {narrow ? (
             <Button variant="secondary" data-testid="edition-search-button" aria-label="Search or ask"
-                    className="w-9 px-0! text-muted-foreground!" onClick={() => ask("")}>
+                    className="w-9 px-0 text-muted-foreground" onClick={() => ask("")}>
               <Search className="size-3.5" />
             </Button>
           ) : (
             <div className="relative w-[280px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input data-testid="edition-search" aria-label="Search or ask" placeholder="Search or ask" value={text}
-                     className="pl-9!" onChange={(e) => setText(e.target.value)}
+                     className="pl-9" onChange={(e) => setText(e.target.value)}
                      onKeyDown={(e) => {
                        if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                        e.preventDefault();
@@ -411,22 +423,27 @@ export default function EditionShell() {
           <OwnMenu.Provider value={setFrame}>
             <HeaderSlotsContext.Provider value={slots}>
               <BrainReadContext.Provider value={brainValue}>
-                <Outlet />
+                {/* each page fades in as it arrives, in opacity only so nothing fixed inside it moves (TR-1433) */}
+                <div className="motion-page contents"><Outlet /></div>
               </BrainReadContext.Provider>
             </HeaderSlotsContext.Provider>
           </OwnMenu.Provider>
         </main>
       </div>
 
-      {narrow && drawer && (
-        <>
-          <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-[var(--overlay)]" onClick={() => setDrawer(false)} />
-          <nav id="edition-drawer" aria-label="Main" data-testid="edition-menu"
-               className="fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
-            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0!">{switcher}</div>}
+      {/* the phone menu slides in over a fading scrim, and back out (TR-1432); while it leaves it no
+          longer counts as the menu, so a check or a screen reader sees it gone at once */}
+      {drawerShown.mounted && (
+        <div ref={drawerShown.ref} data-state={drawerShown.state} className="contents">
+          <div data-testid={drawer ? "edition-scrim" : undefined} data-state={drawerShown.state}
+               className="motion-scrim fixed inset-x-0 bottom-0 top-[57px] z-40 bg-scrim" onClick={() => setDrawer(false)} />
+          <nav id="edition-drawer" aria-label="Main" data-testid={drawer ? "edition-menu" : undefined} data-state={drawerShown.state}
+               aria-hidden={drawer ? undefined : true}
+               className="motion-drawer data-[state=closed]:pointer-events-none fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
+            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
             <MenuLinks entries={entries} narrow setup={setup} />
           </nav>
-        </>
+        </div>
       )}
 
       <CommandPalette />

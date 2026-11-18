@@ -42,17 +42,17 @@ export interface ServiceRowsProps extends Omit<React.HTMLAttributes<HTMLDivEleme
 const CALM = new Set<Tone>(["ready", "quiet", "done"]);
 
 const SPARK_TEXT: Record<Tone, string> = {
-  working: "text-[color:var(--ink-soft)]",
-  waiting: "text-[color:var(--warn)]",
-  ready: "text-[color:var(--ink-soft)]",
-  done: "text-[color:var(--ink-soft)]",
-  bad: "text-[color:var(--err)]",
-  quiet: "text-[color:var(--ink-faint)]",
+  working: "text-muted-foreground",
+  waiting: "text-warn",
+  ready: "text-muted-foreground",
+  done: "text-muted-foreground",
+  bad: "text-err",
+  quiet: "text-faint",
 };
 
 // One grid for the heading and every row, so the columns line up.
 const COLS = "md:grid md:grid-cols-[minmax(0,1.3fr)_minmax(80px,0.7fr)_minmax(0,1.2fr)_minmax(0,1fr)] md:gap-x-6";
-const HEAD = "hidden border-b border-border px-[18px] py-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground";
+const HEAD = "hidden border-b border-border px-[var(--row-x,18px)] py-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground";
 
 /** The rows of a services list: a dot, the name and what it is called, a one-day line, the state
  *  and what it sends, and its activity. Under 768px each row stacks. Put it in a ListSection or a
@@ -66,14 +66,14 @@ export function ServiceRows({ rows, sparkHeading = "Last day", className, ...pro
         <span>Status</span>
         <span>Activity</span>
       </div>
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {rows.map((r) => (
           <li key={r.id} className="border-t border-border first:border-t-0" data-testid="service-row" data-name={r.name} data-state-tone={r.tone}>
             <Link
               to={r.to}
               className={cn(
-                "grid min-w-0 gap-y-2 px-[18px] py-4 [overflow-wrap:anywhere] no-underline! hover:bg-[var(--row-hover)]",
-                "text-foreground! focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--accent)]",
+                "grid min-w-0 gap-y-2 px-[var(--row-x,18px)] py-4 [overflow-wrap:anywhere] no-underline hover:bg-row-hover",
+                "text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand",
                 COLS,
                 "md:items-start",
               )}
@@ -93,7 +93,7 @@ export function ServiceRows({ rows, sparkHeading = "Last day", className, ...pro
               </span>
               <span className="min-w-0 text-[13px]">
                 <StatusLabel tone={r.tone} data-testid="service-state"
-                  className={cn("block font-sans text-[13px] font-medium normal-case tracking-normal", CALM.has(r.tone) && "text-foreground!")}>
+                  className={cn("block font-sans text-[13px] font-medium normal-case tracking-normal", CALM.has(r.tone) && "text-foreground")}>
                   {r.stateWords}
                 </StatusLabel>
                 <span className="block text-muted-foreground">

@@ -29,8 +29,9 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 const esbuild = require(path.join(UI_DIR, "node_modules", "esbuild"));
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8330);
@@ -178,6 +179,8 @@ async function waitFor(url, tries = 100) {
        JSON.stringify(await card("decisions")) === JSON.stringify(["2 to confirm", "Which date format?", `/projects/${y}/calls`]), JSON.stringify(await card("decisions")));
     ck("Overview has no milestone rows, decisions, docs or people", (await T("milestone-row").count()) === 0 && (await T("decision-row").count()) === 0
        && (await T("doc-row").count()) === 0 && (await T("project-people").count()) === 0 && (await T("delete-project").count()) === 0);
+    const paperY = await checkPaper(page, ck, "project-y");
+    ck("project-y: the paper check saw its sections", paperY.heads.length >= 2, String(paperY.heads.length));
     await shot(page, "live-building-1440.png");
 
     // milestones: their own page, compact, with counts and a link, no tickets listed
@@ -201,6 +204,8 @@ async function waitFor(url, tries = 100) {
 
     // calls: the Calls tab of Decisions and calls; keep removes, change needs words
     await open(page, y, "", "calls");
+    await checkPaper(page, ck, "calls page");
+    await shot(page, "calls-1440.png");
     ck("Calls is the first tab of Decisions and calls", JSON.stringify(await T("decision-tabs").locator("a").evaluateAll((as) => as.map((a) => a.dataset.testid))) === JSON.stringify(["tab-calls", "tab-decisions"]));
     ck("Calls is a tab of Decisions and calls, with its own address, To confirm first",
        (await T("tab-calls").getAttribute("aria-current")) === "page" && (await T("tab-decisions").getAttribute("href")) === `/projects/${y}/decisions`
@@ -249,6 +254,8 @@ async function waitFor(url, tries = 100) {
     ck("words equal to the answer are not repeated", (await T("decision-row").nth(1).getByTestId("decision-said").count()) === 0);
     ck("the decisions tab says they are your answers, newest first", /Your answers to the crew, newest first\./.test(await txt(T("decisions-page"))));
     await checkWords(page, ck, "project-y decisions page");
+    await checkPaper(page, ck, "decisions page");
+    await shot(page, "decisions-1440.png");
     await T("project-page-docs").click();
     await page.getByTestId("project-docs-page").waitFor();
     ck("Docs and memory opens the project's docs at their own address", new URL(page.url()).pathname === `/projects/${y}/docs`
@@ -586,6 +593,7 @@ async function waitFor(url, tries = 100) {
         const label = `${name} ${width}`;
         ck(`${label}: no sideways scroll`, (await overflow(p)) <= 0, String(await overflow(p)));
         await checkWords(p, ck, label);
+        if (name !== "err") await checkPaper(p, ck, label);
         const q = (id) => p.getByTestId(id);
         if (width === 1440) {
           if (name === "building") {

@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 
 import type { Ctx } from "./components/project/common";
 import type { FactoryPeopleData, PersonRow } from "./editions/factory/FactoryPeople.api";
+import type { FactoryProjectRow, FactoryProjectsData, HiddenProject, ProjectsView } from "./editions/factory/FactoryProjects.api";
 import type {
-  HomeCrewLimitProps, HomeHiddenRowsProps, HomeProjectLeadProps, HomeProjectsSwitchProps, HomeReposProps,
+  HomeCrewLimitProps, HomeReposProps,
   HomeSample, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "./editions/factory/home.types";
 import type {
@@ -24,6 +25,11 @@ export interface SlotProps {
   "project.access": { ctx: Ctx };
   "page.project.members": { ctx: Ctx };
   "projects.changeLead": { id: string; lead?: { id: string } | null; people: Person[]; onDone: () => void };
+  // the Projects page on a cell with more than one person (TR-1277)
+  "projects.switch": { view: ProjectsView; counts: Record<ProjectsView, number>; onView: (v: ProjectsView) => void };
+  "projects.lock": NoProps;
+  "projects.lead": { p: FactoryProjectRow; me?: string };
+  "projects.hidden": { stubs: HiddenProject[]; summary?: string; view: ProjectsView };
   // the overview of a project, and its Grants view
   "project.teamQuestions": { project: string };
   "project.signoffs": { handover?: Handover | null };
@@ -47,10 +53,6 @@ export interface SlotProps {
   "home.waiting": HomeWaitingProps;
   "home.waitingOn": HomeWaitingOnProps;
   "home.teamActions": HomeTeamActionsProps;
-  "home.projectsSwitch": HomeProjectsSwitchProps;
-  "home.projectLock": NoProps;
-  "home.projectLead": HomeProjectLeadProps;
-  "home.hiddenRows": HomeHiddenRowsProps;
   "home.crewLimit": HomeCrewLimitProps;
   "home.teamCrews": HomeTeamCrewsProps;
   "home.reposYouOwn": HomeReposProps;
@@ -66,4 +68,5 @@ export type PageSlotName = Extract<SlotName, `page.${string}`>;
 /** The samples a page shows, by page; ee adds its own through registerSamples. */
 export interface SampleSets {
   home: Record<string, HomeSample>;
+  projects: Record<string, FactoryProjectsData>;
 }

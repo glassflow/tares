@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
+import { EmptyState } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import type { FactoryProjectData } from "./FactoryProject.api";
 import { DecisionRow } from "./FactoryProject";
@@ -20,8 +21,8 @@ export function DecisionTabs({ d, on }: { d: FactoryProjectData; on: "decisions"
     <nav aria-label="Decisions and calls" className="flex min-w-0 gap-1 border-b border-border" data-testid="decision-tabs">
       {tabs.map((t) => (
         <Link key={t.key} to={t.to} aria-current={on === t.key ? "page" : undefined} data-testid={`tab-${t.key}`}
-              className={cn("-mb-px flex items-center gap-2 border-b-2 border-transparent px-3 py-2 text-[14px] text-foreground! no-underline! hover:bg-[var(--row-hover)]",
-                            on === t.key && "border-b-[color:var(--accent)] font-semibold")}>
+              className={cn("-mb-px flex items-center gap-2 border-b-2 border-transparent px-3 py-2 text-[14px] text-foreground no-underline hover:bg-row-hover",
+                            on === t.key && "border-b-brand font-semibold")}>
           {t.label}
           {t.n > 0 && <span className="font-mono text-xs font-normal text-muted-foreground">{t.key === "calls" ? `${t.n} to confirm` : t.n}</span>}
         </Link>
@@ -37,18 +38,14 @@ export default function FactoryDecisions() {
         <div className="grid min-w-0 gap-4" data-testid="decisions-page">
           <PageHead title="Decisions and calls" />
           <DecisionTabs d={d} on="decisions" />
-          <p className="m-0! text-xs text-muted-foreground">Your answers to the crew, newest first.</p>
+          <p className="m-0 text-xs text-muted-foreground">Your answers to the crew, newest first.</p>
           {d.decisions.length === 0 ? (
-            <div className="border border-border bg-card px-4 py-5 text-muted-foreground" data-testid="decisions-empty">
+            <EmptyState className="border-t border-border py-4" data-testid="decisions-empty">
               No decisions yet. When you answer the crew, it is kept here.
-            </div>
+            </EmptyState>
           ) : (
-            <div className="grid gap-3" data-testid="decisions-list">
-              {d.decisions.map((x, i) => (
-                <div key={i} className="border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]">
-                  <DecisionRow x={x} wide />
-                </div>
-              ))}
+            <div className="border-t border-border" data-testid="decisions-list">
+              {d.decisions.map((x, i) => <DecisionRow key={i} x={x} wide />)}
             </div>
           )}
         </div>

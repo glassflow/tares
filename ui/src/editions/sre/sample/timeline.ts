@@ -15,6 +15,7 @@
 //   many     a full page of 200 items, with an older page to load
 
 import type { RangeKey, TimelineData, TimelineItem, TimelineKind, TimelineRawData, TimelineRawRow, TimelineTone } from "../Timeline.api";
+import { formatCount } from "../../../lib/number";
 
 export const SAMPLE_NAMES = ["normal", "raw", "service", "kinds", "empty", "load", "err", "rawerr", "long", "many"] as const;
 export type SampleName = (typeof SAMPLE_NAMES)[number];
@@ -23,7 +24,6 @@ export const isSample = (n: string | null): n is SampleName => !!n && (SAMPLE_NA
 /** The moment the samples are read at. */
 export const SAMPLE_NOW = "2026-11-02T15:16:00+00:00";
 
-const pad = (n: number) => String(n).padStart(2, "0");
 /** An ISO time in the sample's day: `back` days before the 2nd, at h:m:s UTC. */
 const iso = (back: number, h: number, m: number, s = 0) =>
   new Date(Date.UTC(2026, 10, 2 - back, h, m, s)).toISOString().replace(".000Z", "+00:00");
@@ -86,9 +86,9 @@ function hourItems(back: number, hour: number, minutes: number[]): TimelineItem[
         const start = iso(back, hour, m - 10 < 0 ? 0 : m - 10);
         const raw = { from: start, to: end, count: 1100 + ((n * 37) % 400) };
         const k = n % 3;
-        const text = k === 0 ? `${svc}: ${raw.count.toLocaleString("en-US")} events, 18 errors, errors up 3x on the 10 minutes before`
-          : k === 1 ? `${svc}: ${raw.count.toLocaleString("en-US")} events, 2 errors`
-          : `${svc}: ${raw.count.toLocaleString("en-US")} events, events up 2.2x on the 10 minutes before`;
+        const text = k === 0 ? `${svc}: ${formatCount(raw.count)} events, 18 errors, errors up 3x on the 10 minutes before`
+          : k === 1 ? `${svc}: ${formatCount(raw.count)} events, 2 errors`
+          : `${svc}: ${formatCount(raw.count)} events, events up 2.2x on the 10 minutes before`;
         out.push(item("window", `win:${key}`, start, end, svc, text, k === 0 ? "bad" : k === 1 ? "warn" : "info", { raw }));
         break;
       }

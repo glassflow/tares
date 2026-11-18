@@ -24,7 +24,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8371);
@@ -139,7 +139,7 @@ async function waitFor(url, tries = 100) {
       const grp = page.getByTestId("mq-group");
       ck(`${width}: one group, named by repo and branch`, (await grp.count()) === 1 && (await text(grp.getByTestId("mq-group-toggle"))).includes("example-org/api into main"), await text(grp));
       const gh = await css(grp.getByTestId("mq-group-toggle"), ["fontFamily", "fontWeight"]);
-      ck(`${width}: the group name is bold mono`, /mono/i.test(gh.fontFamily) && Number(gh.fontWeight) >= 600, JSON.stringify(gh));
+      ck(`${width}: the group name is a bold sans heading, not mono (TR-1270)`, !/mono/i.test(gh.fontFamily) && Number(gh.fontWeight) >= 600, JSON.stringify(gh));
       const into = await css(grp.getByTestId("mq-group-toggle").locator("span span").first(), ["fontFamily", "fontWeight"]);
       ck(`${width}: the word into is plain`, !/mono/i.test(into.fontFamily) && Number(into.fontWeight) <= 400, JSON.stringify(into));
       ck(`${width}: the group header has a chevron`, (await grp.getByTestId("mq-group-toggle").locator("svg").count()) === 1);

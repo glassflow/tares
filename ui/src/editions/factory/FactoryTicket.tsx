@@ -4,16 +4,19 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import {
+  Banner, Button, Collapse, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot, StatusLabel, type Tone, toneOf,
+} from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
   factoryTicket,
-  type FactoryTicketData, type TicketCall, type TicketFinding, type TicketLink, type TicketReview, type TicketStateKey,
+  type FactoryTicketData, type TicketCall, type TicketFinding, type TicketLink, type TicketReview,
 } from "./FactoryTicket.api";
 import { isSample, sampleLoad } from "./ticketSamples";
 import { InlineIcon } from "./ProjectIcon";
+import { formatCount } from "../../lib/number";
 
 // One ticket, from one read (GET /api/factory/projects/{id}/tickets/{ref}): its state, where it
 // lives, who works on it, what it depends on and what waits for it, its pull request, every
@@ -30,44 +33,28 @@ const SHOW_HISTORY = 10;
 const NOTES_CAP_LINES = 60;
 
 const NONE = "text-[13px] text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
-const KIND = "m-0! font-mono text-[11px]! font-medium uppercase tracking-[0.06em] text-muted-foreground";
+const LINK = "text-foreground underline";
+// A fact's label is a mono operational label; a heading is Inter (.impeccable.md, Type). The facts are a
+// list of label and value, so they are a dl, not a run of headings.
+const KIND = "m-0 font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground";
+const SUB = "m-0 text-[14px]";
 const TAG = "whitespace-nowrap border border-border bg-muted px-1.5 py-px text-[11.5px] font-semibold";
-const TAG_OK = "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]";
-const TAG_WAIT = "border-[color:var(--warn)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]";
-const TAG_BAD = "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]";
-const MORE = "h-8 self-start text-[13px]!";
-
-const DOT: Record<TicketStateKey, string> = {
-  to_do: "border border-[color:var(--ink-faint)]",
-  in_progress: "bg-[var(--accent)]",
-  in_review: "bg-[var(--accent-deep)]",
-  changes_asked: "bg-[var(--warn)]",
-  blocked: "bg-[var(--err)]",
-  merged: "bg-[var(--ok)]",
-  canceled: "bg-[var(--ink-faint)]",
-};
-
-const KEY_OF_LABEL: Record<string, TicketStateKey> = {
-  "To do": "to_do", "In progress": "in_progress", "In review": "in_review", "Changes asked": "changes_asked",
-  Blocked: "blocked", Merged: "merged", Canceled: "canceled",
-};
+const TAG_BAD = "border-err-border bg-err-soft text-err";
+const MORE = "h-8 self-start text-[13px]";
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-const Dot = ({ state }: { state: TicketStateKey }) => (
-  <i aria-hidden className={cn("inline-block size-[9px] flex-none", DOT[state])} />
-);
+const Dot = ({ tone }: { tone: Tone }) => <StatusDot tone={tone} className="size-[9px]" />;
 
 function Section({ id, title, aside, children }: { id: string; title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section id={id} aria-label={title} className="min-w-0 scroll-mt-4 border border-border bg-card" data-testid={`ticket-${id}`}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-border px-3.5 py-3">
-        <h2 className="m-0! text-base!">{title}</h2>
+    <section id={id} aria-label={title} className="min-w-0 scroll-mt-4 border-t border-border pt-3" data-testid={`ticket-${id}`}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 className="m-0 text-base">{title}</h2>
         {aside && <span className="text-xs text-muted-foreground">{aside}</span>}
       </div>
-      <div className="flex min-w-0 flex-col gap-2.5 px-3.5 py-3">{children}</div>
+      <div className="flex min-w-0 flex-col gap-2.5 pt-2.5">{children}</div>
     </section>
   );
 }
@@ -77,8 +64,7 @@ function Section({ id, title, aside, children }: { id: string; title: string; as
 function Finding({ f }: { f: TicketFinding }) {
   const open = f.state_text === "open";
   return (
-    <div className={cn("flex min-w-0 flex-col gap-1 border border-l-[3px] border-border bg-card px-2.5 py-2", open ? "border-l-[color:var(--warn)]!" : "border-l-[color:var(--ok-border)]!")}
-         data-testid="finding" data-state={open ? "open" : "fixed"}>
+    <div className="flex min-w-0 flex-col gap-1 py-1" data-testid="finding" data-state={open ? "open" : "fixed"}>
       <div className="text-[13.5px] [overflow-wrap:anywhere]" data-user-text>{f.text}</div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         {f.file && (
@@ -87,27 +73,25 @@ function Finding({ f }: { f: TicketFinding }) {
           </code>
         )}
         <span className={cn(TAG, f.blocking && TAG_BAD)}>{f.blocking ? "Must fix" : "Suggestion"}</span>
-        <span className={cn(TAG, open ? TAG_WAIT : TAG_OK)}>{sentence(f.state_text)}</span>
+        <StatusLabel tone={STATUS_TONES.finding[open ? "open" : "fixed"]}>{sentence(f.state_text)}</StatusLabel>
       </div>
     </div>
   );
 }
 
-const VERDICT: Record<string, string> = { passed: TAG_OK, "asked for changes": TAG_WAIT, blocked: TAG_BAD };
-
 function Round({ r, startOpen }: { r: TicketReview; startOpen: boolean }) {
   const [open, setOpen] = React.useState(startOpen);
   return (
-    <div className="border border-border bg-muted" data-testid="round" data-round={r.round} data-open={open}>
+    <div className="border-b border-border last-of-type:border-b-0" data-testid="round" data-round={r.round} data-open={open}>
       <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="round-toggle"
-              className="flex! w-full! flex-wrap items-center gap-2.5! border-0! bg-transparent! px-3! py-2! text-left! text-sm! font-normal! text-foreground! hover:bg-transparent!">
+              className="flex w-full flex-wrap items-center gap-2.5 border-0 bg-transparent px-0 py-2 text-left text-sm font-normal text-foreground hover:bg-transparent">
         <i aria-hidden className={cn("size-[7px] flex-none border-b-2 border-r-2 border-foreground", open ? "rotate-45" : "-rotate-45")} />
         <b className="text-sm">Round {r.round}</b>
-        <span className={cn(TAG, "font-mono text-[10.5px] uppercase tracking-[0.06em]", VERDICT[r.verdict_text])}>{r.verdict_text}</span>
+        <StatusLabel tone={toneOf("verdict", r.verdict_text)}>{r.verdict_text}</StatusLabel>
         <span className="ml-auto text-[12.5px] text-muted-foreground">{[r.by, r.when].filter(Boolean).join(", ")}</span>
       </button>
       {open && (
-        <div className="flex min-w-0 flex-col gap-2 border-t border-border px-3 pb-3 pt-2.5">
+        <div className="flex min-w-0 flex-col gap-2 pb-3 pl-[17px]">
           <div className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-words-exempt>
             <b className="font-medium text-foreground">Checked:</b> {r.verified}
             {r.not_verified && <>. <b className="font-medium text-foreground">Not checked:</b> {r.not_verified}</>}
@@ -128,7 +112,7 @@ function Reviews({ items }: { items: TicketReview[] }) {
   const hidden = sorted.length - shown.length;
   return (
     <Section id="reviews" title="Reviews" aside={items.length > 0 ? plural(items.length, "round", "rounds") : undefined}>
-      {items.length === 0 ? <span className={NONE} data-testid="reviews-empty">No review yet</span> : (
+      {items.length === 0 ? <EmptyState className="py-0" data-testid="reviews-empty">No review yet</EmptyState> : (
         <>
           {shown.map((r, i) => <Round key={r.round} r={r} startOpen={i === 0 || sorted.length <= SHOW_ROUNDS} />)}
           {hidden > 0 && (
@@ -146,8 +130,8 @@ function Reviews({ items }: { items: TicketReview[] }) {
 
 /** A result in the colour of what it says: failures red, passes green, anything else plain. */
 function resultTone(result: string): string {
-  if (/\b[1-9]\d* (failed|errors?)\b|\bFAILED\b|Traceback/.test(result)) return "text-[color:var(--err)]";
-  if (/\bpassed\b|\bok\b/i.test(result)) return "text-[color:var(--ok)]";
+  if (/\b[1-9]\d* (failed|errors?)\b|\bFAILED\b|Traceback/.test(result)) return "text-err";
+  if (/\bpassed\b|\bok\b/i.test(result)) return "text-ok";
   return "text-foreground";
 }
 
@@ -159,7 +143,7 @@ function Checks({ items }: { items: FactoryTicketData["checks"] }) {
   const hidden = items.length - shown.length;
   return (
     <Section id="checks" title="Checks" aside={items.length > 0 ? `${items.length} ran` : undefined}>
-      {items.length === 0 ? <span className={NONE} data-testid="checks-empty">No checks yet</span> : (
+      {items.length === 0 ? <EmptyState className="py-0" data-testid="checks-empty">No checks yet</EmptyState> : (
         <>
           <div className="flex flex-col">
             {shown.map((c, i) => (
@@ -178,15 +162,14 @@ function Checks({ items }: { items: FactoryTicketData["checks"] }) {
 }
 
 function CallRow({ c }: { c: TicketCall }) {
-  const tone = c.state_text === "waiting for you" ? TAG_WAIT : c.state_text === "confirmed" ? TAG_OK : "";
   return (
     <div className="flex min-w-0 flex-col gap-[3px]" data-testid="call-row" data-ref={c.ref}>
       <span className="text-[13.5px] font-semibold [overflow-wrap:anywhere]" data-user-text>{c.question}</span>
       <span className="text-[13.5px] [overflow-wrap:anywhere]" data-user-text>{c.choice}</span>
       {c.why && <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{c.why}</span>}
-      {c.words && <span className="border-l-[3px] border-[color:var(--accent)] pl-2.5 text-[13.5px] [overflow-wrap:anywhere]" data-user-text>{c.words}</span>}
+      {c.words && <span className="text-[13.5px] [overflow-wrap:anywhere]" data-testid="call-said"><span className="text-muted-foreground">You said: </span><span data-user-text>{c.words}</span></span>}
       <span className="text-[12.5px] text-muted-foreground">
-        {sentence(c.made)}. <span className={cn(TAG, tone)}>{sentence(c.state_text)}</span>
+        {sentence(c.made)}. <StatusLabel tone={toneOf("call", c.state_text)} className="ml-1">{sentence(c.state_text)}</StatusLabel>
       </span>
     </div>
   );
@@ -196,17 +179,17 @@ function Calls({ d }: { d: FactoryTicketData }) {
   const none = d.calls.length === 0 && d.decisions.length === 0;
   return (
     <Section id="calls" title="Calls and decisions">
-      {none ? <span className={NONE} data-testid="calls-empty">No calls or decisions on this ticket</span> : (
+      {none ? <EmptyState className="py-0" data-testid="calls-empty">No calls or decisions on this ticket</EmptyState> : (
         <>
           {d.calls.length > 0 && (
             <>
-              <h3 className={KIND}>Calls the builder made</h3>
+              <h3 className={SUB}>Calls the builder made</h3>
               {d.calls.map((c) => <CallRow key={c.ref} c={c} />)}
             </>
           )}
           {d.decisions.length > 0 && (
             <>
-              <h3 className={KIND}>Your decisions</h3>
+              <h3 className={SUB}>Your decisions</h3>
               {d.decisions.map((x, i) => (
                 <div key={i} className="flex min-w-0 flex-col gap-[3px]" data-testid="decision-row">
                   <span className="text-[13.5px] font-semibold [overflow-wrap:anywhere]" data-user-text>{x.question}</span>
@@ -229,7 +212,7 @@ function History({ items }: { items: FactoryTicketData["history"] }) {
   const hidden = items.length - shown.length;
   return (
     <Section id="history" title="History" aside={items.length > 0 ? plural(items.length, "line", "lines") : undefined}>
-      {items.length === 0 ? <span className={NONE} data-testid="history-empty">Nothing has happened yet</span> : (
+      {items.length === 0 ? <EmptyState className="py-0" data-testid="history-empty">Nothing has happened yet</EmptyState> : (
         <>
           <div className="flex flex-col">
             {shown.map((h, i) => (
@@ -266,14 +249,14 @@ function Notes({ text }: { text: string }) {
   const long = lines >= NOTES_CAP_LINES;
   const open = whole || !long;
   return (
-    <Section id="notes" title="Working notes" aside={lines > 0 ? `${lines.toLocaleString("en-US")} ${lines === 1 ? "line" : "lines"}` : undefined}>
-      {!text ? <span className={NONE} data-testid="notes-empty">Nothing noted yet</span> : (
+    <Section id="notes" title="Working notes" aside={lines > 0 ? `${formatCount(lines)} ${lines === 1 ? "line" : "lines"}` : undefined}>
+      {!text ? <EmptyState className="py-0" data-testid="notes-empty">Nothing noted yet</EmptyState> : (
         <>
-          <div className="min-w-0 border border-border bg-card text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>
-            <div className={cn("md px-3.5 py-3 [&_:is(h1,h2,h3,h4)]:mt-3.5! [&_:is(h1,h2,h3,h4)]:mb-1! [&_:is(h1,h2,h3,h4)]:text-[14px]! [&_:is(h1,h2,h3,h4):first-child]:mt-0!", !open && "max-h-[460px] overflow-auto")} data-words-exempt data-testid="notes-text">
+          <div className="min-w-0 text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>
+            <div className={cn("md [&_:is(h1,h2,h3,h4)]:mt-3.5 [&_:is(h1,h2,h3,h4)]:mb-1 [&_:is(h1,h2,h3,h4)]:text-[14px] [&_:is(h1,h2,h3,h4):first-child]:mt-0", !open && "max-h-[460px] overflow-auto")} data-words-exempt data-testid="notes-text">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>{text}</ReactMarkdown>
             </div>
-            {!open && <div aria-hidden className="pointer-events-none relative -mt-9 h-9 bg-gradient-to-b from-transparent to-card" />}
+            {!open && <div aria-hidden className="pointer-events-none relative -mt-9 h-9 bg-gradient-to-b from-transparent to-background" />}
           </div>
           {long && (
             <Button variant="secondary" className={MORE} onClick={() => setWhole((w) => !w)} aria-expanded={open} data-testid="notes-toggle">
@@ -291,8 +274,8 @@ function Notes({ text }: { text: string }) {
 function Fact({ title, children, testid }: { title: string; children: React.ReactNode; testid: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-1" data-testid={testid}>
-      <h3 className={KIND}>{title}</h3>
-      {children}
+      <dt className={KIND}>{title}</dt>
+      <dd className="m-0 flex min-w-0 flex-col gap-1">{children}</dd>
     </div>
   );
 }
@@ -300,14 +283,13 @@ function Fact({ title, children, testid }: { title: string; children: React.Reac
 function Links({ items, testid }: { items: TicketLink[]; testid: string }) {
   if (items.length === 0) return <span className={NONE}>Nothing</span>;
   return (
-    <ul className="m-0! flex list-none flex-col gap-1.5 p-0!">
+    <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
       {items.map((t) => {
-        const key = KEY_OF_LABEL[t.state_label] ?? "to_do";
         return (
           <li key={t.ref} className="flex items-start gap-2 text-[13.5px]" data-testid={testid} data-ref={t.ref}>
-            <span className="mt-[5px] flex"><Dot state={key} /></span>
+            <span className="mt-[5px] flex"><Dot tone={toneOf("ticket", t.state_label)} /></span>
             <span className="min-w-0">
-              <Link to={t.href} className="text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+              <Link to={t.href} className="text-foreground no-underline [overflow-wrap:anywhere] hover:underline">
                 <span className="font-mono text-xs text-muted-foreground">{t.ref}</span> <span data-user-text>{t.title}</span>
               </Link>
               <span className="block text-xs text-muted-foreground">{t.state_label}</span>
@@ -332,9 +314,9 @@ function Command({ command }: { command: string }) {
     navigator.clipboard.writeText(command).then(() => setCopied("yes"), () => setCopied("failed"));
   };
   return (
-    <div className="flex items-center gap-2 border border-border bg-muted px-2 py-1.5">
-      <code data-words-exempt data-testid="command-text" className="min-w-0 flex-1 bg-transparent! font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
-      <Button variant="secondary" className="h-8 text-[13px]!" onClick={copy} data-testid="command-copy">
+    <div className="flex items-center gap-2 bg-muted px-2 py-1.5">
+      <code data-words-exempt data-testid="command-text" className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
+      <Button variant="secondary" className="h-8 text-[13px]" onClick={copy} data-testid="command-copy">
         {copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}
       </Button>
     </div>
@@ -344,8 +326,8 @@ function Command({ command }: { command: string }) {
 function Facts({ d }: { d: FactoryTicketData }) {
   const closed = d.state === "merged" || d.state === "canceled";
   return (
-    <aside aria-label="Facts" className="min-w-0 border border-border bg-card max-xl:order-first" data-testid="ticket-facts">
-      <div className="flex min-w-0 flex-col gap-3.5 px-3.5 py-3">
+    <aside aria-label="Facts" className="min-w-0 border-t border-border max-xl:order-first" data-testid="ticket-facts">
+      <dl className="m-0 flex min-w-0 flex-col gap-3.5 pt-3">
         <Fact title="Who works on it" testid="fact-who">
           {d.who ? <div className="text-sm [overflow-wrap:anywhere]">{d.who}</div>
             : <span className={NONE}>{closed ? "Nobody, it is finished" : "Not picked up yet"}</span>}
@@ -372,7 +354,7 @@ function Facts({ d }: { d: FactoryTicketData }) {
             ))}
           </Fact>
         )}
-      </div>
+      </dl>
     </aside>
   );
 }
@@ -381,16 +363,16 @@ function Facts({ d }: { d: FactoryTicketData }) {
 
 function Back({ href, name, icon }: { href: string; name?: string; icon?: string | null }) {
   return (
-    <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-[color:var(--accent-deep)]! no-underline! hover:underline!">
+    <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-muted-foreground no-underline hover:text-foreground hover:underline">
       {"←"} {name !== undefined ? <span data-user-text><InlineIcon icon={icon} className="mr-1" />{name}</span> : "Back to the project"}
     </Link>
   );
 }
 
-function Loading({ href }: { href: string }) {
+function TicketSkeleton({ href }: { href: string }) {
   const bars = (n: number) => Array.from({ length: n }, (_, i) => <Skeleton key={i} width={`${[90, 70, 80][i % 3]}%`} className="mb-2" />);
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" data-testid="ticket-loading" className="grid min-w-0 gap-4">
+    <Loading data-testid="ticket-loading" className="grid min-w-0 gap-4">
       <Back href={href} />
       <div className="grid gap-2.5">
         <div className="flex gap-2.5"><Skeleton width={60} height={22} /><Skeleton width={110} height={22} /></div>
@@ -398,17 +380,17 @@ function Loading({ href }: { href: string }) {
         <Skeleton width="35%" />
       </div>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="grid min-w-0 gap-[18px]">
+        <div className="grid min-w-0 gap-8">
           {["Reviews", "Checks", "Calls and decisions", "History", "Working notes"].map((n) => (
-            <div key={n} className="border border-border bg-card">
-              <div className="border-b border-border px-3.5 py-3"><h2 className="m-0! text-base!">{n}</h2></div>
-              <div className="p-3.5">{bars(3)}</div>
+            <div key={n} className="border-t border-border pt-3">
+              <h2 className="m-0 text-base">{n}</h2>
+              <div className="pt-2.5">{bars(3)}</div>
             </div>
           ))}
         </div>
-        <div className="border border-border bg-card p-3.5 max-xl:order-first">{bars(5)}</div>
+        <div className="border-t border-border pt-3 max-xl:order-first">{bars(5)}</div>
       </div>
-    </div>
+    </Loading>
   );
 }
 
@@ -427,8 +409,8 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
     return (
       <div className="grid min-w-0 gap-4" data-testid="ticket-notfound">
         <Back href={projectHref} />
-        <div className="grid gap-2 border border-border bg-card px-3.5 py-3">
-          <h2 className="m-0! text-base!">This ticket was not found</h2>
+        <div className="grid gap-2 border-t border-border pt-3">
+          <h2 className="m-0 text-base">This ticket was not found</h2>
           <span className={NONE}>It may have been deleted, or the link may be old.</span>
         </div>
       </div>
@@ -445,28 +427,28 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
         </div>
       );
     }
-    return <Loading href={projectHref} />;
+    return <TicketSkeleton href={projectHref} />;
   }
 
   const ms = d.milestone;
   const msText = ms ? (ms.name.startsWith(ms.number) ? ms.name : `${ms.number} ${ms.name}`) : "";
   return (
     <div className="grid min-w-0 gap-4" data-testid="factory-ticket" data-ref={d.ref} data-state={d.state}>
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={onRetry}>Retry</Button>}>
           <b>This page did not refresh.</b> Check your connection, then try again.
         </Banner>
-      )}
+      )}</Collapse>
       <Back href={d.project.href} name={d.project.name} icon={d.project.icon} />
       <div className="grid min-w-0 gap-2.5">
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="border border-border bg-muted px-2 py-0.5 font-mono text-[13px] font-medium" data-testid="ticket-ref">{d.ref}</span>
-          <span className="inline-flex items-center gap-[7px] border border-border bg-card px-2.5 py-[3px] text-[12.5px] font-semibold" data-testid="ticket-state">
-            <Dot state={d.state} />
-            {d.state_label}
+          <span className="inline-flex items-center gap-[7px]" data-testid="ticket-state">
+            <Dot tone={STATUS_TONES.ticket[d.state]} />
+            <StatusLabel tone={STATUS_TONES.ticket[d.state]}>{d.state_label}</StatusLabel>
           </span>
         </div>
-        <h1 className="m-0! text-[22px]! md:text-[28px]! [overflow-wrap:anywhere]" data-user-text data-testid="ticket-title">{d.title}</h1>
+        <h1 className="m-0 text-[22px] md:text-[28px] [overflow-wrap:anywhere]" data-user-text data-testid="ticket-title">{d.title}</h1>
         <div className="flex flex-wrap gap-x-[18px] gap-y-1.5 text-[13px] text-muted-foreground">
           {ms && <span data-testid="ticket-milestone">Milestone <b className="font-medium text-foreground" data-user-text>{msText}</b></span>}
           {d.blocked_reason && <span data-testid="ticket-blocked-reason" data-user-text>{d.blocked_reason}</span>}
@@ -478,7 +460,7 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
         </div>
       </div>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="flex min-w-0 flex-col gap-[18px]">
+        <div className="flex min-w-0 flex-col gap-8">
           <Reviews items={d.reviews} />
           <Checks items={d.checks} />
           <Calls d={d} />

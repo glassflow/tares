@@ -10,7 +10,7 @@ const Module = require("module");
 const ts = require("typescript");
 const { EventEmitter } = require("events");
 const { offendersIn, checkWords, expectOneCall, READ_TEXT } = require("./words.cjs");
-const { scanSource, listFiles } = require("./words.check.cjs");
+const { scanSource, listFiles, filesToRead, judge, readBaseline, writeBaseline, describe } = require("./words.check.cjs");
 
 // words.ts is what the screens import, so the test loads that file itself (compiled in memory).
 function loadTs(file) {
@@ -25,7 +25,7 @@ function loadTs(file) {
 }
 const WORDS_TS = path.join(__dirname, "..", "src", "editions", "words.ts");
 const WORDS_MD = path.join(__dirname, "..", "src", "editions", "WORDS.md");
-const { forbiddenIn, durationWords } = loadTs(WORDS_TS);
+const { forbiddenIn } = loadTs(WORDS_TS);
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -68,17 +68,6 @@ ck("forbiddenIn: line breaks and runs of spaces do not hide an allowed phrase",
   same(forbiddenIn("open\n  source   and View\tPR"), []));
 ck("forbiddenIn: an em dash comes first when it comes first", same(forbiddenIn("a\u2014b sources"), ["em dash", "sources"]));
 
-// durationWords: one unit, floored; when the count is 1 the next unit follows if it is not zero.
-for (const [secs, want] of [
-  [0, "0 seconds"], [1, "1 second"], [17, "17 seconds"], [17.9, "17 seconds"], [59, "59 seconds"],
-  [60, "1 minute"], [61, "1 minute, 1 second"], [125, "2 minutes"], [480, "8 minutes"], [3599, "59 minutes"],
-  [3600, "1 hour"], [3660, "1 hour, 1 minute"], [7200, "2 hours"], [86400, "1 day"], [86430, "1 day"],
-  [151200, "1 day, 18 hours"], [518400, "6 days"],
-  [-5, "0 seconds"], [NaN, "0 seconds"], [Infinity, "0 seconds"],
-]) {
-  ck(`durationWords(${secs}) -> ${JSON.stringify(want)}`, durationWords(secs) === want, durationWords(secs));
-}
-
 // The static scanner, on fixture strings.
 const scan = (src, name = "Fixture.tsx") => scanSource(name, src).map((h) => `${h.line} ${h.word}`);
 for (const [label, src, want] of [
@@ -120,16 +109,73 @@ for (const f of ["a.ts", "b.tsx", "sub/c.ts", "d.json", "e.md", "f.cjs"]) fs.wri
 const listed = listFiles(tmp).map((f) => path.relative(tmp, f)).sort();
 fs.rmSync(tmp, { recursive: true });
 ck("scanner reads .ts and .tsx only", same(listed, ["a.ts", "b.tsx", path.join("sub", "c.ts")]), JSON.stringify(listed));
+// The scopes (TR-1259): edition roots strict, the rest of src/pages and src/components legacy, the kit
+// (src/components/ui) not read.
+{
+  const ui = fs.mkdtempSync(path.join(os.tmpdir(), "words-ui-"));
+  for (const f of ["src/editions/factory/Home.tsx", "src/components/edition/Button.tsx", "src/pages/dev/Gallery.tsx",
+    "src/ee/crew/Crew.tsx", "src/pages/Sources.tsx", "src/components/SourceForm.tsx", "src/components/project/agents.tsx",
+    "src/components/ui/button.tsx", "src/App.tsx"]) {
+    fs.mkdirSync(path.dirname(path.join(ui, f)), { recursive: true });
+    fs.writeFileSync(path.join(ui, f), "");
+  }
+  const got = filesToRead(ui).map((f) => `${f.legacy ? "legacy" : "edition"} ${f.rel}`).sort();
+  fs.rmSync(ui, { recursive: true });
+  ck("scopes: edition roots strict, pages and shared components legacy, the kit and the rest unread", same(got, [
+    "edition src/components/edition/Button.tsx", "edition src/editions/factory/Home.tsx", "edition src/ee/crew/Crew.tsx",
+    "edition src/pages/dev/Gallery.tsx", "legacy src/components/SourceForm.tsx", "legacy src/components/project/agents.tsx",
+    "legacy src/pages/Sources.tsx"]), JSON.stringify(got));
+}
+
+// The baseline: a legacy file may carry its count, never more; it only goes down.
+{
+  const hits = (n) => Array.from({ length: n }, (_, i) => ({ line: i + 1, word: "runs" }));
+  const legacy = (n) => [{ rel: "src/pages/Activity.tsx", legacy: true, hits: hits(n) }];
+  const base = { "src/pages/Activity.tsx": 3 };
+  let r = judge(legacy(4), base);
+  ck("baseline: a raise fails", r.failed, r.lines.join(" | "));
+  ck("baseline: a raise prints every hit in the file with the allowance",
+    r.lines.filter((l) => /^src\/pages\/Activity\.tsx:\d+ runs .*4 in this file, the baseline allows 3/.test(l)).length === 4, r.lines.join(" | "));
+  r = judge(legacy(3), base);
+  ck("baseline: equal passes, quietly", !r.failed && r.lines.length === 1, r.lines.join(" | "));
+  r = judge(legacy(2), base);
+  ck("baseline: lower passes and says to lower it", !r.failed && r.lines.some((l) => /2 left, the baseline allows 3\. Lower it/.test(l)), r.lines.join(" | "));
+  const tmpBase = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "words-base-")), "baseline.json");
+  writeBaseline(r.counts, tmpBase);
+  ck("baseline: a lower count is written back", same(readBaseline(tmpBase), { "src/pages/Activity.tsx": 2 }), fs.readFileSync(tmpBase, "utf8"));
+  r = judge(legacy(0), { "src/pages/Activity.tsx": 2 });
+  writeBaseline(r.counts, tmpBase);
+  ck("baseline: a file at 0 leaves the baseline", !r.failed && same(readBaseline(tmpBase), {}), fs.readFileSync(tmpBase, "utf8"));
+  fs.rmSync(path.dirname(tmpBase), { recursive: true });
+  r = judge([{ rel: "src/pages/New.tsx", legacy: true, hits: hits(1) }], base);
+  ck("baseline: a legacy file not in it gets no allowance", r.failed, r.lines.join(" | "));
+  r = judge([{ rel: "src/editions/sre/Home.tsx", legacy: false, hits: hits(1) }], { "src/editions/sre/Home.tsx": 5 });
+  ck("baseline: never holds an edition file", r.failed, r.lines.join(" | "));
+  r = judge([], { "src/pages/Gone.tsx": 2 });
+  ck("baseline: an entry for a file no longer read is reported, not failed",
+    !r.failed && r.lines.some((l) => /Gone\.tsx: in the baseline but not read/.test(l)), r.lines.join(" | "));
+}
+ck("the message says which word to use instead",
+  /runs \(factory says session, sre says check/.test(describe("runs")) && describe("sources") === "sources (say connection)"
+  && /comma/.test(describe("em dash")), `${describe("runs")} | ${describe("sources")}`);
+{
+  const live = readBaseline();
+  ck("the committed baseline holds legacy files only",
+    Object.keys(live).length > 0 && Object.keys(live).every((f) => /^src\/(pages|components)\//.test(f)
+      && !/^src\/(pages\/dev|components\/(edition|ui))\//.test(f)), Object.keys(live).join(", "));
+}
 ck("WORDS.md names the limits of the check",
   /"3 runs on main" passes/.test(fs.readFileSync(WORDS_MD, "utf8").replace(/\s+/g, " "))
   && /"triggered" pass/.test(fs.readFileSync(WORDS_MD, "utf8").replace(/\s+/g, " ")));
 ck("WORDS.md says the static check reads .ts and .tsx files only",
   /static check[^]*reads[^]*`\.ts` and `\.tsx` files only/.test(fs.readFileSync(WORDS_MD, "utf8").replace(/\s+/g, " ")));
 
-// checkWords reads the page text; a stand-in page returns what a person would read.
-async function viaCheckWords(text) {
+// checkWords reads the page text; a stand-in page returns what a person would read. The type check
+// (type.cjs) is the evaluate that passes an argument; the stand-in answers it with `mono`, the
+// buttons, headings and sentences it found in mono or Doto.
+async function viaCheckWords(text, mono = []) {
   const results = [];
-  await checkWords({ evaluate: async () => text }, (l, c, d) => results.push([l, c, d]), "state");
+  await checkWords({ evaluate: async (fn, arg) => (arg ? mono : text) }, (l, c, d) => results.push([l, c, d]), "state");
   return results;
 }
 
@@ -174,11 +220,13 @@ async function viaExpectOneCall(requests, route = "/api/home") {
 
 (async () => {
   let r = await viaCheckWords("Your crew is idle.");
-  ck("checkWords: clean page passes both checks", r.length === 2 && r.every((x) => x[1]));
+  ck("checkWords: clean page passes all three checks", r.length === 3 && r.every((x) => x[1]));
   r = await viaCheckWords("3 runs today");
   ck("checkWords: an internal name fails the first check", r[0][1] === false && /runs/.test(r[0][2]));
   r = await viaCheckWords("a\u2014b");
   ck("checkWords: an em dash fails the second check", r[0][1] === true && r[1][1] === false);
+  r = await viaCheckWords("Your crew is idle.", ['button in mono: "Approve"']);
+  ck("checkWords: a mono button fails the type check", r[0][1] && r[1][1] && r[2][1] === false && /Approve/.test(r[2][2]), JSON.stringify(r[2]));
 
   let c = await viaExpectOneCall([req("GET", "/api/whoami"), req("GET", "/api/home?x=1")]);
   ck("expectOneCall: one read, whoami not counted, query ignored", same(c, [true, true]), JSON.stringify(c));

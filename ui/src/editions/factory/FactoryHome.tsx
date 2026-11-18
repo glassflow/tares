@@ -2,14 +2,14 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import {
-  Banner, Button, Dialog, EmptyState, ListRow, Panel, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
-  Toaster, useToast, type Tone,
+  Banner, Button, Dialog, EmptyState, ListRow, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
+  Toaster, toneOf, useToast,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
 import { licenceSentence } from "@/components/LicenceNeeded";
 import { useCloud } from "@/cloud";
-import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useEeSamples, useLicenceNoAnswer } from "@/eeSlots";
+import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useEeSamples, useLicenceNoAnswer } from "@/eeSlots";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
@@ -20,16 +20,16 @@ import {
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeSample, HomeVerb, ProjectsView, TeamHomeHandler,
+  HomeAction, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { Detail, DetailLines } from "./HomeDetail";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
-import { InlineIcon, ItemIcon } from "./ProjectIcon";
-import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
+import { ItemIcon } from "./ProjectIcon";
+import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices, topItem } from "./waitingGroups";
 
-// The factory home: what waits for the person, the projects, the crew, the Claude plan and the
-// connected tools. FactoryHomeView is pure: it draws the HomeData it is given. The default export
+// The factory home: what waits for the person, the crew, the Claude plan and the connected tools.
+// The projects are one click away, on Projects; Home keeps to what needs the person (TR-1275). FactoryHomeView is pure: it draws the HomeData it is given. The default export
 // shows a sample while the sample flag is on and the live page (GET /api/home, every 15 seconds)
 // otherwise; the buttons that do something are handled there, never in the view.
 
@@ -40,18 +40,12 @@ const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 seconds; read
 const GRANT_MAX = 400;
 const WARN_AT = 80;
 
-const SECTION_H = "m-0! text-base!";
-const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
+const SECTION_H = "m-0 text-base";
+/** Loading rows on the paper: no inset, as the rows they stand for. */
+const FLUSH_ROWS = "[&>div]:px-0";
+const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
-const INK_FILL = "[&>div:first-child]:bg-foreground!";
-const WARN_FILL = "[&>div:first-child]:bg-[var(--kit-accent)]!";
-
-const CHIP_TONES: Record<HomeProjectState, string> = {
-  building: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  waiting_on_you: "border-[color:var(--warn)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
-  not_started: "border-border bg-muted text-muted-foreground",
-  ready_to_close: "border-foreground bg-foreground text-background",
-};
+const INK_FILL = "[&>div:first-child]:bg-foreground";
 
 function greetingWord(hour: number): string {
   if (hour < 12) return "Good morning";
@@ -77,7 +71,7 @@ function useFirstName(): string {
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
       <h2 className={SECTION_H}>{title}</h2>
       {aside}
     </div>
@@ -93,20 +87,25 @@ const BUSY_LABEL: Partial<Record<HomeVerb, string>> = {
   answer: "Sending...", choose: "Sending...", decline: "Declining...", later: "Moving...",
 };
 
-function ActionButton({ action, item, onAction, state }: {
+function ActionButton({ action, item, onAction, state, top }: {
   action: HomeAction; item?: HomeItem; onAction?: OnAction; state?: RowState;
+  /** The row is the top decision: its main action is the page's one primary button (TR-1275). */
+  top?: boolean;
 }) {
-  // Row actions are outlined; the main one gets the dark outline, as in the approved mock.
-  const variant = "secondary";
+  // Row actions are outlined and a row's main one gets the dark outline; only the top row's main
+  // action is filled, so the page asks for one thing first.
+  const lead = !!top && action.primary;
+  const variant = lead ? "primary" : "secondary";
   // An option of a question holds the crew's own words, so it wraps inside the card (TR-1125).
-  const fit = action.do === "choose" ? "h-auto min-h-8 max-w-full whitespace-normal py-1! text-left [overflow-wrap:anywhere]" : "h-8";
-  const cls = fit + " text-[13px]!" + (action.primary ? " border-foreground!" : "");
+  const fit = action.do === "choose" ? "h-auto min-h-8 max-w-full whitespace-normal py-1 text-left [overflow-wrap:anywhere]" : "h-8";
+  const cls = fit + " text-[13px]" + (action.primary && !lead ? " border-foreground" : "");
+  const named = actionName(action, item);
   const href = action.href;
   if (href) {
     const internal = href.startsWith("/");
     return (
-      <Button asChild variant={variant} className={cls}>
-        {internal ? <Link to={href}>{action.label}</Link> : <a href={href}>{action.label}</a>}
+      <Button asChild variant={variant} className={cls} data-primary={lead || undefined}>
+        {internal ? <Link to={href} aria-label={named}>{action.label}</Link> : <a href={href} aria-label={named}>{action.label}</a>}
       </Button>
     );
   }
@@ -115,32 +114,33 @@ function ActionButton({ action, item, onAction, state }: {
   const label = mine ? (BUSY_LABEL[action.do as HomeVerb] ?? action.label)
     : action.do === "copy" && state?.copied ? "Copied" : action.label;
   return (
-    <Button variant={variant} className={cls} busy={mine} disabled={working && !mine} onClick={() => onAction?.(action, item)}>
+    <Button variant={variant} className={cls} busy={mine} disabled={working && !mine} onClick={() => onAction?.(action, item)}
+            aria-label={mine ? undefined : named} data-primary={lead || undefined}>
       {label}
     </Button>
   );
 }
 
-function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAction; state?: RowState }) {
+function WaitingRow({ item, onAction, state, top }: { item: HomeItem; onAction?: OnAction; state?: RowState; top?: boolean }) {
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <ListRow data-testid="waiting-row" className="justify-between gap-y-3">
+    <ListRow data-testid="waiting-row" className="justify-between gap-y-3 px-0">
       <div className="min-w-0 flex-[1_1_280px]">
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold" data-user-text><ItemIcon project={item.project} title={item.title} />{item.title}</div>
         <div className="line-clamp-3" title={item.detail} data-user-text><Detail text={item.detail} /></div>
         <DetailLines lines={item.lines} />
         <div className={cn(MUTED, "mt-0.5")} data-user-text>{item.meta}</div>
-        <QuestionChoices item={item} render={(a, it) => <ActionButton key={a.label} action={a} item={it} onAction={onAction} state={state} />} />
+        <QuestionChoices item={item} render={(a, it) => <ActionButton key={a.label} action={a} item={it} onAction={onAction} state={state} top={top} />} />
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2">
-          {actions.map((a) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={state} />)}
+          {actions.map((a) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={state} top={top} />)}
         </div>
       )}
       {state?.error && (
-        <div role="alert" data-testid="row-error" className="basis-full text-[13px] text-[color:var(--err)]" data-words-exempt>
+        <div role="alert" data-testid="row-error" className="basis-full text-[13px] text-err" data-words-exempt>
           {state.error}
         </div>
       )}
@@ -153,7 +153,7 @@ function WaitingPending() {
   return (
     <section aria-label="Waiting for you" className="min-w-0" data-testid="waiting-pending">
       <SectionHead title="Waiting for you" />
-      <div className="border border-border bg-card"><SkeletonRows /></div>
+      <SkeletonRows className={FLUSH_ROWS} />
     </section>
   );
 }
@@ -166,27 +166,28 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   const g = groupWaiting(items);
   const rest = all ? g.rest : g.rest.slice(0, SHOW_FIRST);
   const more = g.rest.length - rest.length;
-  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} />;
+  const top = topItem(items)?.id;
+  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} top={it.id === top} />;
   return (
     <section aria-label="Waiting for you" className="min-w-0">
       <SectionHead title="Waiting for you" aside={<span className={MUTED}>what holds the crew up first</span>} />
-      <div className="border border-border bg-card">
+      <div>
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-6" />
         ) : (
           <>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
             {g.now.map(row)}
-            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" />}
+            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}
             {more > 0 && (
-              <ListRow>
-                <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
+              <ListRow className="px-0">
+                <Button variant="quiet" className="px-0 text-foreground underline" onClick={() => setAll(true)}>
                   {more} more
                 </Button>
               </ListRow>
             )}
-            <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
+            <OlderFold items={g.older} className="px-0">{(older) => older.map(row)}</OlderFold>
           </>
         )}
       </div>
@@ -194,113 +195,27 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   );
 }
 
-// The Team view of a team cell also lists a stub where a private project the person is not on would be;
-// Team draws each as a quiet row after the projects, Mine shows the cell's one line about them instead.
-const isProject = (r: HomeProjectRow): r is HomeProject => !("hidden" in r);
-const isStub = (r: HomeProjectRow): r is HomeHiddenProject => "hidden" in r;
-
-function ProjectRow({ p, team, me }: { p: HomeProject; team?: boolean; me?: string }) {
-  const { merged, blocked, total } = p.tickets;
-  const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
-  return (
-    <ListRow to={`/projects/${encodeURIComponent(p.id)}`} data-testid="project-row"
-             className="block! text-foreground! py-3.5">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {team && p.scope === "private" && <Slot name="home.projectLock" />}
-        <span className={cn("min-w-0 font-bold", team && "[overflow-wrap:anywhere]")} data-user-text><InlineIcon icon={p.icon} />{p.name}</span>
-        <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", CHIP_TONES[p.state])}>
-          {p.state_label}
-        </span>
-      </div>
-      <div className="mt-0.5 line-clamp-2" title={p.goal} data-user-text>{p.goal}</div>
-      {team ? <Slot name="home.projectLead" p={p} me={me} /> : p.meta && <div className={cn(MUTED, "mt-0.5")} data-user-text>{p.meta}</div>}
-      <ProgressBar value={pct(merged)} blocked={pct(blocked)} aria-label="Tickets merged"
-        className="my-2 [&>div:first-child]:bg-foreground! [&_[aria-hidden]]:bg-[repeating-linear-gradient(135deg,var(--kit-accent)_0_3px,transparent_3px_6px)]!" />
-      <div className={cn(MUTED, "flex flex-wrap gap-x-3")}>
-        <span>{total > 0 ? `${merged} of ${total} tickets merged` : "No tickets yet"}</span>
-        {blocked > 0 && <span className="text-[color:var(--err)]">{blocked} blocked</span>}
-      </div>
-      {p.milestone && <div className={cn(MUTED, "mt-0.5")} data-user-text>{p.milestone}</div>}
-    </ListRow>
-  );
-}
-
-/** What a team cell adds to the Projects section: the switch, who the person is, the line about hidden ones. */
-interface TeamProjectsProps {
-  counts: { mine: number; team: number }; view: ProjectsView; onView?: (v: ProjectsView) => void; me?: string; hidden?: string;
-}
-
-const PROJECTS_FIRST = 6;
-
-/** No project yet: planning the first one is what comes after setup, in a terminal, with the crew. */
+// Home lists no projects (TR-1275: the Projects page does). A cell with no project at all, finished or
+// kept for later, shows how to plan the first one here instead, since that is what comes after setup.
 function PlanFirst({ command }: { command: string }) {
   return (
-    <div className="grid gap-3 px-5 py-5" data-testid="plan-first">
-      <h3 className="m-0! text-base!">Plan your first project</h3>
-      <p className="m-0! max-w-[640px] text-[13px] text-muted-foreground">
-        In your project's repo on this machine, type the command and talk the project through with Claude Code. It writes
-        the plan as milestones and tickets and hands them to the crew. A new project? Start in an empty folder: it offers
-        to make the GitHub repo for you.
-      </p>
-      <div><CopyCommand command={command} /></div>
-      <p className="m-0! text-[13px] text-muted-foreground">
-        Or <Link to="/projects/new" className="text-foreground! underline! underline-offset-2">start one here</Link> and hand it to the crew later.
-      </p>
-    </div>
-  );
-}
-
-function Projects({ projects, stubs, finished, later = 0, team, planCommand }: {
-  projects: HomeProject[]; stubs: HomeHiddenProject[]; finished: number; later?: number; team?: TeamProjectsProps; planCommand?: string;
-}) {
-  const [all, setAll] = React.useState(false);
-  const shown = team && !all ? projects.slice(0, PROJECTS_FIRST) : projects;
-  const link = projects.length > 0 || finished > 0 || later > 0 ? (
-    <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]! underline" data-testid="all-projects-link">
-      All projects, {finished} finished{later > 0 && `, ${later} for later`}
-    </Link>
-  ) : undefined;
-  return (
     <section aria-label="Projects" className="min-w-0" data-testid="projects">
-      <SectionHead title="Projects" aside={team ? (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          {link}
-          <Slot name="home.projectsSwitch" view={team.view} counts={team.counts} onView={(v) => { setAll(false); team.onView?.(v); }} />
-        </div>
-      ) : link} />
-      {/* only hidden stubs and no team part to draw them (not loaded, or failed): nothing to put in the box */}
-      {!(projects.length === 0 && stubs.length > 0 && !team) && <div className="border border-border bg-card">
-        {projects.length === 0 ? (
-          stubs.length > 0 ? null : team && team.view === "mine" ? (
-            <EmptyState title="No projects of yours yet." />
-          ) : planCommand && finished === 0 && later === 0 ? (
-            <PlanFirst command={planCommand} />
-          ) : (
-            <EmptyState title="No projects yet."
-                        action={<Button asChild><Link to="/projects/new">New project</Link></Button>}>
-              Start one and hand it to the crew.
-            </EmptyState>
-          )
-        ) : (
-          shown.map((p) => <ProjectRow key={p.id} p={p} team={!!team} me={team?.me} />)
-        )}
-        {team && projects.length > shown.length && (
-          <ListRow>
-            <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
-              Show all {projects.length} projects
-            </Button>
-          </ListRow>
-        )}
-        {team && <Slot name="home.hiddenRows" stubs={stubs} hidden={team.hidden} view={team.view} />}
-      </div>}
+      <SectionHead title="Projects" />
+      <div className="grid gap-3 border-t border-border pt-4" data-testid="plan-first">
+        <h3 className="m-0 text-base">Plan your first project</h3>
+        <p className="m-0 max-w-[640px] text-[13px] text-muted-foreground">
+          In your project's repo on this machine, type the command and talk the project through with Claude Code. It writes
+          the plan as milestones and tickets and hands them to the crew. A new project? Start in an empty folder: it offers
+          to make the GitHub repo for you.
+        </p>
+        <div><CopyCommand command={command} /></div>
+        <p className="m-0 text-[13px] text-muted-foreground">
+          Or <Link to="/projects/new" className="text-foreground underline underline-offset-2">start one here</Link> and hand it to the crew later.
+        </p>
+      </div>
     </section>
   );
 }
-
-const MEMBER_TONE: Record<HomeCrewState, Tone> = {
-  working: "working", idle: "ready", waiting: "waiting", "not heard": "quiet", ended: "quiet",
-};
-
 function stateLine(m: HomeCrewMember): string {
   if (m.state === "not heard") return m.since ? `Not heard from in ${m.since.replace(/ ago$/, "")}` : "Not heard from";
   const word = m.state[0].toUpperCase() + m.state.slice(1);
@@ -311,8 +226,8 @@ function Member({ m }: { m: HomeCrewMember }) {
   const high = m.memory_pct !== null && m.memory_pct >= WARN_AT;
   return (
     <div data-testid="crew-member" className="grid grid-cols-[8px_1fr] gap-x-2.5 border-t border-border py-2.5 first:border-t-0 first:pt-0">
-      <StatusDot tone={MEMBER_TONE[m.state]} label={m.state}
-                 className={cn("mt-[5px]", m.state === "working" && "bg-[var(--accent)]")} />
+      <StatusDot tone={toneOf("crew", m.state)} label={m.state}
+                 className="mt-[5px]" />
       <div className="min-w-0">
         <div className="font-semibold" data-user-text>{m.name}</div>
         <div className={MUTED}>{stateLine(m)}</div>
@@ -320,8 +235,8 @@ function Member({ m }: { m: HomeCrewMember }) {
         {m.memory_pct !== null && (
           <>
             <ProgressBar value={m.memory_pct} aria-label={`Memory of ${m.name}`}
-                         className={cn("mt-1 h-1", high ? WARN_FILL : INK_FILL)} data-testid={high ? "memory-warn" : "memory"} />
-            <div className="mt-0.5 text-[11px] text-muted-foreground">{m.memory ?? `memory ${m.memory_pct}% full`}</div>
+                         className={cn("mt-1 h-1", INK_FILL)} data-testid={high ? "memory-warn" : "memory"} />
+            <div className={cn("mt-0.5 text-[11px]", high ? "font-medium text-foreground" : "text-muted-foreground")}>{m.memory ?? `memory ${m.memory_pct}% full`}</div>
           </>
         )}
       </div>
@@ -341,11 +256,11 @@ function CrewCard({ data }: { data: HomeData }) {
   return (
     <section aria-label="Your crew" className="min-w-0">
       <SectionHead title="Your crew" />
-      <Panel>
+      <div>
         <div className="mb-2.5 text-[13px] text-muted-foreground">{crew.summary}</div>
         {crew.members.map((m) => <Member key={m.station} m={m} />)}
         {limit ? <Slot name="home.crewLimit" limit={limit} fallback={autonomy} /> : autonomy}
-      </Panel>
+      </div>
     </section>
   );
 }
@@ -356,7 +271,7 @@ function PlanCard({ data }: { data: HomeData }) {
     <section aria-label={plan.title} className="min-w-0">
       <SectionHead title={plan.title} />
       {plan.known ? (
-        <Panel>
+        <div>
           {plan.limits.map((l) => (
             <div key={l.kind} className="mb-3 last:mb-0">
               <div className="flex flex-wrap justify-between gap-x-3 text-xs">
@@ -369,7 +284,7 @@ function PlanCard({ data }: { data: HomeData }) {
           {plan.share_text && (
             <div className={cn(MUTED, "mt-3 border-t border-border pt-3")} data-user-text>{plan.share_text}</div>
           )}
-        </Panel>
+        </div>
       ) : (
         <p className="m-0 text-sm text-muted-foreground">Plan use shows once the crew reports it.</p>
       )}
@@ -382,12 +297,13 @@ function TopBar({ name, headline }: { name: string; headline?: React.ReactNode }
   return (
     <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
       <div className="min-w-0">
-        <h1 className="mb-1.5! text-[22px]! md:text-[28px]!">{hello}</h1>
+        <h1 className="mb-1.5 text-[22px] md:text-[28px]">{hello}</h1>
         {headline}
       </div>
       <div className="flex flex-wrap gap-2">
         <Button asChild variant="secondary"><Link to="/crew">Talk to the crew</Link></Button>
-        <Button asChild><Link to="/projects/new">New project</Link></Button>
+        {/* not filled: the one primary on Home is the decision waiting on the person (TR-1275) */}
+        <Button asChild variant="secondary"><Link to="/projects/new">New project</Link></Button>
       </div>
     </div>
   );
@@ -399,33 +315,25 @@ const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 // Setting the factory up lives on /setup (the Setup menu entry), so the home shows no first-run list.
-export function FactoryHomeView({ data, onAction, rows, notice, panels, projectsView, onProjectsView }: {
+export function FactoryHomeView({ data, onAction, rows, notice, panels }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
-  /** Mine or Team on a team cell's Projects (Mine unless told); the page reads the list again for the other. */
-  projectsView?: ProjectsView; onProjectsView?: (v: ProjectsView) => void;
   /** Hand over anyway on a row of You are waiting on. */
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
 }) {
-  const { personName } = useEdition();
   const name = useFirstName();
-  // The team's Projects (switch, lock, lead, hidden rows) are ee: until it has registered, and on a
-  // cell without it, the single-person rows show.
-  const eeLoaded = useEeLoaded();
   const eePending = useEePending();
-  const team = isTeam(data) && data.counts && eeLoaded
-    ? { counts: data.counts, view: projectsView ?? "mine", onView: onProjectsView, me: personName, hidden: data.hidden_summary }
-    : undefined;
+  const top = topItem(data.waiting_for_you)?.id;
   return (
     <div className={PAGE} data-testid="factory-home">
-      <TopBar name={name} headline={<p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
+      <TopBar name={name} headline={<p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
       {notice}
       <div className={COLS}>
         <div className={LEFT}>
           {isTeam(data) ? (
             // the team's lists are enterprise: without it the single-person list shows
             <Slot name="home.waiting" items={data.waiting_for_you}
-              renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} />}
+              renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} top={item.id === top} />}
               errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
               panels={panels}
               // while the ee chunk is on its way, core's rows would flash with the team's buttons on them
@@ -434,7 +342,9 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, projects
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
-          <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} planCommand={data.plan_command} />
+          {data.plan_command && data.projects.length === 0 && data.finished_count === 0 && !data.later_count && (
+            <PlanFirst command={data.plan_command} />
+          )}
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
@@ -447,10 +357,6 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, projects
   );
 }
 
-function LoadingBox({ rows }: { rows: number }) {
-  return <div className="border border-border bg-card"><SkeletonRows count={rows} /></div>;
-}
-
 export function FactoryHomeLoading() {
   const name = useFirstName();
   return (
@@ -458,12 +364,11 @@ export function FactoryHomeLoading() {
       <TopBar name={name} headline={<Skeleton width={320} height={14} className="mt-2" />} />
       <div className={COLS}>
         <div className={LEFT}>
-          <section className="min-w-0"><SectionHead title="Waiting for you" /><LoadingBox rows={3} /></section>
-          <section className="min-w-0"><SectionHead title="Projects" /><LoadingBox rows={3} /></section>
+          <section className="min-w-0"><SectionHead title="Waiting for you" /><SkeletonRows count={3} className={FLUSH_ROWS} /></section>
         </div>
         <aside className={RIGHT}>
-          <section className="min-w-0"><SectionHead title="Your crew" /><LoadingBox rows={3} /></section>
-          <section className="min-w-0"><SectionHead title="Claude plan" /><LoadingBox rows={2} /></section>
+          <section className="min-w-0"><SectionHead title="Your crew" /><SkeletonRows count={3} className={FLUSH_ROWS} /></section>
+          <section className="min-w-0"><SectionHead title="Claude plan" /><SkeletonRows count={2} className={FLUSH_ROWS} /></section>
         </aside>
       </div>
     </div>
@@ -552,7 +457,7 @@ export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
         </pre>
         <Textarea label="The grant, kept in your words" rows={3} value={words} disabled={busy} data-testid="allow-words"
           onChange={(e) => { setWords(e.target.value); setEdited(true); }} />
-        {length > GRANT_MAX && <p className="m-0 text-[13px] text-[color:var(--err)]">The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
+        {length > GRANT_MAX && <p className="m-0 text-[13px] text-err">The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
         {either ? (
           <fieldset className="m-0 flex flex-wrap gap-x-4 gap-y-1 border-0 p-0" disabled={busy}>
             <label className="flex items-center gap-1.5 text-sm">
@@ -569,7 +474,7 @@ export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
             Kept for every project{project ? `: ${who.toLowerCase()} works for all of them` : ""}.
           </p>
         )}
-        {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
+        {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-err" data-words-exempt>{err}</p>}
       </div>
     </Dialog>
   );
@@ -595,7 +500,7 @@ function CloseDialog({ item, project, onClose, onDone }: {
           <Button busy={busy} onClick={submit} data-testid="close-confirm">Close</Button>
         </>
       )}>
-      {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
+      {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-err" data-words-exempt>{err}</p>}
     </Dialog>
   );
 }
@@ -801,13 +706,12 @@ function useAllSamples(): Record<string, HomeSample> {
 function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeSample> }) {
   const [tries, setTries] = React.useState(0);
   const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
-  const [view, setView] = React.useState<ProjectsView>("mine");
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={sampleData(all[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} rows={rows} panels={panels} />;
+  else body = <FactoryHomeView data={sampleData(all[sample])} onAction={onAction} rows={rows} panels={panels} />;
   return (
     <>
       {body}
@@ -817,18 +721,17 @@ function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeS
   );
 }
 
-const sampleData = (s: HomeSample, view: ProjectsView): HomeData => (typeof s === "function" ? s(view) : s);
+const sampleData = (s: HomeSample): HomeData => (typeof s === "function" ? s("mine") : s);
 
 /** What the page shows at once after a change, until the daemon's own answer catches up. */
-interface Overlay { items: Set<string>; projects: Set<string>; later: Set<string>; until: number }
+interface Overlay { items: Set<string>; later: Set<string>; until: number }
 
 function hhmm(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function LiveHome() {
-  const [view, setView] = React.useState<ProjectsView>();   // unset: what the cell sends with no ?projects=
-  const { data, error, reload } = usePagePolling(() => getHome(view), POLL_MS);
+  const { data, error, reload } = usePagePolling(() => getHome(), POLL_MS);
   const [readAt, setReadAt] = React.useState<Date>();
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
@@ -843,7 +746,6 @@ function LiveHome() {
     if (done) {
       setOverlay((o) => ({
         items: new Set([...(o?.items ?? []), ...(done.item ? [done.item] : [])]),
-        projects: new Set([...(o?.projects ?? []), ...(done.project ? [done.project] : [])]),
         later: new Set([...(o?.later ?? []), ...(done.later ? [done.later] : [])]),
         until: Date.now() + CACHE_MS,
       }));
@@ -861,17 +763,13 @@ function LiveHome() {
       ...data,
       waiting_for_you: data.waiting_for_you.filter((i) => !overlay.items.has(i.id)),
       ...(data.you_are_waiting_on ? { you_are_waiting_on: data.you_are_waiting_on.filter((w) => !overlay.later.has(w.project.id)) } : {}),
-      projects: data.projects.filter((p) => !isProject(p) || (!overlay.projects.has(p.id) && !overlay.later.has(p.id))),
-      finished_count: data.finished_count + data.projects.filter((p) => isProject(p) && overlay.projects.has(p.id)).length,
-      later_count: (data.later_count ?? 0) + data.projects.filter((p) => isProject(p) && overlay.later.has(p.id) && !overlay.projects.has(p.id)).length,
     } : data;
     const notice = error ? (
       <Banner tone="warn" data-testid="stale-banner">
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice}
-                           projectsView={view} onProjectsView={(v) => { setView(v); reload(); }} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} />;
   }
   return (
     <>

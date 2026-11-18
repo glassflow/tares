@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { EmptyState } from "../../components/edition";
 import { People } from "./FactoryProject";
 import { PageHead, ProjectShell } from "./ProjectShell";
 import { ProjectSecrets } from "./ProjectSecrets";
@@ -15,7 +16,7 @@ export default function FactoryProjectPeople() {
           <PageHead title="People and access" sub="Who leads the project, who works on it, and the secrets its crew may use." />
           <div className="grid items-start gap-6 xl:grid-cols-2">
             {d.people ? <People people={d.people} onLead={sample ? undefined : act.lead} onAdd={sample ? undefined : act.add} />
-              : <div className="border border-border bg-card px-4 py-5 text-muted-foreground" data-testid="people-none">Only the people on this project see who is on it.</div>}
+              : <EmptyState className="border-t border-border py-4" data-testid="people-none">Only the people on this project see who is on it.</EmptyState>}
             {!sample && d.secrets && <ProjectSecrets project={d.id} initial={d.secrets} />}
           </div>
         </div>

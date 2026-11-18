@@ -63,7 +63,7 @@ const FLOW: { who: string; text: string; tools: string[]; you?: boolean }[] = [
   { who: "It merges", text: "when review and CI pass, or when you approve.", tools: [], you: true },
 ];
 
-const H2 = "m-0! text-lg! font-semibold!";
+const H2 = "m-0 text-lg font-semibold";
 
 export function OverviewView({ data, numbers, next, onGo }: {
   data: SetupData;
@@ -79,7 +79,7 @@ export function OverviewView({ data, numbers, next, onGo }: {
   return (
     <div className="grid min-w-0 max-w-[900px] gap-8" data-testid="step-view" data-slot="overview">
       <div className="grid gap-2">
-        <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]!" data-testid="page-title" tabIndex={-1}>How the factory works</h1>
+        <h1 className="m-0 text-[22px] min-[900px]:text-[26px]" data-testid="page-title" tabIndex={-1}>How the factory works</h1>
         <p className="m-0 max-w-[760px] text-[15px] text-muted-foreground" data-testid="page-sub">
           A crew of Claude Code sessions on your computer turns your goals into merged pull requests.
         </p>
@@ -87,7 +87,7 @@ export function OverviewView({ data, numbers, next, onGo }: {
 
       <section aria-labelledby="overview-crew" className="grid gap-3">
         <h2 id="overview-crew" className={H2}>Your crew</h2>
-        <ul className="m-0! grid list-none! gap-3 p-0! grid-cols-2 min-[700px]:grid-cols-3 min-[1100px]:grid-cols-5" data-testid="overview-crew">
+        <ul className="m-0 grid list-none gap-3 p-0 grid-cols-2 min-[700px]:grid-cols-3 min-[1100px]:grid-cols-5" data-testid="overview-crew">
           {MEMBERS.map((m) => (
             <li key={m.key} className={cn(CARD, "grid content-start gap-1.5 p-3.5")} data-testid={`member-${m.key}`}>
               <Ico>{m.icon}</Ico>
@@ -100,14 +100,14 @@ export function OverviewView({ data, numbers, next, onGo }: {
 
       <section aria-labelledby="overview-tools" className="grid gap-3">
         <h2 id="overview-tools" className={H2}>What they work with</h2>
-        <ul className="m-0! grid list-none! gap-3 p-0! min-[700px]:grid-cols-2" data-testid="overview-tools">
+        <ul className="m-0 grid list-none gap-3 p-0 min-[700px]:grid-cols-2" data-testid="overview-tools">
           {tools(data).map((t) => (
             <li key={t.key} className={cn(CARD, "grid content-start gap-1 px-3.5 py-3", t.wide && "min-[700px]:col-span-2")} data-testid={`tool-${t.key}`}>
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-[15px] font-semibold">{t.name}</span>
                 {stepWords(t.steps) && (
                   <button type="button" onClick={() => onGo(t.steps[0])} data-testid="tool-step"
-                    className="border-0! bg-transparent! p-0! text-xs! font-normal! text-muted-foreground! underline-offset-2 cursor-pointer hover:underline">
+                    className="border-0 bg-transparent p-0 text-xs font-normal text-muted-foreground underline-offset-2 cursor-pointer hover:underline">
                     {stepWords(t.steps)}
                   </button>
                 )}
@@ -121,10 +121,10 @@ export function OverviewView({ data, numbers, next, onGo }: {
 
       <section aria-labelledby="overview-flow" className="grid gap-3.5">
         <h2 id="overview-flow" className={H2}>One goal, start to finish</h2>
-        <ol className="m-0! ml-2.5! list-none! border-l-2 border-foreground p-0!" data-testid="overview-flow">
+        <ol className="m-0 ml-2.5 list-none border-l border-foreground p-0" data-testid="overview-flow">
           {FLOW.map((f, i) => (
             <li key={i} className={cn("relative pl-6", i < FLOW.length - 1 ? "pb-4" : "pb-0.5")}>
-              <span aria-hidden className={cn("absolute top-1 -left-[7px] size-3", f.you ? "bg-foreground" : "border-2 border-foreground bg-background")} />
+              <span aria-hidden className={cn("absolute top-1 -left-[6.5px] size-3", f.you ? "bg-foreground" : "border-2 border-foreground bg-background")} />
               <div className="flex flex-wrap items-center gap-2 text-[15px]">
                 <span><b>{f.who}</b> {f.text}</span>
                 {f.tools.map((t) => <span key={t} className="whitespace-nowrap border border-border bg-card px-2 py-px text-[12.5px]">{t}</span>)}

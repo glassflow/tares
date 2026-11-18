@@ -5,9 +5,12 @@
  *   checkWords(page, ck, label)     the text a person sees on the page, minus [data-words-exempt] and [data-user-text]
  *   expectOneCall(page, route)      the screen's one read call; call it before page.goto
  * Every edition e2e script calls checkWords once per state and expectOneCall for each state that loads live data.
+ * checkWords also runs the type check (type.cjs, TR-1270), so every state an edition script reads is checked for
+ * a button, heading or sentence set in mono or Doto.
  */
 const fs = require("fs");
 const path = require("path");
+const { checkType } = require("./type.cjs");
 
 const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "src", "editions", "words.json"), "utf8"));
 const EM_DASH = WORDS.punctuation[0];
@@ -52,6 +55,7 @@ async function checkWords(page, ck, label) {
   const names = found.filter((w) => w !== "em dash");
   ck(`${label}: no internal names`, names.length === 0, names.join(", "));
   ck(`${label}: no em dashes`, dashes.length === 0, dashes.join(", "));
+  await checkType(page, ck, label);
 }
 
 // A screen loads from exactly one read route. Records every /api/ request until the page is idle;

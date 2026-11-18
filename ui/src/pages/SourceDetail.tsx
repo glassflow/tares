@@ -1,378 +1,362 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
-import ConfirmDialog from "../components/ConfirmDialog";
 import Dependents from "../components/Dependents";
 import { ProjectLink } from "../components/ProjectBadge";
 import IngestEndpoint from "../components/IngestEndpoint";
 import SourceForm from "../components/SourceForm";
-import { ErrorState, InternalName, StatusBadge, TimeAgo, ruleSummary, sourceTitle, usePolling } from "../components/bits";
-import type { ConnectorSpec, Source } from "../types";
+import { ruleSummary, sourceTitle, usePolling } from "../components/bits";
+import { kindOf, memberOf, stateOf, stateWords } from "../components/connectionState";
+import {
+  Banner, Button, Checkbox, Collapse, Dialog, EmptyState, ListRow, ListSection, LoadingBlocks, Panel, ProgressBar, Stat,
+  StatusLabel, Tabs, toneOf,
+} from "../components/edition";
+import { formatCount } from "../lib/number";
+import { ageWords, formatStampUTC } from "../lib/time";
+import type { ConnectorSpec, Source, SourceEvent, SourceField, SourceFieldsProfile, SourceLabelProfile } from "../types";
 
+type Tab = "fields" | "events" | "config";
+
+const errText = (e: unknown) => String((e as Error).message ?? e);
+// The daemon's name for this kind of object when asking what depends on it; not a word on the page.
+const DEPENDENTS_KIND = "source"; // words-ok
+
+// One connection's page: what it is, whether it is healthy, the labels agents slice it by, what else is
+// in its data, what it received last, and its settings.
 export default function SourceDetail() {
   const { name = "" } = useParams();
   const nav = useNavigate();
   const [specs, setSpecs] = useState<Record<string, ConnectorSpec>>();
-  const [tab, setTab] = useState<"fields" | "events" | "config">("fields");
+  const [tab, setTab] = useState<Tab>("fields");
   const [actionError, setActionError] = useState<string>();
+  const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const [purge, setPurge] = useState(false);
   const [cascade, setCascade] = useState(true);
   const tabsRef = useRef<HTMLDivElement>(null);
 
-  // Editing labels opens the Configuration tab, which renders below the fold — scroll to it so it's
-  // obvious something opened (otherwise the page looks unchanged).
+  const { data: source, error, reload } = usePolling(() => api.source(name));
+
+  useEffect(() => { api.connectors().then(setSpecs, () => setSpecs({})); }, []);
+
+  // Editing labels opens the Configuration tab, which sits below the fold, so scroll to it: otherwise
+  // the page looks unchanged.
   const openConfig = () => {
     setTab("config");
-    requestAnimationFrame(() =>
-      tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() => tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const { data: source, error, reload } = usePolling(() => api.source(name));
-  const { data: events, error: eventsError } = usePolling(() => api.sourceEvents(name, 30));
-
-  useEffect(() => { api.connectors().then(setSpecs); }, []);
-
-  if (error) return <div className="alert error">{error}</div>;
-  if (!source || !specs) return <div className="dim">loading…</div>;
+  if (error) return <Banner tone="error">Tares could not load this connection: {error}</Banner>;
+  if (!source || !specs) return <LoadingBlocks />;
 
   const spec = specs[source.connector];
   const h = source.health;
+  const st = stateOf(source);
+  // "source" names the tone table, it is not a word on the page.
+  const tone = toneOf("source", st); // words-ok
+  const title = sourceTitle(source.config);
+  const projects = memberOf(source);
+  const last = h?.last_ingest ? Date.parse(h.last_ingest) : NaN;
+  const polls = h?.polls ?? 0;
 
   const act = (fn: () => Promise<unknown>) => async () => {
     setActionError(undefined);
-    try { await fn(); reload(); } catch (e) { setActionError(String((e as Error).message ?? e)); }
+    setBusy(true);
+    try { await fn(); reload(); } catch (e) { setActionError(errText(e)); } finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    setActionError(undefined);
+    try { await api.deleteSource(name, purge, cascade); nav("/sources"); }
+    catch (e) { setConfirmDel(false); setActionError(errText(e)); }
+    finally { setBusy(false); }
   };
 
   return (
-    <>
-      <div className="pagehead">
-        <div>
-          {(() => {
-            const title = sourceTitle(source.config);
-            return title && title !== source.name
-              ? <h1>{title}<InternalName name={source.name} /></h1>
-              : <h1>{source.name}</h1>;
-          })()}
-          <p className="subtitle">
-            {spec?.label ?? source.connector}
-            {(source.projects ?? []).length > 0 && (
-              <> · in {(source.projects ?? []).map((id, k) => <span key={id}>{k > 0 && ", "}<ProjectLink id={id} /></span>)}</>
-            )}
+    <div className="grid min-w-0 gap-5" data-testid="connection-page">
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="grid min-w-0 gap-1.5">
+          <h1 className="m-0 text-[22px] md:text-[28px]" data-user-text data-testid="connection-title">
+            {title && title !== source.name ? title : source.name}
+          </h1>
+          {title && title !== source.name && (
+            <div className="font-mono text-xs text-muted-foreground" data-user-text>{source.name}</div>
+          )}
+          <p className="m-0 text-sm text-muted-foreground" data-testid="connection-kind">
+            {kindOf(specs, source.connector)}
+            {st !== "push" && spec?.mode !== "push" && `, checked every ${source.poll}`}
+            {projects.length > 0
+              ? <>, in {projects.map((id, k) => <span key={id}>{k > 0 && ", "}<ProjectLink id={id} /></span>)}</>
+              : ", in no project"}
           </p>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted-foreground">
+            <StatusLabel tone={tone} data-testid="connection-state">{stateWords(st)}</StatusLabel>
+            <span data-testid="connection-last" title={Number.isFinite(last) ? formatStampUTC(last) : undefined}>
+              {Number.isFinite(last) ? `last received ${ageWords(Date.now() - last)}` : "nothing received yet"}
+            </span>
+          </div>
         </div>
-        <div className="btnrow">
+        <div className="flex flex-wrap gap-2">
           {source.paused
-            ? <button onClick={act(() => api.resumeSource(name))}>Resume</button>
-            : <button onClick={act(() => api.pauseSource(name))}>Pause</button>}
-          <button className="danger" onClick={() => { setPurge(false); setConfirmDel(true); }}>Delete</button>
+            ? <Button variant="secondary" busy={busy} onClick={act(() => api.resumeSource(name))}>Resume</Button>
+            : <Button variant="secondary" busy={busy} onClick={act(() => api.pauseSource(name))}>Pause</Button>}
+          <Button variant="quiet" className="text-err hover:text-err" data-testid="connection-delete"
+                  onClick={() => { setPurge(false); setCascade(true); setConfirmDel(true); }}>Delete</Button>
         </div>
-      </div>
+      </header>
 
-      {actionError && <div className="alert error">{actionError}</div>}
+      <Collapse>{actionError && <Banner tone="error" data-testid="connection-action-error">{actionError}</Banner>}</Collapse>
+
+      <Collapse>{h?.last_error && (
+        <Banner tone="error" data-testid="connection-error">
+          Failing {h.consecutive_errors === 1 ? "once" : `${formatCount(h.consecutive_errors)} times in a row`}:{" "}
+          <span className="font-mono" data-user-text>{h.last_error}</span>
+        </Banner>
+      )}</Collapse>
 
       {spec?.mode === "push" && <IngestEndpoint source={source} />}
 
-      <div className="cards">
-        <div className="card"><div className="k">status</div><div className="v"><StatusBadge status={h?.status} /></div></div>
-        <div className="card"><div className="k">events stored</div><div className="v">{(h?.events_total ?? 0).toLocaleString()}</div></div>
-        <div className="card"><div className="k">since Tares restarted</div><div className="v">{h?.events_since_start ?? 0} <small>events from {h?.polls ?? 0} {h?.polls === 1 ? "check" : "checks"}</small></div></div>
-        <div className="card"><div className="k">last ingest</div><div className="v" style={{ fontSize: 15 }}><TimeAgo ts={h?.last_ingest} /></div></div>
-      </div>
-
-      {h?.last_error && (
-        <div className="alert error">
-          last error ({h.consecutive_errors} consecutive): <span className="mono">{h.last_error}</span>
-        </div>
-      )}
+      <Stat label="Events kept" value={formatCount(h?.events_total ?? 0)} data-testid="connection-events"
+            note={`${formatCount(h?.events_since_start ?? 0)} since Tares restarted${
+              polls > 0 ? `, from ${formatCount(polls)} ${polls === 1 ? "check" : "checks"}` : ""}`} />
 
       <LabelsSummary source={source} onEdit={openConfig} />
 
-      <div className="tabs" style={{ marginTop: 16, scrollMarginTop: 60 }} ref={tabsRef}>
-        <button className={tab === "fields" ? "active" : ""} onClick={() => setTab("fields")}>Fields</button>
-        <button className={tab === "events" ? "active" : ""} onClick={() => setTab("events")}>Recent events</button>
-        <button className={tab === "config" ? "active" : ""} onClick={() => setTab("config")}>Configuration</button>
+      <div ref={tabsRef} className="scroll-mt-16">
+        <Tabs aria-label="About this connection" value={tab} onValueChange={(v) => setTab(v as Tab)}
+              items={[
+                { value: "fields", label: "Fields", content: <FieldsPanel name={name} source={source} /> },
+                { value: "events", label: "Recent events", content: <RecentEvents name={name} /> },
+                {
+                  value: "config", label: "Configuration",
+                  content: spec
+                    ? <div className="pt-4">
+                        <SourceForm
+                          connector={source.connector}
+                          spec={spec}
+                          lockName
+                          initial={{ name: source.name, type: source.type, poll: source.poll, config: source.config }}
+                          submitLabel="Save changes"
+                          onSubmit={async (body) => {
+                            await api.updateSource(name, body);
+                            setTab("fields");
+                            reload();
+                          }}
+                        />
+                      </div>
+                    : <EmptyState className="pt-4">Tares does not know this kind of connection, so its settings cannot be edited here.</EmptyState>,
+                },
+              ]} />
       </div>
 
-      {tab === "fields" && <FieldsPanel name={name} source={source} />}
-
-      {tab === "config" && spec && (
-        <div className="panel">
-          <SourceForm
-            connector={source.connector}
-            spec={spec}
-            lockName
-            initial={{ name: source.name, type: source.type, poll: source.poll, config: source.config }}
-            submitLabel="Save changes"
-            onSubmit={async (body) => {
-              await api.updateSource(name, body);
-              setTab("fields");
-              reload();
-            }}
-          />
+      <Dialog open={confirmDel} onOpenChange={(o) => { if (!o && !busy) setConfirmDel(false); }}
+              data-testid="connection-delete-dialog"
+              title={`Delete ${title ?? source.name}?`}
+              description="Its settings are removed. The events it kept stay unless you remove them too."
+              footer={<>
+                <Button variant="secondary" disabled={busy} onClick={() => setConfirmDel(false)}>Cancel</Button>
+                <Button busy={busy} onClick={() => void remove()} data-testid="connection-delete-confirm">Delete</Button>
+              </>}>
+        <div className="grid gap-3">
+          <Dependents kind={DEPENDENTS_KIND} name={name} cascade={cascade} onChange={(c) => setCascade(c)} />
+          <Checkbox checked={purge} onCheckedChange={(c) => setPurge(c === true)} data-testid="connection-purge"
+                    label={`Also remove the events it kept${h?.events_total ? ` (${formatCount(h.events_total)})` : ""}`} />
         </div>
-      )}
-
-      {tab === "events" && (
-        <>
-          {eventsError && <ErrorState error={eventsError} what="recent events" />}
-          {!eventsError && !events?.length && <div className="empty">nothing ingested from this source yet</div>}
-          {!!events?.length && (
-            <table>
-              <thead><tr><th>ingested</th><th>key</th><th>type</th><th>text</th></tr></thead>
-              <tbody>
-                {events.map((e, i) => (
-                  <tr key={i}>
-                    <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={e.ingest_time} /></td>
-                    <td className="mono">{e.key}</td>
-                    <td className="mono">{e.event_type}</td>
-                    <td className="mono" style={{ whiteSpace: "pre-wrap" }}>{e.text}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </>
-      )}
-
-      {confirmDel && (
-        <ConfirmDialog
-          title={`Delete source "${name}"?`}
-          confirmLabel="Delete source"
-          danger
-          onCancel={() => setConfirmDel(false)}
-          onConfirm={async () => {
-            setConfirmDel(false);
-            setActionError(undefined);
-            try { await api.deleteSource(name, purge, cascade); nav("/sources"); }
-            catch (e) { setActionError(String((e as Error).message ?? e)); }
-          }}
-        >
-          <p className="help" style={{ whiteSpace: "normal", margin: 0 }}>
-            Its configuration is removed. Stored events are kept unless you purge them.
-          </p>
-          <Dependents kind="source" name={name} cascade={cascade} onChange={(c) => setCascade(c)} />
-          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-            <span>also purge its stored events{h?.events_total ? ` (${h.events_total.toLocaleString()})` : ""}</span>
-          </label>
-        </ConfirmDialog>
-      )}
-    </>
+      </Dialog>
+    </div>
   );
 }
 
-// The fields this source carries, sampled from recent events. Nested contexts (e.g. a Prometheus
-// label set) are flattened to sub-fields (metric.service, …) so the real keyable axes are visible;
-// the backend marks which are declared labels/keys. Coverage is only shown when it varies (a full
-// 100%-everywhere column is noise), so partial fields stand out.
-// The declared entity axes — the single most important config of a source, so it lives on the
-// main screen (not buried in the edit form): every event carries these labels, the key names
-// the timeline agents read.
+type LabelConfig = { name: string; field?: string; const?: string; primary?: boolean };
+
+// The declared labels, the most important setting of a connection, so they sit on the page and not only in
+// the form: every event carries them, and the key names the timeline agents read. Shut by default: the
+// Labels list under Fields says all this and more (coverage, top values, rules), so on a connection with
+// many labels this was mostly page length. Shut, the head keeps the count and the key.
 function LabelsSummary({ source, onEdit }: { source: Source; onEdit: () => void }) {
-  const labels = (source.config?.labels ?? []) as Array<{
-    name: string; field?: string; const?: string; primary?: boolean }>;
-  // Collapsed by default: the Labels panel below says everything this one does and more (coverage,
-  // top values, rules), so on a source with many labels this was mostly page length. The header
-  // keeps the count and the Edit button, so nothing is lost while it is shut.
+  const labels = (source.config?.labels ?? []) as LabelConfig[];
   const [open, setOpen] = useState(false);
   const key = labels.find((l) => l.primary)?.name;
   return (
-    <div className="panel" style={{ marginTop: 14 }}>
-      <div className="pagehead" style={{ marginBottom: open && labels.length ? 8 : 0 }}>
-        <button className="disclosure" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-          <svg className={"disclosure-caret" + (open ? " open" : "")} width="10" height="7"
-               viewBox="0 0 10 7" fill="none" aria-hidden="true">
-            <path d="M1 1l4 4 4-4" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
-          <h2 style={{ margin: 0 }}>Labels &amp; key</h2>
-          {!open && labels.length > 0 && (
-            <small className="dim">
-              · {labels.length} label{labels.length === 1 ? "" : "s"}{key ? <> · key <span className="mono">{key}</span></> : null}
-            </small>
-          )}
-        </button>
-        <button onClick={onEdit}>Edit</button>
-      </div>
-      {!open ? null : labels.length ? (
-        <table>
-          <thead><tr><th>label</th><th>from</th></tr></thead>
-          <tbody>
-            {labels.map((l) => (
-              <tr key={l.name}>
-                <td className="mono">
-                  {l.name}
-                  {l.primary && <span className="badge ok" style={{ marginLeft: 8 }}>key</span>}
-                </td>
-                <td className="mono">
-                  {"field" in l && l.field
-                    ? <><span className="badge push" style={{ marginRight: 8 }}>field</span>{l.field}</>
-                    : <><span className="badge push" style={{ marginRight: 8 }}>const</span>{String(l.const ?? "")}</>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <p className="help" style={{ margin: 0, whiteSpace: "normal" }}>
-          No labels declared; events fall back to the connector&rsquo;s default key, and agents
-          can&rsquo;t slice this source by any axis. Check <strong>Fields</strong> below for the
-          candidates observed in your data, then declare them here.
+    <Panel title="Labels and key" data-testid="connection-labels"
+           action={<Button variant="secondary" onClick={onEdit}>Edit</Button>}>
+      {labels.length === 0 ? (
+        <p className="m-0 text-sm text-muted-foreground">
+          No labels yet, so events take the default key for their kind and agents cannot slice this connection
+          by anything. Fields below lists what is in the data; make the useful ones labels.
         </p>
+      ) : (
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
+            <span data-testid="connection-labels-summary">
+              {labels.length} {labels.length === 1 ? "label" : "labels"}
+              {key && <>, the key is <span className="font-mono" data-user-text>{key}</span></>}
+            </span>
+            <Button variant="quiet" aria-expanded={open} onClick={() => setOpen((o) => !o)}
+                    data-testid="connection-labels-toggle">
+              {open ? "Hide them" : "Show them"}
+            </Button>
+          </div>
+          {open && (
+            <ul className="m-0 grid list-none divide-y divide-border p-0">
+              {labels.map((l) => (
+                <li key={l.name} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-sm">
+                  <span className="font-mono" data-user-text>{l.name}</span>
+                  {l.primary && <Tag>key</Tag>}
+                  <span className="text-muted-foreground">
+                    {l.field
+                      ? <>from <span className="font-mono" data-user-text>{l.field}</span></>
+                      : <>always <span className="font-mono" data-user-text>{String(l.const ?? "")}</span></>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
-    </div>
+    </Panel>
+  );
+}
+
+function Tag({ children, title }: { children: React.ReactNode; title?: string }) {
+  return (
+    <span title={title}
+          className="border border-border px-1.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+function RecentEvents({ name }: { name: string }) {
+  const { data: events, error } = usePolling(() => api.sourceEvents(name, 30));
+  if (error) return <Banner tone="error" className="mt-4">Tares could not load the recent events: {error}</Banner>;
+  if (!events) return <LoadingBlocks />;
+  if (!events.length) return <EmptyState className="pt-4">Nothing received from this connection yet.</EmptyState>;
+  return (
+    <ul className="m-0 grid list-none divide-y divide-border p-0" data-testid="connection-recent">
+      {events.map((e, i) => <EventRow key={i} e={e} />)}
+    </ul>
+  );
+}
+
+function EventRow({ e }: { e: SourceEvent }) {
+  const at = Date.parse(e.ingest_time);
+  return (
+    <li className="grid min-w-0 gap-1 py-3" data-testid="connection-event">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span className="min-w-0 font-mono [overflow-wrap:anywhere]" data-user-text>
+          {e.key}{e.event_type && <> · {e.event_type}</>}
+        </span>
+        <span title={Number.isFinite(at) ? formatStampUTC(at) : undefined}>
+          {Number.isFinite(at) ? ageWords(Date.now() - at) : ""}
+        </span>
+      </div>
+      <div className="whitespace-pre-wrap font-mono text-xs [overflow-wrap:anywhere]" data-user-text>{e.text}</div>
+    </li>
   );
 }
 
 const FIELDS_PAGE = 12;
+const shorten = (v: string) => (v.length > 44 ? v.slice(0, 43) + "…" : v);
 
+// The labels and the other fields, sampled from recent events. Nested contexts (a Prometheus label set)
+// are flattened to sub-fields (metric.service, …) so the real axes show; the daemon marks which are
+// labels or the key. Coverage shows only when it varies (100% everywhere is noise), so partial fields
+// stand out.
 function FieldsPanel({ name, source }: { name: string; source: Source }) {
-  // The rules live in the source config; the profile API only reports coverage and values. Cross
-  // referencing by name is what lets this table say WHICH labels are derived — it claims to include
-  // them and used to render a regex-rewritten label identically to a straight pass-through one.
+  // The rules live in the connection's settings; the profile only reports coverage and values. Matching by
+  // name is what lets this list say WHICH labels rewrite their values.
   const rules = Object.fromEntries(
     ((source.config?.labels ?? []) as Array<{ name: string; pattern?: string; map?: object }>)
       .map((l) => [l.name, ruleSummary(l.pattern, Object.keys(l.map ?? {}).length)]));
-  const { data } = usePolling(() => api.sourceFields(name), 5000);
+  const { data, error } = usePolling(() => api.sourceFields(name), 5000);
   const [showAll, setShowAll] = useState(false);
-  if (!data || !data.fields.length) return null;
-  const fmt = (v: string) => (v.length > 44 ? v.slice(0, 43) + "…" : v);
-  // ONLY the fields that are not already labels. Anything declared is listed — with more detail —
-  // in the Labels table directly above, so including it here printed every declared axis twice on
-  // one screen. What is left is exactly the useful question this table answers: what else is in the
-  // data that you could promote?
+  if (error) return <Banner tone="error" className="mt-4">Tares could not sample the fields: {error}</Banner>;
+  if (!data) return <LoadingBlocks />;
+  if (!data.fields.length) return <EmptyState className="pt-4">No events to sample yet, so no fields to show.</EmptyState>;
+
+  // Only the fields that are not labels already: the labels are listed above with more detail, so this
+  // answers the one useful question left, what else in the data could become a label.
   const candidates = data.fields.filter((f) => !f.is_label && !f.is_key);
-  const allFull = candidates.every((f) => f.coverage === data.sampled);
-  // Densest first — the best promotion candidates lead, long tails fold behind "show all".
-  const sorted = [...candidates].sort((a, b) =>
-    b.coverage - a.coverage || a.name.localeCompare(b.name));
+  // Densest first: the best candidates lead, long tails fold behind Show all.
+  const sorted = [...candidates].sort((a, b) => b.coverage - a.coverage || a.name.localeCompare(b.name));
   const shown = showAll ? sorted : sorted.slice(0, FIELDS_PAGE);
   const labels = data.labels ?? [];
-  const allLabelsFull = labels.every((l) => l.coverage === data.sampled);
+  const sampled = `${formatCount(data.sampled)} recent ${data.sampled === 1 ? "event" : "events"} sampled`;
+
   return (
-    <>
-    {labels.length > 0 && (
-      <div className="panel">
-        <h2 style={{ marginTop: 0 }}>Labels <small className="dim">· {data.sampled} events sampled</small></h2>
-        {/* No subtitle. It described the columns that are right underneath it — the badges, the
-            coverage bar and the values say the same thing without a paragraph. The one fact it
-            carried that the table doesn't is kept where it matters: the 0-coverage rows say so
-            inline, on the row it applies to. */}
-        <table>
-          <thead><tr>
-            <th>label</th>
-            {!allLabelsFull && <th style={{ width: 180 }}>coverage</th>}
-            <th className="num">distinct</th>
-            <th>top values</th>
-          </tr></thead>
-          <tbody>
-            {labels.map((l) => (
-              <tr key={l.name} style={l.coverage === 0 ? { opacity: 0.55 } : undefined}>
-                <td className="mono">
-                  {/* One row, never wrapping. Inline, a long name pushed the badge onto a second
-                      line while short names kept it alongside, so badges staggered down the column
-                      by name length. A nowrap flex cell lines them all up. */}
-                  <div className="label-cell">
-                    <span className="label-cell-name">{l.name}</span>
-                    {l.is_key ? <span className="badge ok">key</span>
-                      : <span className="badge starting">label</span>}
-                    {rules[l.name] && (
-                      <span className="badge rule-chip" title="this label rewrites its values before they are stored">
-                        ≈ {rules[l.name]}
-                      </span>
-                    )}
-                  </div>
-                  {l.coverage === 0 && (
-                    <div className="help" style={{ fontFamily: "inherit" }}>
-                      no sampled event carries this label; check the field mapping / regex
-                    </div>
-                  )}
-                </td>
-                {!allLabelsFull && (
-                  <td>
-                    <div className="cov"><div className="cov-bar" style={{ width: `${(l.coverage / Math.max(1, data.sampled)) * 100}%` }} /></div>
-                    <small className="dim">{l.coverage} / {data.sampled}</small>
-                  </td>
-                )}
-                <td className="num">{l.distinct}</td>
-                <td>
-                  {l.values.length
-                    ? <span className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                        {l.values.slice(0, 6).map((v) => (
-                          <span className="chip" key={v.value} title={`${v.value} · ${v.events} events`}>
-                            {fmt(v.value)} <span className="dim">({v.events})</span>
-                          </span>
-                        ))}
-                      </span>
-                    : <span className="help">—</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    )}
-    <div className="panel">
-      {/* "not declared as labels" earns its place: without it the absence of `path` here reads as a
-          bug rather than as "it's a label, it's in the table above". */}
-      <h2 style={{ marginTop: 0 }}>Fields{" "}
-        <small className="dim">· not declared as labels · {data.sampled} events sampled</small></h2>
-      {sorted.length === 0 ? (
-        <p className="help" style={{ margin: 0, whiteSpace: "normal" }}>
-          Every field observed in the sample is already a label.
-        </p>
-      ) : (
-      <table>
-        <thead><tr>
-          <th>field</th>
-          {!allFull && <th style={{ width: 180 }}>coverage</th>}
-          <th className="num">distinct</th>
-          <th>top values</th>
-        </tr></thead>
-        <tbody>
-          {shown.map((f) => (
-            <tr key={f.name} style={f.coverage === 0 ? { opacity: 0.55 } : undefined}>
-              {/* No key/label badge here any more — nothing in this table is one. */}
-              <td className="mono">
-                {f.name}
-                {f.coverage === 0 && (
-                  <div className="help" style={{ fontFamily: "inherit" }}>not observed in the sample</div>
-                )}
-              </td>
-              {!allFull && (
-                <td>
-                  <div className="cov"><div className="cov-bar" style={{ width: `${(f.coverage / Math.max(1, data.sampled)) * 100}%` }} /></div>
-                  <small className="dim">{f.coverage} / {data.sampled}</small>
-                </td>
-              )}
-              <td className="num">{f.distinct}</td>
-              <td>
-                {f.values.length
-                  ? <span className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                      {f.values.slice(0, 6).map((v) => (
-                        <span className="chip" key={v.value} title={`${v.value} · ${v.events} events`}>
-                          {fmt(v.value)} <span className="dim">({v.events})</span>
-                        </span>
-                      ))}
-                    </span>
-                  : <span className="help">—</span>}
-              </td>
-            </tr>
+    <div className="grid gap-6 pt-4">
+      {labels.length > 0 && (
+        <ListSection paper title="Labels" aside={sampled} data-testid="connection-field-labels">
+          {labels.map((l) => (
+            <ProfileRow key={l.name} p={l} profile={data} full={labels.every((x) => x.coverage === data.sampled)}
+                        tags={<>
+                          <Tag>{l.is_key ? "key" : "label"}</Tag>
+                          {rules[l.name] && <Tag title="This label rewrites its values before they are kept">rewrites: {rules[l.name]}</Tag>}
+                        </>}
+                        missing="No sampled event carries this label. Check its field or pattern under Configuration." />
           ))}
-        </tbody>
-      </table>
+        </ListSection>
       )}
-      {sorted.length > FIELDS_PAGE && (
-        <button style={{ marginTop: 10 }} onClick={() => setShowAll((s) => !s)}>
-          {showAll ? "show fewer" : `show all ${sorted.length} fields`}
-        </button>
-      )}
-      {sorted.length > 0 && allFull && (
-        <p className="help" style={{ marginTop: 8 }}>Every field is present in all {data.sampled} sampled events.</p>
-      )}
+      {/* "not labels" earns its place: without it a missing field reads as a bug, not as "it is a label above". */}
+      <ListSection paper title="Other fields" aside={`Not labels. ${sampled}`} data-testid="connection-fields">
+        {sorted.length === 0
+          ? <EmptyState>Every field in the sample is a label already.</EmptyState>
+          : shown.map((f) => (
+              <ProfileRow key={f.name} p={f} profile={data} full={candidates.every((x) => x.coverage === data.sampled)}
+                          missing="Not in the sample." />
+            ))}
+        {sorted.length > FIELDS_PAGE && (
+          <Button variant="quiet" className="mt-2" onClick={() => setShowAll((s) => !s)} data-testid="connection-fields-more">
+            {showAll ? "Show fewer" : `Show all ${sorted.length} fields`}
+          </Button>
+        )}
+      </ListSection>
     </div>
-    </>
   );
 }
 
+// One label or field: its name, how many sampled events carry it (when that varies), how many values it
+// takes and the commonest of them. Three columns from md up, the density the old table had; stacked
+// below that, so it fits at 390.
+function ProfileRow({ p, profile, full, tags, missing }: {
+  p: SourceField | SourceLabelProfile; profile: SourceFieldsProfile; full: boolean;
+  tags?: React.ReactNode; missing: string;
+}) {
+  const of = Math.max(1, profile.sampled);
+  return (
+    <ListRow data-testid="connection-field"
+             className={`grid min-w-0 gap-x-6 gap-y-1.5 md:grid-cols-[minmax(0,2fr)_minmax(0,11rem)_minmax(0,3fr)] md:items-start${
+               p.coverage === 0 ? " opacity-60" : ""}`}>
+      <div className="grid min-w-0 gap-1">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-mono text-sm [overflow-wrap:anywhere]" data-user-text>{p.name}</span>
+          {tags}
+        </div>
+        {p.coverage === 0 && <div className="text-xs text-muted-foreground">{missing}</div>}
+      </div>
+      <div className="grid min-w-0 gap-1.5">
+        <div className="text-xs text-muted-foreground">
+          {!full && `in ${formatCount(p.coverage)} of ${formatCount(profile.sampled)}, `}
+          {formatCount(p.distinct)} {p.distinct === 1 ? "value" : "values"}
+        </div>
+        {!full && (
+          <ProgressBar className="max-w-60" value={(p.coverage / of) * 100}
+                       aria-label={`${p.name}: share of sampled events that carry it`} />
+        )}
+      </div>
+      {p.values.length > 0 && (
+        <div className="flex min-w-0 flex-wrap gap-1.5">
+          {p.values.slice(0, 6).map((v) => (
+            <span key={v.value} title={`${v.value}, ${formatCount(v.events)} events`} data-user-text
+                  className="max-w-full truncate border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">
+              {shorten(v.value)} <span className="text-muted-foreground">({formatCount(v.events)})</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </ListRow>
+  );
+}
