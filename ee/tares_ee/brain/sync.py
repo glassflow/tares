@@ -20,6 +20,10 @@ poller and webhook stay off: the cell drives every sync.
   `SHOW_AFTER` in a row the reason is also the row's `error`, which is what the card shows. A
   success clears all three.
 
+* The files a push touched are told to the `push_listeners` (the decision importer, TR-1219): from the
+  event's payload (`pushed_files`), or None when it has none that can be trusted. A token repo has no
+  events: when its poll sees a new head, the listeners hear None (look at everything).
+
 A GitHub token is held in a local variable for one call. It is never stored, logged or shown: text
 that may hold one goes through `lore.scrub` and `index._line`, and an error of unknown kind is logged
 by its type only.
@@ -42,7 +46,7 @@ from tares.factory import norm_repo
 from .index import RUNNING, _count, _line
 from .lore import LoreClient, LoreError, scrub
 
-__all__ = ["SHOW_AFTER", "SYNC_POLL_SECONDS", "Syncer", "TICK_SECONDS", "github_head"]
+__all__ = ["SHOW_AFTER", "SYNC_POLL_SECONDS", "Syncer", "TICK_SECONDS", "github_head", "pushed_files"]
 
 log = logging.getLogger("tares_ee.brain.sync")
 
@@ -51,6 +55,7 @@ TICK_SECONDS = 5.0         # between two looks at a push waiting for a repo to b
 SHOW_AFTER = 3             # failures in a row before the card shows the error
 HEAD_TIMEOUT = 15          # seconds one head check may take
 GITHUB_TIMEOUT = 60        # seconds one repo listing may take
+PUSH_COMMITS_CAP = 20      # GitHub lists at most this many commits in a push event
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -85,6 +90,25 @@ async def github_head(api_url, token: str, repo: str, known=None) -> tuple[str, 
     return sha, r.headers.get("etag") or ""
 
 
+def pushed_files(payload) -> set[str] | None:
+    """The paths a push event touched (added, modified or removed in any of its commits), or None when the
+    event cannot say: no commit list, GitHub's cap of PUSH_COMMITS_CAP commits reached (it cuts the rest),
+    or a commit without its file lists."""
+    commits = payload.get("commits") if isinstance(payload, dict) else None
+    if not isinstance(commits, list) or not commits or len(commits) >= PUSH_COMMITS_CAP:
+        return None
+    out: set[str] = set()
+    for c in commits:
+        if not isinstance(c, dict):
+            return None
+        for key in ("added", "modified", "removed"):
+            names = c.get(key)
+            if not isinstance(names, list):
+                return None
+            out.update(n for n in names if isinstance(n, str))
+    return out
+
+
 class Syncer:
     """One per app, next to the Indexer (it shares the indexer's store, lore client and per-repo
     lock). `runtime` is core's runtime, whose `envelope_listeners` brings the push events."""
@@ -98,6 +122,8 @@ class Syncer:
         self._head: dict[str, str] = {}      # repo -> the newest head a push or poll named
         self._synced: dict[str, str] = {}    # repo -> the head last synced (a poll compares to it)
         self._seen: dict[str, tuple[str, str]] = {}   # repo -> (head, etag) of the last poll
+        self._told: dict[str, str] = {}      # repo -> the head the push listeners last heard of from a poll
+        self.push_listeners: list = []       # callables (repo, changed paths or None), told of every push
         self._tasks: dict[str, asyncio.Task] = {}     # repo -> its running sync
         self._wake = asyncio.Event()
         self.task: asyncio.Task | None = None
@@ -117,11 +143,20 @@ class Syncer:
             labels = getattr(env, "labels", None) or {}
             if getattr(env, "event_type", "") == "push" and labels.get("on_default_branch") == "true" \
                     and isinstance(labels.get("repo"), str):
-                pushes.append(labels)
+                pushes.append((labels, getattr(env, "payload", None)))
         if not pushes or not self._is_app_source(source) or not self.active():
             return
-        for labels in pushes:   # no store read here: this runs on the event loop, inside the ingest
-            self._note(norm_repo(labels["repo"]), labels.get("sha"))
+        for labels, payload in pushes:   # no store read here: this runs on the event loop, inside the ingest
+            repo = norm_repo(labels["repo"])
+            self._note(repo, labels.get("sha"))
+            self._tell(repo, pushed_files(payload))
+
+    def _tell(self, repo: str, paths) -> None:
+        for listener in list(self.push_listeners):
+            try:
+                listener(repo, paths)
+            except Exception as e:   # noqa: BLE001  (a listener must not stop the sync)
+                log.warning("brain push listener for %s failed: %s", repo, type(e).__name__)
 
     def _is_app_source(self, name: str) -> bool:
         catalog = getattr(self.runtime, "catalog", None)
@@ -154,7 +189,7 @@ class Syncer:
         self._wake.set()
 
     def _forget(self, repo: str) -> None:
-        for book in (self._want, self._done, self._head, self._synced, self._seen):
+        for book in (self._want, self._done, self._head, self._synced, self._seen, self._told):
             book.pop(repo, None)
 
     def _outstanding(self) -> bool:
@@ -294,6 +329,9 @@ class Syncer:
             self._failed(repo, f"{repo} could not be checked for new commits: {scrub(e, [token])}")
             return 1
         self._seen[repo] = (sha, etag)
+        if sha != self._told.get(repo, self._synced.get(repo, row["indexed_commit"] or "")):
+            self._told[repo] = sha
+            self._tell(repo, None)   # no push event for a token repo: the listeners look at everything
         if sha != self._synced.get(repo, row["indexed_commit"] or ""):
             self.request(repo, sha)
         elif row.get("sync_failures"):   # the index is current again: nothing to show

@@ -41,6 +41,7 @@ from tares.envelope import now_utc
 from tares.factory import norm_repo
 
 from . import decisions as decisions_mod
+from . import decisions_repo as decisions_repo_mod
 from . import folders as folders_mod
 from . import index as indexing
 from . import sync as syncing
@@ -95,10 +96,11 @@ def lore_name(repo: str) -> str:
 
 
 def row_view(r: dict, removing: bool = False, remove_error: str | None = None,
-             folders: list[str] | None = None) -> dict:
+             folders: list[str] | None = None, decisions: int = 0) -> dict:
     """What the routes return for one row: the table's columns, the name of who added it, `removing`
     (a removal is running in the background), `remove_error` (why the last removal gave up, None
-    otherwise) and `folders` (the paths of its chosen decision folders). `repo_source_id` stays inside the cell."""
+    otherwise), `folders` (the paths of its chosen decision folders) and `decisions` (how many decisions the
+    brain holds from the files of those folders). `repo_source_id` stays inside the cell."""
     return {"repo": r["repo"], "state": r["state"], "files_done": r["files_done"],
             "files_total": r["files_total"], "indexed_commit": r["indexed_commit"],
             "last_synced": r["last_synced"], "error": r["error"], "place": r["place"],
@@ -106,7 +108,7 @@ def row_view(r: dict, removing: bool = False, remove_error: str | None = None,
             "added_by": r["added_by"],
             "added_by_name": r["added_by_name"], "added_at": r["added_at"],
             "removing": removing, "remove_error": None if removing else remove_error,
-            "folders": list(folders or [])}
+            "folders": list(folders or []), "decisions": decisions}
 
 
 def register_routes(app, host) -> None:
@@ -118,12 +120,16 @@ def register_routes(app, host) -> None:
     syncer.attach(app)
     decisions = decisions_mod.Decisions(store, lambda: lore_client())   # shared projects' specs, plans and notes (TR-1211)
     decisions.attach(app)   # a repo connected or removed wakes it, so the docs follow at once (TR-1220)
+    repo_decisions = decisions_repo_mod.RepoDecisions(store, lambda: lore_client(), indexer.github_token)   # the files of the chosen decision folders (TR-1210)
+    repo_decisions.attach(app)
+    syncer.push_listeners.append(repo_decisions.on_push)   # a push to a chosen folder updates its documents (TR-1219)
     removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
     remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
 
     def view(r: dict) -> dict:
-        return row_view(r, r["repo"] in removals, remove_errors.get(r["repo"]),
-                        [f["path"] for f in store.list_brain_folders(r["repo"])])
+        folders = [f["path"] for f in store.list_brain_folders(r["repo"])]
+        return row_view(r, r["repo"] in removals, remove_errors.get(r["repo"]), folders,
+                        repo_decisions.count(r["repo"], folders))   # from memory: this route is polled
 
     def need_licence():
         if not licence.ee_allowed():
@@ -149,7 +155,8 @@ def register_routes(app, host) -> None:
         whose last syncs failed stays ready: `sync_failures` counts them in a row, `sync_error` is the
         last reason, and from the third in a row `error` shows it too. `removing` is true while a removal
         runs in the background; `remove_error` says why the last one gave up; `folders` lists the paths of
-        the repo's chosen decision folders."""
+        the repo's chosen decision folders and `decisions` how many decisions the brain holds from their
+        files (0 with no folders or before the first import; kept in memory, no lore call)."""
         need_licence()
         if not LoreClient.configured():
             return {"configured": False, "repos": []}
@@ -319,6 +326,7 @@ def register_routes(app, host) -> None:
                     if row["repo_source_id"]:
                         await forget_in_lore(repo, row["repo_source_id"])
                     store.delete_brain_repo(repo)
+                    await repo_decisions.forget_repo(repo)   # its decision folder files leave the brain too (TR-1453)
                     decisions.wake()   # the docs of projects linked only to it go now
             remove_errors.pop(repo, None)
             return None
