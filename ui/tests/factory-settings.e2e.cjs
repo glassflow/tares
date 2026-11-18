@@ -162,7 +162,8 @@ const until = async (fn, tries = 40) => {
         for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
           const n = await newPage(w, { dark });
           await integ(n.page, "github");
-          await n.page.getByText("example-org").first().waitFor();
+          // the panel's own account line: the rails repeat the name, and the wide one is hidden below 900px
+          await n.page.getByTestId("github-who").filter({ hasText: "example-org" }).first().waitFor();
           await shot(n.page, `github-${tag}-${w}${dark ? "-dark" : ""}.png`);
           await n.ctx.close();
         }
