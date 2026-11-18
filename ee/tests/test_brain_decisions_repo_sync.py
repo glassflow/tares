@@ -389,7 +389,7 @@ async def main():
            and "docs/adr/a001.md" in docs() and fresh.count("acme/web", ["docs/adr"]) == 1,
            f"{sorted(docs())} {fresh.count('acme/web', ['docs/adr'])}")
 
-        print("== a delete that arrives while start-up is still reading lore is not put back by it ==")
+        print("== a delete that arrives while start-up is still reading lore ends deleted, never put back ==")
         gate = asyncio.Event()
 
         def slow_client():
@@ -408,11 +408,11 @@ async def main():
         dels = len(lore.calls("DELETE", "delete_document"))
         late.on_push("acme/web", {"docs/adr/a001.md"})
         await asyncio.sleep(0.1)
-        ck("the push waits for the list: nothing was deleted yet", "docs/adr/a001.md" in docs()
+        ck("while lore's list is held back, nothing is deleted yet", "docs/adr/a001.md" in docs()
            and len(lore.calls("DELETE", "delete_document")) == dels, str(len(lore.calls("DELETE", "delete_document")) - dels))
         gate.set()
         await late.wait()
-        ck("then the document is deleted, and what the list said is not put back", "docs/adr/a001.md" not in docs()
+        ck("once the list arrives the document is deleted and the count is 0 (start-up's own pass settles it)", "docs/adr/a001.md" not in docs()
            and late.count("acme/web", ["docs/adr"]) == 0, f"{sorted(docs())} {late.count('acme/web', ['docs/adr'])}")
 
         print("== before the licence and without a brain, a push does nothing ==")
