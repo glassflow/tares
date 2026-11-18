@@ -1902,6 +1902,73 @@ async def main():
         ck("and then the first is brought up to date",
            updated(repo) == [1] and row(repo, 1)["state"] == "waiting_ci", (UPDATES, row(repo, 1)))
 
+        print("== the holder of the turn falls behind again, and a row that asks relabels the turn ==")
+        repo = "acme/turn-twice"
+        up = project("turntwice", "L4-ship", review="fakerev", ci="github")
+        twice = {n: ticket(up, repo, f"Twice {n}", n, position=n) for n in (1, 2)}
+        first = factory_mod.label(store.get_ticket(up, twice[1]))
+        for n in twice:
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        CHECKED.add(land(repo, 1))
+        await tick()
+        ck("the first is queued on its updated head and keeps the turn",
+           row(repo, 1)["state"] == "queued" and updated(repo) == [1]
+           and row(repo, 2)["reason"].startswith(f"waits its turn: {first} "), (UPDATES, row(repo, 1), row(repo, 2)))
+        BEHIND[(repo, 1)] = 2          # the base moved again before it merged
+        FILES[(repo, 1)] = [fl("a.py", BEFORE)]
+        await tick()
+        ck("the holder is behind a second time: it is brought up to date again, not made to wait for itself",
+           updated(repo) == [1, 1] and row(repo, 1)["state"] == "waiting_ci"
+           and not str(row(repo, 1)["reason"] or "").startswith("waits its turn: "), (UPDATES, row(repo, 1)))
+        ck("and the second row still waits its turn",
+           updated(repo) == [1, 1] and row(repo, 2)["state"] == "queued"
+           and row(repo, 2)["reason"] == f"waits its turn: {first} is being brought up to date", row(repo, 2))
+
+        repo = "acme/turn-relabel"
+        up = project("turnrelabel", "L3-review", review="fakerev", ci="github")
+        rel = {n: ticket(up, repo, f"Relabel {n}", n, position=n) for n in (1, 2)}
+        first = factory_mod.label(store.get_ticket(up, rel[1]))
+        for n in rel:
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        CHECKED.add(land(repo, 1))
+        await tick()
+        ck("the updated first row is queued, about to merge, and asks nothing yet",
+           row(repo, 1)["state"] == "queued" and not desk(up), (row(repo, 1), desk(up)))
+        await tick()
+        ck("the tick that asks the person already says the turn waits for approval",
+           row(repo, 1)["state"] == "waiting_approval" and len(desk(up)) == 1
+           and row(repo, 2)["reason"] == f"waits its turn: {first} is waiting for approval to merge",
+           (row(repo, 1), row(repo, 2), desk(up)))
+
+        repo = "acme/turn-ask-free"
+        up = project("turnaskfree", "L3-review", review="fakerev", ci="github")
+        free = {n: ticket(up, repo, f"Ask free {n}", n, position=n) for n in (1, 2)}
+        first = factory_mod.label(store.get_ticket(up, free[1]))
+        behind(repo, 2, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        ck("nobody holds the turn and the first row asks: it takes the turn, so the behind row waits",
+           row(repo, 1)["state"] == "waiting_approval" and updated(repo) == []
+           and row(repo, 2)["reason"] == f"waits its turn: {first} is waiting for approval to merge",
+           (UPDATES, row(repo, 1), row(repo, 2)))
+
+        repo = "acme/turn-ask-held"
+        up = project("turnaskheld", "L3-review", review="fakerev", ci="github")
+        held = {n: ticket(up, repo, f"Ask held {n}", n, position=n) for n in (1, 2, 3)}
+        first = factory_mod.label(store.get_ticket(up, held[1]))
+        for n in (1, 3):
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        ck("another row asks while the first holds the turn: the turn stays the first's",
+           row(repo, 1)["state"] == "waiting_ci" and row(repo, 2)["state"] == "waiting_approval"
+           and row(repo, 3)["reason"] == f"waits its turn: {first} is being brought up to date",
+           (row(repo, 1), row(repo, 2), row(repo, 3)))
+
         print("== health, and what Tares says ==")
         async with mk() as cx:
             h = (await cx.get("/health")).json()
