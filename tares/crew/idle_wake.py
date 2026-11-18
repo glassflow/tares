@@ -38,6 +38,7 @@ from .paths import CrewPaths
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
 STALL_AFTER = 45 * 60   # seconds a held ticket may go without news before the orchestrator is told
 DESK_ASK_EVERY = 3600   # seconds an open desk item waits before the orchestrator is told to ask again
+KEYS_SHOWN = 5
 DEFAULT_SETTLE = 600   # seconds a session may be active after a wake before the clock restarts (FACTORY_WAKE_SETTLE)
 
 _RELEASE = re.compile(r"(^|[^A-Za-z])RELEASE([^A-Za-z]|$)")
@@ -370,7 +371,19 @@ def work_prompt(role: str, items: str) -> str:
     if role == "releaser":
         return (f"A RELEASE is waiting for you in the orchestrator's report under Undelivered: {items}. Take it "
                 "as your manual says.")
-    return f"Something is waiting for you: {items}. Follow the Tick section of your manual."
+    return f"Something is waiting for you: {items}. Run the whole Tick section of your manual, not only that."
+
+
+def woke_on(keys: list) -> str:
+    """The keys that woke a station, in one short line."""
+    shown = ", ".join(keys[:KEYS_SHOWN])
+    more = f" and {len(keys) - KEYS_SHOWN} more" if len(keys) > KEYS_SHOWN else ""
+    return f"Woke on: {shown}{more}."
+
+
+def liveness_prompt(role: str) -> str:
+    what = ("run the whole Tick section of your manual" if role == "orchestrator" else "check your queue")
+    return f"Liveness check, nothing is known to be pending: {what} once, then end the turn."
 
 
 # ---------- deciding and waking ----------
@@ -460,15 +473,14 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
     if new:
         texts = "; ".join(p["text"] for p in new)
         out.update(work=True, n=0, reason=f"work: {texts}",
-                   prompt=f"{work_prompt(role, texts)} {note} Carry on from your report.")
+                   prompt=f"{work_prompt(role, texts)} {woke_on([p['key'] for p in new])} {note} Carry on from your report.")
     elif scan["live"] and w["released"] is not True:
         # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
         out.update(n=0, reason="release: idle_wake was switched on, telling the station to drop its tick",
                    prompt=f"idle_wake was switched on. {note} Carry on from your report.")
     elif due:
         out.update(n=n + 1, reason=f"liveness: wake {n + 1} with nothing pending",
-                   prompt=("Liveness check, nothing is known to be pending: check your queue once, then end the "
-                           f"turn. {note} Carry on from your report."))
+                   prompt=f"{liveness_prompt(role)} {note} Carry on from your report.")
     else:
         return None
     return out

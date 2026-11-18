@@ -82,6 +82,7 @@ test_crew_wake_console
 test_crew_wake_desk
 test_crew_wake_midturn
 test_crew_wake_mywork
+test_crew_wake_prompt
 test_crew_wake_stall
 test_crew_watch_locks
 test_crew_watch_process
