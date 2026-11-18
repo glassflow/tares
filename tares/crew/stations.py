@@ -268,6 +268,27 @@ def cmd_settings(argv: list, env: dict) -> int:
 LAUNCH_PLAN_USAGE = 'usage: launch-plan <station> <role> <parent> <project> <repo>  ("" or - for no parent, project or repo)'
 
 
+# The entries of a launch plan `launch-plan` prints. Anything else (telemetry values, MCP server configs, an entry a
+# later release adds) is left out: the list names what is safe to show, so a new or unreadable entry hides.
+PLAN_SHOWN = ("args", "env", "settings")
+
+
+def plan_shown(plan) -> dict:
+    """The part of a launch plan that is printed: only the entries in PLAN_SHOWN, and only a value that is plain JSON.
+    A plan that is not a dict, or an entry that cannot be written as JSON (with a line on stderr), is hidden, never shown as it is."""
+    out = {}
+    for key in PLAN_SHOWN:
+        if not isinstance(plan, dict) or key not in plan:
+            continue
+        try:
+            json.dumps(plan[key], ensure_ascii=False)
+        except (TypeError, ValueError):
+            print(f"launch-plan: {key} hidden (it is not JSON)", file=sys.stderr)
+            continue
+        out[key] = plan[key]
+    return out
+
+
 def launch_plan(client: TaresClient, paths: CrewPaths, argv: list) -> str:
     """The text `tares factory launch-plan` prints: what a station would start with, as JSON
     ({args, env, settings}), the cell's launch spec with this machine's placeholders filled
@@ -281,8 +302,7 @@ def launch_plan(client: TaresClient, paths: CrewPaths, argv: list) -> str:
     if parent:
         parent = station_name(parent, paths)
     plan = launch.launch_plan(client, station, argv[1], parent, project, repo)
-    shown = {k: v for k, v in plan.items() if k not in ("otel", "otel_file", "mcp")}   # telemetry values and server configs are never printed
-    return json.dumps(shown, indent=2, ensure_ascii=False) + "\n"
+    return json.dumps(plan_shown(plan), indent=2, ensure_ascii=False) + "\n"
 
 
 def cmd_launch_plan(argv: list, env: dict) -> int:

@@ -42,10 +42,15 @@ const ck = (label, cond, detail = "") => {
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
 };
 
-async function waitFor(url, tries = 100) {
+const exited = (d) => d.exitCode !== null || d.signalCode !== null;
+
+// Ready is the daemon we started answering. One that has already exited never is, and an answer from
+// anything else on the port (the last section's daemon, still going down) must not count.
+async function waitFor(url, daemon, tries = 100) {
   for (; tries > 0; tries--) {
+    if (exited(daemon)) return false;
     const ok = await new Promise((res) => http.get(url, (r) => { r.resume(); res(true); }).on("error", () => res(false)));
-    if (ok) return true;
+    if (ok && !exited(daemon)) return true;
     await new Promise((r) => setTimeout(r, 200));
   }
   return false;
@@ -59,6 +64,19 @@ const waitGone = async (url, tries = 50) => {
   }
   return false;
 };
+
+// Every section's daemon uses the same port, so the next one may start only once this one has exited.
+// A daemon that has not exited after 30 s is killed.
+async function stopDaemon(daemon, url) {
+  if (!exited(daemon)) {
+    const done = new Promise((res) => daemon.once("exit", res));
+    daemon.kill();
+    const hung = setTimeout(() => daemon.kill("SIGKILL"), 30000);
+    await done;
+    clearTimeout(hung);
+  }
+  return waitGone(url);
+}
 
 // The daemon's environment: the real one minus every key that could reach a model, Slack or another cell.
 function cleanEnv(home, dist) {
@@ -131,7 +149,7 @@ function cleanEnv(home, dist) {
     execFileSync(python, [path.join(__dirname, "seed-sre-home.py"), home, state], { cwd: REPO, encoding: "utf8", env: { ...process.env, PYTHONPATH: REPO } });
     const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env: cleanEnv(home, dist) });
     try {
-      ck(`${state}: daemon up`, await waitFor(`${BASE}/health`));
+      ck(`${state}: daemon up`, await waitFor(`${BASE}/health`, daemon));
       const { ctx, page } = await newPage(1440);
       const puts = [], posts = [];
       page.on("request", (r) => {
@@ -292,8 +310,7 @@ function cleanEnv(home, dist) {
       await ctx.close();
 
     } finally {
-      daemon.kill();
-      await waitGone(`${BASE}/health`);
+      await stopDaemon(daemon, `${BASE}/health`);
       fs.rmSync(home, { recursive: true, force: true });
     }
   }
@@ -306,7 +323,7 @@ function cleanEnv(home, dist) {
     const root = "e2e-root-token";
     const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env: { ...cleanEnv(home, dist), TARES_AUTH_TOKEN: root } });
     try {
-      ck("read key: daemon up", await waitFor(`${BASE}/health`));
+      ck("read key: daemon up", await waitFor(`${BASE}/health`, daemon));
       const made = async (name, scopes) => (await (await fetch(`${BASE}/api/keys`, {
         method: "POST", headers: { Authorization: `Bearer ${root}`, "Content-Type": "application/json" }, body: JSON.stringify({ name, scopes }),
       })).json()).secret;
@@ -339,8 +356,7 @@ function cleanEnv(home, dist) {
       ck("a refused click names the key and does not say try again", /late-viewer/.test(refused) && /can only read/.test(refused) && !/try again/i.test(refused), refused);
       await lp.ctx.close();
     } finally {
-      daemon.kill();
-      await waitGone(`${BASE}/health`);
+      await stopDaemon(daemon, `${BASE}/health`);
       fs.rmSync(home, { recursive: true, force: true });
     }
   }
@@ -353,7 +369,7 @@ function cleanEnv(home, dist) {
     const root = "e2e-root-token";
     const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env: { ...cleanEnv(home, dist), TARES_AUTH_TOKEN: root } });
     try {
-      ck("read key, new cell: daemon up", await waitFor(`${BASE}/health`));
+      ck("read key, new cell: daemon up", await waitFor(`${BASE}/health`, daemon));
       const made = async (name, scopes) => (await (await fetch(`${BASE}/api/keys`, {
         method: "POST", headers: { Authorization: `Bearer ${root}`, "Content-Type": "application/json" }, body: JSON.stringify({ name, scopes }),
       })).json()).secret;
@@ -378,8 +394,7 @@ function cleanEnv(home, dist) {
       ck("admin key, new cell: a start button can be clicked", (await ops.page.getByTestId("start-do").evaluateAll((els) => els.some((e) => !e.disabled))));
       await ops.ctx.close();
     } finally {
-      daemon.kill();
-      await waitGone(`${BASE}/health`);
+      await stopDaemon(daemon, `${BASE}/health`);
       fs.rmSync(home, { recursive: true, force: true });
     }
   }
@@ -390,7 +405,7 @@ function cleanEnv(home, dist) {
   execFileSync(python, [path.join(__dirname, "seed-sre-home.py"), home, "new-cell"], { cwd: REPO, encoding: "utf8", env: { ...process.env, PYTHONPATH: REPO } });
   const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env: cleanEnv(home, dist) });
   try {
-    ck("sample: daemon up", await waitFor(`${BASE}/health`));
+    ck("sample: daemon up", await waitFor(`${BASE}/health`, daemon));
     const open = async (name, width) => {
       const { ctx, page } = await newPage(width, true);
       await page.goto(`${BASE}/?sample=${name}`, { waitUntil: "load" });
@@ -481,7 +496,7 @@ function cleanEnv(home, dist) {
       await plain.close();
     }
   } finally {
-    daemon.kill();
+    await stopDaemon(daemon, `${BASE}/health`);
     fs.rmSync(home, { recursive: true, force: true });
     await browser.close();
   }
