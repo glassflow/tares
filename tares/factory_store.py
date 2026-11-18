@@ -1801,6 +1801,16 @@ class FactoryStore:
                     "INSERT INTO waiting_told (person_id, item, told_at, sent) VALUES (?, ?, ?, ?) "
                     "ON CONFLICT DO NOTHING", [person_id, item, at, sent])
 
+    def forget_waiting_told(self, person_id: str, items: list[str]) -> None:
+        """Undo mark_waiting_told for `items` whose message Slack refused for now (busy, down): the
+        next read finds them new and sends them. A row that already names its message stays."""
+        if not items:
+            return
+        with self._swrite:
+            for item in dict.fromkeys(items):
+                self.sc.execute("DELETE FROM waiting_told WHERE person_id = ? AND item = ? AND ts IS NULL",
+                                [person_id, item])
+
     def set_told_message(self, person_id: str, items: list[tuple[str, str]], channel: str, ts: str) -> None:
         """The Slack message (`channel`, `ts`) that told `person_id` about `items`, each (id, ask) in
         the order the message shows them (TR-1460), so an answer can edit it later, after a restart too."""

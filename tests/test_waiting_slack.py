@@ -67,12 +67,17 @@ class FakeSlack:
         self.users = {"alex@example.com": "U_ALEX", "kim@example.com": "U_KIM"}
         self.lookups = 0
         self.error: str | None = None
+        self.send_error: tuple[str, bool] | None = None
+        self.refused: list[dict] = []
 
     async def send(self, token, msg):
+        if self.send_error:
+            self.refused.append(msg)
+            return None, self.send_error[0], self.send_error[1]
         self.sent.append(msg)
         self.n += 1
         msg["ts"] = f"{self.n}.0001"
-        return {"channel": "D" + msg["channel"], "ts": msg["ts"]}, None
+        return {"channel": "D" + msg["channel"], "ts": msg["ts"]}, None, False
 
     async def update(self, token, msg):
         if self.update_error:
@@ -300,6 +305,30 @@ async def main():
     slack.update_error = None
     await read()
     ck("a refusal that will not change is not tried every minute", slack.edits() == [])
+
+    print("== a message Slack refuses for a while is sent on the next read ==")
+    busy = ask("Ship it while Slack is busy?", to=alex["id"])
+    slack.send_error = ("slack: ratelimited", True)
+    await read()
+    ck("refused: it was tried, nothing went", len(slack.refused) == 1 and slack.take() == [], slack.refused)
+    slack.send_error = None
+    await read()
+    got = slack.take()
+    ck("the next read sends it", len(got) == 1 and "Ship it while Slack is busy?" in str(got), got)
+    await read()
+    ck("and only once", slack.take() == [])
+    gone = ask("Ship it to a closed channel?", to=alex["id"])
+    slack.refused = []
+    slack.send_error = ("slack: channel_not_found", False)
+    await read()
+    slack.send_error = None
+    await read()
+    ck("a refusal that will not change is not tried every minute",
+       len(slack.refused) == 1 and slack.take() == [], slack.refused)
+    for d in (busy, gone):      # off Alex's list again, for the checks below
+        store.close_desk_item(d["id"], "dismissed", None, now_utc())
+    await read()
+    slack.edits()
 
     print("== an email Slack does not know ==")
     del slack.users["kim@example.com"]

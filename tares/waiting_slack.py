@@ -177,11 +177,11 @@ class WaitingSlack:
         ok, error, retry = slack_mod.classify(r.status_code, data)
         return (data, None, False) if ok else (None, error, retry)
 
-    async def _post(self, token: str, msg: dict) -> tuple[dict | None, str | None]:
-        """Send a message: ({channel, ts} of the message Slack made, None) or (None, error). A message
-        to a user id lands in the bot's DM with them, whose channel id is what an edit names."""
-        data, err, _retry = await self._call("chat.postMessage", token, msg)
-        return ({"channel": data.get("channel"), "ts": data.get("ts")} if data else None), err
+    async def _post(self, token: str, msg: dict) -> tuple[dict | None, str | None, bool]:
+        """Send a message: ({channel, ts} of the message Slack made, None, False) or (None, error, retry).
+        A message to a user id lands in the bot's DM with them, whose channel id is what an edit names."""
+        data, err, retry = await self._call("chat.postMessage", token, msg)
+        return ({"channel": data.get("channel"), "ts": data.get("ts")} if data else None), err, retry
 
     async def _post_update(self, token: str, msg: dict) -> tuple[bool, str | None, bool]:
         """Edit a message (`msg` names its channel and ts): (ok, error, retry)."""
@@ -287,16 +287,21 @@ class WaitingSlack:
             batches = [(new, list_message(user, rows, feed_link()))]
         else:
             batches = [([i], message(user, i, feed_link(i["id"]))) for i in new]
-        sent = 0
+        sent, again = 0, []
         for its, msg in batches:
-            ref, err = await self._send(token, msg)
+            ref, err, retry = await self._send(token, msg)
             if not ref:
                 self._log_once(f"send:{err}", f"could not message {pid} about {its[0]['id']}: {err}")
+                if retry:
+                    # Slack was busy or down: the items are new again for the next read
+                    again += [i["id"] for i in its]
                 continue
             sent += 1
             if ref.get("channel") and ref.get("ts"):
                 await asyncio.to_thread(self.store.set_told_message, pid, [(i["id"], _ask(i)) for i in its],
                                         ref["channel"], ref["ts"])
+        if again:
+            await asyncio.to_thread(self.store.forget_waiting_told, pid, again)
         return sent, None
 
     async def _close_gone(self, token: str, pid: str, waiting: set[str]) -> None:
