@@ -261,5 +261,49 @@ ck("a plugin whose name only starts with slack is not Slack", launch.slack_deny(
 both = launch.with_restrictions({"permissions": {"deny": [SP + "slack_send_message"]}}, {"permissions": {"deny": ["Bash(rm:*)"]}})
 ck("the person's own deny rules stay beside the Slack ones", both["permissions"]["deny"][0] == SP + "slack_send_message" and "Bash(rm:*)" in both["permissions"]["deny"])
 
+print("Slack fails closed: only the read tools of any Slack server run")
+import importlib.util  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("crew_guard", ROOT / "claude-plugin" / "hooks" / "guard.py")
+G = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(G)
+_GUARD = ROOT / "claude-plugin" / "hooks" / "guard.py"
+
+
+def hook(tool, role="orchestrator"):
+    """'deny' or 'allow' as the guard hook decides, started as Claude Code starts it: the payload on stdin."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("FACTORY_", "TARES_"))}
+    if role:
+        env.update(FACTORY_ROLE=role, FACTORY_HOME=str(SCRATCH / "nohome"), FACTORY_STATION="proj-orch")
+    r = subprocess.run([sys.executable, str(_GUARD)], input=json.dumps({"tool_name": tool, "tool_input": {}}).encode("utf-8"),
+                       capture_output=True, env=env)
+    return "deny" if b'"deny"' in r.stdout else "allow"
+
+
+FAKE = "mcp__slack-mcp__"
+ck("a third-party Slack server's write tool is denied", hook(FAKE + "conversations_add_message") == "deny")
+ck("its read tools are allowed", all(hook(FAKE + t) == "allow" for t in ("conversations_history", "conversations_replies", "conversations_search_messages", "channels_list")))
+ck("an unknown verb on the official server is denied", all(hook(SP + t) == "deny" for t in ("slack_frobnicate", "slack_zap_channel", "slack_do_thing", "slack_lock_channel")))
+ck("the official server's read tools are allowed", all(hook(SP + t) == "allow" for t in READS))
+ck("the official server's write tools are denied", all(hook(SP + t) == "deny" for t in WRITES))
+ck("a verb the deny rules list is denied here too", all(hook(SP + f"slack_{v}_x") == "deny" for v in launch.SLACK_WRITE_VERBS))
+ck("a tool with a read name but another prefix is denied", hook(SP + "read_channel") == "deny" and hook(SP + "get_reactions") == "deny" and hook(SP + "slack_read_channel_x") == "deny")
+ck("a server name in another case is still Slack", hook("mcp__Slack__conversations_add_message") == "deny" and hook("mcp__SLACK__conversations_history") == "allow")
+ck("a plugin's Slack server named inside a longer name is still Slack", hook("mcp__plugin_acme_slack-bridge__post_it") == "deny" and hook("mcp__my_slack_tools__channels_list") == "allow")
+ck("a `__` inside a server name does not hide it", hook("mcp__team__slack__conversations_add_message") == "deny" and hook("mcp__team__slack__conversations_history") == "allow")
+ck("a Slack server with no tool name is denied", hook("mcp__slack") == "deny")
+ck("a server that is not Slack is left alone, whatever its tools are named", all(hook(t) == "allow" for t in (
+    "mcp__linear__get_issue", "mcp__github__create_pull_request", "mcp__linear__create_slack_link", "mcp__plugin_tares_tares__set_stage",
+    "Bash", "Read", "x_mcp__slack__conversations_add_message")))
+ck("a session with no FACTORY_ROLE is never touched", hook(FAKE + "conversations_add_message", role="") == "allow")
+ck("every role is held to it", all(hook(FAKE + "conversations_add_message", role=r) == "deny" for r in ("orchestrator", "reviewer", "releaser", "builder", "helper")))
+ck("the read list holds no tool the write rules name", not G.SLACK_READ_TOOLS & set(WRITES) and not any(
+    t.split("slack_", 1)[-1].startswith(v) for t in G.SLACK_READ_TOOLS for v in launch.SLACK_WRITE_VERBS))
+ck("the read list holds every read tool the plugin tests name", set(READS) <= G.SLACK_READ_TOOLS)
+ck("the read list holds reads only", all(t.split("_", 1)[-1].startswith(("read", "search", "list", "get", "history", "replies")) for t in G.SLACK_READ_TOOLS), sorted(G.SLACK_READ_TOOLS))
+_r = subprocess.run([sys.executable, str(_GUARD)], input=json.dumps({"tool_name": FAKE + "conversations_add_message"}).encode("utf-8"), capture_output=True,
+                    env={**{k: v for k, v in os.environ.items() if not k.startswith(("FACTORY_", "TARES_"))}, "FACTORY_ROLE": "builder"})
+ck("the refusal says why and exits 0, so Claude Code reads it", _r.returncode == 0 and b"never write it" in _r.stdout and b'"permissionDecision": "deny"' in _r.stdout, _r.stdout[:200])
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
