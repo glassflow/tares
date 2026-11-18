@@ -9,6 +9,8 @@ A row of the `merge_queue` table is one pull request. Its states:
                     dependencies are merged (and, at L3-review, once it is approved)
 - waiting_ci        Tares updated the pull request's branch to the base (CI integration `github`)
                     and the row waits for checks on the new commit
+                    One row per (repo, base) is in this state at a time: a ready row that is
+                    behind waits queued ("waits its turn") until it merges or leaves
 - waiting_approval  L3-review: a desk item asks the person; nothing merges until a yes
 - merging           claimed by a tick, the merge call in flight (one per repo and base)
 - merged            GitHub shows it merged (by Tares or by anyone)
@@ -688,13 +690,18 @@ async def _merge_moved(store, row: dict, message: str) -> None:
 
 
 UPDATING = "bringing the branch up to date"
+WAITS = "waits its turn: "
 
 
-async def _branch_ok(store, row: dict, t: dict, ans: dict) -> bool:
+async def _branch_ok(store, row: dict, t: dict, ans: dict, turn: dict) -> bool:
     """Whether the queued row may go on to its approval and its claim. False when it waits (GitHub
     has not said whether it merges, or Tares is bringing the branch up to date) or ended (it
     conflicts). A branch that is only behind is updated for a project whose CI is `github` (the
-    checks then run on the new commit); with any other CI it merges as it is."""
+    checks then run on the new commit); with any other CI it merges as it is. Per (repo, base)
+    one row is brought up to date at a time (`turn["by"]` names it, and the row keeps the turn
+    while it is `waiting_ci` for its checks and, at L3-review, `waiting_approval` for the person's
+    yes): the first to merge moves the base and every other run would be thrown away, so a behind
+    row keeps its place and waits."""
     brief = ans.get("pr") or {}
     mergeable = brief.get("mergeable")
     if mergeable is None:
@@ -720,11 +727,16 @@ async def _branch_ok(store, row: dict, t: dict, ans: dict) -> bool:
         return False
     if not cmp["behind_by"]:
         return True
+    if turn.get("by"):
+        what = "is waiting for approval to merge" if turn.get("asking") else "is being brought up to date"
+        await asyncio.to_thread(_set, store, row, "queued", f"{WAITS}{turn['by']} {what}")
+        return False
     saved = json.dumps({"head": row["head"], "files": _slim(cmp["files"])})
     await asyncio.to_thread(store.merge_queue_update, row["id"], before_files=saved)
     up = await factory_github.update_branch(store, row["repo"], int(row["pr"]), row["head"])
     if up["ok"]:
         await asyncio.to_thread(_set, store, row, "waiting_ci", UPDATING, before_files=saved)
+        turn["by"] = factory_mod.label(t)
         return False
     await asyncio.to_thread(_set, store, row, "queued", None, before_files=None)
     if up["conflict"]:
@@ -751,7 +763,8 @@ async def _after_update(store, row: dict, t: dict, ans: dict | None) -> None:
     pr = await factory_github.read_pr(store, row["repo"], int(row["pr"]), t.get("pr"))
     if pr.get("error") or str(pr.get("head") or "") != head:
         return
-    if not pr.get("ci_checks") and ((ans or {}).get("ci") or {}).get("state") != "none":
+    ci_state = ((ans or {}).get("ci") or {}).get("state")
+    if ci_state == "pending" or (not pr.get("ci_checks") and ci_state != "none"):
         await asyncio.to_thread(_set, store, row, "waiting_ci",
                                 "Waiting for checks on the new commit")
         return
@@ -771,7 +784,9 @@ async def _after_update(store, row: dict, t: dict, ans: dict | None) -> None:
                     f"{before_head[:7]}; only the base moved", "", BY, [], {},
                     factory_mod.finding_kind, now_utc())
             await asyncio.to_thread(review)
-        await asyncio.to_thread(_set, store, row, "queued", None, head=head, before_files=None)
+        more = {"approved_head": head} if row.get("approved_head") == row["head"] else {}
+        await asyncio.to_thread(_set, store, row, "queued", None, head=head, before_files=None,
+                                **more)       # a yes for the reviewed commit stands for the same changes
         return
     await asyncio.to_thread(_withdraw, store, row, "the branch update changed the pull request")
     await asyncio.to_thread(store.add_ticket_history, row["ticket"], uid, "merge_queue",
@@ -788,6 +803,12 @@ async def _run_queue(store, g: dict, fresh: dict[str, dict]) -> None:
     for row in g["rows"]:
         groups.setdefault((row["repo"], row["base"]), []).append(row)
     for (repo, base), rows in groups.items():
+        turn: dict = {}         # the ticket whose branch is being brought up to date, if any
+        for row in sorted(rows, key=lambda r: _key(g, r)):
+            if row["state"] in ("waiting_ci", "waiting_approval") and g["by_id"].get(row["ticket"]):
+                if "by" not in turn:    # the first in line holds it; its merge moves the base
+                    turn.update(by=factory_mod.label(g["by_id"][row["ticket"]]),
+                                asking=row["state"] == "waiting_approval")
         for row in sorted(rows, key=lambda r: _key(g, r)):
             if row["state"] not in ("queued", "waiting_ci"):
                 continue
@@ -813,11 +834,13 @@ async def _run_queue(store, g: dict, fresh: dict[str, dict]) -> None:
                     await asyncio.to_thread(_set, store, row, "queued",
                                             "; ".join(ans.get("reasons") or []))
                     continue
-                if ans is not None and not await _branch_ok(store, row, t, ans):
+                if ans is not None and not await _branch_ok(store, row, t, ans, turn):
                     continue
                 level = g["level"].get(row["project_uid"], "L3-review")
                 if level != AUTO and row.get("approved_head") != row["head"]:
                     await asyncio.to_thread(_ask, store, row, t)
+                    if "by" not in turn:        # its merge, once the person says yes, moves the base
+                        turn.update(by=factory_mod.label(t), asking=True)
                     continue
                 if not await asyncio.to_thread(store.merge_queue_claim, row["id"],
                                                level != AUTO):
