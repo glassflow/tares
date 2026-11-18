@@ -593,8 +593,9 @@ def with_restrictions(settings: dict, person: dict) -> dict:
 
 TELEMETRY_FLAGS = ("CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
 _SECRET_NAME = re.compile(r"HEADERS|KEY|TOKEN|SECRET|AUTH|PASSWORD|CREDENTIAL", re.I)
-_USERINFO = re.compile(r"://[^/?#\s]*@|^[^/?#\s@=,]+(?::[^/?#\s@=,]*)?@[^\s/?#@]+")
-_PAIR_SPLIT = re.compile(r"[,&;?]")
+_USERINFO = re.compile(r"://[^/?#\s]*@")
+_BARE_USERINFO = re.compile(r"^[^/?#\s@=,]+(?::[^/?#\s@=,]*)?@[^\s/?#@]+")
+_PAIR_SPLIT = re.compile(r"[,&;?#]")
 
 
 def telemetry_env(person: dict, spec_env: dict) -> dict:
@@ -609,14 +610,19 @@ def telemetry_env(person: dict, spec_env: dict) -> dict:
 
 def holds_secret(name: str, value: str) -> bool:
     """Whether a telemetry variable may hold a secret: its name has headers, key, token, secret, auth, password or
-    credential in it, or its value has credentials in an address (`https://user:pw@host`, a bare `user:pw@host`),
-    or has a `name=value` pair, in a query string or a list such as OTEL_RESOURCE_ATTRIBUTES, whose name is one
-    of those (`?api_key=...`, `service.name=x,auth_token=...`). A percent-encoded pair name is read decoded."""
+    credential in it, or its value has credentials in an address (`https://user:pw@host`), or, in any piece of it
+    (split at `,` `&` `;` `?` `#`, so a query, a fragment or a list such as OTEL_RESOURCE_ATTRIBUTES), has
+    a `name=value` pair whose name is one of those words (`?api_key=...`, `#access_token=...`,
+    `auth_token=...`; a percent-encoded name is read decoded), or a bare `user:pw@host` or `user@host`, alone or
+    as a pair's value. A name that only contains one of those words, such as `author=`, is held too: it fails safe."""
     if _SECRET_NAME.search(name) or _USERINFO.search(value):
         return True
-    for pair in _PAIR_SPLIT.split(value):
-        key, eq, _ = pair.partition("=")
+    for piece in _PAIR_SPLIT.split(value):
+        piece = piece.strip()
+        key, eq, _ = piece.partition("=")
         if eq and _SECRET_NAME.search(unquote(key.strip())):
+            return True
+        if any(_BARE_USERINFO.search(token.strip()) for token in piece.split("=")):
             return True
     return False
 
