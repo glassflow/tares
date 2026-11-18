@@ -79,14 +79,40 @@ STATION_VERBS = _re(
 SLACK_SEND = _re(
     r"mcp__.*slack.*send.*|mcp__.*slack.*schedule.*|mcp__.*slack.*post.*|mcp__.*slack.*update.*message.*", re.S)
 
+# Slack stays read only whatever its server calls its tools: of an MCP server with slack in its name (the official
+# plugin is `mcp__plugin_slack_slack__<tool>`, a third-party one `mcp__<name>__<tool>`), only the tools listed here
+# run; a write tool, an unknown verb or a tool added later is refused. Claude Code has no per-tool allow list for a
+# server and its auto mode leaves a tool no rule names to a classifier, so the list is kept here, where a hook
+# decides in every permission mode. A read tool missing from it is refused until it is added.
+SLACK_READ_TOOLS = frozenset((
+    "slack_read_channel", "slack_read_thread", "slack_read_user_profile", "slack_read_file", "slack_read_canvas",
+    "slack_search_public", "slack_search_public_and_private", "slack_search_channels", "slack_search_users",
+    "slack_list_channel_members", "slack_get_reactions",
+    "conversations_history", "conversations_replies", "conversations_search_messages", "channels_list"))
+
 MESSAGE_PEOPLE = ("Crew stations don't message people. The person reads the crew in the orchestrator's session "
                   "and on Tares; send the orchestrator an ASK instead.")
+SLACK_READ_ONLY = ("Crew stations read Slack and never write it, and only the Slack read tools are open to them. "
+                   "This tool is not one of them; send the orchestrator an ASK instead.")
 HEAVY_REASON = ("Heavy command: run it through `tares factory heavy <timeout-seconds> <command...>` so only one runs "
                 "at a time with a hard timeout.")
 FINISH_REASON = ("Only the person marks a project done from their terminal. Ask them on the desk, record their "
                  "answer with desk_answer, then call finish_project.")
 REVIEW_REASON = ("Factory sessions share one GitHub account and GitHub refuses self-approval. The reviewer posts "
                  "a PR comment plus the factory/review commit status instead.")
+
+
+def slack_not_read(tool: str) -> bool:
+    """Whether the tool is one of an MCP server with slack in its name (any case) that is not on the read list.
+    A name with several `__` can be read more than one way (`mcp__a__b__c` is tool `b__c` of server `a`, or tool `c`
+    of server `a__b`), so every way it splits is tried and the tool is a read only if each Slack reading of it is."""
+    if not tool.startswith("mcp__"):
+        return False
+    rest = tool[5:]
+    cuts = [i for i in range(len(rest)) if rest.startswith("__", i)]
+    if not cuts:
+        return "slack" in rest.lower()
+    return any("slack" in rest[:i].lower() and rest[i + 2:] not in SLACK_READ_TOOLS for i in cuts)
 
 
 class Deny(Exception):
@@ -220,6 +246,8 @@ def decide(env, tool: str, cmd: str) -> None:
 
     if SLACK_SEND.fullmatch(tool):
         raise Deny(MESSAGE_PEOPLE)
+    if slack_not_read(tool):
+        raise Deny(SLACK_READ_ONLY)
     if tool != "Bash":
         return
     scan = blank_prose(cmd)
