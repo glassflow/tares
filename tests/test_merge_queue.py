@@ -106,6 +106,7 @@ PR_FILES = {}            # (repo, number) -> the pull request's files; missing a
 COMPARE_CODE = {}        # repo -> the status the compare answers with (default 200)
 RAILS = {}               # repo -> the guardrail decisions before a merge (default none)
 CI_NONE = set()          # repos whose CI source says "none"
+CI_PENDING = set()       # (repo, number) pairs whose CI is still running
 COMPARE_BODY = {}        # repo -> a body the compare answers 200 with instead of its own
 
 
@@ -259,6 +260,8 @@ class FakeCI(CISource):
             return CIState(state="failure", head=pr.head, failing=["test"])
         if pr.repo in CI_NONE:
             return CIState(state="none", head=pr.head)
+        if (pr.repo, pr.number) in CI_PENDING:
+            return CIState(state="pending", head=pr.head)
         return CIState(state="success", head=pr.head)
 
 
@@ -1687,6 +1690,140 @@ async def main():
             wk = (await cx.get("/api/crew/my-work")).json()
         ck("a ticket that has merged leaves the list", "lad3only" not in {b["project"] for b in wk["bouncing"]},
            [b["project"] for b in wk["bouncing"]])
+
+        print("== one branch is brought up to date at a time per (repo, base) ==")
+        repo = "acme/turn"
+        up = project("turn", "L4-ship", review="fakerev", ci="github")
+        tt = {n: ticket(up, repo, f"Turn {n}", n + 10, position=n) for n in (1, 2, 3)}
+        name = {n: factory_mod.label(store.get_ticket(up, tt[n])) for n in tt}
+        for n in tt:        # the pull requests are 11, 12 and 13: their heads are new to every check above
+            behind(repo, n + 10, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        other = "acme/turn-other"
+        upo = project("turnother", "L4-ship", review="fakerev", ci="github")
+        ticket(upo, other, "Other repo", 1)
+        behind(other, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+
+        def updated(r):
+            return [u[1] for u in UPDATES if u[0] == r]
+
+        await tick()
+        ck("three ready rows behind main: one update call for the first, in the queue's order",
+           updated(repo) == [11] and row(repo, 11)["state"] == "waiting_ci", (UPDATES, row(repo, 11)))
+        ck("the others keep their place and say whose turn it is",
+           all(row(repo, n + 10)["state"] == "queued"
+               and row(repo, n + 10)["reason"] == f"waits its turn: {name[1]} is being brought up to date"
+               for n in (2, 3)), [row(repo, n + 10) for n in (2, 3)])
+        ck("another repo has its own turn", updated(other) == [1] and row(other, 1)["state"] == "waiting_ci",
+           (UPDATES, row(other, 1)))
+        await tick()
+        await tick()
+        ck("while the first waits for its checks nothing else is updated",
+           updated(repo) == [11] and merged_calls(repo) == [], (UPDATES, merged_calls(repo)))
+        new = land(repo, 11, PENDING.pop((repo, 11)))
+        await tick()
+        ck("a new head with no check on it yet: still nobody else goes",
+           updated(repo) == [11] and row(repo, 12)["reason"].startswith("waits its turn: "), UPDATES)
+        CHECKED.add(new)
+        CI_PENDING.add((repo, 11))
+        await tick()
+        await tick()
+        ck("checks on the new head are still running: the first holds the turn, nobody else is updated",
+           row(repo, 11)["state"] == "waiting_ci" and updated(repo) == [11] and merged_calls(repo) == []
+           and row(repo, 12)["reason"].startswith("waits its turn: "), (row(repo, 11), UPDATES))
+        CI_PENDING.discard((repo, 11))
+        await tick()
+        ck("the checks finished: the first is queued on its new head, and the others still wait",
+           row(repo, 11)["state"] == "queued" and updated(repo) == [11] and merged_calls(repo) == [],
+           (row(repo, 11), UPDATES))
+        await tick()
+        ck("it merges, and the next one is brought up to date in that tick, the third waits for it",
+           [n for n, _ in merged_calls(repo)] == [11] and updated(repo) == [11, 12]
+           and row(repo, 12)["state"] == "waiting_ci"
+           and row(repo, 13)["reason"] == f"waits its turn: {name[2]} is being brought up to date",
+           (MERGES, UPDATES, row(repo, 13)))
+        PRS[(repo, 12)]["state"] = "closed"
+        store.update_ticket(tt[2], stage="doing")
+        await tick()
+        ck("when the one being updated leaves, the next goes", updated(repo) == [11, 12, 13]
+           and row(repo, 13)["state"] == "waiting_ci", (UPDATES, row(repo, 13)))
+        new = land(repo, 13, PENDING.pop((repo, 13)))
+        CHECKED.add(new)
+        await tick()
+        await tick()
+        ck("and it merges in its turn; nothing was updated twice",
+           [n for n, _ in merged_calls(repo)] == [11, 13] and updated(repo) == [11, 12, 13], (MERGES, UPDATES))
+
+        repo = "acme/turn-free"
+        up = project("turnfree", "L4-ship", review="fakerev", ci="github")
+        ticket(up, repo, "Behind", 1, position=1)
+        ticket(up, repo, "Not behind", 2, position=2)
+        ticket(up, repo, "Behind, then caught up", 3, position=3)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        behind(repo, 3, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        ck("a row that is not behind still merges while another is being brought up to date",
+           updated(repo) == [1] and [n for n, _ in merged_calls(repo)] == [2]
+           and row(repo, 1)["state"] == "waiting_ci", (UPDATES, MERGES))
+        ck("a behind row waits its turn",
+           row(repo, 3)["state"] == "queued" and row(repo, 3)["reason"].startswith("waits its turn: "),
+           row(repo, 3))
+        BEHIND[(repo, 3)] = 0       # the base moved back under it, or its author rebased: no longer behind
+        await tick()
+        ck("a row that waited its turn and is no longer behind merges without being updated, and keeps no stale reason",
+           [n for n, _ in merged_calls(repo)] == [2, 3] and updated(repo) == [1]
+           and not str(row(repo, 3)["reason"] or "").startswith("waits its turn: "), (MERGES, UPDATES, row(repo, 3)))
+
+        print("== L3-review: the turn lasts until the yes, and a yes survives the update ==")
+        repo = "acme/turn-l3"
+        up = project("turnl3", "L3-review", review="fakerev", ci="github")
+        l3 = {n: ticket(up, repo, f"L3 {n}", n, position=n) for n in (1, 2)}
+        first = factory_mod.label(store.get_ticket(up, l3[1]))
+        for n in l3:
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        land(repo, 1)
+        CHECKED.add(PRS[(repo, 1)]["head"])
+        await tick()
+        await tick()
+        await tick()
+        ck("the first row is up to date and asks the person",
+           row(repo, 1)["state"] == "waiting_approval" and len(desk(up)) == 1, (row(repo, 1), desk(up)))
+        ck("while it waits for the yes the next behind row is not updated, and says why",
+           updated(repo) == [1] and row(repo, 2)["state"] == "queued"
+           and row(repo, 2)["reason"] == f"waits its turn: {first} is waiting for approval to merge",
+           (UPDATES, row(repo, 2)))
+        answer(desk(up)[0], "Yes, merge")
+        await tick()
+        ck("the yes merges the first, and the next is brought up to date in that tick",
+           [n for n, _ in merged_calls(repo)] == [1] and updated(repo) == [1, 2]
+           and row(repo, 2)["state"] == "waiting_ci", (MERGES, UPDATES, row(repo, 2)))
+
+        repo = "acme/turn-l3b"
+        up = project("turnl3b", "L3-review", review="fakerev", ci="github")
+        ticket(up, repo, "Approved, then behind", 1, position=1)
+        del UPDATES[:], MERGES[:]
+        await tick()
+        await tick()
+        ck("a row that is up to date asks once", row(repo, 1)["state"] == "waiting_approval"
+           and len(desk(up)) == 1 and updated(repo) == [], (row(repo, 1), desk(up)))
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")     # the base moved meanwhile
+        answer(desk(up)[0], "Yes, merge")
+        await tick()
+        ck("the yes is for a commit that is now behind: the branch is brought up to date",
+           updated(repo) == [1] and row(repo, 1)["state"] == "waiting_ci", (UPDATES, row(repo, 1)))
+        old = sha(1)
+        new = land(repo, 1)
+        CHECKED.add(new)
+        await tick()
+        ck("the same changes keep the yes: the approval moves to the new head",
+           row(repo, 1)["state"] == "queued" and row(repo, 1)["approved_head"] == new != old, row(repo, 1))
+        await tick()
+        ck("it merges the new commit with no second question",
+           [(n, b["sha"]) for n, b in merged_calls(repo)] == [(1, new)]
+           and len(store.list_desk(None, up)) == 1, (MERGES, store.list_desk(None, up)))
 
         print("== health, and what Tares says ==")
         async with mk() as cx:
