@@ -3,7 +3,8 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Panel, Select, Skeleton, SkeletonRows, Toaster, useToast,
+  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, SkeletonRows, StatusLabel, STATUS_TONES,
+  Toaster, useToast,
 } from "../../components/edition";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { cn } from "../../lib/utils";
@@ -14,10 +15,13 @@ import {
   incidentAction, sreIncident, sreIncidents,
   type GroupState, type IncidentAction, type IncidentData, type IncidentItem, type IncidentsData, type WorthAction,
 } from "./Incidents.api";
-import { ageWords, clock, dateWords, durationWords, sentence, sinceWords, spanWords, stamp } from "./incidentTime";
+import { ageWords, clock, dateWords, durationWords, sinceWords, spanWords, stamp } from "../../lib/time";
 import {
   isIncidentSample, isListSample, sampleAct, sampleIncident, sampleIncidents, SAMPLE_ME, SAMPLE_NOW,
 } from "./sample/incidents";
+
+/** Sentence case: the cell writes "open 38 minutes, nobody on it" and the row starts a sentence. */
+const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Incidents (TR-751): the list of incidents by state (GET /api/sre/incidents) and one incident
 // (GET /api/sre/incidents/{id}). Each screen is one read, polled every 20 seconds while the tab is
@@ -40,9 +44,9 @@ function useMe(): string {
 
 const now = (sample: string | null) => (sample ? SAMPLE_NOW : Date.now());
 
-const H1 = "m-0! mb-1.5! text-[22px]! md:text-[28px]!";
+const H1 = "m-0 mb-1.5 text-[22px] md:text-[28px]";
 const SUB = "m-0 max-w-[640px] text-[15px] text-muted-foreground";
-const LINK_BTN = "cursor-pointer border-0! bg-transparent! p-0! text-[13px]! text-[color:var(--accent-deep)]! underline!";
+const LINK_BTN = "cursor-pointer border-0 bg-transparent p-0 text-[13px] text-foreground underline";
 
 // ── the list ─────────────────────────────────────────────────────────────────
 
@@ -192,17 +196,17 @@ export default function Incidents() {
               <TabsList aria-label="Incidents by state" className="h-auto w-auto max-w-full flex-wrap gap-0 border border-border bg-card">
                 {TAB_STATES.map((t) => (
                   <TabsTrigger key={t} value={t} data-testid={`tab-${t}`}
-                               className="border-r! border-r-border! px-3! max-sm:px-2! max-sm:text-[13px]! last:border-r-0! data-[state=active]:border-b-[color:var(--accent)]! data-[state=active]:hover:border-b-[color:var(--accent)]!">
+                               className="border-r border-r-border px-3 max-sm:px-2 max-sm:text-[13px] last:border-r-0 data-[state=active]:border-b-brand data-[state=active]:hover:border-b-brand">
                     {{ all: "All", open: "Open", on_it: "Someone on it", resolved: "Resolved" }[t]}
                     <b className="ml-1 font-mono text-xs font-medium" data-testid={`tab-count-${t}`}>{count(t)}</b>
                   </TabsTrigger>
                 ))}
               </TabsList>
             </Tabs>
-            <div className="border border-border bg-card px-3 [&>div]:flex! [&>div]:items-center [&>div]:gap-2 [&_label]:text-sm! [&_label]:font-normal! [&_label]:text-muted-foreground!">
+            <div className="border border-border bg-card px-3 [&>div]:flex [&>div]:items-center [&>div]:gap-2 [&_label]:text-sm [&_label]:font-normal [&_label]:text-muted-foreground">
               <Select label="Service" data-testid="service-filter" options={services} value={service || ALL_SERVICES}
                       onValueChange={(v) => setParam("service", v === ALL_SERVICES ? null : v)}
-                      className="h-9 min-w-[130px] border-0! bg-transparent! px-0! shadow-none!" />
+                      className="h-9 min-w-[130px] border-0 bg-transparent px-0 shadow-none" />
             </div>
           </div>
 
@@ -234,15 +238,13 @@ export default function Incidents() {
 
 // ── one incident ─────────────────────────────────────────────────────────────
 
-const GROUP_TAG: Record<GroupState, { label: string; cls: string }> = {
-  open: { label: "Open", cls: "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]" },
-  on_it: { label: "Someone on it", cls: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]" },
-  resolved: { label: "Resolved", cls: "border-[color:var(--ok)] bg-[var(--ok-soft)] text-[color:var(--ok)]" },
-  raised: { label: "Raised", cls: "border-border bg-transparent text-foreground" },
+/** The incident page's state word; its tone comes from STATUS_TONES.incident. */
+const GROUP_LABEL: Record<GroupState, string> = {
+  open: "Open", on_it: "Someone on it", resolved: "Resolved", raised: "Raised",
 };
 
 function Back() {
-  return <Link to="/incidents" data-testid="back" className="w-fit text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">&larr; Incidents</Link>;
+  return <Link to="/incidents" data-testid="back" className="w-fit text-[13px] text-muted-foreground no-underline hover:text-foreground">&larr; Incidents</Link>;
 }
 
 /** The status sentence under the title. */
@@ -303,7 +305,7 @@ function blocksOf(d: IncidentData): Block[] {
   return out.length > 0 ? out : parts;
 }
 
-const CLIP = 260;
+const CLIP = 260;          // the clipped height; the note body says max-h-[260px], keep them equal
 const CLIP_SLACK = 120;   // a note only a little over the cut is shown whole: a button should not hide two lines
 
 function Note({ d }: { d: IncidentData }) {
@@ -326,11 +328,11 @@ function Note({ d }: { d: IncidentData }) {
   return (
     <div className="grid gap-3">
       <Panel title="The note" data-testid="note" data-clipped={clipped || undefined}>
-        <div className="relative" style={clipped ? { maxHeight: CLIP, overflow: "hidden" } : undefined} data-testid="note-body">
+        <div className={cn("relative", clipped && "max-h-[260px] overflow-hidden")} data-testid="note-body">
           <div ref={inner} className="grid gap-3 text-[15px]" data-words-exempt>
             {blocks.map((b, i) => (
               <div key={i}>
-                {b.heading && <h4 className="m-0! mb-1.5! text-[14px]! font-bold!">{b.heading}</h4>}
+                {b.heading && <h4 className="m-0 mb-1.5 text-[14px] font-bold">{b.heading}</h4>}
                 {b.text.split(/\n\s*\n/).map((p, j) => <p key={j} className="m-0 mb-2 whitespace-pre-line last:mb-0">{p}</p>)}
               </div>
             ))}
@@ -359,7 +361,7 @@ function Evidence({ d }: { d: IncidentData }) {
   const hidden = rows.length - SHOWN_EVIDENCE;
   return (
     <section data-testid="evidence">
-      <h2 className="m-0! mb-2! text-[15px]!">What it read</h2>
+      <h2 className="m-0 mb-2 text-[15px]">What it read</h2>
       <div className="border border-border bg-card">
         {shown.map((e, i) => (
           <div key={`${e.at}-${i}`} className="min-w-0 border-t border-border px-[18px] py-3 text-sm [overflow-wrap:anywhere] first:border-t-0" data-testid="evidence-row">
@@ -382,7 +384,7 @@ function Evidence({ d }: { d: IncidentData }) {
 function SmallPanel({ title, children, ...props }: { title: string; children: React.ReactNode } & React.HTMLAttributes<HTMLElement>) {
   return (
     <section className="min-w-0 border border-border bg-card px-[18px] py-3.5 [overflow-wrap:anywhere]" {...props}>
-      <h3 className="m-0! text-[14px]!">{title}</h3>
+      <h3 className="m-0 text-[14px]">{title}</h3>
       {children}
     </section>
   );
@@ -461,19 +463,17 @@ function IncidentView({ id }: { id: string }) {
   }
   if (!d) {
     return frame(
-      <div className="grid gap-4" data-testid="incident-loading" role="status" aria-busy="true" aria-label="Loading">
+      <Loading className="grid gap-4" data-testid="incident-loading">
         <Skeleton width={220} height={14} />
         <Skeleton width="62%" height={28} />
         <Skeleton height={64} />
         <Skeleton height={180} />
-      </div>,
+      </Loading>,
     );
   }
 
   const at = now(sample);
   const opened = Date.parse(d.opened_at);
-  const tag = GROUP_TAG[d.state];
-  const mine = !!d.who && !!me && d.who.name === me;
   const can = (a: IncidentAction) => d.actions.includes(a);
   const slackUrl = d.slack?.url && /^https?:\/\//i.test(d.slack.url) ? d.slack.url : null;
   const worth = d.worth;
@@ -489,11 +489,11 @@ function IncidentView({ id }: { id: string }) {
     <>
       <header className="grid gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", tag.cls)} data-testid="incident-tag">{tag.label}</span>
+          <StatusLabel tone={STATUS_TONES.incident[d.state]} data-testid="incident-tag">{GROUP_LABEL[d.state]}</StatusLabel>
           <span className="border border-border bg-card px-2 py-0.5 text-xs" data-user-text data-testid="incident-service">{d.service}</span>
           {openedWords && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {openedWords}</span>}
         </div>
-        <h1 className="m-0! text-[22px]! [overflow-wrap:anywhere] md:text-[28px]!" data-words-exempt data-testid="incident-title">{d.title}</h1>
+        <h1 className="m-0 text-[22px] [overflow-wrap:anywhere] md:text-[28px]" data-words-exempt data-testid="incident-title">{d.title}</h1>
       </header>
 
       <section className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border border-border bg-card px-[18px] py-3.5" data-testid="status">

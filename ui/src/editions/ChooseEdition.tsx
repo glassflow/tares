@@ -2,7 +2,7 @@ import * as React from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { Banner, Button, Skeleton } from "../components/edition";
+import { Banner, Button, Collapse, Loading, Skeleton } from "../components/edition";
 import { cn } from "../lib/utils";
 import type { Edition } from "../types";
 import { useEdition } from "./edition";
@@ -24,15 +24,15 @@ const LEAD = "Pick what you want to use it for. You can change this later in Set
 
 // The console's own `button` rules are unlayered and beat plain utilities, so what they also set is
 // marked important.
-const CARD = "flex! w-full cursor-pointer flex-col items-start gap-1 border-border! bg-card! px-4! py-4! text-left text-foreground! font-normal! disabled:cursor-default disabled:opacity-60";
-const CARD_ON = "border-2! border-foreground! bg-[var(--accent-soft)]! px-[15px]! py-[15px]!";
+const CARD = "flex w-full cursor-pointer flex-col items-start gap-1 border-border bg-card px-4 py-4 text-left text-foreground font-normal disabled:cursor-default disabled:opacity-60";
+const CARD_ON = "border-2 border-foreground bg-brand-soft px-[15px] py-[15px]";
 
 function Frame({ lead, children }: { lead: string; children?: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-1 justify-center px-4 py-10 md:py-16">
       <main className="w-full max-w-[720px]" data-testid="choose-edition">
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[26px]!">{QUESTION}</h1>
-        <p className="m-0! mb-5! text-muted-foreground" data-testid="choose-lead">{lead}</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[26px]">{QUESTION}</h1>
+        <p className="m-0 mb-5 text-muted-foreground" data-testid="choose-lead">{lead}</p>
         {children}
       </main>
     </div>
@@ -72,10 +72,10 @@ export default function ChooseEdition() {
   if (edition === undefined) {
     return (
       <Frame lead="Checking">
-        <div role="status" aria-busy="true" aria-label="Loading" className="grid gap-3 md:grid-cols-2" data-testid="choose-loading">
+        <Loading className="grid gap-3 md:grid-cols-2" data-testid="choose-loading">
           <Skeleton height={84} />
           <Skeleton height={84} />
-        </div>
+        </Loading>
       </Frame>
     );
   }
@@ -84,7 +84,7 @@ export default function ChooseEdition() {
   if (!admin) {
     return (
       <Frame lead="An admin of this Tares chooses what it is for first.">
-        <p className="m-0! text-[13px] text-muted-foreground" data-testid="choose-wait">
+        <p className="m-0 text-[13px] text-muted-foreground" data-testid="choose-wait">
           Ask an admin to open this Tares and choose. You will see it here once they have.
         </p>
       </Frame>
@@ -126,22 +126,22 @@ export default function ChooseEdition() {
           <Radio key={c.id} choice={c} on={picked === c.id} disabled={saving} pick={() => setPicked(c.id)} onKey={onKey(i)} />
         ))}
       </div>
-      {stale && (
+      <Collapse>{stale && (
         <Banner
           tone="warn" className="mt-4" data-testid="choose-stale"
           action={<Button variant="secondary" onClick={() => window.location.reload()}>Reload</Button>}
         >
           <b>Your choice was saved.</b> The cell did not answer when we asked again. Reload to continue.
         </Banner>
-      )}
-      {failed && (
+      )}</Collapse>
+      <Collapse>{failed && (
         <Banner
           tone="error" className="mt-4" data-testid="choose-error"
           action={<Button variant="secondary" onClick={save}>Retry</Button>}
         >
           <b>Your choice was not saved.</b> The cell did not answer.
         </Banner>
-      )}
+      )}</Collapse>
       {!failed && !stale && (
         <div className="mt-5">
           <Button busy={saving} onClick={save} className="w-full sm:w-auto" data-testid="choose-continue">

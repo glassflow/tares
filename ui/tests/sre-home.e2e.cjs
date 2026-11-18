@@ -25,8 +25,9 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8861);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -128,6 +129,8 @@ function cleanEnv(home, dist) {
     await checkWords(page, ck, `${state} ${width}`);
     ck(`${state} ${width}: does not scroll sideways`, (await overflow(page)) <= 0, String(await overflow(page)));
     ck(`${state} ${width}: lists have no bullets or indent`, await bare(page));
+    const paper = await checkPaper(page, ck, `${state} ${width}`);
+    if (!/error|loading/.test(state)) ck(`${state} ${width}: the paper check saw sections`, paper.heads.length > 0, String(paper.heads.length));
   }
 
   const sections = async (page) => ({
@@ -194,6 +197,10 @@ function cleanEnv(home, dist) {
         }
       }
       if (state === "all-quiet") {
+        ck("all-quiet: with nothing open, the start checklist sits above the headline", await page.evaluate(() => {
+          const a = document.querySelector("[data-testid=start-checklist], [data-testid=start-hidden]"), b = document.querySelector("[data-testid=home-headline]");
+          return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        }));
         // Read the note (TR-894): it opens the incident the check was filed under, not the check
         // The link shows for a person who cannot answer (a read key): the same home, with can_answer off
         const ro = await ctx.newPage();
@@ -241,6 +248,13 @@ function cleanEnv(home, dist) {
           return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
         }));
         ck("one-incident: no Today panel missing, no watcher-off panel", (await page.getByTestId("watch-off").count()) === 0 && sec.today === 1);
+        // TR-1272: the incident first, setup below it
+        ck("one-incident: the incident comes before the start checklist", await page.evaluate(() => {
+          const a = document.querySelector("[data-testid=incident-card]"), b = document.querySelector("[data-testid=start-checklist], [data-testid=start-hidden]");
+          return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        }));
+        ck("one-incident: the chart draws the errors it counted, not a flat 0",
+           (await card.getByTestId("incident-chart").count()) === 1);
       }
       if (state === "many-incidents") {
         ck("many-incidents: the headline counts them", headline === "5 incidents open", headline);

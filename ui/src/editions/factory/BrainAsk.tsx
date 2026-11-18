@@ -4,7 +4,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Panel, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../components/edition";
 import { Input as TextInput } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { useBrainRead } from "../brainRead";
@@ -24,28 +24,27 @@ import {
 // Look deeper asks the question the answer belongs to (not what is typed in the box now) and replaces the answer.
 
 const MUTED = "m-0 text-[13px] text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
 
 // The answer is a few paragraphs: block markdown, no pictures (they would call out), links open in a new tab.
 // Code and tables scroll inside their block instead of widening the page.
 const MARKDOWN: Components = {
-  p: ({ children }) => <p className="m-0! mb-2.5! last:mb-0!">{children}</p>,
+  p: ({ children }) => <p className="m-0 mb-2.5 last:mb-0">{children}</p>,
   img: ({ alt }) => <>{alt}</>,
   a: ({ href, children }) => {
     const safe = safeHref(href);
-    return safe ? <a href={safe} target="_blank" rel="noreferrer noopener" className="underline!">{children}</a> : <>{children}</>;
+    return safe ? <a href={safe} target="_blank" rel="noreferrer noopener" className="underline">{children}</a> : <>{children}</>;
   },
   code: ({ children }) => <code className="bg-muted px-[5px] py-px font-mono text-[12.5px]">{children}</code>,
   pre: ({ children }) => (
-    <pre className="my-2! max-w-full overflow-x-auto border border-border bg-muted p-2.5 text-[12.5px] [&_code]:bg-transparent [&_code]:p-0">{children}</pre>
+    <pre className="my-2 max-w-full overflow-x-auto border border-border bg-muted p-2.5 text-[12.5px] [&_code]:bg-transparent [&_code]:p-0">{children}</pre>
   ),
-  ul: ({ children }) => <ul className="m-0! mb-2.5! list-disc! pl-5!">{children}</ul>,
-  ol: ({ children }) => <ol className="m-0! mb-2.5! list-decimal! pl-5!">{children}</ol>,
-  h1: ({ children }) => <p className="m-0! mb-2! text-base font-bold">{children}</p>,
-  h2: ({ children }) => <p className="m-0! mb-2! text-base font-bold">{children}</p>,
-  h3: ({ children }) => <p className="m-0! mb-2! text-[15px] font-semibold">{children}</p>,
-  h4: ({ children }) => <p className="m-0! mb-2! text-[15px] font-semibold">{children}</p>,
-  blockquote: ({ children }) => <blockquote className="m-0! mb-2.5! border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
+  ul: ({ children }) => <ul className="m-0 mb-2.5 list-disc pl-5">{children}</ul>,
+  ol: ({ children }) => <ol className="m-0 mb-2.5 list-decimal pl-5">{children}</ol>,
+  h1: ({ children }) => <p className="m-0 mb-2 text-base font-bold">{children}</p>,
+  h2: ({ children }) => <p className="m-0 mb-2 text-base font-bold">{children}</p>,
+  h3: ({ children }) => <p className="m-0 mb-2 text-[15px] font-semibold">{children}</p>,
+  h4: ({ children }) => <p className="m-0 mb-2 text-[15px] font-semibold">{children}</p>,
+  blockquote: ({ children }) => <blockquote className="m-0 mb-2.5 border-l border-border pl-3 text-muted-foreground">{children}</blockquote>,
   table: ({ children }) => <div className="my-2 max-w-full overflow-x-auto"><table className="border-collapse text-[13px]">{children}</table></div>,
   th: ({ children }) => <th className="border border-border px-2 py-1 text-left">{children}</th>,
   td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
@@ -55,10 +54,10 @@ function Head({ n, children }: { n?: number; children?: React.ReactNode }) {
   return (
     <div className="grid max-w-[900px] gap-5 md:gap-6" data-testid="brain-ask">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Ask</h1>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Ask</h1>
         {n === undefined
           ? <Skeleton width={320} height={12} className="max-w-full" />
-          : <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="brain-ask-subtitle">{subtitle(n)}</p>}
+          : <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="brain-ask-subtitle">{subtitle(n)}</p>}
       </div>
       {children}
     </div>
@@ -89,7 +88,7 @@ function Answer({ shown, onDeeper }: { shown: Shown; onDeeper: () => void }) {
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>{data.answer}</ReactMarkdown>
       </div>
       {cites.length > 0 && (
-        <ol aria-label="Where this came from" className="m-0! mt-3.5! flex list-none! flex-col gap-1.5 border-t border-dotted border-border p-0! pt-2.5! text-[13px]" data-testid="brain-ask-sources">
+        <ol aria-label="Where this came from" className="m-0 mt-3.5 flex list-none flex-col gap-1.5 border-t border-dotted border-border p-0 pt-2.5 text-[13px]" data-testid="brain-ask-sources">
           {cites.map((c, i) => {
             const href = sourceHref(c, repos);
             return (
@@ -107,7 +106,7 @@ function Answer({ shown, onDeeper }: { shown: Shown; onDeeper: () => void }) {
         <span data-testid="brain-ask-took">{answeredWords(data.duration_ms, shown.tookMs)}</span>
         {!shown.deep && (
           <button type="button" onClick={onDeeper} data-testid="brain-ask-deeper"
-                  className="cursor-pointer border-0! bg-transparent! p-0! text-[13px]! font-normal! text-foreground! underline!">
+                  className="cursor-pointer border-0 bg-transparent p-0 text-[13px] font-normal text-foreground underline">
             Look deeper
           </button>
         )}
@@ -227,15 +226,15 @@ function Asker({ data, reload }: { data: AskBrainData; reload: () => void }) {
         <div className="min-w-0 flex-[1_1_360px]">
           <label htmlFor="brain-ask-question" className="sr-only">Question</label>
           <TextInput id="brain-ask-question" value={question} autoComplete="off" data-testid="brain-ask-question"
-                     className="h-10 border-foreground! bg-[var(--input-bg)]!" aria-invalid={tooLong ? true : undefined}
+                     className="h-10 border-foreground bg-field" aria-invalid={tooLong ? true : undefined}
                      aria-describedby={tooLong ? "brain-ask-too-long" : undefined}
                      onChange={(e) => setQuestion(e.target.value)} />
         </div>
         <Button type="submit" busy={pending === "quick"} disabled={pending !== null || empty || tooLong} className="h-10" data-testid="brain-ask-submit">Ask</Button>
       </form>
       <div role="status" className="sr-only" data-testid="brain-ask-live">{heard}</div>
-      {tooLong && <p id="brain-ask-too-long" role="alert" className="m-0! -mt-3 text-[13px] text-[color:var(--err)]" data-testid="brain-ask-too-long">{TOO_LONG_WORDS}</p>}
-      {failure && <Banner tone="error" data-testid="brain-ask-error">{failure}</Banner>}
+      {tooLong && <p id="brain-ask-too-long" role="alert" className="m-0 -mt-3 text-[13px] text-err" data-testid="brain-ask-too-long">{TOO_LONG_WORDS}</p>}
+      <Collapse>{failure && <Banner tone="error" data-testid="brain-ask-error">{failure}</Banner>}</Collapse>
       {(pending || shown) && (
         <div ref={region} tabIndex={-1} className="min-w-0 outline-offset-4" data-testid="brain-ask-region">
           {pending

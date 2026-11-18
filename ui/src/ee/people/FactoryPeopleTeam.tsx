@@ -80,7 +80,7 @@ export function AddPerson({ data, adder, onAdded }: { data: FactoryPeopleData; a
   return (
     <ListSection title="Add a person" data-testid="people-add">
       <form onSubmit={submit} className="grid gap-3 px-4 py-4" noValidate>
-        <p className={cn("m-0!", MUTED)} data-testid="people-add-text">{data.add_text}</p>
+        <p className={cn("m-0", MUTED)} data-testid="people-add-text">{data.add_text}</p>
         <div className={cn("grid gap-3 md:items-end", cloud ? "md:grid-cols-[1fr_auto]" : "md:grid-cols-[1fr_1fr_auto]")}>
           <Input label="Email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)}
                  placeholder="name@company.com" data-testid="people-email" error={error || undefined} />
@@ -96,7 +96,7 @@ export function AddPerson({ data, adder, onAdded }: { data: FactoryPeopleData; a
 
 function SignIn({ loginUrl }: { loginUrl?: string }) {
   return (
-    <p className={cn("m-0!", MUTED)} data-testid="people-signed-out">
+    <p className={cn("m-0", MUTED)} data-testid="people-signed-out">
       You are signed out of Tares Cloud.{" "}
       {loginUrl ? <a href={signInLink(loginUrl)} className={LINK}>Sign in to invite people.</a> : "Sign in to invite people."}
     </p>

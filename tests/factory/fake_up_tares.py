@@ -100,7 +100,7 @@ class FakeTares:
                             return self._send(200, dict(outer.health))
                         return self._send(200, {"status": "ok", "capabilities": list(outer.capabilities)})
                     if path == "/api/crew/settings":
-                        return self._send(200, dict(outer.settings))
+                        return self._send(200, {"idle_wake": False, **outer.settings})   # unnamed: a ticking crew
                     if path == "/api/grants":
                         allg = "".join(line + "\n" for line in outer.grants).rstrip("\n")
                         if "project=" in self.path:

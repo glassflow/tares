@@ -1,0 +1,2 @@
+Changed
+Import connections has a new look. Replacing everything now asks first and says it can't be undone; before, choosing replace and pressing Import cleared everything at once. After an import the page says what came in, in the page's words, with a link to the connections. A key that can read but not write is told it can't import before it tries, and a refused import says the key can't import instead of showing the daemon's message (TR-1394).

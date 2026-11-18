@@ -24,7 +24,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8873);
@@ -263,6 +263,114 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // ---- 8b. "Slack settings" opens the same Slack panels as Factory Settings (TR-1392)
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=slack`, { waitUntil: "load" });
+      await T(p, "slack-token-state").waitFor();
+      await T(p, "slack-secret-state").waitFor();
+      ck(`${w}: the Slack tab shows the bot token and the signing secret, each with its state`,
+        (await p.getByLabel("Bot User OAuth Token").count()) === 1 && (await p.getByLabel("Signing Secret").count()) === 1 && /^(Not set|Set)/.test(await text(p, "slack-token-state")));
+      ck(`${w}: the Slack tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-slack-${w}.png`);
+      await c.close();
+    }
+    // ... and the same tracing panel (TR-1392)
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=observability`, { waitUntil: "load" });
+      await T(p, "tracing-state").waitFor();
+      ck(`${w}: the Observability tab shows agent tracing, its switch and where traces go`,
+        (await p.getByRole("heading", { name: "Agent tracing", exact: true }).count()) === 1 && (await p.getByLabel("Send agent traces").count()) === 1 && (await p.getByLabel("Where traces go").count()) === 1);
+      ck(`${w}: the Observability tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-tracing-${w}.png`);
+      await c.close();
+    }
+
+    // The GitHub tab the SRE settings link to (TR-1392): a cell with nothing connected yet.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=github`, { waitUntil: "load" });
+      await T(p, "github-empty").waitFor();
+      ck(`${w}: the GitHub tab says nothing is connected and how to start`,
+        (await p.getByRole("heading", { name: "GitHub", exact: true }).count()) === 1
+        && /^Nothing connected yet\. Create the GitHub App, or add a personal token\.$/.test((await T(p, "github-empty").innerText()).trim())
+        && (await p.getByRole("button", { name: "Add a personal token" }).count()) === 1, await T(p, "github-empty").innerText());
+      ck(`${w}: the GitHub tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-github-${w}.png`);
+      await c.close();
+    }
+
+    // The model providers tab (TR-1392): what agents and Ask work with, and how to add one.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=anthropic`, { waitUntil: "load" });
+      await p.locator('[data-testid="providers-empty"], [data-testid="providers-row"]').first().waitFor();
+      ck(`${w}: the Model providers tab has its heading, its introduction and Add a provider`,
+        (await p.getByRole("heading", { name: "Model providers", exact: true }).count()) === 1
+        && /What Tares agents and Ask work with/.test((await T(p, "providers").innerText()).trim())
+        && (await p.getByRole("button", { name: "Add a provider" }).count()) === 1, await T(p, "providers").innerText());
+      ck(`${w}: the Model providers tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-providers-${w}.png`);
+      await c.close();
+    }
+
+    // The API keys panel on the Access tab (TR-1392): its heading, its introduction and Create a key.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      await p.locator('[data-testid="keys-empty"], [data-testid="keys-row"]').first().waitFor();
+      ck(`${w}: the Access tab has API keys, with its introduction and Create a key`,
+        (await p.getByRole("heading", { name: "API keys", exact: true }).count()) === 1
+        && /Give each agent, script or service its own key/.test((await T(p, "keys").innerText()).trim())
+        && (await p.getByRole("button", { name: "Create a key" }).count()) === 1, await T(p, "keys").innerText());
+      ck(`${w}: the Access tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-access-${w}.png`);
+      await c.close();
+    }
+
+    // The Access box and People on the Access tab (TR-1392). This cell is open, and has no licence.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      await T(p, "you-row").waitFor();
+      ck(`${w}: Access says the cell is open, and how to close it`,
+        /^This cell is open: anyone who can reach it can read and change everything, and API keys are not checked\. Start it with tares up --auth to ask for a sign-in\.$/
+          .test((await T(p, "access-open").innerText()).replace(/\s+/g, " ").trim()), await T(p, "access-open").innerText());
+      ck(`${w}: the keys panel does not say it again`, !/not checked/.test(await T(p, "keys").innerText()));
+      ck(`${w}: People is one row, you, with what is missing said in words`,
+        (await T(p, "you-row").locator("[data-user-text]").first().innerText()) === "You"
+        && (await T(p, "you-email").innerText()).trim() === "No email." && (await T(p, "you-github").innerText()).trim() === "No GitHub login.",
+        await T(p, "you-row").innerText());
+      const gaps = await p.evaluate(() => ["access", "you", "keys"].map((id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect())
+        .reduce((out, r, i, all) => (i ? [...out, Math.round(r.top - all[i - 1].bottom)] : out), []));
+      ck(`${w}: Access and People stand apart, like every panel on the tab`, gaps[0] >= 12 && gaps[1] >= 12, JSON.stringify(gaps));
+      ck(`${w}: adding people is the licence's, said under the row`, (await T(p, "you").getByTestId("licence-needed").count()) === 1);
+      if (w === 1440) {
+        await T(p, "you-edit").click();
+        const name = T(p, "you-name");
+        ck("Edit opens a form on the name, with email and GitHub login for an admin", await name.evaluate((e) => e === document.activeElement)
+          && (await T(p, "you-email-input").count()) === 1 && (await T(p, "you-github-input").count()) === 1 && (await T(p, "you-edit").count()) === 0);
+        await name.fill("");
+        await name.press("Enter");
+        ck("an empty name is said under the Name field", (await name.getAttribute("aria-invalid")) === "true" && /Give your name\./.test(await T(p, "you-form").innerText()));
+        await shot(p, "advanced-access-you-form-1440.png");
+        await name.press("Escape");
+        ck("Escape closes the form and keeps the name", (await T(p, "you-form").count()) === 0 && (await T(p, "you-row").locator("[data-user-text]").first().innerText()) === "You");
+        await T(p, "you-edit").click();
+        await T(p, "you-name").fill("Sam Reyes");
+        await T(p, "you-name").press("Enter");
+        await p.waitForFunction(() => document.querySelector('[data-testid="you-row"]')?.textContent.includes("Sam Reyes"));
+        ck("Enter saves, and the row shows the new name", (await T(p, "you-form").count()) === 0);
+        await T(p, "you-edit").click();
+        await T(p, "you-name").fill("You");
+        await T(p, "you-save").click();
+        await p.waitForFunction(() => !document.querySelector('[data-testid="you-row"]')?.textContent.includes("Sam Reyes"));
+      }
+      ck(`${w}: the Access tab still does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);
@@ -350,7 +458,8 @@ async function waitFor(url, tries = 150) {
           } else if (name === "switch") {
             ck("switch: asks before it switches", (await T(p, "edition-dialog").isVisible()) && /Switch to/.test(await T(p, "edition-dialog").innerText()));
             await T(p, "edition-cancel").click();
-            ck("switch: Cancel closes it", (await T(p, "edition-dialog").count()) === 0);
+            // the dialog leaves with an animation (TR-1432): gone a frame later, not in the same tick
+            ck("switch: Cancel closes it", await T(p, "edition-dialog").waitFor({ state: "detached", timeout: 1000 }).then(() => true, () => false));
           } else if (name === "load") {
             ck("load: the loading rows, and no group", (await T(p, "settings-loading").isVisible()) && (await p.locator("[data-testid^=group-]").count()) === 0);
           } else if (name === "err") {

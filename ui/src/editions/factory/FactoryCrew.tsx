@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, ProgressBar, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, LoadingBlocks, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
 import { ApiError } from "../../api";
 import { cn } from "@/lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -24,12 +24,11 @@ const POLL_MS = 10_000;
 const WARN_AT = 80;
 const ASKED_RELOAD_MS = 4_000;
 
-const SECTION_H = "m-0! text-base!";
+const SECTION_H = "m-0 text-base";
 const CARD = "min-w-0 border border-border bg-card [overflow-wrap:anywhere]";
 const MUTED = "text-xs text-muted-foreground";
-const INK_FILL = "[&>div:first-child]:bg-foreground!";
-const WARN_FILL = "[&>div:first-child]:bg-[var(--warn)]!";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const INK_FILL = "[&>div:first-child]:bg-foreground";
+const LINK = "text-foreground underline";
 const FOLD_BTN = "linklike text-[13px]";
 const CODE = "mt-0.5 inline-block border border-border bg-muted px-1.5 py-0.5 font-mono";
 
@@ -40,14 +39,6 @@ export interface CrewActions {
   ask: (station: string, crew?: string | null) => Promise<unknown>;
   decide: (id: string, decision: "accept" | "reject") => Promise<unknown>;
 }
-
-const DOT: Record<string, string> = {
-  working: "bg-[var(--accent)]",
-  idle: "bg-[var(--ok)]",
-  "waiting for you": "bg-[var(--warn)]",
-  "not heard": "bg-[var(--ink-faint)]",
-  ended: "border border-[var(--ink-faint)] bg-transparent",
-};
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
@@ -121,7 +112,7 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
       {open && (
         <div data-testid="member-detail">
           {failed && (
-            <p className="m-0 mt-2 text-[13px] text-[color:var(--err)]">
+            <p className="m-0 mt-2 text-[13px] text-err">
               It did not load. <button type="button" className={FOLD_BTN} onClick={load}>Try again</button>
             </p>
           )}
@@ -136,11 +127,11 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
                 </div>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
-                <Button variant="secondary" className="h-[30px] text-[13px]!" onClick={ask} disabled={asked === "asked"}>
+                <Button variant="secondary" className="h-[30px] text-[13px]" onClick={ask} disabled={asked === "asked"}>
                   Read memory again
                 </Button>
                 {asked === "asked" && <span className={MUTED} role="status">Asked. It answers in a few seconds.</span>}
-                {asked === "failed" && <span className="text-xs text-[color:var(--err)]" role="status">It could not be asked. Try again.</span>}
+                {asked === "failed" && <span className="text-xs text-err" role="status">It could not be asked. Try again.</span>}
               </div>
             </>
           )}
@@ -158,7 +149,7 @@ function Member({ m, actions }: { m: CrewMember; actions: CrewActions }) {
       className="grid grid-cols-[10px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-border px-4 py-3.5 last:border-b-0 md:grid-cols-[10px_minmax(0,1fr)_auto]"
       data-testid="crew-member" data-state={m.state}
     >
-      <span aria-hidden className={cn("mt-1.5 inline-block size-2", DOT[m.state] ?? DOT["not heard"])} />
+      <StatusDot tone={toneOf("crew", m.state)} className="mt-1.5" />
       <div className="min-w-0">
         <div className="font-semibold" data-user-text>{m.doing}</div>
         <div className={MUTED}><b className="font-semibold text-foreground">{m.role_label}</b> · {m.state_text}</div>
@@ -172,9 +163,9 @@ function Member({ m, actions }: { m: CrewMember; actions: CrewActions }) {
             <>
               <ProgressBar
                 value={pct} aria-label="Memory" data-testid="memory-bar"
-                className={cn("mt-0 h-1 w-[120px] shrink-0", pct >= WARN_AT ? WARN_FILL : INK_FILL)}
+                className={cn("mt-0 h-1 w-[120px] shrink-0", INK_FILL)}
               />
-              <span>{m.memory_text ?? `Memory ${Math.round(pct)}% full`}</span>
+              <span className={cn(pct >= WARN_AT && "font-medium text-foreground")}>{m.memory_text ?? `Memory ${Math.round(pct)}% full`}</span>
             </>
           )}
           {helpers && <span>{helpers}</span>}
@@ -235,7 +226,7 @@ function PersonCrew({ c, actions }: { c: CrewOfPerson; actions: CrewActions }) {
   const builders = live === 0 ? "no builder on it" : live === 1 ? "1 builder on it" : `${live} builders on it`;
   return (
     <section className="min-w-0 border border-border bg-card" data-testid="crew-of-person" aria-label={`${name}'s crew`}>
-      <h2 className="m-0!">
+      <h2 className="m-0">
         <button type="button" className="block w-full px-4 py-3 text-left" aria-expanded={open} onClick={toggle}
                 data-testid="crew-of-person-toggle">
           <span className="flex w-full min-w-0 items-center gap-3">
@@ -288,7 +279,7 @@ function BuilderGroup({ g, actions }: { g: CrewBuilders; actions: CrewActions })
   const finished = g.members.filter((m) => m.state === "ended");
   return (
     <div data-testid="crew-group">
-      <div className="flex items-baseline justify-between gap-3 border-b border-border bg-[var(--wash-2)] px-4 py-2.5 text-[13px] font-semibold">
+      <div className="flex items-baseline justify-between gap-3 border-b border-border bg-wash-strong px-4 py-2.5 text-[13px] font-semibold">
         <span data-user-text><InlineIcon icon={g.project.icon} />{g.project.name}</span>
         <span className="shrink-0 whitespace-nowrap font-mono text-xs font-normal text-muted-foreground">{running.length} running · {g.members.length}</span>
       </div>
@@ -296,7 +287,7 @@ function BuilderGroup({ g, actions }: { g: CrewBuilders; actions: CrewActions })
       {finished.length > 0 && (
         <div className="border-b border-border last:border-b-0">
           <button
-            type="button" className={cn(FOLD_BTN, "block! w-full px-4! py-2.5! text-left")}
+            type="button" className={cn(FOLD_BTN, "block w-full px-4 py-2.5 text-left")}
             aria-expanded={open} onClick={() => setOpen(!open)} data-testid="crew-finished-fold"
           >
             {open ? "Hide" : "Show"} {finished.length} finished
@@ -333,7 +324,7 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
       .catch(() => setFailed(id));
   };
   return (
-    <section data-testid="crew-rules">
+    <section id="rules" className="scroll-mt-4" data-testid="crew-rules">
       <SectionHead title="Rules the crew proposes" aside={<Count>{shown.length}</Count>} />
       <div className={CARD}>
         {shown.length === 0 && <div className="px-4 py-5 text-muted-foreground">No rules are proposed.</div>}
@@ -348,11 +339,11 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
                     {" "}(<span data-user-text>{p.tickets.slice(0, 4).join(", ")}{p.tickets.length > 4 ? ` and ${p.tickets.length - 4} more` : ""}</span>)</>
                 ) : <>from the reviews</>}, {p.when}
               </div>
-              {failed === p.id && <div className="mt-1 text-xs text-[color:var(--err)]" role="alert">It could not be saved. Try again.</div>}
+              {failed === p.id && <div className="mt-1 text-xs text-err" role="alert">It could not be saved. Try again.</div>}
             </div>
             <div className="flex gap-2">
-              <Button variant="secondary" className="h-8 border-foreground! text-[13px]!" onClick={() => decide(p.id, "accept")}>Accept</Button>
-              <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => decide(p.id, "reject")}>Reject</Button>
+              <Button variant="secondary" className="h-8 border-foreground text-[13px]" onClick={() => decide(p.id, "accept")}>Accept</Button>
+              <Button variant="secondary" className="h-8 text-[13px]" onClick={() => decide(p.id, "reject")}>Reject</Button>
             </div>
           </div>
         ))}
@@ -384,7 +375,7 @@ function Plan({ plan }: { plan: CrewPage["plan"] }) {
         {plan.limits.map((l) => (
           <div key={l.kind} className="border-b border-border px-4 py-3">
             <div className="mb-1.5 flex justify-between gap-3 text-[13px]"><span>{l.label}</span><span>{l.text}</span></div>
-            <ProgressBar value={l.pct} aria-label={l.label} className={cn("mt-0 h-1", l.pct >= WARN_AT ? WARN_FILL : INK_FILL)} />
+            <ProgressBar value={l.pct} aria-label={l.label} className={cn("mt-0 h-1", INK_FILL)} />
           </div>
         ))}
         {(plan.by_project ?? []).length > 0 && (
@@ -402,15 +393,6 @@ function Plan({ plan }: { plan: CrewPage["plan"] }) {
   );
 }
 
-function Loading() {
-  return (
-    <div className={cn(CARD, "grid gap-4 p-4")} role="status" aria-busy="true" aria-label="Loading" data-testid="crew-loading">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="grid gap-2"><Skeleton width="60%" /><Skeleton width="40%" /><Skeleton width="75%" /></div>
-      ))}
-    </div>
-  );
-}
 
 export function FactoryCrewView({ data, error, reload, actions }: {
   data: CrewPage | undefined; error: string | undefined; reload: () => void; actions: CrewActions;
@@ -419,20 +401,20 @@ export function FactoryCrewView({ data, error, reload, actions }: {
   return (
     <div className="grid gap-6 md:gap-8" data-testid="factory-crew">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Crew</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and the crew's autonomy.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Crew</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and the crew's autonomy.</p>
       </div>
 
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
           <b>The crew did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
         </Banner>
-      )}
-      {!data && !error && <Loading />}
+      )}</Collapse>
+      {!data && !error && <LoadingBlocks data-testid="crew-loading" count={4} widths={["60%", "40%", "75%"]} />}
       {data && (
         <div className="grid gap-5">
-          {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0! text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
-          {data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}
+          {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0 text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
+          <Collapse>{data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}</Collapse>
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
               {(data.crews ?? []).length > 1 ? (
@@ -449,7 +431,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
               {started && (
                 <section data-testid="crew-standup">
                   <SectionHead title="Standup" aside={
-                    <Link to="/settings?tab=morning" className="text-[13px] text-[color:var(--accent-deep)]! underline!" data-testid="standup-morning-link">Send it every morning</Link>
+                    <Link to="/settings?tab=morning" className="text-[13px] text-foreground underline" data-testid="standup-morning-link">Send it every morning</Link>
                   } />
                   <div className={CARD}>
                     {data.standup ? (

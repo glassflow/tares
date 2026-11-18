@@ -36,7 +36,7 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
         {options.length > 0 ? (
           <div className="flex flex-wrap gap-2" role="group" aria-label={`Answers to ${item.title}`}>
             {options.map((o, i) => (
-              <Button key={i} variant="secondary" className="h-8 text-[13px]!" disabled={busy}
+              <Button key={i} variant="secondary" className="h-8 text-[13px]" disabled={busy}
                 onClick={() => onSend({ ...optionAnswer(options, i, canStand), standing })} data-user-text>
                 {o}
               </Button>
@@ -52,9 +52,9 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
         )}
         <div className="flex gap-2">
           {options.length === 0 && (
-            <Button className="h-8 text-[13px]!" busy={busy} disabled={!words} onClick={() => onSend({ words, standing })}>Send</Button>
+            <Button className="h-8 text-[13px]" busy={busy} disabled={!words} onClick={() => onSend({ words, standing })}>Send</Button>
           )}
-          <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy} onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" className="h-8 text-[13px]" disabled={busy} onClick={onCancel}>Cancel</Button>
         </div>
       </div>
     </div>

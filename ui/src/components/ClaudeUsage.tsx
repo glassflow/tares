@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, agoText, fmtCost, fmtTokens, usePolling } from "./bits";
+import { ErrorState, TimeAgo, fmtCost, fmtTokens, usePolling } from "./bits";
+import { formatRelative } from "../lib/time";
 import type { ClaudeCodeUsage, ClaudePlan, ContextReading, ProjectUsage, StationContext, StationDetail, UsageTotals } from "../types";
 
 // What the Claude Code sessions reporting here spend (tares/claude_usage.py). The crew's machine
@@ -251,7 +252,7 @@ const FRESH_MS = 10 * 60000;
 /** A station's context window, on its detail: one line and a bar, the details in their title. */
 export function StationUsage({ s, onAsked, mine }: { s: StationDetail; onAsked: () => void; mine: boolean }) {
   const ctx = s.context;
-  const tip = ctx ? `${contextTitle(ctx)}${ctx.at ? `; reported ${agoText(ctx.at)}` : ""}` : undefined;
+  const tip = ctx ? `${contextTitle(ctx)}${ctx.at ? `; reported ${formatRelative(Date.parse(ctx.at), Date.now())}` : ""}` : undefined;
   return (
     <div>
       <div className="crew-detail-label">Context window</div>

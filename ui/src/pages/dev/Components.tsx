@@ -4,6 +4,7 @@ import {
   Banner,
   Button,
   Checkbox,
+  Collapse,
   Dialog,
   EmptyState,
   Initials,
@@ -11,15 +12,19 @@ import {
   LineChart,
   ListRow,
   ListSection,
+  Loading,
+  LoadingBlocks,
   Panel,
   ProgressBar,
   Select,
   Skeleton,
+  SkeletonLines,
   SkeletonRows,
   Sparkline,
   Stat,
   StatusDot,
   StatusLabel,
+  STATUS_TONES,
   Switch,
   Tabs,
   Textarea,
@@ -38,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import LicenceNeeded from "@/components/LicenceNeeded";
 import { applyTheme, currentTheme, type Theme } from "@/theme";
+import { ageWords, HOUR } from "../../lib/time";
 
 const TONES: Tone[] = ["working", "waiting", "ready", "done", "bad", "quiet"];
 
@@ -148,9 +154,12 @@ function LinkProbe() {
   );
 }
 
+/** The section's name in the screenshot check (tests/visual): "List section and rows" is list-section-and-rows. */
+const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mb-10">
+    <section className="mb-10" data-gallery-section={slug(title)}>
       <h2 className="m-0! mb-3! text-base! text-foreground">{title}</h2>
       <div className="grid gap-4">{children}</div>
     </section>
@@ -175,6 +184,47 @@ function Item({ name, tone, children }: { name: string; tone: Tone; children: Re
       </div>
       <StatusLabel tone={tone}>{tone}</StatusLabel>
     </ListRow>
+  );
+}
+
+const MOVING_TONES: Tone[] = ["waiting", "working", "ready", "done"];
+
+/** Motion (TR-1431 to TR-1436): what moves when something changes under the reader. */
+function MotionDemo() {
+  const [shown, setShown] = useState(false);
+  const [rows, setRows] = useState(["service-a", "service-b", "service-c"]);
+  const [step, setStep] = useState(0);
+  const tone = MOVING_TONES[step % MOVING_TONES.length];
+  return (
+    <>
+      <Caption>A banner that comes and goes: what is below it moves, it does not jump</Caption>
+      <Row>
+        <Button variant="secondary" onClick={() => setShown((v) => !v)} data-testid="collapse-toggle">
+          {shown ? "Hide the banner" : "Show the banner"}
+        </Button>
+      </Row>
+      <div className="grid gap-4" data-testid="collapse-stack">
+        <Collapse data-testid="collapse">
+          {shown && <Banner tone="warn" data-testid="collapse-banner">GitHub needs to be reconnected.</Banner>}
+        </Collapse>
+        <p className="m-0 text-sm text-muted-foreground" data-testid="collapse-below">This line sits below the banner.</p>
+      </div>
+      <Caption>Rows that come or change places glide there</Caption>
+      <Row>
+        <Button variant="secondary" data-testid="moving-add"
+                onClick={() => setRows((r) => [...r, `service-${String.fromCharCode(97 + r.length)}`])}>Add a row</Button>
+        <Button variant="secondary" data-testid="moving-shuffle"
+                onClick={() => setRows((r) => [r[r.length - 1], ...r.slice(0, -1)])}>Move the last to the top</Button>
+      </Row>
+      <ListSection title="Moving rows" data-testid="moving-list">
+        {rows.map((r) => <ListRow key={r} data-testid="moving-row">{r}</ListRow>)}
+      </ListSection>
+      <Caption>A status that changes washes once</Caption>
+      <Row>
+        <StatusLabel tone={tone} data-testid="status-changing">{tone}</StatusLabel>
+        <Button variant="secondary" onClick={() => setStep((n) => n + 1)} data-testid="status-next">Move it on</Button>
+      </Row>
+    </>
   );
 }
 
@@ -278,7 +328,7 @@ export default function Components() {
         <ListSection title="Many rows" aside="12 of 12">
           {Array.from({ length: 12 }, (_, i) => (
             <Item key={i} name={`project-${i + 1}`} tone={TONES[i % TONES.length]}>
-              Updated {i + 1} hours ago
+              Updated {ageWords((i + 1) * HOUR)}
             </Item>
           ))}
         </ListSection>
@@ -367,6 +417,10 @@ export default function Components() {
         <Panel>
           <EmptyState title="No incidents">service-a has had none in the last 30 days.</EmptyState>
         </Panel>
+        <Caption>Without a title: a line, for a section that has nothing yet</Caption>
+        <ListSection title="Pull requests">
+          <EmptyState className="px-4" data-testid="empty-line">No pull requests yet. Each one the crew opens for a ticket shows here.</EmptyState>
+        </ListSection>
       </Section>
 
       <Section title="Stat">
@@ -414,6 +468,24 @@ export default function Components() {
         ))}
       </Section>
 
+      <Section title="Every status, by where it shows">
+        <div className="grid gap-3" data-testid="status-every">
+          {Object.entries(STATUS_TONES).map(([domain, table]) => (
+            <div key={domain} className="grid gap-1.5 md:grid-cols-[120px_1fr] md:items-baseline">
+              <span className="font-mono text-xs text-muted-foreground">{domain}</span>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {Object.entries(table).map(([status, tone]) => (
+                  <span key={status} className="inline-flex items-center gap-1.5">
+                    <StatusDot tone={tone} />
+                    <StatusLabel tone={tone} data-domain={domain} data-status={status}>{status.replace(/_/g, " ")}</StatusLabel>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
       <Section title="Skeleton">
         <div className="grid gap-2" data-testid="skeleton">
           <Skeleton width="33%" />
@@ -424,6 +496,21 @@ export default function Components() {
         <Panel>
           <SkeletonRows count={2} />
         </Panel>
+        <Caption>Lines: a title and a sentence or two</Caption>
+        <SkeletonLines widths={["30%", "75%", "50%"]} />
+      </Section>
+
+      <Section title="Loading">
+        <Caption>A list page that is loading</Caption>
+        <LoadingBlocks count={2} data-testid="loading-blocks" />
+        <Caption>A page-shaped one: Skeletons inside Loading, arranged as the page will be</Caption>
+        <Loading className="grid gap-4 md:grid-cols-[200px_1fr]" data-testid="loading">
+          <SkeletonLines widths={["70%", "50%", "60%"]} className="border border-border bg-card p-3" />
+          <div className="grid gap-3 border border-border bg-card p-4">
+            <Skeleton width="40%" height={20} />
+            <SkeletonLines widths={["90%", "80%", "55%"]} />
+          </div>
+        </Loading>
       </Section>
 
       <Section title="Form controls">
@@ -465,6 +552,10 @@ export default function Components() {
         <Banner tone="warn">{LONG}</Banner>
       </Section>
 
+      <Section title="Motion">
+        <MotionDemo />
+      </Section>
+
       <Section title="Licence needed">
         <LicenceNeeded what="Adding people" />
         <LicenceNeeded variant="page" />
@@ -483,7 +574,7 @@ export default function Components() {
 
       <Section title="Sparkline">
         <Row>
-          <div className="w-40 text-[color:var(--err)]">
+          <div className="w-40 text-err">
             <Sparkline points={ERRORS} marks={[5]} aria-label="Errors for service-a, with one deploy" data-testid="sparkline" />
           </div>
           <div className="w-40">
@@ -498,7 +589,7 @@ export default function Components() {
         </Row>
         <Caption>Values that are not numbers, and one value</Caption>
         <Row>
-          <div className="w-40 text-[color:var(--err)]">
+          <div className="w-40 text-err">
             <Sparkline points={DIRTY_SPARK} marks={[2]} aria-label="Errors for service-a with gaps" data-testid="sparkline-dirty" />
           </div>
           <div className="w-40">

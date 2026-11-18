@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { api } from "../api";
 import { DemoRow, ReadyItem, useOwnProjects, useReadiness } from "../components/readiness";
 import { GoalStep, type GoalWords, type Who } from "../components/setup/goal";
 import { CLOUD_BACK } from "./Security";

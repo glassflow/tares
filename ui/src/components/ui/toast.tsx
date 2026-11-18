@@ -23,7 +23,7 @@ const ToastViewport = React.forwardRef<
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName;
 
 const toastVariants = cva(
-  "pointer-events-auto relative flex w-full items-center justify-between gap-4 overflow-hidden border bg-background p-4 pr-8",
+  "motion-toast pointer-events-auto relative flex w-full items-center justify-between gap-4 overflow-hidden border bg-background p-4 pr-8",
   {
     variants: {
       variant: {
@@ -50,7 +50,7 @@ const ToastAction = React.forwardRef<
   <ToastPrimitives.Action
     ref={ref}
     className={cn(
-      "inline-flex! h-8 shrink-0 items-center justify-center border! border-border! bg-transparent! px-3! py-0! text-xs! font-medium! text-foreground! hover:border-border! hover:bg-accent! hover:text-accent-foreground! disabled:pointer-events-none disabled:opacity-45!",
+      "inline-flex h-8 shrink-0 items-center justify-center border border-border bg-transparent px-3 py-0 text-xs font-medium text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-45",
       className,
     )}
     {...props}
@@ -65,7 +65,7 @@ const ToastClose = React.forwardRef<
   <ToastPrimitives.Close
     ref={ref}
     className={cn(
-      "absolute right-2 top-2 inline-flex! items-center justify-center border-0! bg-transparent! p-1! text-muted-foreground! hover:text-foreground!",
+      "absolute right-2 top-2 inline-flex items-center justify-center border-0 bg-transparent p-1 text-muted-foreground hover:text-foreground",
       className,
     )}
     toast-close=""

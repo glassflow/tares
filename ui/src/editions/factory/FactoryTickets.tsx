@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ChevronDown, ChevronRight } from "../../components/icons";
-import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -68,20 +68,10 @@ const stateFromUrl = (s: string): StateKey | "moving" | "" => {
   return (Object.keys(STATE_URL) as StateKey[]).find((k) => STATE_URL[k] === s) ?? "";
 };
 
-const DOT: Record<StateKey, string> = {
-  to_do: "border-[color:var(--ink-faint)] bg-transparent",
-  in_progress: "border-[color:var(--accent)] bg-[var(--accent)]",
-  in_review: "border-[color:var(--accent-deep)] bg-[var(--accent-deep)] dark:border-[3px] dark:bg-transparent",
-  changes_asked: "border-[color:var(--warn)] bg-[var(--warn)]",
-  merged: "border-[color:var(--ok)] bg-[var(--ok)]",
-  blocked: "border-[color:var(--err)] bg-[var(--err)]",
-  canceled: "border-[color:var(--ink-faint)] bg-[var(--ink-faint)]",
-};
-
 const MUTED = "text-muted-foreground";
-const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-[var(--input-bg)]! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
-const LINKISH = "cursor-pointer! border-0! bg-transparent! p-0! text-[length:inherit]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]";
-const TILE_LINK = "no-underline! text-foreground! hover:text-foreground! focus-visible:outline-2 focus-visible:outline-[color:var(--accent)]";
+const FIELD = "h-9 w-full md:w-auto min-w-0 border border-border bg-field px-2.5 py-0 text-sm text-foreground disabled:opacity-60";
+const LINKISH = "cursor-pointer border-0 bg-transparent p-0 text-[length:inherit] font-normal text-foreground underline decoration-border underline-offset-[3px]";
+const TILE_LINK = "no-underline text-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand";
 
 // ----------------------------------------------------------------------------------------- small things
 
@@ -129,7 +119,7 @@ function useNarrow(): boolean {
 }
 
 function Dot({ k }: { k: StateKey }) {
-  return <i aria-hidden className={cn("inline-block size-[9px] shrink-0 border", DOT[k])} />;
+  return <StatusDot tone={STATUS_TONES.ticket[k]} className="size-[9px]" />;
 }
 
 // ----------------------------------------------------------------------------------------- tickets
@@ -144,7 +134,7 @@ function Row({ t }: { t: TicketRow }) {
     <Link to={t.href} data-testid="ticket-row" data-ref={t.ref} data-state={t.state_key}
           className={cn("group grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2.5 gap-y-1 border-t border-border px-3.5 py-3 first:border-t-0",
             "min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_112px_108px_130px_140px_88px] min-[1360px]:gap-x-3 min-[1360px]:px-4 min-[1360px]:py-2.5",
-            "hover:bg-[var(--row-hover)] hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
+            "hover:bg-row-hover hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
       <span className={cn("col-start-1 row-start-1 pt-0.5 font-mono text-xs font-medium", "min-[1360px]:col-auto min-[1360px]:row-auto")} data-testid="ticket-ref">{t.ref}</span>
       <span data-user-text data-testid="ticket-title" title={t.title}
             className={cn("col-span-2 row-start-2 line-clamp-2 min-w-0 font-semibold [overflow-wrap:anywhere] group-hover:underline",
@@ -194,7 +184,7 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
   return (
     <Link to={t.href} data-testid="ticket-card" data-ref={t.ref} data-state={t.state_key}
           className={cn("group flex min-w-0 flex-col gap-[3px] border border-border bg-card px-2.5 py-[9px]",
-            "hover:border-foreground! hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
+            "hover:border-foreground hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
       <span className="flex min-w-0 justify-between gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
         <span className="font-mono font-medium text-foreground">{t.ref}</span>
         <span className="min-w-0 truncate">{short(t.changed)}</span>
@@ -206,7 +196,7 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
       </span>
       {person && <span data-user-text data-testid="card-assignee" className="truncate text-xs font-medium" title={person}>{person}</span>}
       {meta && <span data-user-text className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{meta}</span>}
-      {pr && <span className={cn("text-xs [overflow-wrap:anywhere]", blocked ? "font-medium text-[color:var(--err)]" : MUTED)}>{pr}</span>}
+      {pr && <span className={cn("text-xs [overflow-wrap:anywhere]", blocked ? "font-medium text-err" : MUTED)}>{pr}</span>}
     </Link>
   );
 }
@@ -230,11 +220,11 @@ function Cell({ rows, total, cap, id, ctx, quiet, caps, bump, listHref }: {
         <div className="flex flex-col items-stretch gap-1.5 pt-0.5 text-xs text-muted-foreground">
           <span data-testid="cell-showing">Showing {shown.length} of {total}</span>
           {shown.length < rows.length || !listHref ? (
-            <Button variant="secondary" className="h-8!" data-testid="cell-more" onClick={() => bump(id, cap)}>
+            <Button variant="secondary" className="h-8" data-testid="cell-more" onClick={() => bump(id, cap)}>
               Show {Math.min(cap, rows.length - shown.length || rest)} more
             </Button>
           ) : (
-            <Link to={listHref} data-testid="cell-list" className="text-center text-foreground! underline decoration-border underline-offset-[3px]">
+            <Link to={listHref} data-testid="cell-list" className="text-center text-foreground underline decoration-border underline-offset-[3px]">
               See all {total} in the List
             </Link>
           )}
@@ -304,7 +294,7 @@ function LaneHead({ lane, open, toggle, sub, userText }: { lane: Lane; open: boo
   const Chev = open ? ChevronDown : ChevronRight;
   return (
     <button type="button" aria-expanded={open} onClick={toggle} data-testid="lane-toggle"
-            className={cn("flex! w-full items-center! gap-2.5 border-0! bg-card! px-3! py-2.5! text-left! text-foreground! hover:bg-[var(--row-hover)]!", open && "border-b! border-border!")}>
+            className={cn("flex w-full items-center gap-2.5 border-0 bg-card px-3 py-2.5 text-left text-foreground hover:bg-row-hover", open && "border-b border-border")}>
       <Chev className="size-3.5 shrink-0" aria-hidden />
       <b className="min-w-0 text-[15px] [overflow-wrap:anywhere]" {...(userText ? { "data-user-text": true } : {})}>{lane.label}</b>
       <span className="ml-auto text-right text-[12.5px] font-normal text-muted-foreground" data-testid="lane-sub">{sub}</span>
@@ -339,8 +329,8 @@ function StateTabs({ cols, data, tab, setTab }: { cols: StateKey[]; data: Factor
     <div role="tablist" aria-label="State" className="grid grid-cols-3 gap-1.5" data-testid="state-tabs">
       {cols.map((k) => (
         <button key={k} type="button" role="tab" aria-selected={k === tab} data-testid="state-tab" data-state={k} onClick={() => setTab(k)}
-                className={cn("flex! min-h-[50px] min-w-0 flex-col! items-start! justify-center! gap-0.5 border! border-border! bg-[var(--input-bg)]! px-2! py-1.5! text-left! text-[12.5px]! font-normal! text-foreground!",
-                  k === tab && "border-foreground! bg-[var(--wash)]! font-semibold! shadow-[inset_0_-3px_0_var(--accent)]")}>
+                className={cn("flex min-h-[50px] min-w-0 flex-col items-start justify-center gap-0.5 border border-border bg-field px-2 py-1.5 text-left text-[12.5px] font-normal text-foreground",
+                  k === tab && "border-foreground bg-wash font-semibold shadow-[inset_0_-3px_0_var(--accent)]")}>
           <span className="flex min-w-0 items-center gap-1.5"><Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span></span>
           <b className="pl-[15px] text-[15px]">{countOf(data, k)}</b>
         </button>
@@ -366,7 +356,7 @@ function BoardBody(p: BodyProps) {
       {cols.map((k) => {
         const list = rows.filter((r) => r.state_key === k);
         return (
-          <section key={k} className="min-w-0 border border-border bg-[var(--wash)]" data-testid="board-col" data-state={k}>
+          <section key={k} className="min-w-0 border border-border bg-wash" data-testid="board-col" data-state={k}>
             <div className="flex min-w-0 items-center gap-[7px] border-b border-border px-2.5 py-[9px] text-[13px] font-semibold">
               <Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span>
               <span className="ml-auto text-[12.5px] font-medium text-muted-foreground" data-testid="col-count">{countOf(data, k)}</span>
@@ -406,7 +396,7 @@ function LanesBody(p: BodyProps) {
             <section key={id} className="border border-border bg-card" data-testid="lane" data-lane={l.label}>
               <LaneHead lane={l} open={open} toggle={() => flip(id)} sub={plural(l.rows.length, "ticket", "tickets")} userText={userText} />
               {open && (
-                <div className="bg-[var(--wash)] p-2.5">
+                <div className="bg-wash p-2.5">
                   <Cell rows={l.rows} total={l.rows.length} cap={BOARD_CAP} id={`l|${id}|${tab}`} ctx={ctx} caps={caps} bump={bump} />
                 </div>
               )}
@@ -423,7 +413,7 @@ function LanesBody(p: BodyProps) {
       <div className="sticky top-0 z-[2] bg-background px-[11px]" data-testid="lane-heads">
         <div className="grid gap-2.5" style={tpl}>
           {cols.map((k) => (
-            <div key={k} className="flex min-w-0 items-center gap-[7px] border border-border bg-[var(--wash)] px-2.5 py-[9px] text-[13px] font-semibold">
+            <div key={k} className="flex min-w-0 items-center gap-[7px] border border-border bg-wash px-2.5 py-[9px] text-[13px] font-semibold">
               <Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span>
               <span className="ml-auto text-[12.5px] font-medium text-muted-foreground" data-testid="col-count">{countOf(data, k)}</span>
             </div>
@@ -437,7 +427,7 @@ function LanesBody(p: BodyProps) {
           <section key={id} className="border border-border bg-card" data-testid="lane" data-lane={l.label}>
             <LaneHead lane={l} open={open} toggle={() => flip(id)} sub={`${plural(l.rows.length, "ticket", "tickets")}, ${movingIn(l.rows)} moving`} userText={userText} />
             {open && (
-              <div className="grid items-start gap-2.5 bg-[var(--wash)] p-2.5" style={tpl}>
+              <div className="grid items-start gap-2.5 bg-wash p-2.5" style={tpl}>
                 {cols.map((k) => {
                   const list = l.rows.filter((r) => r.state_key === k);
                   return <Cell key={k} rows={list} total={list.length} cap={LANE_CAP} id={`l|${id}|${k}`} ctx={ctx} quiet caps={caps} bump={bump} />;
@@ -455,7 +445,7 @@ function ListBody({ rows }: { rows: TicketRow[] }) {
   const th = "text-xs font-semibold text-muted-foreground";
   return (
     <div className="border border-border bg-card" data-testid="list">
-      <div className={cn("hidden items-center gap-x-3 border-b border-border bg-[var(--wash)] px-4 py-2", th, "min-[1360px]:grid min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_112px_108px_130px_140px_88px]")} aria-hidden>
+      <div className={cn("hidden items-center gap-x-3 border-b border-border bg-wash px-4 py-2", th, "min-[1360px]:grid min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_112px_108px_130px_140px_88px]")} aria-hidden>
         <div>Ref</div><div>Title</div><div>Project</div><div>Milestone</div><div>Assignee</div><div>Worked by</div><div>State</div><div>Pull request</div><div>Changed</div>
       </div>
       {rows.map((t) => <Row key={keyOf(t)} t={t} />)}
@@ -472,13 +462,13 @@ interface Loaded { key: string; resp: FactoryTicketsData }
 function Head({ sub }: { sub?: string }) {
   return (
     <div>
-      <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Tickets</h1>
-      {sub && <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="tickets-sub">{sub}</p>}
+      <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Tickets</h1>
+      {sub && <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="tickets-sub">{sub}</p>}
     </div>
   );
 }
 
-function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
+function TicketsSkeleton({ layout, narrow }: { layout: Layout; narrow: boolean }) {
   const card = (i: number) => (
     <div key={i} className="grid gap-2 border border-border bg-card p-2.5">
       <Skeleton width="40%" /><Skeleton width="92%" /><Skeleton width="70%" />
@@ -499,16 +489,16 @@ function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
     body = (
       <div className="grid gap-3">
         <div className="grid grid-cols-3 gap-1.5">
-          {Array.from({ length: 6 }, (_, i) => <div key={i} className="grid min-h-[50px] gap-2 border border-border bg-[var(--input-bg)] p-2"><Skeleton width="80%" /><Skeleton width="30%" /></div>)}
+          {Array.from({ length: 6 }, (_, i) => <div key={i} className="grid min-h-[50px] gap-2 border border-border bg-field p-2"><Skeleton width="80%" /><Skeleton width="30%" /></div>)}
         </div>
         {[0, 1, 2, 3].map(card)}
       </div>
     );
   } else {
     body = (
-      <div className="grid items-start gap-2.5" style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))" }}>
+      <div className="grid grid-cols-6 items-start gap-2.5">
         {COLUMNS.map((k) => (
-          <section key={k} className="min-w-0 border border-border bg-[var(--wash)]">
+          <section key={k} className="min-w-0 border border-border bg-wash">
             <div className="border-b border-border px-2.5 py-3"><Skeleton width="60%" /></div>
             <div className="grid gap-2 p-2">{[0, 1, 2].map(card)}</div>
           </section>
@@ -516,7 +506,7 @@ function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
       </div>
     );
   }
-  return <div role="status" aria-busy="true" aria-label="Loading" data-testid="tickets-loading">{body}</div>;
+  return <Loading data-testid="tickets-loading">{body}</Loading>;
 }
 
 /** The Tickets screen. With `scope` it is kept to that one project: no Project filter, no grouping
@@ -670,7 +660,7 @@ function TicketsBody({ scope }: { scope: string }) {
         {failed || (
           <>
             <FilterBar layout={layout} filters={filters} qText={qText} group={group} data={undefined} disabled onLayout={pickLayout} patch={patch} setQText={setQText} />
-            <SkeletonBody layout={layout} narrow={narrow} />
+            <TicketsSkeleton layout={layout} narrow={narrow} />
           </>
         )}
       </div>
@@ -722,9 +712,9 @@ function TicketsBody({ scope }: { scope: string }) {
           <ListBody rows={rows} />
           {(more || moreState === "error") && (
             <div className="grid justify-items-center gap-2 border border-t-0 border-border bg-card px-4 py-3">
-              {moreState === "error" && (
+              <Collapse>{moreState === "error" && (
                 <Banner tone="error" className="w-full"><b>More tickets did not load.</b> <span className="text-foreground">Try again.</span></Banner>
-              )}
+              )}</Collapse>
               <Button variant="secondary" busy={moreState === "busy"} onClick={showMore} data-testid="list-more">Show {PAGE} more</Button>
             </div>
           )}
@@ -741,7 +731,7 @@ function TicketsBody({ scope }: { scope: string }) {
     const p: BodyProps = { data: resp, rows, cols, group, narrow, caps, bump, closed, flip, listOf };
     return (
       <>
-        {more && <Banner tone="note" className="mb-3" data-testid="tickets-capped">Showing every open ticket and the newest merged ones, {BOARD_LIMIT} in all. Narrow the filters, or use the List, to reach the rest.</Banner>}
+        <Collapse>{more && <Banner tone="note" className="mb-3" data-testid="tickets-capped">Showing every open ticket and the newest merged ones, {BOARD_LIMIT} in all. Narrow the filters, or use the List, to reach the rest.</Banner>}</Collapse>
         {layout === "board" ? <BoardBody {...p} /> : <LanesBody {...p} />}
       </>
     );
@@ -750,11 +740,11 @@ function TicketsBody({ scope }: { scope: string }) {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-tickets">
       {!scope && <Head sub={hasFilter ? "Every ticket of every project the crew holds" : `${plural(resp.counts.total, "ticket", "tickets")} in ${plural(resp.projects.length, "project", "projects")}`} />}
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={retry}>
           <b>We could not load the tickets.</b> <span className="text-foreground">Check your connection, then try again.</span>
         </Banner>
-      )}
+      )}</Collapse>
       <div className="grid gap-4" aria-busy={!fresh}>
         <FilterBar layout={layout} filters={filters} qText={qText} group={group} data={resp} onLayout={pickLayout} patch={patch} setQText={setQText} />
         <div className="-mt-1.5 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[13px] text-muted-foreground" data-testid="tickets-count-line">
@@ -787,7 +777,7 @@ function FilterSelect({ label, testid, value, options, onChange, disabled, title
   return (
     <Select value={wrap(value)} disabled={disabled} onValueChange={(v) => onChange(v === ALL ? "" : v)}>
       <SelectTrigger aria-label={label} data-testid={testid} title={title}
-                     className={cn("w-full! md:w-auto! min-w-0 border-border! bg-[var(--input-bg)]! px-2.5! disabled:opacity-60!", className)}>
+                     className={cn("w-full md:w-auto min-w-0 border-border bg-field px-2.5 disabled:opacity-60", className)}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -811,11 +801,11 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
   const showAssignee = !!filters.assignee || !!data?.assignees.length;
   return (
     <div role="search" className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center" data-testid="tickets-filters">
-      <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-[var(--input-bg)] md:inline-flex md:w-auto">
+      <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-field md:inline-flex md:w-auto">
         {LAYOUTS.map((l) => (
           <button key={l.value} type="button" aria-pressed={layout === l.value} disabled={disabled} data-testid={`layout-${l.value}`} onClick={() => onLayout(l.value)}
-                  className={cn("h-full! flex-1 border-0! border-r! border-border! bg-transparent! px-3.5! py-0! text-[13px]! font-medium! text-foreground! last:border-r-0! hover:bg-[var(--row-hover)]! disabled:opacity-60 max-md:px-1.5!",
-                    layout === l.value && "bg-foreground! text-background! hover:bg-foreground!")}>
+                  className={cn("h-full flex-1 border-0 border-r border-border bg-transparent px-3.5 py-0 text-[13px] font-medium text-foreground last:border-r-0 hover:bg-row-hover disabled:opacity-60 max-md:px-1.5",
+                    layout === l.value && "bg-foreground text-background hover:bg-foreground")}>
             {l.label}
           </button>
         ))}

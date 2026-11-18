@@ -1,5 +1,5 @@
 import { ApiError } from "../../../api";
-import { ageWords, clock, DAY, spanWords, sinceWords } from "../incidentTime";
+import { ageWords, clock, DAY, HOUR, MIN, spanWords, sinceWords } from "../../../lib/time";
 import type {
   IncidentAction, IncidentData, IncidentGroup, IncidentItem, IncidentsData, IncidentsQuery, IncidentState, WorthAction,
 } from "../Incidents.api";
@@ -14,11 +14,8 @@ export const SAMPLE_NOW = Date.parse("2026-11-02T14:49:00Z");
 /** The person looking at a sample: the incident that is "yours" is Lee's. */
 export const SAMPLE_ME = "Lee";
 
-const MIN = 60_000;
-const HOUR = 60 * MIN;
 const iso = (ms: number) => new Date(ms).toISOString();
 const since = (at: number) => sinceWords(at, SAMPLE_NOW);
-const age = (ms: number) => ageWords(ms);
 
 type How = "person" | "itself";
 interface Spec {
@@ -39,7 +36,7 @@ function stateWords(s: Spec) {
   if (s.state === "on_it" && s.owner) return `${s.owner.name} is on it since ${since(s.owner.at)}`;
   if (s.state === "resolved" && s.resolved) {
     if (s.resolved.how === "itself") return `resolved itself after ${spanWords(s.resolved.at - s.opened)}`;
-    const ago = age(SAMPLE_NOW - s.resolved.at);
+    const ago = ageWords(SAMPLE_NOW - s.resolved.at);
     return s.resolved.by ? `resolved by ${s.resolved.by}, ${ago}` : `resolved, ${ago}`;
   }
   return `open ${spanWords(SAMPLE_NOW - s.opened)}, nobody on it`;

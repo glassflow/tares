@@ -3,8 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, Checkbox, Dialog, EmptyState, Input, LineChart, ListRow, ListSection, Panel, Select,
-  Skeleton, StatusDot, StatusLabel, Switch, Tabs,
+  Banner, Button, Checkbox, Collapse, Dialog, EmptyState, Input, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, StatusDot, StatusLabel, Switch, Tabs,
 } from "../../components/edition";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
@@ -12,7 +11,7 @@ import {
   saveServiceSettings, sreService, type SreService, type SreServiceSettingsBody, type SreWindow,
 } from "./Services.api";
 import { isServiceSample, sampleSave, sampleService } from "./sample/services";
-import { count, serviceHref, STATE_TONE, up } from "./serviceWords";
+import { serviceHref, STATE_TONE, up } from "./serviceWords";
 
 // One service: what state it is in, a chart of its errors and traffic with its deploys, its
 // incidents, what the watcher raised, its blind spots, the repos its deploys come from, and its
@@ -31,19 +30,19 @@ const WINDOWS: { value: SreWindow; label: string }[] = [
 
 type Loaded = { page: SreService } | { missing: true };
 
-function Loading() {
+function ServiceSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="grid gap-6" data-testid="service-loading">
+    <Loading className="grid gap-6" data-testid="service-loading">
       <div className="grid gap-3"><Skeleton width="30%" /><Skeleton width="55%" /></div>
       <div className="border border-border bg-card p-4"><Skeleton width="100%" height={160} /></div>
       <div className="border border-border bg-card p-4 grid gap-3"><Skeleton width="40%" /><Skeleton width="70%" /><Skeleton width="55%" /></div>
-    </div>
+    </Loading>
   );
 }
 
 function BackLink() {
   return (
-    <Link to="/services" className="text-[13px] text-muted-foreground no-underline! hover:text-foreground" data-testid="back-to-services">
+    <Link to="/services" className="text-[13px] text-muted-foreground no-underline hover:text-foreground" data-testid="back-to-services">
       Services
     </Link>
   );
@@ -65,7 +64,7 @@ function Header({ page }: { page: SreService }) {
     <header className="grid gap-3" data-testid="service-header">
       <BackLink />
       <div className="min-w-0">
-        <h1 className="m-0! mb-1.5! text-[22px]! [overflow-wrap:anywhere] md:text-[28px]!" data-testid="service-title"
+        <h1 className="m-0 mb-1.5 text-[22px] [overflow-wrap:anywhere] md:text-[28px]" data-testid="service-title"
           {...(page.about ? { "data-user-text": "" } : {})}>
           {shownName}
         </h1>
@@ -131,7 +130,7 @@ function Incidents({ page }: { page: SreService }) {
       {page.incidents.length === 0 ? (
         <EmptyState title="No incidents">Nothing has gone wrong with this service.</EmptyState>
       ) : (
-        <ul className="m-0! list-none! p-0!">
+        <ul className="m-0 list-none p-0">
           {page.incidents.map((i) => (
             <li key={i.id}>
               <ListRow to={`/incidents/${encodeURIComponent(i.id)}`} data-testid="incident-row" data-state={i.state}>
@@ -157,7 +156,7 @@ function Raised({ page }: { page: SreService }) {
       {page.raised.length === 0 ? (
         <EmptyState title="Nothing raised">The watcher has not flagged anything about this service.</EmptyState>
       ) : (
-        <ul className="m-0! list-none! p-0!">
+        <ul className="m-0 list-none p-0">
           {page.raised.map((r) => (
             <li key={r.id}>
               <ListRow data-testid="raised-row" className="items-start">
@@ -188,7 +187,7 @@ function BlindSpots({ page }: { page: SreService }) {
       {spots.length === 0 ? (
         <p className="m-0 px-[18px] py-4 text-sm text-muted-foreground" data-testid="blind-spots-words">{page.blind_spots_words}</p>
       ) : (
-        <ul className="m-0! list-none! p-0!">
+        <ul className="m-0 list-none p-0">
           {spots.map((b, i) => (
             <li key={`${b.kind}-${i}`}>
               <ListRow className="items-start" data-testid="blind-spot-row">
@@ -212,7 +211,7 @@ function DeploysFrom({ page }: { page: SreService }) {
       {page.repos.length === 0 ? (
         <p className="m-0 px-[18px] py-4 text-sm text-muted-foreground">No repo is linked, so the chart shows no deploys. Link one under Settings below.</p>
       ) : (
-        <ul className="m-0! list-none! p-0!">
+        <ul className="m-0 list-none p-0">
           {page.repos.map((r) => (
             <li key={r.name}>
               <ListRow data-testid="repo-row">
@@ -278,17 +277,17 @@ function SettingsPanel({ page, save, readOnly, onReadOnly }: {
   return (
     <Panel title="Settings" data-testid="service-settings">
       <div className="grid max-w-xl gap-6">
-        {readOnly && (
+        <Collapse>{readOnly && (
           <Banner tone="note" data-testid="settings-readonly">
             This key can read but not change settings. Use a key that can write to change them.
           </Banner>
-        )}
-        {failed && (
+        )}</Collapse>
+        <Collapse>{failed && (
           <Banner tone="error" data-testid="settings-failed"
             action={<Button variant="secondary" onClick={() => run(failed)} disabled={busy}>Retry</Button>}>
             <b>Settings were not saved.</b> <span className="text-foreground">The cell did not accept the change. Try again.</span>
           </Banner>
-        )}
+        )}</Collapse>
         <Input
           label="Name shown"
           hint="Leave it empty to show the service's own name."
@@ -477,7 +476,7 @@ function ServiceLoader({ name }: { name: string }) {
   }
   const shown = answered ?? page;
   const waiting = !shown || (!decided.current && shown.state === "silent");
-  if (waiting || !shown) return <Loading />;
+  if (waiting || !shown) return <ServiceSkeleton />;
   const w = win ?? "24h";
   return (
     <>

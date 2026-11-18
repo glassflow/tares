@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { CopyButton, ErrorState, Picker, TimeAgo, usePolling } from "../components/bits";
+import { StatusLabel, STATUS_TONES } from "../components/edition";
 import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
@@ -36,11 +37,10 @@ const AUTONOMY_TEXT: Record<string, string> = {
 
 const CREW_ROLES = ["orchestrator", "reviewer", "releaser"];
 
+/** A station's state word; its tone comes from STATUS_TONES.crew, like every status in the console. */
 export function CrewState({ s }: { s: CrewStation }) {
   const title = s.state === "quiet" ? `nothing sent for ${s.quiet_minutes} min` : s.state_reason ?? undefined;
-  const cls = s.state === "working" ? "fo-st-in_progress" : s.state === "waiting" ? "fo-st-wait"
-    : s.state === "quiet" ? "fo-st-quiet" : "";
-  return <span className={`fo-st ${cls}`} title={title}>{s.state}</span>;
+  return <StatusLabel tone={STATUS_TONES.crew[s.state]} title={title}>{s.state}</StatusLabel>;
 }
 
 /** A capital first letter and a full stop, for a phrase a station wrote as a reason. */
@@ -623,7 +623,7 @@ function Settings({ st, grants, onChanged }: { st: CrewSettings; grants: string;
             <dt>Kit</dt>
             <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: stations that start or revive use the frozen kit, running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit</> : "following the checkout"}</dd>
             <dt>Wake on events</dt>
-            <dd>{st.idle_wake ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
+            <dd>{st.idle_wake !== false ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
             <dt>Pace before the plan's limits</dt>
             <dd>{st.pace ? "on: at 85% of the 5-hour window or 90% of the week no new builder starts and stations tick every 45 minutes; at 95% builders finish their step and wait; after the reset the watch resumes them" : "off: the crew runs until a limit stops it"}{" "}
               <button type="button" onClick={togglePace}>{st.pace ? "Turn off" : "Turn on"}</button>

@@ -4,8 +4,11 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { cloudLinkHere, useCloud } from "../../cloud";
-import { CLOUD_BACK, GithubPanel, SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings } from "../../pages/Security";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { CLOUD_BACK } from "../../pages/Security";
+import { TerseSettings } from "../settings/AccessPanels";
+import { GithubPanel } from "../settings/GithubPanel";
+import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
+import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
 import { Check, ChevronDown } from "../../components/icons";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -51,11 +54,11 @@ const FALLBACK_TITLE = "Set up your factory";
 const FALLBACK_EXIT = "Exit setup";
 const TEST_NEEDS_FIELDS = "Fill in the required settings first.";
 
-const SMALL_BTN = "h-8! px-3! text-[13px]!";
+const SMALL_BTN = "h-8 px-3 text-[13px]";
 // A button with the dark border of the main action (the mock's plain .btn), a red one for what removes,
 // and the same colours as the text of an error. Hover keeps the border, or the secondary variant would reset it.
-const DARK = "border-foreground! hover:border-foreground!";
-const DANGER_BTN = "border-[color:var(--danger-border)]! text-[color:color-mix(in_srgb,var(--err)_78%,var(--ink))]! hover:border-[color:var(--danger-border)]!";
+const DARK = "border-foreground hover:border-foreground";
+const DANGER_BTN = "border-err-border text-[color:color-mix(in_srgb,var(--err)_78%,var(--ink))] hover:border-err-border";
 const OK_TEXT = "text-[color:color-mix(in_srgb,var(--ok)_62%,var(--ink))]";
 // Narrow, the buttons of a row share its width, as in the mock.
 const ACTS = "flex flex-wrap items-center gap-2.5 max-[559px]:[&>*]:flex-auto";
@@ -66,9 +69,9 @@ const TAG_TONE: Record<SetupTag["key"], string> = {
   default: "border-foreground bg-foreground text-background",
   built_in: "border-border bg-muted text-muted-foreground",
   key: "border-border bg-muted text-muted-foreground",
-  app: cn("border-[color:var(--ok-border)] bg-[var(--ok-soft)]", OK_TEXT),
-  licence_ended: "border-[color:var(--warn)] bg-[var(--warn-soft)] text-foreground",
-  not_licensed: "border-[color:var(--warn)] bg-[var(--warn-soft)] text-foreground",
+  app: cn("border-ok-border bg-ok-soft", OK_TEXT),
+  licence_ended: "border-warn bg-warn-soft text-foreground",
+  not_licensed: "border-warn bg-warn-soft text-foreground",
 };
 
 function Tag({ tone, children, ...props }: { tone: string; children: React.ReactNode } & React.HTMLAttributes<HTMLSpanElement>) {
@@ -120,7 +123,7 @@ function settingsOf(fields: SetupField[], values: Values): Record<string, Settin
   return out;
 }
 
-const FIELD_BOX = "h-10! min-w-0";
+const FIELD_BOX = "h-10 min-w-0";
 const BAR = "shadow-[inset_3px_0_0_var(--err)]";
 
 function FieldLabel({ f, htmlFor, as: As = "label" }: { f: SetupField; htmlFor?: string; as?: "label" | "legend" }) {
@@ -213,19 +216,19 @@ function RepoCombo({ aria, value, onChange, repos, placeholder, more, className 
       />
       {listed && (
         <button type="button" tabIndex={-1} aria-hidden onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}
-          className="absolute inset-y-0 right-0 flex! w-10 items-center justify-center border-0! bg-transparent! p-0! text-muted-foreground"
+          className="absolute inset-y-0 right-0 flex w-10 items-center justify-center border-0 bg-transparent p-0 text-muted-foreground"
           data-testid="repo-toggle">
           <ChevronDown className="size-4" aria-hidden />
         </button>
       )}
       {expanded && (
         <ul id={listId} role="listbox" aria-label="Repositories" data-testid="repo-list"
-          className="absolute inset-x-0 top-full z-30 m-0! mt-1 max-h-72 list-none! overflow-y-auto border border-border bg-popover p-1! shadow-[0_6px_18px_var(--sheet-shadow)]">
+          className="absolute inset-x-0 top-full z-30 m-0 mt-1 max-h-72 list-none overflow-y-auto border border-border bg-popover p-1 shadow-[0_6px_18px_var(--sheet-shadow)]">
           {shown.map((r, i) => (
             <li key={r} id={`${listId}-${i}`} role="option" aria-selected={r.toLowerCase() === key}
               onMouseDown={(e) => { e.preventDefault(); pick(r); }} onMouseEnter={() => setHi(i)}
               className={cn("flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-sm [overflow-wrap:anywhere]",
-                i === hi && "bg-[var(--row-hover)]", r.toLowerCase() === key && "font-semibold")}
+                i === hi && "bg-row-hover", r.toLowerCase() === key && "font-semibold")}
               data-testid="repo-option">
               <span className="min-w-0">{r}</span>
               {r.toLowerCase() === key && <Check className="size-4 flex-none" aria-hidden />}
@@ -262,7 +265,7 @@ function SettingField({ f, value, error, onChange, via = "key", credential = "" 
   const help = helpText ? <p id={helpId} className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{helpText}</p> : null;
   // The list's own line: loading while the first list is asked for, then the cell's sentence when GitHub listed nothing.
   const status = !picking ? "" : list.loading && !list.repos ? f.picker_loading || "" : !list.repos ? list.note : "";
-  const err = error ? <p id={errId} className="m-0 text-[13px] font-semibold text-[color:var(--err)]" data-testid="field-error">{f.error}</p> : null;
+  const err = error ? <p id={errId} className="m-0 text-[13px] font-semibold text-err" data-testid="field-error">{f.error}</p> : null;
   const box = cn(FIELD_BOX, error && cn(ERROR_BORDER, BAR));
 
   if (f.kind === "bool") {
@@ -357,7 +360,7 @@ function SettingField({ f, value, error, onChange, via = "key", credential = "" 
       {control}
       {f.kind === "secret" && f.saved && f.saved_note && (
         <p id={`${id}-saved`} className="m-0 flex items-center gap-1.5 text-[13px] text-muted-foreground" data-testid="field-saved">
-          <Check className="size-3.5 flex-none text-[color:var(--ok)]" aria-hidden />
+          <Check className="size-3.5 flex-none text-ok" aria-hidden />
           <span>{f.saved_note}</span>
         </p>
       )}
@@ -378,7 +381,7 @@ const appFields = (fields: SetupField[]) => fields.filter((f) => f.kind !== "sec
 function AppSteps({ app }: { app: SetupApp }) {
   return (
     <div className="grid gap-2.5 border border-border bg-background p-4" data-testid="app-block">
-      <h2 className="m-0! text-sm! font-semibold!">What happens next</h2>
+      <h2 className="m-0 text-sm font-semibold">What happens next</h2>
       <ol className="m-0 grid list-decimal gap-1.5 pl-5 text-sm text-foreground">
         {app.steps.map((s) => <li key={s} className="[overflow-wrap:anywhere]">{s}</li>)}
       </ol>
@@ -482,7 +485,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
           <button
             type="button"
             onClick={onBack}
-            className="inline! border-0! bg-transparent! p-0! text-[13px]! font-normal! text-muted-foreground! underline! underline-offset-[3px] hover:text-foreground! cursor-pointer"
+            className="inline border-0 bg-transparent p-0 text-[13px] font-normal text-muted-foreground underline underline-offset-[3px] hover:text-foreground cursor-pointer"
             data-testid="form-back"
           >
             {stepName}
@@ -490,7 +493,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
           <span aria-hidden>/</span>
           <span aria-current="page" className="[overflow-wrap:anywhere]" data-testid="form-crumb">{form.title}</span>
         </nav>
-        <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]! [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{form.title}</h1>
+        <h1 className="m-0 text-[22px] min-[900px]:text-[26px] [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{form.title}</h1>
         <p className="m-0 mt-1 text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="form-lead">{form.lead}</p>
       </div>
 
@@ -508,7 +511,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
         {done && app.done && (
           <div className="border-t border-border pt-4">
             <div
-              className={cn("border border-[color:var(--ok-border)] bg-[var(--ok-soft)] px-3 py-2 text-[13px] [overflow-wrap:anywhere]", OK_TEXT)}
+              className={cn("border border-ok-border bg-ok-soft px-3 py-2 text-[13px] [overflow-wrap:anywhere]", OK_TEXT)}
               role="status"
               data-testid="app-done"
             >
@@ -524,8 +527,8 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
                 className={cn(
                   "mb-2 border px-3 py-2 text-[13px] [overflow-wrap:anywhere]",
                   test.ok
-                    ? cn("border-[color:var(--ok-border)] bg-[var(--ok-soft)]", OK_TEXT)
-                    : "border-[color:var(--danger-border)] bg-[var(--err-soft)] font-semibold text-[color:color-mix(in_srgb,var(--err)_78%,var(--ink))]",
+                    ? cn("border-ok-border bg-ok-soft", OK_TEXT)
+                    : "border-err-border bg-err-soft font-semibold text-[color:color-mix(in_srgb,var(--err)_78%,var(--ink))]",
                 )}
                 data-testid="test-line"
                 data-ok={test.ok}
@@ -544,7 +547,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
             </div>
           </div>
         )}
-        {problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}
+        <Collapse>{problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}</Collapse>
         <div className={ACTS}>
           {/* once the app is done, saving connects it for this step: the app alone only lets the cell in */}
           {choosing ? (
@@ -608,7 +611,7 @@ function ConnectedRow({ c, slot, busy, asking, onAsk, onAnswer, onAction }: {
         )}
       </div>
       {asking && c.confirm && (
-        <div role="alertdialog" aria-labelledby={`ask-${slot}-${c.id}`} className="grid gap-2 border border-[color:var(--danger-border)] bg-[var(--err-soft)] p-3" data-testid="confirm">
+        <div role="alertdialog" aria-labelledby={`ask-${slot}-${c.id}`} className="grid gap-2 border border-err-border bg-err-soft p-3" data-testid="confirm">
           <div id={`ask-${slot}-${c.id}`} className="text-sm font-semibold">{c.confirm.title}</div>
           <p className="m-0 text-[13px] [overflow-wrap:anywhere]" data-user-text>{c.confirm.text}</p>
           <div className="flex flex-wrap gap-2">
@@ -639,7 +642,7 @@ function AvailableRow({ a, onConnect }: { a: SetupAvailable; onConnect: () => vo
         )}
         {aboutLicence && (
           <a href={ENTERPRISE_URL} target="_blank" rel="noreferrer" data-testid="row-licence-link"
-             className="mt-1 inline-block text-[13px] text-foreground! underline! decoration-border! underline-offset-[3px]">About the enterprise licence</a>
+             className="mt-1 inline-block text-[13px] text-foreground underline decoration-border underline-offset-[3px]">About the enterprise licence</a>
         )}
       </div>
       <div className="flex flex-none items-center gap-2">
@@ -650,7 +653,7 @@ function AvailableRow({ a, onConnect }: { a: SetupAvailable; onConnect: () => vo
 }
 
 function SectionHead({ children, ...props }: { children: React.ReactNode } & React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className="m-0! mb-2 font-mono text-xs! font-medium! uppercase tracking-[0.08em]! text-muted-foreground" {...props}>{children}</h2>;
+  return <h2 className="m-0 mb-2 text-base" {...props}>{children}</h2>;
 }
 
 /** The step after this one in the rail, for the footer's button; null on the last. */
@@ -691,21 +694,21 @@ function StepView({ step, footer = true, nextStep, busy, asking, notice, problem
   return (
     <div className="grid min-w-0 max-w-[880px] gap-6" data-testid="step-view" data-slot={step.slot}>
       <div className="grid gap-2">
-        <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]! [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{step.name}</h1>
+        <h1 className="m-0 text-[22px] min-[900px]:text-[26px] [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{step.name}</h1>
         <p className="m-0 max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{step.why}</p>
       </div>
 
-      {step.banner && <Banner tone="warn" data-testid="step-banner"><span data-user-text>{step.banner.text}</span></Banner>}
-      {notice && (
+      <Collapse>{step.banner && <Banner tone="warn" data-testid="step-banner"><span data-user-text>{step.banner.text}</span></Banner>}</Collapse>
+      <Collapse>{notice && (
         <Banner tone="note" data-testid="flash" action={<Button variant="quiet" className={SMALL_BTN} onClick={onClearNotice}>Dismiss</Button>}>
           <span data-user-text>{notice}</span>
         </Banner>
-      )}
-      {problem && <Banner tone="error" data-testid="step-error"><span data-user-text>{problem}</span></Banner>}
+      )}</Collapse>
+      <Collapse>{problem && <Banner tone="error" data-testid="step-error"><span data-user-text>{problem}</span></Banner>}</Collapse>
 
       <section aria-labelledby="connected-head" data-testid="connected">
         <SectionHead id="connected-head">{step.connected_heading}</SectionHead>
-        <ul className="m-0! list-none! border border-border bg-card p-0!">
+        <ul className="m-0 list-none border border-border bg-card p-0">
           {step.connected.map((c) => (
             <ConnectedRow
               key={c.id}
@@ -725,7 +728,7 @@ function StepView({ step, footer = true, nextStep, busy, asking, notice, problem
       {step.available.length > 0 && (
         <section aria-labelledby="available-head" data-testid="available">
           <SectionHead id="available-head">{step.available_heading}</SectionHead>
-          <ul className="m-0! list-none! border border-border bg-card p-0!">
+          <ul className="m-0 list-none border border-border bg-card p-0">
             {step.available.map((a) => <AvailableRow key={a.id} a={a} onConnect={() => onConnect(a.id)} />)}
           </ul>
         </section>
@@ -743,7 +746,7 @@ function StepView({ step, footer = true, nextStep, busy, asking, notice, problem
 function StepHead({ name, why }: { name: string; why: string }) {
   return (
     <div className="grid gap-2">
-      <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]! [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{name}</h1>
+      <h1 className="m-0 text-[22px] min-[900px]:text-[26px] [overflow-wrap:anywhere]" data-testid="page-title" tabIndex={-1}>{name}</h1>
       <p className="m-0 max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{why}</p>
     </div>
   );
@@ -779,7 +782,7 @@ function GithubView({ name, next, onGo, footer }: { name: string; next: NextStep
   return (
     <div className="grid min-w-0 max-w-[880px] gap-6" data-testid="step-view" data-slot="github">
       <StepHead name={name} why={GITHUB_WHY} />
-      <TerseSettings.Provider value={true}><div className="settings-tool min-w-0"><GithubPanel cloud={cloud} /></div></TerseSettings.Provider>
+      <TerseSettings.Provider value={true}><GithubPanel cloud={cloud} title="Accounts" /></TerseSettings.Provider>
       {footer && <StepFooter hint="" next={next} onGo={onGo} />}
     </div>
   );
@@ -796,8 +799,8 @@ function NotificationsView() {
       <StepHead name="Notifications" why={NOTIFICATIONS_WHY} />
       <TerseSettings.Provider value={true}>
         {url
-          ? <div className="settings-tool min-w-0"><SlackCloudPanel cloud={cloud} connectUrl={url} /></div>
-          : <div className="settings-tool grid min-w-0 gap-4"><SlackTokenPanel /><SlackSigningSecretPanel /></div>}
+          ? <SlackCloudPanel cloud={cloud} connectUrl={url} />
+          : <SlackSelfHostedPanels />}
       </TerseSettings.Provider>
     </div>
   );
@@ -844,8 +847,8 @@ function StepButton({ s, n, current, onPick, id, plain }: { s: RailItem; n: numb
       onClick={onPick}
       aria-current={current ? "step" : undefined}
       className={cn(
-        "flex! w-full items-start gap-3 border-0! border-b! border-border! bg-transparent! px-3! py-3! text-left font-normal! text-foreground! cursor-pointer hover:bg-[var(--row-hover)]! last:border-b-0!",
-        current && "bg-[var(--row-hover)]! shadow-[inset_2px_0_0_var(--accent)]",
+        "flex w-full items-start gap-3 border-0 border-b border-border bg-transparent px-3 py-3 text-left font-normal text-foreground cursor-pointer hover:bg-row-hover last:border-b-0",
+        current && "bg-row-hover shadow-[inset_2px_0_0_var(--accent)]",
       )}
       data-testid={`${id}-${s.key}`}
       data-state={s.set ? "set" : "not_set"}
@@ -888,8 +891,8 @@ function Rail({ items, current, progress, onPick, plain = false }: {
     <>
       <nav aria-label={plain ? "Integrations" : "Steps"} className={cn("hidden self-start sticky top-6 gap-3", "min-[900px]:grid")} data-testid="rail">
         {!plain && <div className="grid gap-2">
-          <h2 className="m-0! text-sm! font-semibold" data-testid="progress-text">{text}</h2>
-          <div className="h-1 bg-[var(--wash-2)]" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={set} aria-label={text}>
+          <h2 className="m-0 text-sm font-semibold" data-testid="progress-text">{text}</h2>
+          <div className="h-1 bg-wash-strong" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={set} aria-label={text}>
             <div className="h-full bg-foreground" style={{ width: `${total ? (set / total) * 100 : 0}%` }} />
           </div>
         </div>}
@@ -1130,11 +1133,11 @@ function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reloa
       <div className={cn("grid min-w-0 gap-6", !showForm && "min-[900px]:grid-cols-[272px_minmax(0,1fr)] min-[900px]:gap-8")}>
         {!showForm && <Rail items={items} current={key} progress={data.progress} onPick={go} plain={!setupMode} />}
         <div ref={headRef} className="grid min-w-0 content-start gap-4">
-          {cloudBack && !showForm && (
+          <Collapse>{cloudBack && !showForm && (
             <Banner tone={cloudBack.kind === "error" ? "error" : "note"} data-testid="cloud-back">
               <span data-user-text>{cloudBack.text}{cloudBack.detail ? ` ${cloudBack.detail}` : ""}</span>
             </Banner>
-          )}
+          )}</Collapse>
           {key === "overview" ? <OverviewView data={data} numbers={stepNumbers(items)} next={nextStep} onGo={(k) => go(k as StepKey)} />
           : key === "github" ? <GithubView name={setupMode ? "GitHub" : "Code"} next={nextStep} onGo={go} footer={setupMode} />
           : key === "notifications" ? <NotificationsView />
@@ -1194,7 +1197,7 @@ export function FactoryIntegrations() {
   const { data, error, reload } = usePagePolling<SetupData>(() => (sample ? sampleLoad(sample).then(withSampleAround) : setupRead()), 0);
   if (data) return <Setup data={data} reload={reload} first={params.get("step")} mode="integrations" />;
   return error ? (
-    <div role="alert" className="border border-[color:var(--danger-border)] bg-[var(--err-soft)] px-3.5 py-2.5 text-[13px] text-foreground" data-testid="integrations-error">
+    <div role="alert" className="border border-err-border bg-err-soft px-3.5 py-2.5 text-[13px] text-foreground" data-testid="integrations-error">
       <b>The integrations could not be loaded.</b> Nothing was changed.
       <Button variant="secondary" className={cn(SMALL_BTN, DARK, "ml-2 align-middle")} onClick={reload}>Try again</Button>
     </div>
@@ -1214,8 +1217,8 @@ export default function FactorySetup() {
       <HeaderBits title={FALLBACK_TITLE} exit={FALLBACK_EXIT} />
       {error ? (
         <div className="grid max-w-[880px] gap-4">
-          <h1 className="m-0! text-[22px]! min-[900px]:text-[26px]!" data-testid="page-title">{FALLBACK_TITLE}</h1>
-          <div role="alert" className="border border-[color:var(--danger-border)] bg-[var(--err-soft)] px-3.5 py-2.5 text-[13px] text-foreground" data-testid="setup-error">
+          <h1 className="m-0 text-[22px] min-[900px]:text-[26px]" data-testid="page-title">{FALLBACK_TITLE}</h1>
+          <div role="alert" className="border border-err-border bg-err-soft px-3.5 py-2.5 text-[13px] text-foreground" data-testid="setup-error">
             <p className="m-0 [overflow-wrap:anywhere]">
               <b>{LOAD_ERROR_LEAD}</b> {LOAD_ERROR_CAUSE}
               <Button variant="secondary" className={cn(SMALL_BTN, DARK, "ml-2 align-middle")} onClick={reload} data-testid="setup-retry">Try again</Button>

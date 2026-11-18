@@ -40,6 +40,7 @@ ROLES = ("orchestrator", "reviewer", "releaser", "builder")
 STALL_AFTER = 45 * 60   # seconds a held ticket may go without news before the orchestrator is told
 DESK_ASK_EVERY = 3600   # seconds an open desk item waits before the orchestrator is told to ask again
 KEYS_SHOWN = 5
+KEY_CHARS = 80
 DEFAULT_SETTLE = 600   # seconds a session may be active after a wake before the clock restarts (FACTORY_WAKE_SETTLE)
 
 _RELEASE = re.compile(r"(^|[^A-Za-z])RELEASE([^A-Za-z]|$)")
@@ -376,8 +377,12 @@ def work_prompt(role: str, items: str) -> str:
 
 
 def woke_on(keys: list) -> str:
-    """The keys that woke a station, in one short line."""
-    shown = ", ".join(keys[:KEYS_SHOWN])
+    """The keys that woke a station, in one short line: each key on one line and cut at KEY_CHARS."""
+    def one(key) -> str:
+        text = " ".join(str(key).split())
+        return text if len(text) <= KEY_CHARS else text[:KEY_CHARS - 3].rstrip() + "..."
+
+    shown = ", ".join(one(k) for k in keys[:KEYS_SHOWN])
     more = f" and {len(keys) - KEYS_SHOWN} more" if len(keys) > KEYS_SHOWN else ""
     return f"Woke on: {shown}{more}."
 

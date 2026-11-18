@@ -19,6 +19,23 @@ export function groupWaiting(items: HomeItem[]): WaitingGroups {
   return now.length + rest.length === 0 ? { now, rest: older, older: [] } : { now, rest, older };
 }
 
+/** The decision on top of the list: the first item the page draws, from what holds the crew up,
+ *  else the rest. Its main action is Home's one primary button (TR-1275); none when nothing waits. */
+export function topItem(items: HomeItem[]): HomeItem | undefined {
+  const g = groupWaiting(items);
+  return g.now[0] ?? g.rest[0];
+}
+
+/** What a button does, for a screen reader, when its label alone does not say it. Allow grants
+ *  the command the crew asked for, so its name carries that command (TR-1275). */
+export function actionName(action: HomeAction, item?: HomeItem): string | undefined {
+  if (action.do !== "allow" || !item) return undefined;
+  const cmd = /`([\s\S]+)`/.exec(item.detail)?.[1].split(/\s+/).join(" ").trim();
+  if (!cmd) return undefined;
+  const where = item.project ? ` in ${item.project.name}` : "";
+  return `${action.label}: let the crew run ${cmd}${where}`; // words-ok
+}
+
 /** One button per option of a desk question, and the crew's recommendation above them. A click
  *  is an action `choose` with the option's own text, which the page sends as the answer. */
 export function QuestionChoices({ item, render }: {
@@ -47,13 +64,13 @@ export function QuestionChoices({ item, render }: {
 }
 
 /** The fold under a list: "3 older things", open in place. */
-export function OlderFold({ items, children }: { items: HomeItem[]; children: (items: HomeItem[]) => React.ReactNode }) {
+export function OlderFold({ items, children, className }: { items: HomeItem[]; children: (items: HomeItem[]) => React.ReactNode; className?: string }) {
   const [open, setOpen] = React.useState(false);
   if (items.length === 0) return null;
   return (
     <>
-      <div className="border-t border-border px-4 py-2.5" data-testid="waiting-older">
-        <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <div className={cn("border-t border-border px-4 py-2.5", className)} data-testid="waiting-older">
+        <Button variant="quiet" className="px-0 text-foreground underline" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
           {open ? "Hide" : "Show"} {items.length} older {items.length === 1 ? "thing" : "things"}
         </Button>
         {!open && <span className="ml-2 text-xs text-muted-foreground">waited more than a week, holding nothing up</span>}
@@ -64,9 +81,10 @@ export function OlderFold({ items, children }: { items: HomeItem[]; children: (i
 }
 
 /** A heading inside the list, above a group. */
-export function GroupHead({ title, testid }: { title: string; testid: string }) {
+/** On the paper (`flush`) it is a plain line with no band and no inset; inside a box it keeps both. */
+export function GroupHead({ title, testid, flush }: { title: string; testid: string; flush?: boolean }) {
   return (
-    <div className={cn("border-b border-border bg-[var(--wash)] px-4 py-2 text-[12.5px] font-semibold")} data-testid={testid}>
+    <div className={cn("border-b border-border bg-wash px-4 py-2 text-[12.5px] font-semibold", flush && "border-b-0 bg-transparent px-0 pb-1 pt-4")} data-testid={testid}>
       {title}
     </div>
   );

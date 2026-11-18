@@ -1,0 +1,2 @@
+Changed
+Export connections has a new look: pick the connections to export, see which carry a secret, and get the file to copy or download. When an export is refused or fails, the page says why; before, the daemon's error answer was shown as if it were the file. A key that can read but not write is told it can't export before it tries. Changing the picks, or turning secrets on, drops a file made before, so the file on screen always matches what is picked. The downloaded file is now named tares-connections.yaml (TR-1394).

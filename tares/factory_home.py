@@ -26,9 +26,9 @@ CACHE_SECONDS = 5
 
 # the kinds of waiting item; `permission` is a desk item asking to run a command, `signoff` a
 # project ready to close; `grant` (a grant waiting for your consent) and `desk` (a desk item
-# addressed to you) come with teams
+# addressed to you) come with teams; `rule` is a rule the crew proposes (TR-1275)
 KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "permission",
-         "milestone_to_check", "signoff", "grant", "desk")
+         "milestone_to_check", "signoff", "grant", "desk", "rule")
 # what a button does on the page when it is not a link
 ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later")
 
@@ -518,7 +518,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
-    settings = fx.settings() if fx else dict(factory_mod.CREW_DEFAULTS)
+    settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
     team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
     # a private project the caller is not on is left out of every count and name
     hidden = fx.hidden_ids() if fx else set()

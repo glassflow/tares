@@ -5,7 +5,7 @@ exit: 0
 -- stderr --
   ✓ started links-app-build-m1 (opus, high)
 -- after --
-"{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"You are the builder station `links-app-build-m1` of the tares-factory crew. You work on project `Links_App` (id `uc_links`) in ?. The plan, tickets, assumptions, checks, reviews and the desk are on Tares (http://127.0.0.1:<PORT>), through the Tares MCP tools. Your rules are in the skills `factory-protocol` and `station-builder`. This session was resumed: load both skills again, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows idle_wake true, arm none: the factory wakes you), then carry on where your report left off.\"}}\n"
+"{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"You are the builder station `links-app-build-m1` of the tares-factory crew. You work on project `Links_App` (id `uc_links`) in ?. The plan, tickets, assumptions, checks, reviews and the desk are on Tares (http://127.0.0.1:<PORT>), through the Tares MCP tools. Your rules are in the skills `factory-protocol` and `station-builder`. This session was resumed: load both skills again, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, check get_crew_settings: arm no schedule of your own unless idle_wake is false (the factory wakes you); when it is false, check CronList and re-arm your schedule if it is missing. Then carry on where your report left off.\"}}\n"
 == file crew/crew.json ==
 {
   "authorized": {

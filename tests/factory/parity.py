@@ -2325,12 +2325,26 @@ _WATCHING: dict = {}
 scenario(Scenario(
     name="doctor_idle_wake",
     suite="idle_wake",
-    about="status and doctor: idle_wake off says nothing",
+    about="status and doctor: idle_wake set to false has no status line, and doctor warns that the ticks run",
     setup=_settings_and_stations(),
     steps=[Step(["status"], drop=DOCTOR_DROP), Step(["doctor"], drop=DOCTOR_DROP)],
     checks=[("off: status and doctor have no wake line",
-             lambda r: "idle_wake: on" not in r.out(0) and "idle_wake is on" not in r.out(1))],
-    covers=["off: status and doctor have no wake line"],
+             lambda r: "idle_wake: on" not in r.out(0) and "idle_wake is on" not in r.out(1)),
+            ("off: doctor warns that each station ticks with nothing to do",
+             lambda r: "warn  idle_wake is off: each station wakes on its own tick" in r.out(1))],
+    covers=["off: status and doctor have no wake line", "off: doctor warns that each station ticks with nothing to do"],
+))
+
+scenario(Scenario(
+    name="doctor_idle_wake_default",
+    suite="idle_wake",
+    about="status and doctor: idle_wake never set counts as on",
+    setup=_settings_and_stations(idle_wake=None),
+    steps=[Step(["status"], drop=DOCTOR_DROP), Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("unset: status says on, and doctor has no off warning",
+             lambda r: any(x.startswith("idle_wake: on") for x in r.out(0).splitlines())
+             and "idle_wake is off" not in r.out(1) and "idle_wake is on but the watch is not running" in r.out(1))],
+    covers=["unset: status says on, and doctor has no off warning"],
 ))
 
 scenario(Scenario(
@@ -2366,6 +2380,15 @@ scenario(Scenario(
 # answers the scenario names, and writes down what it was asked (the route and whether a key came with it,
 # never the key). TARESD_URL names it for both engines.
 
+def _ticking(doc: dict) -> dict:
+    """Settings that name no idle_wake are a crew that ticks, as the scenarios were recorded before idle_wake
+    was on by default; a scenario of the default names idle_wake None."""
+    inner = doc.get("settings")
+    if isinstance(inner, dict):
+        return {**doc, "settings": {"idle_wake": False, **inner}}
+    return {"idle_wake": False, **doc}
+
+
 class FakeTares:
     """routes: {"GET /api/crew/projects": (status, json document or text)}; unnamed routes answer 404."""
 
@@ -2398,6 +2421,8 @@ class FakeTares:
                         status, doc = hit
                 if callable(doc):   # a stateful answer: doc(request body, the fake)
                     doc = doc(body, fake)
+                if key.split("?", 1)[0] == "GET /api/crew/settings" and status == 200 and isinstance(doc, dict):
+                    doc = _ticking(doc)
                 data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -5775,7 +5800,7 @@ scenario(Scenario(
     checks=[
         ("the daemon ran", lambda r: r.code(0) == 0),
         ("setup: a ticket waits in the review queue", lambda r: _iwd(r, "waiting")["queue"] == 1),
-        ("the setting starts unset", lambda r: _iwd(r, "unset")["idle_wake"] is None),
+        ("the setting starts on, though nobody set it", lambda r: _iwd(r, "unset")["idle_wake"] is True),
         ("setup: the queue is empty", lambda r: _iwd(r, "emptied")["queue"] == 0),
         ("the setting reads back true", lambda r: _iwd(r, "on")["idle_wake"] is True),
         ("setup: the queue has the PR at its head", lambda r: _iwd(r, "head")["head"] == "1111111aaaaaaaa"),
@@ -5788,7 +5813,7 @@ scenario(Scenario(
         ("setup: a head nobody has seen yet, with a current verdict",
          lambda r: _iwd(r, "unseen")["head"] == "6666666ffffffff" and _iwd(r, "unseen")["current"] is True),
     ],
-    covers=["setup: a ticket waits in the review queue", "the setting starts unset", "setup: the queue is empty",
+    covers=["setup: a ticket waits in the review queue", "the setting starts on, though nobody set it", "setup: the queue is empty",
             "an open question is not an answer",
             "the setting reads back true", "setup: the queue has the PR at its head", "setup: a current verdict is recorded",
             "setup: the question is answered", "setup: a second question is answered",
