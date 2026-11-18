@@ -531,8 +531,9 @@ FACTORY_SCHEMA = [
       updated_at    TIMESTAMPTZ
     )""",
     "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
-    # TR-858: the files (and head) a pull request had before its branch was brought up to date,
-    # as JSON, and how many ticks in a row GitHub could not say whether it merges.
+    # TR-858: the files (and head) a pull request had before its branch was last brought up to
+    # date, as JSON (kept until the row ends: a queued row that has it holds its repo's turn), and
+    # how many ticks in a row GitHub could not say whether it merges.
     "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS before_files TEXT",
     "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS unknown_ticks INTEGER",
     # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
