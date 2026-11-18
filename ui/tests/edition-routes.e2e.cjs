@@ -27,7 +27,7 @@ const vm = require("vm");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const ts = require(path.join(UI_DIR, "node_modules", "typescript"));
 const { checkWords } = require("./words.cjs");
 
@@ -144,15 +144,15 @@ function loadSample(env) {
 
       await panel.locator('a[href="/sources"]').click();
       await page.waitForLoadState("networkidle");
-      ck("factory: Connections opens today's Sources page", where(page) === "/sources"
-         && await page.getByRole("heading", { name: "Sources", exact: true }).isVisible(), where(page));
+      ck("factory: Connections opens the Connections page", where(page) === "/sources"
+         && await page.getByRole("heading", { name: "Connections", exact: true }).isVisible(), where(page));
 
       await go(page, e, "/settings");
       await page.getByTestId("pane-crew").waitFor();
       ck("factory: /settings is the Settings page with its own sidebar", where(page) === "/settings" && (await page.getByTestId("settings-nav").count()) === 1);
       await go(page, e, "/sources");
-      ck("factory: /sources still opens today's Sources page", where(page) === "/sources"
-         && await page.getByRole("heading", { name: "Sources", exact: true }).isVisible(), where(page));
+      ck("factory: /sources opens the Connections page", where(page) === "/sources"
+         && await page.getByRole("heading", { name: "Connections", exact: true }).isVisible(), where(page));
       await go(page, e, "/explore");
       ck("factory: /explore still opens today's Explore page", where(page) === "/explore"
          && await page.getByRole("heading", { name: "Explore", exact: true }).isVisible(), where(page));
@@ -257,7 +257,7 @@ function loadSample(env) {
       ck("platform: a ticket address stays and says the page does not exist", where(page) === "/projects/x/tickets/T1"
          && (await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
       await go(page, e, "/sources");
-      ck("platform: /sources is Sources", await page.getByRole("heading", { name: "Sources", exact: true }).isVisible());
+      ck("platform: /sources is the Connections page", await page.getByRole("heading", { name: "Connections", exact: true }).isVisible());
       await shot(page, "settings-platform-1440.png");
       await ctx.close();
     }

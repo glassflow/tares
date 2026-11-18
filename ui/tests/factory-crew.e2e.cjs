@@ -26,7 +26,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8851);
@@ -104,7 +104,7 @@ async function waitFor(url, tries = 100) {
        && /Heard \d+ seconds? ago/.test(await lead.innerText()) && /Memory 82% full/.test(await lead.innerText()), await lead.innerText());
     ck("the reviewer is idle", /Reviewer · Idle for 1 minute/.test(await member(page, "Reviewer").first().innerText()), await member(page, "Reviewer").first().innerText());
     ck("the releaser is idle for two hours", /Releaser · Idle for 2 hours/.test(await member(page, "Releaser").first().innerText()));
-    const groups = await page.getByTestId("crew-builders").evaluate((s) => [...s.querySelectorAll("[data-user-text]")].filter((e) => e.parentElement.className.includes("wash-2"))
+    const groups = await page.getByTestId("crew-builders").evaluate((s) => [...s.querySelectorAll("[data-user-text]")].filter((e) => e.parentElement.className.includes("bg-wash-strong"))
       .map((e) => [e.textContent, e.nextElementSibling.textContent]));
     ck("builders sit in their projects, each with running and total; the finished project's builder is left out",
        JSON.stringify(groups) === JSON.stringify([["project-x", "2 running · 3"], ["project-y", "1 running · 1"]]), JSON.stringify(groups));
@@ -128,7 +128,9 @@ async function waitFor(url, tries = 100) {
     const y = member(page, "Not heard from in 2 hours");
     ck("a builder not heard from for two hours says so", (await y.count()) === 1 && (await y.getAttribute("data-state")) === "not heard" && /Memory 88% full/.test(await y.innerText()));
     const bars = await page.getByTestId("memory-bar").evaluateAll((b) => b.map((x) => [x.getAttribute("aria-valuenow"), x.className.includes("--warn") ? "warn" : x.className.includes("bg-foreground") ? "ink" : "?"]));
-    ck("a memory bar is amber from 80%, ink below", JSON.stringify(bars) === JSON.stringify([["82", "warn"], ["41", "ink"], ["58", "ink"], ["63", "ink"], ["88", "warn"]]), JSON.stringify(bars));
+    ck("every memory bar is ink, amber stays for action (TR-1273)", JSON.stringify(bars) === JSON.stringify([["82", "ink"], ["41", "ink"], ["58", "ink"], ["63", "ink"], ["88", "ink"]]), JSON.stringify(bars));
+    const loud = await page.getByTestId("memory-bar").evaluateAll((b) => b.map((x) => x.nextElementSibling?.className.includes("text-foreground") ? "ink" : "muted"));
+    ck("the words beside a bar at 80% or more are in ink, the rest muted", JSON.stringify(loud) === JSON.stringify(["ink", "muted", "muted", "muted", "ink"]), JSON.stringify(loud));
     const body = await page.getByTestId("factory-crew").innerText();
     ck("no station name, session or version shows outside the fold", !/project-x-build|crew-orchestrator|crew-reviewer|crew-releaser|ctx|claude_version|\bv\d+\.\d+/.test(body)
        && !/\bsession\b/i.test(body), body.slice(0, 200));
@@ -273,7 +275,7 @@ async function waitFor(url, tries = 100) {
       ck("no Releaser now, and the words follow", JSON.stringify(await heads(p)).indexOf("Releaser") < 0
          && /The crew merges after its review and green CI\./.test(await p.getByTestId("crew-how-far").innerText())
          && /No releases\. Up to 4 builders at once\./.test(await p.getByTestId("crew-how-far").innerText()));
-      ck("the 5-hour bar is amber", await p.getByTestId("crew-plan").locator("[role=progressbar]").first().evaluate((b) => b.className.includes("--warn")));
+      ck("the 5-hour bar at 86% is ink, the pacing sentence says it is full (TR-1273)", await p.getByTestId("crew-plan").locator("[role=progressbar]").first().evaluate((b) => !b.className.includes("--warn") && b.className.includes("bg-foreground")));
       await checkWords(p, ck, "live paced");
       await shot(p, "live-paced-1440.png");
       await c.close();
@@ -523,7 +525,7 @@ async function waitFor(url, tries = 100) {
              && (await p.getByTestId("crew-of-person").nth(1).getByTestId("crew-of-person-body").count()) === 1);
           await p.evaluate(() => { try { localStorage.removeItem("taresCrewFolds"); } catch (e) { /* none */ } });
         }
-        if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("wash-2")).length)) === 4);
+        if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("bg-wash-strong")).length)) === 4);
         if (name === "long") ck(`${tag}: long names and texts wrap inside the page`, (await overflow(p)) <= 0);
         ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
         await checkWords(p, ck, tag);

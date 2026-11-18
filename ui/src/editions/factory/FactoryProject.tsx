@@ -2,20 +2,22 @@ import * as React from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Dialog, Initials, Input, ProgressBar, Textarea, useToast } from "../../components/edition";
+import {
+  Banner, Button, Collapse, Dialog, EmptyState, Initials, Input, ProgressBar, StatusDot, Textarea, toneOf, useToast,
+} from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import {
   type ProjectPeople, type ProjectPerson,
-  type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type TicketState,
+  type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
 import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
-import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
+import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { sampleClose } from "./projectSamples";
 import { PageHead, pageHref, ProjectShell, waitingItems, type ProjectCtx, type ProjectPage } from "./ProjectShell";
 
@@ -34,22 +36,13 @@ const NOT_CLOSED = "Try again in a moment.";
 const NOT_SAVED = "That was not saved. Try again in a moment.";
 const STEPS = ["Spec", "Build", "Review", "Done"];
 
-const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
+const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
-const CARD = "border border-border bg-card";
-const SECTION_H = "m-0! text-base!";
-const ROW = "border-b border-border px-4 py-3 last:border-b-0";
-
-const DOT: Record<TicketState, string> = {
-  "to do": "border border-[color:var(--ink-faint)]",
-  "in progress": "bg-[var(--accent)]",
-  "in review": "bg-[var(--accent-deep)]",
-  "changes asked": "bg-[var(--warn)]",
-  blocked: "bg-[var(--err)]",
-  merged: "bg-[var(--ok)]",
-  canceled: "bg-[var(--ink-faint)]",
-};
+const LINK = "text-foreground underline";
+/** A section's body sits on the paper (TR-1274): the rule over its head and the rules between rows carry it. */
+const CARD = "min-w-0";
+const SECTION_H = "m-0 text-base";
+const ROW = "border-b border-border py-3 last:border-b-0";
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -58,7 +51,7 @@ const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0)
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3">
       <h2 className={SECTION_H}>{title}</h2>
       {aside}
     </div>
@@ -66,7 +59,7 @@ function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode 
 }
 
 const Empty = ({ children, testid }: { children: React.ReactNode; testid: string }) => (
-  <div className={cn(CARD, "px-4 py-5 text-muted-foreground")} data-testid={testid}>{children}</div>
+  <div className={cn(CARD, "py-2 text-muted-foreground")} data-testid={testid}>{children}</div>
 );
 
 // ── the header ────────────────────────────────────────────────────────────────
@@ -74,7 +67,7 @@ const Empty = ({ children, testid }: { children: React.ReactNode; testid: string
 function Steps({ stage, finished }: { stage: FactoryProjectData["stage"]; finished: boolean }) {
   const current = finished ? STEPS.length : ["spec", "build", "review", "done"].indexOf(stage);
   return (
-    <ol aria-label="Stages" data-testid="project-steps" className="m-0! flex max-w-[560px] list-none p-0!">
+    <ol aria-label="Stages" data-testid="project-steps" className="m-0 flex max-w-[560px] list-none p-0">
       {STEPS.map((name, i) => {
         const done = i < current;
         const now = i === current;
@@ -83,8 +76,8 @@ function Steps({ stage, finished }: { stage: FactoryProjectData["stage"]; finish
               className={cn("flex min-w-0 flex-[1_1_0] items-center gap-1.5 text-[13px] text-muted-foreground sm:gap-2 last:flex-none",
                             "after:mx-1 after:h-0.5 after:min-w-2 after:flex-1 after:bg-border after:content-[''] last:after:hidden sm:after:mx-2",
                             done && "text-foreground after:bg-foreground", now && "font-semibold text-foreground")}>
-            <span className={cn("grid size-[22px] flex-none place-items-center border border-foreground bg-[var(--input-bg)] font-mono text-[11px] text-foreground",
-                                done && "bg-foreground text-background", now && "bg-[var(--accent)] text-[color:var(--on-accent)]")}>
+            <span className={cn("grid size-[22px] flex-none place-items-center border border-foreground bg-field font-mono text-[11px] text-foreground",
+                                done && "bg-foreground text-background", now && "bg-brand text-brand-foreground")}>
               {done ? "✓" : i + 1}
             </span>
             {name}
@@ -107,12 +100,13 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (a: HomeAction) => void }) {
+function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: HomeAction; item?: HomeItem; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (a: HomeAction) => void }) {
+  const named = actionName(action, item);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px]! max-sm:flex-1 max-sm:justify-center max-sm:text-center";
+  const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px] max-sm:flex-1 max-sm:justify-center max-sm:text-center";
   const variant = action.do === "close" ? "primary" : "secondary";
-  const strong = action.primary && action.do !== "close" ? "border-foreground!" : "";
+  const strong = action.primary && action.do !== "close" ? "border-foreground" : "";
   if (action.do === "close") {
     return <Button variant={variant} className={cn(cls, strong)} onClick={onClose} data-testid="waiting-close">{action.label}</Button>;
   }
@@ -126,12 +120,12 @@ function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction
     return (
       <span className="grid gap-1">
         <Button variant={variant} className={cn(cls, strong)} busy={busy} onClick={() => void keep()} data-testid="waiting-keep">{action.label}</Button>
-        {error && <span role="alert" className="text-[13px] text-[color:var(--err)]">{error}</span>}
+        {error && <span role="alert" className="text-[13px] text-err">{error}</span>}
       </span>
     );
   }
   if (action.do === "allow" && onAllow) {
-    return <Button variant={variant} className={cn(cls, strong)} onClick={() => onAllow(action)} data-testid="waiting-allow">{action.label}</Button>;
+    return <Button variant={variant} className={cn(cls, strong)} onClick={() => onAllow(action)} aria-label={named} data-testid="waiting-allow">{action.label}</Button>;
   }
   if (action.href) {
     const external = !action.href.startsWith("/");
@@ -144,7 +138,7 @@ function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction
   // something the page does on Home: the arrow says so
   return (
     <Button asChild variant={variant} className={cn(cls, strong)}>
-      <Link to="/" title="Opens Home, where this is done">{action.label} <span aria-hidden className="not-italic text-[color:var(--accent-deep)]">{"↗"}</span></Link>
+      <Link to="/" title="Opens Home, where this is done" aria-label={named && `${named}, on Home`}>{action.label} <span aria-hidden className="not-italic text-muted-foreground">{"↗"}</span></Link>
     </Button>
   );
 }
@@ -152,7 +146,7 @@ function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction
 function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void }) {
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-[var(--row-hover)]")}
+    <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-row-hover")}
          data-testid="waiting-row" data-kind={item.kind} id={`waiting-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}>
       <div className="min-w-0 flex-[1_1_260px]">
         <div className={KIND}>{item.label}</div>
@@ -162,12 +156,12 @@ function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClos
         {item.meta && <div className={cn(MUTED, "mt-0.5")}>{item.meta}</div>}
         {/* the options show here; they are answered on Home, where the Answer button opens */}
         <QuestionChoices item={item} render={(a) => (
-          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground! no-underline! hover:bg-[var(--row-hover)]" data-user-text>{a.label} ↗</Link>
+          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground no-underline hover:bg-row-hover" data-user-text>{a.label} ↗</Link>
         )} />
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2 max-sm:w-full">
-          {actions.map((a) => <ActionButton key={a.label} action={a} onClose={onClose} onKeep={onKeep} onAllow={onAllow && ((x) => onAllow(item, x))} />)}
+          {actions.map((a) => <ActionButton key={a.label} action={a} item={item} onClose={onClose} onKeep={onKeep} onAllow={onAllow && ((x) => onAllow(item, x))} />)}
         </div>
       )}
     </div>
@@ -217,18 +211,18 @@ function Waiting({ items, onClose, onKeep, onAllow }: {
         <>
           {arrows && <div className={cn(MUTED, "-mt-1 mb-2")}>Buttons with an arrow open Home, where they are done.</div>}
           <div className={CARD}>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
             {g.now.map(row)}
-            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" />}
+            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}
             {more > 0 && (
-              <div className="border-t border-border px-4 py-2.5">
-                <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => setAll(true)} data-testid="waiting-more">
+              <div className="border-t border-border py-2.5">
+                <Button variant="secondary" className="h-8 text-[13px]" onClick={() => setAll(true)} data-testid="waiting-more">
                   Show {more} more
                 </Button>
               </div>
             )}
-            <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
+            <OlderFold items={g.older} className="px-0">{(older) => older.map(row)}</OlderFold>
           </div>
         </>
       )}
@@ -242,7 +236,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
   const sub = [t.who, t.review].filter(Boolean).join(" · ");
   return (
     <Link to={t.href} data-testid="moving-row" data-ref={t.ref}
-          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border px-3.5 py-3 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px] md:px-4">
+          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground no-underline last:border-b-0 hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
       <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{t.ref}</span>
       <span className="min-w-0">
         <span className="line-clamp-2 block font-semibold [overflow-wrap:anywhere]" data-user-text>{t.title}</span>
@@ -252,14 +246,14 @@ function TicketRow({ t }: { t: MovingTicket }) {
             {t.blocked_by.length > 0 && (
               <>
                 {sub && " · "}
-                <span className="text-[color:var(--err)]">waits for {t.blocked_by.join(", ")}</span>
+                <span className="text-err">waits for {t.blocked_by.join(", ")}</span>
               </>
             )}
           </span>
         )}
       </span>
       <span className="col-start-2 flex items-center gap-[7px] whitespace-nowrap pt-px text-[13px] md:col-start-auto">
-        <i aria-hidden className={cn("inline-block size-[9px] flex-none", DOT[t.state])} />
+        <StatusDot tone={toneOf("ticket", t.state)} className="size-[9px]" />
         {sentence(t.state)}
       </span>
       <span className="col-start-2 pt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere] md:col-start-auto md:row-start-auto">{t.pr?.state_text ?? ""}</span>
@@ -281,19 +275,19 @@ function Moving({ d }: { d: FactoryProjectData }) {
   );
   let body: React.ReactNode;
   if (total === 0) {
-    body = <div className="px-4 py-5 text-muted-foreground" data-testid="moving-empty">No tickets yet. They show here once the crew has planned the build.</div>;
+    body = <EmptyState data-testid="moving-empty">No tickets yet. They show here once the crew has planned the build.</EmptyState>;
   } else if (d.moving.length === 0) {
     body = (
-      <div className="px-4 py-5 text-muted-foreground" data-testid="moving-empty">
+      <EmptyState data-testid="moving-empty">
         {merged === live ? `Nothing is moving. All ${live} tickets are merged.` : "Nothing is moving right now."}
-      </div>
+      </EmptyState>
     );
   } else {
     body = (
       <>
         {shown.map((t) => <TicketRow key={t.ref} t={t} />)}
         {rest > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border px-4 py-2.5 text-[13px]" data-testid="moving-more">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border py-2.5 text-[13px]" data-testid="moving-more">
             <span>{rest} more {rest === 1 ? "ticket is" : "tickets are"} moving.</span>
             <Link to={d.tickets_href} className={LINK} data-testid="all-tickets-more">All {total} tickets {"›"}</Link>
           </div>
@@ -313,9 +307,9 @@ function Moving({ d }: { d: FactoryProjectData }) {
         {body}
         {d.next && (
           <>
-            <div className="border-y border-border bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground">Next up</div>
+            <div className="border-t border-border pb-1 pt-4 text-xs font-semibold text-muted-foreground">Next up</div>
             <Link to={`/projects/${encodeURIComponent(d.id)}/tickets/${encodeURIComponent(d.next.ticket)}`} data-testid="next-up"
-                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 px-3.5 py-3 text-foreground! no-underline! hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_14px] md:px-4">
+                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 py-3 text-foreground no-underline hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_14px]">
               <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{d.next.ticket}</span>
               <span className="min-w-0">
                 <span className="block font-semibold [overflow-wrap:anywhere]" data-user-text>{d.next.title}</span>
@@ -371,8 +365,8 @@ function PersonCheck({ c, onAnswer }: {
   return (
     <div className="mt-1.5 grid gap-2" data-testid="person-check-actions">
       <div className="flex flex-wrap gap-2">
-        <Button className="h-8 text-[13px]!" busy={busy === "pass"} disabled={busy === "fail"} onClick={() => answer("pass")} data-testid="check-works">Works</Button>
-        <Button variant="secondary" className="h-8 text-[13px]!" aria-expanded={open} disabled={busy !== ""}
+        <Button className="h-8 text-[13px]" busy={busy === "pass"} disabled={busy === "fail"} onClick={() => answer("pass")} data-testid="check-works">Works</Button>
+        <Button variant="secondary" className="h-8 text-[13px]" aria-expanded={open} disabled={busy !== ""}
                 onClick={() => setOpen((o) => !o)} data-testid="check-wrong">Something's wrong</Button>
       </div>
       {open && (
@@ -380,12 +374,12 @@ function PersonCheck({ c, onAnswer }: {
           <Textarea label="What did you see? The crew gets a ticket with your words." value={note} data-testid="check-note"
                     onChange={(e) => setNote(e.target.value)} className="min-h-14" />
           <div className="flex flex-wrap gap-2">
-            <Button className="h-8 text-[13px]!" busy={busy === "fail"} disabled={note.trim() === ""} onClick={() => answer("fail")} data-testid="check-send">Send to the crew</Button>
-            <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
+            <Button className="h-8 text-[13px]" busy={busy === "fail"} disabled={note.trim() === ""} onClick={() => answer("fail")} data-testid="check-send">Send to the crew</Button>
+            <Button variant="secondary" className="h-8 text-[13px]" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
           </div>
         </div>
       )}
-      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]" data-testid="check-error">{error}</div>}
+      {error && <div role="alert" className="text-[13px] text-err" data-testid="check-error">{error}</div>}
     </div>
   );
 }
@@ -410,20 +404,20 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
           <div className="flex flex-wrap items-center gap-2 font-semibold [overflow-wrap:anywhere]">
             <span data-user-text>{m.name}</span>
             {m.done && (
-              <span className="border border-[color:var(--ok-border)] bg-[var(--ok-soft)] px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--ok)]">
+              <span className="border border-ok-border bg-ok-soft px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em] text-ok">
                 {m.accepted ? "Accepted" : "Merged"}
               </span>
             )}
           </div>
           {m.goal && <div className="mt-0.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{m.goal}</div>}
           {m.needs_person && (
-            <div className="mt-1 text-[13px] font-semibold text-[color:var(--accent-deep)]" data-testid="milestone-needs">
+            <div className="mt-1 text-[13px] font-semibold text-foreground" data-testid="milestone-needs">
               {mine > 0 ? `${plural(mine, "check", "checks")} for you to try` : "The crew has not recorded its checks. Accept it as it is, or ask the crew."}
             </div>
           )}
           {m.checks.length > 0 && (
             <details className="group mt-1" data-testid="milestone-checks" open={m.needs_person && mine > 0}>
-              <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[13px] text-[color:var(--accent-deep)] [&::-webkit-details-marker]:hidden">
+              <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[13px] text-foreground underline [&::-webkit-details-marker]:hidden">
                 <span aria-hidden className="text-[11px] transition-transform group-open:rotate-90">{"▸"}</span>
                 {plural(m.checks.length, "check", "checks")} to pass
               </summary>
@@ -446,8 +440,8 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
           )}
           {m.can_accept && onAccept && (
             <div className="mt-1.5">
-              <Button variant="secondary" className="h-8 text-[13px]!" busy={busy} onClick={accept} data-testid="milestone-accept">Accept as it is</Button>
-              {error && <div role="alert" className="mt-1 text-[13px] text-[color:var(--err)]">{error}</div>}
+              <Button variant="secondary" className="h-8 text-[13px]" busy={busy} onClick={accept} data-testid="milestone-accept">Accept as it is</Button>
+              {error && <div role="alert" className="mt-1 text-[13px] text-err">{error}</div>}
             </div>
           )}
         </div>
@@ -488,14 +482,14 @@ function ChangeLead({ people, lead, onPick }: { people: ProjectPerson[]; lead: s
     <>
       <Select value="" disabled={busy} onValueChange={(v) => void pick(v)}>
         <SelectPrimitive.Trigger aria-label="Change the lead" title="Change the lead" data-testid="people-set-lead"
-          className="-ml-1.5 inline-flex! size-6! shrink-0 items-center justify-center border-0! bg-transparent! p-0! text-muted-foreground! hover:text-foreground! disabled:opacity-45!">
+          className="-ml-1.5 inline-flex size-6 shrink-0 items-center justify-center border-0 bg-transparent p-0 text-muted-foreground hover:text-foreground disabled:opacity-45">
           <Pencil className="size-3.5" />
         </SelectPrimitive.Trigger>
         <SelectContent align="start">
           {choices.map((x) => <SelectItem key={x.id} value={x.id} data-user-text>{x.name}</SelectItem>)}
         </SelectContent>
       </Select>
-      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]">{error}</div>}
+      {error && <div role="alert" className="text-[13px] text-err">{error}</div>}
     </>
   );
 }
@@ -515,14 +509,14 @@ function PickPerson({ people, exclude, label, testid, onPick }: {
   return (
     <div className="mt-1.5 grid gap-1">
       <Select value="" disabled={busy} onValueChange={(v) => void pick(v)}>
-        <SelectTrigger aria-label={label} data-testid={testid} className="h-8! text-[13px]!">
+        <SelectTrigger aria-label={label} data-testid={testid} className="h-8 text-[13px]">
           <SelectValue placeholder={busy ? "Saving..." : label} />
         </SelectTrigger>
         <SelectContent>
           {choices.map((x) => <SelectItem key={x.id} value={x.id} data-user-text>{x.name}</SelectItem>)}
         </SelectContent>
       </Select>
-      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]">{error}</div>}
+      {error && <div role="alert" className="text-[13px] text-err">{error}</div>}
     </div>
   );
 }
@@ -535,7 +529,7 @@ export function People({ people, onLead, onAdd }: {
   return (
     <section id="people" aria-label="People" className="min-w-0 scroll-mt-4" data-testid="project-people">
       <SectionHead title="People" />
-      <div className={cn(CARD, "px-4 py-3")}>
+      <div className={CARD}>
         <div className={cn(MUTED, "mb-0.5")}>Lead</div>
         {lead ? (
           <PersonLine p={lead}>
@@ -591,9 +585,9 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
         {sentence(c.made)}.{c.tickets.length > 0 && ` Touches ${c.tickets.join(", ")}.`}
       </div>
       <div className="mt-2.5 flex flex-wrap gap-2">
-        <Button variant="secondary" className="h-8 border-foreground! text-[13px]!" busy={busy === "keep"} disabled={busy === "send"}
+        <Button variant="secondary" className="h-8 border-foreground text-[13px]" busy={busy === "keep"} disabled={busy === "send"}
                 onClick={() => decide("kept")} data-testid="call-keep">Keep</Button>
-        <Button variant="secondary" className="h-8 text-[13px]!" aria-expanded={open} disabled={busy !== ""}
+        <Button variant="secondary" className="h-8 text-[13px]" aria-expanded={open} disabled={busy !== ""}
                 onClick={() => setOpen((o) => !o)} data-testid="call-overturn">Change</Button>
       </div>
       {open && (
@@ -602,13 +596,13 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
                     placeholder="For example: use the stronger model for drafts too" data-testid="call-words"
                     onChange={(e) => setWords(e.target.value)} className="min-h-14" />
           <div className="flex flex-wrap gap-2">
-            <Button className="h-8 text-[13px]!" busy={busy === "send"} disabled={busy === "keep" || words.trim() === ""}
+            <Button className="h-8 text-[13px]" busy={busy === "send"} disabled={busy === "keep" || words.trim() === ""}
                     onClick={() => decide("overturned")} data-testid="call-send">Send</Button>
-            <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
+            <Button variant="secondary" className="h-8 text-[13px]" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
           </div>
         </div>
       )}
-      {error && <div role="alert" className="mt-2 text-[13px] text-[color:var(--err)]" data-testid="call-error">{error}</div>}
+      {error && <div role="alert" className="mt-2 text-[13px] text-err" data-testid="call-error">{error}</div>}
     </div>
   );
 }
@@ -616,14 +610,14 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
 /** One decision: the question, the answer chosen, the person's own words when they add something. */
 export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][number]; wide?: boolean }) {
   if (wide) {
-    // its own page: the question and when it was decided on one line, the answer below
+    // its own page: the question and when it was decided on one line, the answer below; rules between
     return (
-      <div className="px-5 py-4" data-testid="decision-row">
+      <div className="border-b border-border py-4 last:border-b-0" data-testid="decision-row">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
           <div className="min-w-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{x.question}</div>
           <div className={cn(MUTED, "whitespace-nowrap")}>{x.when}</div>
         </div>
-        <div className="mt-1.5 border-l-[3px] border-[color:var(--accent)] pl-3 text-[15px] font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+        <div className="mt-1.5 text-[15px] font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
         {x.said && <div className="mt-1.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
       </div>
     );
@@ -631,7 +625,7 @@ export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][nu
   return (
     <div className={ROW} data-testid="decision-row">
       <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-user-text>{x.question}</div>
-      <div className="my-0.5 border-l-[3px] border-[color:var(--accent)] pl-2.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+      <div className="my-0.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
       {x.said && <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
       <div className={MUTED}>{x.when}</div>
     </div>
@@ -656,10 +650,10 @@ export function DeleteProject({ name, onDelete }: { name: string; onDelete: () =
     <section aria-label="Delete project" className="min-w-0 border-t border-border pt-5" data-testid="delete-project">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="min-w-0 flex-[1_1_320px]">
-          <h2 className="m-0! text-base!">Delete this project</h2>
-          <p className="m-0! mt-0.5 text-[13px] text-muted-foreground">Removes its tickets, decisions, calls and docs from Tares. Pull requests and branches on GitHub stay.</p>
+          <h2 className="m-0 text-base">Delete this project</h2>
+          <p className="m-0 mt-0.5 text-[13px] text-muted-foreground">Removes its tickets, decisions, calls and docs from Tares. Pull requests and branches on GitHub stay.</p>
         </div>
-        <Button variant="secondary" className="text-[color:var(--err)]!" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
+        <Button variant="secondary" className="text-err" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
       </div>
       <Dialog open={open} onOpenChange={(o) => { if (!o) shut(); }} data-testid="delete-dialog"
               title={`Delete ${name}?`}
@@ -688,7 +682,7 @@ function OthersLine({ items }: { items: HomeItem[] }) {
       <div className="text-[13px] text-muted-foreground" data-testid="waiting-others-line">
         Waiting for others: {plural(items.length, "thing", "things")}.{" "}
         <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="waiting-others-toggle"
-                className={cn("border-0! bg-transparent! p-0! text-[13px]! font-normal! shadow-none!", LINK)}>
+                className={cn("border-0 bg-transparent p-0 text-[13px] font-normal shadow-none", LINK)}>
           {open ? "Hide" : "Show"}
         </button>
       </div>
@@ -702,11 +696,11 @@ function SummaryCard({ to, title, big, line, more, testid }: {
 }) {
   return (
     <Link to={to} data-testid={testid}
-          className={cn(CARD, "flex min-h-[132px] min-w-0 flex-col gap-1.5 p-4 text-foreground! no-underline! hover:border-foreground! hover:bg-[var(--row-hover)]")}>
+          className="flex min-h-[132px] min-w-0 flex-col gap-1.5 border border-border p-4 text-foreground no-underline hover:border-foreground hover:bg-row-hover">
       <span className="text-[13px] text-muted-foreground">{title}</span>
       <span className="text-[24px] font-bold leading-tight" data-testid="summary-big">{big}</span>
       <span className="line-clamp-2 text-[13px] [overflow-wrap:anywhere]" data-testid="summary-line">{line}</span>
-      <span className="mt-auto pt-1 text-[13px] text-[color:var(--accent-deep)]">{more} {"›"}</span>
+      <span className="mt-auto pt-1 text-[13px] text-foreground underline">{more} {"›"}</span>
     </Link>
   );
 }
@@ -796,14 +790,14 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
           {d.can_close && !finished && <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>}
         </>
       )}>
-        {d.goal && <p className="m-0! max-w-[760px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
+        {d.goal && <p className="m-0 max-w-[760px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
         <Steps stage={d.stage} finished={finished} />
       </PageHead>
-      {closeError && (
+      <Collapse>{closeError && (
         <Banner tone="error" data-testid="close-error">
           <b>The project was not closed.</b> <span className="text-foreground" data-user-text>{closeError}</span>
         </Banner>
-      )}
+      )}</Collapse>
       <div className="grid min-w-0 gap-3">
         <Waiting items={items} onClose={() => setAsking(true)} onKeep={onKeep}
                  onAllow={sample ? undefined : (item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); }} />

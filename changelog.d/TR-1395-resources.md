@@ -1,0 +1,2 @@
+Changed
+All resources lists each kind under a tab in the page's words (Connections, Rules, or Check rules on SRE), with how many there are, in rows instead of a wide table: what each part is, its state in plain words, when it last did something, and the projects that use it as links. The tab is in the address, so Back returns to the kind you came from, and a new tab starts with its search and filter cleared. A failed load offers to try again (TR-1395).

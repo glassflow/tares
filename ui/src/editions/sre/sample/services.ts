@@ -6,6 +6,7 @@ import { ApiError } from "../../../api";
 import type {
   SreIncident, SreRaised, SreService, SreServiceRow, SreServices, SreServiceState, SreWindow,
 } from "../Services.api";
+import { formatCount } from "../../../lib/number";
 
 export const LIST_SAMPLES = ["normal", "empty", "error", "long", "many", "load", "hidden"] as const;
 export const SERVICE_SAMPLES = [
@@ -32,7 +33,7 @@ interface Spec {
 const row = (s: Spec): SreServiceRow => ({
   name: s.name, about: s.about ?? null, state: s.state, state_words: s.words,
   signals_words: s.signals ?? "Errors and traffic", feeds_words: s.feeds ?? "from prod-otlp",
-  events_24h_words: s.events === undefined ? "No events in 24 hours" : `${s.events.toLocaleString("en")} events in 24 hours`,
+  events_24h_words: s.events === undefined ? "No events in 24 hours" : `${formatCount(s.events)} events in 24 hours`,
   watch_words: s.watch ?? "Watched every 10 minutes", last_words: s.last ?? "checked 4 minutes ago",
   spark: s.spark ?? wave(s.name.length, 2), watched: s.watched === undefined ? true : s.watched, hidden: s.hidden ?? false,
 });

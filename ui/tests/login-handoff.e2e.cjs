@@ -22,7 +22,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");        // <repo>/ui
 const REPO = path.resolve(__dirname, "..", "..");    // <repo>
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 
 const DAEMON_PORT = 8808;
 const CP_PORT = 8809;

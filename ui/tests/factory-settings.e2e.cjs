@@ -24,7 +24,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8855);
@@ -150,6 +150,384 @@ const until = async (fn, tries = 40) => {
       await page.getByRole("heading", { name: "Accounts", exact: true }).waitFor();
       return (await page.getByText("example-org").count()) > 0;
     })());
+    const integ = async (page, step) => {
+      await page.goto(`${BASE}/integrations?step=${step}`, { waitUntil: "load" });
+      await page.locator(`[data-testid=step-view][data-slot=${step}]`).waitFor();
+      await settle(page);
+    };
+    {
+      const DEAD = "http://127.0.0.1:9/api/v3";
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await integ(n.page, "github");
+          // the panel's own account line: the rails repeat the name, and the wide one is hidden below 900px
+          await n.page.getByTestId("github-who").filter({ hasText: "example-org" }).first().waitFor();
+          await shot(n.page, `github-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("as-found");
+      await api(TOKEN, "POST", "/api/integrations/github", { name: "enterprise", token: "ghp_e2e_1392", api_url: DEAD });
+      await shots("two-accounts");
+      await api(TOKEN, "DELETE", "/api/integrations/github/enterprise");
+      await integ(page, "github");
+
+      const gh = page.getByTestId("github");
+      const row = (n) => gh.locator(`[data-testid="github-row"][data-name="${n}"]`);
+      await row("main").waitFor();
+      ck("the seeded token reads as whose it is and what it does",
+        (await row("main").getByTestId("github-who").innerText()) === "Personal token of example-org"
+        && /^Polls the repositories you add\. Nothing uses it yet\.$/.test((await row("main").getByTestId("github-events").innerText()).replace(/\s+/g, " ").trim()),
+        `${await row("main").innerText()}`);
+      ck("a self-hosted cell offers to create the App and to add a token",
+        (await gh.getByRole("button", { name: "Create GitHub App" }).count()) === 1 && (await gh.getByRole("button", { name: "Add a personal token" }).count()) === 1);
+      await checkWords(page, ck, "GitHub item");
+
+      await gh.getByRole("button", { name: "Add a personal token" }).click();
+      const form = gh.getByTestId("github-token-form");
+      ck("Add a personal token opens its form, with labelled fields, and hides the buttons",
+        (await form.getByLabel("Name").count()) === 1 && (await form.getByLabel("Token").count()) === 1 && (await form.getByLabel("API URL").count()) === 1
+        && (await gh.getByRole("button", { name: "Add a personal token" }).count()) === 0);
+      ck("Save waits for a name and a token", await form.getByRole("button", { name: "Save" }).isDisabled());
+      await form.getByLabel("Name").fill("not a name");
+      await form.getByLabel("Token").fill("ghp_e2e_1392");
+      await form.getByLabel("API URL").fill(DEAD);
+      await form.getByRole("button", { name: "Save" }).click();
+      ck("a name the daemon refuses is said under the field, as a sentence",
+        await until(async () => (await form.getByLabel("Name").getAttribute("aria-invalid")) === "true")
+        && (await form.getByText(/^Name must be alphanumeric/).count()) === 1);
+      await shot(page, "github-refused-1440.png");
+      await form.getByLabel("Name").fill("enterprise");
+      await form.getByLabel("Token").press("Enter");
+      ck("Enter saves: the form closes and the account is listed",
+        await until(async () => (await row("enterprise").count()) === 1 && (await gh.getByTestId("github-token-form").count()) === 0));
+      ck("the daemon has it", (await api(TOKEN, "GET", "/api/integrations/github")).body?.credentials?.some((c) => c.name === "enterprise" && c.api_url === DEAD));
+      ck("its API URL shows beside its name", (await row("enterprise").innerText()).includes(DEAD));
+
+      await row("enterprise").getByRole("button", { name: "Test" }).click();
+      const result = row("enterprise").getByTestId("github-test");
+      ck("Test says it failed, and why", await until(async () => (await result.count()) === 1 && /^Failed: could not reach GitHub/.test((await result.innerText()).trim())),
+        (await result.count()) ? await result.innerText() : "no result");
+
+      await row("enterprise").getByRole("button", { name: "Rotate" }).click();
+      const rot = row("enterprise").getByTestId("github-rotate");
+      ck("Rotate opens a labelled field for the new token", (await rot.getByLabel("New token").count()) === 1 && await rot.getByRole("button", { name: "Save new token" }).isDisabled());
+      await rot.getByLabel("New token").fill("ghp_e2e_1392_new");
+      await rot.getByLabel("New token").press("Enter");
+      ck("Enter saves the new token and closes the field", await until(async () => (await row("enterprise").getByTestId("github-rotate").count()) === 0));
+
+      await row("enterprise").getByRole("button", { name: "Delete" }).click();
+      const dlg = page.getByTestId("github-delete-dialog");
+      ck("Delete asks first, and says what uses it", (await dlg.getByRole("heading", { name: "Delete enterprise?" }).count()) === 1 && (await dlg.innerText()).includes("Nothing uses it."));
+      await dlg.getByRole("button", { name: "Delete" }).click();
+      ck("and then it is gone, here and in the daemon",
+        await until(async () => (await row("enterprise").count()) === 0)
+        && !(await api(TOKEN, "GET", "/api/integrations/github")).body?.credentials?.some((c) => c.name === "enterprise"));
+
+      await gh.getByRole("button", { name: "Create GitHub App" }).click();
+      const app = gh.getByTestId("github-app-form");
+      ck("Create GitHub App opens its form, named github-app by default", (await app.getByLabel("Name in Tares").inputValue()) === "github-app" && (await app.getByLabel("GitHub organization").count()) === 1);
+      await app.getByRole("button", { name: "Cancel" }).click();
+      ck("Cancel closes it", (await gh.getByTestId("github-app-form").count()) === 0 && (await gh.getByRole("button", { name: "Create GitHub App" }).count()) === 1);
+      const n = await newPage(390);
+      await integ(n.page, "github");
+      await n.page.getByTestId("github-row").first().waitFor();
+      ck("the GitHub item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+    }
+    // Notifications on a self-hosted cell, on Integrations: the bot token and the signing secret (TR-1392).
+    // The page has said what Slack is for, so the panels are terse (Saved. / Not set yet.). Pictures
+    // first, of states set through the API, so the same steps picture the panels before and after.
+    {
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await integ(n.page, "notifications");
+          await shot(n.page, `slack-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("empty");
+      await api(TOKEN, "PUT", "/api/settings/slack-bot-token", { token: "xoxb-e2e-1392" });
+      await shots("token-saved");
+      await api(TOKEN, "DELETE", "/api/settings/slack-bot-token");
+      await integ(page, "notifications");
+
+      const tok = page.getByTestId("slack-token");
+      const sec = page.getByTestId("slack-secret");
+      const field = tok.getByLabel("Bot User OAuth Token");
+      ck("Slack shows the bot token and the signing secret, each under its own heading",
+        (await tok.getByRole("heading", { name: "Bot token", exact: true }).count()) === 1 && (await sec.getByRole("heading", { name: "Signing secret", exact: true }).count()) === 1);
+      ck("neither is set yet, and each says so",
+        /^Not set yet\.$/.test(await text(page, "slack-token-state")) && /^Not set yet\.$/.test(await text(page, "slack-secret-state")),
+        `${await text(page, "slack-token-state")} | ${await text(page, "slack-secret-state")}`);
+      ck("each field has a visible label", (await field.count()) === 1 && (await sec.getByLabel("Signing Secret").count()) === 1);
+      ck("Save waits for something to save", await tok.getByRole("button", { name: "Save" }).isDisabled());
+      ck("nothing to clear yet", (await tok.getByRole("button", { name: "Clear the saved token" }).count()) === 0);
+      await checkWords(page, ck, "Slack item");
+
+      await field.fill("not-a-token");
+      await tok.getByRole("button", { name: "Save" }).click();
+      ck("a value that is not a bot token is refused, under the field, as a sentence",
+        await until(async () => (await field.getAttribute("aria-invalid")) === "true") && (await tok.getByText(/^That does not look like a Slack bot token/).count()) === 1);
+      await shot(page, "slack-refused-1440.png");
+      await field.fill("xoxb-e2e-1392");
+      ck("typing again clears the error", (await field.getAttribute("aria-invalid")) !== "true");
+      await field.press("Enter");
+      ck("Enter saves, and a saved token reads as saved", await until(async () => /^Saved\.$/.test(await text(page, "slack-token-state"))), await text(page, "slack-token-state"));
+      ck("the field is empty again: a secret is never shown back", (await field.inputValue()) === "");
+      ck("the daemon has it", (await api(TOKEN, "GET", "/api/settings/slack-bot-token")).body?.stored === true);
+      await tok.getByRole("button", { name: "Clear the saved token" }).click();
+      ck("Clear removes it", await until(async () => /^Not set/.test(await text(page, "slack-token-state"))) && (await api(TOKEN, "GET", "/api/settings/slack-bot-token")).body?.stored === false);
+      const n = await newPage(390);
+      await integ(n.page, "notifications");
+      ck("the Slack item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+    }
+    // Observability: where agents' traces go (TR-1392). Pictures first, of states set through the
+    // API, so the same steps picture the panel before and after.
+    {
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "observability");
+          await shot(n.page, `tracing-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      const before = (await api(TOKEN, "GET", "/api/settings/tracing")).body;
+      await shots("as-found");
+      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: true, provider: "otlp", endpoint: "https://collector.example:4318", headers: "authorization=Bearer e2e" });
+      await shots("otlp-on");
+      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: false, provider: "rius", endpoint: "", headers: "", api_key: "" });
+      await go(page, "observability");
+
+      const panel = page.getByTestId("tracing");
+      ck("Observability has one heading of that name", (await page.getByRole("heading", { name: "Observability", exact: true }).count()) === 1);
+      ck("tracing is off and says so", /^Off\. Nothing is sent/.test(await text(page, "tracing-state")), await text(page, "tracing-state"));
+      ck("the switch, the provider and the key each have a visible label",
+        (await panel.getByLabel("Send agent traces").count()) === 1 && (await panel.getByLabel("Where traces go").count()) === 1 && (await panel.getByLabel("Rius API key").count()) === 1);
+      ck("Rius has no key yet, and says what that means", /^No API key yet/.test(await text(page, "tracing-key-state")), await text(page, "tracing-key-state"));
+      ck("Save waits for something to save", await panel.getByRole("button", { name: "Save" }).isDisabled());
+      await checkWords(page, ck, "Observability item");
+
+      await panel.getByLabel("Send agent traces").click();
+      ck("switched on to Rius without a key, it says nothing arrives yet",
+        await until(async () => /^On, but nothing reaches Rius until there is an API key/.test(await text(page, "tracing-state"))), await text(page, "tracing-state"));
+      const key = panel.getByLabel("Rius API key");
+      ck("the switch is free again before typing", await until(async () => !(await panel.getByLabel("Send agent traces").isDisabled())));
+      await key.fill("gf_e2e_1392");
+      await key.press("Enter");
+      ck("Enter saves the key, and tracing reads as on, to Rius",
+        await until(async () => /^On\. Traces go to Rius/.test(await text(page, "tracing-state"))) && /^API key set, saved here/.test(await text(page, "tracing-key-state")), await text(page, "tracing-state"));
+      ck("the key field is empty again: a secret is never shown back", (await key.inputValue()) === "");
+      await panel.getByRole("button", { name: "Clear the saved key" }).click();
+      ck("Clear removes the key", await until(async () => /^No API key yet/.test(await text(page, "tracing-key-state"))) && (await api(TOKEN, "GET", "/api/settings/tracing")).body?.key_stored === false);
+
+      await panel.getByLabel("Where traces go").click();
+      await page.getByRole("option", { name: /Any OpenTelemetry endpoint/ }).click();
+      const ep = panel.getByLabel("Endpoint");
+      await ep.fill("collector:4318");
+      await panel.getByRole("button", { name: "Save" }).click();
+      ck("an endpoint that is not a URL is refused, under the field, as a sentence",
+        await until(async () => (await ep.getAttribute("aria-invalid")) === "true") && (await panel.getByText(/^Endpoint must be an http\(s\) URL/).count()) === 1);
+      await shot(page, "tracing-refused-1440.png");
+      await ep.fill("https://collector.example:4318");
+      ck("typing again clears the error", (await ep.getAttribute("aria-invalid")) !== "true");
+      await ep.press("Enter");
+      ck("saved, tracing goes to that endpoint",
+        await until(async () => /^On\. Traces go to https:\/\/collector\.example:4318/.test(await text(page, "tracing-state"))), await text(page, "tracing-state"));
+      const n = await newPage(390);
+      await go(n.page, "observability");
+      ck("the Observability item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: before.enabled, provider: "", endpoint: "", headers: "", api_key: "" });
+    }
+
+    // 2b. model providers (TR-1392). Pictures first, of states set through the API, so the same
+    // steps picture the panel before and after. Every endpoint is a closed port, so discovery fails
+    // at once instead of reaching a real provider; the cell ends with none, as it started.
+    {
+      const DEAD = "http://127.0.0.1:9/v1";
+      const shots = async (tag, wait) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "providers");
+          await n.page.getByText(wait).first().waitFor();
+          await shot(n.page, `providers-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("as-found", /model provider yet/i);
+      await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "anthropic", key: "sk-ant-e2e-1392", base_url: "http://127.0.0.1:9" });
+      await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "openai_compatible", name: "LiteLLM", key: "sk-e2e-1392", base_url: DEAD });
+      await shots("two-providers", "LiteLLM");
+      await api(TOKEN, "DELETE", "/api/settings/providers/litellm");
+      await api(TOKEN, "DELETE", "/api/settings/providers/anthropic");
+      await go(page, "providers");
+
+      const panel = page.getByTestId("providers");
+      const row = (id) => panel.locator(`[data-testid="providers-row"][data-id="${id}"]`);
+      ck("Providers has one heading of that name", (await page.getByRole("heading", { name: "Providers", exact: true }).count()) === 1);
+      ck("a cell with no provider says so, and what waits on one",
+        /^No model provider yet\. Add one: agents cannot be switched on and Ask cannot answer until then\.$/.test(await text(page, "providers-empty")), await text(page, "providers-empty"));
+      await checkWords(page, ck, "Providers item");
+      await panel.getByRole("button", { name: "Add a provider" }).click();
+      const form = panel.getByTestId("providers-form");
+      ck("Add a provider opens a form with labelled fields, on Anthropic",
+        (await form.getByLabel("Provider").count()) === 1 && (await form.getByLabel("API key", { exact: true }).count()) === 1 && (await form.getByLabel("Base URL (optional)").count()) === 1
+        && /Claude models/.test(await form.innerText()));
+      ck("Save waits for a key", await form.getByRole("button", { name: "Save" }).isDisabled());
+      await form.getByLabel("Provider").click();
+      await page.getByRole("option", { name: "Ollama", exact: true }).click();
+      ck("Ollama fills its name and address, and needs no key",
+        (await form.getByLabel("Name").inputValue()) === "Ollama" && (await form.getByLabel("Base URL").inputValue()) === "http://localhost:11434/v1"
+        && (await form.getByLabel("API key (optional)").count()) === 1 && !(await form.getByRole("button", { name: "Save" }).isDisabled()));
+      const url = form.getByLabel("Base URL");
+      await url.fill("localhost:11434");
+      await form.getByRole("button", { name: "Save" }).click();
+      ck("a base URL the daemon refuses is said under the field, as a sentence",
+        await until(async () => (await url.getAttribute("aria-invalid")) === "true") && (await form.getByText(/^Base URL must be an http\(s\) URL/).count()) === 1);
+      await shot(page, "providers-refused-1440.png");
+      await url.fill(DEAD);
+      ck("typing again clears the error", (await url.getAttribute("aria-invalid")) !== "true");
+      await url.press("Enter");
+      ck("Enter saves, and says the endpoint did not answer",
+        await until(async () => (await panel.getByTestId("providers-form").count()) === 0 && (await panel.getByTestId("providers-note").count()) === 1)
+        && /^Saved, but the endpoint did not answer/.test(await text(page, "providers-note")), await panel.innerText());
+      ck("the first provider is the default, and its row says it needs no key",
+        (await row("ollama").getByTestId("providers-default").count()) === 1 && (await row("ollama").getByTestId("providers-key-state").innerText()).trim() === "Needs no key.",
+        await row("ollama").innerText());
+      ck("its models line says why there is no list", /^The endpoint did not answer; is it running and reachable from this daemon\? Agents can still name a model by hand\.$/.test((await row("ollama").getByTestId("providers-models").innerText()).trim()),
+        await row("ollama").getByTestId("providers-models").innerText());
+
+      await api(TOKEN, "PUT", "/api/settings/providers/new", { kind: "anthropic", key: "sk-ant-e2e-1392", base_url: "http://127.0.0.1:9" });
+      await go(page, "providers");
+      ck("a saved Anthropic key reads as saved here", (await row("anthropic").getByTestId("providers-key-state").innerText()).trim() === "Key saved here.", await row("anthropic").innerText());
+      await row("anthropic").getByRole("button", { name: "Make default" }).click();
+      ck("Make default moves the default", await until(async () => (await row("anthropic").getByTestId("providers-default").count()) === 1 && (await row("ollama").getByTestId("providers-default").count()) === 0)
+        && (await api(TOKEN, "GET", "/api/settings/providers")).body?.default === "anthropic");
+      await row("anthropic").getByRole("button", { name: "Edit" }).click();
+      ck("Edit names the provider and keeps the saved key unless one is typed",
+        /^Anthropic\. Claude models/.test((await form.innerText()).trim()) && (await form.getByLabel("API key", { exact: true }).getAttribute("placeholder")) === "Leave empty to keep the saved key"
+        && (await form.getByLabel("Provider").count()) === 0);
+      await form.getByRole("button", { name: "Cancel" }).click();
+      ck("Cancel closes it", (await panel.getByTestId("providers-form").count()) === 0 && (await panel.getByRole("button", { name: "Add a provider" }).count()) === 1);
+
+      await row("ollama").getByRole("button", { name: "Remove" }).click();
+      const dialog = page.getByTestId("providers-remove-dialog");
+      ck("Remove asks first, and says where its agents go", await until(async () => (await dialog.count()) === 1)
+        && /Remove Ollama\?/.test(await dialog.innerText()) && /move to the default/.test(await dialog.innerText()), await dialog.innerText().catch(() => ""));
+      await page.getByTestId("providers-remove-confirm").click();
+      ck("Remove removes it, here and in the daemon", await until(async () => (await row("ollama").count()) === 0 && (await dialog.count()) === 0)
+        && !(await api(TOKEN, "GET", "/api/settings/providers")).body?.providers.some((p) => p.id === "ollama"));
+      const n = await newPage(390);
+      await go(n.page, "providers");
+      await n.page.getByTestId("providers-row").first().waitFor();
+      ck("the Providers item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+      await api(TOKEN, "DELETE", "/api/settings/providers/anthropic");
+      ck("the cell ends with no provider, as it started", ((await api(TOKEN, "GET", "/api/settings/providers")).body?.providers ?? []).every((p) => !p.configured && !p.stored));
+    }
+
+    // 2c. access keys (TR-1392). Pictures first, of states set through the API, so the same steps
+    // picture the panel before and after: the two seeded keys, then a project key and a revoked one.
+    {
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "keys");
+          await n.page.getByText("writer").first().waitFor();
+          await shot(n.page, `keys-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("as-found");
+      const pkey = (await api(TOKEN, "POST", "/api/keys", { name: "px-reader", project: ids.project })).body;
+      const old = (await api(TOKEN, "POST", "/api/keys", { name: "old-ci", scopes: ["ingest"] })).body;
+      await api(TOKEN, "DELETE", `/api/keys/${old.id}`);
+      await shots("project-and-revoked");
+      const pname = ((await api(TOKEN, "GET", "/api/projects")).body?.projects ?? []).find((p) => p.id === ids.project)?.name;
+      await go(page, "keys");
+
+      const panel = page.getByTestId("keys");
+      const row = (name) => panel.locator('[data-testid="keys-row"]').filter({ has: page.getByText(name, { exact: true }) });
+      const rowText = (name, id) => row(name).getByTestId(id).innerText().then((t) => t.replace(/\s+/g, " ").trim());
+      ck("Access keys has one heading of that name, and no introduction", (await page.getByRole("heading", { name: "Access keys", exact: true }).count()) === 1 && !/Give each agent/.test(await text(page, "keys")));
+      ck("each key says what it can do, in words: read", (await rowText("reader", "keys-can")) === "Can read.", await rowText("reader", "keys-can"));
+      ck("each key says what it can do, in words: send data, not ingest", (await rowText("writer", "keys-can")) === "Can send data.", await rowText("writer", "keys-can"));
+      ck("a key nobody used says so, and when it was made", /^Never used\. Made (just now|\d+ \w+ ago)\.$/.test(await rowText("writer", "keys-used")), await rowText("writer", "keys-used"));
+      ck("a project key names its project, not its id", !!pname && (await rowText("px-reader", "keys-can")) === `Can read ${pname} and record findings in it.`, `${await rowText("px-reader", "keys-can")} / ${pname}`);
+      ck("each key says whose it is", /^Belongs to /.test(await rowText("writer", "keys-person")), await rowText("writer", "keys-person"));
+      ck("a revoked key is hidden until asked for", (await row("old-ci").count()) === 0 && (await text(page, "keys-revoked-toggle")) === "Show 1 revoked key", await text(page, "keys-revoked-toggle"));
+      await page.getByTestId("keys-revoked-toggle").click();
+      ck("asked for, it says it is revoked and offers no Revoke", (await row("old-ci").getByTestId("keys-revoked").count()) === 1 && (await row("old-ci").getByTestId("keys-revoke").count()) === 0
+         && /^Revoked (just now|\d+ \w+ ago)\.$/.test(await rowText("old-ci", "keys-used")), await rowText("old-ci", "keys-used"));
+      await page.getByTestId("keys-revoked-toggle").click();
+      ck("Hide revoked keys hides it again", (await row("old-ci").count()) === 0 && (await text(page, "keys-revoked-toggle")) === "Show 1 revoked key");
+      await checkWords(page, ck, "Access keys item");
+
+      // creating one: the name and what it can do are said under their fields
+      await page.getByTestId("keys-add").click();
+      const name = page.getByTestId("keys-name");
+      ck("Create a key opens a form, on the name", (await page.getByTestId("keys-form").count()) === 1 && await name.evaluate((e) => e === document.activeElement));
+      ck("the form starts on Read only", (await page.getByTestId("keys-scope-read").getAttribute("aria-checked")) === "true"
+         && (await page.getByTestId("keys-scope-ingest").getAttribute("aria-checked")) === "false" && (await page.getByTestId("keys-scope-admin").getAttribute("aria-checked")) === "false");
+      await name.press("Enter");
+      ck("an empty name is said under the Name field", (await name.getAttribute("aria-invalid")) === "true" && /Give the key a name\./.test(await text(page, "keys-form")), await text(page, "keys-form"));
+      await name.fill("e2e-agent");
+      ck("typing clears it", (await name.getAttribute("aria-invalid")) !== "true");
+      await page.getByTestId("keys-scope-read").click();
+      await name.press("Enter");
+      ck("nothing it can do is said under the choices", (await text(page, "keys-scope-error")) === "Pick at least one thing it can do.");
+      await page.getByTestId("keys-scope-read").click();
+      await page.getByTestId("keys-scope-ingest").click();
+      await shot(page, "keys-form-1440.png");
+      await name.press("Enter");
+      await page.getByTestId("keys-created").waitFor();
+      ck("Enter creates it and closes the form", (await page.getByTestId("keys-form").count()) === 0);
+      ck("the new key is shown once, with what it can do", /^Key created: e2e-agent\. Can read and send data\. Copy it now, it is not shown again\./.test(await text(page, "keys-created"))
+         && /^nvf_/.test(await text(page, "keys-created-secret")), await text(page, "keys-created"));
+      ck("the new key is in the list", (await row("e2e-agent").count()) === 1 && (await rowText("e2e-agent", "keys-can")) === "Can read and send data.");
+      await shot(page, "keys-created-1440.png");
+      await page.getByTestId("keys-created-copy").click();
+      await page.waitForTimeout(100);
+      ck("Copy key says it copied, or how to copy by hand", (await text(page, "keys-created-copy")) === "Copied" || /Could not copy\. Select the key and copy it by hand\./.test(await text(page, "keys-created")));
+      await page.getByTestId("keys-created-done").click();
+      ck("I have copied it hides the secret for good", (await page.getByTestId("keys-created").count()) === 0 && !(await text(page, "keys")).includes("nvf_e2e"));
+      await page.getByTestId("keys-add").click();
+      await page.getByTestId("keys-name").press("Escape");
+      ck("Escape closes the form", (await page.getByTestId("keys-form").count()) === 0);
+
+      // revoking asks first, and says what stops
+      await row("e2e-agent").getByTestId("keys-revoke").click();
+      const dlg = page.getByTestId("keys-revoke-dialog");
+      await dlg.waitFor();
+      ck("Revoke asks first, and says what stops working", (await page.getByRole("dialog", { name: "Revoke e2e-agent?" }).count()) === 1
+         && /It stops working at once and its subscriptions are removed\./.test(await dlg.innerText()), await dlg.innerText());
+      await shot(page, "keys-revoke-1440.png");
+      await dlg.getByRole("button", { name: "Cancel" }).click();
+      ck("Cancel keeps it", (await dlg.count()) === 0 && (await row("e2e-agent").getByTestId("keys-revoke").count()) === 1);
+      await row("e2e-agent").getByTestId("keys-revoke").click();
+      await page.getByTestId("keys-revoke-confirm").click();
+      await dlg.waitFor({ state: "detached" });
+      await page.waitForFunction(() => ![...document.querySelectorAll('[data-testid="keys-row"]')].some((r) => r.textContent.includes("e2e-agent")));
+      const listed = (await api(TOKEN, "GET", "/api/keys")).body?.keys ?? [];
+      ck("Revoke revokes it, and the list drops it", !!listed.find((k) => k.name === "e2e-agent")?.revoked_at && (await text(page, "keys-revoked-toggle")) === "Show 2 revoked keys", await text(page, "keys-revoked-toggle"));
+
+      const n = await newPage(390);
+      await go(n.page, "keys");
+      await n.page.getByText("writer").first().waitFor();
+      ck("the Access keys item fits at 390 px", (await overflow(n.page)) <= 0, String(await overflow(n.page)));
+      await n.ctx.close();
+      await api(TOKEN, "DELETE", `/api/keys/${pkey.id}`);
+    }
 
     // 3. the crew starts as a new cell has it
     await go(page, "crew");
@@ -338,15 +716,21 @@ const until = async (fn, tries = 40) => {
       const p = n.page;
       for (const tab of ["keys", "providers", "observability"]) {
         await go(p, tab);
-        await p.locator(`[data-testid="pane-${tab}"] .panel`).first().waitFor();
+        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : tab === "providers" ? '[data-testid="providers"]' : '[data-testid="keys"]'}`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
-      await go(p, "observability");
-      const sel = p.locator('[data-testid="pane-observability"] select').first();
-      await sel.waitFor();
-      await sel.focus();
-      const rep = await sel.evaluate((e) => getComputedStyle(e).backgroundRepeat);
-      ck("a focused select draws its chevron once", rep === "no-repeat", rep);
+      // Observability's select was the last native one in a pane (TR-1392 moved it to the kit);
+      // the section picker at 390 px is a native select with the same chevron
+      {
+        const m = await newPage(390);
+        await go(m.page, "keys");
+        const sel = m.page.getByTestId("settings-select");
+        await sel.waitFor();
+        await sel.focus();
+        const rep = await sel.evaluate((e) => getComputedStyle(e).backgroundRepeat);
+        ck("a focused select draws its chevron once", rep === "no-repeat", rep);
+        await m.ctx.close();
+      }
       await go(p, "agent_tools");
       const box = p.locator('[data-testid="pane-agent_tools"] label.field input[type=checkbox]').first();
       await box.waitFor();

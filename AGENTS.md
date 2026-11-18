@@ -49,6 +49,70 @@ cd ui && npm ci && npx tsc --noEmit && npm run build   # produces ui/dist
 Rebuild after any change under `ui/src`; the daemon serves whatever is in `ui/dist`.
 `TARES_UI_DIST` points the daemon at another build directory.
 
+## Console design
+
+The console is paper: cream surfaces, brown ink, amber for action only, square corners, 1px rules
+instead of shadows. The rules and the reasons are in the comment at the top of `ui/src/styles.css`.
+Copy from the edition screens (`ui/src/editions`), never from `ui/src/pages`, whose inline styles
+predate the kit.
+
+- **Build from the kit.** Import from `@/components/edition` (barrel `index.ts`): `Button`,
+  `Input`, `Select`, `Textarea`, `Checkbox`, `Switch`, `Dialog`, `Panel`, `ListSection`, `ListRow`,
+  `StatusLabel`, `EmptyState`, `Loading`, `Skeleton`, `Stat`, `Tabs`, `Banner`, `Toaster`. Look at
+  `/dev/components` (`ui/src/pages/dev/Components.tsx`) before writing a component. A new shared
+  component goes in `components/edition`, with a gallery section and a check in
+  `ui/tests/component-gallery.e2e.cjs` in the same PR. `components/ui` holds the primitives the kit
+  wraps; screens do not import them.
+- **No raw controls, no inline styles** in edition code (`ui/src/editions`, `components/edition`,
+  `ui/src/ee`): no `<button>`, `<input>`, `<select>` or `<textarea>`, and no `style={{}}`.
+  `npm run lint` enforces it (`ui/eslint-rules/kit-only.mjs`). An edition file may break the rule
+  only while it is in the register (`ui/eslint-rules/kit-register.mjs`) with its reason: a value
+  computed at run time (a bar's width), a control the kit has no primitive for yet, a native picker
+  kept on purpose, or a legacy panel waiting for its move. The legacy pages (`ui/src/pages` and the
+  shared components outside the kit) are frozen at their count in `ui/kit-contract.baseline.json`.
+  A file that gets cleaner lowers its count in the same PR with `npm run kit-baseline`, which never
+  raises one without `--raise` and a reason in the PR.
+- **Colour from the semantic utilities**, which `@theme inline` in `styles.css` maps from the
+  tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
+  `bg-primary`, `text-ok`, `text-warn`, `text-err`, and the rest of the roles listed under Colour
+  budget in `.impeccable.md` (`bg-field`, `bg-row-hover`, `bg-wash`, `text-faint`, `border-brand`,
+  `bg-err-soft`, …). No hex, no `rgb()`, no Tailwind palette colours (`text-red-500`), and no
+  `--kit-*` outside the token block. An arbitrary value (`text-[color:var(--…)]`) only for a token
+  with no utility, which today means the code palette. `npm run token-contract`
+  (`ui/eslint-token-contract.config.mjs`) fails on a hex, `rgb()` or palette colour in any string
+  in `ui/src`, and on an arbitrary value naming a token that has a utility (the list is read from
+  `@theme inline`); CSS holds the definitions and is exempt.
+- **Shape and type.** No `rounded-*` other than `rounded-full` (dots, switches). No drop shadow on
+  anything in the page: a panel is a 1px `border-border`, not a card. Floating layers (sheets, menus,
+  popovers) cast `var(--sheet-shadow)`, and the selected-item bar is an inset shadow in the accent
+  (`shadow-[inset_3px_0_0_var(--accent)]`), never a left border wider than 1px. Inter for text,
+  `font-mono` for labels, badges and code, the pixel font for headline numerals only.
+- **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`, and no em dash anywhere.
+  The platform pages are checked too, each held at its count in `ui/words-contract.baseline.json`:
+  add none, and when you remove some, `npm run words-baseline` lowers the count in the same PR.
+- **Time** comes from `ui/src/lib/time.ts`: a UTC stamp (`formatStampUTC`) with "3h ago" in its
+  tooltip (`formatDistance`), a day as `Nov 12, 2026` (`formatDayUTC`), a length in words
+  (`ageWords`, `spanWords`, `durationWords`, the same ladder as the server's `goal.py`). A grouped
+  number is `formatCount` from `ui/src/lib/number.ts`. No `toLocale*String` and no
+  `Intl.DateTimeFormat` anywhere else; the legacy pages keep theirs at the count in
+  `ui/time-contract.baseline.json`, lowered with `npm run time-baseline`. Tests: `npm run test:time`.
+- **Motion** comes from the tokens and classes in the Motion part of `ui/src/styles.css` (rule in
+  `.impeccable.md`). Overlays, banners (`Collapse`), lists (`ListSection`), statuses and tabs in the
+  kit already move; a screen adds none of its own. No `duration-150`, `delay-*`, `ease-[..]` or
+  `animate-[..]`: `duration-(--dur-2)`, `ease-out`, or a `motion-*` class. Script-driven motion
+  reads `ui/src/lib/motion.ts`. Every e2e suite takes Chromium from `ui/tests/browser.cjs`, which asks
+  for reduced motion, so a check never reads something halfway in. `npm run motion-contract` fails on
+  a raw time in CSS, on `motion.ts` drifting from the tokens and on a suite that loads playwright itself.
+- **Before you push** a console change:
+  `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
+  npm run test:time && npm run design-contract && npm run motion-contract && npm run build`,
+  and the gallery suite when you touched `components/edition`. `design-contract`
+  (`ui/eslint-design-contract.config.mjs`) fails on a rounded corner, a page shadow, a side stripe,
+  an em dash in copy, a locale time and a raw time in motion. In both contracts, and in kit-only, an exception goes in
+  the register with a reason, never in an `eslint-disable` comment (inline config is off).
+- A change to one of these conventions changes this section in the same PR, and the check that
+  enforces it when there is one.
+
 ## Environment contract
 
 Every knob is a `TARES_*` variable read at start. The ones you will meet most:

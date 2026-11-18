@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, EmptyState, Input, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Input, Loading, Skeleton } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -11,6 +11,8 @@ import {
   type KindGroup, type RangeKey, type TimelineData, type TimelineItem, type TimelineQuery, type TimelineRawRow, type TimelineTone,
 } from "./Timeline.api";
 import { isSample, sampleEarlier, sampleLoad, sampleOpen, sampleQuery, sampleRaw, SAMPLE_NOW } from "./sample/timeline";
+import { formatCount } from "../../lib/number";
+import { DAY, HOUR } from "../../lib/time";
 
 // Timeline: what happened on the cell, newest first and grouped by the hour, from one read
 // (GET /api/sre/timeline). The service, the range and the kinds live in the address (?service=,
@@ -47,10 +49,10 @@ const TAG: Record<TimelineItem["kind"], string> = {
   window: "Logs", quiet: "Logs", deploy: "Deploy", alert: "Alert", check: "Check", incident: "Incident", metric: "Metric",
 };
 const TONE: Record<TimelineTone, string> = {
-  bad: "bg-[var(--err-soft)] text-[color:var(--err)]",
-  warn: "bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
-  ok: "bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  info: "bg-[var(--wash-2)] text-foreground",
+  bad: "bg-err-soft text-err",
+  warn: "border-b border-dashed border-muted-foreground bg-wash-strong text-foreground",
+  ok: "bg-ok-soft text-ok",
+  info: "bg-wash-strong text-foreground",
 };
 /** The text of these kinds is a person's or an agent's own words (a commit, a title, an alert). */
 const WRITTEN = new Set<TimelineItem["kind"]>(["deploy", "incident", "alert"]);
@@ -59,8 +61,6 @@ const WRITTEN = new Set<TimelineItem["kind"]>(["deploy", "incident", "alert"]);
 const pad = (n: number) => String(n).padStart(2, "0");
 const ms = (t: string) => Date.parse(t);
 const clockSeconds = (t: string) => (Number.isNaN(Date.parse(t)) ? "" : new Date(t).toISOString().slice(11, 19));
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** The hour an item sits under. A span that ends exactly on the hour belongs to the hour before. */
@@ -130,12 +130,11 @@ const fieldsLine = (f: Record<string, unknown>) =>
 const utc = (v: string) => (/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v) ? `${v}:00Z` : v);
 
 // ── small parts
-const btnBase = "inline-flex! items-center! rounded-none! border! border-border! bg-[var(--white)]! dark:bg-background! text-[13px]! font-normal! text-muted-foreground! hover:border-border! hover:text-foreground!";
-const btnOn = "font-semibold! text-foreground! bg-[var(--row-hover)]! dark:bg-[var(--row-hover)]! shadow-[inset_0_-2px_0_var(--accent)]";
+const btnBase = "inline-flex items-center rounded-none border border-border bg-field dark:bg-background text-[13px] font-normal text-muted-foreground hover:border-border hover:text-foreground";
+const btnOn = "font-semibold text-foreground bg-row-hover dark:bg-row-hover shadow-[inset_0_-2px_0_var(--accent)]";
 
 function Tag({ item }: { item: TimelineItem }) {
-  // a metric is drawn amber whatever the cell's tone, as the mock has it
-  const tone = item.kind === "metric" ? "warn" : item.tone;
+  const tone = item.tone;
   return (
     <span data-testid="timeline-tag" data-tone={tone}
           className={cn("inline-block px-1.5 py-px font-mono text-[11px] font-medium uppercase tracking-[0.04em] whitespace-nowrap", TONE[tone])}>
@@ -146,7 +145,7 @@ function Tag({ item }: { item: TimelineItem }) {
 
 const LinkButton = React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(({ className, ...p }, ref) => (
   <button ref={ref} type="button" {...p}
-          className={cn("linklike text-[13px]! text-foreground! underline! decoration-border! underline-offset-[3px] hover:opacity-100!", className)} />
+          className={cn("linklike text-[13px] text-foreground underline decoration-border underline-offset-[3px] hover:opacity-100", className)} />
 ));
 LinkButton.displayName = "LinkButton";
 
@@ -155,7 +154,7 @@ function RawLines({ lines, onMore, onHide, onRetry }: {
 }) {
   const waiting = lines.status === "loading";
   return (
-    <div className="mt-2 min-w-0 border border-border bg-[var(--white)] dark:bg-background" data-testid="timeline-raw" aria-busy={waiting || undefined}>
+    <div className="mt-2 min-w-0 border border-border bg-field dark:bg-background" data-testid="timeline-raw" aria-busy={waiting || undefined}>
       {waiting && lines.rows.length === 0 && (
         <div role="status" aria-label="Loading the lines" className="grid gap-2 px-3 py-2.5" data-testid="timeline-raw-loading">
           <Skeleton width="30%" /><Skeleton width="80%" /><Skeleton width="55%" />
@@ -174,18 +173,18 @@ function RawLines({ lines, onMore, onHide, onRetry }: {
           </div>
         );
       })}
-      {lines.status === "error" && (
+      <Collapse>{lines.status === "error" && (
         <Banner tone="warn" className="m-1.5" data-testid="timeline-raw-error"
                 action={<Button variant="secondary" onClick={onRetry} data-testid="timeline-raw-retry" className="h-[30px]">Try again</Button>}>
           The lines did not load.
         </Banner>
-      )}
+      )}</Collapse>
       {lines.status === "ok" && (
         <div className="border-t border-border px-3 py-1.5 text-[13px] first:border-t-0" data-testid="timeline-raw-footer">
           <span data-testid="timeline-raw-count">
             {lines.more
-              ? `Showing ${lines.rows.length.toLocaleString("en-US")} of ${lines.count.toLocaleString("en-US")} lines.`
-              : lines.count === 1 ? "Showing the line." : `Showing all ${lines.count.toLocaleString("en-US")} lines.`}
+              ? `Showing ${formatCount(lines.rows.length)} of ${formatCount(lines.count)} lines.`
+              : lines.count === 1 ? "Showing the line." : `Showing all ${formatCount(lines.count)} lines.`}
           </span>
           {lines.more && lines.limit < MAX_LINES && <> <LinkButton onClick={onMore} data-testid="timeline-raw-more">Show {MORE_LINES} more</LinkButton></>}
           {" "}<LinkButton onClick={onHide} data-testid="timeline-raw-hide">Hide the lines</LinkButton>
@@ -214,13 +213,13 @@ function Row({ item, first, lines, onOpen, onMore, onHide }: {
           {text}
           {item.link && (
             <small className="block text-[13px] text-muted-foreground">
-              <Link to={item.link} data-testid="timeline-incident-link" className="text-foreground! underline!">Open the incident</Link>
+              <Link to={item.link} data-testid="timeline-incident-link" className="text-foreground underline">Open the incident</Link>
             </small>
           )}
           {item.raw && !lines && (
             <small className="block text-[13px] text-muted-foreground">
               <LinkButton onClick={() => onOpen(item, FIRST_LINES)} data-testid="timeline-open-raw">
-                {count === 1 ? "Show the line" : `Show the ${count.toLocaleString("en-US")} lines`}
+                {count === 1 ? "Show the line" : `Show the ${formatCount(count)} lines`}
               </LinkButton>
             </small>
           )}
@@ -235,15 +234,15 @@ function Row({ item, first, lines, onOpen, onMore, onHide }: {
   );
 }
 
-function Loading() {
+function TimelineSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card" data-testid="timeline-loading">
+    <Loading className="border border-border bg-card" data-testid="timeline-loading">
       {[0, 1, 2, 3, 4, 5].map((i) => (
         <div key={i} className={cn("grid gap-2 px-3.5 py-[11px] md:px-[18px]", i > 0 && "border-t border-border")}>
           <Skeleton width="40%" height={14} /><Skeleton width="40%" height={14} /><Skeleton width="70%" height={14} />
         </div>
       ))}
-    </div>
+    </Loading>
   );
 }
 
@@ -416,8 +415,8 @@ export default function Timeline() {
   return (
     <div className="grid gap-[18px]" data-testid="sre-timeline">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Timeline</h1>
-        <p className="m-0! min-h-[1.5em] text-[15px] text-muted-foreground" data-testid="timeline-sub">
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Timeline</h1>
+        <p className="m-0 min-h-[1.5em] text-[15px] text-muted-foreground" data-testid="timeline-sub">
           {fresh && rangeWords ? <>{rangeWords}, {service ? <span data-user-text>{service}</span> : "all services"}.</> : "\u00a0"}
         </p>
       </div>
@@ -425,7 +424,7 @@ export default function Timeline() {
       <div className="flex flex-wrap items-center gap-2.5">
         <Select value={service || ALL} onValueChange={(v) => pickService(v === ALL ? "" : v)}>
           <SelectTrigger aria-label="Service" data-testid="timeline-service"
-                         className="h-9 w-auto! max-w-full min-w-0 justify-start! gap-2! bg-[var(--white)]! dark:bg-background!">
+                         className="h-9 w-auto max-w-full min-w-0 justify-start gap-2 bg-field dark:bg-background">
             <span className="text-muted-foreground">Service</span>
             <span data-user-text className="truncate"><SelectValue /></span>
           </SelectTrigger>
@@ -434,10 +433,10 @@ export default function Timeline() {
             {serviceOptions.map((s) => <SelectItem key={s} value={s}><span data-user-text>{s}</span></SelectItem>)}
           </SelectContent>
         </Select>
-        <div role="group" aria-label="Range" className="inline-flex w-full border border-border bg-[var(--white)] dark:bg-background md:w-auto" data-testid="timeline-range">
+        <div role="group" aria-label="Range" className="inline-flex w-full border border-border bg-field dark:bg-background md:w-auto" data-testid="timeline-range">
           {RANGES.map((r) => (
             <button key={r.key} type="button" aria-pressed={range === r.key} data-testid={`timeline-range-${r.key}`} onClick={() => pickRange(r.key)}
-                    className={cn("flex-1 cursor-pointer rounded-none! border-y-0! border-r-0! border-l! border-border! bg-transparent! px-2! py-1.5! text-sm! font-normal! text-muted-foreground! first:border-l-0! hover:border-border! hover:text-foreground! md:flex-none md:px-3!",
+                    className={cn("flex-1 cursor-pointer rounded-none border-y-0 border-r-0 border-l border-border bg-transparent px-2 py-1.5 text-sm font-normal text-muted-foreground first:border-l-0 hover:border-border hover:text-foreground md:flex-none md:px-3",
                                   range === r.key && btnOn)}>
               {r.label}
             </button>
@@ -448,9 +447,9 @@ export default function Timeline() {
       {range === "custom" && (
         <div className="flex flex-wrap items-end gap-2.5" data-testid="timeline-custom">
           <Input label="From (UTC)" type="datetime-local" value={draft.from} data-testid="timeline-custom-from"
-                 onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))} className="h-9 bg-[var(--white)]! dark:bg-background!" />
+                 onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))} className="h-9 bg-field dark:bg-background" />
           <Input label="To (UTC)" type="datetime-local" value={draft.to} data-testid="timeline-custom-to"
-                 onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} className="h-9 bg-[var(--white)]! dark:bg-background!" />
+                 onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} className="h-9 bg-field dark:bg-background" />
           <Button variant="secondary" disabled={!draftOk} data-testid="timeline-custom-apply" className="h-9"
                   onClick={() => put({ from: [draft.from, ""], to: [draft.to, ""] })}>
             Apply
@@ -466,26 +465,26 @@ export default function Timeline() {
           return (
             <button key={k} type="button" aria-pressed={on} aria-disabled={last || undefined} data-testid={`timeline-kind-${k}`}
                     title={last ? "At least one kind stays on" : undefined} onClick={() => toggleKind(k)}
-                    className={cn(btnBase, "h-[30px] cursor-pointer gap-1.5! px-2.5! py-0!", on && btnOn, last && "cursor-default")}>
-              <b aria-hidden className={cn("inline-block size-2 bg-[var(--accent)]", !on && "opacity-25")} />
+                    className={cn(btnBase, "h-[30px] cursor-pointer gap-1.5 px-2.5 py-0", on && btnOn, last && "cursor-default")}>
+              <b aria-hidden className={cn("inline-block size-2 bg-foreground", !on && "opacity-25")} />
               {KIND_LABEL[k]}
             </button>
           );
         })}
       </div>
 
-      {showError && (
+      <Collapse>{showError && (
         <Banner tone="error" data-testid="timeline-error"
                 action={<Button variant="secondary" onClick={polled.reload} data-testid="timeline-retry" className="h-[30px]">Try now</Button>}>
           <b>The timeline did not load.</b> <span className="text-foreground">Tares could not read it just now.{live && " It will try again in 30 seconds."}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
-      {!fresh && !showError && <Loading />}
+      {!fresh && !showError && <TimelineSkeleton />}
 
       {fresh && items.length === 0 && (
         <EmptyState title={narrowed ? "Nothing to show" : "Nothing arrived"} data-testid="timeline-empty"
-                    className="border border-dashed border-[color:var(--border-strong)]">
+                    className="border border-dashed border-rule-strong">
           <span data-user-text>{fresh.emptyWords ?? "Nothing to show."}</span>{" "}
           {service ? "Try a longer range or all services." : "Try a longer range."}
         </EmptyState>
@@ -496,7 +495,7 @@ export default function Timeline() {
           {groups.map((g, gi) => (
             <React.Fragment key={g.hour ?? "unknown"}>
               <div role="heading" aria-level={2} data-testid="timeline-hour"
-                   className={cn("border-y border-border bg-[var(--row-hover)] px-3.5 py-2 text-[13px] font-semibold text-muted-foreground md:px-[18px]", gi === 0 && "border-t-0")}>
+                   className={cn("border-y border-border bg-row-hover px-3.5 py-2 text-[13px] font-semibold text-muted-foreground md:px-[18px]", gi === 0 && "border-t-0")}>
                 {hourWords(g.hour, now)}
               </div>
               {g.items.map((it, i) => (
@@ -508,9 +507,9 @@ export default function Timeline() {
           ))}
           {fresh.cursor && (
             <div className="grid justify-items-start gap-2 border-t border-border px-3.5 py-3 md:px-[18px]">
-              {earlier.error && (
+              <Collapse>{earlier.error && (
                 <Banner tone="warn" className="w-full" data-testid="timeline-earlier-error">The earlier items did not load.</Banner>
-              )}
+              )}</Collapse>
               <Button variant="secondary" busy={earlier.busy} onClick={loadEarlier} data-testid="timeline-earlier" className="h-9">
                 {earlier.error ? "Try again" : "Load earlier"}
               </Button>

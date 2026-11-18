@@ -133,6 +133,10 @@ ck("one key", IW.woke_on(["rd:Shop/T5"]) == "Woke on: rd:Shop/T5.")
 ck("several keys, in one line", IW.woke_on(["a", "b", "c"]) == "Woke on: a, b, c.")
 ck("five keys are all shown", IW.woke_on(list("abcde")) == "Woke on: a, b, c, d, e.")
 ck("more than five are counted", IW.woke_on(list("abcdefg")) == "Woke on: a, b, c, d, e and 2 more.")
+LONG = "ds:Shop/" + "x" * 120
+ck("a key with line breaks and runs of spaces is one line", IW.woke_on(["a\n  b\t c"]) == "Woke on: a b c.")
+ck("a long key is cut at 80 characters", IW.woke_on([LONG]) == f"Woke on: {LONG[:77]}...." and len(IW.woke_on([LONG])) < 100, IW.woke_on([LONG]))
+ck("a key of exactly 80 characters is left whole", IW.woke_on(["k" * 80]) == f"Woke on: {'k' * 80}.")
 ck("the orchestrator is told to run the whole tick",
    IW.work_prompt("orchestrator", "X") == "Something is waiting for you: X. Run the whole Tick section of your manual, not only that.")
 ck("its liveness prompt says the same",
@@ -144,6 +148,13 @@ print("a work wake")
 reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
 p = planned({**EMPTY, "ready": [{"project": "Shop", "ticket": "T5", "title": "x", "repo": ""}]})
 ck("the prompt names the key that woke it", p and p["keys"] == ["rd:Shop/T5"] and p["prompt"] == (
+    "Something is waiting for you: ticket T5 of Shop is ready to start. Run the whole Tick section of your manual, not only that. "
+    "Woke on: rd:Shop/T5. " + NOTE + " Carry on from your report."), str(p))
+
+reset({"released": True, "clock": NOW - 60, "seen": ["rd:Shop/T4"], "baseline": {**BASE, "work": []}})
+p = planned({**EMPTY, "ready": [{"project": "Shop", "ticket": "T4", "title": "x", "repo": ""},
+                                {"project": "Shop", "ticket": "T5", "title": "x", "repo": ""}]})
+ck("a key already seen is left out: only the new key wakes it", p and p["keys"] == ["rd:Shop/T4", "rd:Shop/T5"] and p["prompt"] == (
     "Something is waiting for you: ticket T5 of Shop is ready to start. Run the whole Tick section of your manual, not only that. "
     "Woke on: rd:Shop/T5. " + NOTE + " Carry on from your report."), str(p))
 
@@ -159,6 +170,10 @@ skill = (ROOT / "claude-plugin" / "skills" / "station-orchestrator" / "SKILL.md"
 tick = skill[skill.index("## Tick"):skill.index("## Status for the person")]
 ck("the Tick section says every wake runs the whole tick, liveness included",
    "With idle_wake on, every wake (a liveness wake too) runs the whole tick" in tick, tick[:400])
+
+proto = (ROOT / "claude-plugin" / "skills" / "factory-protocol" / "SKILL.md").read_text(encoding="utf-8")
+live = next(ln for ln in proto.splitlines() if ln.startswith("- With `idle_wake` on"))
+ck("the protocol's liveness line says the orchestrator runs its whole tick", "check your queue (orchestrator: whole tick)" in live, live[-200:])
 
 print(f"\n{P} passed, {F} failed")
 shutil.rmtree(SCRATCH, ignore_errors=True)

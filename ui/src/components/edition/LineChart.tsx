@@ -2,6 +2,8 @@ import * as React from "react";
 
 import { EmptyState } from "@/components/edition/EmptyState";
 import { cn } from "@/lib/utils";
+import { formatDecimal } from "@/lib/number";
+import { formatStampUTC } from "@/lib/time";
 
 export interface LineSeries {
   label: string;
@@ -30,8 +32,8 @@ export interface LineChartProps extends Omit<React.HTMLAttributes<HTMLDivElement
 }
 
 // Series colours come from the tokens: the first is the error colour, the second the soft ink.
-const STROKE = ["stroke-[color:var(--err)]", "stroke-[color:var(--ink-soft)]"];
-const SWATCH = ["bg-[var(--err)]", "bg-[var(--ink-soft)]"];
+const STROKE = ["stroke-err", "stroke-muted-foreground"];
+const SWATCH = ["bg-err", "bg-muted-foreground"];
 
 const WIDTH = 100;
 // A lone point has no direction: a segment this wide, centred on its time, so it is still visible.
@@ -50,11 +52,10 @@ function numberFormat(top: number) {
   const half = top / 2;
   let digits = 0;
   while (digits < 8 && Math.abs(half * 10 ** digits - Math.round(half * 10 ** digits)) > 1e-9) digits++;
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits });
+  return { format: (v: number) => formatDecimal(v, digits) };
 }
 
-const TIME = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-const timeLabel = (ms: number, raw: string) => (Number.isNaN(ms) ? raw : TIME.format(ms));
+const timeLabel = (ms: number, raw: string) => (Number.isNaN(ms) ? raw : formatStampUTC(ms));
 
 /** The marks as a list of time and label, oldest first. Renders nothing without marks. A mark outside the plotted range is listed too, though the chart draws no line for it. */
 export function LineMarks({ marks, className, ...props }: { marks: LineMark[] } & Omit<React.HTMLAttributes<HTMLUListElement>, "children">) {
@@ -62,7 +63,7 @@ export function LineMarks({ marks, className, ...props }: { marks: LineMark[] } 
   // A time that does not parse goes last, under its raw text.
   const sorted = marks.map((m) => ({ ...m, ms: Date.parse(m.at) })).sort((a, b) => (Number.isNaN(a.ms) ? Infinity : a.ms) - (Number.isNaN(b.ms) ? Infinity : b.ms));
   return (
-    <ul aria-label="Marks" className={cn("m-0! grid list-none! gap-1 p-0! text-xs", className)} data-marks-list {...props}>
+    <ul aria-label="Marks" className={cn("m-0 grid list-none gap-1 p-0 text-xs", className)} data-marks-list {...props}>
       {sorted.map((m, i) => (
         <li key={`${m.at}-${m.label}-${i}`} className="flex flex-wrap gap-x-2">
           <time dateTime={Number.isNaN(m.ms) ? undefined : m.at} className="font-mono text-muted-foreground">
@@ -133,13 +134,13 @@ export function LineChart({ series, marks = [], marksList = false, height = 160,
         <div className="py-2">
           <svg role="img" viewBox={`0 0 ${WIDTH} ${height}`} preserveAspectRatio="none" width="100%" height={height} className="block overflow-visible" aria-label={ariaLabel}>
             {lines.map(({ f }) => (
-              <line key={f} x1={0} x2={WIDTH} y1={y(top * f)} y2={y(top * f)} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-[color:var(--line)]" />
+              <line key={f} x1={0} x2={WIDTH} y1={y(top * f)} y2={y(top * f)} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-border" />
             ))}
-            <line x1={0} x2={WIDTH} y1={height} y2={height} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-[color:var(--ink-faint)]" />
+            <line x1={0} x2={WIDTH} y1={height} y2={height} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-faint" />
             {/* The svg is an image to assistive tech, so these hover titles are not read: `marksList` is the text form. */}
             {inRange.map((m) => (
               <g key={`${m.at}-${m.label}`} data-mark>
-                <line x1={x(m.ms)} x2={x(m.ms)} y1={0} y2={height} strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" className="stroke-[color:var(--ink-soft)]" />
+                <line x1={x(m.ms)} x2={x(m.ms)} y1={0} y2={height} strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" className="stroke-muted-foreground" />
                 {/* A wide, invisible line gives the hover a target a pixel could not. */}
                 <line x1={x(m.ms)} x2={x(m.ms)} y1={0} y2={height} strokeWidth={12} stroke="transparent" vectorEffect="non-scaling-stroke">
                   <title>{m.label}</title>
@@ -156,7 +157,7 @@ export function LineChart({ series, marks = [], marksList = false, height = 160,
           </div>
         </div>
       </div>
-      <ul className="m-0! flex list-none! flex-wrap gap-x-4 gap-y-1 p-0! text-xs">
+      <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs">
         {shown.map((s, i) => (
           <li key={s.label} className="flex items-center gap-2">
             <span aria-hidden className={cn("inline-block h-0.5 w-4", SWATCH[i])} />

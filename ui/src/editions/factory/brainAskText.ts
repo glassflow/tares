@@ -1,7 +1,7 @@
 // The words and small rules of the Ask page (TR-1206), kept apart from the page so a script can run them
-// without a browser. No JSX and no imports beyond durationWords.
+// without a browser. No JSX and no imports beyond lib/time.
 
-import { durationWords } from "../words";
+import { elapsedWords } from "../../lib/time";
 import type { AskRepoRow, BrainCitation } from "./BrainAsk.api";
 
 /** The cell refuses a longer question (ee brain/ask.py, MAX_QUESTION). */
@@ -65,7 +65,7 @@ export const indexingLine = (names: string[]): string =>
 /** "Answered in 6 seconds." from the milliseconds the cell measured, or the page's own clock when it did not say. */
 export function answeredWords(ms: number | null | undefined, fallbackMs: number): string {
   const real = typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? ms : fallbackMs;
-  return `Answered in ${durationWords(real / 1000)}.`;
+  return `Answered in ${elapsedWords(real)}.`;
 }
 
 const GITHUB_BLOB = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\//;
