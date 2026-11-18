@@ -410,9 +410,9 @@ ck("...in either order", ci().state == "success")
 print("== a job cancelled because a later run of its workflow replaced it ==")
 
 
-def wrun(rid, workflow=306034208, head=HEAD, status="completed", event="pull_request", branch="factory/T1"):
+def wrun(rid, workflow=306034208, head=HEAD, status="completed", event="pull_request", branch="factory/T1", name="CI"):
     """A workflow run as GitHub's actions/runs endpoint sends it (the fields the gate reads)."""
-    return {"id": rid, "workflow_id": workflow, "name": "CI", "head_sha": head, "event": event,
+    return {"id": rid, "workflow_id": workflow, "name": name, "head_sha": head, "event": event,
             "head_branch": branch, "status": status}
 
 
@@ -506,7 +506,8 @@ for st in ("queued", "in_progress", "waiting", "requested", "pending"):
     ck(f"the cancel is dropped but the replacing run is {st} with no jobs yet: pending, nothing failing",
        (out.state, out.failing) == ("pending", []) and got["ci"] == "pending", out)
 ck("...and ci_checks lists it as a pending check, so the queue waits",
-   {"name": "CI", "state": "pending", "waiting": True} in got["ci_checks"]
+   {"name": "CI", "state": "pending", "waiting": True,
+    "jobs": sorted(["test (duckdb)", "test (postgres)", TEMPLATE])} in got["ci_checks"]
    and [c["name"] for c in got["ci_checks"] if c["state"] == "failure"] == [], got["ci_checks"])
 reset(runs=partial_jobs, wruns=[wrun(1), wrun(2)])
 ck("the replacing run finished: its checks are all there is, no pending entry",
@@ -533,7 +534,25 @@ reset(runs=partial_jobs + [real_run("lint", 14, DRAFT, conclusion="failure")], w
 ck("a failure that was read still beats the wait", ci().failing == ["lint"])
 reset(runs=partial_jobs, wruns=[wrun(2, status="queued"), wrun(1), wrun(3, workflow=7, status="queued")])
 ck("two workflows: only the one that replaced a run is waited for",
-   fg._waiting_runs([wrun(2, status="queued"), wrun(1), wrun(3, workflow=7, status="queued")], HEAD) == ["CI"])
+   [w["name"] for w in fg._waiting_runs([wrun(2, status="queued"), wrun(1), wrun(3, workflow=7, status="queued")], HEAD)] == ["CI"])
+
+preview_jobs = [real_run("test (duckdb)", 11, DRAFT), real_run("preview build", 31, DRAFT, conclusion="cancelled")]
+preview_jobs[0]["html_url"] = f"https://github.com/{REPO}/actions/runs/1/job/11"
+preview_jobs[1]["html_url"] = f"https://github.com/{REPO}/actions/runs/7/job/31"
+preview_runs = [wrun(1), wrun(7, workflow=999, name="preview"), wrun(8, workflow=999, name="preview", status="queued")]
+reset(runs=preview_jobs, wruns=preview_runs)
+out = ci(required=["test (duckdb)"])
+ck("required names: a rerun of an unrelated workflow still to start does not hold the gate",
+   (out.state, out.failing) == ("success", []), out)
+ck("...and read_pr still lists it as waiting, with the jobs its runs held",
+   {"name": "preview", "state": "pending", "waiting": True, "jobs": ["preview build"]}
+   in asyncio.run(fg.read_pr(store, REPO, N))["ci_checks"])
+ck("...with no required names it still holds the gate", ci().state == "pending")
+ck("...a required job of that workflow holds it", ci(required=["test (duckdb)", "preview build"]).state == "pending")
+ck("...so does the workflow's own name when it is required", ci(required=["test (duckdb)", "preview"]).state == "pending")
+ck("...and its cancel is dropped, not failing", ci(required=["preview build"]).failing == [])
+reset(runs=preview_jobs, wruns=[wrun(1), wrun(7, workflow=999, name="preview"), wrun(8, workflow=999, name="preview")])
+ck("...once it finished, the gate passes either way", ci(required=["test (duckdb)"]).state == "success")
 
 print("== _replaced_runs ==")
 ck("no runs, None, junk: nothing replaced",
@@ -552,8 +571,13 @@ ck("a run of another event or branch is its own group",
 ck("_waiting_runs: a lone unfinished run is nothing to wait for", fg._waiting_runs([wrun(1, status="queued")], HEAD) == [])
 ck("_waiting_runs: none, junk, a finished newest run", fg._waiting_runs(None, HEAD) == []
    and fg._waiting_runs([None, {"id": 1}], HEAD) == [] and fg._waiting_runs([wrun(1), wrun(2)], HEAD) == [])
+ck("_waiting_runs: names the jobs each workflow's runs held",
+   fg._waiting_runs([wrun(1), wrun(2, status="queued")], HEAD, [
+       {"name": "a", "html_url": "x/actions/runs/1/job/1"}, {"name": "b", "html_url": "x/actions/runs/9/job/2"},
+       {"name": "a", "html_url": "x/actions/runs/2/job/3"}, {"name": "", "html_url": "x/actions/runs/1/job/4"}])
+   == [{"name": "CI", "jobs": ["a"]}])
 ck("_waiting_runs: a run with no name is named for what it is",
-   fg._waiting_runs([wrun(1), {**wrun(2, status="queued"), "name": None}], HEAD) == ["workflow run"])
+   [w["name"] for w in fg._waiting_runs([wrun(1), {**wrun(2, status="queued"), "name": None}], HEAD)] == ["workflow run"])
 ck("_run_id reads the run, not the job",
    fg._run_id({"html_url": "https://github.com/a/b/actions/runs/44240624428/job/134587351900"}) == 44240624428
    and fg._run_id({"html_url": None}) is None and fg._run_id({}) is None and fg._run_id(None) is None

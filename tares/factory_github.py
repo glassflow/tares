@@ -142,16 +142,21 @@ def _replaced_runs(workflow_runs: list[dict], head: str) -> set[int]:
     return out
 
 
-def _waiting_runs(workflow_runs: list[dict], head: str) -> list[str]:
-    """The names of the newest workflow runs that replaced another and have not finished: their
-    jobs may not exist yet, so the commit's checks are not all in."""
+def _waiting_runs(workflow_runs: list[dict], head: str, check_runs=()) -> list[dict]:
+    """The newest workflow runs that replaced another and have not finished, each as {name, jobs}:
+    the workflow's name, and the names of the jobs any run of that workflow on the commit held (from
+    `check_runs`). Its own jobs may not exist yet, so the commit's checks are not all in; `jobs` is
+    how a reader that wants only some checks tells whether this run is one of them."""
     out = []
     for g in _run_groups(workflow_runs, head):
         if len(g) < 2:
             continue
         newest = max(g, key=lambda w: w["id"])
         if newest.get("status") != "completed":
-            out.append(str(newest.get("name") or newest.get("display_title") or "workflow run"))
+            ids = {w["id"] for w in g}
+            out.append({"name": str(newest.get("name") or newest.get("display_title") or "workflow run"),
+                        "jobs": sorted({str(r.get("name") or "") for r in check_runs or []
+                                        if _run_id(r) in ids and r.get("name")})})
     return out
 
 
@@ -214,7 +219,7 @@ def _check_list(statuses: list[dict], runs: list[dict], replaced=frozenset(), wa
     pending, `success`, `neutral` and `skipped` pass, any other conclusion (`cancelled`,
     `timed_out`, `action_required`, `startup_failure`, `stale`, `failure`) fails. A job cancelled
     in a workflow run that a later run replaced is left out (see `_replaced_runs`), and each run in
-    `waiting` is one pending check under its name."""
+    `waiting` is one pending check under its workflow's name, with the `jobs` its runs held."""
     out = []
     for s in _newest(statuses, "context", ("updated_at", "created_at")):
         if s.get("context") != REVIEW_CONTEXT:
@@ -229,7 +234,8 @@ def _check_list(statuses: list[dict], runs: list[dict], replaced=frozenset(), wa
         else:
             state = "failure"
         out.append({"name": str(r.get("name") or ""), "state": state})
-    out += [{"name": str(n), "state": "pending", "waiting": True} for n in waiting or ()]
+    out += [{"name": str(w.get("name") or ""), "state": "pending", "waiting": True,
+             "jobs": list(w.get("jobs") or [])} for w in waiting or ()]
     return out
 
 
@@ -261,7 +267,7 @@ def _review_of(statuses: list[dict], runs: list[dict]) -> dict | None:
 
 
 async def _replaced_of(cx, api: str, repo: str, head: str,
-                       check_runs: list[dict]) -> tuple[set[int], list[str], bool]:
+                       check_runs: list[dict]) -> tuple[set[int], list[dict], bool]:
     """(`_replaced_runs`, `_waiting_runs`, whether the read failed) for the commit, asked of GitHub
     only when a job was cancelled. A read that fails answers nothing replaced, so a cancel counts
     as before; it needs the `actions: read` permission, which the check-runs read does not."""
@@ -272,7 +278,7 @@ async def _replaced_of(cx, api: str, repo: str, head: str,
         if resp.status_code != 200:
             return set(), [], True
         wr = resp.json().get("workflow_runs")
-        return _replaced_runs(wr, head), _waiting_runs(wr, head), False
+        return _replaced_runs(wr, head), _waiting_runs(wr, head, check_runs), False
     except Exception:
         return set(), [], True
 
