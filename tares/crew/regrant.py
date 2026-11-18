@@ -113,14 +113,15 @@ def added_grants(now: str, kept) -> str:
 
 
 def _prompt(human: str, rules: str, rearm: str) -> str:
+    from .lifecycle import REPORT_READ
     if rules:
         return (f"{human} allowed new permissions in Tares, so the factory restarted you in this same "
                 f"conversation with fresh settings. These are in your settings now:\n{rules}\n"
                 "If something you tried was refused for want of one of these and is still needed, run it again "
-                f"now. Then re-read your report, {rearm}, and carry on where you were.")
+                f"now. Then {REPORT_READ}, {rearm}, and carry on where you were.")
     return (f"{human} changed what the crew is allowed in Tares, so the factory restarted you in this same "
-            "conversation with fresh settings that have the change (read_grants shows them). Re-read your "
-            f"report, {rearm}, then carry on where you were.")
+            "conversation with fresh settings that have the change (read_grants shows them). "
+            f"{REPORT_READ[0].upper()}{REPORT_READ[1:]}, {rearm}, then carry on where you were.")
 
 
 def _new_rules(client: TaresClient, paths: CrewPaths, station: str, project: str) -> list:
