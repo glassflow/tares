@@ -268,7 +268,7 @@ export default function BrainDecisions() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">{HEADING}</h1>
-          <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">{SUBTITLE}</p>
+          <p className="m-0 text-[15px] text-muted-foreground">{SUBTITLE}</p>
         </div>
         {canAdd && load.state !== "no-brain" && (
           <Button asChild><Link to="/brain/decisions/new" data-testid="brain-decision-record">{RECORD_WORDS}</Link></Button>

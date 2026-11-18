@@ -27,7 +27,7 @@ function Head() {
     <div>
       <Link to="/brain/decisions" className={cn(MUTED, "no-underline hover:underline")} data-testid="brain-decision-new-back">Decisions</Link>
       <h1 className="m-0 mb-1.5 mt-1 text-[22px] md:text-[28px]">{RECORD_WORDS}</h1>
-      <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">{ADD_LINE}</p>
+      <p className="m-0 text-[15px] text-muted-foreground">{ADD_LINE}</p>
     </div>
   );
 }
