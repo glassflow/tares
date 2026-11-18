@@ -110,9 +110,10 @@ async def main():
            and [x["ref"] for x in p["started"]] == ["T2"]
            and [(x["ref"], x["reason"], x["new"]) for x in p["blocked"]]
            == [("T3", "waiting on the payment API key", True)], p)
-        ck("the open desk question needs the person",
+        ck("the open desk questions need the person, the stuck ticket's among them",
            [(d["question"], d["blocking"]) for d in p["needs_you"]]
-           == [("Which payment provider?", True)], p["needs_you"])
+           == [("T3 is stuck. Waiting on the payment API key. What should happen?", True),
+               ("Which payment provider?", True)], p["needs_you"])
         ck("progress counts the project's tickets", p["progress"]["done"] == 1
            and p["progress"]["total"] == 4, p["progress"])
         md = rep["markdown"]
