@@ -3826,6 +3826,7 @@ scenario(Scenario(
 # or none, and the station is idle, busy, waiting on a person, done, open in a terminal or without a session.
 
 REGRANT_GRANT = '- "the reviewer may label pull requests" (2026-02-03)\n'
+REGRANT_OWN = '- "crew-reviewer may label pull requests" (2026-02-08)\n'
 REGRANT_SHOP = '- "shop-build-m1 may run gh pr merge 12 --squash in shop" (2026-02-04)\n'
 
 
@@ -4137,7 +4138,7 @@ scenario(Scenario(
 scenario(Scenario(
     name="watch_regrant_roles",
     suite="crew",
-    about="a station blocked on a person is restarted at once; a helper and a project's builder get their grants; a station that kept no grants is quoted all of them",
+    about="a station blocked on a person waits for a grant that is not its own and is restarted at once for one that names it; a helper and a project's builder get their grants; a station that kept no grants is quoted all of them",
     driver=LAUNCH_DRIVER,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("shop-build-m1", "builder", _W0, parent="crew-orchestrator", project="shop"),
@@ -4145,17 +4146,24 @@ scenario(Scenario(
            wstep(lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": REGRANT_SHOP}),
                  before=_both(_waiting("crew-reviewer"), _idle("shop-build-m1-e2e"), _busy("shop-build-m1"))),     # 3
            wstep(lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": REGRANT_SHOP}),
-                 before=_both(_idle("shop-build-m1"), _forget_kept("shop-build-m1")))],                            # 4
+                 before=_both(_idle("shop-build-m1"), _forget_kept("shop-build-m1"))),                             # 4
+           wstep(lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT + REGRANT_OWN, project_grants={"shop": REGRANT_SHOP}),
+                 before=_waiting("crew-reviewer"))],                                                               # 5
     checks=[
-        ("a station blocked on a person gets the grant at once",
-         lambda r: r.code(3) == 0 and "crew-reviewer has new permissions" in r.out(3)),
+        ("a station blocked on a person waits for a grant that is not its own",
+         lambda r: r.code(3) == 0 and "crew-reviewer has new permissions" not in r.out(3)
+         and "crew-reviewer has new permissions" not in r.out(4)),
+        ("a grant that names it restarts it at once",
+         lambda r: r.code(5) == 0 and "crew-reviewer has new permissions" in r.out(5)
+         and any('"crew-reviewer may label pull requests"' in a for a in allow_of(r, "crew-reviewer"))),
         ("a live helper is restarted with its grant",
          lambda r: "shop-build-m1-e2e has new permissions" in r.out(3)
          and any("gh pr merge 12 --squash" in a for a in allow_of(r, "shop-build-m1-e2e"))),
         ("a busy builder of the same project still waits", lambda r: "shop-build-m1 has new permissions" not in r.out(3)),
         ("a builder that kept no grants is quoted all of them, the project's with its scope",
-         lambda r: "shop-build-m1 has new permissions" in r.out(4) and "staging database" in _prompt_of(r)
-         and "for project shop, in their own words" in _prompt_of(r)),
+         lambda r: "shop-build-m1 has new permissions" in r.out(4)
+         and "staging database" in _bg_of(r, "shop-build-m1")[-1][-1]
+         and "for project shop, in their own words" in _bg_of(r, "shop-build-m1")[-1][-1]),
     ],
     covers=[],
 ))
@@ -7749,6 +7757,7 @@ G4_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
 G4_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": G4_PROJECT})
 G4_W2 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": G4_PROJECT + G4_HELPER})
 G4_W3 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": G4_PROJECT + G4_HELPER})
+G4_W4 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT + REGRANT_OWN, project_grants={"shop": G4_PROJECT + G4_HELPER})
 
 
 def g4_recorded(tmp: Path) -> dict:
@@ -7777,7 +7786,7 @@ def g4_started_and_differs(tmp: Path) -> dict:
 scenario(Scenario(
     name="crew_g4_regrant",
     suite="crew",
-    about="a permission allowed in Tares reaches a station between turns, in its conversation, once; busy and attached stations wait; helpers and blocked stations get it",
+    about="a permission allowed in Tares reaches a station between turns, in its conversation, once; busy and attached stations wait; helpers get it; a station blocked on a person waits unless the grant names it",
     driver=LAUNCH_DRIVER,
     steps=[_launch("crew-orchestrator", "orchestrator", G4_W0),                                            # 0
            _launch("crew-reviewer", "reviewer", G4_W0),                                                    # 1
@@ -7792,7 +7801,8 @@ scenario(Scenario(
            wstep(G4_W2, before=_leave("shop-build-m2")),                                                   # 9: they left
            wstep({**G4_W3, "grants_status": 500}, before=_idle("crew-reviewer")),                          # 10: unreadable
            wstep(G4_W3, before=_both(_idle("crew-reviewer"), _halted)),                                    # 11: halted
-           wstep(G4_W3, before=_both(_resumed, _waiting("crew-reviewer")), after=g4_started_and_differs)],  # 12: blocked on a person
+           wstep(G4_W3, before=_both(_resumed, _waiting("crew-reviewer")), after=g4_started_and_differs),  # 12: blocked, not its grant
+           wstep(G4_W4, before=_waiting("crew-reviewer"), after=g4_started_and_differs)],                   # 13: blocked, its grant
     checks=[
         ("stations record the grants they started with", lambda r: r.snap(2)["row"] is True and r.snap(2)["file"] is True),
         ("a busy station waits for its new grant", lambda r: r.code(4) == 0 and r.snap(4) == 4 and "new permissions" not in r.out(4)),
@@ -7817,10 +7827,12 @@ scenario(Scenario(
          lambda r: "shop-build-m2 has new permissions" in r.out(9) and any(G4_E2E in a for a in allow_of(r, "shop-build-m2"))),
         ("grants that can't be read restart nothing", lambda r: r.code(10) == 0 and r.snap(10) == r.snap(9) and "new permissions" not in r.out(10)),
         ("nothing restarts while halted", lambda r: r.code(11) == 0 and r.snap(11) == r.snap(9) and "new permissions" not in r.out(11)),
-        ("a station blocked on a person gets the grant at once",
-         lambda r: "crew-reviewer has new permissions" in r.out(12)
-         and any('for all projects, in their own words: "the reviewer may label pull requests"' in a for a in allow_of(r, "crew-reviewer"))),
-        ("busy crew stations still wait", lambda r: r.snap(12)["differs"] and "crew-orchestrator has new permissions" not in r.out(12)),
+        ("a station blocked on a person waits for a grant that is not its own",
+         lambda r: r.code(12) == 0 and r.snap(12)["started"] == r.snap(9) and "crew-reviewer has new permissions" not in r.out(12)),
+        ("a grant that names a station blocked on a person restarts it at once",
+         lambda r: "crew-reviewer has new permissions" in r.out(13)
+         and any('for all projects, in their own words: "crew-reviewer may label pull requests"' in a for a in allow_of(r, "crew-reviewer"))),
+        ("busy crew stations still wait", lambda r: r.snap(13)["differs"] and "crew-orchestrator has new permissions" not in r.out(13)),
     ],
     covers=["stations record the grants they started with", "a busy station waits for its new grant",
             "between turns it is restarted with the grant", "in the same conversation", "its fresh settings have the grant",
@@ -7828,7 +7840,8 @@ scenario(Scenario(
             "a busy builder of the same project still waits", "a station whose grants did not change is left alone",
             "once per change", "a live helper is restarted with its grant", "a station open in a terminal waits",
             "and gets it once they leave", "grants that can't be read restart nothing", "nothing restarts while halted",
-            "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
+            "a station blocked on a person waits for a grant that is not its own",
+            "a grant that names a station blocked on a person restarts it at once", "busy crew stations still wait"],
 ))
 
 # crew_test.sh, "A builder that has finished: only a new grant that names it brings it back (TR-645)": two done builders of

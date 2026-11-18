@@ -128,6 +128,9 @@ class StepClient:
     def tares_on(self):
         pass
 
+    def grants_read(self, project=""):
+        return ""
+
     def close(self):
         pass
 
@@ -252,7 +255,7 @@ def run_refused(prior):
         regrant._new_rules = lambda *a, **k: ["may merge"]
         lifecycle.rearm_text = lambda c: ""
 
-        def refuse(client_, paths_, args, *, claude_bin, only_between_turns=False):
+        def refuse(client_, paths_, args, *, claude_bin, only_between_turns=False, prompt_wait=0):
             seen.append(only_between_turns)
             if only_between_turns:
                 raise NotBetweenTurnsError("s is in a turn; not stopping it")
