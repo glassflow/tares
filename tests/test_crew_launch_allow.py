@@ -290,7 +290,8 @@ ck("a verb the deny rules list is denied here too", all(hook(SP + f"slack_{v}_x"
 ck("a tool with a read name but another prefix is denied", hook(SP + "read_channel") == "deny" and hook(SP + "get_reactions") == "deny" and hook(SP + "slack_read_channel_x") == "deny")
 ck("a server name in another case is still Slack", hook("mcp__Slack__conversations_add_message") == "deny" and hook("mcp__SLACK__conversations_history") == "allow")
 ck("a plugin's Slack server named inside a longer name is still Slack", hook("mcp__plugin_acme_slack-bridge__post_it") == "deny" and hook("mcp__my_slack_tools__channels_list") == "allow")
-ck("a `__` inside a server name does not hide it", hook("mcp__team__slack__conversations_add_message") == "deny" and hook("mcp__team__slack__conversations_history") == "allow")
+ck("a `__` inside a server name does not hide it", hook("mcp__team__slack__conversations_add_message") == "deny" and hook("mcp__plugin_acme_slack__conversations_add_message") == "deny")
+ck("a name that splits two ways is a read only if every Slack reading of it is", hook("mcp__slack__foo__slack_read_channel") == "deny" and hook("mcp__slack__a__b__conversations_history") == "deny" and hook("mcp__team__slack__conversations_history") == "allow" and hook("mcp__slack-mcp__conversations_history") == "allow")
 ck("a Slack server with no tool name is denied", hook("mcp__slack") == "deny")
 ck("a server that is not Slack is left alone, whatever its tools are named", all(hook(t) == "allow" for t in (
     "mcp__linear__get_issue", "mcp__github__create_pull_request", "mcp__linear__create_slack_link", "mcp__plugin_tares_tares__set_stage",

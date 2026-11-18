@@ -104,13 +104,15 @@ REVIEW_REASON = ("Factory sessions share one GitHub account and GitHub refuses s
 
 def slack_not_read(tool: str) -> bool:
     """Whether the tool is one of an MCP server with slack in its name (any case) that is not on the read list.
-    The server is what is left of the last `__`, so a `__` inside a server name still counts."""
+    A name with several `__` can be read more than one way (`mcp__a__b__c` is tool `b__c` of server `a`, or tool `c`
+    of server `a__b`), so every way it splits is tried and the tool is a read only if each Slack reading of it is."""
     if not tool.startswith("mcp__"):
         return False
-    server, sep, name = tool[5:].rpartition("__")
-    if not sep:
-        server, name = name, ""
-    return "slack" in server.lower() and name not in SLACK_READ_TOOLS
+    rest = tool[5:]
+    cuts = [i for i in range(len(rest)) if rest.startswith("__", i)]
+    if not cuts:
+        return "slack" in rest.lower()
+    return any("slack" in rest[:i].lower() and rest[i + 2:] not in SLACK_READ_TOOLS for i in cuts)
 
 
 class Deny(Exception):
