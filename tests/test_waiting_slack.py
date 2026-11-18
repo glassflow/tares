@@ -11,7 +11,12 @@ lookup by email and chat.postMessage are stubbed. Checked here:
     that came while it was off are not sent when they switch it back on;
   - after more than an hour away, what waits is recorded, not sent; so is what already waits for
     someone who joins the cell later;
-  - more than five new items: five messages and one that says how many more;
+  - more than three new items in one read: one message that lists them (TR-1460);
+  - an item answered anywhere edits its message ("Answered by you from the feed", "by Alex on
+    Home"), sends nothing new, and is not edited twice; in a list, its line is struck through;
+  - an item that goes with no answer recorded says it no longer waits; an edit Slack refuses for
+    a while is tried again;
+  - a restart (a new reader on the same store) sends nothing again and still edits what it sent;
   - an email Slack does not know, and a bot without users:read.email, send nothing and say so.
 
 Run: .venv/bin/python tests/test_waiting_slack.py
@@ -56,13 +61,28 @@ def ck(label, cond, detail: object = ""):
 class FakeSlack:
     def __init__(self):
         self.sent: list[dict] = []
+        self.updates: list[dict] = []
+        self.update_error: tuple[str, bool] | None = None
+        self.n = 0
         self.users = {"alex@example.com": "U_ALEX", "kim@example.com": "U_KIM"}
         self.lookups = 0
         self.error: str | None = None
 
     async def send(self, token, msg):
         self.sent.append(msg)
-        return True, None
+        self.n += 1
+        msg["ts"] = f"{self.n}.0001"
+        return {"channel": "D" + msg["channel"], "ts": msg["ts"]}, None
+
+    async def update(self, token, msg):
+        if self.update_error:
+            return False, self.update_error[0], self.update_error[1]
+        self.updates.append(msg)
+        return True, None, False
+
+    def edits(self) -> list[dict]:
+        out, self.updates = self.updates, []
+        return out
 
     async def lookup(self, token, email):
         self.lookups += 1
@@ -83,7 +103,8 @@ async def main():
     clock = {"now": now_utc()}
     # the daemon's own reader (its routes read it), with Slack and the clock stubbed
     reader = app.state.waiting_slack
-    reader._send, reader._lookup, reader.clock = slack.send, slack.lookup, lambda: clock["now"]
+    reader._send, reader._update, reader._lookup = slack.send, slack.update, slack.lookup
+    reader.clock = lambda: clock["now"]
 
     alex = store.create_person("Alex", email="alex@example.com", is_admin=True)
     kim = store.create_person("Kim", email="kim@example.com")
@@ -98,9 +119,15 @@ async def main():
         return store.add_desk_item(uid, question, "", ["Yes", "No"], "Yes", "", blocks, [], True,
                                    "crew-builder-1", [], now_utc(), to_person_id=to)
 
-    async def read(minutes=1):
+    async def read(minutes=1, r=None):
         clock["now"] = clock["now"] + timedelta(minutes=minutes)
-        return await reader.read_once()
+        return await (r or reader).read_once()
+
+    async def reply(d, words, key=secret, via="feed"):
+        async with cx(key) as c:
+            r = await c.post(f"/api/desk/{d['label']}/reply", json={"words": words, "choice": words},
+                             headers={"X-Tares-Via": via})
+            assert r.status_code == 200, r.text
 
     def cx(key=TOKEN):
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
@@ -177,17 +204,102 @@ async def main():
     await read()
     ck("the reader is back: the next new one goes", len(slack.take()) == 1)
 
-    print("== many new at once: five, then one with how many more ==")
-    for n in range(8):
-        ask(f"Question {n}?", to=kim["id"])
+    print("== three new at once: three messages ==")
+    three = [ask(f"Small {n}?", to=kim["id"]) for n in range(3)]
+    await read()
+    ck("one message each", len(slack.take()) == 3)
+
+    print("== more than three new at once: one message that lists them ==")
+    burst = [ask(f"Question {n}?", to=kim["id"]) for n in range(12)]
     await read()
     sent = slack.take()
-    ck("six messages", len(sent) == 6, len(sent))
-    ck("the last says 3 more", sent and sent[-1]["text"] == "3 more things wait for you.", sent and sent[-1]["text"])
-    ck("which links to the feed", sent and "https://cell.example.com/feed'" in str(sent[-1]["blocks"]),
-       sent and sent[-1]["blocks"])
+    ck("one message", len(sent) == 1, [m["text"] for m in sent])
+    lst = sent[0] if sent else {}
+    ck("it says how many wait", lst.get("text") == "12 things wait for you", lst.get("text"))
+    body = str(lst.get("blocks"))
+    ck("it lists the first ten and says how many more",
+       "• Question 0?" in body and "• Question 9?" in body and "Question 10?" not in body
+       and "and 2 more" in body, body)
+    ck("it links to the feed", "https://cell.example.com/feed'" in body, body)
     await read()
     ck("and none of them again", slack.take() == [])
+
+    print("== answered from the feed: the message is edited, nothing new is sent ==")
+    await reply(three[0], "Yes")
+    await read()
+    ck("nothing new sent", slack.take() == [])
+    ed = slack.edits()
+    ck("one edit", len(ed) == 1, ed)
+    e = ed[0] if ed else {}
+    ck("of that item's own message, in Kim's DM", e.get("channel") == "DU_KIM" and e.get("ts"), e)
+    ck("it says who answered it and where", "Answered by you from the feed." in str(e.get("blocks")), e)
+    ck("and no longer offers the button", "open_feed" not in str(e.get("blocks")), e)
+    await read()
+    ck("not edited twice", slack.edits() == [])
+
+    print("== answered by someone else, on Home ==")
+    store.add_answer(f"question:{three[1]['label']}", "question", uid, "Small 1?", None, "No", "console",
+                     alex["id"], now_utc())
+    store.close_desk_item(three[1]["id"], "answered", None, now_utc())
+    await read()
+    ed = slack.edits()
+    ck("Answered by Alex on Home", len(ed) == 1 and "Answered by Alex on Home." in str(ed[0]["blocks"]), ed)
+
+    from tares import answers as answers_mod
+    got = store.last_answer(answers_mod.item_ids(f"desk:{three[1]['label']}"))
+    ck("a team cell's desk: id finds the answer recorded as question:",
+       got and got["said"] == "No" and got["person"]["name"] == "Alex", got)
+
+    print("== gone with no answer recorded ==")
+    async with cx() as c:
+        r = await c.post(f"/api/desk/{three[2]['label']}/withdraw", json={"reason": "not needed"})
+        ck("withdrawn", r.status_code == 200, r.text)
+    await read()
+    ed = slack.edits()
+    ck("it says it no longer waits", len(ed) == 1 and ws.GONE in str(ed[0]["blocks"]), ed)
+
+    print("== one item of a list answered: its line is struck through ==")
+    await reply(burst[0], "Yes")
+    await reply(burst[1], "No")
+    await read()
+    ck("nothing new sent", slack.take() == [])
+    ed = slack.edits()
+    ck("one edit for the two", len(ed) == 1, len(ed))
+    e = ed[0] if ed else {}
+    body = str(e.get("blocks"))
+    ck("of the list's message", e.get("ts") == lst.get("ts"), (e.get("ts"), lst.get("ts")))
+    ck("the two struck through, saying who", "~Question 0?~ Answered by you from the feed." in body
+       and "~Question 1?~ Answered by you from the feed." in body, body)
+    ck("the others as they were, and the count is what still waits",
+       "• Question 2?" in body and e.get("text") == "10 things wait for you", (e.get("text"), body))
+
+    print("== a restart: nothing sent again, and what it sent is still edited ==")
+    again = ws.WaitingSlack(store, reader.waiting_for, send=slack.send, update=slack.update,
+                            lookup=slack.lookup, clock=lambda: clock["now"])
+    await read(r=again)
+    ck("nothing sent again", slack.take() == [])
+    await reply(burst[2], "Yes")
+    await read(r=again)
+    ed = slack.edits()
+    ck("the new reader edits the old message",
+       len(ed) == 1 and ed[0]["ts"] == lst.get("ts") and "~Question 2?~" in str(ed[0]["blocks"]), ed)
+    ck("and keeps the earlier lines", ed and "~Question 0?~" in str(ed[0]["blocks"]))
+
+    print("== an edit Slack refuses for a while is tried again ==")
+    await reply(burst[3], "Yes")
+    slack.update_error = ("slack: ratelimited", True)
+    await read()
+    ck("refused: nothing recorded", slack.edits() == [])
+    slack.update_error = None
+    await read()
+    ed = slack.edits()
+    ck("the next read edits it", len(ed) == 1 and "~Question 3?~" in str(ed[0]["blocks"]), ed)
+    await reply(burst[4], "Yes")
+    slack.update_error = ("slack: message_not_found", False)
+    await read()
+    slack.update_error = None
+    await read()
+    ck("a refusal that will not change is not tried every minute", slack.edits() == [])
 
     print("== an email Slack does not know ==")
     del slack.users["kim@example.com"]
