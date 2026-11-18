@@ -97,7 +97,7 @@ class FakeTares:
                 if key == "GET /health":
                     status, doc = 200, {"ok": True}
                 elif key == "GET /api/crew/settings":
-                    status, doc = 200, {"settings": {}}
+                    status, doc = 200, {"settings": {"idle_wake": False}}   # a ticking crew
                 else:
                     status, doc = 404, {"detail": "not found"}
                 data = json.dumps(doc).encode("utf-8")

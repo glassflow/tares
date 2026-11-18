@@ -986,6 +986,20 @@ CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
                  "kit": {"frozen": None}, "idle_wake": None, "pace": None,
                  "claude_update": None, "docker_cleanup": None, "docker_keep": None}
 
+# What an unset setting means once the layers are merged. CREW_DEFAULTS stays null (never set), so a
+# person's own layer cannot cover the team's value with a default they never chose; this is applied after.
+# idle_wake is on unless someone set it to false.
+CREW_UNSET_MEANS = {"idle_wake": True}
+
+
+def crew_effective(settings: dict) -> dict:
+    """`settings` with each unset (null or missing) setting in CREW_UNSET_MEANS given its value."""
+    out = dict(settings)
+    for k, v in CREW_UNSET_MEANS.items():
+        if out.get(k) is None:
+            out[k] = v
+    return out
+
 
 def kit_ok(v) -> dict:
     """The kit setting: `frozen` is null (the crew follows the checkout) or when, by whom and

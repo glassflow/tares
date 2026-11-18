@@ -534,7 +534,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
-    settings = fx.settings() if fx else dict(factory_mod.CREW_DEFAULTS)
+    settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
     team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
     # a private project the caller is not on is left out of every count and name
     hidden = fx.hidden_ids() if fx else set()

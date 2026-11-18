@@ -180,7 +180,8 @@ def client_for(world, tmp=SCRATCH):
     return tares, c
 
 
-for label, settings, want in (("on", {"idle_wake": True}, True), ("off", {"idle_wake": False}, False), ("missing", {}, False)):
+for label, settings, want in (("on", {"idle_wake": True}, True), ("off", {"idle_wake": False}, False),
+                              ("unset", {"idle_wake": None}, True)):
     tares, c = client_for({"settings": {**LS.DEFAULT_WORLD["settings"], **settings}})
     try:
         c.prime()
