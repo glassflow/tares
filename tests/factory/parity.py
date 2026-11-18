@@ -7471,11 +7471,11 @@ def g3_last(r: Run, name: str) -> list:
 
 
 def g3_state_of(r: Run, i: int, name: str) -> str:
-    """The STATE column of the station's row in a status."""
+    """The STATE column of the station's row in a status (by position: a state can be several words)."""
     for line in r.out(i).splitlines():
         cols = line.split()
         if cols and cols[0] == name and len(cols) > 3:
-            return cols[3]
+            return line[59:89].strip()
     return ""
 
 
@@ -7532,9 +7532,9 @@ g3_scn(
      ("a list that fails mid-way never reads as stuck",
       lambda r: not g3_row_has(r, 1, G3_O, "STUCK")),
      ("a stopped row that kept its status reads as gone",
-      lambda r: g3_state_of(r, 2, G3_O) == "gone"),
+      lambda r: g3_state_of(r, 2, G3_O) == "Ended"),
      ("status shows where its turn is, not the agent list's working",
-      lambda r: g3_state_of(r, 3, G3_O) == "done"),
+      lambda r: g3_state_of(r, 3, G3_O) == "Idle"),
      ("status leaves a recovered station alone",
       lambda r: not g3_row_has(r, 3, G3_R, "STUCK"))],
     ["status shows the stuck station", "a list that fails mid-way never reads as stuck",

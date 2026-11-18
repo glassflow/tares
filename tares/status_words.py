@@ -58,6 +58,53 @@ PROJECT_DONE = "Done"
 # the waiting item that asks a person to close a project; the state keeps "Ready to close"
 SIGNOFF = "Close the project?"
 
+# ── a station (a crew member's session) ───────────────────────────────────────
+
+# The spec's decision 3: one table for `tares factory crew status` and the console's crew cards.
+# "Waiting for you" only with an open item that names the station (decision 5); a station that
+# waits with none says so instead, and one between turns with background work running is not idle
+STATION = {"working": "Working", "waiting": "Waiting for you",
+           "waiting_unasked": "Waiting, nothing asked yet", "background": "Waiting on background work",
+           "idle": "Idle", "not_heard": "Not heard from", "ended": "Ended"}
+
+
+def _count(n: int, one: str, many: str | None = None) -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def plain_wait(minutes: int | None) -> str:
+    """A span in plain words: "just now", "5 minutes", "1 hour", "3 hours", "1 day", "6 days",
+    "3 weeks"."""
+    if minutes is None or minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return _count(minutes, "minute")
+    if minutes < 1440:
+        return _count(minutes // 60, "hour")
+    if minutes < 10080:
+        return _count(minutes // 1440, "day")
+    return _count(minutes // 10080, "week")
+
+
+def background_work(tasks: int) -> str:
+    """"Waiting on a background task", "Waiting on 2 background tasks": Claude Code's job file counts
+    what runs, it does not name it or say when it ends, so neither does this."""
+    return "Waiting on a background task" if tasks == 1 else f"Waiting on {tasks} background tasks"
+
+
+def station_state(turn: str, background: int = 0, asked: bool = False) -> str:
+    """A station's words from where its session is (`turn`: Claude Code's working, done between
+    turns, blocked on a person; anything else is over), the background tasks it still runs and
+    whether an open item for a person names it."""
+    if turn == "working":
+        return STATION["working"]
+    if turn == "blocked":
+        return STATION["waiting"] if asked else STATION["waiting_unasked"]
+    if turn == "done":
+        return background_work(background) if background > 0 else STATION["idle"]
+    return STATION["ended"]
+
+
 # ── a project's ticket counts (factory.progress) ──────────────────────────────
 
 # the groups the count line names, in its order; to do and work under way are what is left of

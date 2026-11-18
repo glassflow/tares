@@ -70,22 +70,8 @@ def _iso(v) -> str | None:
     return t.isoformat() if t else None
 
 
-def _count(n: int, one: str, many: str | None = None) -> str:
-    return f"{n} {one if n == 1 else (many or one + 's')}"
-
-
-def plain_wait(minutes: int | None) -> str:
-    """A span in plain words: "just now", "5 minutes", "1 hour", "3 hours", "1 day", "6 days",
-    "3 weeks"."""
-    if minutes is None or minutes < 1:
-        return "just now"
-    if minutes < 60:
-        return _count(minutes, "minute")
-    if minutes < 1440:
-        return _count(minutes // 60, "hour")
-    if minutes < 10080:
-        return _count(minutes // 1440, "day")
-    return _count(minutes // 10080, "week")
+_count = status_words._count
+plain_wait = status_words.plain_wait   # the words live in status_words; screens import it from here
 
 
 def _minutes(ts, now) -> int | None:
@@ -287,19 +273,20 @@ def heard_ago(ts, now) -> str:
 def _state_text(state: str, since, now) -> str:
     """The state in words with its duration: "Working", "Idle for 8 minutes", "Waiting for you",
     "Not heard from in 2 hours", "Ended 1 day ago"."""
+    w = status_words.STATION
     if state == "working":
-        return "Working"
+        return w["working"]
     if state == "waiting":
-        return "Waiting for you"
+        return w["waiting"]
     m = _minutes(since, now)
     span = plain_wait(m) if m is not None else None
     if state == "ended":
-        return "Ended" if not span else ("Ended just now" if span == "just now" else f"Ended {span} ago")
+        return w["ended"] if not span else (f"{w['ended']} just now" if span == "just now" else f"{w['ended']} {span} ago")
     if state == "not heard":
-        return "Not heard from" if not span or span == "just now" else f"Not heard from in {span}"
+        return w["not_heard"] if not span or span == "just now" else f"{w['not_heard']} in {span}"
     if not span:
-        return "Idle"
-    return "Idle for less than a minute" if span == "just now" else f"Idle for {span}"
+        return w["idle"]
+    return f"{w['idle']} for less than a minute" if span == "just now" else f"{w['idle']} for {span}"
 
 
 def crew_member(station: dict, tickets_by_holder: dict[str, list[dict]], desk_open: int,

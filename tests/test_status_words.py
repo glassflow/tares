@@ -70,7 +70,7 @@ ck("every project page state has words", page <= set(factory_project.STATE_LABEL
 
 # the spec's decision 6, one line each
 vals = [v for t in (sw.TICKET_STAGE, sw.VERDICT, sw.PR_STATE, sw.CI, sw.PROJECT_STATE, sw.TURN)
-        for v in t.values()] + [sw.NO_CI, sw.PROJECT_LATER, sw.PROJECT_DONE, sw.SIGNOFF]
+        for v in t.values()] + list(sw.STATION.values()) + [sw.NO_CI, sw.PROJECT_LATER, sw.PROJECT_DONE, sw.SIGNOFF]
 ck("waiting is \"for you\", never \"on you\"", not [v for v in vals if "on you" in v.lower()])
 ck("a closed project reads the same on the list and its page",
    factory_projects.DONE_LABEL == factory_project.STATE_LABEL["finished"] == sw.PROJECT_DONE == "Done")
@@ -83,6 +83,24 @@ ck("a reviewer's block never reads as blocked",
    and sw.reviewer_stopped(" ", "the crew reviewer") == "The crew reviewer stopped it")
 ck("the close-the-project item is a question, not the state's words",
    sw.SIGNOFF == "Close the project?" and sw.SIGNOFF != sw.PROJECT_STATE["ready_to_close"])
+
+# a station (decisions 3 and 5): every turn the crew engine reads has words, and only an item makes it a wait for you
+from tares.crew import claude as crew_claude
+turns = set(crew_claude.TURN_OF_STATUS.values()) | set(crew_claude.DEAD_STATES) | {"", "null"}
+said = {sw.station_state(t, bg, a) for t in turns for bg in (0, 1, 3) for a in (False, True)}
+ck("every station turn has words, none of them raw", not said & turns and all(w[:1].isupper() for w in said), said)
+ck("waiting is for you only with an item that names the station",
+   sw.station_state("blocked", 0, True) == sw.STATION["waiting"] == "Waiting for you"
+   and sw.station_state("blocked", 0, False) == "Waiting, nothing asked yet"
+   and "for you" not in sw.station_state("done", 0, True))
+ck("between turns with background work is not idle",
+   sw.station_state("done", 1) == "Waiting on a background task" and sw.station_state("done", 2) == "Waiting on 2 background tasks"
+   and sw.station_state("done", 0) == "Idle")
+ck("the console's crew card and the CLI read one table",
+   factory_home._state_text("working", None, None) == sw.STATION["working"]
+   and factory_home._state_text("waiting", None, None) == sw.STATION["waiting"]
+   and factory_home._state_text("idle", None, None) == sw.STATION["idle"]
+   and factory_home._state_text("ended", None, None) == sw.STATION["ended"])
 
 # the words themselves pass the words list
 tables = {k: v for k, v in vars(sw).items() if k.isupper()}

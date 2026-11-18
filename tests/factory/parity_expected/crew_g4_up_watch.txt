@@ -43,9 +43,9 @@ The crew takes a few minutes to check in. Next:
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/xhigh     working  -        
-crew-reviewer                  reviewer     opus/high      working  -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/xhigh     Working                        -        
+crew-reviewer                  reviewer     opus/high      Working                        -        
 watch: running (pid <PID>), it revives any station that stops and gives one a permission you allowed in Tares; log in <TMP>/crew/watch.log
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
