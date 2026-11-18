@@ -9,13 +9,29 @@ import { cn } from "@/lib/utils";
 
 export type PresenceState = "open" | "closed";
 
+const REDUCE = "(prefers-reduced-motion: reduce)";
+const subscribeReduce = (onChange: () => void) => {
+  const mq = typeof window !== "undefined" && window.matchMedia ? window.matchMedia(REDUCE) : null;
+  mq?.addEventListener("change", onChange);
+  return () => mq?.removeEventListener("change", onChange);
+};
+const readReduce = () => typeof window !== "undefined" && !!window.matchMedia?.(REDUCE).matches;
+
+/** True while the viewer asks for reduced motion; follows the setting as it changes. */
+export function useReducedMotion() {
+  return React.useSyncExternalStore(subscribeReduce, readReduce, () => false);
+}
+
 /** Mounted while `show`, and after it until the element's exit animation ends. Put `ref` on the element
  *  and `data-state={state}` on it, so the CSS can tell arriving from leaving. */
 export function usePresence<T extends HTMLElement = HTMLElement>(show: boolean) {
   const [mounted, setMounted] = React.useState(show);
   const ref = React.useRef<T>(null);
+  const reduce = useReducedMotion();
   // shown again before the exit ended: mount at once, in this render
   if (show && !mounted) setMounted(true);
+  // under reduced motion nothing leaves slowly: gone in this render, not after an effect and a frame
+  if (!show && mounted && reduce) setMounted(false);
 
   React.useEffect(() => {
     if (show || !mounted) return;

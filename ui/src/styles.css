@@ -2489,6 +2489,10 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
       transition-delay: 0s !important;
       scroll-behavior: auto !important;
     }
+    /* Leaving is no animation at all, not a 1ms one: Radix Presence and usePresence unmount at once
+       when the closed state has no animation, but wait for animationend when it has one, and that
+       arrives a frame or more later. A dialog closed by a click would linger past the next read. */
+    [data-state="closed"] { animation-name: none !important; }
     ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
   }
 }
