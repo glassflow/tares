@@ -115,6 +115,8 @@ def unit():
     ck("a control plane reason is scrubbed and kept on one line", words("acme/web", f"The index of acme/web stopped: {T2}\nno progress. Retry to start it again.")
        == "The index of acme/web stopped: [hidden] no progress. Retry to start it again.", words("acme/web", f"The index of acme/web stopped: {T2}\nno progress. Retry to start it again."))
     ck("a line that only starts like it is wrapped as before", words("acme/web", "The index of acme/web broke") == "The index of acme/web failed: The index of acme/web broke. Retry to start it again.")
+    ck("a line that only ends like it is wrapped as before", words("acme/web", "fatal: x. Retry to start it again.")
+       == "The index of acme/web failed: fatal: x. Retry to start it again. Retry to start it again.")
     for blank in (None, "", "   ", '{"message": "x"}', "[1]"):
         w = words("acme/web", blank)
         ck(f"no usable log line ({blank!r}) is a plain sentence naming the repo", w == "The index of acme/web failed. Retry to start it again.", w)
