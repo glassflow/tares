@@ -47,7 +47,8 @@ USAGE = f"usage: {ME} doctor [--json]"
 LABELS = {"ok": "ok   ", "warn": "warn ", "fix": "FIX  "}
 # What the new checks' text starts with (after the level word), for a test that sets them aside.
 NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows",
-              "Claude processes", "Claude's background service", "orphaned crew processes")
+              "Claude processes", "Claude's background service", "orphaned crew processes",
+              "idle_wake is off")
 TEMP_FLAGS = re.compile(r"/var/folders/|/tmp/cmux|cmux-claude-settings")
 RUN_TIMEOUT = 60
 WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "OWNER RIGHTS", "CREATOR OWNER")
@@ -535,6 +536,11 @@ class Doctor:
             else:
                 self.warn("idle_wake", "idle_wake is on but the watch is not running: nothing wakes the stations and "
                           f"they hold no tick ({ME} crew watch)", f"{ME} crew watch")
+        elif settings.get("idle_wake") is False:
+            self.warn("idle_wake", "idle_wake is off: each station wakes on its own tick (reviewer every 15 minutes, "
+                      "orchestrator 20, releaser 30) even with nothing to do, and every quiet tick re-reads the whole "
+                      "conversation; turn it on so the watch wakes stations only for work",
+                      "set_crew_settings(idle_wake=True), or PUT /api/crew/settings {\"idle_wake\": true}", new=True)
         if not missing and settings.get("releaser") is True and settings.get("release_profile") == "kind":
             for tool, msg, fix in (("docker", "docker not installed (release profile kind)", "install Docker"),
                                    ("kind", "kind not installed (release profile kind): brew install kind", "brew install kind"),

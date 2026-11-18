@@ -66,6 +66,7 @@ tares factory doctor
   ok    MCP endpoint answers at http://<TARES>/mcp
   ok    crew settings on Tares: {"autonomy":"L3-review","releaser":true,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":3,"idle_wake":false,"pace":false,"claude_update":true}
   ok    the kit follows the plugin checkout (not frozen)
+  warn  idle_wake is off: each station wakes on its own tick (reviewer every 15 minutes, orchestrator 20, releaser 30) even with nothing to do, and every quiet tick re-reads the whole conversation; turn it on so the watch wakes stations only for work
   ok    docker
   ok    kind
   ok    kubectl
@@ -128,6 +129,7 @@ tares factory doctor
   ok    MCP endpoint answers at http://<TARES>/mcp
   ok    crew settings on Tares: {"autonomy":"L3-review","releaser":true,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":3,"idle_wake":false,"pace":false,"claude_update":true}
   ok    the kit follows the plugin checkout (not frozen)
+  warn  idle_wake is off: each station wakes on its own tick (reviewer every 15 minutes, orchestrator 20, releaser 30) even with nothing to do, and every quiet tick re-reads the whole conversation; turn it on so the watch wakes stations only for work
   ok    docker
   ok    kind
   ok    kubectl

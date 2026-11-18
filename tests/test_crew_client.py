@@ -398,7 +398,7 @@ s1, s2 = m1.crew_settings(), m2.crew_settings()
 ck("both machines read the same settings from Tares", s1 == s2 and list(s1) == list(C.settings_defaults()), (s1, s2))
 ck("saved values win, unset ones take the default",
    s1["autonomy"] == "L4-ship" and s1["releaser"] is False and s1["challenger"] is True and s1["builders_max"] == 2
-   and s1["release_profile"] == "kind" and s1["kit"] == {"frozen": None} and s1["idle_wake"] is False and s1["claude_update"] is True, s1)
+   and s1["release_profile"] == "kind" and s1["kit"] == {"frozen": None} and s1["idle_wake"] is True and s1["claude_update"] is True, s1)
 ck("settings Tares has no key for are not added", "extra" not in s1)
 orch_home = Path(ROOT) / "orch"
 orch_home.mkdir()

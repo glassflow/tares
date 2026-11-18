@@ -138,7 +138,7 @@ def settings_defaults() -> dict:
     """The crew settings Tares has not been given yet, in bash's order."""
     return {"autonomy": "L4-ship", "releaser": False, "release_profile": "kind",
             "prod_pattern": "(^|[-_.])(prod|production)([-_.]|$)", "challenger": False, "builders_max": 2,
-            "kit": {"frozen": None}, "idle_wake": False, "pace": False, "claude_update": True}
+            "kit": {"frozen": None}, "idle_wake": True, "pace": False, "claude_update": True}
 
 
 def settings_missing(raw: dict) -> list:

@@ -227,12 +227,14 @@ def context_for(source: str) -> str:
             text += (" This session was compacted: your skills are re-attached, so load one again only if its "
                      "re-attached copy says it was truncated or you cannot find a rule you need; a page is never "
                      "re-attached, so Read it again when a situation needs it. Then " + REPORT_READ + " and your work on Tares, check "
-                     "CronList and re-arm your schedule if it is missing (if get_crew_settings shows idle_wake "
-                     "true, arm none: the factory wakes you), then carry on where your report left off.")
+                     "get_crew_settings: arm no schedule of your own unless idle_wake is false (the factory wakes you); "
+                     "when it is false, check CronList and re-arm your schedule if it is missing. Then carry on "
+                     "where your report left off.")
         else:
             text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, " + REPORT_READ + " and your work on "
-                     "Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows "
-                     "idle_wake true, arm none: the factory wakes you), then carry on where your report left off.")
+                     "Tares, check get_crew_settings: arm no schedule of your own unless idle_wake is false (the "
+                     "factory wakes you); when it is false, check CronList and re-arm your schedule if it is missing. "
+                     "Then carry on where your report left off.")
     home = os.environ.get("FACTORY_HOME", "")
     if home and os.path.isfile(os.path.join(home, "HALT")):
         text += (f" The crew is halted ({halt_reason(os.path.join(home, 'HALT'))}): start nothing new until "

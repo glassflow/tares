@@ -83,7 +83,7 @@ class FakeTares:
     """A Tares that answers by route and writes down each request: {"POST /x": (status, doc)}; /health is up."""
 
     def __init__(self, routes=None, health=True):
-        self.routes = {"GET /api/crew/settings": (200, {"settings": {}})}
+        self.routes = {"GET /api/crew/settings": (200, {"settings": {"idle_wake": False}})}   # a ticking crew
         self.routes.update(routes or {})
         self.health = health
         self.requests: list = []
@@ -424,7 +424,13 @@ with FakeTares({"GET /api/crew/settings": (200, {"settings": {"idle_wake": True}
 with FakeTares({"GET /api/crew/settings": (200, {"settings": {}})}):
     c = TaresClient(paths)
     c.prime()
-    ck("not paced: the plain advice", LC.rearm_text(c) == PLAIN, LC.rearm_text(c))
+    ck("idle_wake never set counts as on: arm no tick", LC.rearm_text(c).startswith("arm no tick of your own (idle_wake is on"),
+       LC.rearm_text(c))
+    c.close()
+with FakeTares({"GET /api/crew/settings": (200, {"settings": {"idle_wake": False}})}):
+    c = TaresClient(paths)
+    c.prime()
+    ck("idle_wake false, not paced: the plain advice", LC.rearm_text(c) == PLAIN, LC.rearm_text(c))
     real_pace = LC.pace.read
     LC.pace.read = lambda client: LC.pace._read_doc({"on": True, "known": True, "level": 1})
     ck("paced at level 1: 45 minutes", LC.rearm_text(c) == "re-arm your schedule if you have one, at 45 minutes while the factory "

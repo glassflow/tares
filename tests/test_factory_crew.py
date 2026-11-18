@@ -266,9 +266,10 @@ async def main():
 
         print("== crew settings and grants ==")
         s = json.loads(await mf.get_crew_settings())
-        ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
+        ck("settings start unset, except idle_wake, which is on until someone turns it off",
+           s == {"autonomy": None, "releaser": None, "release_profile": None,
                                          "prod_pattern": None, "challenger": None,
-                                         "builders_max": None, "idle_wake": None, "pace": None,
+                                         "builders_max": None, "idle_wake": True, "pace": None,
                                          "kit": {"frozen": None}, "claude_update": None,
                                          "docker_cleanup": None, "docker_keep": None}, s)
         s = json.loads(await mf.set_crew_settings(claude_update=False))
@@ -291,7 +292,7 @@ async def main():
         s = json.loads(await mf.set_crew_settings(builders_max=2))
         ck("a later change keeps the rest", s["autonomy"] == "L4-ship" and s["builders_max"] == 2, s)
         s = json.loads(await mf.set_crew_settings(idle_wake=True))
-        ck("idle_wake is a setting of its own, off until the person turns it on",
+        ck("idle_wake is a setting of its own, on unless the person turns it off",
            s["idle_wake"] is True and s["builders_max"] == 2, s)
         s = json.loads(await mf.get_crew_settings())
         ck("the MCP tool reads idle_wake back", s["idle_wake"] is True, s)
