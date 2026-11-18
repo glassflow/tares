@@ -3,3 +3,5 @@
 924c39025bec7f20a40286c9e71b135d96ddf9c0:tests/test_setup_flow.py:generic-api-key:935
 # A made-up legacy key in the keyring test (the line carries gitleaks:allow now; this commit still holds it).
 88d4f0d3da4a39b17dbe802443d2abe33d1b9667:tests/test_login_keyring.py:generic-api-key:197
+# A made-up host named auth in a test that checks a secret word in a host does not hold a variable (the line carries gitleaks:allow now; this commit still holds it).
+2d75e8d2c4d48743d6281994f9f9f752bb8a9b0e:tests/test_crew_launch_lean.py:generic-api-key:278
