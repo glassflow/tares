@@ -32,6 +32,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { crossBoundary } = require("./clock.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8871);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -87,10 +88,17 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     ck("daemon up", await waitFor(`${BASE}/health`));
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
 
+    // Every page runs on a fake clock that starts at T0, the middle of a 10-minute mark. The page asks for
+    // "the last 6 hours" as a from of its own clock minus 6 hours, and the cell groups events into 10-minute
+    // stretches from the start of the range, so a page whose clock crossed a mark between two reads would
+    // get another list than the test expects. From T0 no page in this file (95 seconds of fast-forward at
+    // most) reaches the next mark, and the test reads the cell for the same from the page sends.
+    const T0 = Math.floor(Date.now() / 600e3) * 600e3 + 300e3;
     const newPage = async (width, sampleFlag = false) => {
       const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 } });
       if (sampleFlag) await ctx.addInitScript(() => { try { localStorage.setItem("taresSamples", "1"); } catch (e) { /* none */ } });
       const page = await ctx.newPage();
+      await page.clock.install({ time: T0 });
       page.on("pageerror", (e) => pageErrors.push(e.message));
       return { ctx, page };
     };
@@ -106,14 +114,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     };
     const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(150); };
-    // A fake clock for a page that fast-forwards. The page asks for "the last 6 hours" as a from of
-    // its own clock minus 6 hours, while the cell answers by its own clock, which does not move. The
-    // cell groups events into 10-minute stretches from the start of the range, so a fast-forward that
-    // carries the page's clock over a 10-minute mark moves the first stretch and the list changes
-    // between two reads of the same data. Start the page's clock in the middle of a 10-minute mark,
-    // and no fast-forward in this file (95 seconds at most) reaches the next one.
-    const installClock = (page) => page.clock.install({ time: Math.floor(Date.now() / 600e3) * 600e3 + 300e3 });
-
     const items = (page) => page.getByTestId("timeline-item");
     const ids = (page) => items(page).evaluateAll((e) => e.map((x) => x.dataset.id));
     const kindsOf = (page) => items(page).evaluateAll((e) => [...new Set(e.map((x) => x.dataset.kind))].sort());
@@ -140,14 +140,16 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       await checkWords(page, ck, label);
       if (width === 390) ck(`${label}: no horizontal scroll`, (await overflow(page)) <= 0, String(await overflow(page)));
     };
-    const readOf = async (page, action) => {   // the list read an action causes
+    const listRead = async (page, action) => {   // the list read an action causes: what the page asked and what the cell answered
       const [resp] = await Promise.all([page.waitForResponse((r) => TL_URL.test(r.url()) && r.request().method() === "GET"), action()]);
+      const body = await resp.json();
       await page.waitForTimeout(150);
-      return new URL(resp.url()).searchParams;
+      return { params: new URL(resp.url()).searchParams, body };
     };
+    const readOf = async (page, action) => (await listRead(page, action)).params;
 
     // ── what the live cell holds, from its own API (the times are relative to the seed)
-    const six = await api(`${ROUTE}?from=${encodeURIComponent(stamp(new Date(Date.now() - 6 * 3600e3)))}`);
+    const six = await api(`${ROUTE}?from=${encodeURIComponent(stamp(new Date(T0 - 6 * 3600e3)))}`);
     const win = (list, min) => list.items.filter((i) => i.kind === "window" && i.service === "edge-proxy" && i.raw.count >= min)
       .sort((a, b) => b.raw.count - a.raw.count);
     const bad = win(six, 200)[0];                                   // the bad window: 200+ lines
@@ -157,13 +159,15 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
        JSON.stringify([...new Set(six.items.map((i) => i.kind))].sort()) === JSON.stringify(["alert", "check", "deploy", "incident", "metric", "quiet", "window"]),
        [...new Set(six.items.map((i) => i.kind))].join());
     const incident = six.items.find((i) => i.kind === "incident" && i.link);
+    await crossBoundary(600e3, "between the read of the cell and the first page");
 
     // 1. normal: the last 6 hours, all services
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);
       const seen = track(page);
       const one = expectOneCall(page, ROUTE);
-      await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
+      const [first] = await Promise.all([page.waitForResponse((r) => TL_URL.test(r.url()) && r.request().method() === "GET"), page.goto(`${BASE}/timeline`, { waitUntil: "load" })]);
+      const cell = await first.json();   // the cell's answer to the page's own read
       await items(page).first().waitFor();
       await one(ck, `normal @${width}`);
       ck(`normal @${width}: no lines were read`, seen.raw.length === 0);
@@ -177,9 +181,9 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       eq(`normal @${width}: the filter bar shows no service`, (await text(page.getByTestId("timeline-service"))), "Service All services");
       eq(`normal @${width}: all seven kinds of item are drawn`, await kindsOf(page), ["alert", "check", "deploy", "incident", "metric", "quiet", "window"]);
       const have = await ids(page);
-      eq(`normal @${width}: the list is the cell's, in the cell's order`, have, six.items.map((i) => i.id)
+      eq(`normal @${width}: the list is the cell's, in the cell's order`, have, cell.items.map((i) => i.id)
          .filter((id) => have.includes(id)));
-      ck(`normal @${width}: and nothing the cell sent is missing`, have.length >= six.items.length - 1, `${have.length} of ${six.items.length}`);
+      ck(`normal @${width}: and nothing the cell sent is missing`, have.length >= cell.items.length - 1, `${have.length} of ${cell.items.length}`);
       const hs = await heads(page);
       ck(`normal @${width}: hour headings read HH:00, Yesterday HH:00 or D Mon HH:00`, hs.length > 1 && hs.every((h) => HOUR_RE.test(h)), hs.join());
       ck(`normal @${width}: newest hour first`, hs.length === new Set(hs).size);
@@ -190,7 +194,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       ck(`normal @${width}: the bad alert is red and the deploy is plain`,
          (await items(page).evaluateAll((e) => e.filter((x) => x.dataset.kind === "alert").map((x) => x.dataset.tone))).includes("bad")
          && (await items(page).evaluateAll((e) => e.filter((x) => x.dataset.kind === "deploy").every((x) => x.dataset.tone === "info"))));
-      eq(`normal @${width}: a metric tag is amber whatever the cell says`, await row(page, six.items.find((i) => i.kind === "metric").id).getByTestId("timeline-tag").getAttribute("data-tone"), "warn");
+      eq(`normal @${width}: a metric tag is amber whatever the cell says`, await row(page, cell.items.find((i) => i.kind === "metric").id).getByTestId("timeline-tag").getAttribute("data-tone"), "warn");
       eq(`normal @${width}: tags are in words`, [...new Set(await tags(page))].sort(), ["ALERT", "CHECK", "DEPLOY", "INCIDENT", "LOGS", "METRIC"].map((x) => x));
       const deployText = await texts(page).then((t) => t.filter((x) => /example-org\/edge-proxy pushed/.test(x)));
       eq(`normal @${width}: the deploy is the one the incident follows`, deployText, ["example-org/edge-proxy pushed to main by Kim: 3 commits"]);
@@ -273,20 +277,21 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       let p = await readOf(page, () => page.getByRole("option", { name: "edge-proxy", exact: true }).click());
       eq(`service @${width}: picking a service reads the list for it`, p.get("service"), "edge-proxy");
       eq(`service @${width}: and puts it in the address`, new URL(page.url()).searchParams.get("service"), "edge-proxy");
-      p = await readOf(page, () => page.getByTestId("timeline-range-1h").click());
+      const hourRead = await listRead(page, () => page.getByTestId("timeline-range-1h").click());
+      p = hourRead.params;
       eq(`service @${width}: a range reads again`, [p.get("service"), new URL(page.url()).searchParams.get("range")], ["edge-proxy", "1h"]);
-      const gap = Date.now() - Date.parse(p.get("from"));
+      const gap = (await page.evaluate(() => Date.now())) - Date.parse(p.get("from"));
       ck(`service @${width}: the last hour starts an hour back`, Math.abs(gap - 3600e3) < 30e3, String(gap));
       await items(page).first().waitFor();
       eq(`service @${width}: the subtitle`, await sub(page), "Last hour, edge-proxy.");
       eq(`service @${width}: the picker shows the service`, await text(page.getByTestId("timeline-service")), "Service edge-proxy");
       const body = await texts(page);
       ck(`service @${width}: only edge-proxy is on the page`, body.length > 3 && body.every((t) => t.includes("edge-proxy")) && !body.some((t) => t.includes("service-a")), body.join(" | "));
-      const hour = await api(`${ROUTE}?service=edge-proxy&from=${encodeURIComponent(stamp(new Date(Date.now() - 3600e3)))}`);
+      const hour = hourRead.body;
       const have = await ids(page);
       ck(`service @${width}: the list is the cell's last hour for it`, have.length >= hour.items.length - 1 && have.every((id) => hour.items.some((i) => i.id === id)), `${have.length} vs ${hour.items.length}`);
       ck(`service @${width}: nothing older than an hour (the folded quiet stretch begins before it and shows from where the hour begins)`,
-         hour.items.every((i) => Date.parse(i.end || i.at) >= Date.now() - 3600e3 - 60e3));
+         hour.items.every((i) => Date.parse(i.end || i.at) >= Date.parse(p.get("from")) - 60e3));
       await common(page, `service @${width}`, width);
       await shots(page, "", "service", width);
       // back and forward walk the filters
@@ -351,7 +356,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       await page.goto(`${BASE}/timeline?service=service-a-receiver&range=6h`, { waitUntil: "load" });
       await page.getByTestId("timeline-empty").waitFor();
       await one(ck, `empty @${width}`);
-      const want = (await api(`${ROUTE}?service=service-a-receiver&from=${encodeURIComponent(stamp(new Date(Date.now() - 6 * 3600e3)))}`)).empty_words;
+      const want = (await api(`${ROUTE}?service=service-a-receiver&from=${encodeURIComponent(stamp(new Date(T0 - 6 * 3600e3)))}`)).empty_words;
       eq(`empty @${width}: the cell's sentence and a hint`, await text(page.getByTestId("timeline-empty")), `Nothing arrived ${want} Try a longer range or all services.`);
       eq(`empty @${width}: no list, no error`, [await page.getByTestId("timeline-list").count(), await page.getByTestId("timeline-error").count()], [0, 0]);
       eq(`empty @${width}: the picker still shows the service`, await text(page.getByTestId("timeline-service")), "Service service-a-receiver");
@@ -391,7 +396,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 7. error: the list did not load; it tries again by itself and on a click
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);
-      await installClock(page);
       let down = true;
       await page.route(TL_URL, (route) => down
         ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "down" }) })
@@ -557,7 +561,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 12. the list reads again every 30 seconds, and nothing else does
     {
       const { ctx, page } = await newPage(1440);
-      await installClock(page);
       const seen = track(page);
       await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
       await items(page).first().waitFor();
@@ -582,7 +585,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 12b. a refresh replaces the first page: a quiet stretch whose start moved is one line, not two
     {
       const { ctx, page } = await newPage(1440);
-      await installClock(page);
       let reads = 0;
       await page.route(TL_URL, async (route) => {
         const resp = await route.fetch();
@@ -605,7 +607,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 12b2. a list of two pages: a poll before "Load earlier" must not leave the old stretch behind
     {
       const { ctx, page } = await newPage(1440);
-      await installClock(page);
       let firstPageReads = 0, earlierReads = 0;
       let head = null;
       await page.route(TL_URL, async (route) => {
@@ -648,7 +649,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     {
       const from = new Date(B.getTime() - 120 * 60e3), to = new Date(B.getTime() - 10 * 60e3);
       const { ctx, page } = await newPage(1440);
-      await installClock(page);
       const seen = track(page);
       await page.goto(`${BASE}/timeline?service=edge-proxy&from=${local(from)}&to=${local(to)}`, { waitUntil: "load" });
       await page.getByTestId("timeline-custom").waitFor();
@@ -665,7 +665,6 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     {
       const from = new Date(B.getTime() - 120 * 60e3);
       const { ctx, page } = await newPage(1440);
-      await installClock(page);
       const seen = track(page);
       await page.goto(`${BASE}/timeline?range=custom&from=${local(from)}`, { waitUntil: "load" });
       await page.getByTestId("timeline-custom").waitFor();
