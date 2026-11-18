@@ -207,7 +207,7 @@ fresh()
 p = round_(doc(item(created=iso(NOW - H - 30))))
 text = "desk item D7 of Shop is still open, ask again"
 ck("an hour open wakes the orchestrator", p and p["work"] and p["keys"] == [key_at(1)] and p["reason"] == f"work: {text}"
-   and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + launch.idle_wake_note() + " Carry on from your report.",
+   and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + IW.woke_on(p["keys"]) + " " + launch.idle_wake_note() + " Carry on from your report.",
    str(p))
 ck("...with one restart", len(restarted) == 1 and restarted[0][0] == ORCH, str(restarted))
 ck("...and remembers the key", wake()["seen"] == [key_at(1)] and key_at(1) in wake()["baseline"]["work"], str(wake()))
@@ -267,7 +267,7 @@ projects("p1")
 p = round_(doc())
 text = "project Name p1 was taken over, release it"
 ck("a project under releasing wakes the orchestrator", p and p["work"] and p["keys"] == ["rl:p1"] and p["reason"] == f"work: {text}"
-   and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + launch.idle_wake_note() + " Carry on from your report.",
+   and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + IW.woke_on(p["keys"]) + " " + launch.idle_wake_note() + " Carry on from your report.",
    str(p))
 ck("...with one restart", len(restarted) == 1 and restarted[0][0] == ORCH, str(restarted))
 del restarted[:]

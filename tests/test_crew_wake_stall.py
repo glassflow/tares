@@ -196,7 +196,7 @@ reset({"released": True, "clock": NOW - 60, "baseline": {**BASE, "work": []}})
 p = round_(doc(held(at=STALE)))
 text = "ticket T2 of Shop has had no news for 46 minutes"
 ck("46 minutes without news wakes the orchestrator", p and p["work"] and p["keys"] == [KEY] and p["reason"] == f"work: {text}"
-   and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + launch.idle_wake_note() + " Carry on from your report.", str(p))
+   and p["prompt"] == IW.work_prompt("orchestrator", text) + " " + IW.woke_on(p["keys"]) + " " + launch.idle_wake_note() + " Carry on from your report.", str(p))
 ck("...with one restart", len(restarted) == 1 and restarted[0][0] == ORCH, str(restarted))
 ck("...and remembers the key", wake()["seen"] == [KEY] and KEY in wake()["baseline"]["work"], str(wake()))
 del restarted[:]
