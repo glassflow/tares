@@ -326,6 +326,7 @@ def register_routes(app, host) -> None:
                     if row["repo_source_id"]:
                         await forget_in_lore(repo, row["repo_source_id"])
                     store.delete_brain_repo(repo)
+                    await repo_decisions.forget_repo(repo)   # its decision folder files leave the brain too (TR-1453)
                     decisions.wake()   # the docs of projects linked only to it go now
             remove_errors.pop(repo, None)
             return None
