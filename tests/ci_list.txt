@@ -36,6 +36,7 @@ test_crew_adopt
 test_crew_cc_update
 test_crew_claude
 test_crew_client
+test_crew_context
 test_crew_contract
 test_crew_conversation
 test_crew_dispatch
@@ -78,6 +79,7 @@ test_crew_tidy_safety
 test_crew_unicode_home
 test_crew_views
 test_crew_wake_console
+test_crew_wake_desk
 test_crew_wake_midturn
 test_crew_wake_mywork
 test_crew_wake_stall
