@@ -25,6 +25,17 @@ HEADER = "x-tares-via"
 FROM_CONSOLE = ("feed", "message")
 
 
+def item_ids(item: str) -> list[str]:
+    """The ids the record may hold for one home item. A desk item is `question:D7` or `permission:D7`
+    on a cell of one and `desk:D7` on a team cell's Home, so any of them finds an answer recorded
+    under another."""
+    item = item.strip()
+    kind, _, rest = item.partition(":")
+    if kind in ("question", "permission", "desk") and rest and ":" not in rest:
+        return [f"question:{rest}", f"permission:{rest}", f"desk:{rest}"]
+    return [item]
+
+
 def surface(request) -> str:
     """Where a console call was made: `feed` or `message` when it says so, else `console`."""
     v = str(request.headers.get(HEADER) or "").strip().lower() if request is not None else ""

@@ -569,6 +569,13 @@ FACTORY_SCHEMA = [
       sent       BOOLEAN,
       PRIMARY KEY (person_id, item)
     )""",
+    # TR-1460: the Slack message that told it (its channel, its ts and the item's place in it), the
+    # ask it showed, and once the item no longer waits, the line the message was edited to show.
+    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS ask TEXT",
+    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS channel TEXT",
+    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS ts TEXT",
+    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS seq INTEGER",
+    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS closed TEXT",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -1793,6 +1800,61 @@ class FactoryStore:
                 self.sc.execute(
                     "INSERT INTO waiting_told (person_id, item, told_at, sent) VALUES (?, ?, ?, ?) "
                     "ON CONFLICT DO NOTHING", [person_id, item, at, sent])
+
+    def forget_waiting_told(self, person_id: str, items: list[str]) -> None:
+        """Undo mark_waiting_told for `items` whose message Slack refused for now (busy, down): the
+        next read finds them new and sends them. A row that already names its message stays."""
+        if not items:
+            return
+        with self._swrite:
+            for item in dict.fromkeys(items):
+                self.sc.execute("DELETE FROM waiting_told WHERE person_id = ? AND item = ? AND ts IS NULL",
+                                [person_id, item])
+
+    def set_told_message(self, person_id: str, items: list[tuple[str, str]], channel: str, ts: str) -> None:
+        """The Slack message (`channel`, `ts`) that told `person_id` about `items`, each (id, ask) in
+        the order the message shows them (TR-1460), so an answer can edit it later, after a restart too."""
+        with self._swrite:
+            for seq, (item, ask) in enumerate(items):
+                self.sc.execute("UPDATE waiting_told SET channel = ?, ts = ?, seq = ?, ask = ? "
+                                "WHERE person_id = ? AND item = ?", [channel, ts, seq, ask, person_id, item])
+
+    def open_told(self, person_id: str) -> list[dict]:
+        """The items a message told `person_id` about that it does not yet say were answered."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT item, channel, ts FROM waiting_told WHERE person_id = ? AND ts IS NOT NULL "
+                "AND closed IS NULL", [person_id]).fetchall()
+        return [{"item": r[0], "channel": r[1], "ts": r[2]} for r in rows]
+
+    def told_message(self, person_id: str, channel: str, ts: str) -> list[dict]:
+        """Every item one message told about, in its order, with the line it closed with (or None)."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT item, ask, closed FROM waiting_told WHERE person_id = ? AND channel = ? AND ts = ? "
+                "ORDER BY seq", [person_id, channel, ts]).fetchall()
+        return [{"item": r[0], "ask": r[1], "closed": r[2]} for r in rows]
+
+    def close_told(self, person_id: str, closed: dict[str, str]) -> None:
+        """Record that the message now says `closed[item]` for each item: it is not edited again."""
+        with self._swrite:
+            for item, line in closed.items():
+                self.sc.execute("UPDATE waiting_told SET closed = ? WHERE person_id = ? AND item = ?",
+                                [line, person_id, item])
+
+    def last_answer(self, items: list[str]) -> dict | None:
+        """The newest answer recorded under any of `items` (one item's ids, see answers.item_ids), with
+        who gave it ({id, name} or None), or None when it was never answered."""
+        if not items:
+            return None
+        with self._sread:
+            row = self.sc.execute(
+                f"SELECT item, choice, said, via, person_id, answered_at FROM answers WHERE item IN "
+                f"({', '.join('?' for _ in items)}) ORDER BY answered_at DESC LIMIT 1", list(items)).fetchone()
+        if not row:
+            return None
+        return {"item": row[0], "choice": row[1], "said": row[2], "via": row[3], "at": row[5],
+                "person": self._person_refs([row[4]]).get(row[4])}
 
     def list_answers(self, since, hidden: list[str] | None = None, person: str | None = None,
                      own: str | None = None) -> list[dict]:
