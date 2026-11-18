@@ -9,6 +9,7 @@ connected repo (the table is in core's `factory_store.py`, like the other tables
     POST   /api/brain/repos                     {repos: ["owner/name", ...]}   admin
     DELETE /api/brain/repos/{owner}/{name}                                     admin
     POST   /api/brain/repos/{owner}/{name}/retry                               admin
+    GET    /api/brain/repos/available/{owner}/{name}/folders   suggestions for a repo not connected yet   admin (TR-1441)
     GET    /api/brain/repos/{owner}/{name}/folders   the chosen decision folders and Tares's suggestions (TR-1209)
     PUT    /api/brain/repos/{owner}/{name}/folders   {folders: ["docs/adr", ...]}                       admin
 
@@ -153,12 +154,9 @@ def register_routes(app, host) -> None:
             return {"configured": False, "repos": []}
         return {"configured": True, "repos": [view(r) for r in store.list_brain_repos()]}
 
-    @app.get("/api/brain/repos/available")
-    async def available_repos():
-        """{github, repos: [{repo, private, connected}]}: the repos the cell's GitHub connections
-        can read, `connected` for the ones already on the brain. `github` is false when the cell
-        has no GitHub connection."""
-        need_brain()
+    async def visible_repos() -> tuple[list, dict[str, dict], list[str], int]:
+        """(credentials, {repo: {repo, private, connected}}, failures, answered): what the cell's GitHub
+        connections can read. `failures` are the plain-word reasons a connection did not answer."""
         creds = store.list_github_credentials()
         connected = {r["repo"] for r in store.list_brain_repos()}
         seen: dict[str, dict] = {}
@@ -178,6 +176,15 @@ def register_routes(app, host) -> None:
                 if full and full not in seen:
                     seen[full] = {"repo": full, "private": bool(g.get("private")),
                                   "connected": full in connected}
+        return creds, seen, failures, answered
+
+    @app.get("/api/brain/repos/available")
+    async def available_repos():
+        """{github, repos: [{repo, private, connected}]}: the repos the cell's GitHub connections
+        can read, `connected` for the ones already on the brain. `github` is false when the cell
+        has no GitHub connection."""
+        need_brain()
+        creds, seen, failures, answered = await visible_repos()
         if failures and not answered:
             host.err(ValueError(failures[0]), 502)
         return {"github": bool(creds), "repos": sorted(seen.values(), key=lambda r: r["repo"])}
@@ -419,6 +426,40 @@ def register_routes(app, host) -> None:
             have = {c["path"] for c in chosen}
             suggested = [{**s, "chosen": s["path"] in have}
                          for s in folders_mod.suggest(entries, partial)]
+        for c in chosen:
+            files = folders_mod.count_files(entries, c["path"]) if scanned else None
+            c["files"] = None if (partial and not files) else files
+        return {"repo": repo, "folders": chosen, "suggested": suggested, "partial": partial,
+                "scanned": scanned, "scan_error": scan_error}
+
+    @app.get("/api/brain/repos/available/{owner}/{name}/folders")
+    async def get_available_folders(owner: str, name: str, request: Request):
+        """Admin only. The folder suggestions of a repo that is not connected yet (TR-1441), so an admin can
+        pick decision folders while connecting it. The repo must be one the cell's GitHub connections can
+        read (the list `GET /api/brain/repos/available` gives); any other repo answers 404. The answer has
+        the shape of `GET /api/brain/repos/{owner}/{name}/folders`: `folders` holds the repo's chosen folders
+        (empty before it is connected), then `suggested`, `partial`, `scanned`, `scan_error`, with the same
+        scan and time limit. When GitHub cannot be asked (the list of repos or the scan failed) it answers
+        200 with `scanned: false` and `scan_error` saying why."""
+        need_brain()
+        host.require_admin(request)
+        repo = repo_from(owner, name)
+        _, seen, failures, answered = await visible_repos()
+        if repo not in seen and not (failures and not answered):
+            host.err(KeyError(f"{repo} is not a repo this cell's GitHub connection can read"), 404)
+        chosen = store.list_brain_folders(repo)
+        entries, partial, scanned, scan_error, suggested = [], False, False, None, []
+        if repo not in seen:   # GitHub did not answer the list, so the repo cannot be told apart from another
+            scan_error = failures[0]
+        else:
+            try:
+                tree = await scan_tree(repo)
+                entries, partial, scanned = tree["entries"], bool(tree["truncated"]), True
+            except ValueError as e:
+                scan_error = str(e)
+        if scanned:
+            have = {c["path"] for c in chosen}
+            suggested = [{**s, "chosen": s["path"] in have} for s in folders_mod.suggest(entries, partial)]
         for c in chosen:
             files = folders_mod.count_files(entries, c["path"]) if scanned else None
             c["files"] = None if (partial and not files) else files
