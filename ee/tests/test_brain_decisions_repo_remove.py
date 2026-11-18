@@ -12,7 +12,9 @@ GitHub and no lore call and puts nothing back; a fresh start-up after the remova
 error part way through leaves the rest held and tells no lie, the removal itself still finishes, and the next
 start-up deletes what is left (from what lore holds, so also in a process that never held the paths); a repo that
 is still connected is never forgotten, by the call or by start-up; a repo removed while the cell was down has its
-documents deleted at the next start-up.
+documents deleted at the next start-up, also when that start-up could not read lore's list (the next read forgets
+it); the removal wakes the project docs before it deletes; a reconnect that lands while the store is checked keeps
+its queued import.
 
 In process, no ports. With CI's Postgres run (TARES_TEST_PG and tests/pg_harness on PYTHONPATH) the same
 script keeps its state in Postgres.
@@ -132,7 +134,7 @@ async def main():
     repos_mod.lore_client = lore.client
     gh = Gh()
     adr = {f"docs/adr/a{i:03d}.md": f"# a{i}\nfirst\n" for i in range(3)}
-    for repo in ("acme/web", "acme/api", "acme/old", "acme/half", "acme/keep"):
+    for repo in ("acme/web", "acme/api", "acme/old", "acme/half", "acme/keep", "acme/race", "acme/gone"):
         gh.repos[repo] = {**adr, "README.md": "# readme\n"}
     dr.TRANSPORT = httpx.MockTransport(gh.handle)
 
@@ -258,6 +260,72 @@ async def main():
         await down.startup()
         await down.wait()
         ck("start-up deletes them", docs("acme/old") == set() and (await row("acme/keep"))["decisions"] == 3, str(sorted(docs("acme/old"))))
+
+        print("== the wake comes before the deletes ==")
+        order = []
+        real_wake, real_forget = app.state.brain_decisions.wake, rd.forget_repo
+
+        def wake():
+            order.append("wake")
+            real_wake()
+
+        async def forget(repo):
+            order.append("forget")
+            return await real_forget(repo)
+        app.state.brain_decisions.wake, rd.forget_repo = wake, forget
+        choose(store, "acme/half", [])
+        await cx.put("/api/brain/repos/acme/half/folders", json={"folders": ["docs/adr"]})
+        await rd.wait()
+        r = await cx.delete("/api/brain/repos/acme/half")
+        app.state.brain_decisions.wake, rd.forget_repo = real_wake, real_forget
+        ck("the removal wakes the project docs before it deletes the repo's documents", r.status_code == 200 and order == ["wake", "forget"], str(order))
+
+        print("== a reconnect that lands while forget_repo checks the store keeps its import ==")
+        choose(store, "acme/race", [])
+        await cx.put("/api/brain/repos/acme/race/folders", json={"folders": ["docs/adr"]})
+        await rd.wait()
+        ck("acme/race has three documents", len(docs("acme/race")) == 3)
+        store.delete_brain_repo("acme/race")
+        real_get, loop, lying = store.get_brain_repo, asyncio.get_running_loop(), {"on": True}
+
+        async def reconnect():
+            lying["on"] = False
+            choose(store, "acme/race", ["docs/adr"])
+            rd.request("acme/race", ["docs/adr"])
+
+        def stale(repo):
+            if lying["on"] and repo == "acme/race":
+                asyncio.run_coroutine_threadsafe(reconnect(), loop).result()
+                return None   # the answer from before the reconnect
+            return real_get(repo)
+        store.get_brain_repo = stale
+        was, seed_gate = rd.startup_task, asyncio.Event()
+        rd.startup_task = asyncio.create_task(seed_gate.wait())   # start-up's read of lore is still running: the import waits for it
+        try:
+            await rd.forget_repo("acme/race")
+            seed_gate.set()
+            await rd.wait()
+        finally:
+            store.get_brain_repo = real_get
+            rd.startup_task = was
+        ck("the import the reconnect asked for still runs, so the repo has its documents", len(docs("acme/race")) == 3, str(sorted(docs("acme/race"))))
+        ck("and the count follows", rd.count("acme/race", ["docs/adr"]) == 3, str(rd.count("acme/race", ["docs/adr"])))
+
+        print("== a repo removed while start-up could not read lore is forgotten once a pass reads the list ==")
+        choose(store, "acme/gone", [])
+        await cx.put("/api/brain/repos/acme/gone/folders", json={"folders": ["docs/adr"]})
+        await rd.wait()
+        ck("acme/gone has three documents", len(docs("acme/gone")) == 3)
+        store.delete_brain_repo("acme/gone")   # the row goes with no hook
+        blind = dr.RepoDecisions(store, lambda: lore.client(), rd._token)
+        lore.fail("list_documents", 500, "boom")
+        await blind._seed()
+        ck("the failed seed holds nothing, so nothing is deleted yet", blind._seed_failed and not blind._held and len(docs("acme/gone")) == 3, str(blind._held))
+        blind.on_push("acme/keep", {"docs/adr/a000.md"})   # a pass for a connected repo reads lore's list again
+        await blind.wait()
+        ck("that read forgets the removed repo: its documents are deleted, the connected repo's stay",
+           docs("acme/gone") == set() and not blind._seed_failed and "acme/gone" not in blind._held and len(docs("acme/keep")) == 3,
+           f"{sorted(docs('acme/gone'))} {blind._seed_failed}")
 
         await cx.aclose()
 

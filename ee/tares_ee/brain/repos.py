@@ -326,8 +326,8 @@ def register_routes(app, host) -> None:
                     if row["repo_source_id"]:
                         await forget_in_lore(repo, row["repo_source_id"])
                     store.delete_brain_repo(repo)
+                    decisions.wake()   # the docs of projects linked only to it go now, not after the deletes below
                     await repo_decisions.forget_repo(repo)   # its decision folder files leave the brain too (TR-1453)
-                    decisions.wake()   # the docs of projects linked only to it go now
             remove_errors.pop(repo, None)
             return None
         except Exception as e:   # host.err raises an HTTPException; anything else is a bug we still report
