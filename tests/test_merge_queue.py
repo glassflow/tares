@@ -44,6 +44,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import timedelta
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -870,7 +871,8 @@ async def main():
         r = row(repo, 1)
         mq = [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"]
         ck("with a check on the new head the row is queued on it, and nothing merges in that tick",
-           r["state"] == "queued" and r["head"] == new and r["before_files"] is None and merged_calls(repo) == [], r)
+           r["state"] == "queued" and r["head"] == new and merged_calls(repo) == []
+           and json.loads(r["before_files"])["head"] == h0, r)
         ck("the review is written again for the new head, with the agreed words and no findings",
            len(mq) == 1 and mq[0]["head"] == new and mq[0]["verdict"] == "pass"
            and mq[0]["verified"] == f"Same changes against main as the reviewed commit {h0[:7]}; only the base moved",
@@ -1824,6 +1826,81 @@ async def main():
         ck("it merges the new commit with no second question",
            [(n, b["sha"]) for n, b in merged_calls(repo)] == [(1, new)]
            and len(store.list_desk(None, up)) == 1, (MERGES, store.list_desk(None, up)))
+
+        print("== a turn is kept for a bounded time, and an updated row keeps it until it merges ==")
+        real_now = merge_queue.now_utc
+
+        async def tick_later(by):
+            merge_queue.now_utc = lambda: real_now() + by
+            try:
+                await tick()
+            finally:
+                merge_queue.now_utc = real_now
+
+        repo = "acme/turn-stuck"
+        up = project("turnstuck", "L4-ship", review="fakerev", ci="github")
+        for n in (1, 2):
+            ticket(up, repo, f"Stuck {n}", n, position=n)
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        await tick_later(merge_queue.CI_WAIT - timedelta(minutes=1))
+        ck("an update whose checks are still to come keeps the turn inside the bound",
+           updated(repo) == [1] and row(repo, 1)["state"] == "waiting_ci"
+           and row(repo, 2)["reason"].startswith("waits its turn: "), (UPDATES, row(repo, 1), row(repo, 2)))
+        await tick_later(merge_queue.CI_WAIT + timedelta(minutes=1))
+        ck("past the bound the next row is brought up to date, and the first keeps waiting for its checks",
+           updated(repo) == [1, 2] and row(repo, 1)["state"] == "waiting_ci"
+           and row(repo, 2)["state"] == "waiting_ci", (UPDATES, row(repo, 1), row(repo, 2)))
+
+        repo = "acme/turn-mute"
+        up = project("turnmute", "L3-review", review="fakerev", ci="github")
+        mute = {n: ticket(up, repo, f"Mute {n}", n, position=n) for n in (1, 2)}
+        first = factory_mod.label(store.get_ticket(up, mute[1]))
+        for n in mute:
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        del UPDATES[:], MERGES[:]
+        await tick()
+        land(repo, 1)
+        CHECKED.add(PRS[(repo, 1)]["head"])
+        await tick()
+        await tick()
+        await tick_later(merge_queue.ASK_WAIT - timedelta(minutes=1))
+        ck("a question nobody has answered keeps the turn inside the bound",
+           row(repo, 1)["state"] == "waiting_approval" and updated(repo) == [1]
+           and row(repo, 2)["reason"] == f"waits its turn: {first} is waiting for approval to merge",
+           (UPDATES, row(repo, 1), row(repo, 2)))
+        await tick_later(merge_queue.ASK_WAIT + timedelta(minutes=1))
+        ck("past the bound the next row is brought up to date, and the question stays on the desk",
+           updated(repo) == [1, 2] and row(repo, 2)["state"] == "waiting_ci"
+           and row(repo, 1)["state"] == "waiting_approval" and len(desk(up)) == 1,
+           (UPDATES, row(repo, 1), row(repo, 2), desk(up)))
+
+        repo = "acme/turn-kept"
+        up = project("turnkept", "L4-ship", review="fakerev", ci="github")
+        kept = {n: ticket(up, repo, f"Kept {n}", n, position=n) for n in (1, 2)}
+        for n in kept:
+            behind(repo, n, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        CI_PENDING.add((repo, 1))
+        del UPDATES[:], MERGES[:]
+        await tick()
+        ck("the first in line is not ready: the second is brought up to date",
+           updated(repo) == [2] and row(repo, 2)["state"] == "waiting_ci", (UPDATES, row(repo, 2)))
+        new = land(repo, 2)
+        CHECKED.add(new)
+        await tick()
+        ck("the update came with its checks: the second is queued on its new head",
+           row(repo, 2)["state"] == "queued" and row(repo, 2)["head"] == new, row(repo, 2))
+        CI_PENDING.discard((repo, 1))
+        del UPDATES[:]
+        await tick()
+        ck("the first is ready now but the updated row keeps the turn: it merges before anyone is updated",
+           [n for n, _ in merged_calls(repo)] == [2] and updated(repo) == []
+           and row(repo, 1)["state"] == "queued" and row(repo, 1)["reason"].startswith("waits its turn: "),
+           (MERGES, UPDATES, row(repo, 1)))
+        await tick()
+        ck("and then the first is brought up to date",
+           updated(repo) == [1] and row(repo, 1)["state"] == "waiting_ci", (UPDATES, row(repo, 1)))
 
         print("== health, and what Tares says ==")
         async with mk() as cx:
