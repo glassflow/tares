@@ -7,6 +7,7 @@ test_brain_decisions_projects
 test_brain_decisions_projects_backfill
 test_brain_decisions_repo
 test_brain_decisions_repo_count
+test_brain_decisions_repo_remove
 test_brain_decisions_repo_sync
 test_brain_folders
 test_brain_folders_available
