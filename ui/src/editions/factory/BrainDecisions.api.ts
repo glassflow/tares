@@ -34,10 +34,14 @@ export interface DecisionRow {
 
 export interface DecisionCounts { all: number; repo_folder: number; factory_project: number; by_hand: number }
 
+/** What the dropdowns offer: every repo and project with a decision, whatever the filters say. */
+export interface DecisionFilters { repos: string[]; projects: { id: string; name: string }[] }
+
 export interface DecisionsPage {
   decisions: DecisionRow[];
   next_cursor: string | null;
   counts: DecisionCounts;
+  filters?: DecisionFilters;
 }
 
 export interface NewDecision {
@@ -48,13 +52,14 @@ export interface NewDecision {
   decided_by?: string;
 }
 
-export const PAGE_SIZE = 50;
+export const PAGE_SIZE = 25;
 
 /** One page of the list. `where` "all" is no filter. A 404 means the cell has no brain. */
-export function brainDecisions(opts: { where?: DecisionTab; repo?: string | null; cursor?: string | null } = {}): Promise<DecisionsPage> {
+export function brainDecisions(opts: { where?: DecisionTab; repo?: string | null; project?: string | null; cursor?: string | null } = {}): Promise<DecisionsPage> {
   const q = new URLSearchParams();
   if (opts.where && opts.where !== "all") q.set("where", opts.where);
   if (opts.repo) q.set("repo", opts.repo);
+  if (opts.project) q.set("project", opts.project);
   if (opts.cursor) q.set("cursor", opts.cursor);
   q.set("limit", String(PAGE_SIZE));
   return request<DecisionsPage>(`/api/brain/decisions?${q.toString()}`);

@@ -17,16 +17,20 @@ export const TABS: { value: DecisionTab; label: string }[] = [
 
 const TAB_VALUES = new Set<string>(TABS.map((t) => t.value));
 
-/** The tab an address names (`?where=`), else All. */
+/** The origin an address names (`?where=`), else All. */
 export const tabOf = (v: string | null | undefined): DecisionTab => (v && TAB_VALUES.has(v) ? (v as DecisionTab) : "all");
 
-/** "Repo folders 21". The counts are for the whole cell, so with a repo filter on they are left out. */
-export function tabLabel(tab: DecisionTab, counts: DecisionCounts | null | undefined, showCounts: boolean): string {
+/** An origin in the Origin dropdown, with the cell's count: "Factory projects (44)". */
+export function originLabel(tab: DecisionTab, counts: DecisionCounts | null | undefined): string {
   const label = TABS.find((t) => t.value === tab)?.label ?? "All";
-  if (!showCounts || !counts) return label;
-  const n = counts[tab];
-  return Number.isFinite(n) ? `${label} ${formatCount(Math.max(0, n))}` : label;
+  const n = counts?.[tab];
+  return typeof n === "number" && Number.isFinite(n) ? `${label} (${formatCount(Math.max(0, n))})` : label;
 }
+
+/** The dropdowns' "no filter" value; the kit's picker needs a value for every row. */
+export const ANY = "any";
+export const ALL_REPOS = "All repos";
+export const ALL_PROJECTS = "All projects";
 
 export const EMPTY_ALL = "No decisions yet. They show here from the decisions folders you pick in GitHub repos, from specs and plans in shared factory projects, and from ones you record here.";
 export const EMPTY_ALL_READ_ONLY = "No decisions yet. They show here from the decisions folders of GitHub repos, from specs and plans in shared factory projects, and from ones people add by hand.";
@@ -37,9 +41,10 @@ export const EMPTY_TAB: Record<Exclude<DecisionTab, "all">, string> = {
   by_hand: "Decisions added on this page show here.",
 };
 
-/** The empty line of a tab, or of the list for one repo. */
-export function emptyWords(tab: DecisionTab, repo: string | null, canAdd: boolean): string {
+/** The empty line of an origin, or of the list for one repo or project. */
+export function emptyWords(tab: DecisionTab, repo: string | null, canAdd: boolean, project: string | null = null): string {
   if (repo) return "No decisions for this repo yet.";
+  if (project) return "No decisions for this project yet.";
   if (tab === "all") return canAdd ? EMPTY_ALL : EMPTY_ALL_READ_ONLY;
   return EMPTY_TAB[tab];
 }

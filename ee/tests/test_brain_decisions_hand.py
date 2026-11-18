@@ -11,7 +11,7 @@ body (title, text, file, both, neither, null, blank, too long, unknown field), t
 sides, a Markdown upload, a real PDF, a PDF with no text, a corrupt and a password-protected one, no pypdf,
 that a refused request writes nothing to lore, who may delete (the adder, an admin, the root token; not
 another member), that only `hand:` ids are deleted, the list across a repo's folder, a factory project and
-by hand, `where` and `repo` filters, counts with and without a filter, paging by cursor (limit 1 and 2,
+by hand, `where`, `repo` and `project` filters, the repos and projects for the page's dropdowns, counts with and without a filter, paging by cursor (limit 1 and 2,
 with and without a filter, no repeats or gaps), newest first, a private or unknown project's decision
 never listed or counted, a missing or unknown `where`, lore failing, the licence and brain settings gates,
 no secret in any response, request or log line, and auth off (the single person).
@@ -504,6 +504,22 @@ async def main():
         ck("repo and where together can match nothing", r.json()["decisions"] == [] and r.json()["next_cursor"] is None and r.json()["counts"]["all"] == 8, r.text[:300])
         r = await listing(repo="nobody/nothing")
         ck("a repo with no decisions lists none", r.status_code == 200 and r.json()["decisions"] == [])
+        # project filter and the dropdowns' lists (TR-1444)
+        r = await listing(project="pa")
+        ck("project=pa lists that project's decisions only", [d["title"] for d in r.json()["decisions"]] == ["Alpha spec"] and r.json()["counts"] == j["counts"], r.text[:300])
+        r = await listing(project="pb", where="factory_project")
+        ck("project and where=factory_project together", "Beta plan" in [d["title"] for d in r.json()["decisions"]] and all(d["project"] == "pb" for d in r.json()["decisions"]), r.text[:300])
+        r = await listing(project="pa", where="by_hand")
+        ck("project and another where match nothing", r.json()["decisions"] == [], r.text[:300])
+        r = await listing(project="sec")
+        ck("a private project's decisions stay hidden under its own filter", r.json()["decisions"] == [], r.text[:300])
+        r = await listing(project="nobody")
+        ck("an unknown project lists none", r.status_code == 200 and r.json()["decisions"] == [])
+        f = (await listing(where="by_hand", repo="acme/web", limit=1)).json()["filters"]
+        ck("filters: every repo with a folder decision, lowercase and sorted, whatever the filters", f["repos"] == ["acme/api", "acme/web"], str(f))
+        ck("filters: every project with a visible decision, by name, never a private or unknown one",
+           [p["id"] for p in f["projects"]] == ["pa", "pb"] and all(p["name"] for p in f["projects"]), str(f))
+        ck("filters: a project is named as the cell names it now", {p["id"]: p["name"] for p in f["projects"]}["pb"] == "Beta", str(f))
         for q, why in (({"where": "junk"}, "an unknown where"), ({"limit": 0}, "limit 0"), ({"limit": 201}, "limit 201"), ({"cursor": "not-a-cursor"}, "a cursor lore does not know")):
             r = await listing(**q)
             ck(f"{why} is a 400 in plain words", r.status_code == 400 and bool(r.json().get("detail")), f"{r.status_code} {r.text[:200]}")
@@ -550,7 +566,7 @@ async def main():
         print("== counts when nothing is there, and many more than a page ==")
         reset()
         r = await listing()
-        ck("an empty brain: nothing, zero counts", r.json() == {"decisions": [], "next_cursor": None, "counts": {"all": 0, "repo_folder": 0, "factory_project": 0, "by_hand": 0}}, r.text[:200])
+        ck("an empty brain: nothing, zero counts", r.json() == {"decisions": [], "next_cursor": None, "counts": {"all": 0, "repo_folder": 0, "factory_project": 0, "by_hand": 0}, "filters": {"repos": [], "projects": []}}, r.text[:200])
         async with lore.client() as c:
             for start in range(0, 450, 150):
                 await c.put_documents("bulk", [{"external_id": f"b{i}", "title": f"B{i}", "text": "t", "kind": "decision", "metadata": D("Ann", "2026-01-01", where="repo_folder", repo="acme/web")}

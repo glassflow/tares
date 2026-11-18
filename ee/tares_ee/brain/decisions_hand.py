@@ -35,7 +35,7 @@ Delete: only a decision added by hand (an id that starts with `hand:`; any other
 never deleted). The person who added it or an admin may delete it; another member gets 403, an id
 lore does not hold 404. With auth off the one person is the adder and the admin.
 
-List: `?where=&repo=&cursor=&limit=` (limit 1 to 200, default 50). Every `decision` lore holds under
+List: `?where=&repo=&project=&cursor=&limit=` (limit 1 to 200, default 50). Every `decision` lore holds under
 the cell's brain key, newest first, from the repos' folders (`repo_folder`), shared factory projects
 (`factory_project`) and by hand (`by_hand`). A row has `id` (the external id), `source`, `title`,
 `summary` (null when lore's listing has none: it carries no text, and only a decision added by hand
@@ -49,7 +49,10 @@ project's row and null on any other; a row put into lore before `doc_kind` exist
 the project pass puts it again (the next pass after the cell starts). `where` and `repo` (`owner/name`, any case)
 filter on the cell; `cursor` is lore's own and opaque: pass back `next_cursor` for the next page
 (null on the last). A page holds exactly the matching rows lore's page showed, so a filter never skips
-a row or repeats one. `counts` is `{all, repo_folder, factory_project, by_hand}` over every visible
+a row or repeats one. `project` (a project id) keeps a factory project's rows of that project only. `filters` is
+`{repos, projects}`, read in the same walk as the counts and whatever the filters say: every repo with a
+decision in a folder (`owner/name`, lowercase, sorted) and every project with a visible decision
+(`{id, name}`, sorted by name), for the page's dropdowns. `counts` is `{all, repo_folder, factory_project, by_hand}` over every visible
 decision, whatever `where`, `repo`, `cursor` or `limit` say (a decision with a missing or unknown
 `where` counts only in `all`); it is read by walking lore's pages, nothing is cached.
 
@@ -387,9 +390,10 @@ def register_routes(app, host) -> None:
 
     @app.get("/api/brain/decisions")
     async def list_decisions(request: Request, where: str | None = None, repo: str | None = None,
-                             cursor: str | None = None, limit: int = 50):
-        """Every decision from every place, newest first, with `counts` (see the module's docstring):
-        {decisions: [...], next_cursor, counts: {all, repo_folder, factory_project, by_hand}}."""
+                             project: str | None = None, cursor: str | None = None, limit: int = 50):
+        """Every decision from every place, newest first, with `counts` and `filters` (see the module's
+        docstring): {decisions: [...], next_cursor, counts: {all, repo_folder, factory_project, by_hand},
+        filters: {repos: [owner/name, ...], projects: [{id, name}, ...]}}."""
         need_brain()
         where = (where or "").strip()
         if where in ("all",):
@@ -397,6 +401,7 @@ def register_routes(app, host) -> None:
         if where and where not in WHERE:
             host.err(ValueError(f"where: one of {', '.join(WHERE)}."))
         repo = (repo or "").strip().lower()
+        project = (project or "").strip()
         if not 1 <= limit <= 200:
             host.err(ValueError("limit: a whole number from 1 to 200."))
         private, known = privacy()
@@ -406,11 +411,14 @@ def register_routes(app, host) -> None:
             if not visible(d, private, known):
                 return False
             r = row_of(d)
-            return (not where or r["where"] == where) and (not repo or (r["repo"] or "").lower() == repo)
+            return ((not where or r["where"] == where) and (not repo or (r["repo"] or "").lower() == repo)
+                    and (not project or (r["where"] == "factory_project" and r["project"] == project)))
 
         rows: list[dict] = []
         nxt = (cursor or "").strip() or None
         counts = {"all": 0, **{w: 0 for w in WHERE}}
+        repos_seen: set[str] = set()
+        projects_seen: set[str] = set()
         try:
             async with repos_mod.lore_client() as lore:
                 for _ in range(SCAN_PAGES):
@@ -424,11 +432,19 @@ def register_routes(app, host) -> None:
                 async for d in walk(lore):
                     if visible(d, private, known):
                         counts["all"] += 1
-                        w = row_of(d)["where"]
+                        r = row_of(d)
+                        w = r["where"]
                         if w:
                             counts[w] += 1
+                        if w == "repo_folder" and r["repo"]:
+                            repos_seen.add(r["repo"].lower())
+                        if w == "factory_project" and r["project"]:
+                            projects_seen.add(r["project"])
         except LoreError as e:
             if e.status == 400 and cursor:
                 host.err(ValueError("cursor: not a cursor the brain gave out."))
             lore_fail(e)
-        return {"decisions": rows, "next_cursor": nxt, "counts": counts}
+        filters = {"repos": sorted(repos_seen),
+                   "projects": sorted(({"id": p, "name": pnames.get(p) or p} for p in projects_seen),
+                                      key=lambda x: (x["name"].lower(), x["id"]))}
+        return {"decisions": rows, "next_cursor": nxt, "counts": counts, "filters": filters}

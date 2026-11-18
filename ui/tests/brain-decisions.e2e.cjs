@@ -6,7 +6,8 @@
  *    (expectOneCall) and never again while it sits idle.
  *  - Empty: the line says what fills the page. Filled: each row has its title (a link to GitHub in a new tab, a
  *    project doc in the console, none for one added by hand), where it lives, who decided and when; a project
- *    row without a kind never says "null". The tabs carry the cell's counts; a tab asks with `where`.
+ *    row without a kind never says "null". Three dropdowns, Origin (with the cell's counts), Repo and Project, ask
+ *    with `where`, `repo` and `project`; a repo or project sets its origin, and Clear filters goes back.
  *  - Previous and Next move a page at a time with the cursor the cell gave, and say "1 to 50 of 238".
  *  - Record a decision (top right) opens /brain/decisions/new; it posts {title, text, decided_by} and goes back to
  *    the list with the new row at the top, and the counts are read again. A file
@@ -92,7 +93,7 @@ const COUNTS = { all: 5, repo_folder: 1, factory_project: 2, by_hand: 2 };
 // ---- the brain API, answered here
 function brainMock(extra = {}) {
   const m = {
-    rows: ROWS.slice(), counts: { ...COUNTS }, status: 200, pageSize: 50, reads: [], posts: [], deletes: [], post: null, del: null, ...extra,
+    rows: ROWS.slice(), counts: { ...COUNTS }, filters: { repos: ["glassflow/tares-cloud"], projects: [{ id: "p1", name: "software-second-brain" }, { id: "p2", name: "state-store" }] }, status: 200, pageSize: 50, reads: [], posts: [], deletes: [], post: null, del: null, ...extra,
   };
   m.handle = async (route) => {
     const req = route.request();
@@ -105,11 +106,12 @@ function brainMock(extra = {}) {
       const q = Object.fromEntries(u.searchParams);
       m.reads.push(q);
       if (m.status !== 200) return route.fulfill({ status: m.status, json: { detail: m.status === 404 ? "Not Found" : "The brain did not answer." } });
-      let rows = m.rows.filter((r) => (!q.where || r.where === q.where) && (!q.repo || (r.repo || "").toLowerCase() === q.repo.toLowerCase()));
+      let rows = m.rows.filter((r) => (!q.where || r.where === q.where) && (!q.repo || (r.repo || "").toLowerCase() === q.repo.toLowerCase())
+        && (!q.project || (r.where === "factory_project" && r.project === q.project)));
       const start = q.cursor ? Number(q.cursor) : 0;
       const page = rows.slice(start, start + m.pageSize);
       const next = start + m.pageSize < rows.length ? String(start + m.pageSize) : null;
-      return route.fulfill({ status: 200, json: { decisions: page, next_cursor: next, counts: m.counts } });
+      return route.fulfill({ status: 200, json: { decisions: page, next_cursor: next, counts: m.counts, filters: m.filters } });
     }
     if (req.method() === "POST" && p === "/api/brain/decisions") {
       const body = JSON.parse(req.postData() || "{}");
@@ -137,9 +139,10 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
 (async () => {
   // ---- 0. the pure rules
   {
-    eq("tabOf: known tabs, else All", [T.tabOf("by_hand"), T.tabOf("repo_folder"), T.tabOf("nope"), T.tabOf(null)], ["by_hand", "repo_folder", "all", "all"]);
-    eq("tabLabel: with counts", [T.tabLabel("all", COUNTS, true), T.tabLabel("repo_folder", COUNTS, true), T.tabLabel("by_hand", { ...COUNTS, by_hand: 1200 }, true)], ["All 5", "GitHub repos 1", "Second Brain 1,200"]);
-    eq("tabLabel: without counts", [T.tabLabel("factory_project", COUNTS, false), T.tabLabel("all", null, true)], ["Factory projects", "All"]);
+    eq("tabOf: known origins, else All", [T.tabOf("by_hand"), T.tabOf("repo_folder"), T.tabOf("nope"), T.tabOf(null)], ["by_hand", "repo_folder", "all", "all"]);
+    eq("originLabel: with the cell's counts", [T.originLabel("all", COUNTS), T.originLabel("repo_folder", COUNTS), T.originLabel("by_hand", { ...COUNTS, by_hand: 1200 })], ["All (5)", "GitHub repos (1)", "Second Brain (1,200)"]);
+    eq("originLabel: no counts yet", [T.originLabel("factory_project", null), T.originLabel("all", undefined)], ["Factory projects", "All"]);
+    eq("emptyWords: one project", T.emptyWords("factory_project", null, true, "p1"), "No decisions for this project yet.");
     eq("joinNames", [T.joinNames([]), T.joinNames(["Ana"]), T.joinNames(["Ana", "Kiran"]), T.joinNames(["Ana", " ", "Kiran", "Lee"])], ["", "Ana", "Ana and Kiran", "Ana, Kiran and Lee"]);
     eq("whoParts: decided, and updated by someone else", [T.whoParts(ADR), T.whoParts(SPEC), T.whoParts({ decided_by: ["A"], changed_by: ["A"], added_by: null })],
        [{ decided: "Ada Lovelace", updated: "Updated by Kiran" }, { decided: "Ada Lovelace", updated: "" }, { decided: "A", updated: "" }]);
@@ -241,10 +244,17 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     {
       const { ctx, page, mock, T, one } = await open();
       await one(ck, "filled at 1280");
-      eq("one read, no filter, limit 50", mock.reads, [{ limit: "50" }]);
+      eq("one read, no filter, 25 to a page", mock.reads, [{ limit: "25" }]);
       eq("every row shows", await T("brain-decision-row").count(), 5);
-      const tabs = await page.getByRole("tab").allInnerTexts();
-      eq("the tabs carry the cell's counts and match the origins", tabs.map((t) => t.replace(/\s+/g, " ").trim()), ["All 5", "Factory projects 2", "GitHub repos 1", "Second Brain 2"]);
+      ck("no tabs", (await page.getByRole("tab").count()) === 0);
+      eq("the three dropdowns, all off", [await text(T("brain-decisions-origin")), await text(T("brain-decisions-repo")), await text(T("brain-decisions-project"))], ["All (5)", "All repos", "All projects"]);
+      await T("brain-decisions-origin").click();
+      eq("Origin offers every origin with the cell's counts", (await page.getByRole("option").allInnerTexts()).map((t) => t.trim()), ["All (5)", "Factory projects (2)", "GitHub repos (1)", "Second Brain (2)"]);
+      await page.keyboard.press("Escape");
+      await T("brain-decisions-project").click();
+      eq("Project offers the projects with decisions", (await page.getByRole("option").allInnerTexts()).map((t) => t.trim()), ["All projects", "software-second-brain", "state-store"]);
+      await page.keyboard.press("Escape");
+      ck("no Clear filters while none is on", (await T("brain-decisions-clear").count()) === 0);
       const spec = T("brain-decision-row").nth(0);
       eq("a project doc: its origin, the name on a second line", await lines(spec.getByTestId("brain-decision-origin")), ["Factory project", "software-second-brain"]);
       eq("the project name opens the project", await spec.getByTestId("brain-decision-origin-link").getAttribute("href"), "/projects/p1");
@@ -271,13 +281,34 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await new Promise((r) => setTimeout(r, 3000));
       eq("idle for 3 seconds: no more reads", mock.reads.length, 1);
 
-      // a tab asks with where
-      await page.getByRole("tab", { name: /Second Brain/ }).click();
+      // Origin asks with where
+      const pickOption = async (id, name) => { await T(id).click(); await page.getByRole("option", { name }).click(); };
+      await pickOption("brain-decisions-origin", /^Second Brain/);
       await until(() => mock.reads.length === 2);
       await until(async () => (await T("brain-decision-row").count()) === 2);
-      eq("the Second Brain tab asks with where=by_hand", mock.reads[1], { where: "by_hand", limit: "50" });
+      eq("Origin Second Brain asks with where=by_hand", mock.reads[1], { where: "by_hand", limit: "25" });
       eq("it shows only those", await T("brain-decision-row").count(), 2);
-      ck("the tab is in the address", new URL(page.url()).searchParams.get("where") === "by_hand", page.url());
+      ck("the origin is in the address", new URL(page.url()).searchParams.get("where") === "by_hand", page.url());
+      // a project sets its origin
+      await pickOption("brain-decisions-project", "state-store");
+      await until(() => mock.reads.length === 3);
+      eq("a project asks with project and its origin", mock.reads[2], { where: "factory_project", project: "p2", limit: "25" });
+      await until(async () => (await T("brain-decision-row").count()) === 1);
+      eq("only that project's decisions", await text(T("brain-decision-row").first().getByTestId("brain-decision-title")), OLD_PLAN.title);
+      eq("Origin follows: Factory projects", await text(T("brain-decisions-origin")), "Factory projects (2)");
+      // a repo sets its origin and clears the project
+      await pickOption("brain-decisions-repo", "glassflow/tares-cloud");
+      await until(() => mock.reads.length === 4);
+      eq("a repo asks with repo and its origin, and the project goes", mock.reads[3], { where: "repo_folder", repo: "glassflow/tares-cloud", limit: "25" });
+      eq("Project is back to all", await text(T("brain-decisions-project")), "All projects");
+      // an origin that rules the repo out clears it
+      await pickOption("brain-decisions-origin", /^Second Brain/);
+      await until(() => mock.reads.length === 5);
+      eq("Second Brain clears the repo", mock.reads[4], { where: "by_hand", limit: "25" });
+      await T("brain-decisions-clear").click();
+      await until(() => mock.reads.length === 6);
+      eq("Clear filters goes back to everything", mock.reads[5], { limit: "25" });
+      ck("and the address has no filter", new URL(page.url()).search === "", page.url());
       await ctx.close();
     }
 
@@ -291,7 +322,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await T("brain-decisions-next").click();
       await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
       eq("the second page says where it is", await text(T("brain-decisions-range")), "3 to 4 of 5");
-      eq("Next asks with the cursor", mock.reads[1], { cursor: "2", limit: "50" });
+      eq("Next asks with the cursor", mock.reads[1], { cursor: "2", limit: "25" });
       eq("and shows only the next page", (await T("brain-decision-row").allInnerTexts()).map((t) => t.split("\n")[0]), [HAND_OTHER.title, OLD_PLAN.title]);
       await T("brain-decisions-next").click();
       await until(async () => (await text(T("brain-decisions-range"))) === "5 of 5");
@@ -299,11 +330,11 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       ck("Next is off on the last page", await T("brain-decisions-next").isDisabled());
       await T("brain-decisions-prev").click();
       await until(async () => (await text(T("brain-decisions-range"))) === "3 to 4 of 5");
-      eq("Previous goes back with the cursor it had", mock.reads[mock.reads.length - 1], { cursor: "2", limit: "50" });
+      eq("Previous goes back with the cursor it had", mock.reads[mock.reads.length - 1], { cursor: "2", limit: "25" });
       await T("brain-decisions-prev").click();
       await until(async () => (await text(T("brain-decisions-range"))) === "1 to 2 of 5");
       eq("back on the first page, it says so", await text(T("brain-decisions-range")), "1 to 2 of 5");
-      eq("back on the first page, no cursor", mock.reads[mock.reads.length - 1], { limit: "50" });
+      eq("back on the first page, no cursor", mock.reads[mock.reads.length - 1], { limit: "25" });
       await ctx.close();
       const one = await open();
       ck("one page only: no page bar", (await one.T("brain-decisions-pages").count()) === 0);
@@ -337,8 +368,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       ck("the new row is at the top, from Second Brain, decided by that person",
          (await text(top)).includes("Use Postgres for the state store") && (await text(top.getByTestId("brain-decision-origin"))) === "Second Brain"
          && (await text(top.getByTestId("brain-decision-who"))) === "Grace Hopper", await text(top));
-      await until(async () => (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("3"));
-      ck("the Second Brain count went up", (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("3"));
+      await until(async () => (await text(T("brain-decisions-origin"))) === "All (6)");
+      eq("the count went up", await text(T("brain-decisions-origin")), "All (6)");
       ck("the list was read again", mock.reads.length > readsBefore);
       await page.reload();
       await T("brain-decision-row").first().waitFor();
@@ -408,8 +439,8 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       eq("it deletes that id", mock.deletes, [HAND.id]);
       await until(async () => (await T("brain-decision-row").count()) === 4);
       ck("the row leaves the list", !(await text(T("brain-decisions-list"))).includes("Enterprise code lives in ee/"));
-      await until(async () => (await page.getByRole("tab", { name: /Second Brain/ }).innerText()).includes("1"));
-      ck("the counts drop", (await page.getByRole("tab", { name: /^All/ }).innerText()).includes("4"));
+      await until(async () => (await text(T("brain-decisions-origin"))) === "All (4)");
+      eq("the counts drop", await text(T("brain-decisions-origin")), "All (4)");
       ck("the dialog closed", (await T("brain-decision-delete-dialog").count()) === 0);
       await ctx.close();
     }
@@ -445,12 +476,12 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     // ---- one repo
     {
       const { ctx, page, mock, T } = await open({ url: "/brain/decisions?repo=glassflow/tares-cloud" });
-      eq("?repo asks for that repo", mock.reads[0], { repo: "glassflow/tares-cloud", limit: "50" });
+      eq("?repo asks for that repo", mock.reads[0], { repo: "glassflow/tares-cloud", limit: "25" });
       eq("only its rows", await T("brain-decision-row").count(), 1);
-      ck("the page says which repo, and that the counts are the cell's", (await text(T("brain-decisions-repo-filter"))).includes("glassflow/tares-cloud"));
-      await T("brain-decisions-repo-clear").click();
+      eq("the Repo dropdown shows that repo", await text(T("brain-decisions-repo")), "glassflow/tares-cloud");
+      await T("brain-decisions-clear").click();
       await until(async () => (await T("brain-decision-row").count()) === 5);
-      ck("Show every repo goes back to the whole list", new URL(page.url()).searchParams.get("repo") === null);
+      ck("Clear filters goes back to the whole list", new URL(page.url()).searchParams.get("repo") === null);
       await ctx.close();
     }
 

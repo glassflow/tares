@@ -2,22 +2,22 @@ import * as React from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Collapse, Dialog, EmptyState, Panel, Skeleton, Tabs, Toaster, useToast } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, Panel, Select, Skeleton, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
-import { brainDecisions, deleteDecision, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
+import { brainDecisions, deleteDecision, type DecisionFilters, type DecisionRow, type DecisionsPage, type DecisionTab } from "./BrainDecisions.api";
 import {
-  DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, HEADING,
-  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, rangeWords, RECORD_WORDS, safeLink, SUBTITLE, tabLabel, tabOf, TABS, titleOf,
+  ALL_PROJECTS, ALL_REPOS, ANY, DELETE_LINE, DELETE_TITLE, deleteErrorWords, emptyWords, HEADING,
+  isOnCell, LOAD_FAILED_WORDS, LOADING_WORDS, NOT_SET_UP_WORDS, originLabel, rangeWords, RECORD_WORDS, safeLink, SUBTITLE, tabOf, TABS, titleOf,
   whenWords, originOf, whoParts,
 } from "./brainDecisionsText";
 
 // Decisions (TR-1444): every decision the brain holds, from repo folders, shared factory projects and
-// ones added by hand, in tabs with the cell's counts. Record a decision opens the form at
-// /brain/decisions/new (BrainDecisionNew.tsx). The list is read once when the page opens and again after a
-// delete, a change of tab, or coming back from the form with a new decision: building the counts
-// walks every decision in the brain, so the page never reads by itself. `?repo=owner/name` narrows the
-// list to one repo. Titles, summaries, names and paths are a person's own text and marked data-user-text.
+// ones added by hand, 25 to a page, narrowed by three dropdowns: Origin (with the cell's counts), Repo and
+// Project, each kept in the address (`?where=`, `?repo=owner/name`, `?project=<id>`). Record a decision
+// opens the form at /brain/decisions/new (BrainDecisionNew.tsx). The list is read once when the page
+// opens and again after a delete, a change of filter or page, or coming back from the form with a new
+// decision: building the counts walks every decision in the brain, so the page never reads by itself. Titles, summaries, names and paths are a person's own text and marked data-user-text.
 
 const MUTED = "text-[13px] text-muted-foreground";
 const ROW = "grid min-w-0 gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[minmax(0,1fr)_220px_170px] md:items-baseline";
@@ -28,6 +28,7 @@ interface ListState {
   rows: DecisionRow[];
   next: string | null;
   counts: DecisionsPage["counts"] | null;
+  filters: DecisionFilters | null;
 }
 
 type Load = { state: "loading" } | { state: "ready"; list: ListState } | { state: "error"; message: string; list?: ListState } | { state: "no-brain" };
@@ -87,8 +88,8 @@ function Loading() {
   );
 }
 
-function List({ load, tab, repo, canAdd, now, page, before, onPage, onDelete, onRetry }: {
-  load: Load; tab: DecisionTab; repo: string | null; canAdd: boolean; now: number;
+function List({ load, tab, repo, project, canAdd, now, page, before, onPage, onDelete, onRetry }: {
+  load: Load; tab: DecisionTab; repo: string | null; project: string | null; canAdd: boolean; now: number;
   /** The page shown, from 0. */
   page: number;
   /** How many rows the earlier pages held. */
@@ -97,7 +98,7 @@ function List({ load, tab, repo, canAdd, now, page, before, onPage, onDelete, on
 }) {
   const list = load.state === "ready" ? load.list : load.state === "error" ? load.list : undefined;
   return (
-    <section aria-label="Decision list" className="min-w-0 border border-t-0 border-border bg-card" data-testid="brain-decisions-list">
+    <section aria-label="Decision list" className="min-w-0 border border-border bg-card" data-testid="brain-decisions-list">
       {load.state === "error" && (
         <div className="p-4">
           <Banner tone="error" action={<Button variant="secondary" onClick={onRetry} data-testid="brain-decisions-retry">Try again</Button>} data-testid="brain-decisions-error">
@@ -107,7 +108,7 @@ function List({ load, tab, repo, canAdd, now, page, before, onPage, onDelete, on
       )}
       {load.state === "loading" && <Loading />}
       {list && list.rows.length === 0 && (
-        <EmptyState className="px-4 py-4" data-testid="brain-decisions-empty">{emptyWords(tab, repo, canAdd)}</EmptyState>
+        <EmptyState className="px-4 py-4" data-testid="brain-decisions-empty">{emptyWords(tab, repo, canAdd, project)}</EmptyState>
       )}
       {list && list.rows.length > 0 && (
         <>
@@ -118,7 +119,7 @@ function List({ load, tab, repo, canAdd, now, page, before, onPage, onDelete, on
           {(page > 0 || list.next) && (
             <nav aria-label="Pages" className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3" data-testid="brain-decisions-pages">
               <span className={MUTED} data-testid="brain-decisions-range">
-                {rangeWords(before + 1, before + list.rows.length, repo || !list.counts ? null : list.counts[tab])}
+                {rangeWords(before + 1, before + list.rows.length, repo || project || !list.counts ? null : list.counts[tab])}
               </span>
               <div className="flex gap-2">
                 <Button variant="secondary" disabled={page === 0 || load.state !== "ready"} onClick={() => onPage(page - 1)} data-testid="brain-decisions-prev">Previous</Button>
@@ -136,7 +137,8 @@ export default function BrainDecisions() {
   const [params, setParams] = useSearchParams();
   const tab = tabOf(params.get("where"));
   const repo = (params.get("repo") ?? "").trim() || null;
-  const key = `${tab}|${repo ?? ""}`;
+  const project = (params.get("project") ?? "").trim() || null;
+  const key = `${tab}|${repo ?? ""}|${project ?? ""}`;
   const { canWrite } = useEdition();
   const location = useLocation();
   const navigate = useNavigate();
@@ -151,6 +153,8 @@ export default function BrainDecisions() {
   // how many rows come before the page shown, for "51 to 100 of 238"
   const before = pages.key === key ? pages.firsts[at] ?? 0 : 0;
   const listTop = React.useRef<HTMLDivElement>(null);
+  // the dropdowns keep the last lists the cell gave while a new read is on its way
+  const [filters, setFilters] = React.useState<DecisionFilters | null>(null);
   const [tick, setTick] = React.useState(0);
   const [asking, setAsking] = React.useState<DecisionRow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
@@ -166,14 +170,15 @@ export default function BrainDecisions() {
     const mine = ++latest.current;
     const listKey = `${key}|${at}`;
     setLoad((l) => (l.state === "ready" && l.list.key === listKey ? l : { state: "loading" }));
-    brainDecisions({ where: tab, repo, cursor }).then(
+    brainDecisions({ where: tab, repo, project, cursor }).then(
       (page) => {
         if (mine !== latest.current) return;
         const ids = new Set(page.decisions.map((r) => r.id));
         added.current = added.current.filter((r) => !ids.has(r.id));
         // a decision recorded here shows at the top of the first page until a read has it
-        const fits = (r: DecisionRow) => at === 0 && !repo && (tab === "all" || tab === r.where);
-        setLoad({ state: "ready", list: { key: listKey, rows: [...added.current.filter(fits), ...page.decisions], next: page.next_cursor, counts: page.counts } });
+        const fits = (r: DecisionRow) => at === 0 && !repo && !project && (tab === "all" || tab === r.where);
+        setLoad({ state: "ready", list: { key: listKey, rows: [...added.current.filter(fits), ...page.decisions], next: page.next_cursor, counts: page.counts, filters: page.filters ?? null } });
+        if (page.filters) setFilters(page.filters);
       },
       (e: unknown) => {
         if (mine !== latest.current) return;
@@ -182,7 +187,7 @@ export default function BrainDecisions() {
         setLoad((l) => ({ state: "error", message, list: l.state === "ready" && l.list.key === listKey ? l.list : undefined }));
       },
     );
-  }, [key, tab, repo, at, cursor, tick]);
+  }, [key, tab, repo, project, at, cursor, tick]);
 
   // Next keeps the cursor the read gave, so Previous goes back without asking for it again
   const goTo = (to: number) => {
@@ -226,19 +231,36 @@ export default function BrainDecisions() {
     } finally { setDeleting(false); }
   };
 
-  const setTab = (v: string) => {
+  // A repo belongs to GitHub repos and a project to Factory projects: picking one sets the origin, and
+  // an origin that rules a repo or project out clears it.
+  const setFilter = (change: { where?: string; repo?: string; project?: string }) => {
     const next = new URLSearchParams(params);
-    if (v === "all") next.delete("where"); else next.set("where", v);
+    const set = (k: string, v: string | undefined) => { if (!v || v === ANY || v === "all") next.delete(k); else next.set(k, v); };
+    if (change.where !== undefined) {
+      set("where", change.where);
+      if (change.where !== "all" && change.where !== "repo_folder") next.delete("repo");
+      if (change.where !== "all" && change.where !== "factory_project") next.delete("project");
+    }
+    if (change.repo !== undefined) {
+      set("repo", change.repo);
+      if (change.repo !== ANY) { next.set("where", "repo_folder"); next.delete("project"); }
+    }
+    if (change.project !== undefined) {
+      set("project", change.project);
+      if (change.project !== ANY) { next.set("where", "factory_project"); next.delete("repo"); }
+    }
     setParams(next, { replace: true });
   };
-  const clearRepo = () => {
-    const next = new URLSearchParams(params);
-    next.delete("repo");
-    setParams(next, { replace: true });
-  };
+  const filtered = tab !== "all" || repo !== null || project !== null;
+  const clearFilters = () => setParams(new URLSearchParams(), { replace: true });
 
   const list = load.state === "ready" ? load.list : load.state === "error" ? load.list : undefined;
   const counts = list?.counts ?? null;
+  const repoOptions = [{ value: ANY, label: ALL_REPOS },
+    ...[...new Set([...(filters?.repos ?? []), ...(repo ? [repo.toLowerCase()] : [])])].map((r) => ({ value: r, label: r }))];
+  const projectOptions = [{ value: ANY, label: ALL_PROJECTS },
+    ...(filters?.projects ?? []).map((p) => ({ value: p.id, label: p.name })),
+    ...(project && !(filters?.projects ?? []).some((p) => p.id === project) ? [{ value: project, label: project }] : [])];
   const now = Date.now();
 
   return (
@@ -256,22 +278,20 @@ export default function BrainDecisions() {
         <Panel><EmptyState title="Not set up" data-testid="brain-decisions-not-set-up">{NOT_SET_UP_WORDS}</EmptyState></Panel>
       ) : (
         <>
-          <div className="min-w-0 scroll-mt-4" ref={listTop}>
-            {repo && (
-              <p className={cn("m-0 mb-3 flex flex-wrap items-center gap-x-2", MUTED)} data-testid="brain-decisions-repo-filter">
-                <span>Decisions from <span className="font-mono text-foreground" data-user-text>{repo}</span>. The counts are for the whole cell.</span>
-                <Button variant="quiet" className="h-7 px-2 text-[13px]" onClick={clearRepo} data-testid="brain-decisions-repo-clear">Show every repo</Button>
-              </p>
+          <div className="grid min-w-0 gap-3 scroll-mt-4" ref={listTop}>
+            <div className="grid min-w-0 gap-3 sm:grid-cols-3 sm:items-end" role="group" aria-label="Filters" data-testid="brain-decisions-filters">
+              <Select label="Origin" value={tab} onValueChange={(v) => setFilter({ where: v })} data-testid="brain-decisions-origin"
+                      options={TABS.map((t) => ({ value: t.value, label: originLabel(t.value, counts) }))} />
+              <Select label="Repo" value={repo ? repo.toLowerCase() : ANY} onValueChange={(v) => setFilter({ repo: v })} options={repoOptions} data-testid="brain-decisions-repo" />
+              <Select label="Project" value={project ?? ANY} onValueChange={(v) => setFilter({ project: v })} options={projectOptions} data-testid="brain-decisions-project" />
+            </div>
+            {filtered && (
+              <div>
+                <Button variant="quiet" className="-ml-2 h-7 px-2 text-[13px]" onClick={clearFilters} data-testid="brain-decisions-clear">Clear filters</Button>
+              </div>
             )}
-            <Tabs aria-label="Where from" value={tab} onValueChange={setTab} data-testid="brain-decisions-tabs"
-                  items={TABS.map((t) => ({
-                    value: t.value,
-                    label: tabLabel(t.value, counts, true),
-                    content: (
-                      <List load={load} tab={tab} repo={repo} canAdd={canAdd} now={now} page={at} before={before}
-                            onPage={goTo} onDelete={(r) => { setDeleteError(""); setAsking(r); }} onRetry={reload} />
-                    ),
-                  }))} />
+            <List load={load} tab={tab} repo={repo} project={project} canAdd={canAdd} now={now} page={at} before={before}
+                  onPage={goTo} onDelete={(r) => { setDeleteError(""); setAsking(r); }} onRetry={reload} />
           </div>
         </>
       )}
