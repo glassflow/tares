@@ -287,6 +287,25 @@ ck("it asks about the answer", len(asked) == 1, str(asked))
 ck("a tick leaves an orchestrator blocked on a prompt alone", stopped == [] and revived == [], f"{stopped} {revived}")
 ck("and does not count the answer as handled: the next tick asks again", IW._ANSWERED_DONE == {}, str(IW._ANSWERED_DONE))
 
+print("a station that turns to a prompt between a waker's look and its stop is not stopped")
+real_at_rest = claude.at_rest
+claude.at_rest = lambda *a, **k: True
+try:
+    reset("waiting", waited=5 * HOUR)
+    wake()
+    ck("an idle wake", stopped == [] and revived == [], f"{stopped} {revived}")
+    reset("waiting", waited=5 * HOUR)
+    pace_note()
+    ck("a pace note", stopped == [] and revived == [], f"{stopped} {revived}")
+    reset("waiting", waited=5 * HOUR)
+    (CREW / "stations.json").write_text(json.dumps({
+        "crew-orchestrator": {"role": "orchestrator", "status": "active", "project": "", "repo": "", "cwd": str(SCRATCH),
+                              "id": SID, "sessionId": "sess-1"}}, indent=2) + "\n", encoding="utf-8")
+    sent = strays._deliver(paths, dict(os.environ), "STRAYS")
+    ck("a strays message", sent is False and stopped == [] and revived == [], f"{sent} {stopped} {revived}")
+finally:
+    claude.at_rest = real_at_rest
+
 ADDED_OTHER = "\nBash(make test:*)"
 ADDED_NAMED = f"\nBash(git -C /x push origin {STATION}:*)"
 
