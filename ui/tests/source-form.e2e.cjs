@@ -313,7 +313,7 @@ const noSideways = async (page) => page.evaluate(() => document.documentElement.
         return json(route, 200, { ok: true });
       });
       await page.goto(`${d.base}/sources/edge-logs`, { waitUntil: "load" });
-      await page.getByRole("button", { name: "Configuration" }).click({ timeout: 15000 });
+      await page.getByRole("tab", { name: "Configuration" }).click({ timeout: 15000 });
       await page.getByTestId("connection-form").waitFor({ timeout: 15000 });
       ck("the name is locked when editing", await page.getByLabel("Name (required)").isDisabled());
       const pw = page.getByLabel("Password", { exact: true });
@@ -323,7 +323,7 @@ const noSideways = async (page) => page.evaluate(() => document.documentElement.
       await page.getByRole("button", { name: "Save changes" }).click();
       await page.waitForTimeout(500);
       ck("left blank, the secret is kept (not sent)", puts[0] && !("password" in puts[0].config), JSON.stringify(puts[0]));
-      await page.getByRole("button", { name: "Configuration" }).click();
+      await page.getByRole("tab", { name: "Configuration" }).click();
       await page.getByRole("button", { name: "Remove the stored value" }).click();
       ck("Remove says what saving will do", (await page.getByText("Removed when you save.").count()) === 1 && await page.getByLabel("Password", { exact: true }).isDisabled());
       await page.getByRole("button", { name: "Add label" }).click();
