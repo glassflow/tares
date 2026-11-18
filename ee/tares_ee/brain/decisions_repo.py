@@ -370,6 +370,9 @@ class RepoDecisions:
                     self._prune.add(r["repo"])
                     self._kick(r["repo"])
                 self.request(r["repo"], paths)
+            connected = {r["repo"] for r in repos}
+            for repo in [r for r, held in self._held.items() if held and r not in connected]:
+                await self.forget_repo(repo)   # a repo removed while the cell was down, or whose removal stopped half way
         except asyncio.CancelledError:
             raise
         except Exception as e:   # noqa: BLE001
@@ -408,6 +411,33 @@ class RepoDecisions:
             chosen = await self._chosen(repo)
             stale = [p for p in self._held.get(repo, ()) if not self._under(p, chosen)]
             return await self._delete(repo, stale)
+
+    async def forget_repo(self, repo: str) -> int:
+        """The repo is no longer connected to the brain: delete every document of it (TR-1453), drop what was
+        queued for it and forget its paths, so no count holds it. Does nothing while the repo is still
+        connected. A lore error is logged and ends the pass; what is left stays held and the next start-up
+        deletes it. Never raises. Returns how many it deleted."""
+        try:
+            async with self._lock:
+                if not self.active():
+                    return 0
+                if await asyncio.to_thread(self.store.get_brain_repo, repo) is not None:
+                    return 0   # connected again (or never gone): its folders decide, not this
+                self._pending.pop(repo, None)
+                self._touched.pop(repo, None)
+                self._prune.discard(repo)
+                done = await self._delete(repo, list(self._held.get(repo, ())))
+                if not self._held.get(repo):
+                    self._held.pop(repo, None)
+                else:
+                    log.warning("brain repo decisions: %s: %d documents are still in lore; the next start-up deletes them",
+                                repo, len(self._held[repo]))
+                return done
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:   # noqa: BLE001
+            log.warning("brain repo decisions: could not forget %s: %s", repo, type(e).__name__)
+            return 0
 
     async def _delete(self, repo: str, paths) -> int:
         """Delete the lore documents of `paths` (a document lore no longer has counts as deleted). A lore
