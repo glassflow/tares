@@ -210,6 +210,31 @@ ck("...a retired station is skipped even when named", code == 0 and out.strip() 
 code, out, err = run("grep", "--section", "Undelivered", "dead 29", env=OENV)
 ck("without a stations.json every report counts", code == 0 and "a-dead-29 report" in out, out)
 
+rows = {"crew-orchestrator": {"status": "retired"}, "crew-zz-builder": {"status": "retired"}}
+(OLD / "stations.json").write_text(json.dumps(rows), newline="\n")
+code, out, err = run("grep", "--section", "Undelivered", env=OENV)
+ck("when every station is retired nothing is live: no report is read, not all of them", code == 0 and out.strip() == "no match", out)
+code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-zz-builder", env=OENV)
+ck("...even a named one", code == 0 and out.strip() == "no match", out)
+
+print("grep --section: (none) is empty, an unclosed fence hides nothing")
+(SEC / "reports" / "crew-paren.md").write_text(
+    "## Undelivered\n(none)\n- (none)\n* (none)\n(None)\n## Taken\nreal taken line\n", newline="\n")
+code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-paren", env=SENV)
+ck("`(none)`, `- (none)` and `(None)` count as empty", code == 0 and out.strip() == "no match", out)
+code, out, err = run("grep", "--section", "Taken", "--station", "crew-paren", env=SENV)
+ck("...and the next section is still read", code == 0 and "real taken line" in out, out)
+(SEC / "reports" / "crew-open.md").write_text(
+    "## Now\n```\nhalf typed\n## Undelivered\n[TF:ASK] after the open fence\n## Taken\ntaken after it\n", newline="\n")
+code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-open", env=SENV)
+ck("a fence that is never closed does not hide the headings after it",
+   code == 0 and "after the open fence" in out and "taken after it" not in out, out)
+(SEC / "reports" / "crew-two.md").write_text(
+    "## Now\n```\n## Undelivered\nfenced, not a section\n```\n```\n## Undelivered\n[TF:ASK] after the second\n", newline="\n")
+code, out, err = run("grep", "--section", "Undelivered", "--station", "crew-two", env=SENV)
+ck("a closed fence still hides its `## ` lines when a later fence is left open",
+   code == 0 and "after the second" in out and "fenced, not a section" not in out, out)
+
 code, out, err = run("log", "--section", "Undelivered", "x", env=ENV)
 ck("--section is not an option of log: it stays in the entry", code == 0 and
    any("--section Undelivered x" in f.read_text() for f in LOG.glob("*.md")), (code, err))

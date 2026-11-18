@@ -316,8 +316,8 @@ def tidy(paths: CrewPaths, reading: Reading) -> None:
 def resume_prompt(client: TaresClient) -> str:
     """A short one: the conversation is its own, so it needs no reload of the skills."""
     from . import lifecycle
-    return ("The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on "
-            f"Tares, {lifecycle.rearm_text(client)}, then continue.")
+    return ("The plan's limit was reset. Carry on from where you stopped: "
+            f"{lifecycle.REPORT_READ} and your work on Tares, {lifecycle.rearm_text(client)}, then continue.")
 
 
 def fresh_prompt(client: TaresClient, paths: CrewPaths, station: str) -> str:
@@ -326,7 +326,7 @@ def fresh_prompt(client: TaresClient, paths: CrewPaths, station: str) -> str:
     role = state.stations_get(station, "role", paths=paths)
     return ("The plan's limit was reset, but your last conversation could not be resumed, so this is a new one "
             "under the same name. Nothing from it carries over except your report and what is on Tares. Reload "
-            f"the skills factory-protocol and station-{role}, re-read your report and your work on Tares, "
+            f"the skills factory-protocol and station-{role}, {lifecycle.REPORT_READ} and your work on Tares, "
             f"{lifecycle.rearm_text(client)}, then carry on where your report left off.")
 
 
