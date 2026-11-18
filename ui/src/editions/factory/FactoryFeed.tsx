@@ -173,7 +173,7 @@ function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean
 
   const cards = data.items
     .filter((i) => { const until = hidden.get(i.id); return until === undefined || (live && Date.now() >= until); })
-    .map((i) => toFeedCard(i, data.extras[i.id]))
+    .map(toFeedCard)
     .sort(feedOrder);
 
   const press = (card: FeedCard, action: HomeAction, choice: "yes" | "no") => {
@@ -231,7 +231,6 @@ function fromHome(h: HomeData, answered: FeedAnswered[]): FeedData {
     now: h.now,
     crew: { running: h.crew.running, since: h.crew.heard_at, summary: h.crew.summary },
     items: h.waiting_for_you,
-    extras: {},
     answered,
   };
 }

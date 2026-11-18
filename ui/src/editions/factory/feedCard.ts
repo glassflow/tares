@@ -1,9 +1,9 @@
 import type { HomeAction, HomeItem } from "./home.types";
-import type { FeedCard, FeedExtra } from "./feed.types";
+import type { FeedCard } from "./feed.types";
 
-// A home item as a feed card. Yes and No are the item's own actions, never invented ones: where the
-// cell has no one-tap action yet (merging a PR, accepting a milestone), Yes is the link to the page
-// that has it, under the label the cell gives it.
+// A home item as a feed card. Yes and No are the item's own actions, never invented ones: Merge and
+// Accept where the cell offers them (TR-1450), else the link to the page that has it, under the label
+// the cell gives it (a PR the merge queue has not asked about yet is Review).
 
 const NO_VERBS = ["later", "decline"];
 
@@ -63,7 +63,7 @@ function deeperHref(item: HomeItem, yes: HomeAction | null): string | null {
   return link?.href ?? (item.project ? `/projects/${encodeURIComponent(item.project.id)}` : null);
 }
 
-export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
+export function toFeedCard(item: HomeItem): FeedCard {
   const recommendation = item.question?.recommendation ?? null;
   const { yes, no } = buttons(item);
   // the cell's own verb-first line (TR-1447); a cell from before it: a question's or a permission's
@@ -82,7 +82,7 @@ export function toFeedCard(item: HomeItem, extra: FeedExtra = {}): FeedCard {
     // the cell's own (TR-1448); a cell from before it sends it only on a question
     holds_up: item.holds_up !== undefined ? item.holds_up : item.question?.blocks ?? null,
     blocking: item.blocking === true,
-    recommendation: recommendation ? { answer: recommendation, why: extra.why ?? item.question?.why ?? null } : null,
+    recommendation: recommendation ? { answer: recommendation, why: item.question?.why ?? null } : null,
     yes,
     no,
     deeper: {

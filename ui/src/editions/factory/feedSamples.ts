@@ -2,7 +2,7 @@ import type { HomeItem } from "./home.types";
 import type { FeedData } from "./feed.types";
 
 // Samples of the feed (P-TR-273), in the shape GET /api/home sends (factory_waiting.py builds each kind
-// with these same actions), plus what the home does not send yet (FeedExtra). They show only behind the
+// with these same actions). They show only behind the
 // sample flag (src/editions/sample.ts), and their buttons go through Home's handler, which sends nothing
 // for a sample. Every name here is invented.
 
@@ -23,7 +23,8 @@ const ITEMS: HomeItem[] = [
     title: "atlas", detail: "Which store should sessions use?", ask: "Which store should sessions use?",
     since: "2026-11-18T08:41:00Z", waited: "19 minutes",
     from: { name: "the builder" },
-    question: { desk: "D7", options: ["Redis", "Postgres", "Ask me on a call"], recommendation: "Postgres", blocks: "AT-4 and the 2 tickets after it" },
+    question: { desk: "D7", options: ["Redis", "Postgres", "Ask me on a call"], recommendation: "Postgres",
+      why: "Sessions are rows we already back up; Redis would be the only thing holding them.", blocks: "AT-4 and the 2 tickets after it" },
     actions: [{ label: "Answer", primary: true, href: "/projects/atlas#desk-D7" }],
   }),
   item("prs_to_review:atlas:AT-3", {
@@ -83,10 +84,6 @@ const ITEMS: HomeItem[] = [
   }),
 ];
 
-const EXTRAS: FeedData["extras"] = {
-  "question:D7": { why: "Sessions are rows we already back up; Redis would be the only thing holding them." },
-};
-
 const ANSWERED: FeedData["answered"] = [
   { id: "grant:G2", ask: "Let the crew merge on green", choice: "yes", said: "Agree", by: "you", at: "2026-11-18T07:12:00Z", via: "feed" },
   { id: "question:D5", ask: "Keep the old /login page?", choice: "no", said: "Keep it, redirect", by: "you", at: "2026-11-18T06:40:00Z", via: "console" },
@@ -95,10 +92,10 @@ const ANSWERED: FeedData["answered"] = [
 const running = { running: true, since: null, summary: "Building atlas and link-expiry." };
 
 export const FEED_SAMPLES: Record<string, FeedData> = {
-  busy: { now: NOW, crew: running, items: ITEMS, extras: EXTRAS, answered: ANSWERED },
-  empty: { now: NOW, crew: running, items: [], extras: {}, answered: ANSWERED },
+  busy: { now: NOW, crew: running, items: ITEMS, answered: ANSWERED },
+  empty: { now: NOW, crew: running, items: [], answered: ANSWERED },
   down: {
     now: NOW, crew: { running: false, since: "2026-11-18T06:12:00Z", summary: "Nothing is being built." },
-    items: [], extras: {}, answered: [],
+    items: [], answered: [],
   },
 };
