@@ -22,6 +22,11 @@ import reads the chosen folders again from the cell before it starts and before 
 dropped in the meantime is not imported. It only puts documents: removing the documents of a dropped
 folder or a deleted file, and updating on a push, are TR-1219.
 
+How many documents the brain holds for a repo (`count`, shown on each row of `GET /api/brain`, TR-1442) is kept
+here, not asked of lore: the paths of the files put per repo, filled once at start-up from lore's list of the
+source (one walk, never on a request) and added to by each put. `count` is the paths under the folders still
+chosen, so a dropped folder stops counting at once. A request never calls lore or GitHub.
+
 GitHub's rate limit (the token's hourly budget) is the thing to spare. The tree is one call. Per file the
 import needs the blob, the latest commit, the first commit (the last page of a one-per-page list) and that
 commit's pull request. What was learned for a file is kept in memory under (repo, path, blob sha), so a
@@ -62,6 +67,7 @@ BATCH = 50                      # documents in one request
 MAX_BYTES = 1_000_000           # a file over this is not imported
 MAX_CACHE = 5000                # files whose lookups are kept in memory
 MAX_CACHE_BYTES = 64_000_000    # ... and the bytes of their text
+SEED_PAGES = 500                # pages of 200 read from lore at start-up to fill the counts
 NAME_BYTES = 256                # lore's limit for a name
 TITLE_CHARS = 300
 UNKNOWN = "Unknown"             # the author of a commit with no name at all
@@ -204,11 +210,54 @@ class RepoDecisions:
         self._sent: dict[str, str] = {}               # external id -> digest of what this process last put
         self._cache: OrderedDict[tuple, dict] = OrderedDict()   # (repo, path, blob sha) -> what GitHub said
         self._cache_bytes = 0
+        self._held: dict[str, set[str]] = {}          # repo -> paths of the files whose documents lore holds
         self.startup_task: asyncio.Task | None = None
         self.calls = 0                                # GitHub calls made, for tests
 
     def active(self) -> bool:
         return licence.ee_allowed() and LoreClient.configured()
+
+    # -- how many the brain holds -----------------------------------------------------------
+
+    def count(self, repo: str, folders) -> int:
+        """Documents the brain holds from the files of `folders` (the repo's chosen folders) of `repo`.
+        Answers from memory: 0 for no folders or nothing put yet. Safe to call from a thread."""
+        if not folders:
+            return 0
+        held = list(self._held.get(repo) or ())   # a copy: the event loop may add to the set meanwhile
+        return sum(1 for p in held if self._under(p, folders))
+
+    async def _seed(self) -> None:
+        """Fill `_held` from what lore already holds under the source, so the count is right after a restart
+        before the first import has run. One walk of lore's list, at start-up only."""
+        found: dict[str, set[str]] = {}
+        cursor = None
+        try:
+            async with self._lore() as lore:
+                for _ in range(SEED_PAGES):
+                    page = await lore.list_documents(source=SOURCE, kind=KIND, limit=200, cursor=cursor)
+                    for d in page.get("documents") or []:
+                        if not isinstance(d, dict):
+                            continue
+                        ext = d.get("external_id")
+                        meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+                        repo = meta.get("repo")
+                        if isinstance(ext, str) and isinstance(repo, str) and ext.startswith(repo + ":"):
+                            found.setdefault(repo, set()).add(ext[len(repo) + 1:])
+                    cursor = page.get("next_cursor")
+                    if not cursor:
+                        break
+                else:
+                    log.warning("brain repo decisions: lore holds more than %d decisions; the counts may be low until the next import",
+                                SEED_PAGES * 200)
+        except asyncio.CancelledError:
+            raise
+        except LoreError as e:
+            log.warning("brain repo decisions: could not read what lore holds: %s", _say(e))
+        except Exception as e:   # noqa: BLE001
+            log.warning("brain repo decisions: could not read what lore holds: %s", type(e).__name__)
+        for repo, paths in found.items():
+            self._held.setdefault(repo, set()).update(paths)
 
     # -- asking for an import ---------------------------------------------------------------
 
@@ -250,6 +299,7 @@ class RepoDecisions:
         try:
             if not self.active():
                 return
+            await self._seed()
             repos = await asyncio.to_thread(self.store.list_brain_repos)
             for r in repos:
                 paths = [f["path"] for f in await asyncio.to_thread(self.store.list_brain_folders, r["repo"])]
@@ -407,8 +457,10 @@ class RepoDecisions:
         except Exception as e:   # noqa: BLE001
             log.warning("brain repo decisions: could not put %d documents of %s: %s", len(batch), repo, type(e).__name__)
             return False, 0
+        held = self._held.setdefault(repo, set())
         for doc, digest in batch:
             self._sent[doc["external_id"]] = digest
+            held.add(doc["external_id"][len(repo) + 1:])
         return True, len(batch)
 
     # -- GitHub -----------------------------------------------------------------------------
