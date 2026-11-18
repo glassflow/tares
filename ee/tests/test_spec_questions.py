@@ -155,8 +155,15 @@ async def main():
         q = store.get_spec_question(uid, "Q1")
         ck("the record keeps who answered and when", q["answered_by"] == pid["kiran"]
            and q["answered_at"] is not None)
+        rec = [a for a in (await call("kiran", "GET", "/api/answers")).json()["answers"]
+               if a["id"] == f"question:{uid}:Q1"]
+        ck("the answer is recorded under Home's id, as kiran's (TR-1451)", len(rec) == 1
+           and rec[0]["said"] == "On the cart page." and rec[0]["mine"] and rec[0]["by"] == "kiran"
+           and rec[0]["kind"] == "question", rec)
         r = await call("kiran", "POST", f"/api/projects/{uid}/questions/Q1/answer", {"answer": "again"})
         ck("answering twice: 409", r.status_code == 409, r.text)
+        ck("and records nothing", len([a for a in (await call("kiran", "GET", "/api/answers")).json()["answers"]
+                                       if a["id"] == f"question:{uid}:Q1"]) == 1)
         r = await call("ashish", "GET", f"/api/projects/{uid}/questions")
         q1 = r.json()["questions"][0]
         ck("the questions route gives the answerer's name, not only the id",

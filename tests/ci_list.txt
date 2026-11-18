@@ -8,6 +8,7 @@ test_agent_runs_filter
 test_agent_stats
 test_agents
 test_ai_sre_demo
+test_answers
 test_api_keys
 test_areas_single
 test_auth

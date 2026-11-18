@@ -133,7 +133,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         }
         return route.continue();
       });
-      page.on("request", (req) => { if (req.method() === "POST" && new URL(req.url()).pathname.startsWith("/api/")) ctl.posts.push({ path: new URL(req.url()).pathname, body: req.postData() }); });
+      page.on("request", (req) => { if (req.method() === "POST" && new URL(req.url()).pathname.startsWith("/api/")) ctl.posts.push({ path: new URL(req.url()).pathname, body: req.postData(), via: req.headers()["x-tares-via"] }); });
       return { ctx, page, ctl, base };
     };
     const row = (page, text) => page.getByTestId("waiting-row").filter({ hasText: text });
@@ -535,6 +535,10 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("TR-1452: the daemon recorded the words from the console"), !!szDecided && szDecided.via === "console"
          && JSON.stringify(szDecided).includes("Medium, the same height as the menu."), JSON.stringify(szDecided));
       ck(t("TR-1452: four remain"), (await rows.count()) === 4, String(await rows.count()));
+      const answered = async () => (await api("GET", "/api/answers", undefined, ids.keys.alex)).body.answers;
+      const szRec = (await answered()).find((a) => /Which size for the shop logo/.test(a.ask));
+      ck(t("TR-1451: the console's answer is recorded, as alex's, from the console"), !!szRec && szRec.via === "console"
+         && szRec.mine === true && szRec.said === "Medium, the same height as the menu.", JSON.stringify(szRec));
 
       // Kim, who leads Shop, waits on nobody once her home is read again: Alex answered her question
       await new Promise((r) => setTimeout(r, 5500));   // the daemon keeps /api/home for 5 seconds per credential
@@ -545,6 +549,32 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await shot(kim.page, "live-kim-answered", 1440);
       await checkWords(kim.page, ck, t("kim after the answer"));
       await kim.ctx.close();
+
+      // TR-1451: the same answer from the feed says it came from there, and the feed lists it
+      const banner = await api("POST", "/api/desk", { question: "Which colour for the shop banner?", options: ["red", "blue"],
+        recommendation: "blue", why: "it matches the logo", project: ids.project, to: ids.people.alex });
+      ck(t("TR-1451: a question for the feed is put on the desk"), banner.status < 300, JSON.stringify(banner));
+      await page.goto(`${BASE}/feed`, { waitUntil: "load" });
+      const card = page.getByTestId("feed-card").filter({ hasText: "Which colour for the shop banner" });
+      await card.waitFor();
+      ctl.posts.length = 0;
+      await card.getByTestId("feed-yes").click();
+      await card.waitFor({ state: "detached" });
+      const colourPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
+      ck(t("TR-1451: the feed's reply carries X-Tares-Via: feed"), !!colourPost && colourPost.via === "feed"
+         && JSON.parse(colourPost.body || "{}").choice === "blue", JSON.stringify(colourPost));
+      const colourRec = (await answered()).find((a) => /Which colour for the shop banner/.test(a.ask));
+      ck(t("TR-1451: the daemon records it from the feed"), !!colourRec && colourRec.via === "feed" && colourRec.said === "blue"
+         && colourRec.id === `question:${banner.body.label}`, JSON.stringify(colourRec));
+      await page.reload({ waitUntil: "load" });
+      const done = page.getByTestId("feed-answered").filter({ hasText: "Which colour for the shop banner" });
+      await done.waitFor();
+      ck(t("TR-1451: Answered today lists it from the cell's record, from the feed"),
+         /blue/.test(await done.innerText()) && /by you, from the feed/.test(await done.innerText()), await done.innerText());
+      await checkWords(page, ck, t("feed after an answer"));
+      ctl.posts.length = 0;
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
 
       // Agree and Decline
       const g1 = row(page, "merge to acme/web");
@@ -565,7 +595,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("Decline made the second one revoked"), state(ids.grants[1]) === "revoked", JSON.stringify(grants.map((g) => [g.id, g.state])));
       const declinePost = ctl.posts.find((x) => x.path === `/api/grants/${ids.grants[1]}/decline`);
       ck(t("Decline sends the reason it was given to the daemon"), !!declinePost && JSON.parse(declinePost.body || "{}").reason === "It reads the logs of every customer.", JSON.stringify(declinePost));
-      ck(t("two remain: the permission and the long question"), (await rows.count()) === 2, String(await rows.count()));
+      ck(t("two remain: the permission and the long question"), (await rows.count()) === 2, JSON.stringify(await rows.allInnerTexts()));
 
       // Allow: the permission a builder asked for, kept as a grant in words
       const perm = row(page, "gh api repos");

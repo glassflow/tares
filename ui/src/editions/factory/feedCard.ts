@@ -8,13 +8,21 @@ import type { FeedCard, FeedExtra } from "./feed.types";
 const NO_VERBS = ["later", "decline"];
 
 /** The desk label a question or permission answers to. A question with options sends it; one without
- *  has it only in its id (`question:<label>`, factory_waiting.desk_items). */
+ *  has it on its Answer action (a team cell's `desk` item) or only in its id (`question:<label>`,
+ *  factory_waiting.desk_items). */
 function deskOf(item: HomeItem): string | null {
-  const allow = item.actions.find((a) => a.do === "allow");
-  if (typeof allow?.desk === "string") return allow.desk;
+  for (const a of item.actions) if ((a.do === "allow" || a.do === "answer") && typeof a.desk === "string") return a.desk;
   if (item.question?.desk) return item.question.desk;
   const m = /^question:(.+)$/.exec(item.id);
   return m ? m[1] : null;
+}
+
+/** What a desk item asks, by its shape: a team cell sends every desk item as kind `desk`
+ *  (tares_ee/team_home.desk_items), the single-person home as `question` or `permission`. */
+function deskKind(item: HomeItem): "question" | "permission" | null {
+  if (item.kind === "question" || item.kind === "permission") return item.kind;
+  if (item.kind !== "desk" || item.actions.some((a) => a.do === "keep_batch")) return null;
+  return item.actions.some((a) => a.do === "allow") ? "permission" : "question";
 }
 
 /** The option a recommendation names: the same words, or words that start with the option. */
@@ -26,7 +34,8 @@ function recommended(options: string[], rec: string | null): number {
 
 function buttons(item: HomeItem): { yes: HomeAction | null; no: HomeAction | null } {
   const desk = deskOf(item);
-  if (item.kind === "question" && desk) {
+  const kind = deskKind(item);
+  if (kind === "question" && desk) {
     const options = item.question?.options ?? [];
     const i = recommended(options, item.question?.recommendation ?? null);
     // the panel answers with the option's letter, counted over every option, so all of them go in
@@ -35,7 +44,7 @@ function buttons(item: HomeItem): { yes: HomeAction | null; no: HomeAction | nul
       : null;
     return { yes, no: { label: yes ? "Something else" : "Answer", primary: false, do: "answer", desk, options } };
   }
-  if (item.kind === "permission" && desk) {
+  if (kind === "permission" && desk) {
     const allow = item.actions.find((a) => a.do === "allow") ?? null;
     return { yes: allow, no: { label: "Answer", primary: false, do: "answer", desk } };
   }

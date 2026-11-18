@@ -1,33 +1,28 @@
 import { request } from "../../api";
-import type { FeedAnswered } from "./feed.types";
+import type { FeedAnswered, FeedVia } from "./feed.types";
 
-// The feed's one read of its own: the desk's answered items, for "Answered today". Every other call is
-// Home's (FactoryHome.api.ts), through Home's handler.
+// The feed's one read of its own: the cell's record of the day's answers (GET /api/answers, TR-1451), for
+// "Answered today". Every other call is Home's (FactoryHome.api.ts), through Home's handler.
 
-/** An answered desk row, as GET /api/desk sends it (factory_api.desk_out); only what the feed reads. */
-interface DeskRow {
-  label: string;
-  question: string;
-  command?: string | null;
-  closed_at: string | null;
-  by_label?: string | null;
+/** One row of GET /api/answers (factory_api.answers_list); only what the feed reads. */
+interface AnswerRow {
+  id: string;
+  ask: string;
+  choice: "yes" | "no" | null;
+  said: string;
+  by: string | null;
+  mine: boolean;
+  at: string;
+  via: FeedVia;
 }
 
-/** The desk items answered since the start of the person's day, newest first, as feed rows. The id is
- *  the home item's (`question:D7`, `permission:D8`), so an answer given on this page is not listed twice. */
+/** The answers given since the start of the person's day, newest first. The id is the home item's
+ *  (`question:D7`, `grant:G2`), so an answer given on this page is not listed twice. */
 export async function getAnsweredToday(now = new Date()): Promise<FeedAnswered[]> {
-  const { desk } = await request<{ desk: DeskRow[] }>("/api/desk?state=answered");
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  return desk
-    .filter((d) => d.closed_at && Date.parse(d.closed_at) >= start)
-    .sort((a, b) => Date.parse(b.closed_at!) - Date.parse(a.closed_at!))
-    .map((d) => ({
-      id: `${d.command ? "permission" : "question"}:${d.label}`,
-      ask: d.question,
-      choice: null,
-      said: null,
-      by: d.by_label === "You" || !d.by_label ? "you" : d.by_label,
-      at: d.closed_at!,
-      via: null,
-    }));
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const { answers } = await request<{ answers: AnswerRow[] }>(`/api/answers?since=${encodeURIComponent(start)}`);
+  return answers.map((a) => ({
+    id: a.id, ask: a.ask, choice: a.choice, said: a.said,
+    by: a.mine ? "you" : a.by ?? "someone", at: a.at, via: a.via,
+  }));
 }

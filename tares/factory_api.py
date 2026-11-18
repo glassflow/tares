@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from fastapi import Body, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 
+from . import answers as answers_mod
 from . import claude_usage
 from . import crew_conversation
 from . import crew_onboarding
@@ -26,6 +27,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
+from . import factory_waiting as waiting_mod
 from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
@@ -1638,6 +1640,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         p = h.current_person(request)
         return p["id"] if p else None
 
+    def answerer(request: Request) -> str | None:
+        """Who an answer is recorded under (TR-1451): the person the caller works as, the system
+        credential's being `local`, as on a desk reply; None for a key with no person."""
+        p = h.current_person(request)
+        return p["id"] if p else ("local" if h.is_system(request) else None)
+
     @app.post("/api/projects/{uid}/tickets/{ref}/assign")
     def assign_ticket(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{holder}: the station that works the ticket. Only the orchestrator (or a person's own
@@ -1799,6 +1807,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(ValueError("an overturned assumption keeps the person's words: say them"))
         store.decide_assumption(a["id"], st, words, str(body.get("batch") or "") or None,
                                 now_utc() if st != "open" else None)
+        if st != "open":
+            # the record of the answer (TR-1451); a station records what the person said in its session
+            answers_mod.record(
+                store, request, item=f"calls_to_confirm:{uid}", kind="calls_to_confirm", project=uid,
+                ask=f"Keep the call: {a['question']}", choice="yes" if st == "kept" else "no",
+                said=f"Kept: {a['choice']}" if st == "kept" else words or "Overturned",
+                via="session" if caller(request)["station"] else None, person_id=answerer(request))
         return assumption_out(uid, store.get_assumption(uid, a["id"]))
 
     def parse_checks(body: dict) -> list[tuple[str, str, str, str]]:
@@ -2633,6 +2648,30 @@ def register(app, store, h: Host) -> SimpleNamespace:
                  and (t := str(jsonable_encoder(d["closed_at"]))) > since]
         return {"count": len(fresh), "latest": max(fresh, default=since)}
 
+    @app.get("/api/answers")
+    def answers_list(request: Request, since: str = "", mine: bool = False):
+        """The answers people gave to what waited for them since `since` (default: the start of
+        today, UTC), newest first (TR-1451): each the home item it answered (`item`), its ask as it
+        read then, yes or no where it had two ways, the words or option given, who, when and where
+        (`via`: console, feed, session, message). An answer about a project the caller cannot see
+        is left out. `mine=1` keeps the caller's own."""
+        try:
+            floor = datetime.fromisoformat(since.replace("Z", "+00:00")) if since.strip() else None
+        except ValueError:
+            h.err(ValueError("since is a time, like 2026-11-18T00:00:00Z"))
+        if floor is None:
+            floor = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
+        elif floor.tzinfo is None:
+            floor = floor.replace(tzinfo=timezone.utc)
+        hidden = h.hidden_ids()
+        me = answerer(request)
+        out = [{"id": r["item"], "kind": r["kind"], "project": r["project"], "ask": r["ask"],
+                "choice": r["choice"], "said": r["said"], "via": r["via"], "at": r["at"],
+                "by": (r.get("person") or {}).get("name"),
+                "mine": me is not None and (r.get("person") or {}).get("id") == me}
+               for r in store.list_answers(floor) if r["project"] not in hidden]
+        return {"answers": [a for a in out if a["mine"] or not mine]}
+
     def desk_or_404(ref: str) -> dict:
         d = store.get_desk_item(ref)
         # an item of a project the caller cannot see does not exist for them (TR-629)
@@ -2787,7 +2826,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     def record_answer(d: dict, a: dict, plan: list[tuple], giver: str | None, grant,
                       by: str, matched: bool, session: str | None, via: str | None,
-                      person_id: str | None) -> dict:
+                      person_id: str | None, request: Request | None = None) -> dict:
         """Write a desk answer that has been accepted: the grant a standing answer becomes, the
         assumptions it decides, the decision, and the item closed. The response of /answer and
         /reply."""
@@ -2806,6 +2845,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                  matched, session, granted,
                                  d["tickets"], now_utc(), via=via, person_id=person_id)
         store.close_desk_item(d["id"], "answered", None, now_utc())
+        # the record of the answer (TR-1451): matched in a session, or given in the console or feed
+        kind = "permission" if d.get("command") else "question"
+        answers_mod.record(
+            store, request, item=f"{kind}:{d['label']}", kind=kind, project=d["project"],
+            ask=(waiting_mod.ask_permission(d["command"]) if d.get("command")
+                 else waiting_mod.ask_question(d["question"])),
+            said=a["choice"] or a["words"], via="session" if matched else None,
+            person_id=person_id)
         by_id = {t["id"]: t for t in store.list_tickets(d["project"])} if d["project"] else {}
         follow = [{"assumption": c["label"],
                    "tickets": [factory_mod.label(by_id[x]) for x in c["tickets"] if x in by_id]}
@@ -2905,7 +2952,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                  if a["standing"] else None)
         plan = assumption_plan(d, a["kept"], a["over"])
         return record_answer(d, a, plan, me["id"], grant, "the person, in the console", False,
-                             None, "console", me["id"])
+                             None, "console", me["id"], request)
 
     @app.post("/api/desk/{ref}/allow")
     def desk_allow(ref: str, request: Request, body: dict = Body(...)):
@@ -2953,6 +3000,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                  scope, False, None, True, d["tickets"], now_utc(),
                                  via="console", person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
+        answers_mod.record(store, request, item=f"permission:{d['label']}", kind="permission",
+                           project=d["project"], ask=waiting_mod.ask_permission(d["command"]),
+                           choice="yes", said="Allowed for " + (
+                               "this project" if scope == "project" else "every project"),
+                           person_id=answerer(request))
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
                 "station": d["station"], "line": line, "added": added, "scope": scope}
 
@@ -3077,7 +3129,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 "guardrails": gate["decisions"], "warnings": gate["warnings"]}
 
     @app.post("/api/projects/{uid}/later")
-    def set_later(uid: str, body: dict = Body(default={})):
+    def set_later(uid: str, request: Request, body: dict = Body(default={})):
         """{later: true|false}: keep a project for later, off the home until someone starts it,
         or start it again. Only a project the crew has not been handed, and not a finished one;
         handing it over starts it too."""
@@ -3091,6 +3143,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 h.err(ValueError("the crew has the project: take it back before keeping it for later"), 409)
             if p.get("status") != "later":
                 store.update_project(uid, status="later")
+                answers_mod.record(store, request, item=f"ready_to_start:{uid}", kind="ready_to_start",
+                                   project=uid, ask=f"Hand {p['name']} to the crew", choice="no",
+                                   said="Later", person_id=answerer(request))
         elif p.get("status") == "later":
             store.update_project(uid, status="active")
         return {"later": later}
@@ -3199,6 +3254,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
             row["merged_prs"].sort(key=lambda p: -(p["number"] or 0))
         return rows
 
+    def closed_answer(uid: str, p: dict, words: str, request: Request) -> None:
+        """The record of a person closing a project themselves (TR-1451). One closed on a desk
+        answer is already recorded as that answer."""
+        answers_mod.record(store, request, item=f"signoff:{uid}", kind="signoff", project=uid,
+                           ask=f"Close {p['name']}", choice="yes", said=words,
+                           via="session" if caller(request)["station"] else None,
+                           person_id=answerer(request))
+
     @app.post("/api/projects/{uid}/finish")
     def finish_project(uid: str, request: Request, body: dict = Body(...)):
         """{decision} or {words}: the person said the project is done. A station names the desk
@@ -3239,6 +3302,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             by, _ = who(request, body)
             store.update_project(uid, status="done")
             close_project_desk(uid)
+            closed_answer(uid, p, words, request)
             return {"project": uid, "name": p["name"],
                     "finished": {"at": now_utc(), "words": words, "decision": None, "by": by},
                     "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
@@ -3251,6 +3315,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             store.finish_handover(uid, words, None, by, now_utc(), person_of(request))
             store.update_project(uid, status="done")
             close_project_desk(uid)
+            closed_answer(uid, p, words, request)
             return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
                     "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
         if not ref:

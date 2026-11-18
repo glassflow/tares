@@ -7,8 +7,8 @@ import type { HomeAction, HomeItem, HomeItemKind, HomeRef } from "./home.types";
 // third way to approve anything. What the home does not send yet is in FeedExtra; every field there
 // names the gap it stands for, and only the samples fill it.
 
-/** Where an answer was given. `feed` and `message` are new; the daemon records `console` and
- *  `session` today (factory_store `via`), and does not return the day's answers yet. */
+/** Where an answer was given, as the cell records it (tares/answers.py): Home is `console`, this page
+ *  `feed`, a desk answer matched in the person's session `session`. `message` is for a reply by message. */
 export type FeedVia = "feed" | "console" | "session" | "message";
 
 /** What the home does not send yet. The live feed reads none of it; the samples fill it by hand. */
@@ -44,15 +44,13 @@ export interface FeedCard {
 export interface FeedAnswered {
   id: string;
   ask: string;
-  /** Null for an answer read back from the desk, which keeps the words but not which way they went. */
+  /** Null for an answer that is neither: an option picked or words given to a question. */
   choice: "yes" | "no" | null;
-  /** What was pressed, in its own words ("Yes, Postgres", "Later"). Null for an answer read back from
-   *  the desk, which keeps who and when but not the words (gap). */
-  said: string | null;
+  /** What was pressed or said, in its own words ("Postgres", "Later", "Agree"). */
+  said: string;
   by: string;
   at: string;
-  /** Null when read back from the desk, which does not say where it was answered (gap). */
-  via: FeedVia | null;
+  via: FeedVia;
 }
 
 /** One feed: a sample, or the live home read into this shape. */
@@ -61,7 +59,7 @@ export interface FeedData {
   crew: { running: boolean; since: string | null; summary: string };
   items: HomeItem[];
   extras: Record<string, FeedExtra>;
-  /** The day's answers. Live: the desk's answered questions (GET /api/desk?state=answered) and what was
-   *  answered on this page; other kinds leave no record the feed can read yet. */
+  /** The day's answers. Live: the cell's record (GET /api/answers) and what was answered on this page
+   *  before the record is read again. */
   answered: FeedAnswered[];
 }

@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { CACHE_MS, POLL_MS, useHomeActions, type Done, type RowState } from "./FactoryHome";
+import { setSurface } from "../../api";
 import { getHome } from "./FactoryHome.api";
 import { getAnsweredToday } from "./feed.api";
 import { Detail } from "./HomeDetail";
@@ -27,9 +28,13 @@ import { FEED_SAMPLES } from "./feedSamples";
 
 const MUTED = "text-[13px] text-muted-foreground";
 const PAGE = "mx-auto flex w-full max-w-[640px] min-w-0 flex-col gap-6";
-const VIA: Record<NonNullable<FeedAnswered["via"]>, string> = {
+const VIA: Record<FeedAnswered["via"], string> = {
   feed: "from the feed", console: "on Home", session: "in the crew lead's session", message: "from a message",
 };
+
+/** The record names a desk answer `question:D7` or `permission:D7`; a team cell's card for it is `desk:D7`. */
+const deskKey = (id: string) => id.replace(/^(question|permission|desk):/, "desk:");
+const sameItem = (a: string, b: string) => deskKey(a) === deskKey(b);
 
 /** One sentence from the cards: how many wait, how many hold the crew up, the longest wait. */
 function headline(cards: FeedCard[]): string {
@@ -131,7 +136,7 @@ function AnsweredRow({ a, now }: { a: FeedAnswered; now: number }) {
       <span className="text-[15px] [overflow-wrap:anywhere]" data-user-text><Detail text={a.ask} /></span>
       <span className="text-[13px]">
         <StatusLabel tone="done" className="mr-2">{a.choice === "yes" ? "Yes" : a.choice === "no" ? "No" : "Answered"}</StatusLabel>
-        {a.said && <><span data-user-text>{a.said}</span>, </>}by {a.by}{a.via ? `, ${VIA[a.via]}` : ""}, {sinceWords(Date.parse(a.at), now)}
+        {a.said && <><span data-user-text>{a.said}</span>, </>}by {a.by}, {VIA[a.via]}, {sinceWords(Date.parse(a.at), now)}
       </span>
     </ListRow>
   );
@@ -140,9 +145,10 @@ function AnsweredRow({ a, now }: { a: FeedAnswered; now: number }) {
 /** The feed for one FeedData. `live` sends the answers to the cell; `reload` reads the home again. */
 function FeedPage({ data, live, stale, reload }: { data: FeedData; live: boolean; stale?: boolean; reload?: () => void }) {
   const now = live ? Date.now() : Date.parse(data.now);
-  // answered on this page, kept apart from the day's answers the cell sends, which it replaces on a match
+  // answered on this page, shown until the cell's record of the same item replaces it
   const [mine, setMine] = React.useState<FeedAnswered[]>([]);
-  const answered = [...mine, ...data.answered.filter((a) => !mine.some((m) => m.id === a.id))];
+  const answered = [...data.answered, ...mine.filter((m) => !data.answered.some((a) => sameItem(a.id, m.id)))]
+    .sort((a, b) => b.at.localeCompare(a.at));
   // ids answered here, hidden until the daemon's cached answer has passed (live) or for good (a sample)
   const [hidden, setHidden] = React.useState<Map<string, number>>(new Map());
   const [deeper, setDeeper] = React.useState<Set<string>>(new Set());
@@ -235,6 +241,11 @@ function Loading() {
 }
 
 function LiveFeed() {
+  // the answers sent from here say so (TR-1451)
+  React.useEffect(() => {
+    setSurface("feed");
+    return () => setSurface(null);
+  }, []);
   // the answers are a nicety: when they fail to load, the cards still show
   const { data, error, reload } = usePagePolling(
     () => Promise.all([getHome(), getAnsweredToday().catch(() => [])]), POLL_MS);
