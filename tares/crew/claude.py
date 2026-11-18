@@ -65,6 +65,7 @@ from __future__ import annotations
 import calendar
 import glob
 import json
+import math
 import os
 import re
 import subprocess
@@ -530,9 +531,17 @@ def quiet(station: str, wait=None, claude=None, paths=None, now=None) -> bool:
     return (now - (now if at is None else at)) >= limit
 
 
-def between_turns(station: str, claude=None, paths=None, now=None) -> bool:
-    """True when the station is done or blocked with nothing in flight: quiet with no waiting."""
-    return quiet(station, 0, claude, paths, now)
+def between_turns(station: str, claude=None, paths=None, now=None, wait=0) -> bool:
+    """True when the station is done or blocked with nothing in flight: quiet with no waiting. One blocked on
+    a person (a question or a permission prompt) counts after `wait` seconds (quiet's `wait`)."""
+    return quiet(station, wait, claude, paths, now)
+
+
+def at_rest(station: str, claude=None, paths=None, now=None) -> bool:
+    """True when the station is done with nothing in flight. One stopped on a question or a permission prompt
+    is not at rest however long it has waited: a restart would lose the prompt, so a wake or a pace note
+    leaves it alone until it answers or moves on."""
+    return between_turns(station, claude, paths, now, wait=math.inf)
 
 
 def station_updated(station: str, paths=None):

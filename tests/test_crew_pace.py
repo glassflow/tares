@@ -199,7 +199,7 @@ in_a_turn = [False]   # the station starts a turn after the round looked, before
 real_restart = None
 
 
-def fake_restart(client, paths_, args, *, claude_bin, only_between_turns=False):
+def fake_restart(client, paths_, args, *, claude_bin, only_between_turns=False, prompt_wait=0):
     """What pace.send hands to lifecycle.restart: the station and the prompt."""
     from tares.crew.errors import CrewError, NotBetweenTurnsError
     if fail_restart[0]:
