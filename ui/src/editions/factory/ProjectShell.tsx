@@ -55,7 +55,7 @@ function readyRow(d: FactoryProjectData): HomeItem {
   const { merged, closed } = d.counts;
   const n = merged + closed;
   return {
-    id: "ready_to_close", kind: "signoff", label: "Ready to close",
+    id: "ready_to_close", kind: "signoff", label: "Close the project?",
     title: `All ${n} ${n === 1 ? "ticket is" : "tickets are"} ${closed ? "finished" : "merged"}`,
     detail: "Close the project when you have checked the result.", meta: "",
     project: { id: d.id, name: d.name }, repo: null, from: null, since: null, waited: "", actions: [

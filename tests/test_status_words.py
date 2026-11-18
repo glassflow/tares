@@ -54,7 +54,7 @@ ck("every pull request state has words", prs <= set(sw.PR_STATE), prs - set(sw.P
 
 # CI: success, failure and pending have words on both surfaces; none reads NO_CI on Reviews
 ci = {"success", "failure", "pending"}
-ck("CI has words on the project page", ci <= set(sw.CI_ON_PROJECT))
+ck("CI has words, one table for every screen", ci <= set(sw.CI))
 ck("CI has words on Reviews", ci <= set(factory_reviews.CI))
 ck("no CI reads the shared words", factory_reviews.NO_CI[0] == sw.NO_CI)
 
@@ -67,6 +67,22 @@ ck("every Projects list state has words", not missing, missing)
 page = home | {"finished", "later"}
 ck("every project page state has words", page <= set(factory_project.STATE_LABEL),
    page - set(factory_project.STATE_LABEL))
+
+# the spec's decision 6, one line each
+vals = [v for t in (sw.TICKET_STAGE, sw.VERDICT, sw.PR_STATE, sw.CI, sw.PROJECT_STATE, sw.TURN)
+        for v in t.values()] + [sw.NO_CI, sw.PROJECT_LATER, sw.PROJECT_DONE, sw.SIGNOFF]
+ck("waiting is \"for you\", never \"on you\"", not [v for v in vals if "on you" in v.lower()])
+ck("a closed project reads the same on the list and its page",
+   factory_projects.DONE_LABEL == factory_project.STATE_LABEL["finished"] == sw.PROJECT_DONE == "Done")
+ck("CI reads as checks on every screen, the same words as the turns",
+   all(v.startswith("Checks ") for v in sw.CI.values()) and sw.CI["pending"] == sw.TURN["checks_running"]
+   and sw.CI["failure"] == sw.TURN["checks_failing"] and factory_reviews.CI["success"][0] == sw.CI["success"])
+ck("a reviewer's block never reads as blocked",
+   "block" not in sw.VERDICT["block"] and "block" not in factory_reviews.review_words({"verdict": "block"}).lower()
+   and sw.reviewer_stopped("Drops a column.") == "Reviewer stopped it: Drops a column"
+   and sw.reviewer_stopped(" ", "the crew reviewer") == "The crew reviewer stopped it")
+ck("the close-the-project item is a question, not the state's words",
+   sw.SIGNOFF == "Close the project?" and sw.SIGNOFF != sw.PROJECT_STATE["ready_to_close"])
 
 # the words themselves pass the words list
 tables = {k: v for k, v in vars(sw).items() if k.isupper()}

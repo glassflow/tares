@@ -35,7 +35,7 @@ const CLOSE_WORDS = "Closed from the Projects list";
 type Filter = "open" | "all" | ProjectState;
 const TABS: { key: Filter; label: string }[] = [
   { key: "open", label: "Open" },
-  { key: "waiting_on_you", label: "Waiting on you" },
+  { key: "waiting_on_you", label: "Waiting for you" },
   { key: "building", label: "Building" },
   { key: "not_started", label: "Not started" },
   { key: "ready_to_close", label: "Ready to close" },

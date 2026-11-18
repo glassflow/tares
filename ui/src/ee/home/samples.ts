@@ -82,12 +82,12 @@ function row(id: string, lead: HomeRef, members: HomeRef[], over: Partial<HomePr
 
 const TEAM_PROJECTS: HomeProject[] = [
   row("project-y", alex, [kim], {
-    scope: "private", goal: "A nickname field on the API, shown on the web page.", state: "waiting_on_you", state_label: "Waiting on you",
+    scope: "private", goal: "A nickname field on the API, shown on the web page.", state: "waiting_on_you", state_label: "Waiting for you",
     milestone: "M1 ready to check", tickets: counted({ merged: 1, closed: 0, queued: 0, stuck: 1, total: 2 }), yours: 1, yours_text: "1 ticket yours, 1 Kim's", mine: true,
   }),
   row("project-x", kim, [alex], {
     goal: "Bill teams per seat, monthly or yearly.", state: "not_started", state_label: "Not started",
-    milestone: "Waiting on your answer", tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 7 }), yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
+    milestone: "Waiting for your answer", tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 7 }), yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
   }),
   row("project-z", alex, [], {
     goal: "About 1,000 answer articles so AI assistants cite the product.", milestone: "Now on M4: 1,000 articles live",

@@ -118,7 +118,7 @@ function cleanEnv(extra) {
          /^project-x · T14 · #250 on example-org\/service-a$/.test((await texts(rows.first().getByTestId("review-meta")))[0])
          && (await rows.first().getByTestId("review-waited").innerText()) === "10 days"
          && (await rows.first().getByTestId("review-verdict").innerText()) === "Passed, round 1"
-         && (await rows.first().getByTestId("review-ci").innerText()).trim() === "CI passed"
+         && (await rows.first().getByTestId("review-ci").innerText()).trim() === "Checks passed"
          && (await rows.first().getByTestId("review-holds").innerText()) === "Holds up M2: Faster lists");
       await page.getByTestId("crew-fold").click();
       const nobody = page.getByTestId("reviews-nobody");
@@ -131,7 +131,7 @@ function cleanEnv(extra) {
       ck(`l3 @${width}: with the reviewer's words and a CI dot per state`,
          (await texts(crew.getByTestId("review-verdict"))).join("|") === "Not reviewed yet|Changes asked, round 1|Passed on an older commit"
          && (await crew.getByTestId("review-row").evaluateAll((r) => r.map((x) => x.dataset.ci))).join(",") === "go,ok,ok"
-         && (await texts(crew.getByTestId("review-ci"))).join("|") === "CI in progress|CI passed|CI passed");
+         && (await texts(crew.getByTestId("review-ci"))).join("|") === "Checks running|Checks passed|Checks passed");
       ck(`l3 @${width}: each crew row names who has it next`, (await texts(crew.getByTestId("review-why"))).join("|")
          === "The reviewer reviews it|The builder works on the changes the reviewer asked for|The reviewer reviews it");
       await page.getByTestId("crew-fold").click();
@@ -195,7 +195,7 @@ function cleanEnv(extra) {
          && (await waiting.evaluateAll((r) => r.map((x) => x.dataset.turn))).every((t) => t === "ready_for_you"),
          (await texts(waiting.getByTestId("review-turn"))).join("|"));
       ck(`${tag("lists")}: CI words and dots: passed, none`, (await texts(waiting.getByTestId("review-ci"))).join("|")
-         === "CI passed|CI passed|CI passed|No CI"
+         === "Checks passed|Checks passed|Checks passed|No checks"
          && (await waiting.evaluateAll((r) => r.map((x) => x.dataset.ci))).join(",") === "ok,ok,ok,none");
       const holds = await texts(waiting.getByTestId("review-holds"));
       ck(`${tag("lists")}: the milestone line shows only where the ticket holds one up`, holds.join("|") === "Holds up 1. Foundations|Holds up M2: Faster lists", holds.join("|"));
@@ -220,7 +220,7 @@ function cleanEnv(extra) {
       ck(`${tag("nobody")}: the finished project's pull request is nobody's, with the reason`,
          (await texts(page.getByTestId("reviews-nobody").getByTestId("review-title"))).join("|") === "Old bench script"
          && (await texts(page.getByTestId("reviews-nobody").getByTestId("review-why"))).join("|") === "The project is finished, so the crew no longer works on it");
-      ck(`${tag("crew")}: a pull request still going says so`, (await texts(crew.last().getByTestId("review-ci")))[0] === "CI in progress");
+      ck(`${tag("crew")}: a pull request still going says so`, (await texts(crew.last().getByTestId("review-ci")))[0] === "Checks running");
       ck(`${tag("crew")}: a lone ticket in its milestone holds it up, named with its place`,
          (await texts(crew.getByTestId("review-holds"))).join("|") === "Holds up M2: <u>Speed</u>");
 

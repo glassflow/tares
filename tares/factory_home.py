@@ -486,7 +486,7 @@ def _caller(store, fx, request) -> dict:
 
 def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
     """THE list of what waits for the caller, which every screen that says "Waiting for you" or
-    "Waiting on you" reads (the home, Projects, Tickets, a project's page): every builder's items
+    "Waiting for you" reads (the home, Projects, Tickets, a project's page): every builder's items
     kept to those whose `for_people` (factory_owners, one rule) names the caller. On a team cell
     the team home builds them (it adds spec questions and grants); without a licence the core
     builders do, by the same rule. `team` is a `fx.team_home` answer the caller already read."""

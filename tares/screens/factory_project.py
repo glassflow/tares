@@ -43,13 +43,13 @@ from ..factory_home import plain_ago
 # ── words ─────────────────────────────────────────────────────────────────────
 
 STAGE_LABEL = {"spec": "Spec", "build": "Build", "review": "Review", "done": "Done"}
-STATE_LABEL = {**fh.STATE_LABEL, "finished": status_words.PROJECT_DONE_ON_PAGE,
+STATE_LABEL = {**fh.STATE_LABEL, "finished": status_words.PROJECT_DONE,
                "later": status_words.PROJECT_LATER}
 
 # a ticket's state in words, by its stage key
 _STAGE_WORD = factory_mod.STAGE_WORD
 _VERDICT_WORD = status_words.VERDICT
-_CI_WORD = status_words.CI_ON_PROJECT
+_CI_WORD = status_words.CI
 # the crew's roles as a person says them, as the author of a call: "by the builder"
 _ROLE_BY = {"orchestrator": "the orchestrator", "reviewer": "the reviewer", "releaser": "the releaser",
             "builder": "the builder", "helper": "a helper"}
@@ -172,7 +172,7 @@ def _pr_out(t: dict) -> dict | None:
         text = "closed without merging"
     else:
         ci = _CI_WORD.get(pr.get("ci") or "")
-        text = "open, " + ci if ci else "open"
+        text = "open, " + ci[:1].lower() + ci[1:] if ci else "open"   # "open, checks passed"
     return {"number": number, "url": url, "state_text": text}
 
 
@@ -420,7 +420,7 @@ def register(app, store, h, ctx):
 
         # what waits for the caller here is what their home lists for this project; on a team
         # cell what waits for someone else is under "Waiting for others", named for them, with
-        # nothing to press, and does not make the project "Waiting on you" (fh.project_waiting)
+        # nothing to press, and does not make the project "Waiting for you" (fh.project_waiting)
         waiting, others = fh.project_waiting(store, fh.for_caller(ctx.fx, request), now, request, uid)
         for w in [*waiting, *others]:        # ids, links and what a button does stay as they are
             for k in ("label", "title", "detail", "meta"):

@@ -30,7 +30,7 @@ const BUSY_WAITING: HomeItem[] = [
     ],
   }),
   item("signoff:project-y", {
-    kind: "signoff", label: "Ready to close", title: "project-y",
+    kind: "signoff", label: "Close the project?", title: "project-y",
     detail: "All 27 tickets are merged. Close the project when you have checked the result.", meta: "Ready for 3 days",
     waited: "3 days", project: { id: "project-y", name: "project-y" },
     actions: [
@@ -79,7 +79,7 @@ const BUSY_PROJECTS: HomeProject[] = [
     builders: 0, can_close: true,
   }),
   project("project-z", {
-    goal: "Show every pull request in one list.", state: "waiting_on_you", state_label: "Waiting on you",
+    goal: "Show every pull request in one list.", state: "waiting_on_you", state_label: "Waiting for you",
     meta: "Planned 1 day ago", milestone: "3 milestones", tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 9 }), builders: 0,
   }),
   project("project-w", {
@@ -139,7 +139,7 @@ const many: HomeItem[] = Array.from({ length: 20 }, (_, i) =>
         actions: [reviewsAction],
       })
     : item(`signoff:project-${i}`, {
-        kind: "signoff", label: "Ready to close", title: `project-${i}`,
+        kind: "signoff", label: "Close the project?", title: `project-${i}`,
         detail: "All tickets are merged. Close the project when you have checked the result.", meta: `Ready for ${20 - i} days`,
         waited: `${20 - i} days`,
         // The first row lists its primary action first, so the page has to put it last.

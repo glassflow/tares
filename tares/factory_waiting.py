@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from . import factory as factory_mod
 from . import factory_home as fh
 from . import factory_owners as owners_mod
+from . import status_words
 
 # the role words a person reads ("The reviewer wants to use ..."), by the role the crew keeps
 _ROLE_WORD = {"orchestrator": "the orchestrator", "reviewer": "the reviewer",
@@ -180,7 +181,7 @@ NOBODY = {
     "not_handed": "The project was never handed to the crew",
     "taken": "You took this project over from the crew",
     "closed": "The pull request was closed without merging",
-    "blocked": "The reviewer blocked it; it needs your decision",
+    "blocked": "The reviewer stopped it; it needs your decision",
 }
 
 
@@ -644,7 +645,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
         note = ("" if not open_ms else
                 f" {_and(open_ms)} {'is' if len(open_ms) == 1 else 'are'} not accepted yet.")
         out.append(owners_mod.tag(fh.home_item(
-            "signoff", label="Ready to close", title=p["name"],
+            "signoff", label=status_words.SIGNOFF, title=p["name"],
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
                    + "." + note + " Close the project when you have checked the result.",
             meta=_ready_for(since, now), since=since, now=now, project=_ref(p),

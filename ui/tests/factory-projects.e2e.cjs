@@ -104,9 +104,9 @@ const today = () => {
     ck("Open lists what is not finished, what needs you first",
        JSON.stringify(await names()) === JSON.stringify(["project-w", "project-b1", "project-b2", "project-y", "project-q", "project-z"]), (await names()).join(","));
     ck("a project that is not a factory project is not listed", !(await page.getByTestId("projects-list").innerText()).includes("project-n"));
-    ck("the tabs are in order: Open, Waiting on you, Building, Not started, Ready to close, Later, Done, All",
+    ck("the tabs are in order: Open, Waiting for you, Building, Not started, Ready to close, Later, Done, All",
        JSON.stringify(await page.getByRole("tab").evaluateAll((t) => t.map((x) => x.firstChild.textContent.trim()))) ===
-       JSON.stringify(["Open", "Waiting on you", "Building", "Not started", "Ready to close", "Later", "Done", "All"]));
+       JSON.stringify(["Open", "Waiting for you", "Building", "Not started", "Ready to close", "Later", "Done", "All"]));
     ck("each tab has its count", JSON.stringify(await counts()) === JSON.stringify(["6", "1", "2", "1", "2", "0", "2", "8"]), (await counts()).join(","));
     ck("the finished ones are behind a link", (await page.getByTestId("show-finished").innerText()).trim() === "Show 2 finished");
     ck("the address has no filter for Open", !new URL(page.url()).searchParams.has("state"), page.url());
@@ -122,7 +122,7 @@ const today = () => {
     const b1 = row("project-b1");
     ck("a name links to its project", (await b1.getByTestId("project-name").getAttribute("href")) === `/projects/${ids["project-b1"]}`);
     ck("the state is in words", (await b1.getByTestId("project-state").textContent()).trim() === "Building" &&
-       (await row("project-w").getByTestId("project-state").textContent()).trim() === "Waiting on you" &&
+       (await row("project-w").getByTestId("project-state").textContent()).trim() === "Waiting for you" &&
        (await row("project-y").getByTestId("project-state").textContent()).trim() === "Not started");
     ck("tickets merged and stuck, in one count line", (await b1.getByTestId("project-tickets").innerText()).replace(/\s+/g, " ").trim() === "1 merged, 1 stuck of 4",
        await b1.getByTestId("project-tickets").innerText());
@@ -163,7 +163,7 @@ const today = () => {
     ck("a filter makes no new read of the cell", apiReads.length === reads0, apiReads.slice(reads0).join(","));
     ck("a finished project is a row", (await names()).length === 8 && (await names()).includes("project-d"));
     await pick("done");
-    ck("a finished project says when, and has no Close", (await row("project-d").getByTestId("project-milestone").innerText()).trim() === `Finished ${today()}`
+    ck("a finished project says when, and has no Close", (await row("project-d").getByTestId("project-milestone").innerText()).trim() === `Done ${today()}`
        && (await page.getByTestId("project-close").count()) === 0, await row("project-d").getByTestId("project-milestone").innerText());
     await shot(page, "live-done-1440.png");
     await pick("open");
@@ -232,7 +232,7 @@ const today = () => {
     ck("the link to the finished follows", (await page.getByTestId("show-finished").innerText()).trim() === "Show 3 finished");
     await pick("done");
     ck("it is in Done, finished today", (await row("project-z").count()) === 1 && (await row("project-z").getByTestId("project-state").textContent()).trim() === "Done"
-       && (await row("project-z").getByTestId("project-milestone").innerText()).trim() === `Finished ${today()}`, await row("project-z").innerText());
+       && (await row("project-z").getByTestId("project-milestone").innerText()).trim() === `Done ${today()}`, await row("project-z").innerText());
     ck("and has no Close", (await row("project-z").getByTestId("project-close").count()) === 0);
     await ctx.close();
 

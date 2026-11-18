@@ -42,6 +42,7 @@ from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
 from .. import merge_queue
+from .. import status_words
 from ..envelope import now_utc
 from ..factory_home import _dt, plain_ago
 from ..integrations import registry
@@ -158,7 +159,8 @@ def register(app, store, h, ctx):
         if old:
             return "Not reviewed yet"
         if last["verdict"] == "block":
-            return f"{_upper(who)} blocked it"
+            first = next((x["text"] for x in last.get("findings") or [] if x.get("blocking")), None)
+            return status_words.reviewer_stopped(_first_line(first) if first else None, who)
         return f"{_upper(who)} asked for changes"
 
     def ci_text(t: dict, row: dict) -> str:
@@ -166,17 +168,17 @@ def register(app, store, h, ctx):
         state = pr.get("ci")
         checks = pr.get("ci_checks") or []
         if state == "success":
-            return "Passed"
+            return status_words.CI["success"]
         if state == "none":
-            return "No CI checks on this repo"
+            return f"{status_words.NO_CI} on this repo"
         if state == "failure":
             names = [c.get("name") for c in checks if c.get("state") == "failure" and c.get("name")]
-            return "Failing: " + (", ".join(names) if names else "a check")
+            return f"{status_words.CI['failure']}: " + (", ".join(names) if names else "a check")
         if state == "pending":
             if row["state"] == "waiting_ci":
-                return "Pending, checks restarted on the new commit"
+                return f"{status_words.CI['pending']}, restarted on the new commit"
             names = [c.get("name") for c in checks if c.get("state") == "pending" and c.get("name")]
-            return "Pending, " + (f"waiting for {', '.join(names)}" if names else "checks are still running")
+            return status_words.CI["pending"] + (f", waiting for {', '.join(names)}" if names else "")
         return "Not checked yet"
 
     def guardrail_text(row: dict, history: list[dict]) -> str:

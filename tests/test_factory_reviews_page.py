@@ -56,7 +56,7 @@ def units():
         {"verdict": "pass", "round": 2, "current": True}, {"verdict": "pass", "round": 1, "current": False},
         {"verdict": "changes", "round": 1, "current": True}, {"verdict": "block", "round": 3}, None)] == [
         "Passed, round 2", "Passed on an older commit", "Changes asked, round 1",
-        "Blocked by the reviewer, round 3", "Not reviewed yet"], "")
+        "Reviewer stopped it, round 3", "Not reviewed yet"], "")
     ms = [{"id": "a", "name": "1. Foundations"}, {"id": "b", "name": "Faster lists"},
           {"id": "c", "name": "M3: Search"}, {"id": "d", "name": "4) Wrap up"}]
     ck("a milestone already numbered keeps its own number", [fr.milestone_words(ms, i) for i in "acd"] == [
@@ -212,10 +212,10 @@ async def main():
                 "Add the header": "Changes asked, round 1", "Add the archive": "Not reviewed yet",
                 "Batch the lists": "Passed, round 1", "Tidy the lists": "Not reviewed yet"}, {t: by[t]["review"] for t in by})
             ck("CI words and dots", {t: (by[t]["ci"], by[t]["ci_state"]) for t in by} == {
-                "Add the footer": ("CI passed", "ok"), "Add the sitemap": ("CI failing", "bad"),
-                "Add the search box": ("No CI", "none"), "Add the news page": ("CI passed", "ok"),
-                "Add the header": ("CI passed", "ok"), "Add the archive": ("CI in progress", "go"),
-                "Batch the lists": ("CI passed", "ok"), "Tidy the lists": ("CI passed", "ok")}, {t: (by[t]["ci"], by[t]["ci_state"]) for t in by})
+                "Add the footer": ("Checks passed", "ok"), "Add the sitemap": ("Checks failing", "bad"),
+                "Add the search box": ("No checks", "none"), "Add the news page": ("Checks passed", "ok"),
+                "Add the header": ("Checks passed", "ok"), "Add the archive": ("Checks running", "go"),
+                "Batch the lists": ("Checks passed", "ok"), "Tidy the lists": ("Checks passed", "ok")}, {t: (by[t]["ci"], by[t]["ci_state"]) for t in by})
             ck("holds up: a numbered milestone keeps its name, an unnumbered one gets M and its place",
                by["Add the footer"]["holds_up"] == "Holds up 1. Foundations"
                and by["Batch the lists"]["holds_up"] == "Holds up M2: Faster lists"
@@ -331,7 +331,7 @@ async def main():
             a = await agree(cx, "blocked by the reviewer")
             ck("a pull request the reviewer blocked is nobody's, and needs the person",
                {r["ticket"]["title"]: r["why"] for r in a["nobody_on_it"]}.get("Add the blocker")
-               == "The reviewer blocked it; it needs your decision", refs(a["nobody_on_it"]))
+               == "The reviewer stopped it; it needs your decision", refs(a["nobody_on_it"]))
 
             print("== a ticket closed in its home leaves review (TR-1008) ==")
             store.update_ticket(x_none, status="done", why="Linear marked it Done")

@@ -118,8 +118,8 @@ function make(p: Parts): FactoryProjectData {
   return {
     id: PID, name: p.name, goal: p.goal, stage: p.stage ?? "build",
     stage_label: { spec: "Spec", build: "Build", review: "Review", done: "Done" }[p.stage ?? "build"],
-    state, state_label: p.state_label ?? { building: "Building", waiting_on_you: "Waiting on you", not_started: "Not started",
-      ready_to_close: "Ready to close", later: "Later", finished: "Finished" }[state],
+    state, state_label: p.state_label ?? { building: "Building", waiting_on_you: "Waiting for you", not_started: "Not started",
+      ready_to_close: "Ready to close", later: "Later", finished: "Done" }[state],
     waiting: p.waiting ?? [], counts, moving, moving_total: p.moving_total ?? moving.length, tickets_href: TICKETS,
     next: p.next ?? null, milestones: p.milestones ?? [], decisions: p.decisions ?? [], calls: p.calls ?? [],
     docs: p.docs ?? DOCS, terminal: p.terminal ?? TERMINAL,
@@ -138,9 +138,9 @@ const BUILDING = make({
   waiting: [REVIEW, CALLS, PERMISSION, QUESTION],
   moving: [
     ticket("T14", "Show a last checked date on each answer", "in review", { who: "Reviewer", review: "round 1: waiting for the reviewer",
-      pr: { number: 17, url: "https://example.com/pull/17", state_text: "PR #17 open, CI green" } }),
+      pr: { number: 17, url: "https://example.com/pull/17", state_text: "PR #17 open, checks passed" } }),
     ticket("T15", "Add the answers to the docs sidebar", "changes asked", { who: "Builder for M2", review: "round 2: changes asked",
-      pr: { number: 18, url: "https://example.com/pull/18", state_text: "PR #18 open, CI failing" } }),
+      pr: { number: 18, url: "https://example.com/pull/18", state_text: "PR #18 open, checks failing" } }),
     ticket("T16", "Tag answers by product area", "in progress", { who: "Builder for M2" }),
     ticket("T17", "Search page lists the answers", "in progress", { who: "Builder for M2" }),
     ticket("T18", "Translate the first 50 answers", "blocked", { blocked_by: ["T16"] }),
@@ -240,7 +240,7 @@ export function sampleClose(name: string): { open: boolean; error: string } {
 
 /** The sample after its project was closed here: finished, nothing left to close. */
 export const sampleClosed = (d: FactoryProjectData): FactoryProjectData => ({
-  ...d, stage: "done", stage_label: "Done", state: "finished", state_label: "Finished", can_close: false,
+  ...d, stage: "done", stage_label: "Done", state: "finished", state_label: "Done", can_close: false,
 });
 
 // The Pull requests page's merge queue samples (`queue-*`, see mergeQueueSamples.ts) borrow the ready project for the frame.

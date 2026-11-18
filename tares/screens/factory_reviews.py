@@ -30,7 +30,7 @@ AUTONOMY_TEXT = {
 }
 # the dot of a CI sentence: ok (green), bad (red), go (amber, still going), none (grey)
 _CI_TONE = {"success": "ok", "failure": "bad", "pending": "go"}
-CI = {k: (status_words.CI_ON_REVIEWS[k], tone) for k, tone in _CI_TONE.items()}
+CI = {k: (status_words.CI[k], tone) for k, tone in _CI_TONE.items()}
 NO_CI = (status_words.NO_CI, "none")
 _PULL = re.compile(r"/pull/(\d+)")
 
@@ -45,7 +45,7 @@ def review_words(verdict: dict | None) -> str:
     if kind == "changes":
         return f"Changes asked{suffix}"
     if kind == "block":
-        return f"Blocked by the reviewer{suffix}"
+        return status_words.reviewer_stopped() + suffix
     return "Not reviewed yet"
 
 

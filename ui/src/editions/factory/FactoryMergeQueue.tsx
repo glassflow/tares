@@ -70,13 +70,13 @@ function Check({ label, text, tone }: { label: string; text: string; tone: Tone 
 // start of the sentence.
 function reviewTone(t: string): Tone {
   if (t.startsWith("Approved") && !t.includes("older")) return "ok";
-  if (t.includes("blocked") || t.includes("asked for changes")) return "err";
+  if (t.includes("stopped it") || t.includes("asked for changes")) return "err";
   return "warn";
 }
 function ciTone(t: string): Tone {
-  if (t === "Passed") return "ok";
-  if (t.startsWith("Failing")) return "err";
-  if (t.startsWith("Pending")) return "warn";
+  if (t === "Checks passed") return "ok";
+  if (t.startsWith("Checks failing")) return "err";
+  if (t.startsWith("Checks running")) return "warn";
   return "none";
 }
 function railTone(t: string): Tone {

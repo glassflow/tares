@@ -203,7 +203,7 @@ export interface ProjectPr {
   ticket_href: string;
   state: PrState;
   state_label: string;
-  /** "CI green", "CI failing", "CI running"; null when merged, closed or unknown. */
+  /** "Checks passed", "Checks failing", "Checks running" (status_words.CI); null when merged, closed or unknown. */
   ci: string | null;
   /** "round 2: passed", from the crew's reviewer; null before a review. */
   review: string | null;

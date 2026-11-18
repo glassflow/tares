@@ -15,7 +15,7 @@ const KEY: Record<Kind, StateKey> = {
   todo: "to_do", prog: "in_progress", review: "in_review", changes: "changes_asked",
   blocked: "blocked", merged: "merged", canceled: "canceled",
 };
-// the turn factory.turn_of gives each kind; a reviewed one with CI passed is the person's to merge
+// the turn factory.turn_of gives each kind; a reviewed one with checks passed is the person's to merge
 const TURN: Record<Kind, [TicketTurn, string, TurnWhose]> = {
   todo: ["to_do", "To do", "crew"], prog: ["building", "Building", "crew"], review: ["reviewing", "Reviewing", "crew"],
   changes: ["changes_asked", "Changes asked", "crew"], blocked: ["queued", "Queued", "nobody"],
@@ -124,7 +124,7 @@ function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number>
         pr: withPr ? {
           number: ++pr,
           url: `https://github.com/${REPO}/pull/${pr}`,
-          state_text: kind === "merged" ? "merged" : kind === "changes" ? "open, CI failing" : i % 2 ? "open, CI passed" : "open, CI in progress",
+          state_text: kind === "merged" ? "merged" : kind === "changes" ? "open, checks failing" : i % 2 ? "open, checks passed" : "open, checks running",
         } : null,
         blocked_by: waits,
         changed: ago(minutes),

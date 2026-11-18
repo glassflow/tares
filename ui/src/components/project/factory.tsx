@@ -411,13 +411,13 @@ function PRIcon() {
 function prStatus(p: RepoPR): string {
   const bits: string[] = [];
   const stage: Record<string, string> = { doing: "being built", review: "waiting for review",
-    changes: "changes asked", blocked: "blocked" };
+    changes: "changes asked", blocked: "stuck" };
   if (p.review && p.review.current && p.stage !== "changes")
-    bits.push(p.review.verdict === "pass" ? "review passed" : p.review.verdict === "changes" ? "changes asked" : "review blocked");
+    bits.push(p.review.verdict === "pass" ? "review passed" : p.review.verdict === "changes" ? "changes asked" : "reviewer stopped it");
   else if (p.stage && stage[p.stage]) bits.push(stage[p.stage]);
-  if (p.ci === "success") bits.push("CI passed");
-  else if (p.ci === "failure") bits.push("CI failed");
-  else if (p.ci === "pending") bits.push("CI running");
+  if (p.ci === "success") bits.push("checks passed");
+  else if (p.ci === "failure") bits.push("checks failing");
+  else if (p.ci === "pending") bits.push("checks running");
   return bits.join(" · ");
 }
 

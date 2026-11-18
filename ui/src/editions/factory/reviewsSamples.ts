@@ -10,7 +10,7 @@ const CREW_MERGES = "The crew merges after its review and green CI.";
 const A = "example-org/service-a";
 const B = "example-org/docs";
 
-const CI_WORDS: Record<CiState, string> = { ok: "CI passed", bad: "CI failing", go: "CI in progress", none: "No CI" };
+const CI_WORDS: Record<CiState, string> = { ok: "Checks passed", bad: "Checks failing", go: "Checks running", none: "No checks" };
 
 interface Spec {
   project: string; ref: string; title: string; number: number; waited: string;

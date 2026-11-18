@@ -115,13 +115,13 @@ def pull_requests():
     ck("without a state and not merged it is open",
        out({"stage": "review", "pr": {"number": 7, "url": url}})["state_text"] == "open")
     ck("open with CI", out({"pr": {"number": 7, "state": "open", "ci": "pending"}})["state_text"]
-       == "open, CI running")
+       == "open, checks running")
     ck("the number comes from the link", out({"pr": {"url": url, "state": "open"}})["number"] == 7)
     ck("no pull request, no answer", out({}) is None and out({"pr": {}}) is None)
     last = {"verdict": "block", "head": "aaaaaaa1111", "round": 3, "at": None}
-    ck("a review that still counts", fp._review_out(last, {"pr": {"head": "aaaaaaa1111"}}) == "round 3: blocked")
+    ck("a review that still counts", fp._review_out(last, {"pr": {"head": "aaaaaaa1111"}}) == "round 3: reviewer stopped it")
     ck("a review for an older commit says the pull request changed",
-       fp._review_out(last, {"pr": {"head": "bbbbbbb2222"}}) == "round 3: blocked, then the pull request changed")
+       fp._review_out(last, {"pr": {"head": "bbbbbbb2222"}}) == "round 3: reviewer stopped it, then the pull request changed")
     ck("no review, no words", fp._review_out(None, {}) is None)
 
 
@@ -318,7 +318,7 @@ async def main():
                and a["goal"] == "A project for the test" and a["stage"] == "build"
                and a["stage_label"] == "Build", [a["id"], a["stage"], a["stage_label"]])
             ck("state in words", a["state"] in ("building", "waiting_on_you")
-               and a["state_label"] in ("Building", "Waiting on you"), [a["state"], a["state_label"]])
+               and a["state_label"] in ("Building", "Waiting for you"), [a["state"], a["state_label"]])
 
             ms = {m["name"]: m for m in a["milestones"]}
             ck("two milestones in order with their goals, checks, numbers and done flag",
@@ -368,8 +368,8 @@ async def main():
                and tk["Write the release notes"]["who"] == "Lead", {k: v["who"] for k, v in tk.items()})
             ck("a pull request: number, link and its state in words",
                tk["Add the footer"]["pr"] == {"number": 12, "url": f"https://github.com/{REPO}/pull/12",
-                                              "state_text": "open, CI green"}
-               and tk["Add the sitemap"]["pr"]["state_text"] == "open, CI failing"
+                                              "state_text": "open, checks passed"}
+               and tk["Add the sitemap"]["pr"]["state_text"] == "open, checks failing"
                and tk["Add the search box"]["pr"] is None, [tk[k]["pr"] for k in tk])
             ck("the last review round, and whether it still counts",
                tk["Add the footer"]["review"] == "round 1: passed"
@@ -493,7 +493,7 @@ async def main():
             r = await cx.post(f"/api/projects/{pm}/finish", json={"words": "done"})
             m = (await cx.get(f"/api/factory/projects/{pm}")).json()
             ck("once closed it is finished and can no longer close", r.status_code == 200 and m["can_close"] is False
-               and m["state"] == "finished" and m["state_label"] == "Finished" and m["stage"] == "done",
+               and m["state"] == "finished" and m["state_label"] == "Done" and m["stage"] == "done",
                [r.status_code, m["state"], m["can_close"]])
             ck("a milestone with an open ticket is not done",
                (await cx.get(f"/api/factory/projects/{px}")).json()["milestones"][0]["done"] is False)

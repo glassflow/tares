@@ -6,7 +6,7 @@ import type { FactoryProjectRow, FactoryProjectsData, ProjectState } from "./Fac
 
 const NOW = "2026-11-02T10:00:00+00:00";
 const LABEL: Record<ProjectState, string> = {
-  building: "Building", waiting_on_you: "Waiting on you", not_started: "Not started",
+  building: "Building", waiting_on_you: "Waiting for you", not_started: "Not started",
   ready_to_close: "Ready to close", later: "Later", done: "Done",
 };
 const A = "example-org/service-a";
@@ -44,9 +44,9 @@ export const BUSY: Spec[] = [
   { id: "p4", name: "project-v", state: "ready_to_close", goal: "Let a team share one crew.", merged: 27, total: 27,
     milestone: "All milestones done", repos: [A, B, C], meta: "No builders working · Merged 3 days ago" },
   { id: "p5", name: "project-a", state: "done", goal: "Track how often AI assistants name the product.", merged: 15, total: 15,
-    milestone: "Finished 20 Oct", meta: "" },
+    milestone: "Done 20 Oct", meta: "" },
   { id: "p6", name: "project-b", state: "done", goal: "Let the crew take its tickets from a shared issue list.", merged: 8, total: 8,
-    milestone: "Finished 20 Oct" },
+    milestone: "Done 20 Oct" },
   { id: "p7", name: "project-c", state: "done", goal: "Install the product with one command.", merged: 6, total: 6,
     milestone: "Finished 14 Oct" },
   { id: "p8", name: "project-d", state: "done", goal: "Make the docs easy for AI assistants to quote.", merged: 9, total: 9,
@@ -61,7 +61,7 @@ export const MANY: Spec[] = Array.from({ length: 60 }, (_, i) => {
   return {
     id: `m${i}`, name: `project-${i + 1}`, state, goal: `Short goal sentence for project ${i + 1}.`, merged, total,
     blocked: state === "ready_to_close" || state === "done" ? 0 : i % 5,
-    milestone: state === "done" ? "Finished 20 Oct" : state === "ready_to_close" ? "All milestones done" : `Now on M${1 + (i % 4)}`,
+    milestone: state === "done" ? "Done 20 Oct" : state === "ready_to_close" ? "All milestones done" : `Now on M${1 + (i % 4)}`,
     builders: state === "building" ? 1 : 0, meta: state === "done" ? "" : `${i + 1} hours ago`,
   };
 });

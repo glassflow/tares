@@ -211,7 +211,7 @@ async def main():
         DANA_B = me(dana, "Dana’s builder")
 
         def X(r, p, pos_, ident, title, n, repo, branch, builder, chip, status, review="Approved by the crew reviewer",
-              ci="Passed", rail="Allowed", answer=None, bounce=None, needs=False):
+              ci="Checks passed", rail="Allowed", answer=None, bounce=None, needs=False):
             return {"id": r["id"], "position": pos_, "state": r["state"] if p is None else p,
                     "chip": chip, "ticket": {"ref": ident, "title": title},
                     "pr": {"number": n, "url": url(repo, n)}, "branch": branch, "builder": builder,
@@ -286,7 +286,7 @@ async def main():
                 X(r1, None, 1, "ORD-41", "Round prices to the order currency", 217, API,
                   "ord-41-price-rounding", LEE_B, {"key": "ci", "text": "Waiting for CI"},
                   S("Branch updated to main 3 minutes ago, waiting for CI on the new commit."),
-                  ci="Pending, checks restarted on the new commit"),
+                  ci="Checks running, restarted on the new commit"),
                 X(r2, None, 2, "ORD-43", "Add currency to the order export", 219, API,
                   "ord-43-export-currency", MARCUS_B, {"key": "next", "text": "Next"},
                   S("Next in this project."), review="Approved by Dana Whitfield")],
@@ -430,7 +430,7 @@ async def main():
                 X(r1, None, 1, "ORD-53", "Backport the carrier code to 2.4", 232, API,
                   "ord-53-backport-carrier-code", DANA_B, {"key": "moved", "text": "Commit changed"},
                   S(text_, lead_, note_), review="Approved by the crew reviewer for an older commit",
-                  ci="Pending, waiting for unit", answer=moved)],
+                  ci="Checks running, waiting for unit", answer=moved)],
               level=ASK_TEXT)],
             aside="1 in line", line=1, note="1 pull request is in the merge queue.")
         expect("the commit changed: out of date, cannot be answered, the new commit named",
@@ -602,7 +602,7 @@ async def main():
               sent=2, extra=["2 sent back"]),
             G(WEB, "main", [
                 sb(r4, "ORD-60", "Show saved addresses at checkout", 91, WEB, "ord-60-saved-addresses",
-                   LEE_B, "CI is failing on 7ab31c0: web-unit-tests", 1, L0, ci="Failing: web-unit-tests"),
+                   LEE_B, "CI is failing on 7ab31c0: web-unit-tests", 1, L0, ci="Checks failing: web-unit-tests"),
                 sb(r5, "ORD-62", "Keep the cart after sign in", 93, WEB, "ord-62-cart-after-signin",
                    MARCUS_B, "conflicts with PR 90 in src/cart/store.ts", 5, L3)],
               sent=2, extra=["2 sent back"])],
@@ -769,16 +769,26 @@ async def main():
            (await page(uid))["groups"][0]["rows"][0]["ci"] == "Not checked yet")
         store.update_ticket(t1, pr={**pr, "ci": "none"})
         ck("a repo with no CI says so",
-           (await page(uid))["groups"][0]["rows"][0]["ci"] == "No CI checks on this repo")
+           (await page(uid))["groups"][0]["rows"][0]["ci"] == "No checks on this repo")
         store.update_ticket(t1, pr={**pr, "ci": "pending",
                                     "ci_checks": [{"name": "unit", "state": "pending"},
                                                   {"name": "lint", "state": "success"}]})
         ck("a pending check names what it waits for",
-           (await page(uid))["groups"][0]["rows"][0]["ci"] == "Pending, waiting for unit")
+           (await page(uid))["groups"][0]["rows"][0]["ci"] == "Checks running, waiting for unit")
         store.add_review(uid, t1, url(API, 350), pr["head"], "changes", "", "", "crew-reviewer",
                          [], {}, factory_mod.finding_kind, now_utc())
         ck("a review that asked for changes says so",
            (await page(uid))["groups"][0]["rows"][0]["review"] == "The crew reviewer asked for changes")
+        store.add_review(uid, t1, url(API, 350), pr["head"], "block", "", "", "crew-reviewer",
+                         [{"severity": "minor", "file": None, "line": None, "blocking": False,
+                           "text": "Rename the helper."},
+                          {"severity": "major", "file": "db/m.sql", "line": 3, "blocking": True,
+                           "text": "The migration drops the email column.\nIt has live data."}],
+                         {}, factory_mod.finding_kind, now_utc())
+        ck("a reviewer's block says who stopped it and why, from the first blocking finding",
+           (await page(uid))["groups"][0]["rows"][0]["review"]
+           == "The crew reviewer stopped it: The migration drops the email column. It has live data",
+           (await page(uid))["groups"][0]["rows"][0]["review"])
 
         # ── whose turn: the ticket's words, read with the queue row ─────────────────────────────
         print("== whose turn ==")

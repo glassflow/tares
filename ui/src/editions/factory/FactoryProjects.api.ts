@@ -14,7 +14,7 @@ export interface FactoryProjectRow {
   goal: string;
   state: ProjectState;
   state_label: string;
-  /** The line under the bar: "Now on M2: ...", "6 milestones", "All milestones done" or "Finished 20 Oct";
+  /** The line under the bar: "Now on M2: ...", "6 milestones", "All milestones done" or "Done 20 Oct";
    *  null for a project with no milestones. */
   milestone: string | null;
   /** Tickets by count group (tares/factory.py `progress`): merged only for a merge, closed for done

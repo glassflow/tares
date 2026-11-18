@@ -19,7 +19,7 @@ export interface ReviewRow extends TicketTurnFields {
   since: string | null;
   /** What the reviewer said: "Passed, round 2", "Changes asked, round 1", "Not reviewed yet", "Passed on an older commit". */
   review: string;
-  /** "CI passed", "CI failing", "CI in progress" or "No CI". */
+  /** "Checks passed", "Checks failing", "Checks running" or "No checks" (status_words.CI). */
   ci: string;
   ci_state: CiState;
   /** "Holds up M2: Faster lists" when this is the last pull request its milestone waits for, else null. */

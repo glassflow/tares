@@ -33,7 +33,7 @@ function PrRow({ p }: { p: ProjectPr }) {
   const facts: React.ReactNode[] = [];
   if (p.branch) facts.push(<span key="b" className="font-mono">{p.branch}{p.base ? ` → ${p.base}` : ""}</span>);
   if (p.when) facts.push(<span key="w">{p.when}</span>);
-  if (p.ci) facts.push(<span key="c" className={p.ci === "CI failing" ? "text-err" : undefined}>{p.ci}</span>);
+  if (p.ci) facts.push(<span key="c" className={p.ci === "Checks failing" ? "text-err" : undefined}>{p.ci}</span>);
   if (p.review) facts.push(<span key="r">review {p.review}</span>);
   if (p.size) facts.push(<PrSize key="s" s={p.size} />);
   return (

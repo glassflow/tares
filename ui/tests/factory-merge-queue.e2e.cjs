@@ -155,7 +155,7 @@ async function waitFor(url, tries = 100) {
       ck(`${width}: check labels are mono uppercase`, /mono/i.test(lab.fontFamily) && lab.textTransform === "uppercase", JSON.stringify(lab));
       const dot = await css(first.getByTestId("mq-dot").first(), ["borderRadius", "width", "height"]);
       ck(`${width}: check dots are squares`, dot.borderRadius === "0px" && dot.width === dot.height, JSON.stringify(dot));
-      ck(`${width}: a CI line that waits says so`, (await text(first.getByTestId("mq-check-ci"))).includes("Pending"), await text(first.getByTestId("mq-check-ci")));
+      ck(`${width}: a CI line that waits says so`, (await text(first.getByTestId("mq-check-ci"))).includes("Checks running"), await text(first.getByTestId("mq-check-ci")));
       ck(`${width}: a row with no question has no buttons`, (await page.getByTestId("mq-actions").count()) === 0);
       ck(`${width}: the merged list is closed until asked`, (await page.getByTestId("mq-merged-item").count()) === 0);
       ck(`${width}: the merged toggle is a flat row, not a boxed button`, await flat(page.getByTestId("mq-merged-toggle")), JSON.stringify(await css(page.getByTestId("mq-merged-toggle"), ["borderTopWidth", "backgroundColor", "display"])));

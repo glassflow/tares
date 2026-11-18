@@ -19,8 +19,19 @@ TICKET_STAGE = {"todo": "to do", "doing": "in progress", "review": "in review",
                 "changes": "changes asked", "blocked": "blocked", "merged": "merged",
                 "shipped": "merged", "canceled": "canceled"}
 
-# the reviewer's verdict, as the project page writes it ("round 2: changes asked")
-VERDICT = {"pass": "passed", "changes": "changes asked", "block": "blocked"}
+# the reviewer's verdict, as the project and ticket pages write it ("round 2: changes asked").
+# A block is "stopped it", so "blocked" names nothing a reviewer did (the spec, decision 6)
+VERDICT = {"pass": "passed", "changes": "changes asked", "block": "reviewer stopped it"}
+
+
+def reviewer_stopped(reason: str | None = None, who: str | None = None) -> str:
+    """"Reviewer stopped it: the migration drops a column" on a screen that has the reason (the
+    first blocking finding), "Reviewer stopped it" on one that has not."""
+    who = (who or "").strip()
+    head = f"{who[:1].upper()}{who[1:]} stopped it" if who else "Reviewer stopped it"
+    reason = " ".join(str(reason or "").split()).rstrip(".")
+    return f"{head}: {reason}" if reason else head
+
 
 # the reviewer's verdict at the head of the comment the crew posts on GitHub
 VERDICT_ON_GITHUB = {"pass": "Pass", "changes": "Changes requested", "block": "Blocked"}
@@ -30,22 +41,22 @@ VERDICT_ON_GITHUB = {"pass": "Pass", "changes": "Changes requested", "block": "B
 PR_STATE = {"open": "Open", "draft": "Draft", "merged": "Merged",
             "closed": "Closed without merging"}
 
-# CI on the project and ticket pages ("open, CI green")
-CI_ON_PROJECT = {"success": "CI green", "failure": "CI failing", "pending": "CI running"}
-
-# CI on the Reviews screen; `none` (no checks on the repo) reads NO_CI there
-CI_ON_REVIEWS = {"success": "CI passed", "failure": "CI failing", "pending": "CI in progress"}
-NO_CI = "No CI"
+# CI on every screen ("open, checks passed"); the turn words "Checks running" and "Checks
+# failing" say the same. `none` (no checks on the repo) reads NO_CI
+CI = {"success": "Checks passed", "failure": "Checks failing", "pending": "Checks running"}
+NO_CI = "No checks"
 
 # ── projects ──────────────────────────────────────────────────────────────────
 
-# factory_home.project_state, then the two states the Projects list adds and the one the
-# project page adds for a closed project
-PROJECT_STATE = {"building": "Building", "waiting_on_you": "Waiting on you",
+# factory_home.project_state, then the two states the Projects list and a project's page add.
+# The key stays `waiting_on_you` (the API's), the words are "for you" like every other surface
+PROJECT_STATE = {"building": "Building", "waiting_on_you": "Waiting for you",
                  "not_started": "Not started", "ready_to_close": "Ready to close"}
 PROJECT_LATER = "Later"
-PROJECT_DONE_ON_LIST = "Done"
-PROJECT_DONE_ON_PAGE = "Finished"
+PROJECT_DONE = "Done"
+
+# the waiting item that asks a person to close a project; the state keeps "Ready to close"
+SIGNOFF = "Close the project?"
 
 # ── a project's ticket counts (factory.progress) ──────────────────────────────
 
