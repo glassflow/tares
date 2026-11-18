@@ -276,8 +276,6 @@ export const api = {
     request<{ version?: string | null; discover_docker: boolean; agent_key_configured?: boolean;
               url_configured: boolean; slack_configured?: boolean;
               default_provider?: { id: string; name: string; kind: string } | null }>("/api/capabilities"),
-  /** The brain of a cell with a licence. Without one the route is not there (404). */
-  brain: () => request<{ configured: boolean }>("/api/brain"),
   keys: () => request<{ keys: ApiKey[]; enforced: boolean; scopes: string[] }>("/api/keys"),
   createKey: (name: string, scopes: string[], personId?: string) =>
     request<{ id: string; name: string; scopes: string[]; secret: string; person: { id: string; name: string } | null }>(
