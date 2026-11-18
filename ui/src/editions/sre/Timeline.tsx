@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, EmptyState, Input, Loading, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Input, Loading, Skeleton } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -173,12 +173,12 @@ function RawLines({ lines, onMore, onHide, onRetry }: {
           </div>
         );
       })}
-      {lines.status === "error" && (
+      <Collapse>{lines.status === "error" && (
         <Banner tone="warn" className="m-1.5" data-testid="timeline-raw-error"
                 action={<Button variant="secondary" onClick={onRetry} data-testid="timeline-raw-retry" className="h-[30px]">Try again</Button>}>
           The lines did not load.
         </Banner>
-      )}
+      )}</Collapse>
       {lines.status === "ok" && (
         <div className="border-t border-border px-3 py-1.5 text-[13px] first:border-t-0" data-testid="timeline-raw-footer">
           <span data-testid="timeline-raw-count">
@@ -473,12 +473,12 @@ export default function Timeline() {
         })}
       </div>
 
-      {showError && (
+      <Collapse>{showError && (
         <Banner tone="error" data-testid="timeline-error"
                 action={<Button variant="secondary" onClick={polled.reload} data-testid="timeline-retry" className="h-[30px]">Try now</Button>}>
           <b>The timeline did not load.</b> <span className="text-foreground">Tares could not read it just now.{live && " It will try again in 30 seconds."}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
       {!fresh && !showError && <TimelineSkeleton />}
 
@@ -507,9 +507,9 @@ export default function Timeline() {
           ))}
           {fresh.cursor && (
             <div className="grid justify-items-start gap-2 border-t border-border px-3.5 py-3 md:px-[18px]">
-              {earlier.error && (
+              <Collapse>{earlier.error && (
                 <Banner tone="warn" className="w-full" data-testid="timeline-earlier-error">The earlier items did not load.</Banner>
-              )}
+              )}</Collapse>
               <Button variant="secondary" busy={earlier.busy} onClick={loadEarlier} data-testid="timeline-earlier" className="h-9">
                 {earlier.error ? "Try again" : "Load earlier"}
               </Button>

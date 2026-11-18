@@ -12,7 +12,7 @@ import WorkspaceSettings, { TeamPanel } from "../settings/WorkspacePanels";
 import { TracingPanel } from "../settings/TracingPanel";
 import { ProvidersPanel } from "../settings/ProvidersPanel";
 import { ApiKeysPanel } from "../settings/ApiKeysPanel";
-import { Banner, Button, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
 import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
@@ -193,8 +193,8 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4" data-testid={`pane-${tab}`}>
-      {dim && <Banner tone="warn" data-testid="read-only">You can look but not change anything here. Ask an admin.</Banner>}
-      {problem && <Banner tone="error" data-testid="problem">{problem}</Banner>}
+      <Collapse>{dim && <Banner tone="warn" data-testid="read-only">You can look but not change anything here. Ask an admin.</Banner>}</Collapse>
+      <Collapse>{problem && <Banner tone="error" data-testid="problem">{problem}</Banner>}</Collapse>
 
       {tab === "crew" && (
         <>
@@ -531,11 +531,11 @@ function SettingsPage() {
               : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
           </div>
         )}
-        {error && (
+        <Collapse>{error && (
           <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
             <b>Settings did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
           </Banner>
-        )}
+        )}</Collapse>
         {(!page || waiting) && !error && <LoadingBlocks data-testid="settings-loading" count={5} widths={["35%", "60%", "80%"]} />}
         {page && !waiting && (
           <TerseSettings.Provider value={true}>

@@ -3,7 +3,7 @@ import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, Dialog, EmptyState, Initials, Input, ProgressBar, StatusDot, Textarea, toneOf, useToast,
+  Banner, Button, Collapse, Dialog, EmptyState, Initials, Input, ProgressBar, StatusDot, Textarea, toneOf, useToast,
 } from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
@@ -793,11 +793,11 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
         {d.goal && <p className="m-0 max-w-[760px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
         <Steps stage={d.stage} finished={finished} />
       </PageHead>
-      {closeError && (
+      <Collapse>{closeError && (
         <Banner tone="error" data-testid="close-error">
           <b>The project was not closed.</b> <span className="text-foreground" data-user-text>{closeError}</span>
         </Banner>
-      )}
+      )}</Collapse>
       <div className="grid min-w-0 gap-3">
         <Waiting items={items} onClose={() => setAsking(true)} onKeep={onKeep}
                  onAllow={sample ? undefined : (item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); }} />

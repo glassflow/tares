@@ -2,7 +2,7 @@ import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Loading, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Loading, Skeleton } from "../../components/edition";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -251,11 +251,11 @@ export default function Runbooks() {
         )}
       </div>
 
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Try now</Button>} data-testid="rb-error">
           <b>Runbooks did not load.</b> <span className="text-foreground">Tares could not read them just now. It will try again in 60 seconds.</span>
         </Banner>
-      )}
+      )}</Collapse>
       {!shown && !error && <RunbooksSkeleton />}
       {shown && services.length === 0 && (
         <EmptyState title="No services yet" className="border border-dashed border-border" data-testid="rb-empty">

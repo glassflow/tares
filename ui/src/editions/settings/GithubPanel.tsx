@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import { type Cloud, cloudLinkHere } from "../../cloud";
 import {
-  Banner, Button, Dialog, EmptyState, Input, ListRow, Panel, SkeletonRows, StatusDot, StatusLabel,
+  Banner, Button, Collapse, Dialog, EmptyState, Input, ListRow, Panel, SkeletonRows, StatusDot, StatusLabel,
 } from "../../components/edition";
 import { ageWords } from "../../lib/time";
 import type { GithubAppTest, GithubCredential } from "../../types";
@@ -149,22 +149,22 @@ export function GithubPanel({ cloud, title, intro = false }: { cloud: Cloud; tit
           </p>
         )}
 
-        {back.error && <Banner tone="error">{`GitHub said: ${back.error}`}</Banner>}
-        {back.event === "created" && (
+        <Collapse>{back.error && <Banner tone="error">{`GitHub said: ${back.error}`}</Banner>}</Collapse>
+        <Collapse>{back.event === "created" && (
           <Banner action={backCred && <Button onClick={() => void install(back.github)}>Install on GitHub</Button>}>
             <span>The GitHub App <code className={CODE} data-user-text>{back.github}</code> is created. Install it on the
               organization whose repositories Tares should watch.</span>
           </Banner>
-        )}
-        {back.event === "installed" && (
+        )}</Collapse>
+        <Collapse>{back.event === "installed" && (
           <Banner>
             <span><code className={CODE} data-user-text>{back.github}</code> is installed
               {back.account && <> on <code className={CODE} data-user-text>{back.account}</code></>}. Its events
               arrive in the GitHub connection.</span>
           </Banner>
-        )}
-        {back.event === "requested" && <Banner>{`Install requested: ${back.detail}.`}</Banner>}
-        {loadErr && creds && <Banner tone="error">{loadErr}</Banner>}
+        )}</Collapse>
+        <Collapse>{back.event === "requested" && <Banner>{`Install requested: ${back.detail}.`}</Banner>}</Collapse>
+        <Collapse>{loadErr && creds && <Banner tone="error">{loadErr}</Banner>}</Collapse>
 
         {adding === "app" && (
           <AppForm busy={busy} error={formErr} onCancel={close}

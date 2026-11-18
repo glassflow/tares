@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, Dialog, EmptyState, Panel, ProgressBar, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, Panel, ProgressBar, Skeleton, StatusLabel, Toaster, type Tone, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";
@@ -264,7 +264,7 @@ export default function BrainRepos() {
                 </>
               }>
         <p className="m-0 font-mono text-[14px] [overflow-wrap:anywhere]" data-user-text data-testid="brain-remove-name">{asking}</p>
-        {askError && <Banner tone="error" data-testid="brain-remove-failed"><span data-user-text>{askError}</span></Banner>}
+        <Collapse>{askError && <Banner tone="error" data-testid="brain-remove-failed"><span data-user-text>{askError}</span></Banner>}</Collapse>
       </Dialog>
       <Toaster />
     </>

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, LoadingBlocks, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
+import { Banner, Button, Collapse, LoadingBlocks, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
 import { ApiError } from "../../api";
 import { cn } from "@/lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -405,16 +405,16 @@ export function FactoryCrewView({ data, error, reload, actions }: {
         <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and the crew's autonomy.</p>
       </div>
 
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
           <b>The crew did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
         </Banner>
-      )}
+      )}</Collapse>
       {!data && !error && <LoadingBlocks data-testid="crew-loading" count={4} widths={["60%", "40%", "75%"]} />}
       {data && (
         <div className="grid gap-5">
           {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0 text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
-          {data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}
+          <Collapse>{data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}</Collapse>
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
               {(data.crews ?? []).length > 1 ? (

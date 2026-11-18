@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useState, type ReactNode } from "re
 
 import { api } from "../../api";
 import { type Cloud, cloudLinkHere } from "../../cloud";
-import { Banner, Button, Input, Loading, Panel, SkeletonLines, StatusDot } from "../../components/edition";
+import { Banner, Button, Collapse, Input, Loading, Panel, SkeletonLines, StatusDot } from "../../components/edition";
 import { TerseSettings } from "./AccessPanels";
 
 // Slack's settings, on the edition kit (TR-1392). Factory Settings and the platform Settings page
@@ -72,7 +72,7 @@ function StoredSecret({ spec }: { spec: SecretSpec }) {
     <Panel title={spec.title} data-testid={spec.testid}>
       <div className="grid gap-4">
         <p className={TEXT}>{terse ? spec.terseAbout : spec.about}</p>
-        {loadErr && <Banner tone="error">{loadErr}</Banner>}
+        <Collapse>{loadErr && <Banner tone="error">{loadErr}</Banner>}</Collapse>
         {!st ? (!loadErr && <Loading label={`Loading the ${spec.title.toLowerCase()}`}><SkeletonLines widths={["40%"]} /></Loading>) : (
           <>
             <p className="m-0 flex items-baseline gap-2 text-sm" data-testid={`${spec.testid}-state`}>
@@ -84,11 +84,11 @@ function StoredSecret({ spec }: { spec: SecretSpec }) {
                   : "Set, saved here."}
               </span>
             </p>
-            {st.env_overrides && st.stored && (
+            <Collapse>{st.env_overrides && st.stored && (
               <Banner tone="warn">
                 {`${spec.envVar} in the daemon's environment wins, so the ${spec.noun} saved here is not in use. Remove the variable, or clear the saved ${spec.noun}.`}
               </Banner>
-            )}
+            )}</Collapse>
             <form className="grid max-w-[560px] gap-3" onSubmit={(e) => { e.preventDefault(); if (value.trim()) void save(); }}>
               <Input type="password" autoComplete="off" spellCheck={false} className="font-mono"
                      label={spec.label} hint={spec.hint} error={saveErr}
@@ -196,7 +196,7 @@ export function SlackCloudPanel({ cloud, connectUrl, title }: { cloud: Cloud; co
   return (
     <Panel title={title} data-testid="slack-cloud">
       <div className="grid gap-4">
-        {err && <Banner tone="error">{err}</Banner>}
+        <Collapse>{err && <Banner tone="error">{err}</Banner>}</Collapse>
         {!st ? (!err && <Loading label="Loading Slack"><SkeletonLines widths={["35%", "70%"]} /></Loading>) : st.configured ? (
           <>
             <p className="m-0 font-semibold">

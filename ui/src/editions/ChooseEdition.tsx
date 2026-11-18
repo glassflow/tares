@@ -2,7 +2,7 @@ import * as React from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { Banner, Button, Loading, Skeleton } from "../components/edition";
+import { Banner, Button, Collapse, Loading, Skeleton } from "../components/edition";
 import { cn } from "../lib/utils";
 import type { Edition } from "../types";
 import { useEdition } from "./edition";
@@ -126,22 +126,22 @@ export default function ChooseEdition() {
           <Radio key={c.id} choice={c} on={picked === c.id} disabled={saving} pick={() => setPicked(c.id)} onKey={onKey(i)} />
         ))}
       </div>
-      {stale && (
+      <Collapse>{stale && (
         <Banner
           tone="warn" className="mt-4" data-testid="choose-stale"
           action={<Button variant="secondary" onClick={() => window.location.reload()}>Reload</Button>}
         >
           <b>Your choice was saved.</b> The cell did not answer when we asked again. Reload to continue.
         </Banner>
-      )}
-      {failed && (
+      )}</Collapse>
+      <Collapse>{failed && (
         <Banner
           tone="error" className="mt-4" data-testid="choose-error"
           action={<Button variant="secondary" onClick={save}>Retry</Button>}
         >
           <b>Your choice was not saved.</b> The cell did not answer.
         </Banner>
-      )}
+      )}</Collapse>
       {!failed && !stale && (
         <div className="mt-5">
           <Button busy={saving} onClick={save} className="w-full sm:w-auto" data-testid="choose-continue">

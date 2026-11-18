@@ -8,7 +8,7 @@ import { CLOUD_BACK } from "../../pages/Security";
 import { TerseSettings } from "../settings/AccessPanels";
 import { GithubPanel } from "../settings/GithubPanel";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
 import { Check, ChevronDown } from "../../components/icons";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -547,7 +547,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
             </div>
           </div>
         )}
-        {problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}
+        <Collapse>{problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}</Collapse>
         <div className={ACTS}>
           {/* once the app is done, saving connects it for this step: the app alone only lets the cell in */}
           {choosing ? (
@@ -698,13 +698,13 @@ function StepView({ step, footer = true, nextStep, busy, asking, notice, problem
         <p className="m-0 max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{step.why}</p>
       </div>
 
-      {step.banner && <Banner tone="warn" data-testid="step-banner"><span data-user-text>{step.banner.text}</span></Banner>}
-      {notice && (
+      <Collapse>{step.banner && <Banner tone="warn" data-testid="step-banner"><span data-user-text>{step.banner.text}</span></Banner>}</Collapse>
+      <Collapse>{notice && (
         <Banner tone="note" data-testid="flash" action={<Button variant="quiet" className={SMALL_BTN} onClick={onClearNotice}>Dismiss</Button>}>
           <span data-user-text>{notice}</span>
         </Banner>
-      )}
-      {problem && <Banner tone="error" data-testid="step-error"><span data-user-text>{problem}</span></Banner>}
+      )}</Collapse>
+      <Collapse>{problem && <Banner tone="error" data-testid="step-error"><span data-user-text>{problem}</span></Banner>}</Collapse>
 
       <section aria-labelledby="connected-head" data-testid="connected">
         <SectionHead id="connected-head">{step.connected_heading}</SectionHead>
@@ -1133,11 +1133,11 @@ function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reloa
       <div className={cn("grid min-w-0 gap-6", !showForm && "min-[900px]:grid-cols-[272px_minmax(0,1fr)] min-[900px]:gap-8")}>
         {!showForm && <Rail items={items} current={key} progress={data.progress} onPick={go} plain={!setupMode} />}
         <div ref={headRef} className="grid min-w-0 content-start gap-4">
-          {cloudBack && !showForm && (
+          <Collapse>{cloudBack && !showForm && (
             <Banner tone={cloudBack.kind === "error" ? "error" : "note"} data-testid="cloud-back">
               <span data-user-text>{cloudBack.text}{cloudBack.detail ? ` ${cloudBack.detail}` : ""}</span>
             </Banner>
-          )}
+          )}</Collapse>
           {key === "overview" ? <OverviewView data={data} numbers={stepNumbers(items)} next={nextStep} onGo={(k) => go(k as StepKey)} />
           : key === "github" ? <GithubView name={setupMode ? "GitHub" : "Code"} next={nextStep} onGo={go} footer={setupMode} />
           : key === "notifications" ? <NotificationsView />

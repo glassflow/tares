@@ -4,6 +4,7 @@ import {
   Banner,
   Button,
   Checkbox,
+  Collapse,
   Dialog,
   EmptyState,
   Initials,
@@ -183,6 +184,47 @@ function Item({ name, tone, children }: { name: string; tone: Tone; children: Re
       </div>
       <StatusLabel tone={tone}>{tone}</StatusLabel>
     </ListRow>
+  );
+}
+
+const MOVING_TONES: Tone[] = ["waiting", "working", "ready", "done"];
+
+/** Motion (TR-1431 to TR-1436): what moves when something changes under the reader. */
+function MotionDemo() {
+  const [shown, setShown] = useState(false);
+  const [rows, setRows] = useState(["service-a", "service-b", "service-c"]);
+  const [step, setStep] = useState(0);
+  const tone = MOVING_TONES[step % MOVING_TONES.length];
+  return (
+    <>
+      <Caption>A banner that comes and goes: what is below it moves, it does not jump</Caption>
+      <Row>
+        <Button variant="secondary" onClick={() => setShown((v) => !v)} data-testid="collapse-toggle">
+          {shown ? "Hide the banner" : "Show the banner"}
+        </Button>
+      </Row>
+      <div className="grid gap-4" data-testid="collapse-stack">
+        <Collapse data-testid="collapse">
+          {shown && <Banner tone="warn" data-testid="collapse-banner">GitHub needs to be reconnected.</Banner>}
+        </Collapse>
+        <p className="m-0 text-sm text-muted-foreground" data-testid="collapse-below">This line sits below the banner.</p>
+      </div>
+      <Caption>Rows that come or change places glide there</Caption>
+      <Row>
+        <Button variant="secondary" data-testid="moving-add"
+                onClick={() => setRows((r) => [...r, `service-${String.fromCharCode(97 + r.length)}`])}>Add a row</Button>
+        <Button variant="secondary" data-testid="moving-shuffle"
+                onClick={() => setRows((r) => [r[r.length - 1], ...r.slice(0, -1)])}>Move the last to the top</Button>
+      </Row>
+      <ListSection title="Moving rows" data-testid="moving-list">
+        {rows.map((r) => <ListRow key={r} data-testid="moving-row">{r}</ListRow>)}
+      </ListSection>
+      <Caption>A status that changes washes once</Caption>
+      <Row>
+        <StatusLabel tone={tone} data-testid="status-changing">{tone}</StatusLabel>
+        <Button variant="secondary" onClick={() => setStep((n) => n + 1)} data-testid="status-next">Move it on</Button>
+      </Row>
+    </>
   );
 }
 
@@ -508,6 +550,10 @@ export default function Components() {
           Could not refresh service-a.
         </Banner>
         <Banner tone="warn">{LONG}</Banner>
+      </Section>
+
+      <Section title="Motion">
+        <MotionDemo />
       </Section>
 
       <Section title="Licence needed">

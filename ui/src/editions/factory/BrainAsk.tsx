@@ -4,7 +4,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Panel, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../components/edition";
 import { Input as TextInput } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { useBrainRead } from "../brainRead";
@@ -234,7 +234,7 @@ function Asker({ data, reload }: { data: AskBrainData; reload: () => void }) {
       </form>
       <div role="status" className="sr-only" data-testid="brain-ask-live">{heard}</div>
       {tooLong && <p id="brain-ask-too-long" role="alert" className="m-0 -mt-3 text-[13px] text-err" data-testid="brain-ask-too-long">{TOO_LONG_WORDS}</p>}
-      {failure && <Banner tone="error" data-testid="brain-ask-error">{failure}</Banner>}
+      <Collapse>{failure && <Banner tone="error" data-testid="brain-ask-error">{failure}</Banner>}</Collapse>
       {(pending || shown) && (
         <div ref={region} tabIndex={-1} className="min-w-0 outline-offset-4" data-testid="brain-ask-region">
           {pending

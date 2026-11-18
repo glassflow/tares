@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../../api";
-import { Banner, Button, Checkbox, Dialog, EmptyState, Input, ListRow, Panel, SkeletonRows, StatusLabel } from "../../components/edition";
+import { Banner, Button, Checkbox, Collapse, Dialog, EmptyState, Input, ListRow, Panel, SkeletonRows, StatusLabel } from "../../components/edition";
 import { keyTitle } from "../../components/bits";
 import { Slot } from "../../eeSlots";
 import { ageWords, formatStampUTC } from "../../lib/time";
@@ -101,7 +101,7 @@ export function ApiKeysPanel({ title, intro, people, admin, me }: {
             Claude Code plugin), or change settings, which includes everything else.
           </p>
         )}
-        {loadErr && keys && <Banner tone="error">{loadErr}</Banner>}
+        <Collapse>{loadErr && keys && <Banner tone="error">{loadErr}</Banner>}</Collapse>
         {created && <CreatedKey created={created} onDone={() => setCreated(undefined)} />}
 
         {adding && (
@@ -253,7 +253,7 @@ function KeyForm({ people, defaultPerson, onCancel, onCreated }: {
         ))}
         {scopeErr && <p id="keys-scope-error" className="m-0 text-xs text-err" role="alert" data-testid="keys-scope-error">{scopeErr}</p>}
       </fieldset>
-      {err && <Banner tone="error">{err}</Banner>}
+      <Collapse>{err && <Banner tone="error">{err}</Banner>}</Collapse>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" busy={busy} data-testid="keys-create">Create key</Button>
         <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>Cancel</Button>

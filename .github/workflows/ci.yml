@@ -57,6 +57,7 @@ jobs:
           node tests/time.selftest.cjs
           node tests/words.check.cjs
           npm run design-contract
+          npm run motion-contract
           npm run build
         working-directory: ui
 

@@ -7,7 +7,7 @@
  * Run:  npm run build && node tests/source-claude-code.e2e.cjs     (from ui/, tares installed in ../.venv)
  */
 const path = require("path");
-const { chromium } = require(path.join(path.resolve(__dirname, ".."), "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { startDaemon } = require("./licensed.cjs");
 const { offendersIn } = require("./words.cjs");
 const { mockClaudeCode } = require("./source-claude-code.fixture.cjs");

@@ -5,7 +5,7 @@ import { ApiError } from "../../api";
 import { useEdition } from "../edition";
 
 import {
-  Banner, Button, EmptyState, ListSection, Loading, ServiceRows, Skeleton, SkeletonLines, type ServiceRowItem,
+  Banner, Button, Collapse, EmptyState, ListSection, Loading, type ServiceRowItem, ServiceRows, Skeleton, SkeletonLines,
 } from "../../components/edition";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { useSample } from "../sample";
@@ -279,9 +279,9 @@ export default function Home() {
   return (
     <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
       {banner}
-      {!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}
-      {failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}
-      {failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
+      <Collapse>{!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}</Collapse>
+      <Collapse>{failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}</Collapse>
+      <Collapse>{failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}</Collapse>
       {!firing && start}
       <Head title={home.headline.text} sub={home.headline.sub} />
       <Columns main={main} aside={aside} />

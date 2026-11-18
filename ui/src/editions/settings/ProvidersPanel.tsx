@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../../api";
 import {
-  Banner, Button, Dialog, EmptyState, Input, ListRow, Panel, Select, SkeletonRows, StatusDot, StatusLabel,
+  Banner, Button, Collapse, Dialog, EmptyState, Input, ListRow, Panel, Select, SkeletonRows, StatusDot, StatusLabel,
 } from "../../components/edition";
 import { ageWords } from "../../lib/time";
 import type { ModelProvider, ModelProviders } from "../../types";
@@ -128,8 +128,8 @@ export function ProvidersPanel({ title, intro = false }: { title?: string; intro
             <code className={CODE}>TARES_MODEL_PROVIDER</code>). Keys are never shown again and never exported.
           </p>
         )}
-        {loadErr && data && <Banner tone="error">{loadErr}</Banner>}
-        {note && <Banner tone={note.tone} data-testid="providers-note">{note.text}</Banner>}
+        <Collapse>{loadErr && data && <Banner tone="error">{loadErr}</Banner>}</Collapse>
+        <Collapse>{note && <Banner tone={note.tone} data-testid="providers-note">{note.text}</Banner>}</Collapse>
 
         {editing && data && (
           <ProviderForm editing={editing} existing={data.providers.find((p) => p.id === editing.id)}
@@ -245,7 +245,7 @@ function ProviderForm({ editing, existing, onChange, onCancel, onSaved }: {
                  : "Only for a gateway that speaks the Anthropic format.")
                : editing.kind === "openai" ? "Only for Azure or a proxy." : "Usually ends with /v1."}
              onChange={(e) => set({ base_url: e.target.value })} />
-      {field === "form" && <Banner tone="error">{err}</Banner>}
+      <Collapse>{field === "form" && <Banner tone="error">{err}</Banner>}</Collapse>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" busy={busy} disabled={!ok} data-testid="providers-save">Save</Button>
         <Button variant="secondary" disabled={busy} onClick={onCancel}>Cancel</Button>

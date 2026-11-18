@@ -2,7 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import { api, type CloudMember, type CloudResult, type CloudWorkspaceOverview, cloudApi } from "../../api";
 import { type Cloud, reloadList, signInLink, slugFromHost, useWorkspaceOverview, type WorkspaceOverview } from "../../cloud";
-import { Banner, Button, Checkbox, Input, ListRow, Panel, ProgressBar, SkeletonRows, Switch } from "../../components/edition";
+import { Banner, Button, Checkbox, Collapse, Input, ListRow, Panel, ProgressBar, SkeletonRows, Switch } from "../../components/edition";
 import LicenceNeeded from "../../components/LicenceNeeded";
 import { UsagePanels } from "../../components/UsagePanels";
 import { useLicence } from "../../licence";
@@ -237,7 +237,7 @@ export function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you, cell }: Omit<P
         )}
         <PanelStatus o={o} loginUrl={loginUrl} />
         {msg && <Said data-testid="team-said">{msg}</Said>}
-        {cellErr && <Banner tone="error" data-testid="team-cell-error">{sentence(cellErr)}</Banner>}
+        <Collapse>{cellErr && <Banner tone="error" data-testid="team-cell-error">{sentence(cellErr)}</Banner>}</Collapse>
         {!members ? (!failed && <SkeletonRows count={2} />) : (
           <div className={ROW}>
             {members.map((m) => {
@@ -369,13 +369,13 @@ function StoragePanel({ w, apiUrl, slug, ov, loginUrl, isOwner }: PanelProps & {
               <span className={near ? "font-semibold text-foreground" : "text-muted-foreground"} data-testid="ws-pct">{pct}%</span>
             </p>
             <ProgressBar value={pct} aria-label="Storage used" data-testid="ws-usage-bar" />
-            {near && (
+            <Collapse>{near && (
               <Banner tone="warn" data-testid="ws-near-full">
                 This workspace is {pct}% full.{" "}
                 {isOwner ? "Grow the storage below to keep room for new events."
                   : "The workspace owner can grow the storage to keep room for new events."}
               </Banner>
-            )}
+            )}</Collapse>
           </div>
         )}
         <p className={TEXT}>

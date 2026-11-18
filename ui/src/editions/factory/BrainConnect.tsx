@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Panel, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../components/edition";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input as TextInput } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
@@ -152,7 +152,7 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
       </div>
       {hidden > 0 && <p className={MUTED} data-testid="brain-connect-hidden">{hiddenWords(hidden)}</p>}
       {tooMany && <p className={MUTED} data-testid="brain-connect-too-many">{TOO_MANY_WORDS}</p>}
-      {failure && <Banner tone="error" data-testid="brain-connect-error"><span data-user-text>{failure}</span></Banner>}
+      <Collapse>{failure && <Banner tone="error" data-testid="brain-connect-error"><span data-user-text>{failure}</span></Banner>}</Collapse>
     </>
   );
 }

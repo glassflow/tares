@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { usePolling } from "../components/bits";
-import { Banner, Button, CopyLine, Panel, StatusLabel } from "../components/edition";
+import { Banner, Button, Collapse, CopyLine, Panel, StatusLabel } from "../components/edition";
 
 const INSTALL = "/plugin marketplace add glassflow/tares\n/plugin install tares@tares";
 
@@ -34,13 +34,13 @@ export default function SourceClaudeCode() {
         </p>
       </header>
 
-      {connection && to && (
+      <Collapse>{connection && to && (
         <Banner data-testid="claude-code-connected"
                 action={<Button variant="secondary" asChild><Link to={to}>Open the connection</Link></Button>}>
           Claude Code is connected. Its sessions arrive in{" "}
           <span className="font-mono" data-user-text>{connection.name}</span>.
         </Banner>
-      )}
+      )}</Collapse>
 
       <ol className="m-0 grid list-none gap-4 p-0">
         <li>

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, EmptyState, Skeleton, STATUS_TONES, StatusLabel } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Skeleton, STATUS_TONES, StatusLabel } from "../../components/edition";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { MergeQueuePanel } from "./FactoryMergeQueue";
@@ -183,11 +183,11 @@ function PullRequests({ id }: { id: string }) {
             </div>
           ) : (
             <>
-              {data.github_error && (
+              <Collapse>{data.github_error && (
                 <Banner tone="warn" data-testid="github-error">
                   <b>Some pull requests could not be read from GitHub.</b> <span className="text-foreground">{data.github_error}</span>
                 </Banner>
-              )}
+              )}</Collapse>
               {data.repos.length === 0 ? (
                 <EmptyState className="border-t border-border py-4" data-testid="github-empty">
                   No pull requests yet. Each one the crew opens for a ticket shows here.

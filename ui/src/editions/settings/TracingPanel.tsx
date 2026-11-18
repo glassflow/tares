@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, type TracingStatus } from "../../api";
-import { Banner, Button, Input, Loading, Panel, Select, SkeletonLines, StatusDot, Switch } from "../../components/edition";
+import { Banner, Button, Collapse, Input, Loading, Panel, Select, SkeletonLines, StatusDot, Switch } from "../../components/edition";
 
 // Where agents' traces go, on the edition kit (TR-1392). Factory Settings > Observability and the
 // platform Settings page (/settings/advanced?tab=observability) both show this.
@@ -98,7 +98,7 @@ export function TracingPanel({ title, intro = false }: { title?: string; intro?:
             <code className={CODE}>{st.instance}/&lt;agent&gt;</code>.
           </p>
         )}
-        {loadErr && <Banner tone="error">{loadErr}</Banner>}
+        <Collapse>{loadErr && <Banner tone="error">{loadErr}</Banner>}</Collapse>
 
         <div className="grid gap-2">
           <Switch label="Send agent traces" checked={st.enabled} disabled={busy !== undefined} data-testid="tracing-switch"

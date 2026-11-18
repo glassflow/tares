@@ -4,7 +4,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Loading, Skeleton, SkeletonLines } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Loading, Skeleton, SkeletonLines } from "../../components/edition";
 import { Check, ChevronDown } from "../../components/icons";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
@@ -338,11 +338,11 @@ export default function FactoryDocs() {
         <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">What the crew follows and remembers.</p>
       </div>
 
-      {error && (
+      <Collapse>{error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
           <b>Documents did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
         </Banner>
-      )}
+      )}</Collapse>
       {!data && !error && <DocsSkeleton />}
       {data?.empty && (
         <EmptyState title="Nothing written yet" className="border border-border bg-card" data-testid="docs-empty">

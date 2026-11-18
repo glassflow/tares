@@ -37,6 +37,7 @@ licence
 licence-needed
 licence-words
 login-handoff
+motion
 other-project
 project-idle
 projects-list

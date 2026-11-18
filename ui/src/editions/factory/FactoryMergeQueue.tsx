@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import { request } from "../../api";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import {
   NO, YES, answerRow,
@@ -48,7 +48,7 @@ const DOT: Record<Tone, string> = {
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg aria-hidden viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
-         className={cn("h-3 w-3 flex-none transition-transform duration-100 motion-reduce:transition-none", !open && "-rotate-90")}>
+         className={cn("h-3 w-3 flex-none transition-transform duration-(--dur-1) ease-out", !open && "-rotate-90")}>
       <path d="M2 4l4 4 4-4" />
     </svg>
   );
@@ -404,11 +404,11 @@ export function MergeQueuePanel({ id, data, error, reload, prsHref, sample }: {
   return (
     <section className="@container/mq grid min-w-0 gap-4" data-testid="mq-page" aria-labelledby="mq-title">
       <Head aside={data.aside} />
-      {error && (
+      <Collapse>{error && (
         <Banner tone="warn" data-testid="mq-stale">
           <b>The merge queue could not be refreshed.</b> <span className="text-foreground">What shows is from the last time it loaded.</span>
         </Banner>
-      )}
+      )}</Collapse>
       {data.intro && <p className="m-0 max-w-[760px] text-[13px] text-muted-foreground" data-testid="mq-intro">{data.intro}</p>}
       {data.groups.length === 0
         ? <p className={cn(CARD, "m-0 px-[18px] py-4 @max-[559px]/mq:px-3.5")} data-testid="mq-empty">{data.empty}</p>
