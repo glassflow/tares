@@ -1426,6 +1426,21 @@ def register(app, store, h: Host) -> SimpleNamespace:
         None on a cell of one person."""
         return team_mod.get().project_waiting(team_reader(), request, now or now_utc(), uid)
 
+    def waiting_for_person(person: dict, now=None) -> list[dict]:
+        """What waits for `person` ({id, is_admin, ...}), as their home lists it, built with no
+        request (TR-1458: a message sent to them). The private projects they are not on are
+        hidden as for their own key; on a cell of one person everything is theirs."""
+        now = now or now_utc()
+        hidden = {p["id"] for p in store.private_projects()
+                  if not store.is_project_member(p["id"], person["id"])}
+        got = team_mod.get().waiting_for_person(team_reader(), person, hidden, now)
+        if got is not None:
+            return got
+        if store.only_local_person():
+            return factory_home.waiting_items(store, fx, now, hidden)
+        return owners_mod.mine(factory_home.waiting_items(store, fx, now, hidden), person["id"],
+                               admin=bool(person.get("is_admin")))
+
     def own_stations(request: Request, rows: list[dict]) -> list[dict]:
         """`rows` kept to the caller's own crews on a team cell (see the team interface)."""
         return team_mod.get().own_stations(team_reader(), request, rows)
@@ -3387,6 +3402,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
                          team_home=team_home, project_waiting=project_waiting,
+                         waiting_for_person=waiting_for_person,
                          team_projects=team_projects, own_stations=own_stations,
                          own_desk=own_desk, own_tickets=own_tickets,
                          hidden_ids=lambda: h.hidden_ids(),

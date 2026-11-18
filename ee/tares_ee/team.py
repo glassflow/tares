@@ -86,6 +86,9 @@ class Team(SingleTeam):
     def project_waiting(self, c, request, now, project):
         return home.project_waiting(c, request, now, project)
 
+    def waiting_for_person(self, c, person, hidden, now):
+        return home.waiting_for_person(c, person, hidden, now)
+
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):
         return home.team_projects(c, request, open_ps, tickets, rows, which, now, waiting)
 

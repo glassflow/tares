@@ -137,6 +137,12 @@ class Team:
         """The team page's body for the caller, or {} when the cell has no team page."""
         raise NotImplementedError
 
+    def waiting_for_person(self, c, person: dict, hidden: set, now) -> list[dict] | None:
+        """What waits for `person` ({id, is_admin, ...}), built without a request, for a message
+        sent to them (TR-1458). `hidden` is the private projects they are not on. None when the
+        core rule answers (a cell of one, or no team code)."""
+        raise NotImplementedError
+
     def project_waiting(self, c, request, now, project: str) -> dict | None:
         """What waits in one project, by the rule of `team_home`: {mine, others}. `mine` is the
         caller's items of the project, exactly as their home lists them; `others` is what the same
@@ -230,6 +236,9 @@ class SingleTeam(Team):
         return {}
 
     def project_waiting(self, c, request, now, project):
+        return None
+
+    def waiting_for_person(self, c, person, hidden, now):
         return None
 
     @staticmethod

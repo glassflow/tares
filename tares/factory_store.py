@@ -559,6 +559,16 @@ FACTORY_SCHEMA = [
       answered_at TIMESTAMPTZ
     )""",
     "CREATE INDEX IF NOT EXISTS idx_answers_at ON answers (answered_at)",
+    # TR-1458: the waiting items a person was already told about on Slack (or that were waiting
+    # when telling them began), so each new one is sent once. The item `*` marks that the person's
+    # list was read once: what waited before that is never sent.
+    """CREATE TABLE IF NOT EXISTS waiting_told (
+      person_id  TEXT,
+      item       TEXT,
+      told_at    TIMESTAMPTZ,
+      sent       BOOLEAN,
+      PRIMARY KEY (person_id, item)
+    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -1763,6 +1773,26 @@ class FactoryStore:
         return {"id": aid, "item": item, "kind": kind, "project": project, "ask": ask,
                 "choice": choice, "said": said, "via": via, "at": at,
                 "person": self._person_refs([person_id]).get(person_id)}
+
+    def told_items(self, person_id: str) -> set[str]:
+        """The waiting items `person_id` was told about, or that were there when telling began
+        (TR-1458). Empty for a person whose list was never read; `*` once it was."""
+        with self._sread:
+            rows = self.sc.execute("SELECT item FROM waiting_told WHERE person_id = ?",
+                                   [person_id]).fetchall()
+        return {r[0] for r in rows}
+
+    def mark_told(self, person_id: str, items: list[str], sent: bool, at) -> None:
+        """Record `items` as told to `person_id`: `sent` when a message went, False when they were
+        only seen (already waiting, or the person had it switched off). An item already recorded
+        keeps its first row."""
+        if not items:
+            return
+        with self._swrite:
+            for item in dict.fromkeys(items):
+                self.sc.execute(
+                    "INSERT INTO waiting_told (person_id, item, told_at, sent) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT DO NOTHING", [person_id, item, at, sent])
 
     def list_answers(self, since, hidden: list[str] | None = None, person: str | None = None,
                      own: str | None = None) -> list[dict]:

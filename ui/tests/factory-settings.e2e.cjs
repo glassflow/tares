@@ -287,6 +287,52 @@ const until = async (fn, tries = 40) => {
       ck("the Slack item fits at 390 px", (await overflow(n.page)) <= 0);
       await n.ctx.close();
     }
+    // Messages to you (TR-1458): the person's own switch for a Slack message when something new
+    // waits for them. The root token is no person, so it has none to switch.
+    {
+      await integ(page, "notifications");
+      await page.getByTestId("slack-token").waitFor();
+      await settle(page);
+      ck("the root token is no person: no Messages to you", (await page.getByTestId("slack-me").count()) === 0);
+      const sam = ids.sam_key;   // Sam: a person with an email and a key, seeded
+      for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+        const n = await newPage(w, { token: sam, dark });
+        await integ(n.page, "notifications");
+        const me = n.page.getByTestId("slack-me");
+        await me.waitFor();
+        await settle(n.page);
+        const sw = n.page.getByTestId("slack-me-switch");
+        const tag = `Messages to you at ${w}${dark ? " dark" : ""}`;
+        if (w === 1440 && !dark) {
+          ck(`${tag}: under its own heading, on until Sam switches it off`,
+            (await me.getByRole("heading", { name: "Messages to you", exact: true }).count()) === 1
+            && (await sw.getAttribute("data-state")) === "checked");
+          ck(`${tag}: the switch has its label`, (await n.page.getByLabel("Message me on Slack when something new waits for me").count()) === 1);
+          ck(`${tag}: with Slack not connected it says nothing is sent`,
+            (await text(n.page, "slack-me-blocked")) === "Slack is not connected on this cell yet, so nothing is sent.",
+            await n.page.getByTestId("slack-me-blocked").count() ? await text(n.page, "slack-me-blocked") : "none");
+          await checkWords(n.page, ck, "Messages to you");
+          await shot(n.page, "slack-me-unconnected-1440.png");
+          await sw.click();
+          ck(`${tag}: off, and the daemon has it`, await until(async () => (await sw.getAttribute("data-state")) === "unchecked")
+            && (await api(sam, "GET", "/api/me/slack")).body?.on === false);
+          ck(`${tag}: off says nothing about what blocks it`, (await n.page.getByTestId("slack-me-blocked").count()) === 0);
+          await sw.click();
+          ck(`${tag}: on again`, await until(async () => (await api(sam, "GET", "/api/me/slack")).body?.on === true));
+          await api(TOKEN, "PUT", "/api/settings/slack-bot-token", { token: "xoxb-e2e-1458" });
+          await n.page.reload();
+          await me.waitFor();
+          await settle(n.page);
+          ck(`${tag}: connected and not yet looked up: nothing in the way`, (await n.page.getByTestId("slack-me-blocked").count()) === 0);
+          await shot(n.page, "slack-me-connected-1440.png");
+          await api(TOKEN, "DELETE", "/api/settings/slack-bot-token");
+        } else {
+          await shot(n.page, `slack-me-${w}${dark ? "-dark" : ""}.png`);
+          if (w === 390) ck(`${tag}: fits`, (await overflow(n.page)) <= 0);
+        }
+        await n.ctx.close();
+      }
+    }
     // Observability: where agents' traces go (TR-1392). Pictures first, of states set through the
     // API, so the same steps picture the panel before and after.
     {

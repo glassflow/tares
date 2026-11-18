@@ -283,6 +283,7 @@ test_trigger_debounce
 test_upgrade_hard_stop
 test_usage
 test_vercel
+test_waiting_slack
 test_watch_escalate
 test_watch_scan_edition
 test_watch_state

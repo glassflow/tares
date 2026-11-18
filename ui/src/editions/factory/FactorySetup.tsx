@@ -7,7 +7,7 @@ import { cloudLinkHere, useCloud } from "../../cloud";
 import { CLOUD_BACK } from "../../pages/Security";
 import { TerseSettings } from "../settings/AccessPanels";
 import { GithubPanel } from "../settings/GithubPanel";
-import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
+import { SlackCloudPanel, SlackSelfHostedPanels, WaitingDmPanel } from "../settings/SlackPanels";
 import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
 import { Check, ChevronDown } from "../../components/icons";
@@ -801,6 +801,7 @@ function NotificationsView() {
         {url
           ? <SlackCloudPanel cloud={cloud} connectUrl={url} />
           : <SlackSelfHostedPanels />}
+        <WaitingDmPanel />
       </TerseSettings.Provider>
     </div>
   );

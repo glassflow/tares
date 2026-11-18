@@ -47,7 +47,7 @@ METHODS = [
     "assignee_join", "assignee_resolve",
     "grant_waiting_for", "grants_waiting_for_me", "settle_grant",
     "handover_blockers", "open_questions_for", "resolve_crew",
-    "team_home", "project_waiting", "own_stations", "own_desk", "own_tickets", "team_projects",
+    "team_home", "project_waiting", "waiting_for_person", "own_stations", "own_desk", "own_tickets", "team_projects",
     "register_routes", "mcp_tools",
 ]
 
@@ -87,6 +87,7 @@ class FakeEeTeam(SingleTeam):
     def resolve_crew(self, name, person_id, machine): return (f"{name}@{machine}", machine or "")
     def team_home(self, c, request, now): return {"team": True}
     def project_waiting(self, c, request, now, project): return {"mine": [], "others": []}
+    def waiting_for_person(self, c, person, hidden, now): return []
     def own_stations(self, c, request, rows): return rows[:1]
     def own_desk(self, c, request, rows): return rows[:1]
     def own_tickets(self, c, request, tickets, projects): return {}
