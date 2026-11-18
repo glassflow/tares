@@ -103,6 +103,7 @@ class Gh:
         self.head = {}
         self.hidden = set()      # blob shas GitHub no longer has (404)
         self.undated = set()     # paths whose commits carry no date
+        self.tree_sizes = {}     # path -> the size the tree itself lists for it (the tree lists none otherwise)
 
     def count(self, what):
         return len([p for p in self.requests if f"/{what}/" in p])
@@ -118,7 +119,8 @@ class Gh:
             return httpx.Response(404, json={"message": "Not Found"})
         if rest.startswith("git/trees/"):
             shown = list(files)[:-1] if self.truncated else list(files)   # a cut tree misses files
-            return httpx.Response(200, json={"tree": [{"path": p, "type": "blob", "sha": sha_of(files[p])} for p in shown],
+            return httpx.Response(200, json={"tree": [{"path": p, "type": "blob", "sha": sha_of(files[p]),
+                                                       **({"size": self.tree_sizes[p]} if p in self.tree_sizes else {})} for p in shown],
                                              "truncated": self.truncated})
         if rest.startswith("git/blobs/"):
             want = rest[len("git/blobs/"):]
@@ -497,6 +499,37 @@ async def main():
            f"{sorted(left)} {rd.count('acme/leave', ['docs/adr'])}")
         gh.hidden.clear()
         gh.undated.clear()
+
+        print("== a file the tree lists over the size limit loses its document ==")
+        gh.repos["acme/leave"]["docs/adr/treebig.md"] = "# treebig\nsmall\n"
+        rd.request("acme/leave", ["docs/adr"])
+        await rd.wait()
+        ck("treebig.md is in lore", "docs/adr/treebig.md" in docs("acme/leave"))
+        gh.tree_sizes["docs/adr/treebig.md"] = 5_000_000
+        await ingest(push("acme/leave", modified=["docs/adr/treebig.md"]))
+        ck("a push that finds the tree's size over the limit deletes the document, with no blob read",
+           "docs/adr/treebig.md" not in docs("acme/leave") and rd.count("acme/leave", ["docs/adr"]) == 1,
+           f"{sorted(docs('acme/leave'))} {rd.count('acme/leave', ['docs/adr'])}")
+        gh.tree_sizes.clear()
+        del gh.repos["acme/leave"]["docs/adr/treebig.md"]
+
+        print("== a folder dropped while start-up could not read lore's list is pruned once it can ==")
+        gh.repos["acme/leave"]["docs/old/x.md"] = "# x\n"
+        store.set_brain_folders("acme/leave", ["docs/adr", "docs/old"], None, NOW)
+        rd.request("acme/leave", ["docs/old"])
+        await rd.wait()
+        ck("docs/old/x.md is in lore", "docs/old/x.md" in docs("acme/leave"))
+        store.set_brain_folders("acme/leave", ["docs/adr"], None, NOW)      # the folder is dropped with no hook (the cell was down)
+        dropped = dr.RepoDecisions(store, lambda: lore.client(), rd._token)
+        lore.fail("list_documents", 500, "boom")
+        await dropped._seed()
+        ck("the failed seed holds nothing", dropped._seed_failed and not dropped._held.get("acme/leave"), str(dropped._held))
+        dropped._prune.add("acme/leave")
+        dropped._kick("acme/leave")
+        await dropped.wait()
+        ck("the prune reads lore's list again and deletes the dropped folder's document",
+           "docs/old/x.md" not in docs("acme/leave") and not dropped._seed_failed and "docs/adr/keep.md" in docs("acme/leave"),
+           f"{sorted(docs('acme/leave'))} {dropped._seed_failed}")
 
         print("== a start-up that could not read lore's list reads it again before a push deletes ==")
         gh.repos["acme/leave"]["docs/adr/old.md"] = "# old\n"
