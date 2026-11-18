@@ -6,9 +6,10 @@ from .types import Decision
 
 
 class Guardrail(Integration):
-    """A guardrail integration. When it runs as a guardrail pair, `self.settings` holds that pair's
-    integration settings (secrets included) before `check` is called; the slot's own guardrail
-    reads its settings itself and leaves it empty."""
+    """A guardrail integration. When it runs as a guardrail pair, `self.settings` holds the
+    integration settings of its connection at the factory (secrets included) before `check` is
+    called: a pair holds none of its own (TR-1380). The slot's own guardrail reads its settings
+    itself and leaves it empty."""
     slot = "guardrails"
     settings: dict = {}
 

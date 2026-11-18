@@ -440,6 +440,46 @@ async def main():
         ck("list_decisions says so", dl[0]["label"] == pq["label"] and dl[0]["via"] == "console", dl[0])
         r = await allow(pq["label"], {"words": words, "scope": "project"})
         ck("allowing twice is refused", r.status_code == 409 and "already answered" in r.text, r.text)
+
+        print("== the answered-since check the crew's watch asks every few seconds ==")
+        async def answered(since=""):
+            async with mk() as cx:
+                return (await cx.get("/api/desk/answered", params={"since": since})).json()
+        as_station("crew-orchestrator", "orchestrator")
+        rq = json.loads(await mf.desk_add("Docs: tabs or spaces?", "spaces", "house style",
+                                          ["tabs", "spaces"], project="Shop"))
+        as_station()
+        before = await answered()
+        ck("an open item and a permission answered with a command are not answers", before["count"]
+           == len([d for d in json.loads(await mf.desk_list(state="answered")) if not d.get("command")]), before)
+        async with mk() as cx:
+            r = await cx.post(f"/api/desk/{rq['label']}/reply", json={"words": "spaces", "choice": "spaces"})
+        ck("the person answers it in the console", r.status_code == 200, r.text)
+        after = await answered(before["latest"])
+        ck("one answer closed since the last look", after["count"] == 1 and after["latest"] > before["latest"], after)
+        again = await answered(after["latest"])
+        ck("nothing closed since, and the time stays", again == {"count": 0, "latest": after["latest"]}, again)
+        ck("the whole desk's answers are counted from the start", (await answered())["count"] == before["count"] + 1)
+        seen = []
+        real_list_desk = app.state.store.list_desk
+        app.state.store.list_desk = lambda *a, **k: seen.append(len(rows := real_list_desk(*a, **k))) or rows
+        await answered(after["latest"])
+        everything = (await answered())["count"]
+        app.state.store.list_desk = real_list_desk
+        ck("asking since the last answer reads no more than that answer from the store", seen[0] <= 1 < seen[1],
+           str(seen))
+        ck("and an answer closed at that very time is still counted from just before it",
+           (await answered(before["latest"]))["count"] == 1 and everything == before["count"] + 1)
+        floors = []
+        app.state.store.list_desk = lambda *a, **k: floors.append(k.get("closed_since")) or real_list_desk(*a, **k)
+        naive = after["latest"].split("+")[0].split("Z")[0]
+        for form, since in (("with no zone", naive), ("ending in Z", naive + "Z")):
+            floors.clear()
+            await answered(since)
+            ck(f"a since {form} reaches the store as a time with a zone",
+               len(floors) == 1 and floors[0] is not None and floors[0].tzinfo is not None, str(floors))
+        app.state.store.list_desk = real_list_desk
+        ck("a since that is not a time is no error", (await answered("not a time")) == {"count": 0, "latest": "not a time"})
         cw = "crew-reviewer may set the review status on this crew's pull requests"
         r = await allow(crewq["label"], {"words": f'"{cw}"', "scope": "all"})
         ck("a crew-wide station's grant goes to every project", r.status_code == 200

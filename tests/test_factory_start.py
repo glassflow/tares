@@ -1,9 +1,10 @@
 """The Start checklist of the factory home (TR-756): tares/start_steps.py, its place in
 GET /api/home, and hiding it per credential (POST and DELETE /api/home/start/hide).
 
-Five steps in a fixed order with fixed words; each is done from one read of the store; the block
-hides when everything is done or when the caller hid it, for that caller only; the words pass
-tares/words.py; the cloud cell and the open source cell differ in two rows.
+Four steps in a fixed order with fixed words (TR-1312): Set up your factory, done on /setup, then three
+terminal commands (planning the first project comes after setup, on the home); each is done from one read of the store; the block hides when everything is done or
+when the caller hid it, for that caller only; the words pass tares/words.py. A terminal step keeps its
+command once done, so /setup can always show it.
 
 Run: .venv/bin/python tests/test_factory_start.py
 """
@@ -56,9 +57,9 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
-KEYS = ["claude_code", "github", "tickets", "crew", "spec"]
-ALL = dict(key_used=True, github_connected=True, linear_connected=True, stations=2,
-           spec_with_tickets=True)
+KEYS = ["setup", "install", "login", "crew"]
+ALL = dict(choices_made=True, github_connected=True, cli_version="1.0.0", machine_name="example-laptop",
+           crew_up=True)
 
 
 def done_of(ctx):
@@ -96,17 +97,20 @@ class Store:
 def units():
     print("== the steps ==")
     steps = ss.factory_steps({})
-    ck("five steps in order", [s["key"] for s in steps] == KEYS, [s["key"] for s in steps])
+    ck("four steps in order: planning the first project is not a step of setup", [s["key"] for s in steps] == KEYS, [s["key"] for s in steps])
     ck("the titles and what each gives, word for word",
        [(s["title"], s["gets"]) for s in steps] == [
-           ("Sign in from Claude Code", "Your Claude Code sessions and the crew report here."),
-           ("Connect GitHub", "The crew opens pull requests and Tares follows their reviews and checks."),
-           ("Connect Linear or GitHub Issues", "Tickets stay where your team already tracks work."),
-           ("Start the crew", "Claude Code sessions that build, review and merge your tickets."),
-           ("Write your first spec", "A plan with milestones and tickets the crew can build.")],
+           ("Set up your factory",
+            "How your crew works, your GitHub, and where tickets, reviews and checks live."),
+           ("Install Tares", "The command that starts and watches the crew."),
+           ("Sign your machine in", "So the crew on your machine reports here."),
+           ("Start the crew",
+            "It reads your choices from this workspace and asks only what belongs to your machine.")],
        [(s["title"], s["gets"]) for s in steps])
+    ck("the first is done in the console, the last three in a terminal",
+       [s["where"] for s in steps] == ["workspace", "terminal", "terminal", "terminal"])
     ck("every row has done and actions, nothing done on an empty cell",
-       all(set(s) >= {"key", "title", "gets", "done", "actions"} and isinstance(s["actions"], list)
+       all(set(s) >= {"key", "title", "gets", "done", "actions", "where"} and isinstance(s["actions"], list)
            for s in steps) and not any(s["done"] for s in steps))
     ck("a ctx as a dict or as the dataclass is the same",
        ss.factory_steps(ss.StartCtx(**ALL)) == ss.factory_steps(ALL))
@@ -116,51 +120,40 @@ def units():
     ck("everything true: everything done, no action anywhere",
        all(done_of(ALL).values()) and all(s["actions"] == [] for s in ss.factory_steps(ALL)))
     ck("everything false: nothing done", not any(done_of({}).values()))
-    for label, name, key, bad in (
-            ("a key was used", "key_used", "claude_code", True),
-            ("the claude_code connector got events", "claude_code_events", "claude_code", True),
-            ("a GitHub credential is saved", "github_connected", "github", True),
-            ("Linear is connected", "linear_connected", "tickets", True),
-            ("a project keeps its tickets in GitHub Issues", "github_issues_linked", "tickets", True),
-            ("a station reported", "stations", "crew", 1),
-            ("a factory project has tickets", "spec_with_tickets", "spec", True)):
-        d = done_of({name: bad})
-        ck(f"{label}: only {key} is done", d[key] is True and sum(d.values()) == 1, d)
-    ck("no station is not done", done_of({"stations": 0})["crew"] is False)
-    ck("Linear and GitHub Issues are either one", done_of({"linear_connected": True})["tickets"]
-       and done_of({"github_issues_linked": True})["tickets"]
-       and not done_of({"github_connected": True})["tickets"])
+    ck("the choices alone do not finish setup", done_of({"choices_made": True})["setup"] is False)
+    ck("GitHub alone does not finish setup", done_of({"github_connected": True})["setup"] is False)
+    d = done_of({"choices_made": True, "github_connected": True})
+    ck("the choices and GitHub finish setup, and only setup", d["setup"] is True and sum(d.values()) == 1, d)
+    d = done_of({"cli_version": "1.2.3"})
+    ck("a reported version finishes install only", d["install"] and not d["login"] and sum(d.values()) == 1, d)
+    d = done_of({"machine_name": "example-laptop"})
+    ck("a machine that signed in finishes install and sign in", d["install"] and d["login"]
+       and not d["crew"] and sum(d.values()) == 2, d)
+    d = done_of({"crew_up": True})
+    ck("a crew that is up finishes install, sign in and the crew", d["install"] and d["login"] and d["crew"]
+       and sum(d.values()) == 3, d)
+    ck("done rows say what was chosen",
+       step({"choices_made": True, "github_connected": True,
+             "setup_text": "You approve each merge, 2 builders, no releases. GitHub connected as example-org"},
+            "setup")["detail"] == "You approve each merge, 2 builders, no releases. GitHub connected as example-org"
+       and step({"cli_version": "1.2.3"}, "install")["detail"] == "Installed: tares 1.2.3."
+       and step({"machine_name": "example-laptop"}, "login")["detail"] == "Signed in from example-laptop.")
 
     print("== what a person can do on each row ==")
     o = {}
-    ck("sign in on an open source cell copies tares mcp",
-       step(o, "claude_code")["actions"] == [{"label": "Copy the command", "copy": "tares mcp"}],
-       step(o, "claude_code")["actions"])
-    ck("sign in on a cloud cell copies tares login",
-       step({"cloud": True}, "claude_code")["actions"] == [{"label": "Copy the command", "copy": "tares login"}])
-    ck("GitHub on an open source cell goes to the tools in Settings",
-       step(o, "github")["actions"] == [{"label": "Connect GitHub", "to": "/settings#tools"}],
-       step(o, "github")["actions"])
-    cloud = {"cloud": True, "github_connect_url": "https://cp.example.test/connect/github",
-             "linear_connect_url": "https://cp.example.test/connect/linear"}
-    ck("GitHub on a cloud cell is the link out",
-       step(cloud, "github")["actions"] == [{"label": "Connect GitHub",
-                                              "href": "https://cp.example.test/connect/github"}],
-       step(cloud, "github")["actions"])
-    ck("a cloud cell with no GitHub link goes to Settings like the open source one",
-       step({"cloud": True}, "github")["actions"] == step(o, "github")["actions"])
-    t = step(o, "tickets")["actions"]
-    ck("tickets: Linear in Settings, then GitHub Issues in the docs",
-       [a["label"] for a in t] == ["Connect Linear", "Use GitHub Issues"] and t[0] == {
-           "label": "Connect Linear", "to": "/settings#tools"}
-       and t[1]["href"].startswith("https://docs.glassflow.ai/tares/"), t)
-    ck("tickets on a cloud cell: Linear is the link out",
-       step(cloud, "tickets")["actions"][0] == {"label": "Connect Linear",
-                                                 "href": "https://cp.example.test/connect/linear"})
-    ck("the crew and the spec each copy their command",
-       step(o, "crew")["actions"] == [{"label": "Copy the command", "copy": "tares factory crew up"}]
-       and step(o, "spec")["actions"] == [{"label": "Copy the command",
-                                            "copy": 'tares factory spec "what you want to build"'}])
+    cloud = {"cloud": True}
+    ck("Set up your factory opens /setup",
+       step(o, "setup")["actions"] == [{"label": "Set up your factory", "to": "/setup"}], step(o, "setup")["actions"])
+    ck("the three commands are copied word for word",
+       [step(o, k)["actions"] for k in ("install", "login", "crew")] == [
+           [{"label": "Copy the command", "copy": "uv tool install tares"}],
+           [{"label": "Copy the command", "copy": "tares login"}],
+           [{"label": "Copy the command", "copy": "tares factory crew up"}]])
+    ck("a terminal step keeps its command, done or not",
+       [step(c, k)["command"] for c in (o, ALL) for k in ("install", "login", "crew")]
+       == ["uv tool install tares", "tares login", "tares factory crew up"] * 2)
+    ck("the command that plans a project is kept for the home", ss.SPEC_COMMAND == "tares factory spec")
+    ck("Set up your factory has no command", "command" not in step(o, "setup"))
     ck("a button is one of to, href or copy",
        all(sum(k in a for k in ("to", "href", "copy")) == 1
            for c in (o, cloud) for s in ss.factory_steps(c) for a in s["actions"]))
@@ -173,14 +166,14 @@ def units():
 
     print("== checklist ==")
     st = Store()
-    c = ss.checklist(st, ss.factory_steps({"github_connected": True, "key_used": True}), "ana")
-    ck("the counts and show", c["done"] == 2 and c["total"] == 5 and c["show"] is True
-       and len(c["steps"]) == 5, {k: v for k, v in c.items() if k != "steps"})
+    c = ss.checklist(st, ss.factory_steps({"choices_made": True, "github_connected": True}), "ana")
+    ck("the counts and show", c["done"] == 1 and c["total"] == 4 and c["show"] is True
+       and len(c["steps"]) == 4, {k: v for k, v in c.items() if k != "steps"})
     c = ss.checklist(st, ss.factory_steps(ALL), "ana")
-    ck("show is false when everything is done", c["show"] is False and c["done"] == 5, c["show"])
+    ck("show is false when everything is done", c["show"] is False and c["done"] == 4, c["show"])
     ck("show is false when everything is done, for whoever", ss.checklist(Store(), ss.factory_steps(ALL), "bo")["show"] is False)
     ss.hide(st, "ana")
-    some = ss.factory_steps({"key_used": True})
+    some = ss.factory_steps({"choices_made": True})
     ck("hidden by one person: not shown to that one", ss.checklist(st, some, "ana")["show"] is False)
     ck("hidden by one person: shown to another", ss.checklist(st, some, "bo")["show"] is True)
     ck("the setting is start_hidden:<who>", st.d == {"start_hidden:ana": "1"}, st.d)
@@ -207,54 +200,51 @@ async def main():
     async with app.router.lifespan_context(app):
         print("== the block in the home of a new cell ==")
         s0 = start_of()
-        ck("five steps, none done, shown", [s["key"] for s in s0["steps"]] == KEYS and s0["done"] == 0
-           and s0["total"] == 5 and s0["show"] is True, s0["done"])
-        ck("open source: tares mcp", s0["steps"][0]["actions"][0]["copy"] == "tares mcp")
+        ck("four steps, none done, shown", [s["key"] for s in s0["steps"]] == KEYS and s0["done"] == 0
+           and s0["total"] == 4 and s0["show"] is True, s0["done"])
+        ck("Set up your factory opens /setup",
+           s0["steps"][0]["actions"] == [{"label": "Set up your factory", "to": "/setup"}])
 
         print("== each step reads the store ==")
-        store.upsert_github_credential("main", "ghp_example", "token", "", "example-org")
-        ck("a GitHub credential finishes Connect GitHub", done_now()["github"] is True)
         async with mk() as cx:
-            made = (await cx.post("/api/keys", json={"name": "ana", "scopes": ["read"]})).json()
-            await cx.post("/api/keys", json={"name": "bo", "scopes": ["read"]})
-            ck("a key never used does not finish sign in", done_now()["claude_code"] is False)
-            async with mk(made["secret"]) as ax:
-                await ax.get("/api/whoami")
-            ck("a key that was used finishes sign in", done_now()["claude_code"] is True)
+            await cx.put("/api/crew/settings", json={"autonomy": "L3-review", "builders_max": 2,
+                                                     "releaser": False})
+        ck("the three choices alone do not finish setup (no GitHub yet)", done_now()["setup"] is False)
+        store.upsert_github_credential("main", "ghp_example", "token", "", "example-org")
+        ck("the choices and GitHub finish setup", done_now()["setup"] is True)
+        ck("and the row says what was chosen",
+           next(s for s in start_of()["steps"] if s["key"] == "setup")["detail"]
+           == "You approve each merge, 2 builders, no releases. GitHub connected as example-org")
+        async with mk() as cx:
             await cx.post("/api/projects", json={"template": "custom", "name": "billing-export",
                                                  "goal": "Invoices as a CSV file", "objects": [],
                                                  "kind": "software_factory"})
-            pid = store.list_projects()[0]["id"]
-            ck("a project with no ticket does not finish the spec", done_now()["spec"] is False)
-            await cx.post(f"/api/projects/{pid}/tickets", json={"title": "Write the export query"})
-            ck("a ticket finishes the spec", done_now()["spec"] is True)
-            ck("tickets are not done yet", done_now()["tickets"] is False)
-            store.set_project_github(pid, {"repo": "example-org/billing", "label": "tares"})
-            ck("a GitHub Issues link finishes the tickets step", done_now()["tickets"] is True)
-            store.set_project_github(pid, None)
-            ck("and unlinking undoes it", done_now()["tickets"] is False)
+            ck("a project is not a step: the steps stay the four", list(done_now()) == KEYS)
             real = fx.stations
-            fx.stations = lambda project=None: [{"name": "crew-orchestrator", "role": "orchestrator",
-                                                 "state": "idle", "project": None, "last_at": None}]
+            now = fh.now_utc()
+            row = lambda role, state: {"name": "crew-" + role, "role": role, "state": state,
+                                       "project": None, "last_at": now}
+            fx.stations = lambda project=None: [row("orchestrator", "idle")]
             try:
-                ck("a station finishes the crew step", done_now()["crew"] is True)
+                ck("an orchestrator alone does not finish the crew step", done_now()["crew"] is False)
+                fx.stations = lambda project=None: [row("orchestrator", "idle"), row("reviewer", "working")]
+                d = done_now()
+                ck("the orchestrator and the reviewer finish the crew step, and install and sign in with it",
+                   d["crew"] and d["install"] and d["login"], d)
             finally:
                 fx.stations = real
             ck("no station: not done again", done_now()["crew"] is False)
 
         print("== a cloud cell ==")
+        before = start_of()
         os.environ["TARES_LOGIN_URL"] = "https://cp.example.test/login"
-        os.environ["TARES_LINEAR_CONNECT_URL"] = "https://cp.example.test/connect/linear"
+        os.environ["TARES_GITHUB_CONNECT_URL"] = "https://cp.example.test/connect/github"
         try:
-            s1 = start_of()
-            ck("Connect Linear is the link out from the environment",
-               s1["steps"][2]["actions"][0] == {"label": "Connect Linear",
-                                                "href": "https://cp.example.test/connect/linear"},
-               s1["steps"][2]["actions"])
+            ck("the connect links live on /setup: the cloud's environment changes no step here",
+               start_of() == before)
         finally:
             os.environ.pop("TARES_LOGIN_URL")
-            os.environ.pop("TARES_LINEAR_CONNECT_URL")
-        ck("and back to Settings without it", start_of()["steps"][2]["actions"][0]["to"] == "/settings#tools")
+            os.environ.pop("TARES_GITHUB_CONNECT_URL")
 
         print("== hiding, per credential ==")
         async with mk() as cx:
@@ -267,8 +257,8 @@ async def main():
             ck("both see the block", a0["show"] is True and b0["show"] is True)
             r = await ax.post("/api/home/start/hide")
             ck("a read key may hide its own block", r.status_code == 200, r.text)
-            ck("and gets its new start block back", r.json()["show"] is False and r.json()["total"] == 5
-               and len(r.json()["steps"]) == 5, r.text[:200])
+            ck("and gets its new start block back", r.json()["show"] is False and r.json()["total"] == 4
+               and len(r.json()["steps"]) == 4, r.text[:200])
             ck("key-a sees it hidden at once, not after the cache",
                (await ax.get("/api/home")).json()["start"]["show"] is False)
             ck("key-b still sees it", (await bx.get("/api/home")).json()["start"]["show"] is True)

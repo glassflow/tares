@@ -12,7 +12,11 @@ without, the repository has no CI (`none`). The setting "This repository has no 
 outright.
 
 How a check counts: still running is pending; success, neutral and skipped pass; cancelled,
-timed out, action required, startup failure, stale and failure fail. The reviewer's own
+timed out, action required, startup failure, stale and failure fail. Only the newest run of a check name counts (a draft's cancelled run does not fail a PR
+whose later run of that name passed), and only the newest status of a context. A job cancelled in a
+workflow run that a later run of the same workflow replaced (a draft run cancelled by marking the PR
+ready) does not count at all, and while that later run has not finished the answer is at least
+pending, since its jobs may not exist yet. The reviewer's own
 `factory/review` status is never a check.
 """
 from __future__ import annotations

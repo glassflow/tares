@@ -80,7 +80,7 @@ function startDaemon(port, edition) {
     ck("the command follows the idea, quotes and dollar signs escaped",
        (await cmd.innerText()).trim() === 'tares factory spec "A \\"billing\\" page for \\$TEAM"', await cmd.innerText());
     ck("what happens next, in four steps", (await page.getByTestId("new-project-next").locator("li").count()) === 4);
-    ck("first time: points to Home's Get started list", (await page.getByTestId("new-project-first-time").getByRole("link", { name: "Home" }).getAttribute("href")) === "/");
+    ck("no line about a Get started list: setup is the menu's", (await page.getByTestId("new-project-first-time").count()) === 0);
     await page.getByTestId("new-project-copy").click();
     await page.getByText("Copied. Paste it in a terminal in the repo the project builds on.").first().waitFor({ timeout: 5000 });
     const clip = await page.evaluate(() => navigator.clipboard.readText());

@@ -329,16 +329,13 @@ export default function Timeline() {
           rangeWords: d.range_words, emptyWords: d.empty_words });
   }, [res]);
 
-  // a changed bar reads again at once; the first load is the hook's own
-  // (when the bar also flips between a live and a fixed range, the hook starts over and reads by itself)
+  // a changed bar reads again at once (the hook does not read by itself when only its interval changes,
+  // as when the bar flips between a live and a fixed range, so this is the one read in both cases)
   const seen = React.useRef(key);
-  const wasLive = React.useRef(live);
   React.useEffect(() => {
     if (seen.current === key) return;
     seen.current = key;
-    const flipped = wasLive.current !== live;
-    wasLive.current = live;
-    if (!flipped) polled.reload();
+    polled.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 

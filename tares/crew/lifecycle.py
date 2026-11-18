@@ -24,9 +24,9 @@ import subprocess
 import sys
 import time
 
-from . import claude, jsonrun, launch, locks, pace, stations, state, watch
+from . import claude, jsonrun, launch, locks, pace, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
-from .errors import CrewError, SessionListUnreadableError
+from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
@@ -48,6 +48,10 @@ def stop_watch(paths: CrewPaths, say) -> None:
 
 
 # ---------- what a restart tells a station ----------
+
+
+REPORT_READ = ("re-read your report (a short state file; for older events use `tares factory report grep`, "
+               "never cat or tail a file)")  # every reminder to a station says this, word for word
 
 
 def rearm_text(client: TaresClient) -> str:
@@ -112,7 +116,7 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     old_id = get("id")
     skill = launch.parent_role(parent, paths) if role == "helper" else role
     prompt = rest[0] if rest else ""
-    again = (f"Reload the skills factory-protocol and station-{skill}, re-read your report and your work on "
+    again = (f"Reload the skills factory-protocol and station-{skill}, {REPORT_READ} and your work on "
              f"Tares, {rearm_text(client)}, then carry on where your report left off.")
     if not prompt and fresh:
         prompt = ("You were started again under the same name, in a new conversation: the last one kept "
@@ -155,8 +159,11 @@ def _keep_earlier(paths: CrewPaths, station: str, old_id: str, session: str) -> 
         pass
 
 
-def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) -> None:
-    """factory restart <station> [--fresh]: stop it and start it again with freshly generated settings."""
+def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str,
+            only_between_turns: bool = False) -> None:
+    """factory restart <station> [--fresh]: stop it and start it again with freshly generated settings.
+    With `only_between_turns` (a wake) the station is looked at again under its lock, right before it is
+    stopped, and left running (NotBetweenTurnsError) when it has started a turn or been attached since."""
     state.require_crew(paths)
     if not args or not args[0]:
         _usage(RESTART_USAGE)
@@ -169,6 +176,9 @@ def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: st
         claude.active_json(claude_bin)
     except SessionListUnreadableError:
         raise SessionListUnreadableError(f"{claude.UNREAD}; not stopping {station} without being able to see it stop") from None
+    if only_between_turns and (claude.attached(station, paths)
+                               or not claude.between_turns(station, claude_bin, paths)):
+        raise NotBetweenTurnsError(f"{station} is in a turn; not stopping it")
     _stop_session(job_id, claude_bin)
     for _ in range(_stop_wait(client.env)):
         if not claude.is_alive(station, "", claude_bin, paths):
@@ -212,6 +222,11 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     state.event("retired", station, job_id, paths=paths)
     tell_tares_ended(client, paths, station)
     client.say(f"retired {station}")
+    parked = report.undelivered(paths, station)
+    if parked:
+        client.say(f"warning: {station}'s report holds {len(parked)} line{'s' if len(parked) != 1 else ''} under "
+                   "## Undelivered; `report grep --section` skips a retired station, so read them in the file and pass "
+                   f"them on ({paths.reports_dir / (station + '.md')})")
 
 
 def tell_tares_ended(client: TaresClient, paths: CrewPaths, station: str) -> None:

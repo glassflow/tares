@@ -101,6 +101,19 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-1011
     "/people": { page: lazyPage(() => import("./factory/FactoryPeople")), fallback: { redirect: "/settings" } },
 
+    // Integrations: the setup sections, to come back to
+    "/integrations": { page: lazyPage(() => import("./factory/FactoryIntegrations")), fallback: { redirect: "/" } },
+
+    // TR-872
+    "/setup": { page: lazyPage(() => import("./factory/FactorySetup")), fallback: { redirect: "/" } },
+
+    // TR-1204
+    "/brain": { page: lazyPage(() => import("./factory/BrainRepos")), fallback: "today" },
+    // TR-1206
+    "/brain/ask": { page: lazyPage(() => import("./factory/BrainAsk")), fallback: "today" },
+    // TR-1205
+    "/brain/connect": { page: lazyPage(() => import("./factory/BrainConnect")), fallback: "today" },
+
     // TR-732: the factory home is /, so Start (the login landing) goes there
     "/start": { page: null, fallback: { redirect: "/" } },
   },

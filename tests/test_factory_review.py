@@ -289,7 +289,7 @@ async def main():
         as_station()
         await mf.set_stage("T1", "review", project="Blog")
         await mf.set_stage("T2", "review", project="Shop")
-        q = json.loads(await mf.review_queue())
+        q = json.loads(await mf.review_queue())["queue"]
         ck("tickets blocking a milestone come first",
            [(x["project_name"], x["ticket"]) for x in q][:2] in ([("Shop", "T1"), ("Shop", "T2")],
                                                                  [("Shop", "T2"), ("Shop", "T1")])
@@ -368,7 +368,7 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
     def records():
         return [r for r in store.ticket_reviews(gated["id"]) if r["by"] == "fakegate"]
 
-    q = json.loads(await mf.review_queue())
+    q = json.loads(await mf.review_queue())["queue"]
     ck("the Tares gate (the default) still has the ticket in the reviewer's queue",
        any(x["project_name"] == "Gated" for x in q), q)
     ck("outside_gate is None without a choice", factory_api.outside_gate(store, uid) is None)
@@ -379,7 +379,7 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
     store.set_project_choice(uid, "review", "fakegate", {}, by="test")
     ck("an outside gate is named", factory_api.outside_gate(store, uid) == ("fakegate", "FakeBot"),
        factory_api.outside_gate(store, uid))
-    q = json.loads(await mf.review_queue())
+    q = json.loads(await mf.review_queue())["queue"]
     ck("the crew reviewer's queue leaves the ticket out", not any(x["project_name"] == "Gated" for x in q), q)
     rows = [x for x in factory_api_queue_all(store) if x["project_name"] == "Gated"]
     ck("the pages' queue has it, naming the gate", rows and rows[0]["outside_gate"] == "FakeBot", rows)

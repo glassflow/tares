@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../../api";
-import { type Cloud, cloudLink } from "../../cloud";
+import { type Cloud, cloudLinkHere } from "../../cloud";
 import { Banner, Button, Collapse, Input, Loading, Panel, SkeletonLines, StatusDot } from "../../components/edition";
+import { TerseSettings } from "./AccessPanels";
 
 // Slack's settings, on the edition kit (TR-1392). Factory Settings and the platform Settings page
 // (which the AI SRE edition opens at /settings/advanced?tab=slack) both show these.
@@ -21,6 +22,8 @@ interface SecretSpec {
   title: string;
   /** What it is for and where to find it in Slack. */
   about: ReactNode;
+  /** The same, on a page that has already said what Slack is for (the factory's Integrations). */
+  terseAbout: ReactNode;
   envVar: string;
   /** Slack's own name for it, so the label matches the page the person copies it from. */
   label: string;
@@ -43,6 +46,7 @@ function StoredSecret({ spec }: { spec: SecretSpec }) {
   const [loadErr, setLoadErr] = useState<string>();
   const [saveErr, setSaveErr] = useState<string>();
   const { status } = spec;
+  const terse = useContext(TerseSettings);
 
   const load = useCallback(() => status().then((s) => { setSt(s); setLoadErr(undefined); }).catch((e) => setLoadErr(messageOf(e))), [status]);
   useEffect(() => { void load(); }, [load]);
@@ -67,14 +71,15 @@ function StoredSecret({ spec }: { spec: SecretSpec }) {
   return (
     <Panel title={spec.title} data-testid={spec.testid}>
       <div className="grid gap-4">
-        <p className={TEXT}>{spec.about}</p>
+        <p className={TEXT}>{terse ? spec.terseAbout : spec.about}</p>
         <Collapse>{loadErr && <Banner tone="error">{loadErr}</Banner>}</Collapse>
         {!st ? (!loadErr && <Loading label={`Loading the ${spec.title.toLowerCase()}`}><SkeletonLines widths={["40%"]} /></Loading>) : (
           <>
             <p className="m-0 flex items-baseline gap-2 text-sm" data-testid={`${spec.testid}-state`}>
               <StatusDot tone={st.configured ? "ready" : "quiet"} />
               <span>
-                {!st.configured ? `Not set. ${spec.unset}`
+                {!st.configured ? (terse ? "Not set yet." : `Not set. ${spec.unset}`)
+                  : terse ? "Saved."
                   : fromEnv ? <>Set, from <code className={CODE}>{st.source.slice(4)}</code> in the daemon's environment.</>
                   : "Set, saved here."}
               </span>
@@ -112,6 +117,13 @@ const BOT_TOKEN: SecretSpec = {
       Paste its Bot User OAuth Token here, or set <code className={CODE}>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment.
     </>
   ),
+  terseAbout: (
+    <>
+      The Bot User OAuth Token of your Slack app. The app needs the bot scopes <code className={CODE}>chat:write</code>,{" "}
+      <code className={CODE}>chat:write.public</code>, <code className={CODE}>channels:read</code>,{" "}
+      <code className={CODE}>groups:read</code> and <code className={CODE}>commands</code>.
+    </>
+  ),
   envVar: "TARES_SLACK_BOT_TOKEN",
   label: "Bot User OAuth Token",
   hint: "Starts with xoxb-. Once saved it is never shown again, here or through the API.",
@@ -132,6 +144,12 @@ const SIGNING_SECRET: SecretSpec = {
       <code className={CODE}>/tares ask what happened to checkout-svc?</code> in any channel. Paste the app's Signing Secret
       (under Basic Information) here, or set <code className={CODE}>TARES_SLACK_SIGNING_SECRET</code>. Tares checks every
       request from Slack against it and refuses one older than 5 minutes.
+    </>
+  ),
+  terseAbout: (
+    <>
+      Lets your team answer the crew from Slack. Paste the app's Signing Secret (Basic Information), and point its{" "}
+      <code className={CODE}>/tares</code> command at <code className={CODE}>/api/slack/events</code>.
     </>
   ),
   envVar: "TARES_SLACK_SIGNING_SECRET",
@@ -174,6 +192,7 @@ export function SlackCloudPanel({ cloud, connectUrl, title }: { cloud: Cloud; co
     api.slackTokenStatus().then(setSt).catch((e) => setErr(messageOf(e)));
   }, []);
   const canConnect = cloud.isOwner !== false;
+  const terse = useContext(TerseSettings);
   return (
     <Panel title={title} data-testid="slack-cloud">
       <div className="grid gap-4">
@@ -184,22 +203,26 @@ export function SlackCloudPanel({ cloud, connectUrl, title }: { cloud: Cloud; co
               {st.team?.name ? <>Connected to <span data-user-text>{st.team.name}</span></> : "Connected"}
             </p>
             <p className={TEXT}>
-              Tares posts what it finds to the channels you pick, and your team can ask it from any channel with{" "}
-              <code className={CODE}>/tares ask</code>. It posts to any public channel; for a private one, add it there first
-              with <code className={CODE}>/invite @Tares</code>.
+              {terse
+                ? <>For a private channel, invite Tares there first with <code className={CODE}>/invite @Tares</code>.</>
+                : <>Tares posts what it finds to the channels you pick, and your team can ask it from any channel with{" "}
+                  <code className={CODE}>/tares ask</code>. It posts to any public channel; for a private one, add it there first
+                  with <code className={CODE}>/invite @Tares</code>.</>}
             </p>
             {canConnect
-              ? <div><Button asChild variant="secondary"><a href={cloudLink(connectUrl, { action: "disconnect" }, "slack")}>Disconnect</a></Button></div>
+              ? <div><Button asChild variant="secondary"><a href={cloudLinkHere(connectUrl, { action: "disconnect" })}>Disconnect</a></Button></div>
               : <OwnerOnly cloud={cloud} />}
           </>
         ) : (
           <>
-            <p className={TEXT}>
-              Connect Slack to have Tares post what it finds to a channel, and to let your team ask it from Slack with{" "}
-              <code className={CODE}>/tares ask</code>.
-            </p>
+            {!terse && (
+              <p className={TEXT}>
+                Connect Slack to have Tares post what it finds to a channel, and to let your team ask it from Slack with{" "}
+                <code className={CODE}>/tares ask</code>.
+              </p>
+            )}
             {canConnect
-              ? <div><Button asChild><a href={cloudLink(connectUrl, {}, "slack")}>Connect Slack</a></Button></div>
+              ? <div><Button asChild><a href={cloudLinkHere(connectUrl)}>Connect Slack</a></Button></div>
               : <OwnerOnly cloud={cloud} />}
           </>
         )}

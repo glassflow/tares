@@ -153,6 +153,8 @@ async def main():
             await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n")
 
         store.update_ticket(t_vault, holder="atlas-build-m1")
+        # Vault picks an integration; the setup page names the projects that pick one (TR-871)
+        store.set_project_choice(vault, "tickets", "tares", {}, "Lee")
         # a grant given on Vault, in the project's own grants document
         store.create_doc(vault, "grants", "Grants", '# Grants\n\n- "Zephyrvault may read the status of a '
                          'commit" (2026-11-01)\n')
@@ -164,7 +166,8 @@ async def main():
                          f'commit" (2026-11-01)\n- "{d_label}" (2026-11-02)\n')
 
         lists = ["/api/factory/projects", "/api/factory/tickets", "/api/factory/reviews",
-                 "/api/factory/docs", "/api/factory/crew", "/api/factory/settings", "/api/home"]
+                 "/api/factory/docs", "/api/factory/crew", "/api/factory/settings", "/api/factory/setup",
+                 "/api/home"]
         singles = [f"/api/factory/projects/{vault}", f"/api/factory/projects/{vault}/tickets/{t_vault}",
                    f"/api/factory/projects/{vault}/tickets/T1"]
 
@@ -286,6 +289,22 @@ async def main():
         m = r.json().get("talk_to")
         ck("Lee: the orchestrator does not report an empty desk, the question of Vault is open",
            bool(m) and m.get("doing") != "Desk empty.", m)
+
+        print("== the answered-since count leaves out Vault, and what is not hers with mine=1 ==")
+        store.close_desk_item(dk_vault["id"], "answered", None, now_utc())
+        answered = lambda who, **q: get(who, "/api/desk/answered", **q)
+        r = await answered("kim")
+        ck("Kim: the answer in Vault is not counted, the one in Atlas is", r.status_code == 200
+           and r.json()["count"] == 1, r.text)
+        r = await answered("lee")
+        ck("Lee, who leads Vault: both answers are counted", r.status_code == 200
+           and r.json()["count"] == 2, r.text)
+        r = await answered("lee", mine=1)
+        ck("Lee with mine=1: only the answers that were for her", r.status_code == 200
+           and r.json()["count"] == 1, r.text)
+        r = await answered("kim", mine=1)
+        ck("Kim with mine=1: the answer in Atlas, addressed to her", r.status_code == 200
+           and r.json()["count"] == 1, r.text)
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

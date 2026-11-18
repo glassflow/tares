@@ -1,7 +1,10 @@
 """SessionStart hook: tells a tares-factory crew station who it is on start, resume and after compaction,
 and a person's own session bound to a project (`tares factory session`, TARES_PROJECT set) which project
 it works on (or, with TARES_SESSION_KIND=contributor, that it only contributes to it).
-Silent in every other session. It replaced session-start.sh (TR-1103): the same words, no jq.
+Where the cell reports a code brain with a ready repo (`GET /api/brain` on TARES_FACTORY_URL), any of
+these sessions is also told to ask the brain before it reads code (TR-1202). Any shell with
+TARES_FACTORY_URL set makes that one call (a cell without a brain, or a slow one, changes nothing). Silent
+in every other session. It replaced session-start.sh (TR-1103): the same words, no jq.
 
 Started by `tares hook session-start` (it runs this file in process), or by hand with python3.
 Standard library only, and 3.9-safe: it runs on a person's machine, not in the repo's venv.
@@ -14,15 +17,25 @@ and never fails the hook: when the check cannot run, only that line is dropped.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import urllib.request
 
 # "compact" + "d" read "compactd" in the bash hook
+# The same words as tares.crew.lifecycle.REPORT_READ: the hook stands alone, so test_crew_lifecycle checks they match.
+REPORT_READ = ("re-read your report (a short state file; for older events use `tares factory report grep`, "
+               "never cat or tail a file)")
 PAST = {"resume": "resumed", "compact": "compacted", "clear": "cleared"}
 COMPAT_SECONDS = 2.0  # the longest the compat check may take when it has to ask a `tares` on PATH
+BRAIN_SECONDS = 1.5   # the longest the brain check may take (TR-1202); the hook as a whole has 5 seconds
+BRAIN_ADVICE = ("This cell has a code brain with ready repos{repos}. Before reading code, call `search_brain` "
+                "or `ask_brain` (Tares MCP tools); use grep only for repos those tools say are not ready, and "
+                "to confirm an exact line before editing it.")
 
 
 def env(name, default=""):
@@ -84,6 +97,64 @@ def compat_line(root: str) -> str:
         return ""
     lines = stdout.decode("utf-8", errors="replace").splitlines()
     return lines[0].strip() if lines else ""
+
+
+def crew_bearer(root: str, url: str) -> str:
+    """The token the plugin's MCP header helper would present to `url`, or "" (it never fails)."""
+    try:
+        path = os.path.join(root, "scripts", "mcp_headers.py")
+        spec = importlib.util.spec_from_file_location("tares_plugin_mcp_headers", path)
+        if spec is None or spec.loader is None:
+            return ""
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        return helper.crew_token() or helper.saved_key(url.rstrip("/") + "/mcp")
+    except Exception:
+        return ""
+
+
+def brain_ready_repos(root: str, url: str) -> list:
+    """The names of the ready repos `GET /api/brain` on `url` lists, or [] (it may raise: brain_line catches)."""
+    req = urllib.request.Request(url.rstrip("/") + "/api/brain", headers={"Accept": "application/json"})
+    token = crew_bearer(root, url)
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(req, timeout=BRAIN_SECONDS) as resp:
+        data = json.loads(resp.read(1 << 20).decode("utf-8", errors="replace"))
+    if not isinstance(data, dict) or data.get("configured") is not True:
+        return []
+    rows = data.get("repos")
+    return [str(r.get("repo")) for r in rows if isinstance(r, dict) and r.get("state") == "ready" and r.get("repo")] \
+        if isinstance(rows, list) else []
+
+
+def brain_line(root: str) -> str:
+    """One paragraph telling the session to ask the code brain first, only when the cell reports one
+    (`GET /api/brain` says configured with at least one ready repo), else "". The cell is
+    TARES_FACTORY_URL, the one the crew uses; with it unset, in a session that is not the crew's or a
+    spec session's, nothing is asked. Any failure (no brain, 404, auth, a slow or dead cell) gives "":
+    a cell without a brain changes nothing. The whole check has BRAIN_SECONDS: a socket timeout covers
+    one read, not a body that arrives a byte at a time or a lookup that hangs, so the call runs in a
+    daemon thread the hook stops waiting for."""
+    url = os.environ.get("TARES_FACTORY_URL", "").strip()
+    if not url:
+        return ""
+    found: list = []
+
+    def work() -> None:
+        try:
+            found.append(brain_ready_repos(root, url))
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(BRAIN_SECONDS)
+    ready = found[0] if found else []
+    if not ready:
+        return ""
+    names = ", ".join(ready[:5]) + (f" and {len(ready) - 5} more" if len(ready) > 5 else "")
+    return BRAIN_ADVICE.format(repos=f" ({names})")
 
 
 def halt_reason(path: str) -> str:
@@ -152,9 +223,16 @@ def context_for(source: str) -> str:
              f"({env('TARES_FACTORY_URL', 'the crew Tares')}), through the Tares MCP tools.")
     text += f" Your rules are in the skills `factory-protocol` and `station-{station_skill(role)}`."
     if source != "startup":
-        text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, re-read your report and your work on "
-                 "Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows "
-                 "idle_wake true, arm none: the factory wakes you), then carry on where your report left off.")
+        if source == "compact":
+            text += (" This session was compacted: your skills are re-attached, so load one again only if its "
+                     "re-attached copy says it was truncated or you cannot find a rule you need; a page is never "
+                     "re-attached, so Read it again when a situation needs it. Then " + REPORT_READ + " and your work on Tares, check "
+                     "CronList and re-arm your schedule if it is missing (if get_crew_settings shows idle_wake "
+                     "true, arm none: the factory wakes you), then carry on where your report left off.")
+        else:
+            text += (f" This session was {PAST.get(source, source + 'd')}: load both skills again, " + REPORT_READ + " and your work on "
+                     "Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows "
+                     "idle_wake true, arm none: the factory wakes you), then carry on where your report left off.")
     home = os.environ.get("FACTORY_HOME", "")
     if home and os.path.isfile(os.path.join(home, "HALT")):
         text += (f" The crew is halted ({halt_reason(os.path.join(home, 'HALT'))}): start nothing new until "
@@ -169,6 +247,9 @@ def main() -> int:
         raw = b""
     source = read_source(raw)
     text = context_for(source)
+    brain = brain_line(plugin_root())
+    if brain:
+        text = f"{text} {brain}" if text else brain
     line = compat_line(plugin_root())
     if line:
         # after whatever the session is told; alone in a session that would hear nothing

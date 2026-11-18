@@ -49,6 +49,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FACTORY_DIR))
 
 import fake_claude  # noqa: E402
+from tares.crew.errors import NotBetweenTurnsError  # noqa: E402
 from tares.crew import cc_update, claude, dispatch, kit, launch as L, lifecycle, locks, state, watch, watch_revive  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
@@ -253,7 +254,14 @@ restarts: list = []   # what upgrade_station handed to lifecycle.restart
 upgrades: list = []   # the watch restarting itself
 
 
-def fake_restart(client, paths, args, claude_bin=None):
+guards: list = []   # the only_between_turns each restart was asked with
+in_a_turn = [False]   # the station starts a turn after the round looked, before the restart
+
+
+def fake_restart(client, paths, args, claude_bin=None, only_between_turns=False):
+    if only_between_turns and in_a_turn[0]:
+        raise NotBetweenTurnsError(f"{args[0]} is in a turn; not stopping it")
+    guards.append(only_between_turns)
     restarts.append(list(args))
     state.stations_put(args[0], {"kit": kit.kit_version(KITDIR)}, paths)
 
@@ -638,6 +646,21 @@ with FakeTares() as ft:
     with TaresClient(CP, os.environ, lambda m: None) as c:
         rc = kit.upgrade_station(CP, c, "shop-build-m1", kit.kit_version(KITDIR), claude_bin=BIN)
 ck("(control) an idle one is: rc 0, restarted, upgraded recorded", rc == 0 and len(restarts) == 1 and len(kinds("upgraded")) == 1, str((rc, restarts, kinds())))
+ck("the restart is asked to stop the station only between turns", bool(guards) and all(guards), str(guards))
+
+# it starts a turn after the last look: the restart refuses, nothing is recorded, the station is not stopped
+world({"shop-build-m1": station()}, IDLE)
+in_a_turn[0] = True
+kit_before = state.stations_get("shop-build-m1", "kit", paths=CP)
+msgs = []
+with FakeTares() as ft:
+    with TaresClient(CP, os.environ, msgs.append) as c:
+        rc = kit.upgrade_station(CP, c, "shop-build-m1", kit.kit_version(KITDIR), claude_bin=BIN)
+in_a_turn[0] = False
+ck("a station that started a turn at the restart is left running: rc 4, no event, no kit recorded",
+   rc == 4 and restarts == [] and kinds("upgraded") == [] and state.stations_get("shop-build-m1", "kit", paths=CP) == kit_before,
+   str((rc, restarts, kinds())))
+ck("...and it says so, not that the restart failed", any("started a turn" in m for m in msgs) and not any("could not restart" in m for m in msgs), str(msgs))
 
 # the watch restarts itself, once the kit has held for a round
 world({"shop-build-m1": station(kit=kit.kit_version(KITDIR))}, IDLE)

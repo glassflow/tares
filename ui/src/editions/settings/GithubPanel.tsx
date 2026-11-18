@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../../api";
-import { type Cloud, cloudLink } from "../../cloud";
+import { type Cloud, cloudLinkHere } from "../../cloud";
 import {
   Banner, Button, Collapse, Dialog, EmptyState, Input, ListRow, Panel, SkeletonRows, StatusDot, StatusLabel,
 } from "../../components/edition";
@@ -124,7 +124,7 @@ export function GithubPanel({ cloud, title, intro = false }: { cloud: Cloud; tit
   const action = !adding && (
     <div className="flex flex-wrap gap-2">
       {connectUrl
-        ? canConnect && <Button asChild><a href={cloudLink(connectUrl, {}, "github")} data-testid="github-connect">Connect GitHub</a></Button>
+        ? canConnect && <Button asChild><a href={cloudLinkHere(connectUrl)} data-testid="github-connect">Connect GitHub</a></Button>
         : <Button onClick={() => open("app")} data-testid="github-create-app">Create GitHub App</Button>}
       <Button variant="secondary" onClick={() => open("token")} data-testid="github-add-token">Add a personal token</Button>
     </div>
@@ -325,7 +325,7 @@ function AccountRow({ c, connectUrl, canConnect, test, onTest, onInstall, rotati
   const iid = insts[0]?.id;
   const repos = c.repositories ?? [];
   const repoLink = (params: Record<string, string>) =>
-    cloudLink(connectUrl!, { installation: String(iid), ...params }, "github");
+    cloudLinkHere(connectUrl!, { installation: String(iid), ...params });
   const uses = usedBy(c);
 
   const who = isApp(c)

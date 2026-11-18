@@ -9,8 +9,12 @@ this order, and stops at the first that applies:
      GitHub issues link, its GitHub repos, the tracing settings), source "carried";
   4. the built-in default of the slot, source "default".
 
-A project's `settings` are only its own stored row, never merged with the factory's, so a
-project can never use a factory secret.
+A project's choice names an integration the factory has connected and adds only its own plain
+fields (a branch, a mapping): the `settings` of a "project" result are the factory connection's
+overlaid with those fields. A secret or an address is never the project's: it is set where the
+integration is connected, at the factory, so a project holds none (TR-1380). A project choice
+for an integration that is no longer connected is passed over for the factory's default, with
+`reason` saying so.
 
 A choice whose integration is not installed, or needs an enterprise licence the cell does not
 have, resolves to the slot's default, with `reason` saying which. `effective` never raises for a
@@ -42,6 +46,7 @@ DEFAULTS: dict[str, str] = {
 
 NOT_INSTALLED = "not installed"
 NEEDS_LICENCE = "needs an enterprise licence"
+NOT_CONNECTED = "not connected"
 
 
 @dataclass(frozen=True)
@@ -112,14 +117,23 @@ def effective(slot: str, project_uid: str | None = None, *, store) -> Effective:
     `store` is the cell's store. Raises ValueError only for a slot that does not exist."""
     if slot not in SLOTS:
         raise ValueError(f"slot must be one of {', '.join(SLOTS)} (got {slot!r})")
+    passed = ""
     if project_uid and slot in PROJECT_SLOTS:
         row = store.get_project_choice(project_uid, slot)
         if row is not None:
-            return _usable(slot, row["name"], row["settings"], "project")
+            if store.is_connected(slot, row["name"]):
+                base = store.get_connection(slot, row["name"]) or {}
+                return _usable(slot, row["name"], {**(base.get("settings") or {}), **row["settings"]},
+                               "project")
+            passed = NOT_CONNECTED
     row = store.get_choice(slot)
     if row is not None:
-        return _usable(slot, row["name"], row["settings"], "factory")
+        got = _usable(slot, row["name"], row["settings"], "factory")
+        return got if not passed or got.reason else Effective(got.integration, got.settings,
+                                                              got.source, passed)
     found = carried(slot, project_uid, store)
     if found is not None:
-        return _usable(slot, found[0], found[1], "carried")
-    return _default(slot)
+        got = _usable(slot, found[0], found[1], "carried")
+        return got if not passed or got.reason else Effective(got.integration, got.settings,
+                                                              got.source, passed)
+    return _default(slot, passed)

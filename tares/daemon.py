@@ -797,6 +797,7 @@ def make_app() -> FastAPI:
     _PROJECT_INTEGRATION = re.compile(
         r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks|guardrails/pairs(/[^/]+)?)$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
+    _BRAIN_DECISION_WRITE = re.compile(r"^/api/brain/decisions(/[^/]+)?$")
 
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
@@ -824,6 +825,10 @@ def make_app() -> FastAPI:
             return "ingest"   # an area owner answering a question addressed to them (TR-636), or
                               # a person answering their own desk item from the console (TR-740):
                               # the handler decides by the credential's person
+        if method in ("POST", "DELETE") and _BRAIN_DECISION_WRITE.match(path):
+            return "ingest"   # anyone on the cell adds a decision by hand, and takes back their own
+                              # (TR-1212): the enterprise handler decides who may delete, from the
+                              # credential's person. A read key is refused here
         if method != "GET" and _PROJECT_INTEGRATION.match(path):
             return "ingest"   # a project's own integration choice and its test (TR-842), and
                               # its required checks (TR-854) and its guardrail pairs (TR-863): an admin or the project's lead;
@@ -832,6 +837,9 @@ def make_app() -> FastAPI:
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
+        if method == "POST" and path == "/api/crew/machine":
+            return "ingest"  # the command line's report after `tares login` (TR-1312): a name and a
+                             # version, from a key that can write the crew's settings
         if (method == "PUT" and path == "/api/crew/settings") or (
                 method == "POST" and _PERSONAL_LINES.match(path)):
             return "ingest"  # a person's own crew settings and personal docs (TR-624): the
@@ -839,9 +847,10 @@ def make_app() -> FastAPI:
                              # is refused here; admin implies ingest
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
-        if path in ("/api/factory/settings", "/api/sre/settings"):
-            return "admin"   # the two edition settings pages: the keys, the crew's limits, the Slack
-                             # channels. A read key is refused, as on the other admin-only pages
+        if path in ("/api/factory/settings", "/api/sre/settings", "/api/factory/setup"):
+            return "admin"   # the edition settings pages and the factory setup screen (TR-871): the
+                             # keys, the crew's limits, the Slack channels, the connected
+                             # integrations. A read key is refused, as on the other admin-only pages
         if path == "/api/setup/github-suggestion":
             return "admin"   # spends model money and distills private READMEs: not for read keys
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")

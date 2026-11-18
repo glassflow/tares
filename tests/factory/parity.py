@@ -5918,6 +5918,7 @@ def tares_bin_forms() -> list:
     return sorted(forms, key=len, reverse=True)
 
 
+MACHINE_REPORT = "POST /api/crew/machine"
 KIT_NEWER = re.compile(r"kit \d{6,} is newer than the frozen kit \d{6,}")
 
 
@@ -6353,6 +6354,8 @@ def _run_side(sc: Scenario) -> Side:
             # A read asked twice in a row counts once: the bash engine asked again from a subshell that lost its cache.
             asked = []
             for q in fake.requests:
+                if q["route"] == MACHINE_REPORT:   # the machine's name and version: it differs on every machine, tests/test_crew_setup_contract.py checks it
+                    continue
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
                     continue
                 route = q["route"]
@@ -8927,10 +8930,8 @@ def _plain_bound_ok(ctx: str) -> bool:
 
 
 def _contributor_section() -> str:
-    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "SKILL.md").read_text(encoding="utf-8")
-    start = text.index("\n## Contributor")
-    end = text.index("\n## Light mode", start)
-    return re.sub(r"[ \n]+", " ", text[start:end])
+    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "contributor.md").read_text(encoding="utf-8")
+    return re.sub(r"[ \n]+", " ", text)
 
 
 _CONTRIB = ("TARES_PROJECT=Acme web", "TARES_SESSION_KIND=contributor")

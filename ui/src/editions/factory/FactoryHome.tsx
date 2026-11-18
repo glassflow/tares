@@ -13,8 +13,8 @@ import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePendi
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
-import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
+import { CopyCommand } from "../StartChecklist";
 import {
   allowDesk, deskReply, finishProject, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
@@ -195,6 +195,27 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   );
 }
 
+// Home lists no projects (TR-1275: the Projects page does). A cell with no project at all, finished or
+// kept for later, shows how to plan the first one here instead, since that is what comes after setup.
+function PlanFirst({ command }: { command: string }) {
+  return (
+    <section aria-label="Projects" className="min-w-0" data-testid="projects">
+      <SectionHead title="Projects" />
+      <div className="grid gap-3 border-t border-border pt-4" data-testid="plan-first">
+        <h3 className="m-0 text-base">Plan your first project</h3>
+        <p className="m-0 max-w-[640px] text-[13px] text-muted-foreground">
+          In your project's repo on this machine, type the command and talk the project through with Claude Code. It writes
+          the plan as milestones and tickets and hands them to the crew. A new project? Start in an empty folder: it offers
+          to make the GitHub repo for you.
+        </p>
+        <div><CopyCommand command={command} /></div>
+        <p className="m-0 text-[13px] text-muted-foreground">
+          Or <Link to="/projects/new" className="text-foreground underline underline-offset-2">start one here</Link> and hand it to the crew later.
+        </p>
+      </div>
+    </section>
+  );
+}
 function stateLine(m: HomeCrewMember): string {
   if (m.state === "not heard") return m.since ? `Not heard from in ${m.since.replace(/ ago$/, "")}` : "Not heard from";
   const word = m.state[0].toUpperCase() + m.state.slice(1);
@@ -271,30 +292,6 @@ function PlanCard({ data }: { data: HomeData }) {
   );
 }
 
-function Tools({ data }: { data: HomeData }) {
-  const chip = "inline-flex items-center gap-1.5 border px-2.5 py-1.5 text-[13px]";
-  return (
-    <section aria-label="Connected" className="min-w-0">
-      <SectionHead title="Connected" />
-      <div className="flex flex-wrap gap-2">
-        {data.tools.map((t) => (
-          <Link key={t.name} to="/settings#tools" data-testid="tool-chip" data-on={t.connected}
-                className={cn(chip, "border-border bg-card text-foreground no-underline hover:bg-row-hover")}>
-            <StatusDot tone={t.connected ? "ready" : "quiet"} label={t.connected ? "connected" : "not connected"} />
-            <span>{t.name}</span>
-            {t.connected && t.short && <span className="text-muted-foreground" data-user-text>· {t.short}</span>}
-          </Link>
-        ))}
-        {data.tools.some((t) => !t.connected) && (
-          <Link to="/settings#tools" data-testid="tool-add" className={cn(chip, "border-dashed border-border text-muted-foreground no-underline")}>
-            Add a tool
-          </Link>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function TopBar({ name, headline }: { name: string; headline?: React.ReactNode }) {
   const hello = greetingWord(new Date().getHours()) + (name ? `, ${name}` : "");
   return (
@@ -317,16 +314,12 @@ const COLS = "flex flex-wrap items-start gap-8";
 const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
-const START_TITLE = "Get your factory going";
-
-export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown }: {
+// Setting the factory up lives on /setup (the Setup menu entry), so the home shows no first-run list.
+export function FactoryHomeView({ data, onAction, rows, notice, panels }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
   /** Hand over anyway on a row of You are waiting on. */
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
-  /** What Hide this list and Show it again call; a sample passes ones that touch nothing. */
-  hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
-  showStart?: () => Promise<unknown>; onStartShown?: () => void;
 }) {
   const name = useFirstName();
   const eePending = useEePending();
@@ -337,12 +330,6 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
       {notice}
       <div className={COLS}>
         <div className={LEFT}>
-          {data.start?.show && (
-            <StartChecklist block={data.start} title={START_TITLE} hide={hideStart} onHidden={onStartHidden} />
-          )}
-          {data.start && (
-            <StartChecklistHidden block={data.start} title={START_TITLE} show={showStart} onShown={onStartShown} />
-          )}
           {isTeam(data) ? (
             // the team's lists are enterprise: without it the single-person list shows
             <Slot name="home.waiting" items={data.waiting_for_you}
@@ -355,13 +342,15 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
+          {data.plan_command && data.projects.length === 0 && data.finished_count === 0 && !data.later_count && (
+            <PlanFirst command={data.plan_command} />
+          )}
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
           {isTeam(data) && <Slot name="home.teamCrews" crews={data.crews ?? []} quiet={data.crews_quiet ?? []} />}
           {isTeam(data) && <Slot name="home.reposYouOwn" areas={data.areas ?? []} />}
           <PlanCard data={data} />
-          <Tools data={data} />
         </aside>
       </div>
     </div>
@@ -375,7 +364,6 @@ export function FactoryHomeLoading() {
       <TopBar name={name} headline={<Skeleton width={320} height={14} className="mt-2" />} />
       <div className={COLS}>
         <div className={LEFT}>
-          <StartChecklistLoading title={START_TITLE} />
           <section className="min-w-0"><SectionHead title="Waiting for you" /><SkeletonRows count={3} className={FLUSH_ROWS} /></section>
         </div>
         <aside className={RIGHT}>
@@ -723,7 +711,7 @@ function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeS
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={sampleData(all[sample])} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={sampleData(all[sample])} onAction={onAction} rows={rows} panels={panels} />;
   return (
     <>
       {body}
@@ -781,7 +769,7 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} />;
   }
   return (
     <>

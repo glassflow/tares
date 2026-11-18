@@ -1,6 +1,6 @@
 [project]
 name = "tares"
-version = "1.57.0"
+version = "1.59.0"
 description = "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems."
 readme = "README.md"
 keywords = ["tares", "software-factory", "claude-code", "autonomous-agents", "coding-agents", "multi-agent", "agent-orchestration", "ai-sre", "ai-monitoring", "incident-response", "observability", "mcp"]
@@ -57,6 +57,9 @@ otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
 # A cell's state in Postgres (TARES_STATE_DSN, state_db.py): the cloud image installs it; a
 # local install keeps its state in DuckDB and needs none of this.
 postgres-state = ["psycopg[binary]>=3.1"]
+# The enterprise code's optional deps (ee/tares_ee): pypdf reads an uploaded PDF decision in the brain
+# (brain/decisions_hand.py). Without it a PDF upload answers 501 and pasting text still works.
+ee = ["pypdf>=4"]
 
 # The enterprise code is loaded through the `tares.ee` entry point group (tares/team.py). Core
 # never imports it; with no valid licence the cell uses SingleTeam instead.

@@ -68,7 +68,7 @@ exit: 0
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -122,6 +122,7 @@ exit: 0
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -169,6 +170,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -191,6 +193,7 @@ exit: 0
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",

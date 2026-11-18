@@ -65,7 +65,7 @@ from typing import NoReturn
 
 from . import claude, locks, state, tidy
 from .client import TaresClient, TaresHTTPError, cksum
-from .errors import CrewError, SessionListUnreadableError
+from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 FREEZING_SECONDS = 300   # a freeze marker older than this is a freeze that died
@@ -491,9 +491,12 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
                     lifecycle.restart(fresh, paths, [station, (
                         "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with "
                         f"fresh settings. Reload the skills factory-protocol and station-{skill} (they may have changed), "
-                        f"re-read your report, {lifecycle.rearm_text(fresh)}, then carry on where you were.")],
-                        claude_bin=claude_bin)
+                        f"{lifecycle.REPORT_READ}, {lifecycle.rearm_text(fresh)}, then carry on where you were.")],
+                        claude_bin=claude_bin, only_between_turns=True)
                     state.event("upgraded", station, kit, paths=paths)
+        except NotBetweenTurnsError:
+            client.say(f"{station} started a turn; not restarting it on the new version, will look again next round")
+            rc = 4
         except CrewError as e:
             print(e.line, file=sys.stderr, flush=True)
             rc = 1

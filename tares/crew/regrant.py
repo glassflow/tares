@@ -13,7 +13,8 @@ conversation with a prompt that quotes the added grants, but only when it is bet
 nothing in flight), has a session, is not open in someone's terminal, and the crew is not halted. A station with
 a `.done` file is restarted only for a new grant that names it (TR-645); any other change is noted once in the
 event log as `regrant-skipped`. A Tares that does not answer is never a change. Once per change: `grants_tried` is written before the
-restart, so a restart that fails is not tried again every round.
+restart, so a restart that fails is not tried again every round. A restart that is refused because the station started a
+turn meanwhile did not fail: `grants_tried` goes back to what it was, and the next round tries again.
 
 Standard library plus the crew modules (no duckdb, fastapi or daemon). lifecycle is imported as a module and
 used at call time: it imports watch, and watch registers this step.
@@ -35,7 +36,7 @@ import sys
 from . import claude, launch, locks, state, watch_revive
 from . import rules as rules_mod
 from .client import TaresClient, grants_sum
-from .errors import CrewError, SessionListUnreadableError
+from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 
@@ -112,14 +113,15 @@ def added_grants(now: str, kept) -> str:
 
 
 def _prompt(human: str, rules: str, rearm: str) -> str:
+    from .lifecycle import REPORT_READ
     if rules:
         return (f"{human} allowed new permissions in Tares, so the factory restarted you in this same "
                 f"conversation with fresh settings. These are in your settings now:\n{rules}\n"
                 "If something you tried was refused for want of one of these and is still needed, run it again "
-                f"now. Then re-read your report, {rearm}, and carry on where you were.")
+                f"now. Then {REPORT_READ}, {rearm}, and carry on where you were.")
     return (f"{human} changed what the crew is allowed in Tares, so the factory restarted you in this same "
-            "conversation with fresh settings that have the change (read_grants shows them). Re-read your "
-            f"report, {rearm}, then carry on where you were.")
+            "conversation with fresh settings that have the change (read_grants shows them). "
+            f"{REPORT_READ[0].upper()}{REPORT_READ[1:]}, {rearm}, then carry on where you were.")
 
 
 def _new_rules(client: TaresClient, paths: CrewPaths, station: str, project: str) -> list:
@@ -161,11 +163,17 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
             total = str(grants_sum(now + "\n"))
             human = launch._ccfg_or("the user", "human", "name", paths=paths) or "the user"
             rules = "\n".join("- " + r for r in _new_rules(client, paths, station, project))
+            tried_before = state.stations_get(station, "grants_tried", paths=paths)
             state.stations_put(station, {"grants_tried": total}, paths=paths)
             prompt = _prompt(human, rules, lifecycle.rearm_text(client))
             client.say(f"{station} has new permissions from Tares; restarting it with them now that it's "
                        "between turns, in the same conversation")
-            lifecycle.restart(client, paths, [station, prompt], claude_bin=claude_bin)
+            try:
+                lifecycle.restart(client, paths, [station, prompt], claude_bin=claude_bin, only_between_turns=True)
+            except NotBetweenTurnsError:
+                state.stations_put(station, {"grants_tried": tried_before}, paths=paths)   # it was never told: the next round tries again
+                client.say(f"{station} started a turn; not restarting it with its new permissions, will look again next round")
+                return
             paths.done_file(station).unlink(missing_ok=True)   # it has work again; it says so itself when that is over
             state.event("regranted", station, total, paths=paths)
         except (CrewError, OSError) as e:   # bash says "could not restart" for any failure of the restart

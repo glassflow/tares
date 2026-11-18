@@ -27,6 +27,8 @@ Browser suites locally: `cd ui && npm ci && npm run build && npx playwright inst
 `python tests/ci_e2e.py` (all) or `python tests/ci_e2e.py --list` (names).
 ee tests: `python tests/ci_run.py --suite ee` (the list is `ee/tests/ci_list.txt`).
 A licensed scratch daemon: `python ee/tests/licensed.py serve --port 8799 --data-dir $(mktemp -d) [--edition factory] [--auth] [--licence expired]`.
+`python tests/factory/otel_bg_probe.py file` (or `env`) is a by-hand check, not in CI, that a `claude --bg` station sends its OTLP logs, traces and metrics
+to a local receiver; it needs the `claude` CLI.
 A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
 `tests/test_*.py` in neither file.
 

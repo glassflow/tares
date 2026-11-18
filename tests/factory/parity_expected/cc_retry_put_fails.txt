@@ -94,7 +94,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -147,7 +147,8 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -168,6 +169,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -186,6 +188,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -207,7 +210,8 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -294,7 +298,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-r", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-r", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file), re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
 {"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -302,7 +306,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "<ID>", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "<ID>", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file), re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
 {"args": ["rm", "00000001"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -310,7 +314,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "<ID>", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "<ID>", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file), re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
 {"args": ["rm", "00000002"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
@@ -318,7 +322,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Claude Code was updated to 2.1.200, but your old conversation kept coming back on an older Claude Code, so the factory started you again under the same name, in a new conversation, on 2.1.200. Nothing from the old one carries over except your report and what is on Tares. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Claude Code was updated to 2.1.200, but your old conversation kept coming back on an older Claude Code, so the factory started you again under the same name, in a new conversation, on 2.1.200. Nothing from the old one carries over except your report and what is on Tares. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
 {"args": ["rm", "00000003"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}

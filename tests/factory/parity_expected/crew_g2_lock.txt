@@ -113,7 +113,7 @@ exit: 0
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -166,7 +166,8 @@ exit: 0
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -187,6 +188,7 @@ exit: 0
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -205,6 +207,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -226,7 +229,8 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -340,14 +344,14 @@ exit: 0
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-reviewer", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-reviewer", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
 {"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
 {"args": ["rm", "00000001"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
 {"args": ["rm", "00000002"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
 {"args": ["rm", "00000003"], "cwd": "<REPO>"}
 == asked of Tares ==
 

@@ -100,9 +100,14 @@ for (const [ms, want] of [
   [30 * S, "less than a minute"], [12 * MIN, "12 minutes"], [HOUR, "1 hour"], [64 * MIN, "1 hour 4 minutes"],
   [2 * HOUR, "2 hours"], [DAY, "1 day"], [DAY + 18 * HOUR, "1 day 18 hours"], [2 * DAY + 3 * HOUR + 59 * MIN, "2 days 3 hours"],
 ]) eq(`durationWords ${ms}`, t.durationWords(ms), want);
+for (const [ms, want] of [
+  [0, "0 seconds"], [999, "0 seconds"], [1000, "1 second"], [6400, "6 seconds"], [65 * S, "1 minute, 5 seconds"],
+  [60 * S, "1 minute"], [3 * MIN + 20 * S, "3 minutes"], [HOUR + 4 * MIN, "1 hour, 4 minutes"], [-5 * S, "0 seconds"],
+]) eq(`elapsedWords ${ms}`, t.elapsedWords(ms), want);
 for (const b of [NaN, Infinity, -Infinity]) {
   eq(`spanWords of ${b}`, t.spanWords(b), "a while");
   eq(`durationWords of ${b}`, t.durationWords(b), "a while");
+  eq(`elapsedWords of ${b}`, t.elapsedWords(b), "0 seconds");
 }
 eq("ageWords of NaN says no NaN", /NaN/.test(t.ageWords(NaN)), false);
 

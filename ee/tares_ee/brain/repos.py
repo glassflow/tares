@@ -9,31 +9,59 @@ connected repo (the table is in core's `factory_store.py`, like the other tables
     POST   /api/brain/repos                     {repos: ["owner/name", ...]}   admin
     DELETE /api/brain/repos/{owner}/{name}                                     admin
     POST   /api/brain/repos/{owner}/{name}/retry                               admin
+    GET    /api/brain/repos/available/{owner}/{name}/folders   suggestions for a repo not connected yet   admin (TR-1441)
+    GET    /api/brain/repos/{owner}/{name}/folders   the chosen decision folders and Tares's suggestions (TR-1209)
+    PUT    /api/brain/repos/{owner}/{name}/folders   {folders: ["docs/adr", ...]}                       admin
 
 Without a licence every route answers 404 exactly as an unmounted route does (the licence can
 change while the daemon runs, so the check is per request, not at mount time). With a licence but
 no brain settings, `GET /api/brain` says `configured: false` and every other route answers 404.
-A new row is `queued`; starting its index is TR-1198 and removing it from lore is TR-1199.
+A new row is `queued`, and connecting it asks the control plane for an index Job (`index.py`, TR-1198);
+a background task there follows the Job: `queued` (with its `place`), `cloning`, `indexing`
+(`files_done` of `files_total`), `ready` or `failed`. A ready repo is kept up to date by `sync.py`
+(TR-1201): a push to its default branch syncs it. Removing a repo (TR-1199) cancels its index at the
+control plane, deletes it in lore (asking again for up to four minutes while lore's run on it is live) and
+then deletes the row. That can outlast the proxy in front of a cell (60 s), so the work runs in the
+background: the route answers 200 when it finished within INLINE_WAIT, else 202 `{removing: true}`, and the
+row says `removing` (and `remove_error` when a run gave up) until it is gone.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
+import time
 
 from fastapi import Body, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from tares import github_credentials
 from tares import licence
 from tares.envelope import now_utc
 from tares.factory import norm_repo
 
+from . import decisions as decisions_mod
+from . import folders as folders_mod
+from . import index as indexing
+from . import sync as syncing
+from .cp import CpError
 from .lore import _REPO_NAME, LoreClient, LoreError
+
+log = logging.getLogger("tares.brain")
 
 __all__ = ["MAX_CONNECT", "STATES", "lore_client", "register_routes"]
 
-STATES = ("queued", "indexing", "indexed", "failed")
+STATES = indexing.STATES   # queued, cloning, indexing, ready, failed
 MAX_CONNECT = 50           # repos in one POST
 GITHUB_TIMEOUT = 60        # seconds the available list waits for GitHub
+SCAN_TIMEOUT = 45          # seconds the folder suggestions wait for GitHub (the proxy in front of a cell cuts at 60)
+REMOVE_WAIT = 240.0        # seconds removing a repo waits for lore's run on it to stop (lore answers 409 for 90 s
+                           # after its last write, and a cancelled Job's pod runs on through its grace period)
+REMOVE_STEP = 3.0          # seconds before the second ask; each wait is half as long again as the last
+REMOVE_STEP_MAX = 20.0     # ... up to this
+INLINE_WAIT = 45.0         # seconds the remove route waits for the work before it answers 202 (the proxy in front of a
+                           # cell cuts a request at 60 s)
+CP_WAIT = 60.0             # seconds removing a repo asks again while the control plane answers 502 (a cluster error)
 
 
 def lore_client() -> LoreClient:
@@ -66,18 +94,36 @@ def lore_name(repo: str) -> str:
     return repo.replace("/", "_", 1)
 
 
-def row_view(r: dict) -> dict:
-    """What the routes return for one row: the table's columns, and the name of who added it.
-    `repo_source_id` stays inside the cell."""
+def row_view(r: dict, removing: bool = False, remove_error: str | None = None,
+             folders: list[str] | None = None) -> dict:
+    """What the routes return for one row: the table's columns, the name of who added it, `removing`
+    (a removal is running in the background), `remove_error` (why the last removal gave up, None
+    otherwise) and `folders` (the paths of its chosen decision folders). `repo_source_id` stays inside the cell."""
     return {"repo": r["repo"], "state": r["state"], "files_done": r["files_done"],
             "files_total": r["files_total"], "indexed_commit": r["indexed_commit"],
-            "last_synced": r["last_synced"], "error": r["error"], "added_by": r["added_by"],
-            "added_by_name": r["added_by_name"], "added_at": r["added_at"]}
+            "last_synced": r["last_synced"], "error": r["error"], "place": r["place"],
+            "sync_failures": r.get("sync_failures") or 0, "sync_error": r.get("sync_error"),
+            "added_by": r["added_by"],
+            "added_by_name": r["added_by_name"], "added_at": r["added_at"],
+            "removing": removing, "remove_error": None if removing else remove_error,
+            "folders": list(folders or [])}
 
 
 def register_routes(app, host) -> None:
     store = host.store
     lock = threading.Lock()
+    indexer = indexing.Indexer(store, lambda: lore_client())   # looked up per call: a test swaps lore_client
+    indexer.attach(app)
+    syncer = syncing.Syncer(indexer, getattr(host, "runtime", None))   # keeps ready repos current (TR-1201)
+    syncer.attach(app)
+    decisions = decisions_mod.Decisions(store, lambda: lore_client())   # shared projects' specs, plans and notes (TR-1211)
+    decisions.attach(app)   # a repo connected or removed wakes it, so the docs follow at once (TR-1220)
+    removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
+    remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
+
+    def view(r: dict) -> dict:
+        return row_view(r, r["repo"] in removals, remove_errors.get(r["repo"]),
+                        [f["path"] for f in store.list_brain_folders(r["repo"])])
 
     def need_licence():
         if not licence.ee_allowed():
@@ -97,18 +143,21 @@ def register_routes(app, host) -> None:
     @app.get("/api/brain")
     def brain_state():
         """{configured, repos: [{repo, state, files_done, files_total, indexed_commit,
-        last_synced, error, added_by, added_by_name, added_at}]}, oldest first."""
+        last_synced, error, place, sync_failures, sync_error, added_by, added_by_name, added_at, removing,
+        remove_error}], oldest first. `state` is queued (`place` says where in the control plane's queue,
+        when it does), cloning, indexing, ready or failed (`error` says why, in plain words). A ready repo
+        whose last syncs failed stays ready: `sync_failures` counts them in a row, `sync_error` is the
+        last reason, and from the third in a row `error` shows it too. `removing` is true while a removal
+        runs in the background; `remove_error` says why the last one gave up; `folders` lists the paths of
+        the repo's chosen decision folders."""
         need_licence()
         if not LoreClient.configured():
             return {"configured": False, "repos": []}
-        return {"configured": True, "repos": [row_view(r) for r in store.list_brain_repos()]}
+        return {"configured": True, "repos": [view(r) for r in store.list_brain_repos()]}
 
-    @app.get("/api/brain/repos/available")
-    async def available_repos():
-        """{github, repos: [{repo, private, connected}]}: the repos the cell's GitHub connections
-        can read, `connected` for the ones already on the brain. `github` is false when the cell
-        has no GitHub connection."""
-        need_brain()
+    async def visible_repos() -> tuple[list, dict[str, dict], list[str], int]:
+        """(credentials, {repo: {repo, private, connected}}, failures, answered): what the cell's GitHub
+        connections can read. `failures` are the plain-word reasons a connection did not answer."""
         creds = store.list_github_credentials()
         connected = {r["repo"] for r in store.list_brain_repos()}
         seen: dict[str, dict] = {}
@@ -128,18 +177,30 @@ def register_routes(app, host) -> None:
                 if full and full not in seen:
                     seen[full] = {"repo": full, "private": bool(g.get("private")),
                                   "connected": full in connected}
+        return creds, seen, failures, answered
+
+    @app.get("/api/brain/repos/available")
+    async def available_repos():
+        """{github, repos: [{repo, private, connected}]}: the repos the cell's GitHub connections
+        can read, `connected` for the ones already on the brain. `github` is false when the cell
+        has no GitHub connection."""
+        need_brain()
+        creds, seen, failures, answered = await visible_repos()
         if failures and not answered:
             host.err(ValueError(failures[0]), 502)
         return {"github": bool(creds), "repos": sorted(seen.values(), key=lambda r: r["repo"])}
 
     @app.post("/api/brain/repos", status_code=201)
     async def connect_repos(request: Request, body: dict = Body(...)):
-        """Admin only. {repos: ["owner/name", ...]}: connect each repo (queued). The whole list
-        is checked first: a repo that is not owner/name, one named twice or one already
-        connected refuses the request and connects nothing."""
+        """Admin only. {repos: ["owner/name", ...], folders: {"owner/name": ["docs/adr"], ...}}: connect each
+        repo and ask the control plane
+        for its index. The whole list is checked first: a repo that is not owner/name, one named
+        twice or one already connected refuses the request and connects nothing. A repo whose
+        index could not be started (no GitHub connection reaches it, the control plane refused or
+        is not set up) is still connected, `failed` with the reason in `error`; Retry starts it again."""
         need_brain()
         host.require_admin(request)
-        extra = sorted(set(body) - {"repos"})
+        extra = sorted(set(body) - {"repos", "folders"})
         if extra:
             host.err(ValueError(f"unknown field {extra[0]!r}: send {{\"repos\": [\"owner/name\"]}}"))
         given = body.get("repos")
@@ -156,6 +217,7 @@ def register_routes(app, host) -> None:
             if repo in repos:
                 host.err(ValueError(f"{repo} is in the list twice"))
             repos.append(repo)
+        chosen = parse_connect_folders(body.get("folders"), repos)
         have = {r["repo"] for r in store.list_brain_repos()}
         already = [r for r in repos if r in have]
         if already:
@@ -168,41 +230,268 @@ def register_routes(app, host) -> None:
             async with lore_client() as lore:
                 for repo in repos:
                     current = repo
-                    made = await lore.create_repo(lore_name(repo),
-                                                  remote_url=f"https://github.com/{repo}.git")
+                    made = await lore.create_repo(lore_name(repo), remote_url=indexing.remote_url(repo),
+                                                  web_url_template=indexing.web_url_template(repo))
                     source = str(made.get("id") or "")
                     if not source:
                         raise LoreError("The brain did not say which repo it made.")
                     with lock:
                         added = store.add_brain_repo(repo, source, by, now_utc())
+                        if added and chosen.get(repo):
+                            store.set_brain_folders(repo, chosen[repo], by, now_utc())
                     if added:
                         done.append(repo)
+                        decisions.wake()   # its linked projects' docs go in now, not at the next interval
         except LoreError as e:
             kept = f" Connected before it failed: {', '.join(done)}." if done else ""
             host.err(ValueError(f"Could not connect {current}: {e}{kept}"), 502)
-        return {"repos": [row_view(store.get_brain_repo(r)) for r in done]}
+        finally:
+            await asyncio.gather(*(indexer.start(r) for r in done))   # never raises: a failure is the row's error
+            for repo in done:
+                await folders_mod.notify(repo, chosen.get(repo, []), [])   # never raises
+        return {"repos": [view(store.get_brain_repo(r)) for r in done]}
+
+    def parse_connect_folders(value, repos: list[str]) -> dict[str, list[str]]:
+        """The `folders` of a connect request as {repo: [paths]}. It is an object keyed by repo
+        (each key one of `repos`), or, when one repo is connected, a plain list of its paths; absent or
+        null means none chosen. A bad value refuses the whole request."""
+        if value is None:
+            return {}
+        try:
+            if isinstance(value, list):
+                if len(repos) != 1:
+                    raise ValueError('folders: with more than one repo, send an object like '
+                                     '{"owner/name": ["docs/adr"]}')
+                return {repos[0]: folders_mod.check_folders(value)}
+            if not isinstance(value, dict):
+                raise ValueError('folders: an object like {"owner/name": ["docs/adr"]}, or a list for one repo')
+            out: dict[str, list[str]] = {}
+            for key, paths in value.items():
+                repo = check_repo(key)
+                if repo not in repos:
+                    raise ValueError(f"folders: {repo} is not one of the repos being connected")
+                if repo in out:
+                    raise ValueError(f"folders: {repo} is in the object twice")
+                out[repo] = folders_mod.check_folders(paths)
+            return out
+        except ValueError as e:
+            host.err(e)
 
     @app.delete("/api/brain/repos/{owner}/{name}")
-    def remove_repo(owner: str, name: str, request: Request):
-        """Admin only. Take the repo off this cell's list. What lore indexed stays in lore."""
+    async def remove_repo(owner: str, name: str, request: Request):
+        """Admin only. Remove the repo: its queued or running index is cancelled at the control
+        plane (a cluster error, 502, is asked again for a minute; a wrong token, no brain index or no cancel
+        route is 502 here with the row and lore untouched), lore deletes the repo and everything it indexed
+        from it (source, chunks, mirror, checkout, documents), then the row goes. While lore still runs the
+        index it answers 409 (for 90 s after its last write, and a cancelled Job's pod may write until its
+        grace period ends): the delete is asked again with a growing wait for up to four minutes.
+
+        The work runs in the background, so a closed connection or the proxy's 60 s cut does not stop it.
+        This answers 200 `{ok, removed}` when it finished within INLINE_WAIT, the error (502, or 409 "Still
+        indexing. Try again in a minute.") when it gave up in that time, and else 202 `{ok, removing}`:
+        the row then says `removing`, and `remove_error` when the run gives up later. Asking again while a
+        removal runs joins it; asking again after it gave up starts a new one."""
         need_brain()
         host.require_admin(request)
         repo = repo_from(owner, name)
-        if not store.delete_brain_repo(repo):
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        task = removals.get(repo)
+        if task is None or task.done():
+            if store.get_brain_repo(repo) is None:
+                host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            remove_errors.pop(repo, None)
+            task = removals[repo] = asyncio.ensure_future(run_remove(repo))
+        done, _ = await asyncio.wait({task}, timeout=INLINE_WAIT)
+        if not done:
+            return JSONResponse({"ok": True, "removing": True}, status_code=202)
+        failure = task.result()
+        if failure:
+            host.err(ValueError(failure[1]), failure[0])
         return {"ok": True, "removed": True}
 
+    async def run_remove(repo: str) -> tuple[int, str] | None:
+        """The removal itself. Returns None when the row is gone, else (status, words) for why it is not;
+        the words are also kept in `remove_errors` for the row. Never raises."""
+        try:
+            async with indexer.removing(repo):
+                row = store.get_brain_repo(repo)
+                if row is not None:   # None: a removal finished first
+                    await cancel_job(repo, row)
+                    if row["repo_source_id"]:
+                        await forget_in_lore(repo, row["repo_source_id"])
+                    store.delete_brain_repo(repo)
+                    decisions.wake()   # the docs of projects linked only to it go now
+            remove_errors.pop(repo, None)
+            return None
+        except Exception as e:   # host.err raises an HTTPException; anything else is a bug we still report
+            if hasattr(e, "status_code"):   # ours: the words are plain and carry no secret
+                status, words = e.status_code, str(getattr(e, "detail", None) or e)
+            else:   # unknown: its text may hold a token, so say it plainly and log only the type
+                log.warning("removal of %s failed: %s", repo, type(e).__name__)
+                status, words = 502, f"Could not remove {repo}. Try again in a minute."
+            remove_errors[repo] = words
+            return status, words
+        finally:
+            removals.pop(repo, None)
+
+    async def cancel_job(repo: str, row: dict) -> None:
+        """Cancel the repo's Job at the control plane. A 502 is a cluster error that a second call
+        finishes, so it is asked again for CP_WAIT. Any other error (401, 503, 405, 501, ...) means "not
+        cancelled", not "gone": this answers 502 with it and nothing in lore or the row is touched."""
+        deadline, step = time.monotonic() + CP_WAIT, REMOVE_STEP
+        while True:
+            try:
+                await indexer.cancel(row)
+                return
+            except CpError as e:
+                if e.status != 502 or time.monotonic() + step > deadline:
+                    again = "" if "Try again" in str(e) else " Try again in a minute."
+                    host.err(ValueError(f"Could not stop the index of {repo}: {e}{again}"), 502)
+            await asyncio.sleep(step)
+            step = min(step * 1.5, REMOVE_STEP_MAX)
+
+    async def forget_in_lore(repo: str, source: str) -> None:
+        """Delete the repo's source in lore, asking again while its index run is live (409), with a
+        growing wait, for REMOVE_WAIT. The row is kept until lore answers 204 or 404."""
+        deadline, step = time.monotonic() + REMOVE_WAIT, REMOVE_STEP
+        while True:
+            try:
+                async with lore_client() as lore:
+                    await lore.delete_repo(source)
+                return
+            except LoreError as e:
+                if e.status == 404:   # lore does not have it any more
+                    return
+                if e.status != 409:
+                    host.err(ValueError(f"Could not remove {repo} from the brain: {e}"), 502)
+            if time.monotonic() + step > deadline:
+                host.err(ValueError("Still indexing. Try again in a minute."), 409)
+            await asyncio.sleep(step)
+            step = min(step * 1.5, REMOVE_STEP_MAX)
+
     @app.post("/api/brain/repos/{owner}/{name}/retry")
-    def retry_repo(owner: str, name: str, request: Request):
-        """Admin only. A repo whose index failed goes back to queued with its error cleared. A
-        repo in any other state is refused."""
+    async def retry_repo(owner: str, name: str, request: Request):
+        """Admin only. A repo whose index failed goes back to queued with its error cleared and
+        its index is asked for again. A repo in any other state is refused."""
         need_brain()
         host.require_admin(request)
         repo = repo_from(owner, name)
         row = store.get_brain_repo(repo)
         if row is None:
             host.err(KeyError(f"{repo} is not connected to the brain"), 404)
-        if not store.requeue_brain_repo(repo, "failed"):
+        if indexer.is_removing(repo) or repo in removals:
+            host.err(ValueError(f"{repo} is being removed"), 409)
+        async with indexer.lock(repo):
+            requeued = store.requeue_brain_repo(repo, "failed")
+        if not requeued:
             now = (store.get_brain_repo(repo) or row)["state"]
             host.err(ValueError(f"{repo} is {now}: only a repo whose index failed can be retried"), 409)
-        return row_view(store.get_brain_repo(repo))
+        remove_errors.pop(repo, None)
+        await indexer.start(repo)
+        fresh = store.get_brain_repo(repo)
+        if fresh is None:   # a removal finished while the start ran
+            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        return view(fresh)
+
+    async def scan_tree(repo: str) -> dict:
+        """The repo's git tree as `github_credentials.git_tree` answers it. Raises ValueError in plain
+        words when no GitHub connection can read the repo or GitHub did not answer in time."""
+        async def run():
+            token = await indexer.github_token(repo)
+            return await github_credentials.git_tree(token, repo)
+        try:
+            return await asyncio.wait_for(run(), SCAN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise ValueError("GitHub took too long to answer")
+
+    @app.get("/api/brain/repos/{owner}/{name}/folders")
+    async def get_folders(owner: str, name: str):
+        """{repo, folders: [{path, chosen_by, chosen_by_name, chosen_at, files}], suggested: [{path, files,
+        why, chosen}], partial, scanned, scan_error}. `folders` are the chosen decision folders; `suggested`
+        are the folders Tares found in the repo's git tree, each with its markdown file count (`why` is
+        "known" for docs/adr and the like, "numbered" for a folder of 0007-title.md files); `chosen` says
+        one is already chosen. `files` of a chosen folder is its count in the tree (null when the tree
+        could not tell: not scanned, or partial and the folder not seen). `partial` is true when GitHub cut
+        a huge tree short: only the known names were looked at. When GitHub cannot be asked (no connection
+        reads the repo, it did not answer) the chosen folders still come back, with `scanned: false` and
+        `scan_error` saying why."""
+        need_brain()
+        repo = repo_from(owner, name)
+        if store.get_brain_repo(repo) is None:
+            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        chosen = store.list_brain_folders(repo)
+        entries, partial, scanned, scan_error, suggested = [], False, False, None, []
+        try:
+            tree = await scan_tree(repo)
+            entries, partial, scanned = tree["entries"], bool(tree["truncated"]), True
+        except ValueError as e:
+            scan_error = str(e)
+        if scanned:
+            have = {c["path"] for c in chosen}
+            suggested = [{**s, "chosen": s["path"] in have}
+                         for s in folders_mod.suggest(entries, partial)]
+        for c in chosen:
+            files = folders_mod.count_files(entries, c["path"]) if scanned else None
+            c["files"] = None if (partial and not files) else files
+        return {"repo": repo, "folders": chosen, "suggested": suggested, "partial": partial,
+                "scanned": scanned, "scan_error": scan_error}
+
+    @app.get("/api/brain/repos/available/{owner}/{name}/folders")
+    async def get_available_folders(owner: str, name: str, request: Request):
+        """Admin only. The folder suggestions of a repo that is not connected yet (TR-1441), so an admin can
+        pick decision folders while connecting it. The repo must be one the cell's GitHub connections can
+        read (the list `GET /api/brain/repos/available` gives); any other repo answers 404. The answer has
+        the shape of `GET /api/brain/repos/{owner}/{name}/folders`: `folders` holds the repo's chosen folders
+        (empty before it is connected), then `suggested`, `partial`, `scanned`, `scan_error`, with the same
+        scan and time limit. When GitHub cannot be asked (the list of repos or the scan failed) it answers
+        200 with `scanned: false` and `scan_error` saying why."""
+        need_brain()
+        host.require_admin(request)
+        repo = repo_from(owner, name)
+        _, seen, failures, answered = await visible_repos()
+        if repo not in seen and not (failures and not answered):
+            host.err(KeyError(f"{repo} is not a repo this cell's GitHub connection can read"), 404)
+        chosen = store.list_brain_folders(repo)
+        entries, partial, scanned, scan_error, suggested = [], False, False, None, []
+        if repo not in seen:   # GitHub did not answer the list, so the repo cannot be told apart from another
+            scan_error = failures[0]
+        else:
+            try:
+                tree = await scan_tree(repo)
+                entries, partial, scanned = tree["entries"], bool(tree["truncated"]), True
+            except ValueError as e:
+                scan_error = str(e)
+        if scanned:
+            have = {c["path"] for c in chosen}
+            suggested = [{**s, "chosen": s["path"] in have} for s in folders_mod.suggest(entries, partial)]
+        for c in chosen:
+            files = folders_mod.count_files(entries, c["path"]) if scanned else None
+            c["files"] = None if (partial and not files) else files
+        return {"repo": repo, "folders": chosen, "suggested": suggested, "partial": partial,
+                "scanned": scanned, "scan_error": scan_error}
+
+    @app.put("/api/brain/repos/{owner}/{name}/folders")
+    async def put_folders(owner: str, name: str, request: Request, body: dict = Body(...)):
+        """Admin only. {folders: ["docs/adr", ...]}: these are now the repo's decision folders (an empty
+        list clears them). A folder that is already chosen keeps who chose it and when. The paths are not
+        looked up on GitHub, so a folder that does not exist yet can be chosen. Answers `{repo, folders,
+        added, removed}`; the added folders are imported and the removed ones' documents dropped by the hooks
+        in `folders.HOOKS` (TR-1210, TR-1219). A repo that is being removed answers 409."""
+        need_brain()
+        host.require_admin(request)
+        repo = repo_from(owner, name)
+        extra = sorted(set(body) - {"folders"})
+        if extra:
+            host.err(ValueError(f"unknown field {extra[0]!r}: send {{\"folders\": [\"docs/adr\"]}}"))
+        try:
+            paths = folders_mod.check_folders(body.get("folders"))
+        except ValueError as e:
+            host.err(e)
+        if indexer.is_removing(repo) or repo in removals:
+            host.err(ValueError(f"{repo} is being removed"), 409)
+        person = host.current_person(request)
+        with lock:
+            if store.get_brain_repo(repo) is None:
+                host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            added, removed = store.set_brain_folders(repo, paths, person["id"] if person else None, now_utc())
+        await folders_mod.notify(repo, added, removed)
+        return {"repo": repo, "folders": store.list_brain_folders(repo), "added": added, "removed": removed}

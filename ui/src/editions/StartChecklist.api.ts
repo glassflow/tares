@@ -20,6 +20,10 @@ export interface StartStep {
   /** Empty once the step is done. */
   actions: StartAction[];
   detail?: string;
+  /** Where the person does it: "workspace" (this console) or "terminal". Only the factory's steps say. */
+  where?: "workspace" | "terminal";
+  /** A terminal step's command, kept once the step is done (the factory's steps only). */
+  command?: string;
 }
 
 export interface StartBlock {

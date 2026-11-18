@@ -200,8 +200,8 @@ def _context(args: list, env: dict) -> int:
             raise CrewError(f"{s} has no conversation to read yet")
         cwd = state.stations_get(s, "cwd", paths=paths) or paths.raw
         settings = state.stations_get(s, "settings", paths=paths)
-        flags = ["--plugin-dir", kit_dir(client, env)]
-        # the station's own settings and plugin, so the tools and skills counted are the ones it loads
+        flags = _launch_flags(client, s, paths, env)
+        # the station's own settings, sources and plugin, so the tools and skills counted are the ones it loads
         fd, tmp = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         try:
@@ -224,7 +224,68 @@ def _context(args: list, env: dict) -> int:
         u = usage if isinstance(usage, dict) else {}
         print(f"{s}: {_t(u.get('total_tokens'))} of {_t(u.get('raw_max_tokens'))} tokens "
               f"({_t(u.get('percentage'))}%), sent to Tares")
+        print(launch_summary(u))
         return 0
+
+
+# what a station's launch passes that decides what loads: the setting sources, the plugins, the MCP servers
+# and the browser extension. Other launch flags (model, prompt, permission mode) do not change what is counted.
+_LOAD_VALUED = ("--setting-sources", "--plugin-dir", "--mcp-config")
+_LOAD_BARE = ("--no-chrome", "--strict-mcp-config")
+
+
+def _load_flags(args: list) -> list:
+    """The flags of a launch's `claude` arguments that decide what loads, in order, with their values."""
+    out, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in _LOAD_BARE:
+            out.append(a)
+        elif a in _LOAD_VALUED and i + 1 < len(args):
+            out += [a, args[i + 1]]
+            i += 1
+        i += 1
+    return out
+
+
+def _launch_flags(client: TaresClient, station: str, paths: CrewPaths, env: dict) -> list:
+    """The load flags the station's own launch passes (launch_plan, so a change to the launch follows here).
+    Without a plan (the station's role is not recorded, or Tares will not give its launch and no copy stands
+    in): the lean flags and the kit a launch starts with."""
+    from . import launch
+    flags = []
+    row = {k: state.stations_get(station, k, paths=paths) for k in ("role", "parent", "project", "repo")}
+    if row["role"]:
+        try:
+            plan = launch.launch_plan(client, station, row["role"], row["parent"], row["project"], row["repo"])
+            flags = _load_flags(plan["args"])
+        except CrewError:
+            pass
+    if "--plugin-dir" not in flags:
+        flags = ["--plugin-dir", kit_dir(client, env), *flags]
+    if "--setting-sources" not in flags:
+        flags += list(launch.LEAN_FLAGS)
+    return flags
+
+
+def launch_summary(usage: dict) -> str:
+    """One line on what a reading shows loaded: the tokens before any message, the tools per server, the skills
+    and whether auto-memory is on. Counts and server names only; no tool, path or setting value."""
+    def num(x):
+        return x if isinstance(x, int) and not isinstance(x, bool) else 0
+    cats = [c for c in usage.get("categories") or [] if isinstance(c, dict)]
+    messages = sum(num(c.get("tokens")) for c in cats if c.get("name") == "Messages")
+    tools: dict = {}
+    for t in usage.get("mcp_tools") or []:
+        if isinstance(t, dict):
+            name = str(t.get("server_name") or "?")
+            tools[name] = tools.get(name, 0) + 1
+    skills = [k for k in usage.get("skills") or [] if isinstance(k, dict)]
+    memory = any(isinstance(m, dict) and str(m.get("type") or "").startswith("AutoMem")
+                 for m in usage.get("memory_files") or [])
+    per = ", ".join(f"{n} {tools[n]}" for n in sorted(tools)) or "none"
+    return (f"launch: {max(num(usage.get('total_tokens')) - messages, 0)} tokens before messages; "
+            f"tools by server: {per}; skills: {len(skills)}; memory: {'on' if memory else 'off'}")
 
 
 def _t_str(value) -> str:
@@ -466,6 +527,76 @@ def _git(args: list, cwd=None):
     except OSError:
         return 1, ""
     return r.returncode, r.stdout.rstrip("\n")
+
+
+# ---------- a new project's repo ----------
+# `spec` plans in a git repo that has a commit on GitHub: builders branch from it and the crew opens pull requests
+# there. A person starting from an empty folder is offered to make that repo here (asked only at a terminal); anyone
+# else is told the commands.
+
+
+def _repo_name(folder: str) -> str:
+    """A GitHub repo name from a folder's name: letters, digits, '.', '-' and '_'."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", os.path.basename(os.path.normpath(folder))).strip("-.") or "project"
+
+
+def _has_origin(path: str) -> bool:
+    return _git(["-C", path, "remote", "get-url", "origin"])[0] == 0
+
+
+def first_repo_commands(folder: str, is_repo: bool) -> list:
+    """The commands that make `folder` a GitHub repo with a first commit, as a person would type them."""
+    name = _repo_name(folder)
+    out = [] if is_repo else ["git init"]
+    out.append('git commit --allow-empty -m "Start"')
+    out.append("git push -u origin HEAD" if is_repo and _has_origin(folder)
+               else f"gh repo create {name} --private --source . --remote origin --push")
+    return out
+
+
+def _say_commands(cmds: list) -> str:
+    return "".join(f"\n           {c}" for c in cmds)
+
+
+def _ask_yes(question: str) -> bool:
+    """A yes or no at a terminal; False when there is none to ask (a script, the crew), or on anything but yes."""
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+    except (AttributeError, ValueError):
+        return False
+    _err(f"{ME}: {question} [y/N] ")
+    try:
+        line = sys.stdin.readline()
+    except (OSError, ValueError):
+        return False
+    return line.strip().lower() in ("y", "yes")
+
+
+def _run_step(cmd: list, cwd: str) -> None:
+    """Run one step of making the repo; a failure stops with the tool's own last line."""
+    try:
+        r = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        raise CrewError(f"could not run {cmd[0]}: install it, or make the repo yourself") from None
+    if r.returncode != 0:
+        last = ((r.stderr or r.stdout).strip().splitlines() or [f"{cmd[0]} failed"])[-1]
+        raise CrewError(f"{' '.join(cmd[:3])} failed: {last}")
+
+
+def make_first_repo(folder: str, is_repo: bool) -> None:
+    """Make `folder` a private GitHub repo with an empty first commit, pushed: what `first_repo_commands` says."""
+    name = _repo_name(folder)
+    if not is_repo:
+        _run_step(["git", "init"], folder)
+    _run_step(["git", "commit", "--allow-empty", "-m", "Start"], folder)
+    if is_repo and _has_origin(folder):
+        _run_step(["git", "push", "-u", "origin", "HEAD"], folder)
+    else:
+        _run_step(["gh", "repo", "create", name, "--private", "--source", ".", "--remote", "origin", "--push"], folder)
+    _err(f"{ME}: {folder} is now the GitHub repo {name}, with a first commit.\n"
+         "         Make sure the Tares app on GitHub can reach it (all repositories, or this one picked).\n")
 
 
 def has_commit(path: str) -> bool:
@@ -741,15 +872,26 @@ def _spec(args: list, env: dict) -> int:
                 here = root
         elif root:
             if not has_commit(root):
-                raise CrewError(f"{root} has no commit yet. Make a first commit and push it, so builders can branch from it.")
+                if not _ask_yes(f"{root} has no commit yet. Make a first commit and push it to GitHub now?"):
+                    raise CrewError(f"{root} has no commit yet. Make a first commit and push it, so builders can "
+                                    "branch from it:" + _say_commands(first_repo_commands(root, True)))
+                make_first_repo(root, True)
             here = root
             client.say(f"planning in the repo {root}")
         else:
             repos = repos_in(here)
             if not repos:
-                raise CrewError(f"run {ME} spec inside the git repo the project builds on, or in a folder that holds its repos")
-            client.say(f"planning in {here}, which holds {len(repos)} repo(s): "
-                       + ", ".join(os.path.basename(r) for r in repos))
+                if not _ask_yes(f"{here} is not a git repo. Make it a private GitHub repo with a first commit, "
+                                "and plan the project in it?"):
+                    raise CrewError(f"run {ME} spec inside the git repo the project builds on, or in a folder that "
+                                    "holds its repos. A new project? Make its repo here first:"
+                                    + _say_commands(first_repo_commands(here, False)))
+                make_first_repo(here, False)
+                here = git_root() or here
+                client.say(f"planning in the repo {here}")
+            else:
+                client.say(f"planning in {here}, which holds {len(repos)} repo(s): "
+                           + ", ".join(os.path.basename(r) for r in repos))
         slug = _cut_slug(name or _words(idea, 4))
         if not slug:
             slug = state.slugify(os.path.basename(here))

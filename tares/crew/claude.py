@@ -48,6 +48,14 @@ Differences from bash
     rolled over by the month (Feb 30 is Mar 2) and a leap second (second 61 too off macOS, as glibc does); a time before 1970 is unknown. A libc that
     accepts a day 0, as macOS's does, is not copied.
   * running_version also accepts a Windows path (`\\versions\\<v>`) in a command line.
+  * running_version reads a command line one argument at a time and takes the version only from a path that
+    stands on its own. The value an option takes (`--plugin-dir <folder>`) and a prompt are skipped: a station
+    started with its own arguments names the plugin's install folder (`.tares/engine/versions/<tares
+    version>/...`), and that is not Claude Code's version. bash takes the first match in the whole line, which
+    is the binary only where its path comes first.
+  * running_version on Windows: the install keeps one claude.exe in `~/.local/bin`, so no path names the
+    version. The session's own claude.exe is asked instead (`--version`), unless that file was written after
+    the process started (an update put a new one there): then the version cannot be told.
 
 Standard library and psutil only (no duckdb, fastapi, tares.daemon or tares.store). Not imported by
 tares.crew, so `import tares.crew` stays free of psutil; import it as `tares.crew.claude`.
@@ -87,6 +95,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _BG_ID = re.compile(r"backgrounded[^0-9a-f\n]+[0-9a-f]{8}")
 _VERSION_WORD = re.compile(r"^[0-9]+(\.[0-9]+)+[^ ]*")
 _VERSIONS_IN_COMMAND = re.compile(r"[/\\]versions[/\\]([0-9][^ /\\]*)")
+_PATH_START = re.compile(r"(?:[A-Za-z]:)?[/\\]")   # how an argument that is a full path starts
 _ISO_SECONDS = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$")
 
 
@@ -628,11 +637,70 @@ def attached(station: str, paths=None) -> bool:
     return False
 
 
-def running_version(session_id: str, agents=None, claude=None) -> str:
+def _arguments(pid) -> list:
+    """A process's arguments, one each; [] when it is gone or may not be read. The fake hook's command line is
+    one text, so it is cut at its spaces."""
+    fake = _fake_ps_file(pid, "command")
+    if fake is not None:
+        return fake.split()
+    try:
+        return [str(a) for a in psutil.Process(int(pid)).cmdline()]
+    except (psutil.Error, ValueError, TypeError, OSError):
+        return []
+
+
+def version_named(args) -> str:
+    """The Claude Code version a process's arguments name: the <v> of the first .../versions/<v> path that
+    stands on its own, as the binary a pty host runs does. The value an option takes (`--plugin-dir <folder>`,
+    `--settings <file>`) belongs to the option, and an argument that does not start as a path is a word or a
+    prompt: neither is read. A station started with its own arguments names the plugin's folder, which in an
+    install is .tares/engine/versions/<tares version>/..., and that is not Claude Code's version. "" when no
+    argument names one."""
+    value = False
+    for a in args:
+        mine, value = value, a.startswith("-") and a != "--" and "=" not in a
+        if mine or not _PATH_START.match(a):
+            continue
+        m = _VERSIONS_IN_COMMAND.search(a)
+        if m:
+            return m.group(1)
+    return ""
+
+
+_exe_versions: dict = {}   # (path, size, mtime) of a claude.exe: the version it said it is
+
+
+def _exe_version(pid) -> str:
+    """Windows: the version of the claude.exe a process runs, asked of the file (`--version`); "" when it cannot
+    be told. The install there keeps one claude.exe in ~/.local/bin and an update puts a new file at that path,
+    so a process that started before the file was written runs an older build, and which one cannot be told.
+    A process that is not claude.exe (node, for an npm install) is not asked. A file is asked once."""
+    try:
+        proc = psutil.Process(int(pid))
+        exe, started = proc.exe(), proc.create_time()
+        if os.path.basename(exe).lower() != "claude.exe":
+            return ""
+        st = os.stat(exe)
+    except (psutil.Error, ValueError, TypeError, OSError):
+        return ""
+    if started < max(st.st_mtime, getattr(st, "st_birthtime", st.st_mtime)):
+        return ""
+    key = (exe, st.st_size, st.st_mtime_ns)
+    if key not in _exe_versions:
+        v = claude_version(exe)
+        if not v:
+            return ""
+        _exe_versions[key] = v
+    return _exe_versions[key]
+
+
+def running_version(session_id: str, agents=None, claude=None, platform=None) -> str:
     """The Claude Code version a session's process runs; "" when it cannot be told. The session list may
     give it (`version`); if not, a station's pid is a `bg-spare` process under a pty host whose command
-    line names the binary it runs (.../versions/<v>), so the pid's parent is read, then the pid. `agents`
-    is a list already read (active_json); without one it is read here, and an unreadable list gives ""."""
+    line names the binary it runs (.../versions/<v>), so the pid's parent is read, then the pid
+    (version_named: only a path that stands on its own, never an option's value). On Windows no path names
+    the version, so the pid's own claude.exe is asked (_exe_version). `agents` is a list already read
+    (active_json); without one it is read here, and an unreadable list gives ""."""
     if not session_id:
         return ""
     if agents is None:
@@ -660,9 +728,11 @@ def running_version(session_id: str, agents=None, claude=None) -> str:
     for p in (ppid, pid):
         if p is None:
             continue
-        m = _VERSIONS_IN_COMMAND.search(_command_line(p))
-        if m:
-            return m.group(1)
+        v = version_named(_arguments(p))
+        if v:
+            return v
+    if _is_windows(platform) and not os.environ.get("TARES_FAKE_PS_DIR"):
+        return _exe_version(pid)   # never with the fake hook on: it would read the machine's real processes
     return ""
 
 

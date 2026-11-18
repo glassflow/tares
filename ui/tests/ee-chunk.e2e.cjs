@@ -123,6 +123,8 @@ async function visit(browser, base, { blockChunk = false } = {}) {
 
     // A team home read from the cell, with the waiting row and the project rows swapped in by the page.
     const teamHome = async (page, { waiting = [], projects = [] }) => {
+      // a set-up cell with a project: the home is not sent to /setup (this checks the licence, not the landing)
+      await page.route(/\/api\/factory\/setup\/progress(\?|$)/, (route) => route.fulfill({ json: { set: 7, total: 7, text: "7 of 7 done", projects: 1 } }));
       await page.route(/\/api\/home(\?|$)/, async (route) => {
         const res = await route.fetch();
         const data = await res.json();

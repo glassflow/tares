@@ -47,6 +47,14 @@ export interface HomeRef {
 
 export interface HomeItem {
   id: string;
+  /** The people it waits for, by person id (the cell's one rule, factory_owners). */
+  for_people?: string[];
+  /** Any admin may act on it (a grant that waits for an admin). */
+  for_admin?: boolean;
+  /** Its project has no lead, so it fell to the admins: the meta says "No lead, set one". */
+  no_lead?: boolean;
+  /** On a project page's "Waiting for others": the first person it waits for. */
+  for_person?: { id: string; name: string } | null;
   kind: HomeItemKind;
   label: string;
   title: string;
@@ -180,12 +188,31 @@ export interface HomePlan {
   title: string; // "Your Claude plan", "Kim's Claude plan", or "Claude plan" when the cell cannot tell whose it is
 }
 
-export interface HomeTool {
-  key: "github" | "linear" | "slack" | "claude_code";
-  name: string;
-  connected: boolean;
-  /** What it is connected to, after the name on the chip: "glassflow", "last session 5 minutes ago". */
-  short: string | null;
+/** One always-on member of the crew as the first-run panel shows it. */
+export interface OnboardingMember {
+  state: "running" | "quiet" | "stopped" | "starting" | "none";
+  last_at: string | null;
+}
+
+
+export interface HomeOnboarding {
+  choices: {
+    chosen: boolean;
+    autonomy: "L3-review" | "L4-ship" | null;
+    releaser: boolean | null;
+    builders_max: number | null;
+    /** What the form starts on; the cell's own defaults, saved only when the person confirms. */
+    defaults: { autonomy: "L3-review" | "L4-ship"; releaser: boolean; builders_max: number };
+  };
+  github: { connected: boolean; text: string };
+  machine: { name: string; version: string; at: string | null };
+  crew: {
+    machine: string;
+    orchestrator: OnboardingMember;
+    reviewer: OnboardingMember;
+    builders: { live: number; max: number };
+    up: boolean;
+  };
 }
 
 export interface HomeData {
@@ -210,9 +237,12 @@ export interface HomeData {
   later_count?: number; // projects kept for later, off the home
   crew: HomeCrew;
   plan: HomePlan;
-  tools: HomeTool[];
+  /** The command that plans a project with the crew (`tares factory spec`), shown while there is none. */
+  plan_command?: string;
   // The Start checklist (tares/start_steps.py); absent in older answers and in samples that skip it.
   start?: StartBlock;
+  // What the first-run panel shows beside it (tares/crew_onboarding.py); absent in older answers.
+  onboarding?: HomeOnboarding;
   now: string;
 }
 

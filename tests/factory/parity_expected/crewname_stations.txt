@@ -75,6 +75,7 @@ b-reviewer	reviewer		working
 exit: 0
 -- stdout --
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -93,6 +94,7 @@ exit: 0
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -114,7 +116,8 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -269,7 +272,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -322,6 +325,7 @@ shop-build-m5	builder	shop	working
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -365,7 +369,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role helper, session name crew-reviewer-probe, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role helper, session name crew-reviewer-probe, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -418,7 +422,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -452,7 +457,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -505,7 +510,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -539,7 +545,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo <TMP>/shop, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo <TMP>/shop, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -595,7 +601,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -634,6 +641,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -656,6 +664,7 @@ shop-build-m5	builder	shop	working
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -684,6 +693,7 @@ shop-build-m5	builder	shop	working
 
 == file crew/stations/crew-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -702,6 +712,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -723,7 +734,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -742,6 +754,7 @@ shop-build-m5	builder	shop	working
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -760,6 +773,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -781,7 +795,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -801,6 +816,7 @@ shop-build-m5	builder	shop	working
 @project 
 == file crew/stations/shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -819,6 +835,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -844,7 +861,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -1022,7 +1040,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role orchestrator, session name a-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role orchestrator, session name a-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -1075,6 +1093,7 @@ shop-build-m5	builder	shop	working
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -1118,7 +1137,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role helper, session name a-releaser-probe, started by a-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role helper, session name a-releaser-probe, started by a-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -1171,7 +1190,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -1205,7 +1225,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role helper, session name a-reviewer-probe, started by a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role helper, session name a-reviewer-probe, started by a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -1258,7 +1278,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -1292,7 +1313,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role reviewer, session name a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role reviewer, session name a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -1345,7 +1366,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -1379,7 +1401,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role builder, session name a-shop-build-m1, project shop, repo <TMP>/shop, started by a-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role builder, session name a-shop-build-m1, project shop, repo <TMP>/shop, started by a-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -1435,7 +1457,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -1474,6 +1497,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -1496,6 +1520,7 @@ shop-build-m5	builder	shop	working
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -1524,6 +1549,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-a/stations/a-releaser-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1542,6 +1568,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -1563,7 +1590,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -1582,6 +1610,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-a/stations/a-reviewer-probe.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1600,6 +1629,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -1621,7 +1651,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -1640,6 +1671,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-a/stations/a-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1658,6 +1690,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -1679,7 +1712,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -1699,6 +1733,7 @@ shop-build-m5	builder	shop	working
 @project 
 == file crew-a/stations/a-shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1717,6 +1752,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -1742,7 +1778,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -1945,7 +1982,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role orchestrator, session name b-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role orchestrator, session name b-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -1998,6 +2035,7 @@ shop-build-m5	builder	shop	working
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -2041,7 +2079,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role reviewer, session name b-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role reviewer, session name b-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -2094,7 +2132,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -2128,7 +2167,7 @@ shop-build-m5	builder	shop	working
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role builder, session name b-shop-build-m1, project shop, repo <TMP>/shop, started by b-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role builder, session name b-shop-build-m1, project shop, repo <TMP>/shop, started by b-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -2184,7 +2223,8 @@ shop-build-m5	builder	shop	working
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -2223,6 +2263,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -2245,6 +2286,7 @@ shop-build-m5	builder	shop	working
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -2273,6 +2315,7 @@ shop-build-m5	builder	shop	working
 
 == file crew-b/stations/b-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -2291,6 +2334,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -2312,7 +2356,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -2332,6 +2377,7 @@ shop-build-m5	builder	shop	working
 @project 
 == file crew-b/stations/b-shop-build-m1.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -2350,6 +2396,7 @@ shop-build-m5	builder	shop	working
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -2375,7 +2422,8 @@ shop-build-m5	builder	shop	working
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -2590,38 +2638,38 @@ shop-build-m5	builder	shop	working
 == file claude/calls.jsonl ==
 {"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo <TMP>/shop, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
+{"args": ["--bg", "-n", "shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo <TMP>/shop, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-reviewer-probe", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name crew-reviewer-probe, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook"], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer-probe", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name crew-reviewer-probe, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook"], "cwd": "<TMP>/crew"}
 {"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "a-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name a-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew-a"}
+{"args": ["--bg", "-n", "a-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name a-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew-a"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "a-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send a-orchestrator READY when you are set."], "cwd": "<TMP>/crew-a"}
+{"args": ["--bg", "-n", "a-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send a-orchestrator READY when you are set."], "cwd": "<TMP>/crew-a"}
 {"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "b-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name b-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew-b"}
+{"args": ["--bg", "-n", "b-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name b-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew-b"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "b-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name b-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send b-orchestrator READY when you are set."], "cwd": "<TMP>/crew-b"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "b-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name b-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send b-orchestrator READY when you are set."], "cwd": "<TMP>/crew-b"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "a-shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name a-shop-build-m1, project shop, repo <TMP>/shop, started by a-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send a-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "b-shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name b-shop-build-m1, project shop, repo <TMP>/shop, started by b-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send b-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
+{"args": ["--bg", "-n", "a-shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name a-shop-build-m1, project shop, repo <TMP>/shop, started by a-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send a-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "b-shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name b-shop-build-m1, project shop, repo <TMP>/shop, started by b-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send b-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "a-reviewer-probe", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name a-reviewer-probe, started by a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as a helper of the station a-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, write results to your report, and send a-reviewer DONE when it is finished.\n\nYour task:\nlook"], "cwd": "<TMP>/crew-a"}
+{"args": ["--bg", "-n", "a-reviewer-probe", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name a-reviewer-probe, started by a-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as a helper of the station a-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, write results to your report, and send a-reviewer DONE when it is finished.\n\nYour task:\nlook"], "cwd": "<TMP>/crew-a"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "a-releaser-probe", "--model", "", "--effort", "", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name a-releaser-probe, started by a-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as a helper of the station a-releaser: load the skills factory-protocol and station-releaser, do only the task below, write results to your report, and send a-releaser DONE when it is finished.\n\nYour task:\nlook"], "cwd": "<TMP>/crew-a"}
+{"args": ["--bg", "-n", "a-releaser-probe", "--model", "", "--effort", "", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name a-releaser-probe, started by a-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as a helper of the station a-releaser: load the skills factory-protocol and station-releaser, do only the task below, write results to your report, and send a-releaser DONE when it is finished.\n\nYour task:\nlook"], "cwd": "<TMP>/crew-a"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}

@@ -115,6 +115,8 @@ const GRANT = { id: "grant-1", kind: "grant", label: "Grant", title: "Agree to m
                 meta: "", project: null, repo: null, from: { name: "Kim" }, since: null, waited: "1 minute",
                 actions: [{ label: "Agree", primary: true, do: "agree", grant: "g1" }, { label: "Decline", primary: false, do: "decline", grant: "g1" }] };
 async function fakeHome(page) {
+  // a set-up cell with a project: the home is not sent to /setup (this checks the licence, not the landing)
+  await page.route(/\/api\/factory\/setup\/progress(\?|$)/, (route) => route.fulfill({ json: { set: 7, total: 7, text: "7 of 7 done", projects: 1 } }));
   await page.route(/\/api\/home(\?|$)/, async (route) => {
     const res = await route.fetch();
     const data = await res.json();

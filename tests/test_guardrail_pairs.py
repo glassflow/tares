@@ -1,30 +1,32 @@
-"""Guardrail pairs: a hook point paired with a guardrail integration, block or warn (TR-863).
+"""Guardrail pairs: a hook point paired with a guardrail integration, block or warn (TR-863, TR-1380).
 
 One in-process cell with auth on and fake guardrail integrations whose answer a test sets (deny,
 allow, warn-only, raise, never answer) and that record what they were asked and the integration
-settings they ran with. Covered:
+settings they ran with. A pair holds no integration settings: the guardrail runs with the connection
+the factory holds for it. Covered:
  - the store: the table, add, list, get, delete; ids GP1, GP2... that grow and are not handed out
-   again below the highest; on_fail is block by default; an exact twin is not added twice;
+   again below the highest; on_fail is block by default; an exact twin (hook, integration, on_fail)
+   is not added twice; a pair reads empty settings and secrets;
  - null and empty inputs: no pairs at all (run gives the slot's answer only, gate is open, GET gives
-   {"pairs": []}); empty settings, missing settings, null settings; a blank secret on update keeps the
-   old value, null clears it, a non-empty one replaces it; an empty or unknown hook, an empty or
-   not installed integration, a bad on_fail, an unknown key, a value of the wrong type, a missing
-   required field, an empty body and a settings that is not an object are all 422; an enterprise
-   integration without a licence is 402;
- - secrets stay redacted on every read (factory GET, project GET, the add and update answers) and the
-   real value is in no response body; a project pair keeps its own secret and never takes a factory
-   one (not on add, not on update with its id, and a factory update never changes it);
+   {"pairs": []}); missing, null and empty settings are fine; an empty or unknown hook, an empty,
+   not installed or not connected integration, a bad on_fail, an empty body and a settings that is
+   not an object are all 422; a body that carries any integration settings (a secret, an address, any
+   key) is 422 and names the factory's integrations; an enterprise integration without a licence is
+   402;
+ - an update with the id keeps what the body leaves out, and refuses a settings body or an integration
+   that is not connected;
+ - no secret is in any response; a project pair holds no settings either;
  - who may: an admin on the factory routes; the project's lead or an admin on a project's routes;
    another person, a read key and a crew station get 403; no credential is 401; an unknown project is
    404; a project request cannot remove a factory pair (403, it stays), names another project's pair
    as 404, and an admin removes a project pair from the factory routes;
  - the project view lists the factory's pairs read-only, with empty settings;
  - run(): the slot's guardrail first and its error still raises; factory pairs before the project's, each
-   in the order added; a project pair the same as a factory pair runs once (not when its settings
-   differ); a pair for another hook point does not run; a pair is given its own settings; block keeps
-   a denial blocking and warn makes it a warning; a guardrail that raises, never answers, is no longer
-   installed or needs a licence the cell lacks follows on_fail with "guardrail did not answer:
-   <integration>" and never shows the cause; one failing pair does not stop the next;
+   in the order added; a project pair the same as a factory pair runs once; a pair for another hook
+   point does not run; a pair runs with its integration's connection at the factory, read on each run;
+   block keeps a denial blocking and warn makes it a warning; a guardrail that raises, never answers,
+   is no longer installed or needs a licence the cell lacks follows on_fail with "guardrail did not
+   answer: <integration>" and never shows the cause; one failing pair does not stop the next;
  - warnings on a ticket: merge_ready writes a guardrail_warn row, once per warning, a different warning
    writes another, a block writes none, no ticket writes nothing, and a recording that fails does not
    break the answer;
@@ -88,6 +90,14 @@ SECRETS = ["FSECRET-factory-1", "FSECRET-factory-2", "PSECRET-project-1", "PSECR
            "LEADSECRET-1", "KEEPME-secret-7", "BOOM-detail-TOKEN9"]
 
 SCHEMA = [Field("url", "Address", "text"), Field("token", "Token", "secret")]
+
+# the connection the factory holds for each guardrail a pair uses (what the runner must hand it)
+CONN = {"gr_a": {"url": "https://factory.example/hook", "token": SECRETS[0]},
+        "gr_b": {"url": "https://second.example/hook", "token": SECRETS[1]},
+        "gr_c": {"url": "https://third.example/hook", "token": SECRETS[5]},
+        "gr_gone": {"url": "https://gone.example/hook", "token": SECRETS[4]},
+        "gr_ee": {"url": "https://paid.example/hook", "token": SECRETS[2]},
+        "gr_tok": {"token": SECRETS[3]}, "gr_url": {"url": "https://old.example/hook", "token": SECRETS[5]}}
 
 
 def ru(r):
@@ -186,6 +196,7 @@ async def main():
         "gr_tok", [Field("token", "Token", "secret", required=True)])
     registry._loaded[("guardrails", "gr_url")] = make_rail(
         "gr_url", [Field("url", "Address", "url"), Field("token", "Token", "secret")])
+    registry._loaded[("guardrails", "gr_off")] = make_rail("gr_off", SCHEMA)
     registry._loaded[("review", "fakerev")] = FakeReview
     registry._loaded[("ci", "fakeci")] = FakeCI
 
@@ -209,6 +220,10 @@ async def main():
         tid = cat["id"]
         store.update_ticket(tid, pr={"repo": "acme/shop", "number": 7,
                                      "url": "https://github.com/acme/shop/pull/7"})
+        for name, settings in CONN.items():      # connected at the factory, none of them the default
+            store.set_choice("guardrails", name, settings, "test", default=False)
+        store.set_choice("review", "fakerev", {}, "test", default=False)
+        store.set_choice("ci", "fakeci", {}, "test", default=False)
         store.set_project_choice(shop, "review", "fakerev", {}, by="test")
         store.set_project_choice(shop, "ci", "fakeci", {}, by="test")
 
@@ -225,23 +240,18 @@ async def main():
             ck("GET project gives an empty list", r.status_code == 200 and r.json() == {"pairs": []}, r.text)
 
         print("== the store ==")
-        a, how = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a",
-                                           {"url": "u1", "token": SECRETS[0]}, "block", "tester")
+        a, how = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "block", "tester")
         ck("a pair is added as GP1 with block", how == "added" and a["id"] == "GP1"
            and a["on_fail"] == "block" and a["scope"] == "factory" and a["project_uid"] is None
            and a["created_by"] == "tester" and a["created_at"] is not None, a)
-        ck("its secret is redacted in the view",
-           a["settings"] == {"url": "u1", "token": ""} and a["secrets"] == {"token": {"has_value": True}}, a)
+        ck("it holds no settings and no secrets", a["settings"] == {} and a["secrets"] == {}, a)
         ck("the title is the integration's", a["title"] == "Fake gr_a", a)
-        b, how = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a",
-                                           {"url": "u1", "token": SECRETS[0]}, "block")
+        b, how = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "block")
         ck("the exact twin adds nothing", how == "twin" and b["id"] == "GP1"
            and len(store.list_guardrail_pairs()) == 1, (how, b))
-        b, how = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a",
-                                           {"url": "u1", "token": SECRETS[0]}, "warn")
+        b, how = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "warn")
         ck("the same with another on_fail is a different pair", how == "added" and b["id"] == "GP2", (how, b))
-        c, how = store.save_guardrail_pair("project", "p1", "pre_merge", "gr_a",
-                                           {"url": "u1", "token": SECRETS[0]}, "block")
+        c, how = store.save_guardrail_pair("project", "p1", "pre_merge", "gr_a", "block")
         ck("the same in a project is a different pair", how == "added" and c["id"] == "GP3", (how, c))
         ck("get gives one", store.get_guardrail_pair("gp2")["id"] == "GP2" and store.get_guardrail_pair("GP9") is None
            and store.get_guardrail_pair("") is None)
@@ -251,13 +261,13 @@ async def main():
            and len(store.list_guardrail_pairs()) == 3)
         ck("delete removes one, twice says so", store.delete_guardrail_pair("GP1") is True
            and store.delete_guardrail_pair("GP1") is False and store.delete_guardrail_pair("") is False)
-        d, how = store.save_guardrail_pair("factory", None, "pre_build", "gr_b", None, "block")
+        d, how = store.save_guardrail_pair("factory", None, "pre_build", "gr_b", "block")
         ck("an id below the highest is not handed out again", d["id"] == "GP4", d)
-        ck("settings None is stored as empty", d["settings"] == {} and d["secrets"] == {"token": {"has_value": False}}, d)
-        ck("a stored pair with the real secret is readable for the runner only",
-           store.guardrail_pair_stored("GP2")["settings"]["token"] == SECRETS[0])
+        ck("what runs is the factory's connection, which the pair never copies",
+           store.guardrail_pair_stored("GP2")["settings"] == {}
+           and store.stored_settings("guardrails", "gr_a")["token"] == SECRETS[0])
         try:
-            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", {}, "block", pair_id="GP3")
+            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", "block", pair_id="GP3")
             ck("an id of another scope is refused", False, "no error")
         except LookupError:
             ck("an id of another scope is refused", True)
@@ -276,35 +286,30 @@ async def main():
             ben_k = await key("ben", ["read", "ingest"], ben)
 
             print("== adding and the defaults ==")
-            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://factory.example/hook",
-                                                             "token": SECRETS[0]}}))
+            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_a"}))
             ck("an admin adds a factory pair, 201", r.status_code == 201 and r.json()["added"] is True, r.text)
             fp = r.json()["pair"]
-            ck("on_fail defaults to block and the view is redacted",
+            ck("on_fail defaults to block and the view holds no settings",
                fp["on_fail"] == "block" and fp["scope"] == "factory" and fp["hook"] == "pre_merge"
-               and fp["integration"] == "gr_a" and fp["settings"] == {"url": "https://factory.example/hook", "token": ""}
-               and fp["secrets"] == {"token": {"has_value": True}} and fp["project_uid"] is None
-               and fp["created_by"] and fp["created_at"], fp)
-            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://factory.example/hook",
-                                                             "token": SECRETS[0]}}))
+               and fp["integration"] == "gr_a" and fp["settings"] == {} and fp["secrets"] == {}
+               and fp["project_uid"] is None and fp["created_by"] and fp["created_at"], fp)
+            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_a"}))
             ck("the exact twin adds nothing: 200, added false",
                r.status_code == 200 and r.json()["added"] is False and r.json()["pair"]["id"] == fp["id"], r.text)
             r = ru(await root.post(PAIRS, json={"hook": "pre_release", "integration": "gr_plain"}))
-            ck("settings missing is fine", r.status_code == 201 and r.json()["pair"]["settings"] == {}, r.text)
+            ck("settings missing is fine, and an integration with none needs no connection",
+               r.status_code == 201 and r.json()["pair"]["settings"] == {}, r.text)
             plain = r.json()["pair"]
             r = ru(await root.post(PAIRS, json={"hook": "pre_build", "integration": "gr_plain", "settings": None,
                                                 "on_fail": "warn"}))
             ck("settings null is fine, on_fail warn is kept", r.status_code == 201
                and r.json()["pair"]["settings"] == {} and r.json()["pair"]["on_fail"] == "warn", r.text)
             r = ru(await root.post(PAIRS, json={"hook": "pre_build", "integration": "gr_a", "settings": {}}))
-            ck("settings empty is fine", r.status_code == 201 and r.json()["pair"]["secrets"] == {"token": {"has_value": False}}, r.text)
+            ck("settings empty is fine", r.status_code == 201 and r.json()["pair"]["secrets"] == {}, r.text)
             r = ru(await root.get(PAIRS))
             ids = [p["id"] for p in r.json()["pairs"]]
             ck("GET lists them oldest first with growing ids", ids == ["GP1", "GP2", "GP3", "GP4"], ids)
-            ck("and shows the secret as empty with has_value", r.json()["pairs"][0]["settings"]["token"] == ""
-               and r.json()["pairs"][0]["secrets"]["token"]["has_value"] is True, r.text)
+            ck("and shows no settings", all(p["settings"] == {} and p["secrets"] == {} for p in r.json()["pairs"]), r.text)
 
             print("== bad input is 422 ==")
 
@@ -327,117 +332,85 @@ async def main():
             await bad("an empty on_fail", {"hook": "pre_merge", "integration": "gr_a", "on_fail": ""}, 422, "on_fail")
             await bad("settings that is not an object", {"hook": "pre_merge", "integration": "gr_a", "settings": "x"}, 422, "object")
             await bad("settings that is a list", {"hook": "pre_merge", "integration": "gr_a", "settings": []}, 422, "object")
-            await bad("an unknown key", {"hook": "pre_merge", "integration": "gr_a", "settings": {"nope": "1"}}, 422, "nope")
-            await bad("a value of the wrong type", {"hook": "pre_merge", "integration": "gr_a", "settings": {"url": 5}}, 422, "url")
-            await bad("a required field missing", {"hook": "pre_merge", "integration": "gr_req", "settings": {}}, 422, "channel")
-            await bad("a required field blank", {"hook": "pre_merge", "integration": "gr_req", "settings": {"channel": ""}}, 422, "channel")
-            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_req", "settings": {"channel": "ops"}}))
-            ck("a required field given is added", r.status_code == 201, r.text)
+            await bad("a key in settings", {"hook": "pre_merge", "integration": "gr_a", "settings": {"nope": "1"}},
+                      422, "integration settings")
+            await bad("an address in settings", {"hook": "pre_merge", "integration": "gr_a",
+                                                 "settings": {"url": "https://pair.example/hook"}}, 422, "factory's integrations")
+            await bad("a secret in settings is refused and never echoed", {"hook": "pre_merge", "integration": "gr_a",
+                                                                         "settings": {"token": SECRETS[6]}}, 422, "integrations")
+            await bad("an integration that is not connected", {"hook": "pre_merge", "integration": "gr_off"}, 422, "not connected")
+            await bad("another integration with no connection, named in the message",
+                      {"hook": "pre_merge", "integration": "gr_req"}, 422, "gr_req is not connected")
             await bad("an unknown id", {"id": "GP99", "hook": "pre_merge", "integration": "gr_a"}, 404, "GP99")
-            ck("nothing was added by a refusal", len(store.list_guardrail_pairs()) == before + 1)
+            ck("nothing was added by a refusal", len(store.list_guardrail_pairs()) == before)
             r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_ee"}))
             ck("an enterprise integration without a licence is 402", r.status_code == 402, (r.status_code, r.text))
             licensed[0] = True
-            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_ee", "settings": {"token": SECRETS[1]}}))
+            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_ee"}))
             ck("and with one it is added", r.status_code == 201, (r.status_code, r.text))
             ee_id = r.json()["pair"]["id"]
             licensed[0] = False
 
-            print("== secrets on update ==")
+            print("== an update ==")
             fid = fp["id"]
-
-            async def stored_token(pid):
-                return (store.guardrail_pair_stored(pid)["settings"] or {}).get("token")
-            body = {"id": fid, "hook": "pre_merge", "integration": "gr_a", "settings": {"url": "https://factory.example/hook"}}
+            body = {"id": fid, "hook": "pre_merge", "integration": "gr_a"}
             r = ru(await root.post(PAIRS, json=body))
-            ck("a missing secret keeps the stored value", r.status_code == 200 and r.json()["updated"] is True
-               and r.json()["pair"]["secrets"]["token"]["has_value"] is True
-               and await stored_token(fid) == SECRETS[0], r.text)
-            r = ru(await root.post(PAIRS, json={**body, "settings": {"url": "https://factory.example/hook", "token": ""}}))
-            ck("a blank secret keeps it", await stored_token(fid) == SECRETS[0] and r.json()["pair"]["settings"]["token"] == "", r.text)
-            r = ru(await root.post(PAIRS, json={**body, "settings": {"url": "https://factory.example/hook", "token": SECRETS[1]}}))
-            ck("a non-empty secret replaces it", await stored_token(fid) == SECRETS[1], r.text)
-            r = ru(await root.post(PAIRS, json={**body, "settings": {"url": "https://factory.example/hook", "token": None}}))
-            ck("null clears it", await stored_token(fid) is None
-               and r.json()["pair"]["secrets"]["token"]["has_value"] is False, r.text)
-            ru(await root.post(PAIRS, json={**body, "settings": {"url": "https://factory.example/hook", "token": SECRETS[0]}}))
-            r = ru(await root.post(PAIRS, json={"id": fid, "settings": {"url": "https://factory.example/hook"}}))
+            ck("an update with the same values is 200, updated", r.status_code == 200 and r.json()["updated"] is True
+               and r.json()["pair"]["id"] == fid, r.text)
+            r = ru(await root.post(PAIRS, json={"id": fid}))
             ck("an update with only the id keeps hook, integration and on_fail",
                r.status_code == 200 and r.json()["pair"]["hook"] == "pre_merge"
-               and r.json()["pair"]["integration"] == "gr_a" and r.json()["pair"]["on_fail"] == "block"
-               and await stored_token(fid) == SECRETS[0], r.text)
-            r = ru(await root.post(PAIRS, json={"id": fid, "on_fail": "warn", "settings": {"url": "https://factory.example/hook"}}))
+               and r.json()["pair"]["integration"] == "gr_a" and r.json()["pair"]["on_fail"] == "block", r.text)
+            r = ru(await root.post(PAIRS, json={"id": fid, "on_fail": "warn"}))
             ck("an update changes on_fail and keeps the id", r.json()["pair"]["on_fail"] == "warn"
                and r.json()["pair"]["id"] == fid and r.json()["pair"]["scope"] == "factory", r.text)
-            r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_b",
-                                                "settings": {"url": "https://factory.example/hook"}}))
-            ck("choosing another integration starts from nothing: no secret travels",
-               r.status_code == 200 and await stored_token(fid) is None, r.text)
-            ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_a",
-                                            "on_fail": "block", "settings": {"url": "https://factory.example/hook", "token": SECRETS[0]}}))
-            r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_tok", "settings": {}}))
-            ck("a secret the new integration needs is not taken from the old one", r.status_code == 422
-               and "token is required" in r.text and await stored_token(fid) == SECRETS[0], r.text)
+            r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_b", "on_fail": "block"}))
+            ck("choosing another integration keeps the pair", r.status_code == 200
+               and r.json()["pair"]["integration"] == "gr_b" and store.guardrail_pair_stored(fid)["settings"] == {}, r.text)
+            r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_off"}))
+            ck("an integration that is not connected is refused and the pair stays", r.status_code == 422
+               and "not connected" in r.text and store.guardrail_pair_stored(fid)["integration"] == "gr_b", r.text)
+            # the route's early check can be stale (the connection deleted in between): the write
+            # must refuse on its own, so make the early check say yes while it is not connected
+            n_pairs = len(store.list_guardrail_pairs())
+            _early = store.is_connected
+            store.is_connected = lambda slot, name: True
+            r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_off"}))
+            r2 = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_off"}))
+            store.is_connected = _early
+            ck("the write refuses a connection that is gone even when the early check said yes",
+               r.status_code == 422 and r2.status_code == 422 and "gr_off is not connected" in r.text
+               and "factory's integrations" in r.text and store.guardrail_pair_stored(fid)["integration"] == "gr_b"
+               and len(store.list_guardrail_pairs()) == n_pairs, (r.text, r2.text))
+            r = ru(await root.post(PAIRS, json={"id": fid, "settings": {"token": SECRETS[6]}}))
+            ck("settings on an update are refused too", r.status_code == 422 and "integration settings" in r.text
+               and store.guardrail_pair_stored(fid)["settings"] == {}, r.text)
+            ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_a", "on_fail": "block"}))
+            ck("a connection with a secret reaches no response", SECRETS[0] not in "\n".join(ALL))
 
-            print("== a changed address needs the secret again ==")
-            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_url",
-                                                "settings": {"url": "https://old.example/hook", "token": SECRETS[5]}}))
-            uid_ = r.json()["pair"]["id"]
-            ub = {"id": uid_, "hook": "pre_merge", "integration": "gr_url"}
-            r = ru(await root.post(PAIRS, json={**ub, "settings": {"url": "https://new.example/hook"}}))
-            ck("a new address with the secret left out is refused", r.status_code == 422
-               and "re-enter the secret" in r.text, r.text)
-            r = ru(await root.post(PAIRS, json={**ub, "settings": {"url": "https://new.example/hook", "token": ""}}))
-            ck("a new address with a blank secret is refused", r.status_code == 422, r.text)
-            ck("and nothing changed", store.guardrail_pair_stored(uid_)["settings"]
-               == {"url": "https://old.example/hook", "token": SECRETS[5]}, store.guardrail_pair_stored(uid_))
-            r = ru(await root.post(PAIRS, json={**ub, "settings": {"url": "https://old.example/hook"}}))
-            ck("the same address keeps the secret without it", r.status_code == 200
-               and store.guardrail_pair_stored(uid_)["settings"]["token"] == SECRETS[5], r.text)
-            r = ru(await root.post(PAIRS, json={**ub, "settings": {"url": "https://new.example/hook", "token": SECRETS[6]}}))
-            ck("a new address with a new secret is saved", r.status_code == 200
-               and store.guardrail_pair_stored(uid_)["settings"] == {"url": "https://new.example/hook", "token": SECRETS[6]}, r.text)
-            r = ru(await root.post(PAIRS, json={**ub, "settings": {"url": "https://third.example/hook", "token": None}}))
-            ck("a new address with the secret cleared is saved", r.status_code == 200
-               and store.guardrail_pair_stored(uid_)["settings"].get("token") is None, r.text)
-            store.delete_guardrail_pair(uid_)
-            r = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_url",
-                                                "settings": {"url": "https://first.example/hook"}}))
-            ck("a pair with no secret may change its address", r.status_code == 201 and (await root.post(
-                PAIRS, json={"id": r.json()["pair"]["id"], "settings": {"url": "https://second.example/hook"}})).status_code == 200, r.text)
-            store.delete_guardrail_pair(r.json()["pair"]["id"])
-
-            print("== a project pair keeps its own secret ==")
+            print("== a project pair holds no settings either ==")
             L = "/api/projects/p1/guardrails/pairs"
             async with mk(ann_k) as lead:
-                r = ru(await lead.post(L, json={"hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://project.example/x"}}))
+                r = ru(await lead.post(L, json={"hook": "pre_merge", "integration": "gr_a"}))
                 ck("the lead adds a project pair, 201", r.status_code == 201 and r.json()["pair"]["scope"] == "project"
                    and r.json()["pair"]["project_uid"] == "p1", r.text)
                 pp = r.json()["pair"]
-                ck("with the secret omitted it has none: the factory's is not copied",
-                   pp["secrets"]["token"]["has_value"] is False
-                   and "token" not in store.guardrail_pair_stored(pp["id"])["settings"], pp)
-                r = ru(await lead.post(L, json={"id": pp["id"], "hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://project.example/x", "token": ""}}))
-                ck("a blank secret on update of a project pair never picks up the factory value",
-                   "token" not in store.guardrail_pair_stored(pp["id"])["settings"], r.text)
-                r = ru(await lead.post(L, json={"id": pp["id"], "hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://project.example/x", "token": SECRETS[2]}}))
-                ck("its own secret is stored", store.guardrail_pair_stored(pp["id"])["settings"]["token"] == SECRETS[2]
-                   and r.json()["pair"]["settings"]["token"] == "", r.text)
-                ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://factory.example/hook", "token": SECRETS[3]}}))
-                ck("a factory update never changes a project pair",
-                   store.guardrail_pair_stored(pp["id"])["settings"]["token"] == SECRETS[2]
-                   and store.guardrail_pair_stored(fid)["settings"]["token"] == SECRETS[3])
-                ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://factory.example/hook", "token": SECRETS[0]}}))
+                ck("it holds no settings, and the factory's connection is not copied into it",
+                   pp["settings"] == {} and pp["secrets"] == {}
+                   and store.guardrail_pair_stored(pp["id"])["settings"] == {}, pp)
+                r = ru(await lead.post(L, json={"hook": "pre_merge", "integration": "gr_a",
+                                                "settings": {"url": "https://project.example/x"}}))
+                ck("settings on a project pair are 422", r.status_code == 422 and "integration settings" in r.text, r.text)
+                r = ru(await lead.post(L, json={"hook": "pre_merge", "integration": "gr_off"}))
+                ck("an integration that is not connected is 422 for a project too", r.status_code == 422
+                   and "not connected" in r.text, r.text)
+                r = ru(await lead.post(L, json={"id": pp["id"], "settings": {"token": SECRETS[2]}}))
+                ck("an update of a project pair with settings is 422", r.status_code == 422
+                   and store.guardrail_pair_stored(pp["id"])["settings"] == {}, r.text)
                 r = ru(await lead.post(L, json={"id": fid, "hook": "pre_merge", "integration": "gr_a"}))
                 ck("a project request naming a factory pair id is 404 and changes nothing",
-                   r.status_code == 404 and store.guardrail_pair_stored(fid)["settings"]["token"] == SECRETS[0], r.text)
-                r = ru(await lead.post(L, json={"hook": "pre_merge", "integration": "gr_a",
-                                                "settings": {"url": "https://project.example/x", "token": SECRETS[2]}}))
+                   r.status_code == 404 and store.guardrail_pair_stored(fid)["on_fail"] == "block", r.text)
+                r = ru(await lead.post(L, json={"hook": "pre_merge", "integration": "gr_a"}))
                 ck("the project's exact twin adds nothing", r.status_code == 200 and r.json()["added"] is False, r.text)
 
                 print("== the project view ==")
@@ -449,9 +422,8 @@ async def main():
                    and all(p["settings"] == {} and p["secrets"] == {} for p in fac), r.text)
                 ck("with hook, integration and on_fail", all(p["hook"] and p["integration"] and p["on_fail"] for p in fac))
                 ck("the factory's settings are not in the answer", "factory.example" not in r.text, r.text)
-                ck("the project's own pair is whole, secret redacted", len(own) == 1 and own[0]["id"] == pp["id"]
-                   and own[0]["settings"]["url"] == "https://project.example/x" and own[0]["settings"]["token"] == ""
-                   and own[0]["secrets"]["token"]["has_value"] is True, own)
+                ck("the project's own pair is listed with no settings", len(own) == 1 and own[0]["id"] == pp["id"]
+                   and own[0]["settings"] == {} and own[0]["secrets"] == {}, own)
                 ck("factory pairs come before the project's", [p["scope"] for p in pairs] == ["factory"] * len(fac) + ["project"])
 
             print("== who may ==")
@@ -513,10 +485,10 @@ async def main():
             print("== run: order and dedupe ==")
             clear()
             hook = "pre_merge"
-            store.save_guardrail_pair("project", shop, hook, "gr_c", {}, "block")
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {"url": "u"}, "block")
-            store.save_guardrail_pair("factory", None, hook, "gr_b", {}, "block")
-            store.save_guardrail_pair("factory", None, "pre_release", "gr_plain", {}, "block")
+            store.save_guardrail_pair("project", shop, hook, "gr_c", "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_a", "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_b", "block")
+            store.save_guardrail_pair("factory", None, "pre_release", "gr_plain", "block")
             say(gr_a=Decision(allow=True, reason="a ok"), gr_b=Decision(allow=True, reason="b ok"),
                 gr_c=Decision(allow=True, reason="c ok"))
             out = await hooks.run(hook, shop, {})
@@ -531,36 +503,37 @@ async def main():
             await hooks.run(hook, None, {})
             ck("no project runs the factory's pairs only", [x["name"] for x in LOG] == ["gr_a", "gr_b"], LOG)
             clear()
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, "block")
-            store.save_guardrail_pair("project", shop, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_a", "block")
+            store.save_guardrail_pair("project", shop, hook, "gr_a", "block")
             say()
             await hooks.run(hook, shop, {})
-            ck("a project pair identical to a factory pair, secret included, runs once",
-               len(LOG) == 1 and LOG[0]["settings"] == {"url": "u", "token": SECRETS[0]}, LOG)
+            ck("a project pair identical to a factory pair runs once, with the factory's connection",
+               len(LOG) == 1 and LOG[0]["settings"] == CONN["gr_a"], LOG)
             clear()
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, "warn")
-            store.save_guardrail_pair("project", shop, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_a", "warn")
+            store.save_guardrail_pair("project", shop, hook, "gr_a", "block")
             say()
             await hooks.run(hook, shop, {})
-            ck("the same settings with another on_fail run both: a project may be stricter than the factory",
+            ck("the same pair with another on_fail runs both: a project may be stricter than the factory",
                len(LOG) == 2, LOG)
             clear()
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, "block")
-            store.save_guardrail_pair("project", shop, hook, "gr_a", {"url": "u", "token": SECRETS[2]}, "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_a", "block")
+            store.save_guardrail_pair("project", shop, hook, "gr_b", "block")
             say()
             await hooks.run(hook, shop, {})
-            ck("with another secret both run, each with its own settings",
-               [x["settings"] for x in LOG] == [{"url": "u", "token": SECRETS[0]}, {"url": "u", "token": SECRETS[2]}], LOG)
-            clear()
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, "block")
-            store.save_guardrail_pair("project", shop, hook, "gr_a", {"url": "u"}, "block")
+            ck("each guardrail runs with the settings of its own connection at the factory",
+               [(x["name"], x["settings"]) for x in LOG] == [("gr_a", CONN["gr_a"]), ("gr_b", CONN["gr_b"])], LOG)
+            store.set_choice("guardrails", "gr_a", {"url": "https://moved.example/hook", "token": SECRETS[3]},
+                             "test", default=False)
             say()
             await hooks.run(hook, shop, {})
-            ck("a project pair with no secret does not get the factory's: the guardrail sees no token",
-               [x["settings"] for x in LOG] == [{"url": "u", "token": SECRETS[0]}, {"url": "u"}], LOG)
+            ck("the connection is read on every run: a change at the factory reaches the pair at once",
+               LOG[0]["settings"] == {"url": "https://moved.example/hook", "token": SECRETS[3]}
+               and LOG[1]["settings"] == CONN["gr_b"], LOG)
+            store.set_choice("guardrails", "gr_a", CONN["gr_a"], "test", default=False)
             clear()
-            store.save_guardrail_pair("factory", None, "pre_release", "gr_a", {"url": "u"}, "block")
-            store.save_guardrail_pair("project", shop, hook, "gr_a", {"url": "u"}, "block")
+            store.save_guardrail_pair("factory", None, "pre_release", "gr_a", "block")
+            store.save_guardrail_pair("project", shop, hook, "gr_a", "block")
             say()
             await hooks.run(hook, shop, {})
             ck("the same integration and settings at another hook point is not deduped",
@@ -571,7 +544,7 @@ async def main():
             print("== run: block and warn ==")
             for on_fail, warn_only in (("block", False), ("warn", True)):
                 clear()
-                store.save_guardrail_pair("factory", None, hook, "gr_a", {}, on_fail)
+                store.save_guardrail_pair("factory", None, hook, "gr_a", on_fail)
                 say(gr_a=deny("Too big"))
                 out = await hooks.run(hook, shop, {})
                 ck(f"on_fail {on_fail}: a denial is {'blocking' if not warn_only else 'a warning'}, reason kept",
@@ -596,7 +569,7 @@ async def main():
                g["ok"] is True and g["reasons"] == [] and g["warnings"] == ["gr_a: Too big"]
                and g["decisions"][0]["warn_only"] is True, g)
             clear()
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {}, "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_a", "block")
             g = await hooks.gate(hook, shop, {})
             ck("gate: a block pair blocks with the name and reason", g["ok"] is False
                and g["reasons"] == ["Blocked by gr_a: Too big"] and g["decisions"][0]["warn_only"] is False, g)
@@ -608,7 +581,7 @@ async def main():
                 for on_fail, warn_only in (("block", False), ("warn", True)):
                     for how, ans in (("raises", RuntimeError(f"connection refused {SECRETS[6]}")), ("never answers", "sleep")):
                         clear()
-                        store.save_guardrail_pair("factory", None, hook, "gr_a", {"url": "u", "token": SECRETS[0]}, on_fail)
+                        store.save_guardrail_pair("factory", None, hook, "gr_a", on_fail)
                         say(gr_a=ans)
                         out = await hooks.run(hook, shop, {})
                         text = json.dumps([d.__dict__ for d in out])
@@ -618,7 +591,7 @@ async def main():
                         ck("and the cause and the secrets are not in the answer",
                            SECRETS[6] not in text and "refused" not in text and SECRETS[0] not in text, text)
                 clear()
-                store.save_guardrail_pair("factory", None, hook, "gr_gone", {}, "block")
+                store.save_guardrail_pair("factory", None, hook, "gr_gone", "block")
                 saved = registry._loaded.pop(("guardrails", "gr_gone"))
                 say()
                 out = await hooks.run(hook, shop, {})
@@ -628,7 +601,7 @@ async def main():
                 registry._loaded[("guardrails", "gr_gone")] = saved
                 clear()
                 licensed[0] = True
-                store.save_guardrail_pair("factory", None, hook, "gr_ee", {}, "warn")
+                store.save_guardrail_pair("factory", None, hook, "gr_ee", "warn")
                 licensed[0] = False
                 say()
                 out = await hooks.run(hook, shop, {})
@@ -640,9 +613,9 @@ async def main():
                 ck("with the licence it runs", len(LOG) == 1 and out == [], (out, LOG))
                 licensed[0] = False
                 clear()
-                store.save_guardrail_pair("factory", None, hook, "gr_a", {}, "block")
-                store.save_guardrail_pair("factory", None, hook, "gr_b", {}, "block")
-                store.save_guardrail_pair("project", shop, hook, "gr_c", {}, "warn")
+                store.save_guardrail_pair("factory", None, hook, "gr_a", "block")
+                store.save_guardrail_pair("factory", None, hook, "gr_b", "block")
+                store.save_guardrail_pair("project", shop, hook, "gr_c", "warn")
                 say(gr_a=RuntimeError("down"), gr_b=deny("No"), gr_c="sleep")
                 out = await hooks.run(hook, shop, {})
                 ck("one failing pair does not stop the next, and run does not raise",
@@ -659,7 +632,7 @@ async def main():
             print("== run: the slot's guardrail still runs first ==")
             clear()
             store.set_choice("guardrails", "gr_slot", {}, by="test")
-            store.save_guardrail_pair("factory", None, hook, "gr_a", {}, "block")
+            store.save_guardrail_pair("factory", None, hook, "gr_a", "block")
             say(gr_slot=Decision(allow=True, reason="slot ok", integration="gr_slot"), gr_a=None)
             out = await hooks.run(hook, shop, {})
             ck("the slot's answer comes first, then the pairs", [x["name"] for x in LOG] == ["gr_slot", "gr_a"]
@@ -676,7 +649,7 @@ async def main():
 
             print("== merge_ready: block, warn and the ticket's history ==")
             clear()
-            store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", {}, "block")
+            store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "block")
             say(gr_a=deny("Diff too large"))
             a = await mr.merge_ready(store, "acme/shop#7")
             ck("on_fail block: not ready with 'Blocked by <integration>: <reason>'",
@@ -686,8 +659,8 @@ async def main():
             ck("a block writes no history", rows(tid) == [], rows(tid))
             ck("the ticket is in the payload", LOG[0]["ticket"], LOG)
             clear()
-            pid = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", {}, "warn")[0]["id"]
-            store.save_guardrail_pair("factory", None, "pre_release", "gr_b", {}, "warn")
+            pid = store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "warn")[0]["id"]
+            store.save_guardrail_pair("factory", None, "pre_release", "gr_b", "warn")
             a = await mr.merge_ready(store, "acme/shop#7")
             ck("on_fail warn: ready, no reasons, guardrails lists it with warn_only",
                a["ready"] is True and a["reasons"] == [] and a["guardrails"][0]["warn_only"] is True
@@ -705,7 +678,7 @@ async def main():
             ck("a different warning writes another", [r["value"] for r in rows(tid)] == ["Diff too large", "Touches billing"], rows(tid))
             await mr.merge_ready(store, "acme/shop#7")
             ck("and that one once too", len(rows(tid)) == 2)
-            store.save_guardrail_pair("factory", None, "pre_merge", "gr_b", {}, "warn")
+            store.save_guardrail_pair("factory", None, "pre_merge", "gr_b", "warn")
             say(gr_a=deny("Touches billing"), gr_b=deny("Second warning"))
             await mr.merge_ready(store, "acme/shop#7")
             await mr.merge_ready(store, "acme/shop#7")
@@ -713,7 +686,7 @@ async def main():
                 "Diff too large", "Touches billing", "Second warning"], rows(tid))
             say(gr_a=None, gr_b=None)
             clear()
-            store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", {}, "warn")
+            store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "warn")
             say(gr_a=deny("Brand new warning"))
             n = len(rows(tid))
             orig = store.add_ticket_history
@@ -738,7 +711,7 @@ async def main():
 
             print("== release_ready and the tool ==")
             clear()
-            store.save_guardrail_pair("factory", None, "pre_release", "gr_a", {}, "warn")
+            store.save_guardrail_pair("factory", None, "pre_release", "gr_a", "warn")
             say(gr_a=deny("Friday release"))
             n = len(rows(tid))
             r = ru(await root.get("/api/factory/release-ready", params={"project": shop, "commit": "abc"}))
@@ -751,7 +724,7 @@ async def main():
             out = json.loads(await mf.release_ready(project="Shop", commit="abc"))
             ck("the tool carries guardrails", out["ready"] is True and out["guardrails"][0]["warn_only"] is True, out)
             clear()
-            store.save_guardrail_pair("factory", None, "pre_release", "gr_a", {}, "block")
+            store.save_guardrail_pair("factory", None, "pre_release", "gr_a", "block")
             out = json.loads(await mf.release_ready(project="Shop", commit="abc"))
             ck("a block through the tool", out["ready"] is False and out["reasons"] == ["Blocked by gr_a: Friday release"], out)
             r = ru(await root.get("/api/factory/release-ready", params={"project": shop}))
@@ -761,7 +734,7 @@ async def main():
 
             print("== the hand-over ==")
             clear()
-            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", {}, "block")
+            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", "block")
             say(gr_a=deny("No builds this week"))
             body = {"repos": [{"path": "/w/blog", "name": "acme/blog"}]}
             r = ru(await root.post(f"/api/projects/{blog}/handover", json=body))
@@ -769,7 +742,7 @@ async def main():
             ck("and nothing was recorded", not (store.get_handover(blog) or {}).get("repos"))
             ck("and no warning either", [x for x in store.ticket_history(tid) if x["reason"] == "pre_build: gr_a"] == [])
             clear()
-            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", {}, "warn")
+            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", "warn")
             r = ru(await root.post(f"/api/projects/{blog}/handover", json=body))
             j = r.json()
             ck("a warning lets it through and is returned beside the handover", r.status_code == 200
@@ -783,16 +756,16 @@ async def main():
             out = await mf.hand_over(project="Blog", repo="/w/blog2")
             ck("the tool shows the warning", "Guardrail warning: gr_a: No builds this week" in out, out)
             clear()
-            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", {}, "block")
+            store.save_guardrail_pair("factory", None, "pre_build", "gr_a", "block")
             out = await mf.hand_over(project="Blog", repo="/w/blog3")
             ck("the tool shows a block's reason", "No builds this week" in out, out)
 
             print("== deleting a project, /health ==")
             clear()
             store.create_project("p3", "custom", "gamma", {}, lead_person_id=ann["id"])
-            store.save_guardrail_pair("project", "p3", "pre_merge", "gr_a", {}, "block")
-            store.save_guardrail_pair("project", "p1", "pre_merge", "gr_a", {}, "block")
-            store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", {}, "block")
+            store.save_guardrail_pair("project", "p3", "pre_merge", "gr_a", "block")
+            store.save_guardrail_pair("project", "p1", "pre_merge", "gr_a", "block")
+            store.save_guardrail_pair("factory", None, "pre_merge", "gr_a", "block")
             store.delete_project("p3")
             ck("a deleted project's pairs go", store.list_guardrail_pairs("project", "p3") == [])
             ck("another project's and the factory's stay", len(store.list_guardrail_pairs("project", "p1")) == 1
@@ -807,6 +780,10 @@ async def main():
             ck("the responses carry no em dash", chr(0x2014) not in blob)
             for path in ("tares/guardrails_api.py", "tares/integrations/hooks.py", "tests/test_guardrail_pairs.py",
                          "changelog.d/TR-863.md"):
+                # a release collects changelog.d into CHANGELOG.md and deletes the files: on a release
+                # commit the fragment is gone, and its words are checked there by the release itself
+                if path.startswith("changelog.d/") and not os.path.exists(os.path.join(ROOT, path)):
+                    continue
                 ck(f"{path} has no em dash", chr(0x2014) not in open(os.path.join(ROOT, path)).read())
 
     print(f"\n{P} passed, {F} failed")

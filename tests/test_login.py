@@ -3,7 +3,9 @@ localhost: the browser hand-over, the version check, the saved file, logout and 
 who uses the saved login (`tares status`'s resolve, `tares factory`'s environment, the plugin's
 session shipper).
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import stat
@@ -63,7 +65,8 @@ def ck(label, cond, detail=""):
 
 # ── a fake control plane that is also the workspace ────────────────────────────────────────────
 WORLD = {"version": "1.44.0", "health_status": 200, "logout_status": 200, "logouts": [],
-         "deletes": [], "n": 0, "challenge": "", "redirected_auth": []}
+         "deletes": [], "n": 0, "challenge": "", "redirected_auth": [],
+         "machines": [], "machine_status": 200, "own_cell": False}
 
 
 def _s256(verifier: str) -> str:
@@ -84,6 +87,10 @@ class Fake(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
             return self._json(WORLD["health_status"], {"status": "ok", "version": WORLD["version"]})
+        if WORLD["own_cell"] and self.path == "/api/crew/settings":      # a cell the key was made on
+            return self._json(200, {"autonomy": "L3-review"})
+        if WORLD["own_cell"] and self.path == "/api/whoami":
+            return self._json(200, {"scopes": ["admin"], "project": None})
         if self.path == "/elsewhere":
             WORLD["redirected_auth"].append(self.headers.get("Authorization"))
             return self._json(200, {})
@@ -104,6 +111,9 @@ class Fake(BaseHTTPRequestHandler):
             kid = f"k{WORLD['n']}"
             return self._json(200, {"token": f"nvf_{kid}_secret", "key_id": kid, "cell": "factory",
                                     "cell_url": BASE})
+        if self.path == "/api/crew/machine":     # TR-1312: the machine report the home's steps read
+            WORLD["machines"].append((body, self.headers.get("Authorization")))
+            return self._json(WORLD["machine_status"], {"ok": True})
         if self.path == "/api/cli/logout":
             WORLD["logouts"].append((body.get("cell"), self.headers.get("Authorization")))
             return self._json(WORLD["logout_status"], {"revoked": True})
@@ -151,6 +161,14 @@ ck("saved the workspace and key", s and s["cell"] == "factory" and s["key"] == "
    and s["key_id"] == "k1" and s["cell_url"] == BASE and s["cloud"] == BASE, s)
 mode = stat.S_IMODE(os.stat(L.login_file()).st_mode)
 ck("login.json is 600", mode == 0o600, oct(mode))
+
+print("login tells the workspace which machine signed in (TR-1312)")
+ck("one machine report arrived", len(WORLD["machines"]) == 1, WORLD["machines"])
+body, auth = WORLD["machines"][0] if WORLD["machines"] else ({}, None)
+ck("it names this machine and the tares version", body.get("machine") == L._machine()
+   and "version" in body and set(body) == {"machine", "version"}, body)
+ck("it is sent with the key login just saved, and the key is not in the body",
+   auth == "Bearer nvf_k1_secret" and "nvf_k1_secret" not in json.dumps(body), (auth, body))
 
 print("resolve: a flag, then the environment, then the saved login, then local")
 ck("saved login when nothing is set", L.resolve() == (BASE, "nvf_k1_secret", "saved login"), L.resolve())
@@ -321,6 +339,36 @@ L.logout()
 ck("logout leaves a key it did not end alone",
    (crew / ".tares-token").read_text().strip() == "my-own-tares-root")
 os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
+
+print("a refused machine report prints one quiet line and never stops a sign-in")
+WORLD["machine_status"] = 403
+err = io.StringIO()
+browser()
+with contextlib.redirect_stderr(err):
+    rc = L.login(BASE, wait=10)
+ck("sign-in still succeeds", rc == 0, rc)
+ck("one quiet stderr line, no key in it", err.getvalue().count("could not tell the workspace") == 1
+   and "nvf_" not in err.getvalue(), err.getvalue())
+WORLD["machine_status"] = 404      # an older workspace without the call: silent
+err = io.StringIO()
+browser()
+with contextlib.redirect_stderr(err):
+    rc = L.login(BASE, wait=10)
+ck("a workspace that does not know the call says nothing", rc == 0 and "could not tell" not in err.getvalue(),
+   err.getvalue())
+WORLD["machine_status"] = 200
+
+print("tares login --cell reports the machine with the key it was handed")
+WORLD["own_cell"] = True
+before = len(WORLD["machines"])
+with contextlib.redirect_stdout(io.StringIO()):
+    rc = L.connect_cell(BASE, "own_cell_key_1", json_out=True)
+ck("connect succeeds", rc == 0, rc)
+ck("one machine report, with that key", len(WORLD["machines"]) == before + 1
+   and WORLD["machines"][-1][1] == "Bearer own_cell_key_1"
+   and WORLD["machines"][-1][0].get("machine") == L._machine() and "version" in WORLD["machines"][-1][0],
+   WORLD["machines"][before:])
+WORLD["own_cell"] = False
 
 ck("the OS keychain was never asked (TARES_KEYRING is off here)", TRIPWIRE == [], TRIPWIRE)
 

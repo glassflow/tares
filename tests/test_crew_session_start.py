@@ -175,6 +175,11 @@ ck("... names the station, the project and the role's skill, with non-ASCII inta
    "`s-\u540d`" in c and "`Shop \u00e9\u540d`" in c and "`station-builder`" in c, short(c))
 ck("... a resumed station is told to reload its skills and re-arm its schedule",
    "This session was resumed: load both skills again" in c and "re-arm your schedule" in c, short(c))
+r = run_py('{"source": "compact"}', {"FACTORY_ROLE": "builder", "FACTORY_STATION": "b", "TARES_PROJECT": "uc_1"})
+c = ctx_of(r.stdout) or ""
+ck("... a compacted station is told to load a skill again only when its re-attached copy was truncated",
+   "your skills are re-attached" in c and "only if its re-attached copy says it was truncated" in c
+   and "load both skills again" not in c and "re-arm your schedule" in c, short(c))
 r = run_py(b'{"source": "compact", "x": "\xff\xfe"}', {"FACTORY_ROLE": "orchestrator", "FACTORY_STATION": "crew-orchestrator"})
 ck("invalid UTF-8 in the input does not fail the hook", r.returncode == 0 and "was compacted:" in (ctx_of(r.stdout) or ""),
    short((r.returncode, r.stdout, r.stderr[-200:])))
@@ -303,7 +308,7 @@ tree = ast.parse(SRC, feature_version=(3, 9))
 tops = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
 names = sorted({a.name.split(".")[0] for n in tops if isinstance(n, ast.Import) for a in n.names}
                | {n.module.split(".")[0] for n in tops if isinstance(n, ast.ImportFrom) and n.module})
-ck("it imports only the standard library at the top", set(names) <= {"__future__", "json", "os", "shutil", "subprocess", "sys"}, str(names))
+ck("it imports only the standard library at the top", set(names) <= {"__future__", "importlib", "json", "os", "shutil", "subprocess", "sys", "threading", "urllib"}, str(names))
 ck("it does not import tares at the top (the import is inside compat_line, where its failure is caught)",
    "tares" not in names and "from tares.crew.version import check_plugin_compat" in SRC)
 ck("it has no stray CR (a CRLF checkout is fine) and no em dash", b"\r" not in SCRIPT.read_bytes().replace(b"\r\n", b"") and "\u2014" not in SRC)
