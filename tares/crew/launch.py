@@ -369,7 +369,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     plan = plan or launch_plan(client, station, role, parent, project, repo)
     file, shown = settings_path(client, station)
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
-    state.write_json(file, {"env": plan["env"], **plan["settings"]}, mode=0o600)
+    state.write_json(file, {"env": {**plan["env"], **plan.get("otel_file", {})}, **plan["settings"]}, mode=0o600)
     servers = plan.get("mcp") or {}
     mcp_path = mcp_file(paths, station)[0]
     if servers:
@@ -590,13 +590,29 @@ def with_restrictions(settings: dict, person: dict) -> dict:
     return out
 
 
+TELEMETRY_FLAGS = ("CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+_SECRET_NAME = re.compile(r"HEADERS|KEY|TOKEN|SECRET|AUTH|PASSWORD|CREDENTIAL", re.I)
+_USERINFO = re.compile(r"://[^/?#\s]*@")
+
+
 def telemetry_env(person: dict, spec_env: dict) -> dict:
-    """The OTEL_* variables a station starts with: the person's (their settings' env) under the spec's."""
+    """The telemetry variables a station starts with: OTEL_* and the two that switch Claude Code's telemetry on,
+    the person's (their settings' env) under the spec's."""
     out = {}
     for source in (person.get("env"), spec_env):
         if isinstance(source, dict):
-            out.update({k: str(v) for k, v in source.items() if str(k).startswith("OTEL_")})
+            out.update({k: str(v) for k, v in source.items() if str(k).startswith("OTEL_") or k in TELEMETRY_FLAGS})
     return out
+
+
+def split_telemetry(otel: dict) -> tuple:
+    """(plain, secret): the telemetry variables a settings file may hold, and the ones that may hold a secret,
+    which no file ever does: a name with headers, key, token, secret, auth, password or credential in it, or a
+    value with credentials in its address."""
+    plain, secret = {}, {}
+    for k, v in otel.items():
+        (secret if _SECRET_NAME.search(k) or _USERINFO.search(v) else plain)[k] = v
+    return plain, secret
 
 
 def lean_args(args: list) -> list:
@@ -654,7 +670,7 @@ def mcp_servers(paths: CrewPaths, station: str, role: str, parent: str, env=None
 
 def launch_plan(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
                 model: str | None = None, effort: str | None = None) -> dict:
-    """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel}.
+    """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel, otel_file}.
 
     args: the `claude` arguments up to and including --plugin-dir, with --setting-sources project,local and
     --no-chrome after --settings, and `--mcp-config <file>` before them when the role keeps MCP servers; no
@@ -663,9 +679,11 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     halves of the settings document (env, and everything else); the file is `{"env": env, **settings}`. The
     settings carry the person's restrictions (see with_restrictions), disableClaudeAiConnectors, the role's
     allow-listed plugins in enabledPlugins and, for every role but the orchestrator (and the helpers under it),
-    autoMemoryEnabled false. otel: the
-    OTEL_* variables, the person's and the spec's, which reach the station only through the environment of
-    the process that starts it, never a file. `model` and `effort` default to the crew's (see model_effort).
+    autoMemoryEnabled false. otel: the telemetry variables, the person's and the spec's, given to the process
+    that starts the station. That alone does not reach a session started in a running Claude Code background
+    service, so otel_file, the ones that cannot hold a secret (see split_telemetry), also go in the settings
+    file's env; the rest never touch a file and are never printed. `model` and `effort` default to the
+    crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
     this fills the placeholders of this machine and adds FACTORY_TARES, the `tares` that started the crew.
     Dies (CrewError) for a model that cannot run auto mode, a name that is not a station name, a helper whose
@@ -695,6 +713,7 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     person = person_settings(client.env)
     otel = telemetry_env(person, env)
     env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
+    plain, _ = split_telemetry(otel)
     settings = with_restrictions(fill_placeholders(spec["settings"], values), person)
     settings["disableClaudeAiConnectors"] = True
     plugins = allow_lists(paths, role, parent)[1]
@@ -708,7 +727,7 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     servers = mcp_servers(paths, station, role, parent, client.env)
     if servers:
         args = with_mcp_flag(args, mcp_file(paths, station)[1])
-    return {"args": args, "env": env, "settings": settings, "otel": otel, "mcp": servers}
+    return {"args": args, "env": env, "settings": settings, "otel": otel, "otel_file": plain, "mcp": servers}
 
 
 # ---------- starting a station ----------
@@ -735,6 +754,11 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
         grants = gsum = ""
     plan = launch_plan(client, station, role, parent, project, repo, model, effort)
     settings = write_settings(client, station, role, parent, project, repo, plan)
+    held = sorted(set(plan["otel"]) - set(plan["otel_file"]))
+    if held:
+        print(f"  note: {station} sends its telemetry without {', '.join(held)}: a variable that may hold a secret "
+              "never goes in a file, and a running Claude Code background service does not pass on the one a "
+              "launch gives it", file=sys.stderr)
     args = plan["args"]
     kd = kit_dir(client)
     if resume:
