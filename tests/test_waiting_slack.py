@@ -23,6 +23,7 @@ Run: .venv/bin/python tests/test_waiting_slack.py
 """
 import asyncio
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -352,9 +353,12 @@ async def main():
     ask("Move to a queue?", to=kim["id"])
     await read()
     ck("nothing sent", slack.take() == [])
-    async with cx(secret) as c:
-        r = await c.get("/api/me/slack")
-        ck("Settings names the missing scope", "users:read.email" in str(r.json()["problem"]), r.text)
+    async def notice():
+        async with cx(secret) as c:
+            return (await c.get("/api/me/slack")).json()["problem"]
+    ck("Settings names the missing scope", "users:read.email" in str(await notice()))
+    await read()
+    ck("a read with nothing new keeps it (TR-1468)", "users:read.email" in str(await notice()))
     slack.error = "ratelimited"
     ask("Add search?", to=kim["id"])
     await read()
@@ -363,6 +367,22 @@ async def main():
     await read()
     ck("the next read sends what waited for the lookup", [m["text"] for m in slack.take()]
        == ["Waiting for you: Add search?"])
+    ck("and Settings no longer names the scope", await notice() is None)
+
+    print("== the scope added while nothing new waits: the notice goes on the next read ==")
+    reader._users.clear()
+    slack.error = "missing_scope"
+    ask("Rename the queue?", to=kim["id"])
+    await read()
+    ck("the scope is missing", "users:read.email" in str(await notice()))
+    slack.error = None
+    looked = slack.lookups
+    await read()
+    ck("one lookup asks whether it is there now", slack.lookups == looked + 1, slack.lookups - looked)
+    ck("it is, and Settings says nothing", await notice() is None)
+    await read()
+    ck("no more asking once it is there", slack.lookups == looked + 1, slack.lookups - looked)
+    ck("what came while it was missing is not sent late", slack.take() == [])
 
     print("== someone who joins later: what already waits for them is not sent ==")
     lee = store.create_person("Lee", email="lee@example.com")
@@ -373,6 +393,25 @@ async def main():
     ask("Add Apple Pay?", to=lee["id"])
     await read()
     ck("Lee's next new one goes", [m["channel"] for m in slack.take()] == ["U_LEE"])
+
+    print("== a private project Kim is not on: nothing of it reaches her (TR-1468) ==")
+    vault = "uc_vault"
+    store.create_project(vault, "custom", "Vault", {}, goal="Keep the codes")
+    store.set_project_kind(vault, "software_factory")
+    store.set_project_scope(vault, "private")
+    codes = store.add_desk_item(vault, "Rotate the vault codes?", "", ["Yes", "No"], "Yes", "", "", [], True,
+                                "crew-builder-1", [], now_utc(), to_person_id=kim["id"])
+    await read()
+    ck("not in Kim's list", not [i for i in reader.waiting_for(kim, now_utc())
+                                 if "vault" in json.dumps(i).lower()])
+    ck("no message about it", not [m for m in slack.take() if "vault" in json.dumps(m).lower()])
+    store.add_project_member(vault, kim["id"])
+    await read()
+    ck("once she is on it, it goes to her", [m["text"] for m in slack.take()]
+       == ["Waiting for you: Rotate the vault codes?"])
+    store.close_desk_item(codes["id"], "dismissed", None, now_utc())
+    await read()
+    slack.edits()
 
     print("== Alex was never told about Kim's questions ==")
     ck("no message to Alex", slack.lookups and not any(m["channel"] == "U_ALEX" for m in slack.sent))
