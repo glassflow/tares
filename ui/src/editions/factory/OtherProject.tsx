@@ -4,7 +4,7 @@ import { Link, Navigate, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../../api";
 import { usePolling } from "../../components/bits";
 import {
-  Banner, Button, Dialog, EmptyState, ListRow, ListSection, LoadingBlocks, StatusLabel, toneOf,
+  Banner, Button, Collapse, Dialog, EmptyState, ListRow, ListSection, LoadingBlocks, StatusLabel, toneOf,
 } from "../../components/edition";
 import { formatCount } from "../../lib/number";
 import { ageWords, formatStampUTC } from "../../lib/time";
@@ -112,13 +112,13 @@ function OtherProjectPage({ s, id, reload, stale }: {
         </p>
       </header>
 
-      {stale && <Banner tone="warn" data-testid="other-stale">Showing what Tares read last; the latest read failed: {stale}</Banner>}
-      {problem && <Banner tone="error" data-testid="other-problem">{problem}</Banner>}
-      {s.status === "error" && s.last_error && (
+      <Collapse>{stale && <Banner tone="warn" data-testid="other-stale">Showing what Tares read last; the latest read failed: {stale}</Banner>}</Collapse>
+      <Collapse>{problem && <Banner tone="error" data-testid="other-problem">{problem}</Banner>}</Collapse>
+      <Collapse>{s.status === "error" && s.last_error && (
         <Banner tone="error" data-testid="other-error">
           It stopped on an error: <span className="font-mono text-[13px]" data-user-text>{s.last_error}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
       {s.goal && (
         <section className="grid min-w-0 gap-1" data-testid="other-goal">

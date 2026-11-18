@@ -20,6 +20,35 @@
 @import "@fontsource/geist-mono/600.css";
 @import "@fontsource-variable/doto";
 
+/* ── Motion (TR-1431) ──
+   One scale for every duration and curve in the console; nothing below names a raw time. The rule
+   in .impeccable.md (Motion) says what moves; `npm run motion-contract` (tests/motion.check.cjs) fails
+   on a raw duration in CSS, and the design-contract lint on one in a component.
+   - dur-1, 120ms: hover, press, colour, a menu or a select opening, anything leaving
+   - dur-2, 180ms: a dialog, a fold, a banner, a tab underline
+   - dur-3, 260ms: a page's content, the phone drawer, a toast, a row moving
+   - dur-4, 900ms: the wash on a value that just changed, fading out
+   - dur-wait, 200ms: how long a skeleton holds back, so a fast read never shows one
+   - dur-instant, 1ms: what every animation becomes under prefers-reduced-motion (transitions: 0s)
+   Things arrive on ease-out (fast, then settle) and leave on ease-in, faster than they came.
+   Under prefers-reduced-motion every one of them collapses to an instant (the guard in @layer base).
+   `static`: Tailwind emits these even where no utility names them, since the CSS below reads them. */
+@theme static {
+  --dur-1: 120ms;
+  --dur-2: 180ms;
+  --dur-3: 260ms;
+  --dur-4: 900ms;
+  --dur-wait: 200ms;
+  --dur-instant: 1ms;
+  --dur-spin: 0.8s;
+  --dur-pulse: 1.2s;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.2, 1);
+  --default-transition-duration: var(--dur-1);
+  --default-transition-timing-function: var(--ease-out);
+}
+
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono-jb: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
@@ -337,7 +366,7 @@ button.ws-switch[aria-expanded="true"] { border-color: var(--accent); }
 }
 .ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-chev { width: 14px; height: 14px; color: var(--ink-faint); transform: rotate(90deg);
-  transition: transform 0.12s ease; }
+  transition: transform var(--dur-1) var(--ease-out); }
 button.ws-switch[aria-expanded="true"] .ws-chev { transform: rotate(-90deg); }
 .ws-pop { position: fixed; z-index: 40; min-width: 240px; max-width: 320px;
   letter-spacing: normal; font-weight: 400; }
@@ -778,7 +807,7 @@ details.adv-group { border-top: 1px solid var(--line); margin-top: 8px; }
 details.adv-group > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px;
   padding: 14px 0 4px; display: flex; align-items: center; gap: 8px; }
 details.adv-group > summary::-webkit-details-marker { display: none; }
-details.adv-group > summary .caret { color: var(--ink-soft); transition: transform .18s ease; }
+details.adv-group > summary .caret { color: var(--ink-soft); transition: transform var(--dur-2) var(--ease-out); }
 details.adv-group[open] > summary .caret { transform: rotate(90deg); }
 details.adv-group .fld-row:first-child { border-top: none; }
 
@@ -923,7 +952,7 @@ pre.payload {
   font: inherit; color: inherit; cursor: pointer; text-align: left;
 }
 .disclosure:hover h2 { color: var(--accent-deep); }
-.disclosure-caret { flex-shrink: 0; color: var(--ink-faint); transform: rotate(-90deg); transition: transform 0.12s ease; }
+.disclosure-caret { flex-shrink: 0; color: var(--ink-faint); transform: rotate(-90deg); transition: transform var(--dur-1) var(--ease-out); }
 .disclosure-caret.open { transform: rotate(0deg); }
 .combo-list {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
@@ -980,12 +1009,12 @@ pre.payload {
 }
 
 /* ── right-side slide-over sheet ── */
-.sheet-overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 40; animation: sheet-fade 0.12s ease; }
+.sheet-overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 40; animation: sheet-fade var(--dur-2) var(--ease-out); }
 .sheet {
   position: fixed; top: 0; right: 0; height: 100vh; width: min(580px, 94vw);
   background: var(--panel); border-left: 1px solid var(--line);
   box-shadow: -16px 0 40px var(--sheet-shadow); z-index: 41;
-  display: flex; flex-direction: column; animation: sheet-slide 0.16s ease;
+  display: flex; flex-direction: column; animation: sheet-slide var(--dur-3) var(--ease-out);
 }
 @keyframes sheet-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sheet-slide { from { transform: translateX(18px); opacity: 0.5; } to { transform: none; opacity: 1; } }
@@ -1276,7 +1305,7 @@ pre.payload {
   margin-left: auto;
   background: none; border: 0; padding: 0; font: inherit; font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-faint); cursor: pointer; opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-1) var(--ease-out);
 }
 .turn:hover .turn-copy { opacity: 1; }
 .turn-copy:hover { color: var(--accent-deep); }
@@ -1300,7 +1329,7 @@ pre.payload {
   content: ""; position: absolute; left: -22px; top: 10px; width: 7px; height: 7px;
   background: var(--panel); border: 1px solid var(--border-strong);
 }
-.node[data-state="running"]::before { background: var(--accent); border-color: var(--accent); animation: node-pulse 1.1s ease-in-out infinite; }
+.node[data-state="running"]::before { background: var(--accent); border-color: var(--accent); animation: node-pulse var(--dur-pulse) var(--ease-in-out) infinite; }
 .node[data-state="done"]::before { background: var(--ink-faint); border-color: var(--ink-faint); }
 .node[data-state="fail"]::before { background: var(--err); border-color: var(--err); }
 @keyframes node-pulse { 50% { box-shadow: 0 0 0 4px var(--accent-soft); } }
@@ -1615,7 +1644,7 @@ pre.payload {
 /* the builder once it is running: the goal as a brief, the active step visibly busy */
 .builder-brief blockquote { margin: 2px 0 0; padding: 0 0 0 12px; border-left: 3px solid var(--line); white-space: pre-wrap; }
 .builder-running { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 13px; }
-.builder-running .spinner { width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: builder-spin 0.8s linear infinite; }
+.builder-running .spinner { width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: builder-spin var(--dur-spin) linear infinite; }
 @keyframes builder-spin { to { transform: rotate(360deg); } }
 .builder-steps .step.busy { border-style: dashed; }
 
@@ -1832,7 +1861,7 @@ pre.payload {
 .su-progress li { display: flex; gap: 10px; align-items: baseline; }
 .su-progress-mark { width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%; border: 2px solid var(--line); transform: translateY(1px); }
 .su-progress li.done .su-progress-mark { background: var(--ok); border-color: var(--ok); }
-.su-progress li.running .su-progress-mark { border-color: var(--accent); border-top-color: transparent; animation: builder-spin 0.9s linear infinite; }
+.su-progress li.running .su-progress-mark { border-color: var(--accent); border-top-color: transparent; animation: builder-spin var(--dur-spin) linear infinite; }
 .su-progress li.running { font-weight: 600; }
 .su-progress li.stopped .su-progress-mark { border-color: var(--err); }
 @media (prefers-reduced-motion: reduce) { .su-progress li.running .su-progress-mark { animation: none; border-top-color: var(--accent); } }
@@ -1905,8 +1934,8 @@ pre.payload {
 .su-switch input { position: absolute; opacity: 0; width: 30px; height: 18px; margin: 0; cursor: pointer; }
 /* an on/off switch reads as one only when it looks like one: a small rounded track, a round knob
    that slides, grey off and green on (the console's colour for "on") */
-.su-switch-track { flex: 0 0 auto; width: 30px; height: 18px; margin-top: 2px; border-radius: 999px; background: var(--line); position: relative; transition: background 0.15s; }
-.su-switch-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 0.15s; }
+.su-switch-track { flex: 0 0 auto; width: 30px; height: 18px; margin-top: 2px; border-radius: 999px; background: var(--line); position: relative; transition: background var(--dur-1) var(--ease-out); }
+.su-switch-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform var(--dur-1) var(--ease-out); }
 .su-switch input:checked + .su-switch-track { background: var(--ok); }
 .su-switch input:checked + .su-switch-track::after { transform: translateX(12px); }
 .su-switch input:focus-visible + .su-switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2068,7 +2097,7 @@ pre.payload {
 .fo-fold > summary::-webkit-details-marker { display: none; }
 .fo-fold > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
 .fo-fold-h { font-weight: 600; font-size: 15px; display: inline-flex; gap: 8px; align-items: baseline; }
-.fo-fold-h::before { content: "›"; color: var(--ink-soft); display: inline-block; transition: transform 0.15s; }
+.fo-fold-h::before { content: "›"; color: var(--ink-soft); display: inline-block; transition: transform var(--dur-1) var(--ease-out); }
 .fo-fold[open] .fo-fold-h::before { transform: rotate(90deg); }
 .fo-fold[open] > summary { border-bottom: 1px solid var(--line); }
 .fo-meta { font-size: 13px; color: var(--ink-soft); }
@@ -2195,7 +2224,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-builders > summary::-webkit-details-marker { display: none; }
 .crew-builders-count { margin-left: -14px; padding-left: 14px; text-indent: -14px; }
 /* the same arrow as the pane's fold: a "›" that turns down when open */
-.crew-builders-count::before { content: "›"; display: inline-block; width: 14px; text-indent: 0; text-align: center; transition: transform 0.15s; }
+.crew-builders-count::before { content: "›"; display: inline-block; width: 14px; text-indent: 0; text-align: center; transition: transform var(--dur-1) var(--ease-out); }
 .crew-builders[open] > summary > .crew-builders-count::before { transform: rotate(90deg); }
 .crew-builders > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
 .crew-builders[open] > summary { padding-bottom: 6px; }
@@ -2268,7 +2297,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-subfold > summary::-webkit-details-marker { display: none; }
 .crew-subfold > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .crew-subfold-h { color: var(--ink); }
-.crew-subfold-h::before { content: "›"; display: inline-block; width: 14px; text-align: center; color: var(--ink-soft); transition: transform 0.15s; }
+.crew-subfold-h::before { content: "›"; display: inline-block; width: 14px; text-align: center; color: var(--ink-soft); transition: transform var(--dur-1) var(--ease-out); }
 .crew-subfold[open] > summary .crew-subfold-h::before { transform: rotate(90deg); }
 .crew-subfold-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 0 14px; }
 .main table.cc-cats { margin-top: 2px; border: 0; background: none; font-size: 13px; }
@@ -2279,7 +2308,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .cc-loaded > summary { list-style: none; cursor: pointer; color: var(--ink-soft); }
 .cc-loaded > summary::-webkit-details-marker { display: none; }
 .cc-loaded > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
-.cc-loaded > summary::before { content: "›"; display: inline-block; width: 14px; text-align: center; transition: transform 0.15s; }
+.cc-loaded > summary::before { content: "›"; display: inline-block; width: 14px; text-align: center; transition: transform var(--dur-1) var(--ease-out); }
 .cc-loaded[open] > summary::before { transform: rotate(90deg); }
 .cc-loaded dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
 .cc-loaded dt { color: var(--ink-soft); }
@@ -2428,4 +2457,135 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   --radius-lg: 0;
   --radius-xl: 0;
   --font-mono: var(--mono);
+}
+
+/* ── Motion (TR-1431 to TR-1436) ──
+   What moves, and how, in one place; components name these classes, not durations. Each piece says
+   which ticket wants it. The rule is in .impeccable.md (Motion); the tokens are at the top of this file. */
+
+/* The guard. A person who asked the OS for less motion gets none: every transition and animation
+   ends at once. An animation gets 1ms, not 0, so an exit still finishes and the element leaves. A
+   transition gets 0s: transition-property defaults to `all`, so a 1ms duration on every element would
+   start a transition on any style change anywhere, and a colour read in the same tick would get the
+   old value. 0s is the default, the browser's "no transition". In @layer
+   base and important: an important declaration in an earlier layer beats every later layer, so no
+   utility or component can win it back. Skeleton delays drop too, since nothing then fades them in. */
+@layer base {
+  :root { interpolate-size: allow-keywords; }
+
+  /* A fold opens to its height instead of jumping (TR-1434). Browsers without ::details-content keep the jump. */
+  details::details-content {
+    block-size: 0; overflow-y: clip;
+    transition: block-size var(--dur-2) var(--ease-out), content-visibility var(--dur-2) allow-discrete;
+  }
+  details[open]::details-content { block-size: auto; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after, ::details-content {
+      animation-duration: var(--dur-instant) !important;
+      animation-delay: 0s !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0s !important;
+      transition-delay: 0s !important;
+      scroll-behavior: auto !important;
+    }
+    /* Leaving is no animation at all, not a 1ms one: Radix Presence and usePresence unmount at once
+       when the closed state has no animation, but wait for animationend when it has one, and that
+       arrives a frame or more later. A dialog closed by a click would linger past the next read. */
+    [data-state="closed"] { animation-name: none !important; }
+    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  }
+}
+
+@layer components {
+  @keyframes m-fade-in { from { opacity: 0; } }
+  @keyframes m-fade-out { to { opacity: 0; } }
+  /* --m-x, --m-y and --m-s say where an element comes from; it leaves the way it came. `transform`
+     only: Tailwind 4's translate and scale utilities write their own properties, so a centred dialog
+     keeps its -50% while it moves. */
+  @keyframes m-arrive { from { opacity: 0; transform: translate(var(--m-x, 0), var(--m-y, 0)) scale(var(--m-s, 1)); } }
+  @keyframes m-leave { to { opacity: 0; transform: translate(var(--m-x, 0), var(--m-y, 0)) scale(var(--m-s, 1)); } }
+
+  /* TR-1432: the scrim behind a dialog or the phone menu. */
+  .motion-scrim { animation: m-fade-in var(--dur-2) var(--ease-out); }
+  .motion-scrim[data-state="closed"] { animation: m-fade-out var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1432: a dialog rises a little and settles; it leaves faster than it came. */
+  .motion-dialog { --m-y: 6px; --m-s: 0.97; animation: m-arrive var(--dur-2) var(--ease-out); }
+  .motion-dialog[data-state="closed"] { animation: m-leave var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1432: a menu or a select opens from the side it hangs on, 4px, grown from its anchor. */
+  .motion-pop {
+    --m-s: 0.98; transform-origin: var(--radix-popper-transform-origin, top center);
+    animation: m-arrive var(--dur-1) var(--ease-out);
+  }
+  .motion-pop[data-side="bottom"] { --m-y: -4px; }
+  .motion-pop[data-side="top"] { --m-y: 4px; }
+  .motion-pop[data-side="left"] { --m-x: 4px; }
+  .motion-pop[data-side="right"] { --m-x: -4px; }
+  .motion-pop[data-state="closed"] { animation: m-leave var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1432: the phone menu slides in from the left edge and back. */
+  .motion-drawer { --m-x: -100%; animation: m-arrive var(--dur-3) var(--ease-out); }
+  .motion-drawer[data-state="closed"] { animation: m-leave var(--dur-2) var(--ease-in) forwards; }
+
+  /* TR-1432: a toast rises in, leaves faded, and follows a finger that swipes it right. */
+  .motion-toast { --m-y: 12px; animation: m-arrive var(--dur-3) var(--ease-out); }
+  .motion-toast[data-state="closed"] { animation: m-fade-out var(--dur-1) var(--ease-in) forwards; }
+  .motion-toast[data-swipe="move"] { transform: translateX(var(--radix-toast-swipe-move-x)); animation: none; }
+  .motion-toast[data-swipe="cancel"] { transform: translateX(0); transition: transform var(--dur-2) var(--ease-out); }
+  .motion-toast[data-swipe="end"] { --m-x: 100%; animation: m-swipe-out var(--dur-1) var(--ease-in) forwards; }
+  @keyframes m-swipe-out { from { transform: translateX(var(--radix-toast-swipe-end-x)); } to { opacity: 0; transform: translateX(100%); } }
+
+  /* TR-1433: a page's content fades in when it replaces the skeleton or the last page. The Shell puts
+     this on the element that holds the page, so only its top element animates, once, as it arrives;
+     a poll that re-renders the same element moves nothing. Opacity only: a transform, even for a
+     moment, would make the page the containing block of anything fixed inside it. */
+  .motion-page > * { animation: m-fade-in var(--dur-3) var(--ease-out); }
+
+  /* TR-1433: a skeleton waits 200ms before it shows, so a fast read never flashes one. */
+  .motion-wait { animation: m-fade-in var(--dur-2) var(--ease-out) var(--dur-wait) both; }
+
+  /* TR-1434: a banner (or anything in a Collapse) grows open from nothing and shrinks shut, so the
+     page below moves with it instead of jumping. Clipped only while it moves: both keyframes name
+     the overflow, so a focus ring is never cut once it stands still. Without interpolate-size the
+     height snaps and only the fade is left. */
+  /* The gap the parent puts beside it (a grid's gap-5) opens and closes with it, or the page would still
+     jump by the gap as the element mounts and unmounts. A grid track never goes below 0, so the element's
+     own negative margin cannot take the gap back; the next sibling can, by moving up over it. Collapse
+     measures the parent's gap into --m-gap on the parent, where the sibling inherits it. With nothing
+     after it, the element pulls itself (--m-gap-s): exact in a flex column, close in a grid. */
+  @keyframes m-grow {
+    from { block-size: 0; opacity: 0; overflow: clip; margin-block-start: calc(-1 * var(--m-gap-s, 0px)); }
+    to { overflow: clip; }
+  }
+  @keyframes m-shrink {
+    from { overflow: clip; }
+    to { block-size: 0; opacity: 0; overflow: clip; margin-block-start: calc(-1 * var(--m-gap-s, 0px)); }
+  }
+  @keyframes m-pull-in { from { margin-block-start: calc(-1 * var(--m-gap, 0px)); } }
+  @keyframes m-pull-out { to { margin-block-start: calc(-1 * var(--m-gap, 0px)); } }
+  .motion-collapse[data-state="open"]:not([data-initial]) { animation: m-grow var(--dur-2) var(--ease-out); }
+  .motion-collapse[data-state="open"]:not([data-initial]) + * { animation: m-pull-in var(--dur-2) var(--ease-out); }
+  .motion-collapse[data-state="closed"] { animation: m-shrink var(--dur-1) var(--ease-in) forwards; }
+  .motion-collapse[data-state="closed"] + * { animation: m-pull-out var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1435: a value that just changed under a poll washes and fades back. */
+  @keyframes m-wash { from { background-color: var(--color-wash-strong); } }
+  .motion-wash { animation: m-wash var(--dur-4) var(--ease-out); }
+
+  /* TR-1436: the tab underline slides to the tab chosen. The list places it (TabsList); once placed,
+     the tabs' own underline goes quiet and this one moves. */
+  .motion-tabs > [data-tab-line] {
+    position: absolute; left: 0; bottom: 0; block-size: 2px; pointer-events: none;
+  }
+  .motion-tabs[data-line="on"] > [data-tab-line] {
+    transition: transform var(--dur-2) var(--ease-out), inline-size var(--dur-2) var(--ease-out);
+  }
+  /* the border goes at once, not through the tab's colour transition: that would be a fade on first paint */
+  .motion-tabs[data-line="on"] > [role="tab"] { border-bottom-color: transparent !important; transition-property: color, background-color; }
+
+  /* TR-1436: the theme switch crossfades the whole page (a view transition, where the browser has them). */
+  ::view-transition-old(root) { animation: m-fade-out var(--dur-3) var(--ease-in-out) both; }
+  ::view-transition-new(root) { animation: m-fade-in var(--dur-3) var(--ease-in-out) both; }
 }

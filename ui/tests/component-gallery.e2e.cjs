@@ -14,7 +14,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkType } = require("./type.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8831);
@@ -54,6 +54,8 @@ async function checkStatuses(page, theme) {
 
 // TR-1264: one Loading and one EmptyState. Loading tells a screen reader the area is busy and holds only
 // Skeleton bars; EmptyState is a titled block for a page with nothing in it, or a line for an empty section.
+// The suites run under reduced motion (tests/browser.cjs), where the bars hold still on purpose, so the pulse is
+// asked of the class here; motion.e2e.cjs sees it move.
 async function checkStates(page) {
   const got = await page.evaluate(() => {
     const busy = (id) => {
@@ -61,7 +63,7 @@ async function checkStates(page) {
       if (!e) return null;
       const bars = [...e.querySelectorAll("[aria-hidden=true]")];
       return { role: e.getAttribute("role"), busy: e.getAttribute("aria-busy"), label: e.getAttribute("aria-label"),
-               bars: bars.length, pulse: bars.every((b) => getComputedStyle(b).animationName !== "none"), words: e.textContent.trim() };
+               bars: bars.length, pulse: bars.length > 0 && bars.every((b) => b.classList.contains("animate-pulse")), words: e.textContent.trim() };
     };
     const empty = (id) => {
       const e = document.querySelector(`[data-testid=${id}]`);
@@ -134,7 +136,8 @@ async function waitFor(url, tries = 100) {
 
 const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "empty-line", "stat",
   "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
-  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link"];
+  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link",
+  "collapse-toggle", "collapse-stack", "moving-list", "status-changing"];
 
 (async () => {
   const bin = path.join(REPO, ".venv/bin");

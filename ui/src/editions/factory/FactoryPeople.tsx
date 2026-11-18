@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { api, ApiError } from "../../api";
 import LicenceNeeded from "../../components/LicenceNeeded";
-import { Banner, Button, Initials, Input, ListRow, ListSection, LoadingBlocks, StatusDot } from "../../components/edition";
+import { Banner, Button, Collapse, Initials, Input, ListRow, ListSection, LoadingBlocks, StatusDot } from "../../components/edition";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useLicenceNoAnswer } from "../../eeSlots";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
@@ -88,7 +88,7 @@ export function FactoryPeopleView({ data, onAdded, note, onPeopleChanged = () =>
   const { people } = data;
   return (
     <PeopleHead>
-      {note && <Banner tone="note" data-testid="people-note">{note}</Banner>}
+      <Collapse>{note && <Banner tone="note" data-testid="people-note">{note}</Banner>}</Collapse>
       <ListSection title="On this cell" aside={<span className="font-mono" data-testid="people-count">{people.length}</span>} data-testid="people-list">
         {people.map((p) => <Row key={p.id} p={p} canSetPicture={!data.cloud} onChanged={onPeopleChanged} />)}
       </ListSection>

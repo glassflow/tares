@@ -17,6 +17,11 @@
 //                    inset accent bar above; a section opens with a 1px top rule.
 //   voice-contract   Copy carries no em dash. A string or JSX text holding one fails, except a
 //                    lone '—' (the no-value mark in a cell). Comments are not copy.
+//   motion-contract  Time in motion comes from the tokens (TR-1431, styles.css "Motion"): no
+//                    duration-150, duration-[..], delay-.., ease-[..] or animate-[..] utility,
+//                    and no raw time in a transition or animation of a style object. Name a
+//                    token (duration-(--dur-2), ease-out) or a motion-* class instead. The CSS
+//                    side, raw times in src/**/*.css, is tests/motion.check.cjs.
 //   kit-only         No inline style and no raw form control in edition code (TR-1258). Its own
 //                    rule (eslint-rules/kit-only.mjs) with its own register and per-file baseline,
 //                    so it is a separate config object, not a selector. It runs in `npm run lint`
@@ -68,6 +73,10 @@ const SHADOW = `${B}shadow-(xs|sm|md|lg|xl|2xl)(?![\\w-])|${B}shadow-\\[(?!inset
 // A left or inline-start border wider than 1px: border-l-2..N, border-l-[3px]. border-l, -0, -1
 // and a colour (border-l-[color:..], border-l-transparent) stay allowed.
 const STRIPE = `${B}border-(l|s)-([2-9]|[1-9]\\d+|\\[\\d)`
+// A utility that names its own time or curve. duration-(--dur-N) and ease-out/in/in-out read the tokens.
+const MOTION = `${B}(duration|delay)-(\\d|\\[)|${B}(ease|animate)-\\[`
+const MOTION_KEY = '^(transition|animation)(Duration|Delay|TimingFunction)?$'
+const RAW_TIME = '\\d(m?s)\\b|cubic-bezier'
 const WIDE = '^\\s*(?:[2-9]|[1-9]\\d+|1\\.\\d*[1-9])'
 
 const strings = (re) => `Literal[value=/${re}/], TemplateElement[value.raw=/${re}/]`
@@ -88,13 +97,21 @@ const SELECTORS = {
       `Property[key.name=/^border(Left|InlineStart)(Width)?$/] Literal[value>1]`,
     message: `No side stripes: a left border wider than 1px. Mark a selected row with shadow-[inset_3px_0_0_var(--accent)]; open a section with a 1px top rule. ${DOC} (stripe-contract)`,
   },
+  motion: {
+    selector:
+      `${strings(MOTION)}, ` +
+      `Property[key.name=/${MOTION_KEY}/] Literal[value=/${RAW_TIME}/], ` +
+      // in a template the unit can follow the expression: `${ms}ms`
+      `Property[key.name=/${MOTION_KEY}/] TemplateElement[value.raw=/${RAW_TIME}|^m?s\\b/]`,
+    message: `Motion takes its time from the tokens: duration-(--dur-1..4), ease-out / ease-in, or a motion-* class from styles.css. ${DOC} (motion-contract)`,
+  },
   emDash: {
     selector: `Literal[value=/${EM_DASH_PROSE}/], TemplateElement[value.cooked=/${EM_DASH_PROSE}/], JSXText[value=/${EM_DASH_PROSE}/]`,
     message: `An em dash in copy: rewrite the sentence with a period, a colon or a comma. A lone '—' as the no-value mark is fine. ${DOC} (voice-contract)`,
   },
 }
 
-const ALL = [...(PAPER_PROFILE ? ['rounded'] : []), 'shadow', 'stripe', 'emDash']
+const ALL = [...(PAPER_PROFILE ? ['rounded'] : []), 'shadow', 'stripe', 'motion', 'emDash']
 const syntax = (keys) => ({ 'no-restricted-syntax': ['error', ...keys.map((k) => SELECTORS[k])] })
 const without = (...drop) => ALL.filter((k) => !drop.includes(k))
 

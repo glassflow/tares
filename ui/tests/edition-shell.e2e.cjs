@@ -21,7 +21,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, offendersIn } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8835);
@@ -34,6 +34,9 @@ const ck = (label, cond, detail = "") => {
   cond ? pass++ : fail++;
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
 };
+
+// A closing drawer stays while it leaves (usePresence), so "closed" is "detached within a second".
+const gone = (loc) => loc.waitFor({ state: "detached", timeout: 1000 }).then(() => true, () => false);
 
 async function waitFor(url, tries = 150) {
   for (; tries > 0; tries--) {
@@ -234,11 +237,12 @@ async function waitFor(url, tries = 150) {
           await shot(page, `${e}-390-drawer.png`);
           await nav.getByRole("link").first().focus();
           await page.keyboard.press("Escape");
-          ck(`${tag}: Escape closes the drawer`, (await nav.count()) === 0);
+          // the drawer leaves with an animation (TR-1432), so it is gone a frame later, not in the same tick
+          ck(`${tag}: Escape closes the drawer`, await gone(nav));
           ck(`${tag}: and returns to the Menu button`, await page.getByTestId("menu-button").evaluate((el) => el === document.activeElement));
           await page.getByTestId("menu-button").click();
           await page.getByTestId("edition-scrim").click({ position: { x: 340, y: 300 } });
-          ck(`${tag}: the scrim closes the drawer`, (await nav.count()) === 0);
+          ck(`${tag}: the scrim closes the drawer`, await gone(nav));
           await page.getByTestId("menu-button").click();
           await nav.getByRole("link", { name: "Settings" }).click();
           await page.waitForURL(/\/settings/);
@@ -290,7 +294,7 @@ async function waitFor(url, tries = 150) {
       await page.waitForTimeout(300);
       ck(`${e}: and is not sent`, posts.length === 0, posts.join(", "));
       await page.keyboard.press("Escape");
-      ck(`${e}: Escape closes it`, (await dialog.count()) === 0);
+      ck(`${e}: Escape closes it`, await gone(dialog));
       await search.press("Enter");
       ck(`${e}: Enter on an empty field opens nothing`, (await dialog.count()) === 0);
       await ctx.close();

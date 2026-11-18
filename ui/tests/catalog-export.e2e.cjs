@@ -8,7 +8,7 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { chromium } = require(path.join(path.resolve(__dirname, ".."), "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { startDaemon } = require("./licensed.cjs");
 const { offendersIn } = require("./words.cjs");
 const { mockExport } = require("./catalog-export.fixture.cjs");

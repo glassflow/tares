@@ -23,7 +23,7 @@ export function Tabs({ items, className, defaultValue, value, "aria-label": labe
       className={cn("min-w-0", className)}
       {...props}
     >
-      <TabsList aria-label={label} className="overflow-x-auto">
+      <TabsList aria-label={label} className="overflow-x-auto [&>[data-tab-line]]:bg-brand">
         {items.map((t) => (
           <TabsTrigger
             key={t.value}

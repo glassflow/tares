@@ -5,7 +5,7 @@ import { api } from "../api";
 import IngestSetup from "../components/IngestSetup";
 import { useProjectName } from "../components/ProjectBadge";
 import SourceForm from "../components/SourceForm";
-import { Banner, Button, ListRow, ListSection, LoadingBlocks, Panel, Textarea } from "../components/edition";
+import { Banner, Button, Collapse, ListRow, ListSection, LoadingBlocks, Panel, Textarea } from "../components/edition";
 import { copyText } from "../editions/copyText";
 import type { ConnectorSpec } from "../types";
 
@@ -77,8 +77,8 @@ function YamlQuickAdd() {
   return (
     <Panel title="Paste YAML" data-testid="yaml-add">
       <div className="grid gap-3">
-        {err && <Banner tone="error" data-testid="yaml-error">{err}</Banner>}
-        {done && (
+        <Collapse>{err && <Banner tone="error" data-testid="yaml-error">{err}</Banner>}</Collapse>
+        <Collapse>{done && (
           <Banner data-testid="yaml-added">
             Added{" "}
             {done.map((d, i) => (
@@ -87,7 +87,7 @@ function YamlQuickAdd() {
               </span>
             ))}.
           </Banner>
-        )}
+        )}</Collapse>
         <Textarea label="Connections, rules or agents as YAML" className="min-h-32 font-mono text-[13px]"
                   hint="Checked first, then added to what you have. Nothing already there is removed."
                   value={text} onChange={(e) => setText(e.target.value)} data-testid="yaml-text"
@@ -164,13 +164,13 @@ export default function SourceNew() {
 
       {picking && showYaml && <YamlQuickAdd />}
 
-      {specsErr && <Banner tone="error" data-testid="kinds-error">Tares could not list what it connects to: <span data-user-text>{specsErr}</span></Banner>}
+      <Collapse>{specsErr && <Banner tone="error" data-testid="kinds-error">Tares could not list what it connects to: <span data-user-text>{specsErr}</span></Banner>}</Collapse>
       {!specs && !specsErr && <LoadingBlocks />}
-      {specs && connector && !spec && (
+      <Collapse>{specs && connector && !spec && (
         <Banner tone="warn" data-testid="kind-unknown">
           Tares cannot add a <span className="font-mono" data-user-text>{connector}</span> connection here. Pick one of the kinds below.
         </Banner>
-      )}
+      )}</Collapse>
 
       {specs && picking && MODES.map(({ mode, title }) => {
         const kinds = offered.filter(([, s]) => s.mode === mode);
@@ -285,12 +285,12 @@ function CreatedPanel({ created, connector, authOn, onAnother }: {
             <CopyLine text={created.authKey} what="key" data-testid="created-key-secret" />
           </div>
         )}
-        {created.keyErr && (
+        <Collapse>{created.keyErr && (
           <Banner tone="error" data-testid="created-key-error">
             The connection was added, but Tares could not make its key: <span data-user-text>{created.keyErr}</span>.
             Make one that can send data under <Link to="/settings">Settings</Link>.
           </Banner>
-        )}
+        )}</Collapse>
         {!authOn && (
           <p className="m-0 text-[13px] text-muted-foreground" data-testid="created-open">
             This cell is open, so no key is needed and the address alone takes events.

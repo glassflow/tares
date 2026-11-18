@@ -3,8 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, Checkbox, Dialog, EmptyState, Input, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton,
-  StatusDot, StatusLabel, Switch, Tabs,
+  Banner, Button, Checkbox, Collapse, Dialog, EmptyState, Input, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, StatusDot, StatusLabel, Switch, Tabs,
 } from "../../components/edition";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
@@ -278,17 +277,17 @@ function SettingsPanel({ page, save, readOnly, onReadOnly }: {
   return (
     <Panel title="Settings" data-testid="service-settings">
       <div className="grid max-w-xl gap-6">
-        {readOnly && (
+        <Collapse>{readOnly && (
           <Banner tone="note" data-testid="settings-readonly">
             This key can read but not change settings. Use a key that can write to change them.
           </Banner>
-        )}
-        {failed && (
+        )}</Collapse>
+        <Collapse>{failed && (
           <Banner tone="error" data-testid="settings-failed"
             action={<Button variant="secondary" onClick={() => run(failed)} disabled={busy}>Retry</Button>}>
             <b>Settings were not saved.</b> <span className="text-foreground">The cell did not accept the change. Try again.</span>
           </Banner>
-        )}
+        )}</Collapse>
         <Input
           label="Name shown"
           hint="Leave it empty to show the service's own name."

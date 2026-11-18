@@ -17,8 +17,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 
-const UI_DIR = path.resolve(__dirname, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { startDaemon } = require("./licensed.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8866);

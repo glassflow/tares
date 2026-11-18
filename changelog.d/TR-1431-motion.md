@@ -1,0 +1,2 @@
+Changed
+The console moves instead of jumping (TR-1431 to TR-1436): dialogs, menus and toasts arrive and leave with a short fade, a banner grows open and shrinks shut so the page below slides instead of jumping, rows glide to their new place when a list re-sorts, a status that changes washes once, the tab underline slides, and a page that takes a moment to load waits 200ms before showing its skeleton. With reduced motion set in the system, all of it is instant.

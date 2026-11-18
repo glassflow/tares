@@ -9,7 +9,7 @@ import SourceForm from "../components/SourceForm";
 import { ruleSummary, sourceTitle, usePolling } from "../components/bits";
 import { kindOf, memberOf, stateOf, stateWords } from "../components/connectionState";
 import {
-  Banner, Button, Checkbox, Dialog, EmptyState, ListRow, ListSection, LoadingBlocks, Panel, ProgressBar, Stat,
+  Banner, Button, Checkbox, Collapse, Dialog, EmptyState, ListRow, ListSection, LoadingBlocks, Panel, ProgressBar, Stat,
   StatusLabel, Tabs, toneOf,
 } from "../components/edition";
 import { formatCount } from "../lib/number";
@@ -107,14 +107,14 @@ export default function SourceDetail() {
         </div>
       </header>
 
-      {actionError && <Banner tone="error" data-testid="connection-action-error">{actionError}</Banner>}
+      <Collapse>{actionError && <Banner tone="error" data-testid="connection-action-error">{actionError}</Banner>}</Collapse>
 
-      {h?.last_error && (
+      <Collapse>{h?.last_error && (
         <Banner tone="error" data-testid="connection-error">
           Failing {h.consecutive_errors === 1 ? "once" : `${formatCount(h.consecutive_errors)} times in a row`}:{" "}
           <span className="font-mono" data-user-text>{h.last_error}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
       {spec?.mode === "push" && <IngestEndpoint source={source} />}
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import { Banner, Button, Checkbox, EmptyState, ListRow, ListSection, LoadingBlocks, StatusLabel } from "../components/edition";
+import { Banner, Button, Checkbox, Collapse, EmptyState, ListRow, ListSection, LoadingBlocks, StatusLabel } from "../components/edition";
 import type { ConnectorSpec, EnvScan, ProposedSource } from "../types";
 
 /** Discover (TR-1394): Tares looks at the Docker Compose containers on its machine and proposes a
@@ -71,12 +71,12 @@ export default function SourceDiscover() {
 
       {loading && <LoadingBlocks label="Looking at Docker" />}
 
-      {!loading && error && (
+      <Collapse>{!loading && error && (
         <Banner tone="error" data-testid="discover-error"
                 action={<Button variant="secondary" asChild><Link to="/sources/new">Add one by hand</Link></Button>}>
           Tares could not read Docker on the machine it runs on: <span data-user-text>{error}</span>
         </Banner>
-      )}
+      )}</Collapse>
 
       {!loading && scan && (
         <>
@@ -84,17 +84,17 @@ export default function SourceDiscover() {
             {count(scan.summary.containers, "container")} found, {count(scan.summary.proposed, "connection")} proposed.
           </p>
 
-          {results && failed === 0 && (
+          <Collapse>{results && failed === 0 && (
             <Banner data-testid="discover-added"
                     action={<Button asChild><Link to="/sources" data-testid="discover-open">Open connections</Link></Button>}>
               Added {count(added, "connection")}. Tares starts on them at once.
             </Banner>
-          )}
-          {results && failed > 0 && (
+          )}</Collapse>
+          <Collapse>{results && failed > 0 && (
             <Banner tone="error" data-testid="discover-failed">
               Added {added} of {added + failed}. The ones that failed say why below; fix them and add again.
             </Banner>
-          )}
+          )}</Collapse>
 
           {proposed.length === 0 ? (
             <EmptyState title="Nothing to connect" data-testid="discover-empty"

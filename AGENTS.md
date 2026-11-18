@@ -94,12 +94,19 @@ predate the kit.
   number is `formatCount` from `ui/src/lib/number.ts`. No `toLocale*String` and no
   `Intl.DateTimeFormat` anywhere else; the legacy pages keep theirs at the count in
   `ui/time-contract.baseline.json`, lowered with `npm run time-baseline`. Tests: `npm run test:time`.
+- **Motion** comes from the tokens and classes in the Motion part of `ui/src/styles.css` (rule in
+  `.impeccable.md`). Overlays, banners (`Collapse`), lists (`ListSection`), statuses and tabs in the
+  kit already move; a screen adds none of its own. No `duration-150`, `delay-*`, `ease-[..]` or
+  `animate-[..]`: `duration-(--dur-2)`, `ease-out`, or a `motion-*` class. Script-driven motion
+  reads `ui/src/lib/motion.ts`. Every e2e suite takes Chromium from `ui/tests/browser.cjs`, which asks
+  for reduced motion, so a check never reads something halfway in. `npm run motion-contract` fails on
+  a raw time in CSS, on `motion.ts` drifting from the tokens and on a suite that loads playwright itself.
 - **Before you push** a console change:
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
-  npm run test:time && npm run design-contract && npm run build`,
+  npm run test:time && npm run design-contract && npm run motion-contract && npm run build`,
   and the gallery suite when you touched `components/edition`. `design-contract`
   (`ui/eslint-design-contract.config.mjs`) fails on a rounded corner, a page shadow, a side stripe,
-  an em dash in copy and a locale time. In both contracts, and in kit-only, an exception goes in
+  an em dash in copy, a locale time and a raw time in motion. In both contracts, and in kit-only, an exception goes in
   the register with a reason, never in an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
   enforces it when there is one.

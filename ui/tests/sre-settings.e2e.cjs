@@ -24,7 +24,7 @@ const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
-const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { chromium } = require("./browser.cjs");
 const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8873);
@@ -458,7 +458,8 @@ async function waitFor(url, tries = 150) {
           } else if (name === "switch") {
             ck("switch: asks before it switches", (await T(p, "edition-dialog").isVisible()) && /Switch to/.test(await T(p, "edition-dialog").innerText()));
             await T(p, "edition-cancel").click();
-            ck("switch: Cancel closes it", (await T(p, "edition-dialog").count()) === 0);
+            // the dialog leaves with an animation (TR-1432): gone a frame later, not in the same tick
+            ck("switch: Cancel closes it", await T(p, "edition-dialog").waitFor({ state: "detached", timeout: 1000 }).then(() => true, () => false));
           } else if (name === "load") {
             ck("load: the loading rows, and no group", (await T(p, "settings-loading").isVisible()) && (await p.locator("[data-testid^=group-]").count()) === 0);
           } else if (name === "err") {

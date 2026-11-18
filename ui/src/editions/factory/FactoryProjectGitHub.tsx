@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, EmptyState, Skeleton, STATUS_TONES, StatusLabel } from "../../components/edition";
+import { Banner, Button, Collapse, EmptyState, Skeleton, STATUS_TONES, StatusLabel } from "../../components/edition";
 import { usePagePolling } from "../usePagePolling";
 import { PrSize, n } from "./prParts";
 import { PageHead, ProjectShell } from "./ProjectShell";
@@ -96,11 +96,11 @@ function PullRequests({ id }: { id: string }) {
             {countsText(data.counts)} on <span data-user-text>{data.name}</span>.
             {data.checked && <> Last read from GitHub {data.checked}.</>}
           </span>} />
-        {data.github_error && (
+        <Collapse>{data.github_error && (
           <Banner tone="warn" data-testid="github-error">
             <b>Some pull requests could not be read from GitHub.</b> <span className="text-foreground">{data.github_error}</span>
           </Banner>
-        )}
+        )}</Collapse>
       </div>
       {data.repos.length === 0 ? (
         <EmptyState className="border-t border-border py-4" data-testid="github-empty">

@@ -16,10 +16,10 @@ export interface ListRowProps extends React.HTMLAttributes<HTMLElement> {
 
 // The console's bare `a` rule underlines links, so the row's link form turns that off.
 const LINK_CLASS =
-  "no-underline hover:bg-row-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand";
+  "no-underline transition-colors hover:bg-row-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand";
 
 export function ListRow({ as = "div", to, href, className, ...props }: ListRowProps) {
   if (to !== undefined) return <Link to={to} className={cn(ROW_CLASS, LINK_CLASS, className)} {...props} />;
   if (as === "a") return <a href={href} className={cn(ROW_CLASS, LINK_CLASS, className)} {...props} />;
-  return <div className={cn(ROW_CLASS, "hover:bg-row-hover", className)} {...props} />;
+  return <div className={cn(ROW_CLASS, "transition-colors hover:bg-row-hover", className)} {...props} />;
 }

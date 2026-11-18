@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
 import { api } from "../../api";
-import { Banner, Button, Input, ListRow, Panel, SkeletonRows } from "../../components/edition";
+import { Banner, Button, Collapse, Input, ListRow, Panel, SkeletonRows } from "../../components/edition";
 import LicenceNeeded from "../../components/LicenceNeeded";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useLicenceNoAnswer, useEePending } from "../../eeSlots";
 import { extraEmails, personDraft, type PersonDraft } from "../../personDraft";
@@ -111,7 +111,7 @@ function YouPanel({ people, admin, err: loadErr, onChanged, me }: {
         <p className={TEXT}>
           You are the one person on this cell. Each API key belongs to a person, so you can tell whose agent or script is acting.
         </p>
-        {loadErr && <Banner tone="error">{sentence(loadErr)}</Banner>}
+        <Collapse>{loadErr && <Banner tone="error">{sentence(loadErr)}</Banner>}</Collapse>
         {!people ? (!loadErr && <SkeletonRows count={1} />) : mine && (editing ? (
           <YouForm draft={editing} admin={admin} onCancel={() => setEditing(undefined)}
                    onSaved={() => { setEditing(undefined); onChanged(); }} />
@@ -175,7 +175,7 @@ function YouForm({ draft, admin, onCancel, onSaved }: {
         </>
       )}
       {!admin && <p className={TEXT}>Only someone who can change settings can change your email and GitHub login.</p>}
-      {errs.other && <Banner tone="error">{errs.other}</Banner>}
+      <Collapse>{errs.other && <Banner tone="error">{errs.other}</Banner>}</Collapse>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" busy={busy} data-testid="you-save">Save</Button>
         <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>Cancel</Button>

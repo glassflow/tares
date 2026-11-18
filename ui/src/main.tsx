@@ -180,6 +180,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <EditionProvider>
         <LicenceProvider>
           <EeLoader />
+          {/* Not v7_startTransition: it makes every router update a transition, a tab's search param too, so
+              the page lags its own address by a render, and a check that reads it after a click sees the old
+              one. The menu preloads a page's code on hover and focus instead, and the Suspense fallback waits
+              200ms (TR-1433). */}
           <RouterProvider router={router} />
         </LicenceProvider>
       </EditionProvider>

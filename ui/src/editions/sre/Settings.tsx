@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { licenceWordsOn, useCloud } from "../../cloud";
-import { Banner, Button, Dialog, EmptyState, Loading, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
+import { Banner, Button, Collapse, Dialog, EmptyState, Loading, Skeleton, StatusLabel, Toaster, type Tone, useToast } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
@@ -715,12 +715,12 @@ function Settings() {
     <div className="grid gap-6" data-testid="sre-settings">
       <Head sub />
       {banner}
-      {failure && (
+      <Collapse>{failure && (
         <Banner tone="warn" data-testid="partial-banner" role="alert"
                 action={<Button variant="quiet" onClick={() => setFailure(null)}>Dismiss</Button>}>
           <b>{partial ? `Part of ${failedTitle} was saved.` : `${failedTitle} was not saved.`}</b> {failure.text} Fix it and save again.
         </Banner>
-      )}
+      )}</Collapse>
       <nav aria-label="Settings groups" className="flex flex-wrap gap-2" data-testid="settings-nav">
         {NAV.map((n) => (
           <a key={n.id} href={`#${n.id}`} data-testid={`nav-${n.id}`}
