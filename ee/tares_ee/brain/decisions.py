@@ -122,6 +122,7 @@ def build_document(project: str, doc: dict) -> dict | None:
         "metadata": {
             "where": "factory_project",
             "project": project,
+            "doc_kind": doc.get("kind") if doc.get("kind") in DOC_KINDS else None,
             "decided_by": [author],
             "decided_at": _when(doc.get("updated_at"), doc.get("created_at")),
         },
