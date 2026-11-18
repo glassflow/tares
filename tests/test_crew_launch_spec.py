@@ -175,10 +175,17 @@ try:
                   "SETTINGS_FILE": L.settings_path(client, station)[1]}
         want = fill_placeholders({"args": raw["command"], "env": raw["env"], "settings": raw["settings"]}, values)
         env = {k: v for k, v in plan["env"].items() if k != "FACTORY_TARES"}
-        ck(f"{label}: the arguments equal the filled command, one for one", plan["args"] == want["args"], str(plan["args"])[:300])
+        lean = list(L.LEAN_FLAGS)
+        at = plan["args"].index("--settings") + 2
+        ck(f"{label}: the plan adds the lean flags right after --settings", plan["args"][at:at + len(lean)] == lean, str(plan["args"])[:300])
+        bare = plan["args"][:at] + plan["args"][at + len(lean):]
+        ck(f"{label}: the arguments equal the filled command, one for one, but for the lean flags", bare == want["args"], str(plan["args"])[:300])
         ck(f"{label}: the environment equals the filled env, but for FACTORY_TARES", env == want["env"],
            {k: (env.get(k), want["env"].get(k)) for k in set(env) | set(want["env"]) if env.get(k) != want["env"].get(k)})
-        ck(f"{label}: the settings equal the filled settings, deep", plan["settings"] == want["settings"])
+        ck(f"{label}: the plan turns the claude.ai connectors off", plan["settings"].get("disableClaudeAiConnectors") is True)
+        ck(f"{label}: the plan starts the station without auto-memory", plan["settings"].get("autoMemoryEnabled") is False)
+        bare = {k: v for k, v in plan["settings"].items() if k not in ("disableClaudeAiConnectors", "autoMemoryEnabled")}
+        ck(f"{label}: the settings equal the filled settings, deep, but for the connectors and auto-memory keys", bare == want["settings"])
         ck(f"{label}: the plan names the station, role and the project the cell resolved",
            plan["env"]["FACTORY_STATION"] == station and plan["env"]["FACTORY_ROLE"] == role
            and plan["env"].get("TARES_PROJECT") == ("uc_links" if project else None), str(plan["env"])[:300])

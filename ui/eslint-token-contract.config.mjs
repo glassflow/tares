@@ -36,7 +36,8 @@ const REGISTER = [
   {
     // Sample crew transcripts: "#595" is a pull request number in prose, and three hex digits
     // look the same as a colour. The file holds no styling. Permanent while the samples quote PRs.
-    files: ['src/editions/factory/crewSamples.ts'],
+    // The merge queue samples' "In line behind #219." is the same.
+    files: ['src/editions/factory/crewSamples.ts', 'src/editions/factory/mergeQueueSamples.ts'],
     drop: ['hex'],
   },
 ]

@@ -88,6 +88,17 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-1011
     "/people": { page: React.lazy(() => import("./factory/FactoryPeople")), fallback: { redirect: "/settings" } },
 
+    // Integrations: the setup sections, to come back to
+    "/integrations": { page: React.lazy(() => import("./factory/FactoryIntegrations")), fallback: { redirect: "/" } },
+
+    // TR-872
+    "/setup": { page: React.lazy(() => import("./factory/FactorySetup")), fallback: { redirect: "/" } },
+
+    // TR-1204
+    "/brain": { page: React.lazy(() => import("./factory/BrainRepos")), fallback: "today" },
+    // TR-1206
+    "/brain/ask": { page: React.lazy(() => import("./factory/BrainAsk")), fallback: "today" },
+
     // TR-732: the factory home is /, so Start (the login landing) goes there
     "/start": { page: null, fallback: { redirect: "/" } },
   },

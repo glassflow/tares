@@ -114,5 +114,43 @@ clean = ["touch \"$FACTORY_HOME/stations/$FACTORY_STATION.done\"", "git log --fo
 ck("the commands a skill really uses are not flagged", all(scan(c, BANNED_SKILLS_ONLY) == [] for c in clean),
    [(c, scan(c, BANNED_SKILLS_ONLY)) for c in clean])
 
+print("factory-protocol keeps its reload and permission rules")
+fp = (PLUGIN / "skills" / "factory-protocol" / "SKILL.md").read_text(encoding="utf-8")
+fp_desc = re.search(r"^description: (.*)$", fp, re.M).group(1)
+ck("the description does not say to load it after any compaction", "after any compaction" not in fp_desc, fp_desc[-120:])
+ck("the description still says to load it at boot and on reload", "at boot" in fp_desc and "reload" in fp_desc, fp_desc[-120:])
+ck("rule 13 (a denied permission) is still there", "13. **A permission check denies an action**" in fp)
+ck("the compaction bullet is still there and names Claude Code's cut note",
+   "**After a compaction**" in fp and "skill content truncated for compaction" in fp)
+bullet = next(l for l in fp.splitlines() if l.startswith("- **After a compaction**"))
+ck("after a compaction a skill is loaded again only when truncated or missing a rule, and pages are read on need",
+   "re-attached" in bullet and "only if" in bullet and "skill content truncated for compaction" in bullet
+   and "a rule is missing" in bullet and "Pages are not re-attached" in bullet, bullet[:200])
+ck("the compaction bullet does not say to load both skills again", "load this skill and your station skill again" not in fp
+   and "load both skills again" not in fp, bullet[:200])
+ck("the older Tares page is named and present", "`older-tares.md`" in fp and (PLUGIN / "skills" / "factory-protocol" / "older-tares.md").is_file())
+ck("the skill stays under its size limit (14,000 characters)", len(fp) <= 14000, len(fp))
+
+print("the report is a small state file")
+skills_dir = PLUGIN / "skills"
+rp = (skills_dir / "factory-protocol" / "report.md").read_text(encoding="utf-8")
+ck("factory-protocol names the report page", "`report.md`" in fp)
+for section in ("## Now", "## Waiting on", "## Desk", "## Undelivered", "## Bouncing", "## Taken"):
+    ck(f"the report page names {section}", f"`{section}`" in rp)
+ck("the report page says to keep Undelivered, which the watch reads", "Always keep this section" in rp)
+ck("the report page sends history to report log and search to report grep",
+   "tares factory report log" in rp and "tares factory report grep" in rp)
+ck("the report page gives the 4 KB and 8 KB limits", "4 KB" in rp and "8 KB" in rp)
+bad = []
+for md in sorted(skills_dir.glob("*/*.md")):
+    for n, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
+        if re.search(r"reports/.*(>>|tail|cat )", line) or re.search(r"\bappend\b[^.]*\b(report|log)\b", line, re.I) \
+                and "never" not in line.lower() and "no skill" not in line.lower():
+            bad.append(f"{md.relative_to(skills_dir)}:{n}")
+ck("no skill tells a station to cat, tail or append to a report", not bad, bad)
+for station in ("station-orchestrator", "station-reviewer", "station-releaser"):
+    body = (skills_dir / station / "SKILL.md").read_text(encoding="utf-8")
+    ck(f"{station} logs history with report log", "tares factory report log" in body)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

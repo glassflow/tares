@@ -335,6 +335,11 @@ def register(app, store, h, ctx):
                         key=lambda t: _MOVING.index(states[t["id"]]))
         moving = [ticket_out(t) for t in movers[:_MOVING_CAP]]
 
+        # whom the project's checks wait for, by the one rule (factory_owners): its lead, else the
+        # admins; the caller answers them only when they are among them
+        owners = fh.owners_mod.Owners(store)
+        check_for = owners.who(owners.project(p))
+        yours = fh.caller_owns(store, fh.for_caller(ctx.fx, request), request, p, owners)
         out_ms = []
         results = store.milestone_check_results([m["id"] for m in milestones])
         crew_with_it = fw.crew_has(store, p)
@@ -359,7 +364,9 @@ def register(app, store, h, ctx):
                                       for j, c in enumerate(m["checks"])],
                            "accepted": st["accepted"], "needs_person": st["needs_person"],
                            # accept as it is: the crew never recorded its checks and none is for you
-                           "can_accept": st["needs_person"] and not st["person_open"],
+                           "can_accept": st["needs_person"] and not st["person_open"] and yours,
+                           # the person checks wait for these people; `yours` when the caller is one
+                           "checks_for": check_for, "yours": yours,
                            "tickets_href": f"/projects/{uid}/tickets?milestone={m['id']}"})
 
         # the ticket that goes next: the first ready one that has not started. Moving now lists
@@ -370,34 +377,16 @@ def register(app, store, h, ctx):
         nxt = ({"ticket": refs[pick["id"]], "title": clean(pick["title"]),
                 "why": "ready, nothing it depends on is open"} if pick is not None else None)
 
-        waiting = [w for w in fh.waiting_items(store, fh.for_caller(ctx.fx, request), now)
-                   if (w.get("project") or {}).get("id") == uid]
-        for w in waiting:        # ids, links and what a button does stay as they are
+        # what waits for the caller here is what their home lists for this project; on a team
+        # cell what waits for someone else is under "Waiting for others", named for them, with
+        # nothing to press, and does not make the project "Waiting on you" (fh.project_waiting)
+        waiting, others = fh.project_waiting(store, fh.for_caller(ctx.fx, request), now, request, uid)
+        for w in [*waiting, *others]:        # ids, links and what a button does stay as they are
             for k in ("label", "title", "detail", "meta"):
                 if isinstance(w.get(k), str):
                     w[k] = clean(w[k])
             w["actions"] = [{**a, "label": clean(a["label"])} if isinstance(a.get("label"), str) else a
                             for a in w.get("actions") or []]
-        # On a team cell a question or permission request addressed to someone else is theirs, not
-        # the viewer's (TR-1223 follow-up): it moves to `waiting_others`, named for that person,
-        # with nothing to press (only the person it is for may answer it), and does not make the
-        # project "Waiting on you".
-        others: list[dict] = []
-        me = (h.current_person(request) or {}).get("id")
-        if me and not store.only_local_person():
-            kept = []
-            for w in waiting:
-                kind, _, ref = str(w.get("id") or "").partition(":")
-                d = store.get_desk_item(ref) if kind in ("question", "permission") and ref else None
-                to = (d or {}).get("to_person_id")
-                if to and to != me:
-                    person = store.get_person(to) or {}
-                    who = person.get("name") or "someone else"
-                    others.append({**w, "label": f"{'Question' if kind == 'question' else 'Permission'} for {who}",
-                                   "actions": [], "for_person": {"id": to, "name": person.get("name")}})
-                else:
-                    kept.append(w)
-            waiting = kept
         gids = set(h.global_ids().values())
         own = [d for d in store.list_docs(uid) if d["id"] not in gids]
         has_start = any(d["kind"] == "start" for d in own)
@@ -478,7 +467,8 @@ def register(app, store, h, ctx):
                 "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "docs_total": docs_total, "terminal": terminal,
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
-                "can_close": factory_mod.ready_to_close(p, tickets),
+                # Close is for whoever owns the project's work (factory_owners)
+                "can_close": factory_mod.ready_to_close(p, tickets) and yours,
                 "later": later, "can_later": not later and not closed and not with_crew,
                 "people": people,
                 # the repos handed over to the crew, by name only: their folders stay on the crew's machine

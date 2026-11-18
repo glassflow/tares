@@ -44,6 +44,10 @@ MILESTONE_BRANCHES = ("factory-modular/*",)
 
 AUTO = "L4-ship"      # any other level is treated as L3-review
 BY = "merge-queue"
+# what the console approval records as the person's words and choice; the merge queue page
+# (TR-1094) reads them back to tell this yes from an answer given elsewhere
+APPROVE_WORDS = "Approved in the console"
+APPROVE_CHOICE = "Yes, merge"
 _FAR = 10 ** 9        # sorts after every real position
 UNKNOWN_LIMIT = 10    # ticks in a row GitHub may answer "mergeable: null" before the row blocks
 FILES_SHOWN = 5       # conflict files named in a reason
@@ -120,8 +124,8 @@ def approve(store, row: dict, person_id: str | None = None) -> dict:
     commit it holds and goes back in line."""
     d = store.get_desk_item(row["desk_item"]) if row.get("desk_item") else None
     if d and d.get("state") == "open":
-        store.add_decision(d["project"], d["id"], d["question"], "Approved in the console",
-                           "Yes, merge", False, "project", False, None, False, d["tickets"],
+        store.add_decision(d["project"], d["id"], d["question"], APPROVE_WORDS,
+                           APPROVE_CHOICE, False, "project", False, None, False, d["tickets"],
                            now_utc(), via="console", person_id=person_id)
         store.close_desk_item(d["id"], "answered", None, now_utc())
     _set(store, row, "queued", None, approved_head=row["head"])

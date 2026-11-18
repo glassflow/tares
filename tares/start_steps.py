@@ -16,22 +16,24 @@ from dataclasses import dataclass, fields
 
 HIDDEN_PREFIX = "start_hidden:"
 SETTINGS_LINK = "/settings#tools"
+SETUP_LINK = "/setup"
 # the page that explains keeping tickets in GitHub Issues
 GITHUB_ISSUES_DOCS = "https://docs.glassflow.ai/tares/software-factory/get-started"
+INSTALL_COMMAND = "uv tool install tares"
+LOGIN_COMMAND = "tares login"
+CREW_COMMAND = "tares factory crew up"
+SPEC_COMMAND = "tares factory spec"     # the name the command line accepts (tares/crew/dispatch.py PORTED)
 
 
 @dataclass
 class StartCtx:
-    cloud: bool = False                 # this cell is a Tares Cloud one
-    github_connect_url: str = ""        # cloud: where Connect GitHub goes
-    linear_connect_url: str = ""        # cloud: where Connect Linear goes
-    key_used: bool = False              # a key (not the root token) has been used
-    claude_code_events: bool = False    # the claude_code connector has received events
-    github_connected: bool = False      # a GitHub credential is saved
-    linear_connected: bool = False
-    github_issues_linked: bool = False  # a project keeps its tickets in GitHub Issues
-    stations: int = 0                   # crew stations that have reported
-    spec_with_tickets: bool = False     # a factory project has tickets
+    choices_made: bool = False          # autonomy, releases and builders are saved on the cell
+    github_connected: bool = False      # the cell holds a GitHub credential
+    setup_text: str = ""                # "You approve each merge, 2 builders, no releases. GitHub connected as example-org"
+    cli_version: str = ""               # the version `tares login` reported
+    machine_name: str = ""              # the machine that signed in or runs the crew
+    crew_up: bool = False               # the orchestrator and the reviewer have both reported
+    crew_text: str = ""                 # "Running on <machine>"
 
 
 @dataclass
@@ -61,35 +63,39 @@ def _step(key: str, title: str, gets: str, done: bool, actions: list[dict],
     return out
 
 
+def _where(step: dict, where: str, command: str | None = None) -> dict:
+    """Which half of the journey a step belongs to: `workspace` (done in the console) or `terminal`.
+    A terminal step keeps its `command` once done, so /setup can always show how to run the crew."""
+    step["where"] = where
+    if command:
+        step["command"] = command
+    return step
+
+
 def factory_steps(ctx) -> list[dict]:
-    """The five steps of the factory home, in order."""
+    """The four steps of a factory's first run (TR-1312), in order: Set up your factory, done in the
+    console on /setup (how the crew works, GitHub, and the integrations), then three commands in a
+    terminal. Each ticks from what the cell knows. The factory is set up once the crew is up; planning
+    the first project (SPEC_COMMAND) is what comes next, on the home, not a step of setup: it is a long
+    conversation, not something to wait on."""
     c = _ctx(ctx)
-    connect_github = ({"label": "Connect GitHub", "href": c.github_connect_url}
-                      if c.cloud and c.github_connect_url
-                      else {"label": "Connect GitHub", "to": SETTINGS_LINK})
-    connect_linear = ({"label": "Connect Linear", "href": c.linear_connect_url}
-                      if c.cloud and c.linear_connect_url
-                      else {"label": "Connect Linear", "to": SETTINGS_LINK})
     return [
-        _step("claude_code", "Sign in from Claude Code",
-              "Your Claude Code sessions and the crew report here.",
-              c.key_used or c.claude_code_events,
-              [{"label": "Copy the command", "copy": "tares login" if c.cloud else "tares mcp"}]),
-        _step("github", "Connect GitHub",
-              "The crew opens pull requests and Tares follows their reviews and checks.",
-              c.github_connected, [connect_github]),
-        _step("tickets", "Connect Linear or GitHub Issues",
-              "Tickets stay where your team already tracks work.",
-              c.linear_connected or c.github_issues_linked,
-              [connect_linear, {"label": "Use GitHub Issues", "href": GITHUB_ISSUES_DOCS}]),
-        _step("crew", "Start the crew",
-              "Claude Code sessions that build, review and merge your tickets.",
-              c.stations > 0, [{"label": "Copy the command", "copy": "tares factory crew up"}]),
-        _step("spec", "Write your first spec",
-              "A plan with milestones and tickets the crew can build.",
-              c.spec_with_tickets,
-              [{"label": "Copy the command",
-                "copy": 'tares factory spec "what you want to build"'}]),
+        _where(_step("setup", "Set up your factory",
+                     "How your crew works, your GitHub, and where tickets, reviews and checks live.",
+                     c.choices_made and c.github_connected,
+                     [{"label": "Set up your factory", "to": SETUP_LINK}], c.setup_text), "workspace"),
+        _where(_step("install", "Install Tares", "The command that starts and watches the crew.",
+                     bool(c.cli_version or c.machine_name or c.crew_up),
+                     [{"label": "Copy the command", "copy": INSTALL_COMMAND}],
+                     f"Installed: tares {c.cli_version}." if c.cli_version else None), "terminal", INSTALL_COMMAND),
+        _where(_step("login", "Sign your machine in", "So the crew on your machine reports here.",
+                     bool(c.machine_name or c.crew_up),
+                     [{"label": "Copy the command", "copy": LOGIN_COMMAND}],
+                     f"Signed in from {c.machine_name}." if c.machine_name else None), "terminal", LOGIN_COMMAND),
+        _where(_step("crew", "Start the crew",
+                     "It reads your choices from this workspace and asks only what belongs to your machine.",
+                     c.crew_up, [{"label": "Copy the command", "copy": CREW_COMMAND}],
+                     c.crew_text), "terminal", CREW_COMMAND),
     ]
 
 

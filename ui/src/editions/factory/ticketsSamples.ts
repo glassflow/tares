@@ -71,6 +71,16 @@ const LONG_TITLES = [
 ];
 const LONG_MILESTONE = "The first batch of one hundred answers, checked, tagged and searchable by product area";
 
+/** The invented people tickets are assigned to; Sam is "you" in the samples. */
+const PEOPLE = [{ id: "p-sam", name: "Sam Ortiz" }, { id: "p-ria", name: "Ria Patel" }, { id: "p-jon", name: "Jon Berg" }];
+const ME = "p-sam";
+/** Every fifth ticket is assigned to someone the cell does not know, every seventh to nobody. */
+function assigneeOf(n: number): [TicketRow["assignee"], string | null] {
+  if (n % 7 === 0) return [null, null];
+  if (n % 5 === 0) return [null, "lee@partner.example"];
+  return [PEOPLE[n % PEOPLE.length], null];
+}
+
 const ago = (m: number) => ageWords(m * MIN);
 
 function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number> } {
@@ -89,6 +99,7 @@ function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number>
         : kind === "review" ? "Reviewer"
         : kind === "todo" || kind === "blocked" ? "Not picked up yet"
         : i === 21 ? "Lead" : `Builder for ${number}`;
+      const [assignee, assignee_raw] = assigneeOf(n + pi);
       const withPr = kind === "merged" || kind === "changes" || kind === "review" || (kind === "prog" && i % 2 === 0);
       const row: TicketRow = {
         ref,
@@ -97,6 +108,7 @@ function build(long: boolean): { rows: TicketRow[]; mins: Map<TicketRow, number>
         project: { id: p.id, name: p.name },
         milestone: { id: `${p.id}-m${mi + 1}`, number, name: long && ref === "Z-4" ? LONG_MILESTONE : ms },
         who,
+        assignee, assignee_raw,
         pr: withPr ? {
           number: ++pr,
           url: `https://github.com/${REPO}/pull/${pr}`,
@@ -141,6 +153,7 @@ export function sampleLoad(name: string, q: TicketsQuery): Promise<FactoryTicket
   const inScope = s.rows.filter((r) =>
     (!q.project || r.project.id === q.project)
     && (!q.milestone || r.milestone?.id === q.milestone)
+    && (!q.assignee || (q.assignee === "none" ? !r.assignee : r.assignee?.id === (q.assignee === "mine" ? ME : q.assignee)))
     && (!needle || r.ref.toLowerCase().includes(needle) || r.title.toLowerCase().includes(needle)));
   const counts = {
     total: 0, moving: 0, to_do: 0, in_progress: 0, in_review: 0, changes_asked: 0, blocked: 0, merged: 0, canceled: 0,
@@ -167,6 +180,11 @@ export function sampleLoad(name: string, q: TicketsQuery): Promise<FactoryTicket
     milestones: s.projects
       .filter((p) => !q.project || p.id === q.project)
       .flatMap((p) => p.milestones.map((name, i) => ({ id: `${p.id}-m${i + 1}`, project: p.id, number: `M${i + 1}`, name }))),
+    assignees: PEOPLE
+      .map((p) => ({ ...p, count: s.rows.filter((r) => (!q.project || r.project.id === q.project) && r.assignee?.id === p.id && r.state_key !== "canceled").length }))
+      .filter((p) => p.count > 0)
+      .sort((a, b) => Number(b.id === ME) - Number(a.id === ME) || a.name.localeCompare(b.name)),
+    me: s.rows.length ? ME : null,
     hidden_canceled: want === "canceled" ? 0 : counts.canceled,
     now: NOW,
   });

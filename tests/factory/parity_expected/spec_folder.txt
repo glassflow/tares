@@ -28,7 +28,10 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: run tares factory spec inside the git repo the project builds on, or in a folder that holds its repos
+tares factory: run tares factory spec inside the git repo the project builds on, or in a folder that holds its repos. A new project? Make its repo here first:
+           git init
+           git commit --allow-empty -m "Start"
+           gh repo create empty --private --source . --remote origin --push
 -- after --
 {
   "env": {
@@ -50,7 +53,9 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: <TMP>/fresh has no commit yet. Make a first commit and push it, so builders can branch from it.
+tares factory: <TMP>/fresh has no commit yet. Make a first commit and push it, so builders can branch from it:
+           git commit --allow-empty -m "Start"
+           gh repo create fresh --private --source . --remote origin --push
 -- after --
 {
   "env": {

@@ -12,15 +12,14 @@ items; TR-769 fills it, so does every other ticket that adds a kind of item.
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 from . import claude_usage
 from . import factory as factory_mod
-from . import linear as linear_mod
-from . import start_steps
+from . import factory_owners as owners_mod
+from . import crew_onboarding, start_steps
 from .envelope import now_utc
 
 CACHE_SECONDS = 5
@@ -134,7 +133,10 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             # holds crew work up until the person answers (TR-1021); `older` is set by order_waiting
             "blocking": bool(blocking), "older": False,
             # a desk question's own options and the crew's recommendation, answerable on the row
-            "question": question, "lines": list(lines or [])}
+            "question": question, "lines": list(lines or []),
+            # whom it waits for (factory_owners.tag): the people, whether any admin may act, and
+            # whether it fell to the admins because its project has no lead
+            "for_people": [], "for_admin": False, "no_lead": False}
 
 
 OLDER_DAYS = 7
@@ -241,6 +243,7 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
             "tickets": {"merged": prog["done"], "blocked": prog["blocked"], "total": prog["total"]},
             "repos": repos, "builders": builders, "last_activity_at": _iso(at),
             "last_activity": ago or None, "meta": " · ".join(meta),
+            # whether this caller may close it is the screen's to add (caller_owns)
             "can_close": state == "ready_to_close"}
 
 
@@ -430,31 +433,15 @@ def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
 
 # ── the page ──────────────────────────────────────────────────────────────────
 
-def _start_ctx(store, stations: list[dict], tickets: dict, linear: bool) -> start_steps.StartCtx:
-    """What the Start checklist needs, from the store alone (`tickets` is the open projects'
-    tickets, already read)."""
-    names = {c.get("name") for c in store.list_catalog_sources() if c.get("connector") == "claude_code"}
-    events = any(s.get("source") in names and (s.get("events") or 0) > 0 for s in store.event_stats())
-    keys = [k for k in store.list_api_keys() if not k.get("revoked_at")]
-    spec = any(tickets.values())
-    if not spec:
-        done = [p["id"] for p in store.list_projects()
-                if p.get("kind") == "software_factory" and p["status"] == "done"]
-        spec = any(store.tickets_by_project(done).values())
+def _start_ctx(onboarding: dict) -> start_steps.StartCtx:
+    """What the Start checklist needs (`onboarding` is the block of this home)."""
+    c, g, m, crew = onboarding["choices"], onboarding["github"], onboarding["machine"], onboarding["crew"]
+    parts = [crew_onboarding.choices_text(c) if c["chosen"] else "", g["text"]]
     return start_steps.StartCtx(
-        cloud=bool(os.getenv("TARES_LOGIN_URL", "").strip()),
-        github_connect_url=os.getenv("TARES_GITHUB_CONNECT_URL", "").strip(),
-        linear_connect_url=os.getenv("TARES_LINEAR_CONNECT_URL", "").strip(),
-        key_used=any(k.get("last_used_at") for k in keys), claude_code_events=events,
-        github_connected=bool(store.list_github_credentials()), linear_connected=bool(linear),
-        github_issues_linked=bool(store.github_projects()), stations=len(stations),
-        spec_with_tickets=spec)
-
-
-def _tools(store, now, hidden) -> list[dict]:
-    from . import factory_tools
-    return [{k: t[k] for k in ("key", "name", "connected", "short")}
-            for t in factory_tools.tools(store, now, hidden)]
+        choices_made=c["chosen"], github_connected=g["connected"],
+        setup_text=". ".join(t for t in parts if t),
+        cli_version=m["version"], machine_name=m["name"], crew_up=crew["up"],
+        crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "")
 
 
 def _cut(fx, name: str, request, rows, *more):
@@ -463,6 +450,66 @@ def _cut(fx, name: str, request, rows, *more):
     such filter."""
     fn = getattr(fx, name, None)
     return fn(request, rows, *more) if fn is not None and request is not None else rows
+
+
+def _caller(store, fx, request) -> dict:
+    """Who "you" is for factory_owners.mine: {me, everything, admin}. A cell of one person and a
+    call with no request see every item as theirs; the root credential is `local` with the admin
+    scope; a key with no person on a cell of several people has nothing addressed to it."""
+    if request is None or fx is None or store.only_local_person():
+        return {"me": "local", "everything": True, "admin": True, "orphans": True}
+    if getattr(fx, "is_system", lambda r: False)(request):
+        # the root credential works as `local` with the admin scope: what it may act on
+        return {"me": "local", "everything": False, "admin": True, "orphans": True}
+    me = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id")
+    return {"me": me, "everything": False, "admin": bool(getattr(fx, "is_admin", lambda r: False)(request)),
+            "orphans": False}
+
+
+def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
+    """THE list of what waits for the caller, which every screen that says "Waiting for you" or
+    "Waiting on you" reads (the home, Projects, Tickets, a project's page): every builder's items
+    kept to those whose `for_people` (factory_owners, one rule) names the caller. On a team cell
+    the team home builds them (it adds spec questions and grants); without a licence the core
+    builders do, by the same rule. `team` is a `fx.team_home` answer the caller already read."""
+    if team is None:
+        team = fx.team_home(request, now) if fx is not None and request is not None and hasattr(fx, "team_home") else {}
+    if team:
+        return team["waiting_for_you"]
+    return owners_mod.mine(waiting_items(store, fx, now, hidden), **_caller(store, fx, request))
+
+
+def project_waiting(store, fx, now, request, project: str) -> tuple[list[dict], list[dict]]:
+    """(what waits for the caller in `project`, what waits there for other people, named for
+    them). Both come from one build of the items: the first is caller_waiting's items of the
+    project, so a project page and the home agree."""
+    fn = getattr(fx, "project_waiting", None)
+    got = fn(request, project, now) if fn is not None and request is not None else None
+    if got is not None:
+        return got["mine"], got["others"]
+    hidden = fx.hidden_ids() if fx is not None and hasattr(fx, "hidden_ids") else set()
+    items = [w for w in waiting_items(store, fx, now, hidden)
+             if (w.get("project") or {}).get("id") == project]
+    return split_waiting(store, items, _caller(store, fx, request), now)
+
+
+def caller_owns(store, fx, request, project: dict, owners=None) -> bool:
+    """The caller owns the project's work (factory_owners: its lead, else the admins), so Close
+    and its person checks are theirs; the system credential and a cell of one own everything."""
+    who = _caller(store, fx, request)
+    if who["everything"]:
+        return True
+    o = owners or owners_mod.Owners(store)
+    ids = o.project(project)
+    return bool(who["me"]) and (who["me"] in ids or (who["orphans"] and o.orphan(ids)))
+
+
+def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dict], list[dict]]:
+    """`items` split into (the caller's, the others' said for them)."""
+    mine = owners_mod.mine(items, **caller)
+    ids = {i["id"] for i in mine}
+    rest = [i for i in items if i["id"] not in ids]
+    return mine, order_waiting(owners_mod.for_others(owners_mod.Owners(store), rest), now)
 
 
 def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
@@ -484,20 +531,17 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
     desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
-    waiting = with_icons(store, team["waiting_for_you"] if team else
-                         waiting_items(store, fx, now, hidden))
+    waiting = with_icons(store, caller_waiting(store, fx, now, request, hidden, team))
     if team:
         team = {**team, "waiting_for_you": waiting}
-    # a person's home never lists another person's desk item, licence or not (core, TR-1048)
+    # a person's home never counts another person's desk item, licence or not (core, TR-1048)
     mine_desk = _cut(fx, "own_desk", request, desk)
-    if not team and len(mine_desk) != len(desk):
-        gone = {f"{kind}:{d['label']}" for d in desk if d not in mine_desk
-                for kind in ("permission", "question")}
-        waiting = [w for w in waiting if w["id"] not in gone]
+    owners = owners_mod.Owners(store)
     rows = []
     for p in open_ps:
         row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
                           milestones[p["id"]])
+        row["can_close"] = row["can_close"] and caller_owns(store, fx, request, p, owners)
         rows.append(row)
     rows.sort(key=lambda r: (_STATE_ORDER[r["state"]],
                              -(_dt(r["last_activity_at"]) or datetime.fromtimestamp(0, timezone.utc)).timestamp()))
@@ -516,18 +560,22 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())
-    linear = linear_mod.public_connection(store)["connected"]
+    mk = getattr(fx, "machine_key", None)
+    who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
+    onboarding = crew_onboarding.payload(store, mine, settings,
+                                         mk(request) if mk else crew_onboarding.machine_key(), who)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
-            # the same rows Settings shows (factory_tools, TR-1013): the chip shows `short`
-            "tools": _tools(store, now, hidden),
+            # how a project is planned with the crew: the home's empty Projects list shows it
+            "plan_command": start_steps.SPEC_COMMAND,
             "start": start_steps.checklist(
-                store, start_steps.factory_steps(_start_ctx(store, stations, tickets, linear)),
+                store, start_steps.factory_steps(_start_ctx(onboarding)),
                 "console" if credential_key == "open" else credential_key),
+            "onboarding": onboarding,
             "now": now.isoformat()}
     body.update(team)
     return body

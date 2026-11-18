@@ -14,7 +14,7 @@ import { isSample, sampleLoad } from "./ticketsSamples";
 
 // Tickets: every ticket of every project the crew holds, as a list, a board or swimlanes. One read
 // (GET /api/factory/tickets), repeated every 20 seconds. The address keeps the layout and the filters:
-// ?layout=list|board|lanes, ?group=milestone|who (swimlanes), ?project=&state=&milestone=&q=&sort=.
+// ?layout=list|board|lanes, ?group=milestone|who|person (swimlanes), ?project=&state=&milestone=&assignee=&q=&sort=.
 // A card or a row is one link to the ticket's page; nothing here moves a ticket. The List pages by 25
 // (Show more asks for the next 25); the Board and the Swimlanes read the 200 newest tickets once and
 // group them by state here. Titles, project and milestone names are the person's own text and marked
@@ -30,7 +30,7 @@ const PREF_KEY = "tares-tickets-layout";
 const NARROW_QUERY = "(max-width: 1000px)";
 
 type Layout = "list" | "board" | "lanes";
-type Group = "project" | "milestone" | "who";
+type Group = "project" | "milestone" | "who" | "person";
 
 const LAYOUTS: { value: Layout; label: string }[] = [
   { value: "list", label: "List" },
@@ -41,6 +41,7 @@ const GROUPS: { value: Group; label: string }[] = [
   { value: "project", label: "Group by project" },
   { value: "milestone", label: "Group by milestone" },
   { value: "who", label: "Group by who works on it" },
+  { value: "person", label: "Group by assignee" },
 ];
 const SORTS: { value: TicketSort; label: string }[] = [
   { value: "new", label: "Last change, newest first" },
@@ -79,6 +80,8 @@ const keyOf = (t: TicketRow) => `${t.project.id}/${t.ref}`;
 /** "27 minutes ago" as "27 min ago", for the narrow places. */
 const short = (s: string | null) =>
   (s ?? "").replace(/ minutes?/, " min").replace(/ hours?/, " hr").replace(/ weeks?/, " wk").replace(/ months?/, " mo");
+/** The person the ticket is assigned to, or the name the source gave when nobody here matches. */
+const assigneeOf = (t: TicketRow) => t.assignee?.name ?? t.assignee_raw ?? "";
 const whoOf = (t: TicketRow) => t.who ?? (t.state_key === "canceled" ? "No one" : "");
 const blockedText = (t: TicketRow) => (t.blocked_by.length ? `Blocked by ${t.blocked_by.join(", ")}` : "Blocked");
 const stateText = (t: TicketRow) => (t.state_key === "blocked" ? blockedText(t) : STATE_LABEL[t.state_key] ?? t.state);
@@ -130,7 +133,7 @@ function Row({ t }: { t: TicketRow }) {
   return (
     <Link to={t.href} data-testid="ticket-row" data-ref={t.ref} data-state={t.state_key}
           className={cn("group grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2.5 gap-y-1 border-t border-border px-3.5 py-3 first:border-t-0",
-            "min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_108px_130px_140px_88px] min-[1360px]:gap-x-3 min-[1360px]:px-4 min-[1360px]:py-2.5",
+            "min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_112px_108px_130px_140px_88px] min-[1360px]:gap-x-3 min-[1360px]:px-4 min-[1360px]:py-2.5",
             "hover:bg-row-hover hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
       <span className={cn("col-start-1 row-start-1 pt-0.5 font-mono text-xs font-medium", "min-[1360px]:col-auto min-[1360px]:row-auto")} data-testid="ticket-ref">{t.ref}</span>
       <span data-user-text data-testid="ticket-title" title={t.title}
@@ -144,6 +147,10 @@ function Row({ t }: { t: TicketRow }) {
         <span data-user-text title={t.milestone ? `${t.milestone.number} ${t.milestone.name}` : undefined}
               className={cn(cell, MUTED, "after:mx-[7px] after:content-['·'] last:after:content-none", "min-[1360px]:truncate min-[1360px]:pt-px min-[1360px]:after:content-none")}>
           {t.milestone ? `${t.milestone.number} ${t.milestone.name}` : ""}
+        </span>
+        <span data-user-text data-testid="ticket-assignee" title={assigneeOf(t) || undefined}
+              className={cn(cell, "after:mx-[7px] after:text-muted-foreground after:content-['·'] max-[1359px]:empty:hidden", "min-[1360px]:truncate min-[1360px]:pt-px min-[1360px]:after:content-none")}>
+          {assigneeOf(t)}
         </span>
         <span className={cn(cell, canceled && MUTED, "[overflow-wrap:anywhere]", "min-[1360px]:pt-px")}>{whoOf(t)}</span>
       </span>
@@ -168,8 +175,10 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
   const scoped = React.useContext(Scope) !== "";
   const meta = (ctx === "board" ? [scoped ? ms : t.project.name, who]
     : ctx === "who" ? [scoped ? "" : t.project.name, ms]
+    : ctx === "person" ? [scoped ? ms : t.project.name, who]
     : ctx === "project" ? [who || ms]
     : [who]).filter(Boolean).join(" · ");
+  const person = ctx === "person" ? "" : assigneeOf(t);
   const blocked = t.state_key === "blocked" && t.blocked_by.length > 0;
   const pr = blocked ? blockedText(t) : prText(t);
   return (
@@ -185,6 +194,7 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
               t.state_key === "canceled" && "text-muted-foreground line-through")}>
         {t.title}
       </span>
+      {person && <span data-user-text data-testid="card-assignee" className="truncate text-xs font-medium" title={person}>{person}</span>}
       {meta && <span data-user-text className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{meta}</span>}
       {pr && <span className={cn("text-xs [overflow-wrap:anywhere]", blocked ? "font-medium text-err" : MUTED)}>{pr}</span>}
     </Link>
@@ -240,7 +250,7 @@ function whoRank(w: string | null): number {
 
 /** Lanes in the order the page promises: projects as the Projects page lists them, milestones in
  *  order, then the people who work on tickets. Lanes with no tickets are not drawn. */
-function makeLanes(rows: TicketRow[], group: Group, projects: FactoryTicketsData["projects"]): Lane[] {
+function makeLanes(rows: TicketRow[], group: Group, projects: FactoryTicketsData["projects"], me: string | null = null): Lane[] {
   const at = (id: string) => {
     const i = projects.findIndex((p) => p.id === id);
     return i < 0 ? 999 : i;
@@ -255,6 +265,11 @@ function makeLanes(rows: TicketRow[], group: Group, projects: FactoryTicketsData
       key = `${t.project.id}|${t.milestone?.id ?? ""}`;
       label = `${t.project.name}, ${t.milestone ? `${t.milestone.number} ${t.milestone.name}` : "no milestone"}`;
       rank = [at(t.project.id), n];
+    } else if (group === "person") {
+      const name = assigneeOf(t);
+      key = t.assignee?.id ?? (t.assignee_raw ? `raw|${t.assignee_raw}` : "");
+      label = name || "No assignee";
+      rank = [t.assignee ? (t.assignee.id === me ? 0 : 1) : t.assignee_raw ? 2 : 3];
     } else {
       key = t.who ?? "";
       label = t.who ?? "Finished";
@@ -369,7 +384,7 @@ function LanesBody(p: BodyProps) {
   const userText = group !== "who";
   if (narrow) {
     const list = rows.filter((r) => r.state_key === tab);
-    const lanes = makeLanes(list, group, data.projects);
+    const lanes = makeLanes(list, group, data.projects, data.me);
     return (
       <div className="grid gap-3">
         <StateTabs cols={cols} data={data} tab={tab} setTab={setTab} />
@@ -392,7 +407,7 @@ function LanesBody(p: BodyProps) {
     );
   }
   const tpl = { gridTemplateColumns: `repeat(${cols.length}, minmax(0, 1fr))` };
-  const lanes = makeLanes(rows, group, data.projects);
+  const lanes = makeLanes(rows, group, data.projects, data.me);
   return (
     <div className="grid gap-3" style={{ maxWidth: cols.length * 360 }} data-testid="lanes">
       <div className="sticky top-0 z-[2] bg-background px-[11px]" data-testid="lane-heads">
@@ -430,8 +445,8 @@ function ListBody({ rows }: { rows: TicketRow[] }) {
   const th = "text-xs font-semibold text-muted-foreground";
   return (
     <div className="border border-border bg-card" data-testid="list">
-      <div className={cn("hidden items-center gap-x-3 border-b border-border bg-wash px-4 py-2", th, "min-[1360px]:grid min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_108px_130px_140px_88px]")} aria-hidden>
-        <div>Ref</div><div>Title</div><div>Project</div><div>Milestone</div><div>Worked by</div><div>State</div><div>Pull request</div><div>Changed</div>
+      <div className={cn("hidden items-center gap-x-3 border-b border-border bg-wash px-4 py-2", th, "min-[1360px]:grid min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_112px_108px_130px_140px_88px]")} aria-hidden>
+        <div>Ref</div><div>Title</div><div>Project</div><div>Milestone</div><div>Assignee</div><div>Worked by</div><div>State</div><div>Pull request</div><div>Changed</div>
       </div>
       {rows.map((t) => <Row key={keyOf(t)} t={t} />)}
     </div>
@@ -440,7 +455,7 @@ function ListBody({ rows }: { rows: TicketRow[] }) {
 
 // ----------------------------------------------------------------------------------------- page
 
-interface Filters { project: string; state: StateKey | "moving" | ""; milestone: string; q: string; sort: TicketSort | "" }
+interface Filters { project: string; state: StateKey | "moving" | ""; milestone: string; assignee: string; q: string; sort: TicketSort | "" }
 
 interface Loaded { key: string; resp: FactoryTicketsData }
 
@@ -510,18 +525,19 @@ function TicketsBody({ scope }: { scope: string }) {
     project: scope || (params.get("project") ?? ""),
     state: stateFromUrl(params.get("state") ?? ""),
     milestone: params.get("milestone") ?? "",
+    assignee: params.get("assignee") ?? "",
     q: params.get("q") ?? "",
     sort: ((s) => (s === "old" || s === "ref" ? s : ""))(params.get("sort")),
   };
-  const hasFilter = !!((filters.project && !scope) || filters.state || filters.milestone || filters.q);
+  const hasFilter = !!((filters.project && !scope) || filters.state || filters.milestone || filters.assignee || filters.q);
   const layoutParam = params.get("layout");
   const layout: Layout = layoutParam === "list" || layoutParam === "board" || layoutParam === "lanes"
     ? layoutParam : (readPref() ?? (hasFilter ? "list" : "board"));
-  const group: Group = ((g) => (g === "milestone" || g === "who" ? g : scope ? "milestone" : "project"))(params.get("group"));
+  const group: Group = ((g) => (g === "milestone" || g === "who" || g === "person" ? g : scope ? "milestone" : "project"))(params.get("group"));
 
   // What the read asks for. The List pages by 25; the Board and the Swimlanes take 200, open first.
   const query: TicketsQuery = {
-    project: filters.project, milestone: filters.milestone, state: filters.state ? (filters.state === "moving" ? "moving" : STATE_URL[filters.state]) : "",
+    project: filters.project, milestone: filters.milestone, assignee: filters.assignee, state: filters.state ? (filters.state === "moving" ? "moving" : STATE_URL[filters.state]) : "",
     q: filters.q.trim(),
     ...(layout === "list" ? { sort: filters.sort || undefined, limit: PAGE } : { sort: "open" as const, limit: BOARD_LIMIT }),
   };
@@ -558,7 +574,7 @@ function TicketsBody({ scope }: { scope: string }) {
     // Changing a filter does not move the person to another layout: the layout in view is kept in the
     // address when the new filters would open another one, and left out when they would open this one.
     if (!("layout" in changes) && !readPref()) {
-      const filtered = (scope ? ["state", "milestone", "q"] : ["project", "state", "milestone", "q"]).some((k) => !!next.get(k));
+      const filtered = (scope ? ["state", "milestone", "assignee", "q"] : ["project", "state", "milestone", "assignee", "q"]).some((k) => !!next.get(k));
       if (layout === (filtered ? "list" : "board")) next.delete("layout");
       else next.set("layout", layout);
     }
@@ -590,7 +606,7 @@ function TicketsBody({ scope }: { scope: string }) {
   const clear = () => {
     wrote.current = "";
     setQText("");
-    patch({ project: null, state: null, milestone: null, q: null, sort: null });
+    patch({ project: null, state: null, milestone: null, assignee: null, q: null, sort: null });
   };
 
   // Rows past the first page of the List, and which cells and lanes the person opened or closed.
@@ -781,6 +797,8 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
   const opt = (k: StateKey) => `${STATE_LABEL[k]}${counts ? ` (${counts[k]})` : ""}`;
   const noProject = !filters.project;
   const scoped = React.useContext(Scope) !== "";
+  // A cell where no ticket has an assignee has nothing to choose; a filter in the address still shows.
+  const showAssignee = !!filters.assignee || !!data?.assignees.length;
   return (
     <div role="search" className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center" data-testid="tickets-filters">
       <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-field md:inline-flex md:w-auto">
@@ -807,6 +825,14 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
                     className="md:min-w-[128px]" onChange={(v) => patch({ milestone: v || null })}
                     options={[{ value: "", label: "All milestones" },
                       ...(data?.milestones ?? []).filter((m) => m.project === filters.project).map((m) => ({ value: m.id, label: `${m.number} ${m.name}`, user: true }))]} />
+      {showAssignee && <FilterSelect label="Assignee" testid="f-assignee" value={filters.assignee} disabled={disabled} className="md:min-w-[128px]"
+                    onChange={(v) => patch({ assignee: v || null })}
+                    options={[{ value: "", label: "All assignees" },
+                      ...(data?.me ? [{ value: "mine", label: `Mine (${data.assignees.find((a) => a.id === data.me)?.count ?? 0})` }] : []),
+                      { value: "none", label: "No assignee" },
+                      ...(data?.assignees ?? []).filter((a) => a.id !== data?.me).map((a) => ({ value: a.id, label: `${a.name} (${a.count})`, user: true })),
+                      ...(data && filters.assignee && !["mine", "none"].includes(filters.assignee) && !data.assignees.some((a) => a.id === filters.assignee)
+                        ? [{ value: filters.assignee, label: filters.assignee, user: true }] : [])]} />}
       {layout === "list" && (
         <FilterSelect label="Sort" testid="f-sort" value={filters.sort || "new"} disabled={disabled} className="col-span-full md:col-auto md:ml-auto md:min-w-[190px]"
                       onChange={(v) => patch({ sort: v === "new" ? null : v })} options={SORTS} />
@@ -814,7 +840,7 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
       {layout === "lanes" && (
         <FilterSelect label="Group by" testid="f-group" value={group} disabled={disabled} className="col-span-full md:col-auto md:ml-auto md:min-w-[190px]"
                       onChange={(v) => patch({ group: v === (scoped ? "milestone" : "project") ? null : v })}
-                      options={scoped ? GROUPS.filter((g) => g.value !== "project") : GROUPS} />
+                      options={GROUPS.filter((g) => !(scoped && g.value === "project") && (g.value !== "person" || showAssignee || group === "person"))} />
       )}
     </div>
   );

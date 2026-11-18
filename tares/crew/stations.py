@@ -281,7 +281,8 @@ def launch_plan(client: TaresClient, paths: CrewPaths, argv: list) -> str:
     if parent:
         parent = station_name(parent, paths)
     plan = launch.launch_plan(client, station, argv[1], parent, project, repo)
-    return json.dumps(plan, indent=2, ensure_ascii=False) + "\n"
+    shown = {k: v for k, v in plan.items() if k != "otel"}   # the telemetry variables are never printed
+    return json.dumps(shown, indent=2, ensure_ascii=False) + "\n"
 
 
 def cmd_launch_plan(argv: list, env: dict) -> int:

@@ -144,16 +144,22 @@ async def main():
         print("== the session that builds it ==")
         docs = json.loads(await m.list_docs(project="Invoices"))
         ck("list_docs in reading order, starting prompt first",
-           [d["kind"] for d in docs if not d["global"]] == ["start", "spec", "plan", "agents", "working"], docs)
+           [d["kind"] for d in docs if not d["global"]] == ["start", "spec", "plan", "agents"], docs)
+        wk = json.loads(await m.list_docs(kind="working", project="Invoices"))
+        ck("working docs only when asked for", [d["kind"] for d in wk] == ["working"]
+           and "updated_at" not in docs[0], wk)
         ck("and the shared docs marked global",
            sorted(d["title"] for d in docs if d["global"])
            == ["AGENTS.md (all projects)", "Memory (all projects)"], docs)
         d = json.loads(await m.get_doc(spec["id"], project="Invoices"))
         ck("get_doc -> body", d["body"] == "# Build\n\nv2"
            and d["updated_by"] == "claude code session", d)
-        tl = json.loads(await m.list_tickets(project="Invoices"))
-        ck("list_tickets with working doc titles, no Linear",
+        tl = json.loads(await m.list_tickets(project="Invoices", detail="full"))
+        ck("list_tickets in full has the working doc titles, no Linear",
            tl["linear"] is None and tl["tickets"][0]["working_doc_title"] == "Working: parse", tl)
+        tl = json.loads(await m.list_tickets(project="Invoices"))
+        ck("and by default leaves the working doc out", "working_doc_title" not in tl["tickets"][0]
+           and "assignee" not in tl["tickets"][0] and tl["tickets"][0]["label"], tl)
         g = json.loads(await m.get_ticket(t1["id"], project="Invoices"))
         ck("get_ticket carries the working doc", g["working_doc_body"] == "1. read the PDF", g)
         nf = await m.get_ticket("nope", project="Invoices")
@@ -181,7 +187,10 @@ async def main():
            and a["working_doc"] == w["id"], a)
         tl = json.loads(await m.list_tickets(project="Billing"))
         ck("list_tickets says where they live", tl["linear"]["name"] == "Billing"
-           and tl["tickets"][0]["url"] == "https://l/FAC-1", tl)
+           and tl["ticket_url"] == "https://l/{label}" and "url" not in tl["tickets"][0], tl)
+        tl = json.loads(await m.list_tickets(project="Billing", detail="full"))
+        ck("and in full each ticket carries its url", tl["tickets"][0]["url"] == "https://l/FAC-1"
+           and "ticket_url" not in tl, tl)
 
         print("== tickets in GitHub ==")
         pid = json.loads(await m.create_project("Issues"))["id"]

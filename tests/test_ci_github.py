@@ -269,6 +269,135 @@ ck("an unknown status word waits as pending", fg._status_state("expected") == "p
 ck("null lists are empty", fg._check_list(None, None) == [])
 ck("a read adds no call to GitHub: pull, status, check runs", len(calls) == 3, calls)
 
+print("== a later run of the same name replaces the earlier one ==")
+SUITE = [9000]
+
+
+def real_run(name, rid, started, status="completed", conclusion="success", suite=None, app=None):
+    """A check run as GitHub's check-runs endpoint sends it (the fields the gate reads and those it ignores)."""
+    suite = suite or rid + 100
+    return {"id": rid, "node_id": f"CR_{rid}", "name": name, "head_sha": HEAD, "status": status,
+            "conclusion": conclusion if status == "completed" else None, "started_at": started,
+            "completed_at": started if status == "completed" else None,
+            "html_url": f"https://github.com/{REPO}/actions/runs/{rid}/job/{rid}",
+            "app": app or {"id": 15368, "slug": "github-actions"}, "check_suite": {"id": suite},
+            "output": {"title": None, "summary": None}}
+
+
+def real_status(context, state, sid, updated):
+    """A commit status as GitHub's combined-status endpoint sends it."""
+    return {"id": sid, "context": context, "state": state, "description": None, "target_url": None,
+            "created_at": updated, "updated_at": updated}
+
+
+DRAFT, READY = "2026-11-17T17:05:04Z", "2026-11-17T17:29:30Z"
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("a cancelled run with a later run of its name that passed: one check, success",
+   got["ci"] == "success" and got["ci_checks"] == [{"name": "test", "state": "success"}], got)
+out = ci()
+ck("...and the gate says success with nothing failing", (out.state, out.failing) == ("success", []), out)
+reset(runs=[real_run("test", 22, READY), real_run("test", 11, DRAFT, conclusion="cancelled")])
+ck("...whichever order GitHub lists them in", ci().state == "success")
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled")])
+out = ci()
+ck("a cancelled run with no later run of its name still fails, named",
+   (out.state, out.failing) == ("failure", ["test"]), out)
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("lint", 12, DRAFT, conclusion="cancelled"),
+            real_run("test", 22, READY)])
+out = ci()
+ck("a name that never got a later run keeps failing when another name's did",
+   (out.state, out.failing) == ("failure", ["lint"]), out)
+reset(runs=[real_run("test", 11, DRAFT, conclusion="success"), real_run("test", 22, READY, conclusion="failure")])
+out = ci()
+ck("a later run that failed counts, though an earlier one passed", (out.state, out.failing) == ("failure", ["test"]), out)
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY, conclusion="cancelled")])
+ck("two cancelled runs of one name are one failing check", ci().failing == ["test"])
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY, status="in_progress")])
+out = ci()
+ck("a later run still going is pending, not failure", (out.state, out.failing) == ("pending", []), out)
+reset(runs=[real_run("test", 22, READY, conclusion="failure"), real_run("test", 11, READY, conclusion="success")])
+ck("the same start time: the higher id counts", ci().failing == ["test"])
+reset(runs=[real_run("test", 11, READY, conclusion="failure"), real_run("test", 22, READY, conclusion="success")])
+ck("...in either direction", ci().state == "success")
+reset(runs=[{"name": "test", "status": "completed", "conclusion": "failure"},
+            {"name": "test", "status": "completed", "conclusion": "success"}])
+ck("runs with no id and no time: the first one read counts, as before", ci().state == "failure")
+names = [f"job {i}" for i in range(21)]
+reset(runs=[real_run(n, 100 + i, DRAFT, conclusion="cancelled") for i, n in enumerate(names)]
+      + [real_run(n, 200 + i, READY) for i, n in enumerate(names)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("21 names, each a cancelled run then a passing one: 21 checks, all success, ci success",
+   got["ci"] == "success" and len(got["ci_checks"]) == 21
+   and {c["state"] for c in got["ci_checks"]} == {"success"}, got["ci"])
+out = ci(required=["job 3", "job 20"])
+ck("...and required names are met by the later run", (out.state, out.failing) == ("success", []), out)
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY),
+            real_run("factory/review", 33, DRAFT, conclusion="failure")])
+ck("the reviewer's own run is still not a check", ci().state == "success")
+
+print("== a check name is told apart per GitHub App ==")
+ACTIONS, OTHER = {"id": 15368, "slug": "github-actions"}, {"id": 8800, "slug": "other-ci"}
+reset(runs=[real_run("test", 11, DRAFT, conclusion="failure"), real_run("test", 22, READY, app=OTHER)])
+out = ci()
+ck("a failing run of an app, a later passing run of that name from another app: failure, named",
+   (out.state, out.failing) == ("failure", ["test"]), out)
+reset(runs=[real_run("test", 22, READY, app=OTHER), real_run("test", 11, DRAFT, conclusion="failure")])
+ck("...whichever order GitHub lists them in", ci().failing == ["test"])
+got = (reset(runs=[real_run("test", 11, DRAFT, conclusion="failure"), real_run("test", 22, READY, app=OTHER)]),
+       asyncio.run(fg.read_pr(store, REPO, N)))[1]
+ck("...read_pr gives ci failure and both checks", got["ci"] == "failure"
+   and got["ci_checks"] == [{"name": "test", "state": "failure"}, {"name": "test", "state": "success"}], got)
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY),
+            real_run("test", 33, READY, app=OTHER)])
+ck("a cancelled run is still replaced by a later run of the same app and name", ci().state == "success")
+reset(runs=[real_run("test", 11, DRAFT, conclusion="cancelled"), real_run("test", 22, READY),
+            real_run("test", 33, DRAFT, conclusion="failure", app=OTHER)])
+ck("...while the other app's own failing run keeps failing", ci().failing == ["test"])
+a, b = real_run("test", 11, DRAFT, conclusion="failure"), real_run("test", 22, READY)
+del a["app"], b["app"]
+reset(runs=[a, b])
+ck("runs with no app are grouped by name alone, the later one counts", ci().state == "success")
+b["app"] = OTHER
+reset(runs=[a, b])
+ck("a run with no app and a later run with an app are told apart", ci().failing == ["test"])
+reset(runs=[real_run("test", 11, DRAFT, conclusion="failure", app={"slug": "x"}),
+            real_run("test", 22, READY, app={"slug": "y"})])
+ck("an app with a slug and no id is told apart by its slug", ci().failing == ["test"])
+reset(runs=[real_run("test", 11, DRAFT, app={"id": None}), real_run("test", 22, READY, conclusion="failure", app="odd")])
+ck("an app that is not a mapping counts as no app", ci().failing == ["test"])
+
+print("== the newest status of a context counts ==")
+reset(statuses=[real_status("ci/legacy", "failure", 1, DRAFT), real_status("ci/legacy", "success", 2, READY)])
+out = ci()
+ck("an older failing status, a newer passing one: success", (out.state, out.failing) == ("success", []), out)
+reset(statuses=[real_status("ci/legacy", "success", 2, READY), real_status("ci/legacy", "failure", 1, DRAFT)])
+ck("...whichever order they come in", ci().state == "success")
+reset(statuses=[real_status("ci/legacy", "success", 1, DRAFT), real_status("ci/legacy", "error", 2, READY)])
+out = ci()
+ck("an older passing status, a newer error: failure, named", (out.state, out.failing) == ("failure", ["ci/legacy"]), out)
+reset(statuses=[real_status("ci/legacy", "failure", 1, DRAFT)])
+ck("a failing status with no newer one still fails", ci().state == "failure")
+reset(statuses=[real_status("ci/legacy", "failure", 1, DRAFT), real_status("ci/other", "success", 2, READY)])
+ck("another context's newer status does not hide a failure", ci().failing == ["ci/legacy"])
+reset(statuses=[real_status("same", "failure", 1, DRAFT)], runs=[real_run("same", 22, READY)])
+ck("a status and a check run of one name are two checks", ci().failing == ["same"])
+
+print("== the overall word and the fallback stamp ==")
+reset(statuses=[real_status("ci/legacy", "failure", 1, DRAFT), real_status("ci/legacy", "success", 2, READY)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("ci for an older failing status and a newer passing one is success", got["ci"] == "success", got["ci"])
+reset(statuses=[real_status("ci/legacy", "success", 1, DRAFT), real_status("ci/legacy", "failure", 2, READY)])
+got = asyncio.run(fg.read_pr(store, REPO, N))
+ck("...and failure when the newer one failed", got["ci"] == "failure", got["ci"])
+old, new = real_run("test", 22, DRAFT, conclusion="cancelled"), real_run("test", 11, READY)
+del old["started_at"], new["started_at"]
+old["created_at"], new["created_at"] = DRAFT, READY
+reset(runs=[old, new])
+ck("a run with no started_at is ordered by created_at, not by id", ci().state == "success")
+reset(runs=[new, old])
+ck("...in either order", ci().state == "success")
+
 print("== has_workflows ==")
 fg._workflows.clear()
 reset(workflows=(200, [{"type": "file", "name": "ci.yml"}]))

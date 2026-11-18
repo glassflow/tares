@@ -151,6 +151,24 @@ export function durationWords(ms: number) {
   return h % 24 ? `${plural(d, "day")} ${plural(h % 24, "hour")}` : plural(d, "day");
 }
 
+/** A short stopwatch length, to the second: "6 seconds", "1 second", "1 minute, 5 seconds", "3 minutes".
+ *  For how long one action took (an answer, a run), where "less than a minute" would hide the number.
+ *  One unit, floored; when that unit's count is 1 the next unit follows if it is not zero. */
+export function elapsedWords(ms: number) {
+  const s = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
+  const units: [string, number][] = [["day", 86400], ["hour", 3600], ["minute", 60], ["second", 1]];
+  for (let i = 0; i < units.length; i++) {
+    const [name, size] = units[i];
+    if (s < size && i < units.length - 1) continue;
+    const n = Math.floor(s / size);
+    const next = units[i + 1];
+    const rest = next ? Math.floor((s - n * size) / next[1]) : 0;
+    if (n === 1 && next && rest > 0) return `${plural(n, name)}, ${plural(rest, next[0])}`;
+    return plural(n, name);
+  }
+  return plural(0, "second");
+}
+
 // --- the viewer's zone ----------------------------------------------------------
 
 /** The viewer's IANA zone ("Europe/Belgrade"), for a setting that asks for one. Display never uses

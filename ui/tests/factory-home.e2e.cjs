@@ -176,8 +176,8 @@ function cleanEnv(extra) {
       ck(`busy @${width}: Autonomy links to Settings`, (await page.getByRole("link", { name: "Autonomy" }).getAttribute("href")) === "/settings#crew");
       ck(`busy @${width}: the plan card shows both limits`, (await page.getByText("1% used · resets 21:50").count()) === 1
          && (await page.getByText("11% used · resets Fri").count()) === 1);
-      ck(`busy @${width}: connected tools and the dashed Add a tool link`, (await page.getByText("GitHub").count()) === 1
-         && (await page.getByRole("link", { name: "Add a tool" }).getAttribute("href")) === "/settings#tools");
+      ck(`busy @${width}: the home lists no tools: they are on Integrations`, (await page.getByTestId("tool-chip").count()) === 0
+         && (await page.getByRole("link", { name: "Add a tool" }).count()) === 0);
       const copy = page.getByRole("button", { name: "Copy the hand-over command" });
       ck(`busy @${width}: the copy action is a button`, (await copy.count()) === 1);
       await copy.click();
@@ -191,6 +191,14 @@ function cleanEnv(extra) {
       ck(`empty @${width}: Nothing waits for you.`, await page.getByText("Nothing waits for you.", { exact: true }).isVisible());
       ck(`empty @${width}: no waiting rows`, (await rows.count()) === 0);
       ck(`empty @${width}: no filled primary when nothing waits (TR-1275)`, (await filledButtons(page)).length === 0, JSON.stringify(await filledButtons(page)));
+      const projBox = page.getByRole("region", { name: "Projects" });
+      ck(`empty @${width}: no project rows, only how to plan the first project, with the command to copy`,
+        (await page.getByTestId("project-row").count()) === 0
+        && (await projBox.getByTestId("plan-first").count()) === 1 && (await projBox.getByRole("heading", { name: "Plan your first project" }).count()) === 1
+        && (await projBox.getByTestId("plan-first").locator("code").innerText()) === "tares factory spec"
+        && (await projBox.getByTestId("start-copy").count()) === 1);
+      ck(`empty @${width}: and a link to start one in the console instead`, (await projBox.getByRole("link", { name: "start one here" }).getAttribute("href")) === "/projects/new");
+      ck(`empty @${width}: no "All projects" link on a cell with none`, (await page.getByRole("link", { name: /^All projects/ }).count()) === 0);
       ck(`empty @${width}: plan hidden for one line`, await page.getByText("Plan use shows once the crew reports it.", { exact: true }).isVisible()
          && (await page.getByText(/% used/).count()) === 0);
 

@@ -48,7 +48,7 @@ from pathlib import Path
 from . import contract, doctor_lsp, jsonrun, state
 from . import watch as watch_mod
 from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
-from .errors import CrewError, SetupNeededError, UsageError
+from .errors import CrewError, CrewHomeUntrusted, SetupNeededError, UsageError
 from .paths import CREW_NAME_RULE, ME, CrewPaths
 
 NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,30}$"
@@ -383,6 +383,21 @@ class Up:
             self.add_grant(words)
             _err("  saved\n")
 
+    def report_machine(self) -> None:
+        """Tell Tares which machine runs the crew and which tares it is (TR-1312), so the home's first-run
+        steps tick. Best effort: starting the crew never waits on it, but a refusal or no answer prints one
+        quiet line (an older Tares that does not know the call, a 404, says nothing, and neither does a 401:
+        crew up already says the key is refused)."""
+        from ..login import _installed_version, _machine
+        try:
+            self.client.tares_http("POST", "/api/crew/machine", state.dumps_compact(
+                {"machine": _machine(), "version": _installed_version()}))
+        except Exception as e:   # noqa: BLE001 (starting the crew never waits on this)
+            status = getattr(e, "status", None)
+            if status not in (401, 404):
+                _err("  could not tell Tares which machine this is "
+                     f"({'no answer' if status is None else f'HTTP {status}'}), so its first-run steps may not tick\n")
+
     def ensure_settings(self) -> None:
         raw = self.client.settings_raw()
         missing = settings_missing(raw)
@@ -474,11 +489,11 @@ class Up:
     def ensure_home_trusted(self, claude: str) -> None:
         if home_trusted(self.paths, self.env):
             return
-        home = self.paths.raw
+        home = str(self.paths.home)
         how = f'cd {home} && claude, pick "Yes, I trust this folder", then /exit'
         if self.assume_yes or not _terminal():
-            raise CrewError(f"Claude Code has not trusted the crew home {home} yet, and the stations run there. "
-                            f"Trust it once ({how}), then run crew up again.")
+            raise CrewHomeUntrusted(f"Claude Code has not trusted the crew home {home} yet, and the stations run there. "
+                                    f"Trust it once ({how}), then run crew up again.", home)
         _err(f"\nThe crew keeps its own folder, {home}, whichever folder you run this from (FACTORY_CREW_HOME moves it).\n"
              "Its stations run there, and Claude Code starts no session in a folder you have not trusted.\n"
              'Open Claude Code there now to trust it? Pick "Yes, I trust this folder", then type /exit.\n'
@@ -487,14 +502,14 @@ class Up:
         if ans is None:
             ans = "no"
         if (ans or "yes") not in ("y", "Y", "yes", "Yes"):
-            raise CrewError(f"not starting the crew: its home {home} is not trusted. Trust it once ({how}), then run crew up again.")
+            raise CrewHomeUntrusted(f"not starting the crew: its home {home} is not trusted. Trust it once ({how}), then run crew up again.", home)
         try:
             subprocess.run([claude], cwd=home, env=self.env)
         except OSError:
             pass
         if not home_trusted(self.paths, self.env):
-            raise CrewError(f"Claude Code still has not trusted {home} (did the trust prompt get a no?). "
-                            f"Trust it once ({how}), then run crew up again.")
+            raise CrewHomeUntrusted(f"Claude Code still has not trusted {home} (did the trust prompt get a no?). "
+                                    f"Trust it once ({how}), then run crew up again.", home)
         self.say("the crew home is trusted")
 
     # -- the contract --
@@ -681,6 +696,7 @@ def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
     up.ensure_home_trusted(claude)
     c.keep_token()
     up.setup_crew_name()
+    up.report_machine()
     up.ensure_settings()
     c.prime()
     up.lsp_offer(claude)

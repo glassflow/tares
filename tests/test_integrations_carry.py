@@ -199,11 +199,13 @@ async def main():
                (e, eff("monitoring")))
 
             print("== the order ==")
-            s.set_project_choice("p_linear", "tickets", "faketix", {"url": "mine"}, "a")
+            s.set_choice("tickets", "faketix", {"url": "factory"}, "a", default=False)
+            s.set_project_choice("p_linear", "tickets", "faketix", {}, "a")
             ck("a project's own choice beats carried",
                seen("tickets", "p_linear") == ("faketix", "project", ""), seen("tickets", "p_linear"))
             s.clear_project_choice("p_linear", "tickets")
             ck("cleared: carried again", seen("tickets", "p_linear")[:2] == ("linear", "carried"))
+            s.delete_connection("tickets", "faketix")
 
             print("== not installed ==")
             gone = registry._loaded.pop(("tickets", "linear"))

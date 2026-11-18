@@ -369,12 +369,42 @@ async def main():
             integrations_api.TEST_SECONDS = 10
 
             print("== a project's own choice ==")
-            pb = {"name": "faketix", "settings": {"url": "http://93.184.216.40/api", "project": "PRJ", "token": SECRETS[2]}}
+            pb = {"name": "faketix", "settings": {"project": "PRJ"}}
             async with mk(ann_k) as cx:
                 r = ru(await cx.put("/api/projects/p1/integrations/tickets", json=pb))
-                ck("the project's lead may choose", r.status_code == 200 and r.json()["effective"]["source"] == "project"
-                   and r.json()["choice"]["settings"]["token"] == "" and SECRETS[2] not in r.text, r.text)
+                ck("the project's lead may choose a connected integration and a plain field",
+                   r.status_code == 200 and r.json()["effective"]["source"] == "project"
+                   and r.json()["choice"]["settings"] == {"project": "PRJ"} and SECRETS[2] not in r.text, r.text)
+                ck("it runs with the factory's connection and the project's own field",
+                   r.json()["effective"]["settings"] == {"url": "http://93.184.216.34/api", "token": "", "project": "PRJ",
+                                                          "sync": False, "flow": {}}
+                   or (r.json()["effective"]["settings"]["project"] == "PRJ"
+                       and r.json()["effective"]["settings"]["url"] == "http://93.184.216.34/api"
+                       and r.json()["effective"]["settings"]["token"] == ""), r.json()["effective"])
                 ck("and read it back", (await cx.get("/api/projects/p1/integrations/tickets")).json()["choice"]["name"] == "faketix")
+                ck("the lead sees which integrations it may pick, not their settings",
+                   {c["name"] for c in r.json()["connections"]} >= {"faketix", "eetix"}
+                   and all(set(c) == {"name", "default"} for c in r.json()["connections"]), r.json()["connections"])
+                for label, st, needle in (
+                        ("a secret", {"project": "PRJ", "token": SECRETS[2]}, "token is a secret"),
+                        ("a blank secret", {"project": "PRJ", "token": ""}, "token is a secret"),
+                        ("an address", {"project": "PRJ", "url": "http://93.184.216.40/api"}, "url is an address")):
+                    r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "faketix", "settings": st}))
+                    ck(f"{label} in a project write is 422 and says where it goes", r.status_code == 422
+                       and needle in r.text and "factory's integrations" in r.text and SECRETS[2] not in r.text, r.text)
+                r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "slowtix", "settings": {}}))
+                ck("an integration that is not connected is 422", r.status_code == 422 and "slowtix is not connected" in r.text, r.text)
+                # the route's early check can be stale (the connection deleted in between): the write
+                # must refuse on its own, so make the early check say yes while it is not connected
+                _early = store.is_connected
+                store.is_connected = lambda slot, name: True
+                r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "slowtix", "settings": {}}))
+                store.is_connected = _early
+                ck("the write refuses a connection that is gone even when the early check said yes",
+                   r.status_code == 422 and "slowtix is not connected" in r.text
+                   and "factory's integrations" in r.text and store.get_project_choice("p1", "tickets")["name"] == "faketix", r.text)
+                ck("the refused writes changed nothing", store.get_project_choice("p1", "tickets")["settings"] == {"project": "PRJ"}
+                   and store.get_project_choice("p1", "tickets")["name"] == "faketix")
                 r = ru(await cx.put("/api/projects/p2/integrations/tickets", json=pb))
                 ck("not on another project", r.status_code == 403, r.status_code)
                 r = ru(await cx.put("/api/projects/p1/integrations/memory", json={"name": "x", "settings": {}}))
@@ -402,21 +432,24 @@ async def main():
                 ck("an admin may read a project's choice", (await cx.get("/api/projects/p1/integrations/tickets")).status_code == 200)
                 await cx.put("/api/projects/p1/integrations/tickets", json=pb)
             async with mk(ann_k) as cx:
-                for label, st in (("blank", {"url": "http://93.184.216.50/api", "project": "PRJ", "token": ""}),
-                                  ("left out", {"url": "http://93.184.216.50/api", "project": "PRJ"})):
-                    r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "faketix", "settings": st}))
-                    ck(f"a lead moving the address of a stored secret ({label}) is 422",
-                       r.status_code == 422 and "re-enter the secret" in r.json()["detail"], r.text)
-                ck("and the project row is unchanged", store.stored_settings("tickets", "faketix", "p1") ==
-                   {"url": "http://93.184.216.40/api", "project": "PRJ", "token": SECRETS[2]},
+                ck("the project row holds only the plain field", store.get_project_choice("p1", "tickets")["settings"]
+                   == {"project": "PRJ"} and store.stored_settings("tickets", "faketix", "p1")
+                   == {"url": "http://93.184.216.34/api", "project": "PRJ", "token": SECRETS[0]},
                    store.stored_settings("tickets", "faketix", "p1"))
                 SEEN.clear()
-                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={"name": "faketix", "settings": {}}))
-                ck("a project test with no settings tries the project's own saved values",
-                   r.status_code == 200 and SEEN[-1] == {"url": "http://93.184.216.40/api", "project": "PRJ", "token": SECRETS[2]},
-                   (r.text, SEEN))
-            ck("the project row is its own, the factory's is untouched",
-               store.stored_settings("tickets", "faketix", "p1")["token"] == SECRETS[2]
+                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={"name": "faketix", "settings": {"project": "PRJ"}}))
+                ck("a project test tries the factory's connection with the project's field, and never shows the secret",
+                   r.status_code == 200 and SEEN[-1] == {"url": "http://93.184.216.34/api", "project": "PRJ", "token": SECRETS[0]}
+                   and SECRETS[0] not in r.text, (r.text, SEEN))
+                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={
+                    "name": "faketix", "settings": {"project": "PRJ", "token": "typed-by-lead"}}))
+                ck("a project test with a secret in it is 422", r.status_code == 422 and "token is a secret" in r.text, r.text)
+                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={"name": "slowtix", "settings": {}}))
+                ck("a project test of an integration that is not connected is 422", r.status_code == 422
+                   and "not connected" in r.text, r.text)
+            ck("the project row is its own, the factory's connection is untouched",
+               store.stored_settings("tickets", "faketix", "p1")["project"] == "PRJ"
+               and store.stored_settings("tickets", "faketix")["project"] == "FAC"
                and store.stored_settings("tickets", "faketix")["token"] == SECRETS[0])
             r = ru(await root.get("/api/projects/nope/integrations/tickets"))
             ck("an unknown project is 404", r.status_code == 404, r.status_code)
@@ -426,41 +459,21 @@ async def main():
                 r = ru(await root.put(f"/api/projects/nope/integrations/{slot}", json={"name": "x"}))
                 ck(f"... on a write too ({slot})", r.status_code == 404, r.status_code)
 
-            print("== a project never uses the factory's secret ==")
+            print("== a project holds no credential ==")
             async with mk(ann_k) as cx:
                 await cx.put("/api/projects/p1/integrations/review", json={"name": "fakerev", "settings": {}})
-                r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={
-                    "name": "faketix", "settings": {"project": "PRJ", "url": "http://93.184.216.40/api", "token": ""}}))
-                ck("a blank secret on a project write keeps its own, not the factory's",
-                   store.stored_settings("tickets", "faketix", "p1")["token"] == SECRETS[2], r.text)
-                await cx.delete("/api/projects/p1/integrations/tickets")
-                r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={
-                    "name": "faketix", "settings": {"project": "PRJ", "url": "http://93.184.216.40/api", "token": ""}}))
-                ck("a project with no secret of its own gets none from the factory",
-                   "token" not in store.stored_settings("tickets", "faketix", "p1"), store.stored_settings("tickets", "faketix", "p1"))
-                SEEN.clear()
-                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={
-                    "name": "faketix", "settings": {"project": "PRJ", "url": "http://93.184.216.40/api"}}))
-                ck("a project's test does not see the factory's secret",
-                   r.status_code == 200 and not SEEN[-1].get("token") and SECRETS[0] not in json.dumps(SEEN)
-                   and SECRETS[0] not in r.text, (r.text, SEEN))
-                SEEN.clear()
-                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={
-                    "name": "faketix", "settings": {"url": "http://93.184.216.41/api", "token": "typed-by-lead"}}))
-                ck("a project's test takes what the lead typed", r.status_code == 200 and SEEN[-1]["token"] == "typed-by-lead", r.text)
-                await cx.put("/api/projects/p1/integrations/tickets", json={
-                    "name": "faketix", "settings": {"project": "PRJ", "url": "http://93.184.216.41/api", "token": SECRETS[5]}})
-                SEEN.clear()
-                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={
-                    "name": "faketix", "settings": {"project": "PRJ", "url": "http://93.184.216.41/api", "token": ""}}))
-                ck("a project's test can use its own stored secret",
-                   r.status_code == 200 and SEEN[-1]["token"] == SECRETS[5] and SECRETS[5] not in r.text, (r.text, SEEN))
                 r = ru(await cx.delete("/api/projects/p1/integrations/tickets"))
-                ck("clearing goes back to the factory's choice",
+                ck("clearing goes back to the factory's default",
                    r.status_code == 200 and r.json()["cleared"] is True and r.json()["effective"]["source"] == "factory"
                    and r.json()["choice"] is None, r.text)
                 r = ru(await cx.delete("/api/projects/p1/integrations/tickets"))
                 ck("clearing again says nothing was there", r.status_code == 200 and r.json()["cleared"] is False)
+                r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "faketix"}))
+                ck("a project may name a connected integration with no field of its own", r.status_code == 200
+                   and r.json()["choice"]["settings"] == {} and r.json()["effective"]["source"] == "project", r.text)
+                ck("the project holds no secret and no address", store.get_project_choice("p1", "tickets")["settings"] == {}
+                   and store.guardrail_pair_stored.__self__ is store)
+                await cx.delete("/api/projects/p1/integrations/tickets")
 
             print("== what applies, for a station ==")
             async with mk(station="shop-build-x", role="builder") as cx:
@@ -472,9 +485,10 @@ async def main():
                 ck("it holds no integration settings", '"settings"' not in r.text and "93.184" not in r.text, r.text)
                 r = ru(await cx.get("/api/factory/integrations/effective", params={"project": "alpha"}))
                 ck("for a project, by name", r.status_code == 200 and r.json()["project"] == "p1", r.text)
+            await root.put("/api/factory/integrations/tickets", json={
+                "name": "slowtix", "settings": {"url": "http://93.184.216.40/"}, "default": False})
             async with mk(ann_k) as cx:
-                await cx.put("/api/projects/p1/integrations/tickets", json={
-                    "name": "slowtix", "settings": {"url": "http://93.184.216.40/"}})
+                await cx.put("/api/projects/p1/integrations/tickets", json={"name": "slowtix", "settings": {}})
             async with mk(station="shop-build-x", role="builder") as cx:
                 r = ru(await cx.get("/api/factory/integrations/effective", params={"project": "p1"}))
                 ck("the project's own choice shows, and the factory's does for another project",

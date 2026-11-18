@@ -31,7 +31,8 @@
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -53,5 +54,7 @@
       "$defaults",
       "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
     ]
-  }
+  },
+  "disableClaudeAiConnectors": true,
+  "autoMemoryEnabled": false
 }

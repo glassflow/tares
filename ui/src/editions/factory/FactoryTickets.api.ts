@@ -19,6 +19,10 @@ export interface TicketRow {
   milestone: { id: string; number: string; name: string } | null;
   /** "Builder for M2", "Reviewer", "Lead", "Not picked up yet"; null once the ticket is finished. */
   who: string | null;
+  /** The person on the cell the ticket is assigned to, or null. */
+  assignee: { id: string; name: string } | null;
+  /** The assignee as the source named them (an email, a name, a GitHub login) while nobody on the cell matches. */
+  assignee_raw: string | null;
   pr: { number: number | null; url: string | null; state_text: string } | null;
   /** The labels of the tickets this one waits for, when it is blocked. */
   blocked_by: string[];
@@ -55,6 +59,10 @@ export interface FactoryTicketsData {
   projects: { id: string; name: string; count: number }[];
   /** The chosen project's milestones; empty with no project chosen. */
   milestones: { id: string; project: string; number: string; name: string }[];
+  /** The people tickets are assigned to, for the chosen project, with their open tickets; the caller first. */
+  assignees: { id: string; name: string; count: number }[];
+  /** The caller's person id; null for the root credential and a key with no person. */
+  me: string | null;
   /** How many canceled tickets the list leaves out. */
   hidden_canceled: number;
   now: string;
@@ -69,6 +77,8 @@ export interface TicketsQuery {
   /** "to-do", "in-progress", "in-review", "changes-asked", "blocked", "merged", "canceled" or "moving". */
   state?: string;
   q?: string;
+  /** A person's id, "mine" for the caller, or "none" for the tickets nobody on the cell is assigned. */
+  assignee?: string;
   sort?: TicketSort;
   limit?: number;
   offset?: number;

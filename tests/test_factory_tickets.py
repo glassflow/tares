@@ -275,6 +275,54 @@ async def main():
             only = (await get(f"?project={py}")).json()
             ck("a project with no milestone has none to choose", only["milestones"] == [])
 
+            print("== assignees (TR-1240) ==")
+            ck("no ticket is assigned yet: every ticket says so, nobody to choose",
+               all(t["assignee"] is None and t["assignee_raw"] is None for t in a["tickets"])
+               and a["assignees"] == [], a["assignees"])
+            ann = store.create_person("Ann Lee", "ann@example.com")
+            bob = store.create_person("Bob Ray", "bob@example.com")
+            store.update_ticket(t2, assignee_person_id=ann["id"])
+            store.update_ticket(t3, assignee_person_id=ann["id"])
+            store.update_ticket(t4, assignee_person_id=bob["id"])
+            store.update_ticket(t7, assignee_person_id=bob["id"])           # canceled
+            store.update_ticket(ty1, assignee_person_id=bob["id"])
+            store.update_ticket(t9, assignee_raw="carol@elsewhere.example")  # nobody here
+            r = await cx.post("/api/keys", json={"name": "ann-key", "scopes": ["admin"],
+                                                 "person": {"email": "ann@example.com"}})
+            ck("Ann gets a key", r.status_code == 201, r.text[:200])
+            ann_h = {"Authorization": f"Bearer {r.json()['secret']}"}
+            al = (await get("?limit=200")).json()
+            byt = {t["title"]: t for t in al["tickets"]}
+            ck("a ticket carries its assignee",
+               byt["Add the footer"]["assignee"] == {"id": ann["id"], "name": "Ann Lee"}
+               and byt["Add the footer"]["assignee_raw"] is None
+               and byt["Add the search box"]["assignee"]["name"] == "Bob Ray", byt["Add the footer"])
+            ck("an assignee nobody here matches shows as the source named them",
+               byt["Tidy the readme"]["assignee"] is None
+               and byt["Tidy the readme"]["assignee_raw"] == "carol@elsewhere.example", byt["Tidy the readme"])
+            ck("the people to choose, by name, open tickets counted (canceled left out)",
+               [(x["name"], x["count"]) for x in al["assignees"]] == [("Ann Lee", 2), ("Bob Ray", 2)],
+               al["assignees"])
+            ck("the root credential has no person", al["me"] is None, al["me"])
+            ck("a project narrows the people to choose",
+               [(x["name"], x["count"]) for x in (await get(f"?project={px}")).json()["assignees"]]
+               == [("Ann Lee", 2), ("Bob Ray", 1)])
+            ck("assignee: a person", sorted(t["title"] for t in (await get(f"?assignee={bob['id']}")).json()["tickets"])
+               == ["Add the search box", "Export the posts"])
+            ck("assignee: none is every ticket nobody here holds (a raw name counts as none)",
+               "Tidy the readme" in [t["title"] for t in (await get("?assignee=none&limit=200")).json()["tickets"]]
+               and all(t["assignee"] is None for t in (await get("?assignee=none&limit=200")).json()["tickets"]))
+            c5 = (await get(f"?assignee={bob['id']}")).json()["counts"]
+            ck("the assignee narrows the counts", c5["total"] == 2 and c5["canceled"] == 1 and c5["in_progress"] == 1, c5)
+            ck("mine with no person is nothing", (await get("?assignee=mine")).json()["tickets"] == [])
+            ck("an unknown person is nothing", (await get("?assignee=nobody")).json()["tickets"] == [])
+            async with cx_(None) as plain:
+                r = await plain.get("/api/factory/tickets?assignee=mine", headers=ann_h)
+                mine = r.json()
+            ck("mine is the caller's tickets, and the caller comes first in the list",
+               sorted(t["title"] for t in mine["tickets"]) == ["Add the footer", "Add the sitemap"]
+               and mine["me"] == ann["id"] and mine["assignees"][0]["id"] == ann["id"], r.text[:300])
+
             print("== bad requests ==")
             for q_, want in (("?state=nonsense", 400), ("?sort=random", 400), ("?limit=0", 400), ("?limit=201", 400),
                              ("?offset=-1", 400), ("?project=uc_nothing", 404), (f"?project={pd}", 404),

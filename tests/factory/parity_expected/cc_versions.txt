@@ -69,6 +69,10 @@ tares factory doctor
   ok    docker
   ok    kind
   ok    kubectl
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   FIX   gh not signed in: gh auth login
   ok    crew-orchestrator runs Claude Code 1.0.0
   ok    crew-reviewer runs Claude Code 1.0.0
@@ -127,6 +131,10 @@ tares factory doctor
   ok    docker
   ok    kind
   ok    kubectl
+  ok    orchestrator keeps mcp none; plugins none
+  ok    reviewer keeps mcp none; plugins none
+  ok    releaser keeps mcp none; plugins none
+  ok    builder keeps mcp none; plugins none
   FIX   gh not signed in: gh auth login
   warn  crew-orchestrator runs Claude Code 1.0.0, older than the 1.1.0 installed; tares factory crew update moves it when it's idle
   warn  crew-reviewer runs Claude Code 1.0.0, older than the 1.1.0 installed; tares factory crew update moves it when it's idle
@@ -202,7 +210,7 @@ fix the items marked FIX
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -255,6 +263,7 @@ fix the items marked FIX
     "permissions": {
       "allow": [
         "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)",
         "Bash(tares factory spawn *)",
         "Bash(tares factory revive *)",
         "Bash(tares factory restart *)",
@@ -298,7 +307,7 @@ fix the items marked FIX
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -351,7 +360,8 @@ fix the items marked FIX
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -385,7 +395,7 @@ fix the items marked FIX
     "--autocompact",
     "200000",
     "--append-system-prompt",
-    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.",
     "--plugin-dir",
     "{PLUGIN_DIR}"
   ],
@@ -438,7 +448,8 @@ fix the items marked FIX
     },
     "permissions": {
       "allow": [
-        "Bash(tares factory tidy *)"
+        "Bash(tares factory tidy *)",
+        "Bash(tares factory report *)"
       ],
       "deny": [
         "Bash(gh pr merge:*)"
@@ -477,6 +488,7 @@ fix the items marked FIX
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -499,6 +511,7 @@ fix the items marked FIX
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)",
       "Bash(tares factory spawn *)",
       "Bash(tares factory revive *)",
       "Bash(tares factory restart *)",
@@ -527,6 +540,7 @@ fix the items marked FIX
 
 == file crew/stations/crew-releaser.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -545,6 +559,7 @@ fix the items marked FIX
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -566,7 +581,8 @@ fix the items marked FIX
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -585,6 +601,7 @@ fix the items marked FIX
 
 == file crew/stations/crew-reviewer.settings.json ==
 {
+  "autoMemoryEnabled": false,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -603,6 +620,7 @@ fix the items marked FIX
     ]
   },
   "crossSessionInbound": "accept",
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "tares@inline": true
   },
@@ -624,7 +642,8 @@ fix the items marked FIX
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)"
+      "Bash(tares factory tidy *)",
+      "Bash(tares factory report *)"
     ],
     "deny": [
       "Bash(gh pr merge:*)"
@@ -734,8 +753,8 @@ fix the items marked FIX
 ]
 == file claude/calls.jsonl ==
 {"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}
-{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
-{"args": ["--bg", "-n", "crew-releaser", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the releaser station: load the skills factory-protocol and station-releaser, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--setting-sources", "project,local", "--no-chrome", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot and whenever you are told to reload. After a compaction Claude Code re-attaches them: load one again only when its re-attached copy says it was truncated or you cannot find a rule you need. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the releaser station: load the skills factory-protocol and station-releaser, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
 == file tares/writes.jsonl ==
 {"body": {"autonomy": "L3-review", "builders_max": 3, "challenger": false, "prod_pattern": "(^|[-_.])(prod|production)([-_.]|$)", "release_profile": "kind", "releaser": true}, "method": "PUT", "path": "/api/crew/settings"}

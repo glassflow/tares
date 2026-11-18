@@ -10,9 +10,15 @@ Query: `project` (an id), `milestone` (an id), `state` ("to do", "in progress", 
 "changes asked", "blocked", "merged", "canceled" or "moving", which is the three that move now:
 in progress, in review and changes asked), `q` (text in the ref or the title), `sort` ("new",
 "old", "ref" or "open": every ticket not merged first, then the merged ones, newest first in each),
-`limit` (25 by default, 200 at most) and `offset`. Canceled tickets show only when `state` is
+`assignee` (a person's id, "mine" for the caller, or "none" for a ticket nobody on the cell is
+assigned), `limit` (25 by default, 200 at most) and `offset`. Canceled tickets show only when `state` is
 "canceled". The Board and Swimlanes layouts ask for `sort=open&limit=200`, so a cell with many merged
 tickets still shows every open one, and cap each column themselves.
+
+A ticket carries its assignee (TR-1240): `assignee` is {id, name} of the person on the cell, or
+None; `assignee_raw` is the name the source gave while it matches nobody here. `assignees` lists the
+people tickets are assigned to, for the chosen project, and `me` is the caller's person id (None
+for the root credential and a key with no person), so the page can offer "Mine".
 
 Every string is worded for people, as on the project page (`factory_project`): a state is "in
 review", who works on a ticket is "Builder for M2", never the name of a station, a time is "3 days
@@ -28,7 +34,7 @@ from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
 from ..envelope import now_utc
-from ..factory_home import _dt, for_caller, plain_ago, waiting_items
+from ..factory_home import _dt, for_caller, plain_ago, caller_waiting
 from .factory_project import _pr_out, _review_out, station_roles, ticket_state, who_words
 from .factory_projects import ORDER, row_for
 
@@ -64,11 +70,15 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/tickets")
     def factory_tickets(project: str | None = None, milestone: str | None = None,
                         state: str | None = None, q: str | None = None, sort: str = "new",
+                        assignee: str | None = None,
                         limit: int = DEFAULT_LIMIT, offset: int = 0, *, request: Request):
-        """{tickets, total, offset, limit, more, counts, projects, milestones, hidden_canceled,
-        now}. See the module note for the query."""
+        """{tickets, total, offset, limit, more, counts, projects, milestones, assignees, me,
+        hidden_canceled, now}. See the module note for the query."""
         want = _state_param(state)
-        project, milestone = project or None, milestone or None
+        project, milestone, assignee = project or None, milestone or None, assignee or None
+        me = (h.current_person(request) or {}).get("id")
+        # "mine" for a caller with no person matches nothing: no ticket is theirs
+        pick_person = me if assignee == "mine" else assignee
         if sort not in SORTS:
             raise HTTPException(400, "sort is one of: " + ", ".join(SORTS))
         if not 1 <= limit <= MAX_LIMIT:
@@ -94,7 +104,8 @@ def register(app, store, h, ctx):
         roles = station_roles(station_rows)
 
         # the projects in the order of the Projects page: what needs you first, finished last
-        waiting = waiting_items(store, for_caller(fx, request), now, hidden)
+        # what waits for the caller, as their home has it (never another person's items)
+        waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
         stations = fx.stations() if fx else []
         ranked = []
         for p in projects:
@@ -117,6 +128,16 @@ def register(app, store, h, ctx):
                 return factory_mod.hide_paths(text, hidden)
             return clean
 
+        people = {p["id"]: p["name"] for p in store.list_people()}
+
+        def assignee_of(t) -> tuple[dict | None, str | None]:
+            pid = t.get("assignee_person_id")
+            if pid and pid in people:
+                return {"id": pid, "name": people[pid]}, None
+            return None, t.get("assignee_raw") or None
+
+        assigned: dict[str, int] = {}   # person id: open tickets assigned, in the chosen project
+
         needle = (q or "").strip().lower()
         rows = []          # (sort time, ticket row) of every ticket the filters but the state keep
         counts = {"total": 0, "moving": 0, **{k: 0 for k in KEYS.values()}}
@@ -130,6 +151,14 @@ def register(app, store, h, ctx):
             clean = cleaner(p)
 
             for t in tickets:
+                who_is, raw = assignee_of(t)
+                if who_is and t.get("status") != "canceled":
+                    assigned[who_is["id"]] = assigned.get(who_is["id"], 0) + 1
+                if assignee == "none":
+                    if who_is:
+                        continue
+                elif assignee is not None and (not who_is or who_is["id"] != pick_person):
+                    continue
                 if milestone is not None and t.get("milestone") != milestone:
                     continue
                 ref = factory_mod.label(t)
@@ -151,6 +180,7 @@ def register(app, store, h, ctx):
                                   if ms in numbers else None),
                     "who": None if done else (who_words(t.get("holder"), roles, numbers.get(ms))
                                               or NOT_TAKEN),
+                    "assignee": who_is, "assignee_raw": raw,
                     "pr": _pr_out(t), "blocked_by": blocked_by,
                     "changed": plain_ago(t.get("updated_at"), now) or None,
                     "changed_at": _iso(t.get("updated_at")),
@@ -189,6 +219,10 @@ def register(app, store, h, ctx):
                                 "name": cleaner(p)(m["name"])}
                                for p in projects for i, m in enumerate(milestones_of[p["id"]])
                                if project is None or p["id"] == project],
+                "assignees": sorted(({"id": pid, "name": people[pid], "count": n}
+                                     for pid, n in assigned.items()),
+                                    key=lambda a: (a["id"] != me, a["name"].lower())),
+                "me": me,
                 "hidden_canceled": counts["canceled"] if want != "canceled" else 0,
                 "now": now.isoformat()}
 

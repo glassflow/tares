@@ -2,8 +2,11 @@
 # Tests CI runs for the enterprise code, one per line, in sorted order (ee/tests/<name>.py).
 test_areas
 test_areas_licence
+test_brain_index
 test_brain_lore_client
+test_brain_remove
 test_brain_repos
+test_brain_sync
 test_console_answers
 test_crew_page_by_person
 test_crew_split
@@ -21,6 +24,7 @@ test_factory_team_home
 test_grant_decline_sticks
 test_grants_teams
 test_licence_cloud
+test_mcp_brain
 test_mcp_editions_ee
 test_my_work
 test_owner_claims_local_team
@@ -36,6 +40,7 @@ test_private_routes
 test_private_services
 test_private_writes
 test_project_access
+test_project_page_lead_items
 test_project_page_others
 test_project_secrets
 test_recording_person_team

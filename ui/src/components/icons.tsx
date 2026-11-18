@@ -191,6 +191,52 @@ export const Check = (p: P) => (
   </S>
 );
 
+export const HomeIcon = (p: P) => (
+  <S {...p}>
+    <path d="M3 10.5 12 3l9 7.5" />
+    <path d="M5 9.5V21h14V9.5" />
+    <path d="M10 21v-6h4v6" />
+  </S>
+);
+
+export const Folder = (p: P) => (
+  <S {...p}>
+    <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+  </S>
+);
+
+export const Ticket = (p: P) => (
+  <S {...p}>
+    <path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z" />
+    <path d="M13 6v2M13 11v2M13 16v2" />
+  </S>
+);
+
+export const Users = (p: P) => (
+  <S {...p}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+    <path d="M16 4.5a3.5 3.5 0 0 1 0 7" />
+    <path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.5" />
+  </S>
+);
+
+export const Bot = (p: P) => (
+  <S {...p}>
+    <rect x="4" y="8" width="16" height="12" rx="2" />
+    <path d="M12 8V4" />
+    <circle cx="12" cy="3" r="1" />
+    <path d="M9 13v2M15 13v2" />
+  </S>
+);
+
+export const CopyIcon = (p: P) => (
+  <S {...p}>
+    <rect x="9" y="9" width="12" height="12" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </S>
+);
+
 export const ChevronDown = (p: P) => (
   <S {...p}>
     <path d="m6 9 6 6 6-6" />

@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
 
 import { Button, Input, ListSection, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
@@ -63,10 +62,6 @@ export default function FactoryNewProject() {
           {NEXT.map((s) => <li key={s}>{s}</li>)}
         </ol>
       </ListSection>
-      <p className={cn("m-0", MUTED)} data-testid="new-project-first-time">
-        First time here? The Get started list on <Link to="/" className="text-foreground underline decoration-border underline-offset-[3px]">Home</Link> signs
-        you in from Claude Code and starts the crew.
-      </p>
       <Toaster />
     </div>
   );

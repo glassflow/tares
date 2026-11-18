@@ -11,8 +11,10 @@ deliberate MVP test of agent-operable onboarding (no auth — the proxy talks to
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import os
+import re
 import time
 
 import httpx
@@ -689,6 +691,32 @@ def _out(r: httpx.Response, keys: tuple[str, ...] | None = None) -> str:
     return json.dumps(data, default=str)
 
 
+LIST_CAP = 8_000   # bytes a list tool answers with by default: a station's context fills fast
+
+
+def _fingerprint(obj) -> str:
+    return hashlib.sha1(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def _fit(rows: list, limit: int, offset: int, cap: int, again: str) -> tuple[list, str]:
+    """`rows[offset:offset+limit]`, fewer when they pass `cap` bytes as JSON, and the sentence
+    saying how to read the rest ("" when nothing is left out). `again` is the call to repeat,
+    with `{offset}` where the next offset goes."""
+    page = rows[offset:offset + limit] if limit > 0 else rows[offset:]
+    while len(page) > 1 and len(json.dumps(page, default=str)) > cap:
+        page = page[:max(1, len(page) * 3 // 4)]
+    left = len(rows) - offset - len(page)
+    if left <= 0:
+        return page, ""
+    return page, (f"{left} more of {len(rows)} left out to keep this small: "
+                  + again.format(offset=offset + len(page)))
+
+
+def _clip(text, n: int) -> str:
+    text = str(text or "")
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
 @writable()
 async def create_project(name: str, goal: str = "") -> str:
     """Create an empty Tares project for a piece of work you are about to spec, and tie this
@@ -746,11 +774,13 @@ async def write_doc(kind: str, title: str, body: str, id: str = "", project: str
 
 
 @mcp.tool()
-async def list_docs(kind: str = "", project: str = "") -> str:
+async def list_docs(kind: str = "", project: str = "", limit: int = 40, offset: int = 0) -> str:
     """The project's docs in reading order (starting prompt, spec, plan, AGENTS.md, memory,
-    notes, working docs): id, kind, title, size, when changed. No bodies: read one with get_doc.
-    `kind` narrows the list. Docs marked `global` (the AGENTS.md and the memory for all
-    projects) belong to every project: read them too, they hold the user's standing rules."""
+    notes): id, kind, title, size. No bodies: read one with get_doc. `kind` narrows the list.
+    Working docs are left out unless `kind="working"` (a ticket's working doc comes with
+    get_ticket). Docs marked `global` (the AGENTS.md and the memory for all projects) belong to
+    every project: read them too, they hold the user's standing rules. At most `limit` docs;
+    a last entry {"more": ...} says how to read the rest."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -758,20 +788,50 @@ async def list_docs(kind: str = "", project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/docs", params={"kind": kind})
     if r.status_code >= 400:
         return _out(r)
-    return json.dumps([{k: d.get(k) for k in ("id", "kind", "title", "global", "size",
-                                               "updated_at")}
-                       for d in r.json()], default=str)
+    docs = [d for d in r.json() if kind or d.get("kind") != "working"]
+    rows = [{k: d.get(k) for k in ("id", "kind", "title", "global", "size")} for d in docs]
+    page, more = _fit(rows, limit, offset, LIST_CAP - 200,
+                      f'list_docs(kind="{kind}", offset={{offset}})')
+    return json.dumps(page + ([{"more": more}] if more else []), default=str)
+
+
+DOC_MAX = 12_000      # characters of a doc get_doc answers whole by default
+DOC_HEAD = 3_000      # of those, the part of its first section a long doc shows
+DOC_HEADINGS = 60     # headings listed for a long doc
 
 
 @mcp.tool()
-async def get_doc(id: str, project: str = "") -> str:
-    """One of the project's docs, with its markdown body."""
+async def get_doc(id: str, project: str = "", section: str = "") -> str:
+    """One of the project's docs, with its markdown body. A doc over 12,000 characters comes as
+    its headings (each with its size) and the start of its first section, not whole:
+    `section="<heading>"` reads one section (a heading of the doc, any case, with or without
+    its #), `section="all"` the whole doc. A shorter doc comes whole unless you name a section."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.get(f"{TARESD}/api/projects/{uid}/docs/{id}")
-    return _out(r, ("id", "kind", "title", "body", "updated_at", "updated_by"))
+    if r.status_code >= 400:
+        return _out(r)
+    doc = r.json()
+    out = {k: doc.get(k) for k in ("id", "kind", "title", "body", "updated_at", "updated_by")}
+    body, want = out["body"] or "", section.strip()
+    if want.lower() == "all" or (not want and len(body) <= DOC_MAX):
+        return json.dumps(out, default=str)
+    secs = _doc_sections(body)
+    if want:
+        hits = _find_sections(secs, want)
+        if not hits:
+            names = [h for h, _ in secs if h]
+            return f"no section {section!r} in doc {id}: it has {names}"
+        return json.dumps({**out, "body": "".join(hits), "section": section}, default=str)
+    heads = [{"heading": h or "(top)", "chars": len(text)} for h, text in secs]
+    out["body"] = _clip(secs[0][1], DOC_HEAD) if secs else _clip(body, DOC_HEAD)
+    out["sections"] = heads[:DOC_HEADINGS] + ([{"more": len(heads) - DOC_HEADINGS}]
+                                              if len(heads) > DOC_HEADINGS else [])
+    out["note"] = (f"{len(body)} characters, so only the start of the first section is here. "
+                   f'get_doc("{id}", section="<heading>") reads one section, section="all" the whole doc.')
+    return json.dumps(out, default=str)
 
 
 @mcp.tool()
@@ -900,18 +960,22 @@ async def pick_up(project: str = "", take_over: bool = False) -> str:
 
 
 @mcp.tool()
-async def list_tickets(project: str = "") -> str:
+async def list_tickets(project: str = "", milestone: str = "", open: bool = False,
+                       limit: int = 60, offset: int = 0, detail: str = "") -> str:
     """The project's tickets in plan order: id, label (the Linear identifier such as ENG-12, the
     GitHub identifier such as GH-12, else T<n>), title, status (todo, in_progress, done,
     canceled), milestone, depends_on, the GitHub repo it changes (`repo`, owner/name, for a
     project that spans several), whether it is ready (all it depends on is done) or which tickets
-    block it, the link when it lives in Linear or GitHub, and the id and title of each one's
-    working doc, and who it is for (`assignee`, {id, name}, or null with `assignee_raw` as the
-    source named them, and `assignee_note`: "assignee: Kiran" or "unowned (kiran@x.com is not on
+    block it, who it is for (`assignee_note`: "assignee: Kiran" or "unowned (kiran@x.com is not on
     this cell)"). Work the ready tickets in this order. Also says where they live: `linear` is
     the Linear project and `github` the repo and issue label, each with when it was last synced
     (null when the project does not use it); with both null the tickets live in Tares. Read one
-    with get_ticket to get its working doc."""
+    with get_ticket to get its working doc.
+    Small by default: `milestone` (a name) and `open=True` (not done or canceled) narrow it, at
+    most `limit` tickets come back and within about 8,000 bytes (`more` says how to read the
+    rest with `offset`), and each ticket leaves out its link when they share one pattern
+    (`ticket_url`, with `{label}`), its working doc and its assignee object. `detail="full"`
+    gives every ticket with every field, as before."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -922,22 +986,51 @@ async def list_tickets(project: str = "") -> str:
     data = r.json()
     lin = data.get("linear")
     gh = data.get("github")
+    every = data.get("tickets") or []
+    tickets = [t for t in every if (not milestone or t.get("milestone_name") == milestone)
+               and (not open or t.get("status") not in ("done", "canceled"))]
+    full = detail == "full"
+    keys = (("id", "label", "number", "identifier", "title", "status", "milestone_name",
+             "depends_on", "ready", "blocked_by", "holder", "stage", "stage_reason", "repo", "url",
+             "working_doc", "working_doc_title", "assignee", "assignee_raw") if full else
+            ("id", "label", "number", "title", "status", "milestone_name", "depends_on", "ready",
+             "blocked_by", "holder", "stage", "stage_reason", "repo"))
+    pattern = "" if full else _url_pattern(tickets)
+    if not full and not pattern:
+        keys += ("url",)     # links of their own: keep them
+    rows = [{k: t.get(k) for k in keys}
+            | {"pr": _pr_brief(t.get("pr"))}
+            | ({"pr_note": t.get("pr_note")} if full or t.get("pr_note") else {})
+            | {"assignee_note": _assignee_note(t)}
+            for t in tickets]
     out = {
         "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
         "github": ({k: gh.get(k) for k in ("repo", "issue_label", "url", "synced_at", "error")}
-                   if gh else None),
-        "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
-                                            "status", "milestone_name", "depends_on", "ready",
-                                            "blocked_by", "holder", "stage", "stage_reason",
-                                            "repo", "url", "working_doc", "working_doc_title",
-                                            "assignee", "assignee_raw")}
-                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note"),
-                       "assignee_note": _assignee_note(t)}
-                    for t in data.get("tickets") or []]}
-    if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
+                   if gh else None)}
+    if full:
+        out["tickets"] = rows
+    else:
+        page, more = _fit(rows, limit, offset, LIST_CAP - 1_000,
+                          f'list_tickets(milestone="{milestone}", open={open}, offset={{offset}})')
+        out["tickets"] = page
+        if pattern:
+            out["ticket_url"] = pattern
+        if more:
+            out["more"] = more
+    if any(t.get("status") == "in_progress" for t in every):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
                        "it, call pick_up before anything else.")
     return json.dumps(out, default=str)
+
+
+def _url_pattern(tickets: list[dict]) -> str:
+    """"https://linear.app/acme/issue/{label}" when every ticket's link is that prefix plus its
+    label, so a compact list can leave the links out; "" otherwise."""
+    urls = [(t.get("url") or "", t.get("label") or "") for t in tickets]
+    if not urls or not all(u and lab and u.endswith("/" + lab) for u, lab in urls):
+        return ""
+    prefixes = {u[:-len(lab)] for u, lab in urls}
+    return prefixes.pop() + "{label}" if len(prefixes) == 1 else ""
 
 
 def _assignee_note(t: dict) -> str:
@@ -957,12 +1050,21 @@ def _pr_brief(pr: dict | None) -> dict | None:
 
 
 @mcp.tool()
-async def get_ticket(ticket: str, project: str = "") -> str:
+async def get_ticket(ticket: str, project: str = "", detail: str = "", section: str = "",
+                     since: str = "") -> str:
     """One ticket, by its Tares id, its number (T3), its Linear identifier (for example
     ENG-12) or its GitHub identifier (for example GH-12), with the body of its working doc, who
     holds it and where it stands, who it is for (`assignee`, or `assignee_raw` when that person is
     not on this cell), its pull request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
-    crew's messages about it: everything you need to work on it."""
+    crew's messages about it: everything you need to work on it.
+    Small by default: a working doc over 4,000 characters comes as its Goal, Steps and Progress
+    with `working_doc_sections` (every heading and its size; `section="<heading>"` reads one,
+    `section="all"` the whole doc), the latest 8 messages and checks and the first 5 of its
+    decisions (this ticket's first; `messages_total`, `checks_total` count them all,
+    `decisions_total` the decisions the ticket carries; list_decisions has the rest), and reviews with only their open findings in words. `detail="status"` is only where it stands
+    (stage, holder, PR, verdict), for a tick; `detail="full"` is everything, uncut. Each answer
+    carries a `fingerprint`: pass it back as `since` and an unchanged ticket answers
+    {"unchanged": true} alone."""
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -976,7 +1078,110 @@ async def get_ticket(ticket: str, project: str = "") -> str:
     if msgs.status_code == 200:
         out["messages"] = [{k: m.get(k) for k in ("at", "from", "to", "type", "first_line")}
                            for m in msgs.json().get("messages") or []]
-    return json.dumps(out, default=str)
+    if section:
+        return _doc_section(out, section)
+    if detail != "full":
+        out = _ticket_status(out) if detail == "status" else _ticket_gist(out)
+    pr = out.get("pr")    # when GitHub was last read is no change to the ticket
+    fp = _fingerprint({**out, "pr": {k: v for k, v in pr.items() if k != "checked_at"}}
+                      if isinstance(pr, dict) else out)
+    if since and since == fp:
+        return json.dumps({"unchanged": True, "fingerprint": fp})
+    return json.dumps({**out, "fingerprint": fp}, default=str)
+
+
+TICKET_DOC_MAX = 4_000            # characters of a working doc get_ticket gives whole
+TICKET_DOC_KEEP = ("goal", "steps", "progress")
+TICKET_MESSAGES = 8               # the latest messages, checks and decisions get_ticket gives
+TICKET_CHECKS = 8
+TICKET_DECISIONS = 5
+
+
+def _finding(f) -> dict | str:
+    """An open finding as its gist; a fixed or waived one as its label alone."""
+    if not isinstance(f, dict):
+        return f
+    if f.get("state") not in (None, "", "open"):
+        return f"{f.get('label')} {f.get('state')}"
+    return {"label": f.get("label"), "severity": f.get("severity"), "blocking": f.get("blocking"),
+            "where": f"{f.get('file') or ''}:{f.get('line') or ''}".strip(":"),
+            "text": _clip(f.get("text"), 200)}
+
+
+def _doc_sections(body: str) -> list[tuple[str, str]]:
+    """The doc as [(heading, text)], split at its level-1 and level-2 headings; text before the
+    first heading goes under "". A # line inside a ``` fence is code, not a heading."""
+    out, head, start, pos, fenced = [], "", 0, 0, False
+    for line in body.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            m = re.match(r"#{1,2} +(.+?)\s*$", line)
+            if m:
+                if pos > start or head:
+                    out.append((head, body[start:pos]))
+                head, start = m.group(1).strip(), pos
+        pos += len(line)
+    out.append((head, body[start:]))
+    return [(h, t) for h, t in out if h or t.strip()]
+
+
+def _find_sections(secs: list[tuple[str, str]], section: str) -> list[str]:
+    want = section.strip().lstrip("#").strip().lower()
+    return [text for h, text in secs if h.lower() == want]
+
+
+def _doc_section(t: dict, section: str) -> str:
+    body = t.get("working_doc_body") or ""
+    if section.strip().lower() == "all":
+        return json.dumps({"label": t.get("label"), "working_doc_body": body})
+    hits = _find_sections(_doc_sections(body), section)
+    if not hits:
+        names = [h for h, _ in _doc_sections(body) if h]
+        return f"no section {section!r} in the working doc of {t.get('label')}: it has {names}"
+    return json.dumps({"label": t.get("label"), "section": section, "body": "".join(hits)})
+
+
+def _ticket_status(t: dict) -> dict:
+    return {k: t.get(k) for k in ("id", "label", "title", "status", "stage", "stage_reason",
+                                  "holder", "milestone_name", "depends_on", "ready", "blocked_by",
+                                  "verdict", "updated_at", "assignee_note")} | {
+        "pr": _pr_brief(t.get("pr"))}
+
+
+def _ticket_gist(t: dict) -> dict:
+    out = dict(t)
+    body = t.get("working_doc_body") or ""
+    if len(body) > TICKET_DOC_MAX:
+        secs = _doc_sections(body)
+        keep = [text.split("\n### Checks")[0] if h.lower() == "progress" else text
+                for h, text in secs if h.lower() in TICKET_DOC_KEEP]
+        out["working_doc_body"] = "".join(keep)
+        out["working_doc_sections"] = [{"heading": h or "(top)", "chars": len(text),
+                                        "shown": h.lower() in TICKET_DOC_KEEP} for h, text in secs]
+    msgs = t.get("messages") or []
+    out["messages"] = [{**m, "first_line": _clip(m.get("first_line"), 120)}
+                       for m in msgs[-TICKET_MESSAGES:]]
+    out["messages_total"] = len(msgs)
+    out["reviews"] = [{"round": v.get("round"), "verdict": v.get("verdict"),
+                       "head": str(v.get("head") or "")[:12], "at": v.get("at"), "by": v.get("by"),
+                       "findings": [_finding(f) for f in v.get("findings") or []],
+                       "fixed": v.get("fixed")}
+                      for v in t.get("reviews") or []]
+    out["checks"] = [{k: v for k, v in {
+        "command": _clip(c.get("command"), 120), "result": _clip(c.get("result"), 100),
+        "match": c.get("match"), "commit": str(c.get("commit") or "")[:12], "at": c.get("at"),
+        "by": c.get("by"), "recorded": c.get("recorded"), "broke_test": c.get("broke_test")}.items()
+        if v not in (None, "")} for c in (t.get("checks") or [])[-TICKET_CHECKS:]]
+    out["checks_total"] = len(t.get("checks") or [])
+    out["decisions"] = [{"label": d.get("label"), "question": _clip(d.get("question"), 160),
+                         "words": d.get("words"), "choice": _clip(d.get("choice"), 160),
+                         "standing": d.get("standing"), "at": d.get("at")}
+                        for d in (t.get("decisions") or [])[:TICKET_DECISIONS]]
+    out["decisions_total"] = len(t.get("decisions") or [])
+    out["history"] = [{k: h.get(k) for k in ("at", "field", "value", "reason", "by")}
+                      for h in t.get("history") or []]
+    return out
 
 
 @writable()

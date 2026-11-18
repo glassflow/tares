@@ -1678,7 +1678,6 @@ pre.payload {
 .settings-headed > .panel:last-child { position: relative; margin-top: 44px; }
 .settings-headed > .panel:last-child > h2:first-child,
 .settings-headed > .panel:last-child > div:first-child:has(> h2) { position: absolute; top: -49px; left: -1px; right: -1px; margin: 0 !important; min-height: 36px; align-items: center; }
-.settings-tool > .panel:first-child > h2:first-child { display: none; }
 .settings-headed > .panel:last-child > h2:first-child,
 .settings-headed > .panel:last-child > div:first-child > h2 { font-size: 20px; line-height: 36px; }
 .pv-head { margin-bottom: 12px; }

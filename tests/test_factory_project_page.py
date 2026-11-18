@@ -329,7 +329,7 @@ async def main():
                                                    "for": "crew", "result": None, "note": None, "by": None}]
                and ms["M1: pages"]["done"] is False and ms["M2: search"]["done"] is False
                and all(set(m) == {"id", "number", "name", "goal", "done", "counts", "checks", "accepted",
-                                      "needs_person", "can_accept", "tickets_href"}
+                                      "needs_person", "can_accept", "checks_for", "yours", "tickets_href"}
                        for m in a["milestones"]), ms)
             ck("a milestone counts its tickets and leaves the canceled one out",
                ms["M1: pages"]["counts"] == {"total": 3, "merged": 1}
@@ -421,7 +421,8 @@ async def main():
                and not any(w["id"] == x["id"] for w in ry["waiting"] for x in a["waiting"]), ry["waiting"])
             ck("a waiting item has the shape of the home page's", all(
                 set(w) == {"id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-                           "waited", "actions", "tickets", "blocking", "older", "question", "lines"} for w in a["waiting"]), [sorted(w) for w in a["waiting"]][:1])
+                           "waited", "actions", "tickets", "blocking", "older", "question", "lines",
+            "for_people", "for_admin", "no_lead"} for w in a["waiting"]), [sorted(w) for w in a["waiting"]][:1])
 
             print("== nothing of the crew's machine ==")
             text = json.dumps(a)

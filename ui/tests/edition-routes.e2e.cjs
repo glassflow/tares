@@ -4,7 +4,8 @@
  * Factory: /settings/advanced lands on Settings with its Advanced group open, which links Connections
  * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
  * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); /sources still opens today's
- * page; the menu is Home, Projects, Tickets, Reviews, Crew, Docs and memory, People, Settings;
+ * page; the menu is Home, Integrations, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings;
+ * / on a new cell (no project, setup not done) opens Set up your factory;
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is the Timeline page (TR-752); /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
  * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
@@ -122,7 +123,7 @@ function loadSample(env) {
     const where = (page) => { const u = new URL(page.url()); return u.pathname + u.search; };
     const settingsNav = (page) => page.locator('nav[aria-label="Settings"]');
     const advancedTab = (page) => settingsNav(page).getByRole("button", { name: "Advanced", exact: true });
-    const menuLabels = async (page) => (await page.locator('nav[aria-label="Main"] a').allInnerTexts()).map((t) => t.trim());
+    const menuLabels = async (page) => (await page.locator('nav[aria-label="Main"] a:not([data-testid="menu-setup"])').allInnerTexts()).map((t) => t.trim());
 
     // 1. factory
     {
@@ -167,15 +168,16 @@ function loadSample(env) {
       await page.getByTestId("ticket-notfound").waitFor();
       ck("factory: a ticket address opens the ticket page, here with no such ticket", where(page) === "/projects/x/tickets/T1", where(page));
       const home = await homeOf(page, e);
-      ck("factory: / is Home, which opens Start on a cell with no project", home === "/" || home === "/start", home);
+      ck("factory: / on a new cell, with no project and setup not done, opens Set up your factory", home === "/setup", home);
       for (const p of ["/welcome/edition", "/timeline", "/services", "/services/service-a", "/incidents", "/incidents/i-1", "/runbooks"]) {
         await go(page, e, p);
-        ck(`factory: ${p} lands on /`, where(page) === home && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
+        ck(`factory: ${p} lands on /`, where(page) === "/" && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
       }
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Projects, Tickets, Reviews, Crew, Docs and memory, People, Settings", items.join(",") === "Home,Projects,Tickets,Reviews,Crew,Docs and memory,People,Settings", items.join(","));
+      ck("factory: the menu is Home, Integrations, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings",
+         items.join(",") === "Home,Integrations,Projects,Tickets,Reviews,Crew,People,Docs and memory,Settings", items.join(","));
       ck("factory: the People entry opens /people", (await page.locator('nav[aria-label="Main"] a', { hasText: "People" }).getAttribute("href")) === "/people");
       ck("factory: the Reviews entry links to /reviews", (await page.getByTestId("menu-reviews").getAttribute("href")) === "/reviews");
       ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");

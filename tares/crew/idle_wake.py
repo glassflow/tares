@@ -27,14 +27,16 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 
 from . import claude, launch, lifecycle, locks, pace, state
 from .claude import SessionListUnreadableError
 from .client import TaresClient, TaresHTTPError, cksum, uri
-from .errors import CrewError
+from .errors import CrewError, NotBetweenTurnsError
 from .paths import CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
+STALL_AFTER = 45 * 60   # seconds a held ticket may go without news before the orchestrator is told
 DEFAULT_SETTLE = 600   # seconds a session may be active after a wake before the clock restarts (FACTORY_WAKE_SETTLE)
 
 _RELEASE = re.compile(r"(^|[^A-Za-z])RELEASE([^A-Za-z]|$)")
@@ -193,10 +195,75 @@ def _secs(closed_at):
     return t - sign * (int(z[1:3]) * 3600 + int(z[4:6]) * 60)
 
 
+def _my_work(client: TaresClient):
+    """What /api/crew/my-work says, or None from a Tares that does not have the route (older: skip the signal)."""
+    try:
+        return state.loads_json(client.tares_http("GET", "/api/crew/my-work"))
+    except TaresHTTPError as e:
+        if e.status == 404:
+            return None
+        raise ScanError(str(e)) from None
+    except ValueError as e:
+        raise ScanError(str(e)) from None
+
+
+def _work_items(doc) -> list:
+    """The orchestrator's tickets and milestones that want it, as [{key, text}]: tickets that can start, tickets
+    that came back from review enough times to reach a new ladder step, and milestones whose tickets are all
+    delivered."""
+    items = []
+    for t in _list(_get(doc, "ready")):
+        project, ticket = _text(_get(t, "project")), _text(_get(t, "ticket"))
+        items.append({"key": f"rd:{project}/{ticket}", "text": f"ticket {ticket} of {project} is ready to start"})
+    for t in _list(_get(doc, "bouncing")):
+        project, ticket, ladder = _text(_get(t, "project")), _text(_get(t, "ticket")), _text(_get(t, "ladder"))
+        items.append({"key": f"bn:{project}/{ticket}@{ladder}",
+                      "text": f"ticket {ticket} of {project} bounced again (ladder step {ladder})"})
+    for lp in _list(_get(doc, "led_projects")):
+        project = _text(_get(lp, "project"))
+        for m in _list(_get(lp, "milestones_ready_to_check")):
+            items.append({"key": f"ms:{project}/{_text(m)}", "text": f"milestone {_text(m)} of {project} is ready to check"})
+    return items
+
+
+def _stall_items(doc, client: TaresClient, paths: CrewPaths) -> list:
+    """The held tickets that stopped moving, as [{key, text}]: a ticket whose builder owes the next step (stage todo,
+    doing or changes, or none yet) with no news for STALL_AFTER seconds, and a ticket in changes whose holder is no longer
+    running. A ticket whose row has no `updated_at` (a Tares before that field) gives no stall signal; the
+    liveness signal needs only the stage and the holder."""
+    items, now, running = [], state.now_s(), {}
+    known = state.stations_load(paths)
+    for t in _list(_get(doc, "in_progress")):
+        project, ticket = _text(_get(t, "project")), _text(_get(t, "ticket"))
+        stage, holder = _get(t, "stage"), _get(t, "holder")
+        if stage not in ("", "todo", "doing", "changes"):   # "" is held but not started: the same as todo
+            continue
+        at = _get(t, "updated_at")
+        when = _secs(at)
+        if when is not None and now - when > STALL_AFTER:
+            items.append({"key": f"st:{project}/{ticket}@{at}",
+                          "text": f"ticket {ticket} of {project} has had no news for {(now - when) // 60} minutes"})
+        if stage == "changes" and isinstance(holder, str) and holder in known:   # a station this crew does not know is not ours to call gone
+            if holder not in running:
+                try:
+                    running[holder] = claude.is_alive(holder, "", claude.claude_bin(client.env), paths)
+                except (SessionListUnreadableError, CrewError):
+                    running[holder] = True   # not known to be gone: no wake on a reading that failed
+            if not running[holder]:
+                items.append({"key": f"gone:{project}/{ticket}@{_text(_alt(_get(t, 'head'), ''))}",
+                              "text": f"ticket {ticket} of {project} is in changes and {holder} is not running"})
+    return items
+
+
 def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
-    """Desk answers closed, and projects handed over, since the baseline; the first look only sets it."""
+    """Desk answers closed, projects handed over, tickets ready, tickets bouncing to a new ladder step, milestones
+    ready to check and held tickets that stalled or lost their holder, since the baseline; the first look only
+    sets it."""
     desk = _json(client, "/api/desk?state=answered&mine=1")
     projs = _json(client, "/api/crew/projects")
+    work = _my_work(client)
+    items = None if work is None else _work_items(work) + _stall_items(work, client, paths)
+    work_keys = [] if items is None else [i["key"] for i in items]
     orch = state.crew_orchestrator(paths)
     base = state.wake_read(orch, paths)["baseline"]
     act = claude.station_updated(orch, paths)   # an answer the orchestrator itself recorded is not news to it
@@ -207,7 +274,10 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
     ids = [_get(p, "id") for p in project_rows]
     try:
         if base is None:
-            return {"first": True, "pending": [], "live": True, "baseline": {"desk": dmax, "projects": ids}}
+            first = {"desk": dmax, "projects": ids}
+            if items is not None:
+                first["work"] = sorted(set(work_keys))
+            return {"first": True, "pending": [], "live": True, "baseline": first}
         base_desk = _alt(_get(base, "desk"), "")
         known = _alt(_get(base, "projects"), [])
         if not isinstance(known, list):
@@ -226,8 +296,21 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
             if _get(p, "id") not in known:
                 pending.append({"key": f"ph:{_text(_get(p, 'id'))}",
                                 "text": f"project {_text(_alt(_get(p, 'name'), _get(p, 'id')))} was handed over"})
-        return {"live": True, "pending": pending,
-                "baseline": {"desk": max(dmax, base_desk), "projects": sorted(set(known + ids), key=state.dumps_compact)}}
+        baseline = {"desk": max(dmax, base_desk), "projects": sorted(set(known + ids), key=state.dumps_compact)}
+        if items is not None:
+            seen_work = _get(base, "work")
+            if isinstance(seen_work, list):
+                pending += [i for i in items if i["key"] not in seen_work]
+            else:   # a baseline from before this signal: its first look only sets the work part, and keeps it now
+                seen_work = []
+                try:
+                    state.wake_update(orch, {"baseline": {**base, "work": sorted(set(work_keys))}}, paths)
+                except OSError:
+                    pass
+            baseline["work"] = sorted(set(seen_work + work_keys))
+        elif isinstance(_get(base, "work"), list):
+            baseline["work"] = base["work"]
+        return {"live": True, "pending": pending, "baseline": baseline}
     except TypeError as e:   # a time that is not text, an id that cannot be ordered
         raise ScanError(str(e)) from None
 
@@ -365,7 +448,10 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
             return   # it started something since the first check
         client.say(f"waking {s} ({p['reason'].split(':')[0]}); restarting it in the same conversation")
         try:
-            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin)
+            lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True)
+        except NotBetweenTurnsError:
+            client.say(f"{s} started a turn; not waking it, will look again next round")
+            return
         except (CrewError, OSError) as e:   # a restart that hits the disk is no different from a refused one
             sys.stdout.flush()
             print(getattr(e, "line", None) or str(e), file=sys.stderr)
@@ -426,5 +512,71 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
                 client.say(f"skipping {s} this round")
             except CrewError as e:
                 client.say(e.message)
+    finally:
+        client.close()
+
+
+_ANSWERED_OFF: dict = {}     # crew home -> when to ask again, for a Tares without /api/desk/answered (the round wakes meanwhile)
+_ANSWERED_DONE: dict = {}    # crew home -> the latest answer time the console tick has already acted on
+_ANSWERED_WAIT: dict = {}    # crew home -> when to try again after a wake that did not happen
+_OFF_FOR = 600.0             # seconds before a Tares that lacked the route is asked again (it may have been upgraded)
+_RETRY_AFTER = 30.0          # seconds before a wake that did not happen is tried again
+
+
+def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
+    """One tick of the nap: a desk answer closed since the orchestrator's baseline wakes it now, not at the next
+    round. One small call asks whether anything was answered; only a yes reads the desk and plans the wake, and
+    only for the orchestrator, between turns. A Tares without the route keeps the round's behaviour."""
+    home = str(paths.home)
+    now = time.monotonic()
+    if now < _ANSWERED_OFF.get(home, 0.0) or now < _ANSWERED_WAIT.get(home, 0.0):
+        return
+    env = os.environ if env is None else env
+    orch = state.crew_orchestrator(paths)
+    if (state.stations_get(orch, "status", paths=paths) != "active" or state.halted(paths)
+            or not state.stations_get(orch, "sessionId", paths=paths)):
+        return
+    base = state.wake_read(orch, paths)["baseline"]
+    if not isinstance(base, dict) or not isinstance(_alt(_get(base, "desk"), ""), str):
+        return   # the first look sets the baseline: the round does that
+    since = max(_alt(_get(base, "desk"), ""), _ANSWERED_DONE.get(home, ""))   # nothing already acted on is asked about again
+    client = TaresClient(paths, env)
+    try:
+        if not client.tares_on():
+            return
+        try:
+            doc = state.loads_json(client.tares_http("GET", "/api/desk/answered?mine=1&since=" + uri(since)))
+        except TaresHTTPError as e:
+            if e.status == 404:
+                _ANSWERED_OFF[home] = now + _OFF_FOR
+            return
+        except ValueError:
+            return
+        latest, count = _get(doc, "latest"), _get(doc, "count")
+        if not isinstance(latest, str) or not isinstance(count, int) or count < 1:
+            return
+        if latest <= _ANSWERED_DONE.get(home, ""):
+            return
+        if claude_bin is None:
+            claude_bin = claude.claude_bin(env)
+        try:
+            if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
+                    or not claude.between_turns(orch, claude_bin, paths)):
+                return   # not now: the next tick asks again
+            p = plan(client, paths, orch, claude_bin=claude_bin)
+            if p is None or not p["work"]:   # nothing new for it; a release note or a liveness wake waits for the round
+                _ANSWERED_DONE[home] = latest
+                return
+            before = state.wake_read(orch, paths)["last_wake"]
+            send(client, paths, p, claude_bin=claude_bin)
+            if state.wake_read(orch, paths)["last_wake"] != before:
+                _ANSWERED_DONE[home] = latest
+            else:
+                _ANSWERED_WAIT[home] = now + _RETRY_AFTER   # it was not woken: ask again soon, not every tick
+        except SessionListUnreadableError:
+            return
+        except CrewError as e:
+            client.say(e.message)
+            _ANSWERED_WAIT[home] = now + _RETRY_AFTER   # the same error every tick helps nobody: look again soon
     finally:
         client.close()

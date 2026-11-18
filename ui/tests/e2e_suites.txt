@@ -1,5 +1,7 @@
 # Browser e2e suites CI runs, one per line, in sorted order (byte order, LC_ALL=C sort). Each is ui/tests/<name>.e2e.cjs. Add your suite's name on its own line in its sorted place. On a merge conflict keep both sides.
 a11y
+brain-ask
+brain-repos
 capped-runs
 catalog-export
 catalog-import
@@ -16,6 +18,7 @@ factory-crew
 factory-docs
 factory-github
 factory-home
+factory-merge-queue
 factory-new-project
 factory-people
 factory-project
@@ -24,8 +27,7 @@ factory-projects
 factory-reviews
 factory-secrets
 factory-settings
-factory-start
-factory-start-show
+factory-setup
 factory-team
 factory-ticket
 factory-tickets

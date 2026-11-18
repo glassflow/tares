@@ -220,9 +220,26 @@ async def main():
         print("== a ticket held by a station is in progress, and no longer ready ==")
         store.update_ticket(t2["id"], holder="a-shop-build-m1", stage="doing", status="in_progress")
         wp = (await work("P")).json()
-        ck("P's second ticket is in progress with its holder and stage",
+        stamp = next(t for t in store.list_tickets(shop) if t["id"] == t2["id"])["updated_at"]
+        ck("P's second ticket is in progress with its holder, stage, head and last news",
            wp["in_progress"] == [{"project": "Shop", "ticket": "T2", "title": "P second",
-                                  "holder": "a-shop-build-m1", "stage": "doing"}], wp["in_progress"])
+                                  "holder": "a-shop-build-m1", "stage": "doing", "head": "",
+                                  "updated_at": wp["in_progress"][0]["updated_at"]}], wp["in_progress"])
+        at = wp["in_progress"][0]["updated_at"]
+        ck("...its updated_at is that ticket's time, as ISO text in UTC", datetime.fromisoformat(at) ==
+           (stamp if isinstance(stamp, datetime) else datetime.fromisoformat(str(stamp))).astimezone(timezone.utc)
+           and "T" in at and at.endswith("+00:00"), (at, stamp))
+        from tares.crew import idle_wake as IW
+        from tares.crew.paths import CrewPaths
+        secs = IW._secs(at)
+        ck("...and the crew's watch can read it", secs is not None, at)
+        os.environ["FACTORY_NOW"] = str(secs + 46 * 60)
+        try:
+            stalled = IW._stall_items(wp, None, CrewPaths.at(__import__("pathlib").Path(tempfile.mkdtemp())))
+        finally:
+            del os.environ["FACTORY_NOW"]
+        ck("...so 46 minutes later the route's own answer is a stall", [i["key"] for i in stalled] == [f"st:Shop/T2@{at}"],
+           stalled)
         ck("and P's ready is the first only", names(wp["ready"]) == ["T1"], wp["ready"])
         ck("Q sees none of P's", (await work("Q")).json()["in_progress"] == [])
 

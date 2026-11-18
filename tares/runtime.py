@@ -54,6 +54,10 @@ class Runtime:
         self._trigger_eval_at: dict = {}
         # {source: deliveries refused for a bad or missing signature since start}
         self.rejected_deliveries: dict[str, int] = {}
+        # Functions `fn(source_name, envelopes)` called, on the event loop, for every batch of
+        # events a source stored. They must return at once (start a task for slow work). The ee
+        # code adds its own; a listener that raises is logged by type and never stops an ingest.
+        self.envelope_listeners: list = []
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def start_all(self) -> None:
@@ -246,6 +250,12 @@ class Runtime:
         metrics.events_ingested(source_name, len(envelopes))
         if rt and rt.health.status == "push":
             metrics.source_state(source_name, "push")
+        if envelopes:
+            for listener in list(self.envelope_listeners):
+                try:
+                    listener(source_name, envelopes)
+                except Exception as e:   # noqa: BLE001  (a listener must not fail the ingest)
+                    print(f"taresd: an envelope listener failed: {type(e).__name__}")
         if envelopes:
             if bypass_cooldown:
                 # Synchronous, and no await between it and the evaluation: on the single event
