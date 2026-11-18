@@ -449,12 +449,12 @@ def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin
     else:
         skill = state.stations_get(s, "role", paths=paths)
     prompt = (f"Claude Code was updated to {target}, so the factory restarted you on it, in this same conversation, "
-              f"with fresh settings. Reload the skills factory-protocol and station-{skill}, re-read your report, "
-              f"{lifecycle.rearm_text(client)}, then carry on where you were.")
+              f"with fresh settings. Reload the skills factory-protocol and station-{skill}, "
+              f"{lifecycle.REPORT_READ}, {lifecycle.rearm_text(client)}, then carry on where you were.")
     fresh_prompt = (f"Claude Code was updated to {target}, but your old conversation kept coming back on an older "
                     f"Claude Code, so the factory started you again under the same name, in a new conversation, on "
                     f"{target}. Nothing from the old one carries over except your report and what is on Tares. "
-                    f"Reload the skills factory-protocol and station-{skill}, re-read your report and your work on "
+                    f"Reload the skills factory-protocol and station-{skill}, {lifecycle.REPORT_READ} and your work on "
                     f"Tares, {lifecycle.rearm_text(client)}, then carry on where your report left off.")
     total = tries
     if state.stations_get(s, "cc_fresh", paths=paths) != target:

@@ -105,8 +105,8 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
 == step: pace_down crew-reviewer:ok crew-releaser:ok ==
 exit: 0
 -- stdout --
-revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, then continue.
-revive crew-releaser: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, then continue.
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then continue.
+revive crew-releaser: The plan's limit was reset. Carry on from where you stopped: re-read your report (a short state file; for older events use `tares factory report grep`, never cat or tail a file) and your work on Tares, re-arm your schedule if you have one, then continue.
 -- stderr --
 
 -- after --
