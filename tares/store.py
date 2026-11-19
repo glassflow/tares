@@ -25,6 +25,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
 from . import state_db
+from .session_store import SessionStore
 from .reads import parse_window
 
 _SCHEMA = """
@@ -830,6 +831,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                         f"this cell's state moved to Postgres on {moved_at[0]}, but the database "
                         "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
                         "state database and restart.", path)
+            # The session store: SQLite beside the DuckDB file, or the state Postgres. Built here,
+            # where the guards above have passed (a start refused for a missing DSN leaves no file)
+            # and the DuckDB-or-Postgres choice is made (state_dsn is set), before any data upgrade.
+            self.sessions_db = SessionStore(
+                ":memory:" if path == ":memory:" else os.path.dirname(os.path.abspath(path)),
+                state_dsn or None)
+            self.sessions_db.upgrade()
             self._upgrade()
             if pg is not None and self.sc is self.con:
                 # first start with a state database: the state moves over once, then is read
@@ -845,6 +853,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self.con.execute("CHECKPOINT")
         except Exception as e:
             raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
+
+    def close(self) -> None:
+        """Let go of the session store's connections. The DuckDB and Postgres state connections are
+        left to the process, as before."""
+        sessions_db = getattr(self, "sessions_db", None)
+        if sessions_db is not None:
+            sessions_db.close()
 
     def _use_duckdb_state(self) -> None:
         self.sc, self._sread, self._swrite = self.con, self._lock, self._lock
