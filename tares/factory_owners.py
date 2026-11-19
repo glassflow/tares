@@ -1,6 +1,6 @@
 """Who a thing waits for on a factory cell: THE rule, the one every screen reads.
 
-Every waiting item (a pull request to merge, a milestone to check, calls to confirm, a desk
+Every waiting item (a pull request to merge, a milestone to check, crew answers to confirm, a desk
 question, a spec ready to hand over, a project ready to close, a spec question, a grant) names the
 people it waits for in `for_people`. Home, a project's page, Projects, Tickets and Reviews then
 only split: what is the caller's ("Waiting for you"), and what is someone else's ("Waiting for

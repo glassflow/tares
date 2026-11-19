@@ -9,7 +9,7 @@
  * Toast, goals clamped to two lines with the full goal in the title, no horizontal scroll at 390, the
  * words check in every state, and that without the flag ?sample=busy shows no sample.
  * Run:  npm run test:factory-home     (builds first: the daemon serves ui/dist; tares installed in ../.venv or on PATH)
- * Live mode (TR-732) comes last: tests/seed-factory-home.py fills the same daemon through its API (calls to confirm,
+ * Live mode (TR-732) comes last: tests/seed-factory-home.py fills the same daemon through its API (crew answers to confirm,
  * permission requests, a spec not handed over, a project ready to close, one that is not, one finished), and the page
  * is opened without the sample flag. Checks: the one read call, the rows and links from the server, Copy, Keep (its
  * calls, the busy button, the row gone at once and for good), the Allow dialog (words, scope, Cancel, a refusal), the
@@ -352,7 +352,7 @@ function cleanEnv(extra) {
         ck(t("one filled primary, the top row's main action (TR-1275)"), lead.length === 1
            && (await rows.first().locator("[data-primary]").count()) === 1, JSON.stringify(lead));
         ck(t("a link action keeps the daemon's address"),
-           (await row(page, "2 calls to confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${ids["Billing export"]}/calls`
+           (await row(page, "2 crew answers to confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${ids["Billing export"]}/calls`
            && (await row(page, "Docs search").getByRole("link", { name: "Read the spec" }).getAttribute("href")) === `/projects/${ids["Docs search"]}`
            && (await row(page, "reviewer").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/crew#desk-${ids["allow-crew"]}`);
         ck(t("the permission names its command in a monospace span"), (await row(page, "npm run test").locator("code").innerText()) === "npm run test -- --watch=false");
@@ -368,7 +368,7 @@ function cleanEnv(extra) {
         ck(t("Copy: and the label comes back after 2 seconds"), true);
 
         // Keep: a refusal first, then the real thing, slowed so the busy button can be seen
-        const calls = row(page, "2 calls to confirm");
+        const calls = row(page, "2 crew answers to confirm");
         await page.route("**/assumptions/*/state", (r) => r.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "A1 is gone." }) }));
         await calls.getByRole("button", { name: "Keep both" }).click();
         await calls.getByTestId("row-error").waitFor();

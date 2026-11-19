@@ -461,7 +461,7 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
         roles = list(dict.fromkeys(_ROLE_WORD.get(a["made_role"] or "", "the crew") for a in items))
         since = min((a["made_at"] for a in items), key=lambda t: fh._dt(t) or now)
         out.append(owners_mod.tag(fh.home_item(
-            "calls_to_confirm", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
+            "calls_to_confirm", label="1 crew answer to confirm" if n == 1 else f"{n} crew answers to confirm",
             title=names[pid], detail="The crew decided without you:", lines=shown,
             meta="Made by " + _and(roles), since=since, now=now,
             project={"id": pid, "name": names[pid]}, ask=ask_calls(n, names[pid]),

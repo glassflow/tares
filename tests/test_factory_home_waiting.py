@@ -257,10 +257,10 @@ async def main():
             {"label": "Copy the hand-over command", "primary": True, "do": "copy",
              "text": "/tares:ship project-y"}], rs["actions"])
 
-        print("== calls to confirm ==")
+        print("== crew answers to confirm ==")
         cc = k["calls_to_confirm"][0]
         ck("the open calls of a project, the kept one left out", len(k["calls_to_confirm"]) == 1
-           and cc["label"] == "2 calls to confirm" and cc["title"] == "project-z"
+           and cc["label"] == "2 crew answers to confirm" and cc["title"] == "project-z"
            and cc["detail"] == "The crew decided without you:" and cc["lines"] == ["ISO dates", "the standard one"]
            and cc["meta"] == "Made by the builder and the reviewer" and cc["id"] == f"calls_to_confirm:{pz}", cc)
         ck("read them, or keep them all in one click", cc["actions"] == [
@@ -383,7 +383,7 @@ async def main():
         for n, c in enumerate(("a very long choice " * 12, "choice three", "choice four")):
             store.add_assumption(pz, f"Q{n}?", c, "why", "", [], "z-build-m1", "builder", ago(hours=2))
         cc = by_kind(await get_home())["calls_to_confirm"][0]
-        ck("five calls: three shown, one line each, the rest counted, keep all", cc["label"] == "5 calls to confirm"
+        ck("five calls: three shown, one line each, the rest counted, keep all", cc["label"] == "5 crew answers to confirm"
            and len(cc["lines"]) == 4 and cc["lines"][-1] == "2 more" and cc["lines"][2].endswith("choice a…")
            and cc["actions"][1]["label"] == "Keep all" and len(cc["actions"][1]["refs"]) == 5, cc)
         ck("the long choice is cut", len(cc["lines"][2]) <= 140, len(cc["lines"][2]))

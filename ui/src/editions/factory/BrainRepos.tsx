@@ -5,8 +5,9 @@ import { Banner, Button, Collapse, Dialog, EmptyState, Panel, ProgressBar, Skele
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";
+import { useBrainRead } from "../brainRead";
 import { usePagePolling } from "../usePagePolling";
-import { brainRepos, removeBrainRepo, retryBrainRepo, type BrainReposData, type BrainRepoRow } from "./BrainRepos.api";
+import { removeBrainRepo, retryBrainRepo, type BrainReposData, type BrainRepoRow } from "./BrainRepos.api";
 import { BRAIN_SAMPLES, isBrainSample, SAMPLE_FOLDERS, SAMPLE_NOW, SAMPLE_UPDATES } from "./brainSamples";
 import { repoFolders, repoUpdates, saveRepoFolders, type FolderScan, type RepoUpdate } from "./BrainFolders.api";
 import { FolderList } from "./BrainFolders";
@@ -316,10 +317,33 @@ export default function BrainRepos() {
   const sample = isBrainSample(named) ? named : null;
   const { admin } = useEdition();
   const { toast } = useToast();
+  // A sample reads its own data; a live page takes the shell's one read of GET /api/brain (TR-1438), which
+  // also feeds the menu and the Ask page, so the page makes no read of its own and odd answers are already
+  // tidied (brainRead.ts: an empty body is an error, a missing repo list is empty).
   const [ms, setMs] = React.useState(POLL_SLOW_MS);
-  const { data, error, reload } = usePagePolling<BrainReposData>(() => (sample ? sampleLoad(sample) : brainRepos()), ms);
-  // The read picks its own pace from what it last saw. A change of pace reads once straight away.
+  const sampled = usePagePolling<BrainReposData>(() => (sample ? sampleLoad(sample) : new Promise<BrainReposData>(() => {})), sample ? ms : 0);
+  const shell = useBrainRead();
+  const live = shell.read;
+  const data: BrainReposData | undefined = sample ? sampled.data
+    : ((live.state === "ok" ? live.data : live.state === "error" ? live.last : undefined) as BrainReposData | undefined);
+  const error = sample ? sampled.error : live.state === "error";
+  const reload = React.useCallback(() => (sample ? sampled.reload() : shell.reload(true)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sample, sampled.reload, shell.reload]);
+  // The read picks its own pace from what it last saw: every 10 s while a repo moves, else every minute.
   React.useEffect(() => { if (data) setMs(pollMs(data)); }, [data]);
+  // A live page reads again (quietly, through the shell) after each answer, at that pace; a hidden tab waits
+  // until it is shown again.
+  React.useEffect(() => {
+    if (sample || live.state === "loading") return undefined;
+    const again = () => {
+      if (document.hidden) { document.addEventListener("visibilitychange", again, { once: true }); return; }
+      shell.reload(true);
+    };
+    const timer = setTimeout(again, ms);
+    return () => { clearTimeout(timer); document.removeEventListener("visibilitychange", again); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sample, live, ms]);
 
   const [asking, setAsking] = React.useState<string | null>(null);
   const [foldersFor, setFoldersFor] = React.useState<string | null>(null);
@@ -358,7 +382,7 @@ export default function BrainRepos() {
   };
 
   const banner = error && (
-    <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
+    <Banner tone="error" action={<Button variant="secondary" onClick={() => reload()} data-testid="brain-retry-read">Retry</Button>}>
       <b>Repos did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );

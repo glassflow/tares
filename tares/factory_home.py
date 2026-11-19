@@ -117,7 +117,7 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
     does (`do`, one of ACTIONS), never both. `id` is made from the kind, the project and the title
     unless the builder gives a stable one. `tickets` names the tickets the item is about (the
     pull requests to review), empty for an item about no ticket. `lines` are short lines shown one
-    under the other below the detail (the calls in a "calls to confirm" item). `ask` is the
+    under the other below the detail (the calls in a "crew answers to confirm" item). `ask` is the
     decision in one line that starts with its verb ("Merge PR 336", "Check M1 of atlas"), what a
     feed card leads with (TR-1447); a question's ask is the question itself. `holds_up` names
     what waits on the answer ("T4 and 2 more tickets", "M2: billing hooks"), None when nothing

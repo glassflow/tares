@@ -10,7 +10,7 @@ export function Detail({ text }: { text: string }) {
   );
 }
 
-/** An item's lines, one under the other (the calls in a "calls to confirm" item). */
+/** An item's lines, one under the other (the calls in a "crew answers to confirm" item). */
 export function DetailLines({ lines }: { lines?: string[] }) {
   if (!lines || lines.length === 0) return null;
   return (
