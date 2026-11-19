@@ -1,4 +1,4 @@
-"""The session store (TR-1493): SQLite beside the DuckDB file, or the state Postgres, with Alembic.
+"""The session store (TR-1493, TR-1497): SQLite beside the DuckDB file, or the state Postgres, with Alembic.
 
 Plain:                python tests/test_session_store.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -16,15 +16,21 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from sqlalchemy import Column, Integer, MetaData, Table, text  # noqa: E402
+from alembic import command  # noqa: E402
+from sqlalchemy import Column, Integer, MetaData, Table, inspect, text  # noqa: E402
 
 import tares.store as store_mod  # noqa: E402
+from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
+from tares.session_store import tables as declared_tables  # noqa: E402
+from tares.session_store.copy import CopyMismatch, copy_from_duckdb  # noqa: E402
 from tares.session_store.engine import make_engine  # noqa: E402
 from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
+HEAD = "0002_session_tables"      # the newest revision: tests that count revisions move with it
+REVISIONS = 2
 FAILS = []
 
 
@@ -78,8 +84,8 @@ def fresh_start():
     path = os.path.join(d, "t.duckdb")
     with capture_logs("alembic.runtime.migration") as recs:
         s = Store(path)
-    ck("a first start runs the base revision", len(upgrade_lines(recs)) == 1, [r.getMessage() for r in recs])
-    ck("the revision table holds 0001_base", versions(s.sessions_db) == ["0001_base"], versions(s.sessions_db))
+    ck("a first start runs both revisions", len(upgrade_lines(recs)) == REVISIONS, [r.getMessage() for r in recs])
+    ck(f"the revision table holds {HEAD}", versions(s.sessions_db) == [HEAD], versions(s.sessions_db))
     if s.state_dsn:
         ck("with a state DSN the store is Postgres", s.sessions_db.dialect == "postgresql")
         ck("and no sessions.sqlite is made", not os.path.exists(os.path.join(d, "sessions.sqlite")))
@@ -100,7 +106,7 @@ def second_start(path):
     with capture_logs("alembic.runtime.migration", "tares.session_store") as recs:
         s = Store(path)
     ck("no revision runs again", upgrade_lines(recs) == [], [r.getMessage() for r in recs])
-    ck("the revision table still holds the one row", versions(s.sessions_db) == ["0001_base"])
+    ck("the revision table still holds the one row", versions(s.sessions_db) == [HEAD])
     s.close()
 
 
@@ -208,7 +214,7 @@ def dsn_rewrite():
     e.dispose()
     sdb = SessionStore(":memory:")
     sdb.upgrade()
-    ck("and it migrates", versions(sdb) == ["0001_base"])
+    ck("and it migrates", versions(sdb) == [HEAD])
     sdb.close()
 
 
@@ -230,6 +236,297 @@ def upgrade_failure():
         ck("Store raises StoreUnavailable", False, f"{type(e).__name__}: {e}")
     finally:
         store_mod.SessionStore.upgrade = orig
+
+
+SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
+ALL_TABLES = SESSION_TABLES + ["session_store_copies"]
+
+
+def shape(engine, names=ALL_TABLES):
+    """{table: (columns as (name, type, nullable), primary key)} as the database reports it."""
+    insp = inspect(engine)
+    out = {}
+    for n in names:
+        cols = sorted((c["name"], c["type"].compile(dialect=engine.dialect), bool(c["nullable"]))
+                      for c in insp.get_columns(n))
+        out[n] = (cols, sorted(insp.get_pk_constraint(n)["constrained_columns"]))
+    return out
+
+
+def declared(engine):
+    """The same shape, from the declarations in tables.py."""
+    out = {}
+    for t in declared_tables.metadata.sorted_tables:
+        cols = sorted((c.name, c.type.compile(dialect=engine.dialect), bool(c.nullable)) for c in t.columns)
+        out[t.name] = (cols, sorted(c.name for c in t.primary_key.columns))
+    return out
+
+
+def index_columns(engine, table, name):
+    for i in inspect(engine).get_indexes(table):
+        if i["name"] == name:
+            return i["column_names"]
+    return None
+
+
+def step_down(sessions_db, revision):
+    with sessions_db.begin() as conn:
+        cfg = sessions_db._config()
+        cfg.attributes["connection"] = conn
+        command.downgrade(cfg, revision)
+
+
+def session_tables():
+    print("== the session tables on SQLite ==")
+    d = tempfile.mkdtemp()
+    sdb = SessionStore(d)
+    sdb.upgrade()
+    ck("the five tables and the copy ledger exist", sorted(inspect(sdb.engine).get_table_names()
+       ) == sorted(ALL_TABLES + ["session_store_version"]), inspect(sdb.engine).get_table_names())
+    ck("each table has the columns, types and primary key tables.py declares",
+       shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
+    ck("project_sessions has an index on session",
+       index_columns(sdb.engine, "project_sessions", "project_sessions_session") == ["session"])
+    ck("the copy ledger is empty", _count(sdb, "session_store_copies") == 0)
+    step_down(sdb, "0001_base")
+    ck("a downgrade puts the version back to the base", versions(sdb) == ["0001_base"], versions(sdb))
+    ck("and removes the tables the store made",
+       inspect(sdb.engine).get_table_names() == ["session_store_version"], inspect(sdb.engine).get_table_names())
+    sdb.upgrade()
+    ck("an upgrade after a downgrade builds them again", shape(sdb.engine) == declared(sdb.engine)
+       and versions(sdb) == [HEAD])
+    sdb.close()
+
+
+def _count(sdb, table):
+    with sdb.begin() as c:
+        return c.execute(text(f"SELECT count(*) FROM {table}")).scalar()
+
+
+def _duck_rows(store, table):
+    cols = [c.name for c in declared_tables.metadata.tables[table].columns]
+    with store._lock:
+        return cols, store.con.execute(f"SELECT {', '.join(cols)} FROM {table} ORDER BY 1, 2").fetchall()
+
+
+def _norm(v):
+    return v.astimezone(timezone.utc) if isinstance(v, datetime) and v.tzinfo else v
+
+
+def _seeded_store(full=True):
+    """A DuckDB-only Store (its session store is SQLite) with rows in the session tables, written
+    through the Store's own methods. `full` False leaves session_meters empty."""
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if PG else None)
+    t1 = datetime(2026, 11, 19, 9, 30, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    t2 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=timezone.utc)
+    s.set_session_station("s1", "crew-builder", "builder", "crew-orch", "p1", t1, "crew1")
+    s.set_session_station("s2", "crew-reviewer", "", "", None, t2)             # empty and null values
+    s.set_session_state("s1", "working", "building", t1)
+    s.set_session_state("s2", "idle", None, t2)
+    s.link_session("p1", "s1", "glassflow/tares")
+    s.link_session("p1", "s2")
+    usage = {"input_tokens": 120, "output_tokens": 40, "cache_creation_input_tokens": 30,
+             "cache_read_input_tokens": 900}
+    s.record_reply_usage("s1", "m1", t1, "claude-sonnet-5-5", "p1", None, usage)
+    s.record_reply_usage("s1", "m2", t2, None, None, "sub1", {})                # no model, zero tokens
+    if full:
+        s.set_session_status("s1", {"plan": "max", "n": 3}, t1, "person1")
+        s.set_session_context("s1", {"used": 12}, t2)
+        s.ask_session_context("s2", t2)                                         # a row of mostly nulls
+    return s
+
+
+def copy_sqlite():
+    print("== copy_from_duckdb on SQLite ==")
+    s = _seeded_store()
+    before = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
+    ck("every session table has rows to copy", all(before[t] for t in SESSION_TABLES),
+       {t: len(r) for t, r in before.items()})
+    ck("nothing is in the session store yet", all(_count(s.sessions_db, t) == 0 for t in SESSION_TABLES))
+    got = copy_from_duckdb(s, s.sessions_db)
+    ck("the first call reports the rows it copied", got == {t: len(before[t]) for t in SESSION_TABLES}, got)
+    for t in SESSION_TABLES:
+        tbl = declared_tables.metadata.tables[t]
+        with s.sessions_db.begin() as c:       # through the declared table, so times come back as UTC
+            rows = c.execute(tbl.select().order_by(*list(tbl.columns)[:2])).all()
+        ck(f"{t}: every row arrived, values and times the same",
+           [tuple(_norm(v) for v in r) for r in rows] == [tuple(_norm(v) for v in r) for r in before[t]],
+           (rows, before[t]))
+    with s.sessions_db.begin() as c:
+        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger holds each table and its count", ledger == {t: len(before[t]) for t in SESSION_TABLES}, ledger)
+    ck("DuckDB is unchanged", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == before)
+    again = copy_from_duckdb(s, s.sessions_db)
+    ck("a second call copies nothing", again == {}, again)
+    ck("and adds no row", {t: _count(s.sessions_db, t) for t in SESSION_TABLES}
+       == {t: len(before[t]) for t in SESSION_TABLES})
+    s.record_reply_usage("s1", "m3", datetime(2026, 11, 19, 11, 0, tzinfo=timezone.utc), "x", "p1", None, {})
+    ck("a row written to DuckDB after the copy stays out", copy_from_duckdb(s, s.sessions_db) == {}
+       and _count(s.sessions_db, "session_usage") == len(before["session_usage"]))
+    s.close()
+
+    # an empty table is copied too: zero rows, and the ledger says so
+    e = _seeded_store(full=False)
+    got = copy_from_duckdb(e, e.sessions_db)
+    with e.sessions_db.begin() as c:
+        zero = c.execute(text("SELECT rows FROM session_store_copies WHERE table_name = 'session_meters'")).all()
+    ck("an empty table copies zero rows and is recorded", got.get("session_meters") == 0 and zero == [(0,)],
+       (got, zero))
+    e.close()
+
+    # a mismatch raises with the table and both numbers, and leaves that table out of the ledger
+    m = _seeded_store()
+    with m.sessions_db.begin() as c:
+        c.execute(text("CREATE TRIGGER drop_states BEFORE INSERT ON session_states "
+                       "BEGIN SELECT RAISE(IGNORE); END"))
+    try:
+        copy_from_duckdb(m, m.sessions_db)
+        ck("a table that loses rows raises", False, "no error")
+    except CopyMismatch as err:
+        msg = str(err)
+        ck("a table that loses rows raises with its name and both counts",
+           "session_states" in msg and "read 2" in msg and "inserted 0" in msg, msg)
+    with m.sessions_db.begin() as c:
+        ledger = [r[0] for r in c.execute(text("SELECT table_name FROM session_store_copies")).all()]
+    ck("the table before it is in the ledger and the failing one is not",
+       ledger == ["session_stations"] and _count(m.sessions_db, "session_states") == 0, ledger)
+    ck("the tables after it were not touched", _count(m.sessions_db, "session_usage") == 0)
+    with m.sessions_db.begin() as c:
+        c.execute(text("DROP TRIGGER drop_states"))
+    got = copy_from_duckdb(m, m.sessions_db)
+    ck("after the cause is gone, the next call copies the rest and not the first",
+       sorted(got) == ["project_sessions", "session_meters", "session_states", "session_usage"], got)
+    m.close()
+
+
+def copy_on_postgres():
+    print("== copy_from_duckdb with the state in Postgres ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"))                 # the harness puts its state in Postgres
+    if s.sessions_db.dialect != "postgresql":              # CI sets the DSN for every suite, the harness only for postgres
+        print("  skip  tests/pg_harness is not on PYTHONPATH")
+        s.close()
+        return
+    ck("the session store is Postgres", True)
+    s.link_session("p1", "s1")
+    ck("nothing is copied: the rows are already there", copy_from_duckdb(s, s.sessions_db) == {})
+    ck("and the ledger stays empty", _count(s.sessions_db, "session_store_copies") == 0)
+    s.close()
+
+
+def _old_ddl(names):
+    """The statements the Store ran on Postgres before the session store: its DuckDB DDL, as
+    state_ddl keeps it, for the named tables only."""
+    import re
+    pat = re.compile(r"\b(" + "|".join(names) + r")\b")
+    return [x for x in state_db.state_ddl(Store._ddl()) if pat.search(x)]
+
+
+def takeover():
+    print("== Postgres: tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    made = []
+
+    def schema_for(names):
+        sch = "ss_" + uuid.uuid4().hex[:12]
+        made.append(sch)
+        dsn = f"{PG}?options=-csearch_path%3D{sch}"
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {sch}")
+        pg = state_db.PgState(dsn)
+        for stmt in _old_ddl(names):
+            pg.execute(stmt)
+        return sch, dsn
+
+    def snapshot(sch):
+        """Every row of the five tables, and every column's type, as Postgres holds them."""
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"SET search_path = {sch}")
+            out = {}
+            for t in SESSION_TABLES:
+                if c.execute("SELECT to_regclass(%s)", [t]).fetchone()[0] is None:
+                    continue
+                cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                                 "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
+                                 [sch, t]).fetchall()
+                rows = c.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
+                out[t] = (cols, [tuple(map(str, r)) for r in rows])
+            return out
+
+    try:
+        sch, dsn = schema_for(SESSION_TABLES)
+        old = snapshot(sch)
+        ck("the old DDL made all five tables", sorted(old) == SESSION_TABLES, sorted(old))
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"SET search_path = {sch}")
+            c.execute("INSERT INTO session_stations (session, station, role, seen_at) VALUES "
+                      "('s1', 'crew-b', 'builder', '2026-11-19 04:00:00+00'), ('s2', 'crew-r', NULL, NULL)")
+            c.execute("INSERT INTO session_states (session, state, state_at) VALUES ('s1', 'idle', now())")
+            c.execute("INSERT INTO project_sessions (project, session, linked_at) VALUES ('p1', 's1', now())")
+            c.execute("INSERT INTO session_usage (session, message, replied_at, input_tokens, cost_usd) VALUES "
+                      "('s1', 'm1', now(), 5, 0.25), ('s1', 'm2', NULL, NULL, NULL)")
+            c.execute("INSERT INTO session_meters (session, status, status_at) VALUES "
+                      "('s1', '{\"a\": 1}', now()), ('s2', NULL, NULL)")
+        before = snapshot(sch)
+        ck("seeded rows are there", all(before[t][1] for t in SESSION_TABLES), {t: len(v[1]) for t, v in before.items()})
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        ck("no revision table yet: the database is one the old code made", "session_store_version"
+           not in inspect(sdb.engine).get_table_names())
+        sdb.upgrade()
+        ck(f"the upgrade stamps {HEAD}", versions(sdb) == [HEAD], versions(sdb))
+        after = snapshot(sch)
+        ck("no row and no column of the five tables changed", after == before,
+           [t for t in SESSION_TABLES if after[t] != before[t]])
+        ck("each table's columns, types and primary key are what tables.py declares",
+           shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
+        ck("project_sessions has its index on session",
+           index_columns(sdb.engine, "project_sessions", "project_sessions_session") == ["session"])
+        ck("the copy ledger is made", _count(sdb, "session_store_copies") == 0)
+        with capture_logs("alembic.runtime.migration") as recs:
+            sdb.upgrade()
+        ck("a second upgrade runs nothing", upgrade_lines(recs) == [])
+        # the types are the ones a database the session store built itself has
+        sch2 = "ss_" + uuid.uuid4().hex[:12]
+        made.append(sch2)
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {sch2}")
+        fresh = SessionStore(tempfile.mkdtemp(), f"{PG}?options=-csearch_path%3D{sch2}")
+        fresh.upgrade()
+        ck("a database the revision built has the same shape as the taken-over one",
+           shape(fresh.engine) == shape(sdb.engine), (shape(fresh.engine), shape(sdb.engine)))
+        ck("and the same index", index_columns(fresh.engine, "project_sessions", "project_sessions_session") == ["session"])
+        # a downgrade leaves the live tables and their rows
+        step_down(sdb, "0001_base")
+        ck("a downgrade keeps the five tables and their rows", snapshot(sch) == before)
+        names = inspect(sdb.engine).get_table_names()
+        ck("and drops the ledger", "session_store_copies" not in names, names)
+        ck("and the index", index_columns(sdb.engine, "project_sessions", "project_sessions_session") is None)
+        sdb.upgrade()
+        ck("an upgrade after it takes them over again", versions(sdb) == [HEAD] and snapshot(sch) == before)
+        sdb.close()
+        fresh.close()
+
+        # only some of the tables exist: the others are made, the ones there are left alone
+        sch3, dsn3 = schema_for(["session_stations", "session_usage"])
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"SET search_path = {sch3}")
+            c.execute("INSERT INTO session_stations (session, station) VALUES ('s9', 'x')")
+        part = SessionStore(tempfile.mkdtemp(), dsn3)
+        part.upgrade()
+        ck("with two of the five there, all five end up declared", shape(part.engine) == declared(part.engine))
+        ck("and the row in the one that was there is kept", _count(part, "session_stations") == 1)
+        part.close()
+    finally:
+        with psycopg.connect(PG, autocommit=True) as c:
+            for sch in made:
+                c.execute(f"DROP SCHEMA IF EXISTS {sch} CASCADE")
 
 
 def postgres():
@@ -254,11 +551,11 @@ def postgres():
         ck("the dialect is postgresql", sdb.dialect == "postgresql")
         with capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
-        ck("a first upgrade runs the base revision", len(upgrade_lines(recs)) == 1)
+        ck("a first upgrade runs both revisions", len(upgrade_lines(recs)) == REVISIONS)
         ck("session_store_version is in the schema from the DSN", "session_store_version" in tables(schema),
            tables(schema))
         ck("and not in public", "session_store_version" not in tables("public"))
-        ck("it holds 0001_base", versions(sdb) == ["0001_base"], versions(sdb))
+        ck(f"it holds {HEAD}", versions(sdb) == [HEAD], versions(sdb))
         with capture_logs("alembic.runtime.migration", "tares.session_store") as recs:
             sdb.upgrade()
         ck("a second upgrade runs nothing", upgrade_lines(recs) == [])
@@ -271,7 +568,7 @@ def postgres():
         ck("an unknown revision logs one line and goes on", len(recs) == 1 and versions(sdb) == ["9999_future"],
            [r.getMessage() for r in recs])
         with sdb.begin() as c:
-            c.execute(text("UPDATE session_store_version SET version_num = '0001_base'"))
+            c.execute(text("UPDATE session_store_version SET version_num = '" + HEAD + "'"))
         md = MetaData()
         t = Table("tmp_times", md, Column("id", Integer, primary_key=True), Column("at", UTCDateTime))
         ist = timezone(timedelta(hours=5, minutes=30))
@@ -304,7 +601,7 @@ def postgres():
         parts = psycopg.conninfo.conninfo_to_dict(PG)
         kw = " ".join(f"{k}={v}" for k, v in parts.items()) + f" options=-csearch_path={schema}"
         kdb = SessionStore(d, kw)
-        ck("a keyword DSN reads the same schema", versions(kdb) == ["0001_base"], "")
+        ck("a keyword DSN reads the same schema", versions(kdb) == [HEAD], "")
         ck("and its connections use no prepared statements",
            kdb.engine.raw_connection().driver_connection.prepare_threshold is None, "")
         kdb.close()
@@ -330,8 +627,8 @@ def postgres():
                 for th in ths:
                     th.join()
             ck("two upgrades at once raise nothing", not errs, errs[:1])
-            ck("and the revision ran once", len(upgrade_lines(recs)) == 1, len(upgrade_lines(recs)))
-            ck("one version row", versions(a) == ["0001_base"], versions(a))
+            ck("and each revision ran once", len(upgrade_lines(recs)) == REVISIONS, len(upgrade_lines(recs)))
+            ck("one version row", versions(a) == [HEAD], versions(a))
             a.close()
             b.close()
         finally:
@@ -350,6 +647,10 @@ if __name__ == "__main__":
     two_writers()
     dsn_rewrite()
     upgrade_failure()
+    session_tables()
+    copy_sqlite()
+    copy_on_postgres()
+    takeover()
     postgres()
     print("FAIL " + ", ".join(FAILS) if FAILS else "OK")
     sys.exit(1 if FAILS else 0)
