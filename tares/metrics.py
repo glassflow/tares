@@ -3,7 +3,8 @@
 What a cell is doing, for a fleet dashboard and alerts: events in, poll errors, source health,
 agent runs and their outcomes, model calls, tokens and spend by provider, database size against
 its limit, trigger evaluations and how long they take, the event loop's lag, and how long each
-HTTP route takes (`tares_http_request_duration_seconds`, TR-652). Labels name the source, agent,
+HTTP route takes (`tares_http_request_duration_seconds`, TR-652) and where the time of the ticket
+brief, the builder brief and merge-ready goes (`tares_route_phase_seconds`, TR-1476). Labels name the source, agent,
 provider, route template or status; never an entity key, an ID or anything from a payload.
 
 The endpoint is public unless TARES_METRICS_TOKEN is set; then it wants
@@ -15,6 +16,8 @@ guards its calls. The endpoint answers 404 in that case.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import time
 
 try:
@@ -67,6 +70,11 @@ if AVAILABLE:
                              "for a streaming response), per route template, method and status class",
                              ["route", "method", "status"],
                              buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
+    PHASE_SECONDS = Histogram("tares_route_phase_seconds",
+                              "Own wall time of one phase of a route (the time of the phases "
+                              "inside it left out), so the phases of a route add up to its time",
+                              ["route", "phase"],
+                              buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60))
 
 _storage_probe = None
 _licence_probe = None
@@ -133,6 +141,64 @@ def observe_request(route: str, method: str, status: str, seconds: float) -> Non
     raw path; `status` is the class (`2xx` .. `5xx`)."""
     if AVAILABLE:
         HTTP_SECONDS.labels(route=route, method=method, status=status).observe(seconds)
+
+
+# The routes that report their phases, and the phases each one has (TR-1476). Every label set is
+# made at zero on import, so the family is on /metrics before the first call.
+ROUTE_PHASES = {
+    "brief": ("pr_refresh", "ticket_read", "recorded_commands", "challenger", "decisions",
+              "recurring", "repo_map", "render"),
+    "builder_brief": ("pr_refresh", "ticket_read", "recorded_commands", "challenger", "milestone",
+                      "dependencies", "agents_docs", "repo_map", "desk", "protocol_messages",
+                      "render"),
+    "merge_ready": ("pr_read", "review", "ci", "pr_files", "guardrails"),
+}
+if AVAILABLE:
+    for _route, _phases in ROUTE_PHASES.items():
+        for _name in _phases:
+            PHASE_SECONDS.labels(route=_route, phase=_name)
+
+_phase_route: contextvars.ContextVar = contextvars.ContextVar("tares_phase_route", default=None)
+_phase_open: contextvars.ContextVar = contextvars.ContextVar("tares_phase_open", default=None)
+
+
+@contextlib.contextmanager
+def bind_route(route: str):
+    """Name the route being served, so `step(name)` calls deeper down (a helper that does not know
+    which route called it) report under it. Outside this block `step` does nothing."""
+    tok = _phase_route.set(route)
+    try:
+        yield
+    finally:
+        _phase_route.reset(tok)
+
+
+@contextlib.contextmanager
+def phase(route: str, name: str):
+    """Time the block as phase `name` of `route` (TR-1476). A phase inside it is left out of this
+    one's time, so a route's phases add up to its time and a rate of one is not counted twice.
+    The time is reported when the block raises too. A no-op without the client library."""
+    if not AVAILABLE:
+        yield
+        return
+    parent = _phase_open.get()
+    frame = [0.0]                       # what the phases inside this one took
+    tok = _phase_open.set(frame)
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        _phase_open.reset(tok)
+        took = time.perf_counter() - t0
+        if parent is not None:
+            parent[0] += took
+        PHASE_SECONDS.labels(route=route, phase=name).observe(max(0.0, took - frame[0]))
+
+
+def step(name: str):
+    """`phase` for the route `bind_route` named; a block that runs on no bound route is not timed."""
+    route = _phase_route.get()
+    return phase(route, name) if route else contextlib.nullcontext()
 
 
 # Path prefixes the API answers under; a request outside them that matched no route is the console

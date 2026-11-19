@@ -31,6 +31,7 @@ from . import factory_waiting as waiting_mod
 from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
+from . import metrics
 from . import team as team_mod
 from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
@@ -593,7 +594,8 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     holder = t.get("holder")
     sessions = (store.station_session_ids(holder) if holder
                 else [s["session"] for s in store.project_sessions(uid)])
-    commands = store.recorded_commands(source, sessions) if sessions else None
+    with metrics.step("recorded_commands"):
+        commands = store.recorded_commands(source, sessions) if sessions else None
     # only what ran since the ticket went into the work counts for its checks
     since = next((x["at"] for x in store.ticket_history(t["id"])
                   if x["field"] == "stage" and x["value"] == "doing"), None)
@@ -615,8 +617,9 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
                                if commands is not None else (None, None))
             checks.append({**c, "match": state, "recorded": recorded})
     reviews = store.ticket_reviews(t["id"])
-    layer = factory_mod.challenger_layer(
-        store.challenge_events(source, uid, factory_mod.label(t)))
+    with metrics.step("challenger"):
+        layer = factory_mod.challenger_layer(
+            store.challenge_events(source, uid, factory_mod.label(t)))
     return {"checks": checks, "reviews": reviews, "challenger": layer,
             "verdict": verdict_now(t, reviews[-1] if reviews else None)}
 
@@ -2326,12 +2329,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
         repo map version the reviewer already read: an unchanged map comes as one line."""
         p = h.project_or_404(uid)
         t = ticket_or_404(uid, ref)
-        if await refresh_pr(store, uid, t):    # this ticket's pull request only (TR-1474)
-            t = ticket_or_404(uid, ref)
-        return {"brief": brief_md(p, t, head.strip(), known_map.strip())}
+        with metrics.bind_route("brief"):
+            with metrics.step("pr_refresh"):
+                if await refresh_pr(store, uid, t):    # this ticket's pull request only (TR-1474)
+                    t = ticket_or_404(uid, ref)
+            with metrics.step("render"):    # what the phases inside brief_md leave over
+                return {"brief": brief_md(p, t, head.strip(), known_map.strip())}
 
     def brief_md(p: dict, t: dict, head: str, known_map: str = "") -> str:
-        full = h.ticket_out(p["id"], t, with_doc=True)
+        with metrics.step("ticket_read"):
+            full = h.ticket_out(p["id"], t, with_doc=True)
         pr = t["pr"] or {}
         lab = factory_mod.label(t)
         L = [f"# Review brief: {lab} {t['title']} ({p['name']})", ""]
@@ -2401,8 +2408,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
             L += ["## Assumptions made on this ticket"]
             L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
                   for a in full["assumptions"]] + [""]
-        ds = [d for d in store.list_decisions(p["id"], all_=True)
-              if lab in (d.get("tickets") or []) or not d.get("tickets")][:10]
+        with metrics.step("decisions"):
+            ds = [d for d in store.list_decisions(p["id"], all_=True)
+                  if lab in (d.get("tickets") or []) or not d.get("tickets")][:10]
         if ds:
             L += ["## Decisions the person made on this project"]
             for d in ds:   # the answer chosen, then the person's words when they add something
@@ -2412,13 +2420,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
             L += [""]
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
-            rec = recurring(pr["repo"])
+            with metrics.step("recurring"):
+                rec = recurring(pr["repo"])
             if rec:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
                 L.append("")
         # 8. the repo map: read it instead of exploring the repo
-        L += repo_map_md(repo_of(p["id"], t), builder=False, known=known_map)
+        with metrics.step("repo_map"):
+            L += repo_map_md(repo_of(p["id"], t), builder=False, known=known_map)
         # 8. links, not inlined
         L += ["## Read as needed",
               "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "
@@ -2433,20 +2443,24 @@ def register(app, store, h: Host) -> SimpleNamespace:
         past that (review, changes, blocked, merged) keeps its stage."""
         p = h.project_or_404(uid)
         t = ticket_or_404(uid, ref)
-        if await refresh_pr(store, uid, t):    # this ticket's pull request only (TR-1474)
-            t = ticket_or_404(uid, ref)
-        note = ""
-        if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
-            try:
-                await set_stage(uid, ref, request, {"stage": "doing"})
-            except HTTPException as e:
-                note = f"Could not move the ticket to doing: {e.detail}\n\n"
-            t = ticket_or_404(uid, ref)
-        return {"brief": note + builder_brief_md(p, t)}
+        with metrics.bind_route("builder_brief"):
+            with metrics.step("pr_refresh"):
+                if await refresh_pr(store, uid, t):    # this ticket's pull request only (TR-1474)
+                    t = ticket_or_404(uid, ref)
+            note = ""
+            if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
+                try:
+                    await set_stage(uid, ref, request, {"stage": "doing"})
+                except HTTPException as e:
+                    note = f"Could not move the ticket to doing: {e.detail}\n\n"
+                t = ticket_or_404(uid, ref)
+            with metrics.step("render"):    # what the phases inside builder_brief_md leave over
+                return {"brief": note + builder_brief_md(p, t)}
 
     def builder_brief_md(p: dict, t: dict) -> str:
         uid, lab = p["id"], factory_mod.label(t)
-        full = h.ticket_out(uid, t, with_doc=True)
+        with metrics.step("ticket_read"):
+            full = h.ticket_out(uid, t, with_doc=True)
         pr = t["pr"] or {}
         repo = repo_of(uid, t)
         L = [f"# Builder brief: {lab} {t['title']} ({p['name']})", ""]
@@ -2468,7 +2482,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         L += ["## The ticket and its working doc",
               (full.get("working_doc_body") or "(no working doc)").strip(), ""]
         # 3. the milestone it belongs to and the checks that close it
-        ms = store.get_milestone(uid, t["milestone"]) if t.get("milestone") else None
+        with metrics.step("milestone"):
+            ms = store.get_milestone(uid, t["milestone"]) if t.get("milestone") else None
         L += [f"## Milestone: {ms['name']}" if ms else "## Milestone", ]
         if ms:
             L += ([ms["goal"]] if ms["goal"] else [])
@@ -2478,8 +2493,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
             L += ["The ticket is in no milestone."]
         L.append("")
         # 4. what it depends on
-        by_id = {x["id"]: x for x in store.list_tickets(uid)}
-        deps = [by_id[d] for d in t["depends_on"] if d in by_id]
+        with metrics.step("dependencies"):
+            by_id = {x["id"]: x for x in store.list_tickets(uid)}
+            deps = [by_id[d] for d in t["depends_on"] if d in by_id]
         L += ["## Dependencies"]
         if not deps:
             L += ["None."]
@@ -2492,24 +2508,27 @@ def register(app, store, h: Host) -> SimpleNamespace:
                      if d["status"] == "canceled" else " (NOT DONE: it blocks this ticket)")]
         L.append("")
         # 5. the rules: the project's AGENTS.md wins over the generic flow, then the shared one
-        gids = h.global_ids(False) or {}
-        agents = store.list_docs(uid, "agents")
-        mine = [d for d in agents if d["id"] not in gids.values()]
-        shared = [d for d in agents if d["id"] == gids.get("agents")]
-        for title, docs in (("AGENTS.md of this project (wins over the generic flow)", mine),
-                            ("AGENTS.md shared by every project", shared)):
-            for d in docs:
-                L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
+        with metrics.step("agents_docs"):
+            gids = h.global_ids(False) or {}
+            agents = store.list_docs(uid, "agents")
+            mine = [d for d in agents if d["id"] not in gids.values()]
+            shared = [d for d in agents if d["id"] == gids.get("agents")]
+            for title, docs in (("AGENTS.md of this project (wins over the generic flow)", mine),
+                                ("AGENTS.md shared by every project", shared)):
+                for d in docs:
+                    L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
         if not (mine or shared):
             L += ["## AGENTS.md", "This project has none.", ""]
-        L += repo_map_md(repo, builder=True)
+        with metrics.step("repo_map"):
+            L += repo_map_md(repo, builder=True)
         # 6. what is open on it: assumptions to honour, questions waiting for the person
         asm = [a for a in full.get("assumptions") or [] if a["state"] != "kept"]
         if asm:
             L += ["## Assumptions on this ticket (open, or overturned: follow the person's words)"]
             L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
                   + (f". The person: \"{a['words']}\"" if a.get("words") else "") for a in asm] + [""]
-        desk = [d for d in store.list_desk("open", uid) if lab in (d.get("tickets") or [])]
+        with metrics.step("desk"):
+            desk = [d for d in store.list_desk("open", uid) if lab in (d.get("tickets") or [])]
         if desk:
             L += ["## Questions on the desk about this ticket"]
             L += [f"- {d['label']}{' (blocking)' if d['blocking'] else ''}: {d['question']}. "
@@ -2530,7 +2549,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 L += [f"  - {f['label']} [{f['severity']}] {f['state']}: {f['text']}"
                       for f in r["findings"] if f["state"] == "open"]
             L.append("")
-        msgs = messages_for(p, t)[-5:]
+        with metrics.step("protocol_messages"):
+            msgs = messages_for(p, t)[-5:]
         if msgs:
             L += ["## The crew's latest messages about it"]
             L += [f"- {m['from'] or '?'} -> {m['to']}: [TF:{m['type']}] {m['first_line']}" for m in msgs]
