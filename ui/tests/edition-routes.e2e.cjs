@@ -4,7 +4,7 @@
  * Factory: /settings/advanced lands on Settings with its Advanced group open, which links Connections
  * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
  * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); /sources still opens today's
- * page; the menu is Home, Integrations, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings;
+ * page; the menu is Home, Integrations, Feed, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings;
  * / on a new cell (no project, setup not done) opens Set up your factory;
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is the Timeline page (TR-752); /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
@@ -176,8 +176,8 @@ function loadSample(env) {
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Integrations, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings",
-         items.join(",") === "Home,Integrations,Projects,Tickets,Reviews,Crew,People,Docs and memory,Settings", items.join(","));
+      ck("factory: the menu is Home, Integrations, Feed, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings",
+         items.join(",") === "Home,Integrations,Feed,Projects,Tickets,Reviews,Crew,People,Docs and memory,Settings", items.join(","));
       ck("factory: the People entry opens /people", (await page.locator('nav[aria-label="Main"] a', { hasText: "People" }).getAttribute("href")) === "/people");
       ck("factory: the Reviews entry links to /reviews", (await page.getByTestId("menu-reviews").getAttribute("href")) === "/reviews");
       ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");
