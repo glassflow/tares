@@ -98,6 +98,39 @@ sessions = Table(
 )
 Index("sessions_last_line_at", sessions.c.last_line_at)
 
+# The facts the factory reads from a session's lines, written as each line is stored and filled
+# from DuckDB at start (session_ingest.py, TR-1477). One row per tool call, by its tool_use id, so
+# a resumed session that copies old lines, or a fill that runs twice, adds nothing.
+# A protocol message the crew sent (a SendMessage call whose text starts `[TF:<TYPE>]`).
+session_messages = Table(
+    "session_messages", metadata,
+    Column("tool_use_id", Text, primary_key=True),
+    Column("source", Text),
+    Column("session", Text),
+    Column("at", UTCDateTime),
+    Column("to_station", Text),
+    Column("type", Text),
+    Column("text", Text),
+)
+Index("session_messages_session_at", session_messages.c.session, session_messages.c.at)
+
+# A shell command a session ran (the Bash call) with what it printed once its result arrived.
+# The call makes the row; a result sets the exit code, output and time of the row of the call it
+# answers and makes none (it does not name its tool). A result that came first is written by the
+# fill. The columns can be null (a row from a table this revision found already made).
+session_commands = Table(
+    "session_commands", metadata,
+    Column("tool_use_id", Text, primary_key=True),
+    Column("source", Text),
+    Column("session", Text),
+    Column("at", UTCDateTime),
+    Column("command", Text),
+    Column("exit_code", Integer),
+    Column("output_tail", Text),
+    Column("result_at", UTCDateTime),
+)
+Index("session_commands_session_at", session_commands.c.session, session_commands.c.at)
+
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
     "session_ingest_marks", metadata,

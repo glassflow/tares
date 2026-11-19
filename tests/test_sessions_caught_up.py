@@ -236,7 +236,8 @@ def failed_reconcile_keeps_the_scan():
             s.start_session_reconcile().join(30)
         out = buf.getvalue().strip().splitlines()
         ck("start_session_reconcile prints one line about the failure",
-           len(out) == 1 and "catch-up failed (RuntimeError: down)" in out[0], out)
+           len(out) == 2 and "catch-up failed (RuntimeError: down)" in out[0], out)
+        # the facts fill runs after it and does not depend on it
         ck("and still sets no row", not has_row(s))
     finally:
         session_ingest._reconcile_chunk = real

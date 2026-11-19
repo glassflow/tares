@@ -16,8 +16,8 @@ from sqlalchemy import and_, func, null, select, update
 from . import session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
-from .session_store.tables import (project_sessions, session_states, session_stations,
-                                   session_usage)
+from .session_store.tables import (project_sessions, session_commands, session_messages,
+                                   session_states, session_stations, session_usage)
 from .session_store.tables import sessions as sessions_table
 
 log = logging.getLogger("tares.factory_store")
@@ -1400,52 +1400,21 @@ class FactoryStore:
     def protocol_messages(self, source: str, limit: int = 3000) -> list[dict]:
         """The crew's recorded protocol messages (TR-429): SendMessage calls whose text starts
         `[TF:<TYPE>]`, oldest first, with the sending station (from its session) and the one it
-        was sent to."""
-        # parsed once per new tool call on the source: a cheap count says whether anything came
-        with self._lock:
-            n = self.con.execute("SELECT count(*) FROM events WHERE source = ? AND "
-                                 "event_type = 'tool_use'", [source]).fetchone()[0]
-        hit = getattr(self, "_proto_cache", None)
-        if hit and hit[0] == (source, n):
-            return hit[1]
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT e.key_value, e.event_time, e.payload FROM events e "
-                "WHERE e.source = ? AND e.event_type = 'tool_use' "
-                "AND e.text LIKE '%SendMessage%' "
-                "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
-                "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
+        was sent to. Read from `session_messages`, where each call was written once as its line was
+        stored (session_ingest, TR-1477); the sender is looked up now, so a station renamed later
+        shows under its new name."""
+        t = session_messages.c
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(select(t.session, t.at, t.to_station, t.type, t.text).where(
+                t.source == source).order_by(t.at.desc(), t.tool_use_id.desc()).limit(limit)
+            ).fetchall()
         stations = self._station_of({r[0] for r in rows})
-        out, seen = [], set()
-        for sid, at, pj in reversed(rows):
-            station = stations.get(sid)
-            try:
-                o = json.loads(pj) if pj else {}
-            except (TypeError, ValueError):
-                continue
-            if str(o.get("type") or "").startswith("api-request"):
-                continue   # Claude Code's copy of a request, recorded by an older plugin
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if not (isinstance(b, dict) and b.get("type") == "tool_use"
-                        and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
-                    continue
-                # one call, once: the same transcript line can be stored more than once
-                # (a resumed session's file copies the old lines under its own session id)
-                if b.get("id"):
-                    if b["id"] in seen:
-                        continue
-                    seen.add(b["id"])
-                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                text = str(inp.get("message") or inp.get("content") or "")
-                m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text)
-                if not m:
-                    continue
-                out.append({"at": at, "session": sid, "from": station or "", "to":
-                            str(inp.get("to") or ""), "type": m.group(1),
-                            "first_line": m.group(2).splitlines()[0][:300] if m.group(2) else "",
-                            "text": text[:4000]})
-        self._proto_cache = ((source, n), out)
+        out = []
+        for sid, at, to, typ, text in reversed(rows):
+            m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text or "")
+            out.append({"at": at, "session": sid, "from": stations.get(sid) or "", "to": to or "",
+                        "type": typ, "text": text or "",
+                        "first_line": m.group(2).splitlines()[0][:300] if m and m.group(2) else ""})
         return out
 
     def coordination_calls(self, source: str, sessions: list[str]) -> dict[str, int]:
@@ -1468,33 +1437,19 @@ class FactoryStore:
         return out
 
     def _coordination_calls_scan(self, source: str, sessions: list[str]) -> dict[str, int]:
-        """`coordination_calls` from the events table: what a cell not yet caught up has to use.
-        A session is parsed again only when it has new tool calls, whichever sessions are asked for."""
+        """`coordination_calls` from the events table: what a cell not yet caught up has to use, a
+        parse of each asked session's calls on every read (nothing is kept between reads)."""
         from .factory import is_coordination
         if not sessions:
             return {}
         marks = ", ".join("?" for _ in sessions)
         with self._lock:
-            # count and newest call together: a prune that drops old calls while new ones arrive
-            # leaves the count alone but moves the newest
-            sizes = {sid: (n, newest) for sid, n, newest in self.con.execute(
-                f"SELECT key_value, count(*), max(event_time) FROM events WHERE source = ? AND "
-                f"event_type = 'tool_use' AND key_value IN ({marks}) GROUP BY key_value",
-                [source, *sessions]).fetchall()}
-            cache = self.__dict__.setdefault("_coord_cache", {})
-            for sid in sessions:
-                if sid not in sizes:   # every call of it is gone (pruned): forget its count
-                    cache.pop((source, sid), None)
-            fresh = [sid for sid in sizes if cache.get((source, sid), (None,))[0] != sizes[sid]]
-            rows = []
-            if fresh:
-                fmarks = ", ".join("?" for _ in fresh)
-                # the rendered text names each tool as "→ name(": a cheap filter before the parse
-                rows = self.con.execute(
-                    f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({fmarks}) "
-                    "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
-                    "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
-                    [source, *fresh]).fetchall()
+            # the rendered text names each tool as "→ name(": a cheap filter before the parse
+            rows = self.con.execute(
+                f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({marks}) "
+                "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
+                "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
+                [source, *sessions]).fetchall()
         found: dict[str, int] = {}
         for sid, pj in rows:
             try:
@@ -1505,10 +1460,7 @@ class FactoryStore:
             for b in msg.get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")):
                     found[sid] = found.get(sid, 0) + 1
-        for sid in fresh:
-            cache[(source, sid)] = (sizes[sid], found.get(sid, 0))
-        out = {sid: cache[(source, sid)][1] for sid in sessions if (source, sid) in cache}
-        return {sid: n for sid, n in out.items() if n}
+        return found
 
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
@@ -1781,52 +1733,23 @@ class FactoryStore:
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
         printed and whether it failed, oldest first: what a builder's claimed checks are
-        compared with."""
+        compared with. Read from `session_commands`, where each call was written as its line was
+        stored and its result added when that arrived (session_ingest, TR-1477). A command whose
+        result has not arrived shows no output and no failure."""
         if not sessions:
             return []
-        marks = ", ".join("?" for _ in sessions)
-        with self._lock:
-            # the Bash calls first (their rendered text names the tool), then the results that
-            # came after the oldest of them: other tools' rows never push a Bash run out
-            uses = self.con.execute(
-                f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-                f"AND key_value IN ({marks}) AND event_type = 'tool_use' "
-                "AND text LIKE '%Bash(%' ORDER BY event_time DESC LIMIT ?",
-                [source, *sessions, limit // 2]).fetchall()
-            oldest = min((u[0] for u in uses), default=None)
-            results = self.con.execute(
-                f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-                f"AND key_value IN ({marks}) AND event_type = 'tool_result' AND event_time >= ? "
-                "ORDER BY event_time DESC LIMIT ?",
-                [source, *sessions, oldest, limit * 2]).fetchall() if uses else []
-            rows = uses + results
-        uses: dict[str, dict] = {}
-        results: dict[str, dict] = {}
-        for at, typ, pj, sid in sorted(rows, key=lambda r: r[0]):
-            try:
-                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-            except ValueError:
-                continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "tool_use" and b.get("name") == "Bash":
-                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                    uses[str(b.get("id"))] = {"at": at, "session": sid,
-                                              "command": str(inp.get("command") or "")}
-                elif b.get("type") == "tool_result":
-                    c = b.get("content")
-                    if isinstance(c, list):
-                        c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
-                    # the tail: a test run's summary line is at the end
-                    results[str(b.get("tool_use_id"))] = {"output": str(c or "")[-20000:],
-                                                          "is_error": bool(b.get("is_error"))}
-        out = []
-        for tid, u in uses.items():
-            r = results.get(tid) or {"output": "", "is_error": False}
-            out.append({**u, **r})
-        return sorted(out, key=lambda x: x["at"])
+        t = session_commands.c
+        rows = []
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.begin() as conn:
+                rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code)
+                                     .where(t.source == source, t.session.in_(sessions[i:i + 500]),
+                                            t.command.is_not(None), t.at.is_not(None))
+                                     .order_by(t.at.desc(), t.tool_use_id.desc())
+                                     .limit(limit // 2)).fetchall()
+        rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
+        return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
+                 "is_error": bool(code)} for at, sid, command, tail, code in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
