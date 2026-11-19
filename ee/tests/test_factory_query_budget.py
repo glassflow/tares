@@ -78,7 +78,7 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # of done wants that caught, and the counts do not vary between runs). Both
 # backends measured the same today (449, 780, 374, 46, 13, 19), but each has its own entry so a
 # change that moves one (a sessions database, a Postgres-only read) can move only that one.
-_TODAY = {"home": 458, "projects": 796, "project": 382, "ticket": 47, "raw_tickets": 14, "raw_ticket": 20}
+_TODAY = {"home": 458, "projects": 796, "project": 382, "ticket": 29, "raw_tickets": 9, "raw_ticket": 15}
 BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it

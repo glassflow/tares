@@ -1302,9 +1302,7 @@
     "owner": "tares",
     "position": 1.0,
     "pr": {
-     "checked_at": "2026-11-19T12:00:00+00:00",
      "ci": "success",
-     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
      "head": "aaaaaaa0000",
      "merged": true,
      "number": 1,
@@ -1379,9 +1377,7 @@
     "owner": "tares",
     "position": 3.0,
     "pr": {
-     "checked_at": "2026-11-19T12:00:00+00:00",
      "ci": "failure",
-     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
      "head": "aaaaaaa0002",
      "merged": false,
      "number": 3,
@@ -1557,10 +1553,7 @@
     "owner": "tares",
     "position": 9.0,
     "pr": {
-     "behind_by": null,
-     "checked_at": "2026-11-19T12:00:00+00:00",
      "ci": "success",
-     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
      "head": "aaaaaaa0008",
      "merged": false,
      "number": 9,
