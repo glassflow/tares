@@ -83,6 +83,8 @@ ck("a reviewer's block never reads as blocked",
    and sw.reviewer_stopped(" ", "the crew reviewer") == "The crew reviewer stopped it")
 ck("the close-the-project item is a question, not the state's words",
    sw.SIGNOFF == "Close the project?" and sw.SIGNOFF != sw.PROJECT_STATE["ready_to_close"])
+ck("someone who cannot close it reads who can",
+   sw.signoff_for("Kiran") == "Kiran can close it" and sw.signoff_for("an admin") == "An admin can close it")
 
 # a station (decisions 3 and 5): every turn the crew engine reads has words, and only an item makes it a wait for you
 from tares.crew import claude as crew_claude

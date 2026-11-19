@@ -23,6 +23,8 @@ each person their own. The team code only adds kinds of item and names the other
 """
 from __future__ import annotations
 
+from tares import status_words
+
 
 def claimed(person: dict) -> bool:
     """A person someone is: anyone but the built-in `local` before an owner claimed it (no email)."""
@@ -139,7 +141,9 @@ def for_others(owners: Owners, items: list[dict]) -> list[dict]:
         label = i["label"]
         base = label[: -len(" for you")] if label.endswith(" for you") else label
         first = (i.get("for_people") or [None])[0]
-        out.append({**i, "label": f"{base} for {who}", "actions": [], "question": None,
+        # the close item is a question to its lead; to anyone else it says who can answer it
+        said = status_words.signoff_for(who) if i.get("kind") == "signoff" and names else f"{base} for {who}"
+        out.append({**i, "label": said, "actions": [], "question": None,
                     "for_person": (owners.who([first]) or [None])[0] if first else None})
     return out
 

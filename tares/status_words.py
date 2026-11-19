@@ -58,6 +58,12 @@ PROJECT_DONE = "Done"
 # the waiting item that asks a person to close a project; the state keeps "Ready to close"
 SIGNOFF = "Close the project?"
 
+
+def signoff_for(who: str) -> str:
+    """The close item as someone who may not close the project reads it: "Kiran can close it",
+    "An admin can close it"."""
+    return f"{who[:1].upper()}{who[1:]} can close it"
+
 # ── a station (a crew member's session) ───────────────────────────────────────
 
 # The spec's decision 3: one table for `tares factory crew status` and the console's crew cards.
