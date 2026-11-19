@@ -33,6 +33,18 @@ counts' (so a line the facts cannot take never loses a batch's counts), and `fil
 batch written twice or a fill that runs twice adds nothing. A result sets the fields of the row of
 the call it answers and makes none: a result that comes before its call is written by the next fill.
 
+The same two writers keep three more tables the factory reads (TR-1505): `session_turns` (what a
+person typed), `session_said` (the last three things each session's assistant said) and
+`session_files` (the files a session edited or wrote, with when it last did). `turn_fact`,
+`said_fact` and `files_facts` are the rules, one line at a time, and `turns_of` folds a batch of
+lines into rows. `record` writes them in a third transaction of its own, after the facts, so a
+failure there loses neither the counts nor the facts. `fill_turns` reads them back from DuckDB for
+the lines a first start has not seen (the watermark `session_turns`): every user line newer than
+the mark, the 60 newest assistant lines and the 400 newest file-editing tool_use lines of each
+session touched. A turn and a said line are made by (session, line key), a file by (session, path),
+so a repeat adds nothing. The readers `FactoryStore.person_turns`, `Store.said_lately`,
+`Store.last_said` and `Store.files_touched` read these tables and no longer scan events.
+
 Two things to know when reading the table:
 
 - A row holds the `source` of the session's first line, and the readers ask for the one source
@@ -44,25 +56,31 @@ Two things to know when reading the table:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import bindparam, func, select
+from sqlalchemy import bindparam, delete, func, select
 
 from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
-from .session_store.tables import (session_commands, session_ingest_marks, session_messages,
-                                   sessions)
+from .session_store.tables import (session_commands, session_files, session_ingest_marks,
+                                   session_messages, session_said, session_turns, sessions)
 
 MARK = "sessions_reconcile"          # the fill's row in session_ingest_marks
 CAUGHT_UP = "sessions_caught_up"     # its row when a pass has finished (TR-1520): readers use the table
 MARGIN = timedelta(minutes=10)       # a pass starts this long before the last one's newest line
 CHUNK = 200                          # sessions read from DuckDB under one hold of the lock
 FACTS_MARK = "session_facts"         # the facts fill's row in session_ingest_marks (TR-1477)
+TURNS_MARK = "session_turns"         # the turns fill's row in session_ingest_marks (TR-1505)
+SAID_KEEP = 3                        # the assistant messages kept per session
+SAID_READ = 60                       # the newest assistant lines per session a fill reads
+FILES_READ = 400                     # the newest file-editing tool_use lines per session a fill reads
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 OUTPUT_TAIL = 20000                  # characters of a command's output kept: a test run's summary is at the end
 MESSAGE_TEXT = 4000                  # characters of a protocol message kept
 
@@ -272,6 +290,170 @@ def _write_facts(conn, db, facts: dict) -> None:
               "r_at": r["result_at"]} for r in facts["results"]])
 
 
+# ── the turns, last words and touched files the factory reads (TR-1505) ──────────────────────
+def _obj(v) -> dict:
+    """A JSON object given as one (at ingest) or as its text (from DuckDB); {} for anything else."""
+    if isinstance(v, (str, bytes)):
+        try:
+            v = json.loads(v) if v else {}
+        except (TypeError, ValueError):
+            return {}
+    return v if isinstance(v, dict) else {}
+
+
+def _jx(obj: dict, *path) -> str | None:
+    """DuckDB's json_extract_string(obj, '$.a.b') for the values these filters read: a JSON true
+    or false reads as 'true' or 'false', a string as itself, a number as its text, null, a missing
+    key and a step into something that is not an object as None (SQL NULL); an object or array as
+    its JSON text."""
+    v = obj
+    for k in path:
+        if not isinstance(v, dict) or k not in v:
+            return None
+        v = v[k]
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float)):
+        return json.dumps(v)
+    return json.dumps(v, separators=(",", ":"), sort_keys=True)
+
+
+def line_key(payload) -> str:
+    """What names one line within its session: the payload's `uuid` when it has a non-empty one
+    (Claude Code gives every transcript line one), else the SHA-256 of the payload's JSON."""
+    o = _obj(payload)
+    u = o.get("uuid")
+    if isinstance(u, str) and u:
+        return _text(u)
+    return hashlib.sha256(json.dumps(o, sort_keys=True).encode("utf-8", "replace")).hexdigest()
+
+
+def turn_fact(event_type: str, text: str | None, payload, labels, session: str, at: datetime,
+              source: str) -> dict | None:
+    """The row of `session_turns` one line makes, or None when the line is not a person typing: a
+    `user` line that is not a subagent's (labels.sidechain), not Claude Code's own message (the
+    label `meta`, the payload's isMeta, isCompactSummary, or an origin that is not human). The
+    rules `FactoryStore.person_turns` read from events (TR-450, TR-634), spelled as its SQL did."""
+    if event_type != "user":
+        return None
+    lab, pay = _obj(labels), _obj(payload)
+    if ((_jx(lab, "sidechain") or "false") == "true" or (_jx(lab, "meta") or "false") == "true"
+            or (_jx(pay, "isMeta") or "false") == "true"
+            or (_jx(pay, "isCompactSummary") or "false") == "true"
+            or (_jx(pay, "origin", "kind") or "human") != "human"):
+        return None
+    who = _jx(lab, "tares_person")
+    return {"session": session, "line_key": line_key(pay), "source": source, "at": at,
+            "person": None if who is None else _text(who), "text": _text(text)}
+
+
+def said_fact(event_type: str, text: str | None, payload, session: str, at: datetime,
+              source: str) -> dict | None:
+    """The row of `session_said` one line makes, or None: an `assistant` line whose text, stripped,
+    is not empty and does not start with the arrow that marks a tool call. The text is kept
+    stripped."""
+    if event_type != "assistant":
+        return None
+    t = _text(text).strip()
+    if not t or t.startswith("→"):
+        return None
+    return {"session": session, "line_key": line_key(payload), "source": source, "at": at,
+            "text": t}
+
+
+def files_facts(event_type: str, text: str | None, payload, session: str, at: datetime,
+                source: str) -> list[dict]:
+    """The files one tool_use line edited or wrote, as rows of `session_files`: each tool_use block
+    named Edit, Write, MultiEdit or NotebookEdit, by its input's file_path or notebook_path. The
+    line's text names each call as "→ name(", so a line whose text holds neither "Edit(" nor
+    "Write(" is passed over before its payload is parsed (MultiEdit( and NotebookEdit( hold
+    "Edit(")."""
+    if event_type != "tool_use" or not text or ("Edit(" not in text and "Write(" not in text):
+        return []
+    out = []
+    for b in _blocks(payload):
+        if b.get("type") != "tool_use" or str(b.get("name") or "") not in EDIT_TOOLS:
+            continue
+        inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+        path = _text(inp.get("file_path") or inp.get("notebook_path"))
+        if path:
+            out.append({"session": session, "path": path, "source": source, "last_at": at})
+    return out
+
+
+def turns_of(lines) -> dict:
+    """What `lines` (rows of (source, session, time, event_type, text, payload, labels)) hold:
+    {"turns": [...], "said": [...], "files": [...]}. A turn and a said line are kept once by
+    (session, line key) (the first wins), a file once by (session, path) with its latest time, and
+    each list is in key order, so two writers meet their rows in the same order and cannot
+    deadlock."""
+    turns: dict = {}
+    said: dict = {}
+    files: dict = {}
+    for source, session, at, event_type, text, payload, labels in lines:
+        if event_type not in ("user", "assistant", "tool_use"):
+            continue
+        at = _utc(at)
+        r = turn_fact(event_type, text, payload, labels, session, at, source)
+        if r:
+            turns.setdefault((r["session"], r["line_key"]), r)
+        r = said_fact(event_type, text, payload, session, at, source)
+        if r:
+            said.setdefault((r["session"], r["line_key"]), r)
+        for r in files_facts(event_type, text, payload, session, at, source):
+            k = (r["session"], r["path"])
+            if k not in files or files[k]["last_at"] < r["last_at"]:
+                files[k] = r
+    return {"turns": [turns[k] for k in sorted(turns)], "said": [said[k] for k in sorted(said)],
+            "files": [files[k] for k in sorted(files)]}
+
+
+def _write_turns(conn, db, rows: dict) -> None:
+    """Write `rows` (from `turns_of`) in the open transaction. A turn and a said line are written
+    once; a file keeps the greatest time. Then each touched session's said rows are cut to the
+    newest SAID_KEEP, in the same transaction, so a reader never sees more."""
+    if rows["turns"]:
+        conn.execute(db.upsert(session_turns).on_conflict_do_nothing(
+            index_elements=["session", "line_key"]), rows["turns"])
+    if rows["said"]:
+        conn.execute(db.upsert(session_said).on_conflict_do_nothing(
+            index_elements=["session", "line_key"]), rows["said"])
+        sids = sorted({r["session"] for r in rows["said"]})
+        t = session_said.c
+        held: dict = {}
+        for i in range(0, len(sids), 500):
+            for sid, key, at in conn.execute(select(t.session, t.line_key, t.at).where(
+                    t.session.in_(sids[i:i + 500]))):
+                held.setdefault(sid, []).append((at, key))
+        drop = []
+        for sid in sorted(held):
+            for _, key in sorted(held[sid], reverse=True)[SAID_KEEP:]:
+                drop.append({"d_session": sid, "d_key": key})
+        if drop:
+            conn.execute(delete(session_said).where(
+                t.session == bindparam("d_session"), t.line_key == bindparam("d_key")), drop)
+    if rows["files"]:
+        stmt = db.upsert(session_files)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["session", "path"],
+            set_={"last_at": db.greatest(session_files.c.last_at, stmt.excluded.last_at)})
+        conn.execute(stmt, rows["files"])
+
+
+def _add_turns(store, rows: dict) -> None:
+    """Write a batch's turns, last words and files in a transaction of their own: a line they
+    cannot take must not lose the batch's counts or facts."""
+    if not any(rows.values()):
+        return
+    db = store.sessions_db
+    with db.begin() as conn:
+        _write_turns(conn, db, rows)
+
+
 def _add(store, folded: dict) -> None:
     """Add each session's counts to its row, in one transaction. Rows are written in session order,
     so two writers on Postgres meet their rows in the same order and cannot deadlock."""
@@ -325,6 +507,14 @@ def record(store, envelopes) -> None:
     except Exception as e:
         ok = False
         print(f"taresd: writing the facts of {len(envelopes)} claude_code line(s) failed "
+              f"({type(e).__name__}: {e}); written at the next start", flush=True)
+    try:
+        _add_turns(store, turns_of(
+            (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload, e.labels)
+            for e in envelopes))
+    except Exception as e:
+        ok = False
+        print(f"taresd: writing the turns of {len(envelopes)} claude_code line(s) failed "
               f"({type(e).__name__}: {e}); written at the next start", flush=True)
     metrics.session_ingest(time.perf_counter() - t0, ok)
 
@@ -521,9 +711,83 @@ def _fill_chunk(store, sources: list, sids: list, since) -> None:
         _write_facts(conn, db, facts)
 
 
+def _turns_mark(store):
+    with store.sessions_db.begin() as conn:
+        return conn.execute(select(session_ingest_marks.c.at).where(
+            session_ingest_marks.c.name == TURNS_MARK)).scalar_one_or_none()
+
+
+def _set_turns_mark(store, at: datetime) -> None:
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).values(name=TURNS_MARK, at=at)
+    stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"at": stmt.excluded.at})
+    with db.begin() as conn:
+        conn.execute(stmt)
+
+
+def fill_turns(store, chunk: int = CHUNK) -> int:
+    """Write the turns, last words and touched files of the lines DuckDB holds that these tables
+    have not seen: the sessions of a claude_code source with a user, assistant or tool_use line
+    newer than the `session_turns` mark minus the margin (all of them on the first pass). The same
+    functions `record` runs, written so a line `record` already wrote, or a pass that runs twice,
+    changes nothing. Reads DuckDB for `chunk` sessions at a time, taking and letting go of the
+    store's lock for each, so one chunk is in memory at once; the mark moves to the newest
+    `ingest_time` read once every chunk is written, so a pass that raised is read again from the
+    same place. Returns how many sessions it looked at."""
+    sources = sorted(claude_code_sources(store))
+    marks = ", ".join("?" for _ in sources)
+    mark = _turns_mark(store)
+    since = mark - MARGIN if mark is not None else None
+    with store._lock:
+        found = store.con.execute(
+            f"SELECT key_value, max(ingest_time) FROM events WHERE source IN ({marks}) "
+            "AND event_type IN ('user', 'assistant', 'tool_use') "
+            "AND key_value IS NOT NULL AND key_value <> '' "
+            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
+            [*sources, since, since]).fetchall()
+    newest = max((r[1] for r in found), default=None)
+    sids = sorted(r[0] for r in found)
+    for i in range(0, len(sids), chunk):
+        _fill_turns_chunk(store, sources, sids[i:i + chunk], since)
+    if newest is not None:
+        _set_turns_mark(store, _utc(newest))
+    return len(sids)
+
+
+def _fill_turns_chunk(store, sources: list, sids: list, since) -> None:
+    marks = ", ".join("?" for _ in sources)
+    keys = ", ".join("?" for _ in sids)
+    base = f"FROM events WHERE source IN ({marks}) AND key_value IN ({keys}) "
+    args = [*sources, *sids]
+    cols = "source, key_value, event_time, event_type, text, payload, labels "
+    with store._lock:
+        # every user line newer than the mark: a turn is written once, so a repeat is skipped
+        lines = store.con.execute(
+            f"SELECT {cols}{base}AND event_type = 'user' "
+            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) ORDER BY event_time",
+            [*args, since, since]).fetchall()
+        # the newest assistant lines of each session, whatever the mark: only the last few count
+        lines += store.con.execute(
+            f"SELECT {cols}{base}AND event_type = 'assistant' "
+            "QUALIFY row_number() OVER (PARTITION BY source, key_value "
+            f"ORDER BY event_time DESC) <= {SAID_READ}", args).fetchall()
+        # the newest lines that edit a file (the cheap text filter of `files_facts`), same
+        lines += store.con.execute(
+            f"SELECT {cols}{base}AND event_type = 'tool_use' "
+            "AND (text LIKE '%Edit(%' OR text LIKE '%Write(%') "
+            "QUALIFY row_number() OVER (PARTITION BY source, key_value "
+            f"ORDER BY event_time DESC) <= {FILES_READ}", args).fetchall()
+    rows = turns_of(lines)
+    if not any(rows.values()):
+        return
+    db = store.sessions_db
+    with db.begin() as conn:
+        _write_turns(conn, db, rows)
+
+
 def start_reconcile(store) -> threading.Thread:
-    """Run `reconcile_sessions` and then `fill_facts` in a background thread, once. A failure
-    prints one line: the next start tries again, and the tables only undercount until then."""
+    """Run `reconcile_sessions`, `fill_facts` and then `fill_turns` in a background thread, once. A
+    failure prints one line: the next start tries again, and the tables only undercount until then."""
     def run():
         t0 = time.perf_counter()
         try:
@@ -542,6 +806,15 @@ def start_reconcile(store) -> threading.Thread:
                       f"{time.perf_counter() - t1:.1f}s", flush=True)
         except Exception as e:
             print(f"taresd: session facts fill failed ({type(e).__name__}: {e}); "
+                  "tried again at the next start", flush=True)
+        t2 = time.perf_counter()
+        try:
+            n = fill_turns(store)
+            if n:
+                print(f"taresd: session turns filled for {n} session(s) in "
+                      f"{time.perf_counter() - t2:.1f}s", flush=True)
+        except Exception as e:
+            print(f"taresd: session turns fill failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
