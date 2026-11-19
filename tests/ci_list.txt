@@ -209,6 +209,7 @@ test_plugin_shims
 test_plugin_ship_once
 test_postgres
 test_pr_one_tap
+test_pr_refresh_scope
 test_pricing
 test_private_any_licence
 test_project_access_single

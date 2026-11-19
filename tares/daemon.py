@@ -5483,8 +5483,9 @@ def make_app() -> FastAPI:
         sync's time and error), or the GitHub repo and issue label when it uses GitHub Issues
         (`github`, the same)."""
         await asyncio.to_thread(_project_or_404, uid)
-        await factory_api.refresh_prs(store, uid)
-        # the store work runs in a thread, so other requests are served meanwhile
+        # no GitHub call (TR-1474): the pull request state kept so far, which the background sync
+        # and a ticket's own read keep current; the store work runs in a thread, so other
+        # requests are served meanwhile
         return await asyncio.to_thread(lambda: {
             "tickets": _tickets_out(uid), "linear": store.get_project_linear(uid),
             "github": store.get_project_github(uid)})
@@ -5577,8 +5578,10 @@ def make_app() -> FastAPI:
         """One ticket by its id, number or Linear identifier, with its working doc's body and
         its history (who moved it, when)."""
         _project_or_404(uid)
-        await factory_api.refresh_prs(store, uid)
-        return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
+        t = _ticket_or_404(uid, ref)
+        if await factory_api.refresh_pr(store, uid, t):   # its own pull request only (TR-1474)
+            t = _ticket_or_404(uid, ref)
+        return _ticket_out(uid, t, with_doc=True)
 
     @app.put("/api/projects/{uid}/tickets/link")
     async def link_project_tickets(uid: str, body: dict = Body(...)):

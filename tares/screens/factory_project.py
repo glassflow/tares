@@ -479,13 +479,13 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/projects/{uid}/github")
     async def factory_project_github(uid: str, request: Request):
         """The project's GitHub page: its pull requests by repo (the open ones first, then merged,
-        then closed without merging, newest first in each), read again from GitHub when stale,
-        waiting at most a moment for it (factory_api.refresh_prs)."""
+        then closed without merging, newest first in each), from the pull request state kept so
+        far: the page makes no GitHub call, the background sync and a ticket's own read keep it
+        current (TR-1474)."""
         p = store.get_project(uid)
         if (p is None or p.get("kind") != "software_factory" or p.get("status") == "draft"
                 or not h.can_see(p)):
             raise HTTPException(404, f"no factory project {uid!r}")
-        await factory_api.refresh_prs(store, uid)
         now = now_utc()
         tickets = store.list_tickets(uid)
         reviews = store.last_reviews([t["id"] for t in tickets if pr_state(t)])

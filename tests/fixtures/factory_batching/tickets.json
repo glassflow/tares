@@ -17,7 +17,6 @@
    "owner": "tares",
    "position": 1.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000000",
     "number": 0,
     "repo": "o/r",
@@ -85,7 +84,6 @@
    "owner": "tares",
    "position": 3.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000002",
     "number": 2,
     "repo": "o/r",
@@ -145,7 +143,6 @@
    "owner": "tares",
    "position": 5.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000004",
     "number": 4,
     "repo": "o/r",
@@ -215,7 +212,6 @@
    "owner": "tares",
    "position": 7.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000006",
     "number": 6,
     "repo": "o/r",
@@ -275,7 +271,6 @@
    "owner": "tares",
    "position": 9.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000008",
     "number": 8,
     "repo": "o/r",
@@ -345,7 +340,6 @@
    "owner": "tares",
    "position": 11.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "000000000000000000000000000000000000000a",
     "number": 10,
     "repo": "o/r",
@@ -405,7 +399,6 @@
    "owner": "tares",
    "position": 13.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "000000000000000000000000000000000000000c",
     "number": 12,
     "repo": "o/r",
@@ -475,7 +468,6 @@
    "owner": "tares",
    "position": 15.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "000000000000000000000000000000000000000e",
     "number": 14,
     "repo": "o/r",
@@ -535,7 +527,6 @@
    "owner": "tares",
    "position": 17.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000010",
     "number": 16,
     "repo": "o/r",
@@ -605,7 +596,6 @@
    "owner": "tares",
    "position": 19.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000012",
     "number": 18,
     "repo": "o/r",
@@ -665,7 +655,6 @@
    "owner": "tares",
    "position": 21.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000014",
     "number": 20,
     "repo": "o/r",
@@ -733,7 +722,6 @@
    "owner": "tares",
    "position": 23.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000016",
     "number": 22,
     "repo": "o/r",
@@ -793,7 +781,6 @@
    "owner": "tares",
    "position": 25.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "0000000000000000000000000000000000000018",
     "number": 24,
     "repo": "o/r",
@@ -863,7 +850,6 @@
    "owner": "tares",
    "position": 27.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "000000000000000000000000000000000000001a",
     "number": 26,
     "repo": "o/r",
@@ -923,7 +909,6 @@
    "owner": "tares",
    "position": 29.0,
    "pr": {
-    "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
     "head": "000000000000000000000000000000000000001c",
     "number": 28,
     "repo": "o/r",
