@@ -3,8 +3,9 @@
 A page that lists sessions used to count over the events table, and that table grows with every
 line. Here each line is counted once, as it is stored, into one row per session. The readers
 `Store.session_activity`, `Store.project_sessions`, `FactoryStore.station_sessions` and
-`FactoryStore.coordination_calls` read the row (TR-1499) and never touch events. Two writers keep
-the row right:
+`FactoryStore.coordination_calls` read the row (TR-1499) once the table has caught up (see
+`caught_up`), and scan events until then (TR-1520), so a cell just upgraded shows right numbers
+at once. Two writers keep the row right:
 
 - `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB. It
   adds the batch to each session's row in one transaction (`ON CONFLICT ... DO UPDATE`), so
@@ -13,7 +14,13 @@ the row right:
   DuckDB for the sessions with lines newer than the last pass, and keeps the larger of what is
   stored and what DuckDB says. Lines written by an image that did not call `record`, or a batch
   whose `record` failed, are counted this way. Both writers only ever undercount, so the larger
-  value is the right one, and a second pass changes nothing.
+  value is the right one, and a second pass changes nothing. When a pass has finished all its
+  chunks it sets the `sessions_caught_up` row in `session_ingest_marks`; a pass that raised does
+  not, so the readers stay on the scan and the next start tries again.
+
+The readers know the table has caught up from one row in `session_ingest_marks`, `CAUGHT_UP`. It
+is set by the first complete `reconcile_sessions`, or at once by `Store.__init__` on a cell whose
+events hold no claude_code line (nothing to catch up on). It is never unset.
 
 DuckDB is never changed: `Store.append` keeps writing every line there.
 
@@ -42,6 +49,7 @@ from .factory import is_coordination
 from .session_store.tables import session_ingest_marks, sessions
 
 MARK = "sessions_reconcile"          # the fill's row in session_ingest_marks
+CAUGHT_UP = "sessions_caught_up"     # its row when a pass has finished (TR-1520): readers use the table
 MARGIN = timedelta(minutes=10)       # a pass starts this long before the last one's newest line
 CHUNK = 200                          # sessions read from DuckDB under one hold of the lock
 
@@ -167,13 +175,55 @@ def _set_mark(store, at: datetime) -> None:
         conn.execute(stmt)
 
 
+def caught_up(store) -> bool:
+    """True once the `sessions` table holds every session's counts: the first complete reconcile
+    ran, or the cell had no claude_code line to count. One primary-key lookup. Only a True answer
+    is kept on the store (the row is never unset, and losing the answer changes nothing)."""
+    if getattr(store, "_sessions_caught_up", False):
+        return True
+    with store.sessions_db.begin() as conn:
+        at = conn.execute(select(session_ingest_marks.c.at).where(
+            session_ingest_marks.c.name == CAUGHT_UP)).first()
+    if at is None:
+        return False
+    store._sessions_caught_up = True
+    return True
+
+
+def _set_caught_up(store) -> None:
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).values(name=CAUGHT_UP, at=now_utc())
+    stmt = stmt.on_conflict_do_nothing(index_elements=["name"])
+    with db.begin() as conn:
+        conn.execute(stmt)
+    store._sessions_caught_up = True
+
+
+def mark_caught_up_if_empty(store) -> bool:
+    """The one-time shortcut at `Store.__init__`: a cell with no caught-up row whose DuckDB events
+    hold no claude_code line has nothing to catch up on, so it counts as caught up at once. A cell
+    that has such lines stays on the scan until its reconcile finishes. Returns the state."""
+    if caught_up(store):
+        return True
+    sources = sorted(claude_code_sources(store))
+    marks = ", ".join("?" for _ in sources)
+    with store._lock:
+        has = store.con.execute(
+            f"SELECT 1 FROM events WHERE source IN ({marks}) LIMIT 1", sources).fetchone()
+    if has is not None:
+        return False
+    _set_caught_up(store)
+    return True
+
+
 def reconcile_sessions(store, chunk: int = CHUNK) -> int:
     """Bring `sessions` up to what DuckDB holds, for the sessions with lines newer than the last
     pass (every session on the first pass). Each counter becomes the larger of the stored value and
     the one DuckDB computes; the mark then moves to the newest `ingest_time` read. Reads DuckDB in
     chunks of `chunk` sessions, taking and letting go of the store's lock for each, and writes
     under the same lock that `Store.append` holds across its commit and `record`, so a line is
-    never counted by both. Returns how many sessions it looked at."""
+    never counted by both. Sets the caught-up row when every chunk has been written (even when it
+    found no session). Returns how many sessions it looked at."""
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _mark(store)
@@ -190,6 +240,7 @@ def reconcile_sessions(store, chunk: int = CHUNK) -> int:
         _reconcile_chunk(store, sources, sids[i:i + chunk])
     if newest is not None:
         _set_mark(store, _utc(newest))
+    _set_caught_up(store)          # only here: a pass that raised above leaves the readers on the scan
     return len(sids)
 
 

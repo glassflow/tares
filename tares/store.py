@@ -24,7 +24,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, null, select
 
 from . import session_ingest, state_db
 from .session_store import SessionStore
@@ -864,6 +864,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 self, self.sessions_db, state_move=first_pg_start,
                 local_dir=None if path == ":memory:" else os.path.dirname(os.path.abspath(path)))
             self._upgrade()
+            # an empty cell has nothing to catch up on: its readers use the sessions table at once
+            # (one with claude_code lines scans events until its reconcile finishes, TR-1520)
+            session_ingest.mark_caught_up_if_empty(self)
             if first_pg_start:
                 # first start with a state database: the state moves over once, then is read
                 # from Postgres only; the DuckDB copy is left as it was, as a fallback
@@ -1492,7 +1495,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             session_ingest.record(self, cc)
 
     def start_session_reconcile(self):
-        """Catch the `sessions` table up with the events in a background thread (TR-1471)."""
+        """Catch the `sessions` table up with the events in a background thread (TR-1471). The four
+        session readers scan events until this has finished once, and read the table after (TR-1520);
+        a failed pass leaves them on the scan and the next start tries again."""
         return session_ingest.start_reconcile(self)
 
     def _append(self, envelopes: list[Envelope]) -> None:
@@ -3453,13 +3458,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
         ps, ss, st, sx = project_sessions, session_stations, session_states, sessions_table
-        # the lines come from the sessions table in the same read (TR-1499), not a scan of events
+        # once the sessions table has caught up (TR-1520) the lines come from it in the same read
+        # (TR-1499); before, from a scan of events below
+        table = session_ingest.caught_up(self)
+        lines = ((sx.c.started_at, sx.c.last_line_at, sx.c.line_count) if table
+                 else (null(), null(), null()))
+        j = (ps.outerjoin(ss, ss.c.session == ps.c.session)
+             .outerjoin(st, st.c.session == ps.c.session))
+        if table:
+            j = j.outerjoin(sx, and_(sx.c.session == ps.c.session,
+                                     sx.c.source == "claude_code", sx.c.line_count > 0))
         q = (select(ps.c.session, ps.c.repo, ps.c.linked_at, st.c.state, st.c.reason,
-                    st.c.state_at, ss.c.station, sx.c.started_at, sx.c.last_line_at, sx.c.line_count)
-             .select_from(ps.outerjoin(ss, ss.c.session == ps.c.session)
-                          .outerjoin(st, st.c.session == ps.c.session)
-                          .outerjoin(sx, and_(sx.c.session == ps.c.session,
-                                              sx.c.source == "claude_code", sx.c.line_count > 0)))
+                    st.c.state_at, ss.c.station, *lines)
+             .select_from(j)
              .where(ps.c.project == project,
                     # the crew's own stations serve every project: they show on the Crew page and
                     # never count as the project's build session (a pick-up must not replace them)
@@ -3472,9 +3483,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if r[0] not in seen:
                 seen.add(r[0])
                 uniq.append(r)
+        if table:
+            act = {r[0]: (r[7], r[8], int(r[9] or 0)) for r in uniq}
+        else:
+            act = self._session_activity_scan("claude_code", [r[0] for r in uniq])
         out = [{"session": r[0], "repo": r[1], "linked_at": r[2],
-                "started_at": r[7], "last_at": r[8], "lines": int(r[9] or 0),
-                "state": r[3], "state_reason": r[4], "state_at": r[5], "station": r[6]} for r in uniq]
+                "started_at": act.get(r[0], (None,))[0], "last_at": act.get(r[0], (None, None))[1],
+                "lines": act.get(r[0], (None, None, 0))[2], "state": r[3], "state_reason": r[4],
+                "state_at": r[5], "station": r[6]} for r in uniq]
         # newest activity first, sessions with no lines last
         out.sort(key=lambda s: (s["last_at"] is None, -(s["last_at"].timestamp())
                                 if s["last_at"] else 0))
@@ -3482,7 +3498,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def session_activity(self, source: str, sessions: list[str]) -> dict:
         """{session: (first line time, last line time, line count)} for the sessions that have
-        lines on `source`, read from the sessions table (TR-1471 keeps it; nothing scans events)."""
+        lines on `source`. Read from the sessions table (TR-1471 keeps it) once it has caught up
+        (TR-1520), from a scan of events before."""
+        if not session_ingest.caught_up(self):
+            return self._session_activity_scan(source, sessions)
         out = {}
         t = sessions_table
         for i in range(0, len(sessions), 500):
@@ -3493,6 +3512,21 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 t.c.source == source, t.c.session.in_(chunk), t.c.line_count > 0)
             with self.sessions_db.begin() as conn:
                 for sid, first, last, n in conn.execute(q):
+                    out[sid] = (first, last, int(n))
+        return out
+
+    def _session_activity_scan(self, source: str, sessions: list[str]) -> dict:
+        """`session_activity` from the events table: what a cell not yet caught up has to use."""
+        out = {}
+        for i in range(0, len(sessions), 500):
+            chunk = sessions[i:i + 500]
+            if not chunk:
+                continue
+            with self._lock:
+                for sid, first, last, n in self.con.execute(
+                        "SELECT key_value, min(event_time), max(event_time), count(*) FROM events "
+                        f"WHERE source = ? AND key_value IN ({', '.join('?' * len(chunk))}) "
+                        "GROUP BY key_value", [source, *chunk]).fetchall():
                     out[sid] = (first, last, int(n))
         return out
 
