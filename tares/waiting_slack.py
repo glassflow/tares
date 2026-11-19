@@ -2,7 +2,7 @@
 
 Every minute the cell reads what waits for each person, the same list their home calls "Waiting
 for you" (factory_api.waiting_for_person), and sends one direct message for each item that is new
-since the last read: the decision, what it holds up, and a link to the feed. The person is found
+since the last read: the decision, what it holds up, and a link to Home at that item. The person is found
 in Slack by their email, through the cell's own bot token, so a cell with no Slack sends nothing.
 Each person can switch it off for themselves (Settings, Slack); it is on until they do.
 
@@ -13,7 +13,7 @@ so a crash or a restart cannot send it twice; a message that fails is logged and
 More than three new items in one read (one minute) become one message that lists them (TR-1460).
 
 When an item no longer waits, its message is edited, not followed by another: "Answered by Alex
-from the feed", from the answers record (answers.py), or "No longer waits for you." when nothing
+on Home", from the answers record (answers.py), or "No longer waits for you." when nothing
 recorded an answer. The message's address is kept with the sent record, so this works after a
 restart too. An edit Slack refuses for a while (rate limit, outage) is tried again on the next read.
 """
@@ -90,13 +90,13 @@ def set_on(store, person_id: str, on: bool) -> None:
     store.set_setting(f"{SETTING}:{person_id}", "on" if on else "off")
 
 
-def feed_link(item_id: str | None = None) -> str:
-    """The feed, opened on `item_id` when given, or "" while the cell has no public address
+def item_link(item_id: str | None = None) -> str:
+    """Home, opened at `item_id` when given, or "" while the cell has no public address
     (slack.public_base: a link to 127.0.0.1 is worse than none)."""
     base = slack_mod.public_base()
     if not base:
         return ""
-    return f"{base}/feed" + (f"?item={quote(item_id, safe='')}" if item_id else "")
+    return f"{base}/" + (f"?item={quote(item_id, safe='')}" if item_id else "")
 
 
 def _ask(item: dict) -> str:
@@ -106,7 +106,7 @@ def _ask(item: dict) -> str:
 def _link_block(link: str) -> dict:
     if link:
         return {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text",
-                "text": "Open the feed"}, "url": link, "action_id": "open_feed"}]}
+                "text": "Open in Tares"}, "url": link, "action_id": "open_item"}]}
     return slack_mod._context("Open Tares to answer it.")
 
 
@@ -356,9 +356,9 @@ class WaitingSlack:
         if len(new) > BURST:
             # many at once (a crew that just reached a gate): one message that lists them
             rows = [{"ask": _ask(i), "closed": None} for i in new]
-            batches = [(new, list_message(user, rows, feed_link()))]
+            batches = [(new, list_message(user, rows, item_link()))]
         else:
-            batches = [([i], message(user, i, feed_link(i["id"]))) for i in new]
+            batches = [([i], message(user, i, item_link(i["id"]))) for i in new]
         sent, again = 0, []
         for its, msg in batches:
             ref, err, retry = await self._send(token, msg)
@@ -398,7 +398,7 @@ class WaitingSlack:
             if len(rows) == 1:
                 msg = closed_message(channel, rows[0]["ask"] or "", rows[0]["closed"])
             else:
-                msg = list_message(channel, rows, feed_link())
+                msg = list_message(channel, rows, item_link())
             ok, err, retry = await self._update(token, {**msg, "ts": ts})
             if ok or not retry:
                 # a refusal that will not change (the message was deleted) is not tried every minute

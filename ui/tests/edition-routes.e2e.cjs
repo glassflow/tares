@@ -9,7 +9,7 @@
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is the Timeline page (TR-752); /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
  * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
- * Every edition: /welcome/edition lands on /. The Advanced tab passes the words check, and is shot at
+ * Every edition: /welcome/edition lands on /. /feed and /feed?item=x land on / and /?item=x, the query kept (TR-1527). The Advanced tab passes the words check, and is shot at
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
  * the flag rule: the address alone never shows sample data.
  *
@@ -253,6 +253,10 @@ function loadSample(env) {
       }
       await goInApp(page, "/docs");
       ck("platform: /docs lands on /", where(page) === home, where(page));
+      await go(page, e, "/feed?item=x%3Ay&k=1");
+      ck("platform: /feed?item=x lands on /?item=x", where(page) === `${home}?item=x%3Ay&k=1`, where(page));
+      await go(page, e, "/feed");
+      ck("platform: /feed lands on /", where(page) === home, where(page));
       await go(page, e, "/projects/x/tickets/T1");
       ck("platform: a ticket address stays and says the page does not exist", where(page) === "/projects/x/tickets/T1"
          && (await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));

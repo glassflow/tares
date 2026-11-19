@@ -509,6 +509,127 @@ function cleanEnv(extra) {
         ck("live: Retry reads again and shows the page", (await page.getByTestId("waiting-row").count()) >= 3);
         await ctx.close();
       }
+      // TR-1527: /?item=<id> opens Home at one item. The last row of the list is the one a link names, so it
+      // would sit far down the page without the link.
+      {
+        // the plain Home first, then the same page opened at a row that is not its first
+        const waiting = (await api("GET", "/api/home")).body.waiting_for_you;
+        const link = (id) => `${BASE}/?item=${encodeURIComponent(id)}`;
+        const { ctx, page } = await liveContext(1440);
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        const plainFirst = (await page.getByTestId("waiting-row").first().innerText()).replace(/\s+/g, " ");
+        const plainCount = await page.getByTestId("waiting-row").count();
+        const target = waiting.filter((i) => !plainFirst.includes(i.title)).at(-1);
+        ck("item link: the seed leaves a waiting item that is not the first row", !!target && plainCount >= 2, JSON.stringify(waiting.map((i) => i.id)));
+        await page.goto(link(target.id), { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        const first = page.getByTestId("waiting-row").first();
+        ck("item link: a waiting item comes first and is marked",
+           (await first.getAttribute("data-focus")) === "1" && (await first.innerText()).includes(target.title)
+           && !plainFirst.includes(target.title)
+           && (await page.locator("[data-focus]").count()) === 1
+           && (await first.getByTestId("home-focus-label").innerText()).toLowerCase() === "from your link"
+           && (await page.getByTestId("waiting-row").count()) === plainCount
+           && (await page.getByTestId("home-focus-answered").count()) + (await page.getByTestId("home-focus-gone").count()) === 0,
+           `${await first.innerText()} | ${await page.locator("[data-focus]").count()} marked | ${plainCount} rows plain`);
+        ck("item link: the marked item holds the primary button", (await filledButtons(page)).length === 1
+           && (await first.evaluate((row) => { const probe = document.createElement("i"); probe.className = "bg-primary"; document.body.appendChild(probe);
+                const fill = getComputedStyle(probe).backgroundColor; probe.remove();
+                return [...row.querySelectorAll("a, button")].filter((e) => getComputedStyle(e).backgroundColor === fill).length; })) === 1,
+           JSON.stringify(await filledButtons(page)));
+        await liveShot(page, "item-link", 1440);
+        await checkWords(page, ck, "live item link");
+        await ctx.close();
+      }
+      {
+        const waiting = (await api("GET", "/api/home")).body.waiting_for_you;
+        const target = waiting.at(-1);
+        const { ctx, page } = await liveContext(390);
+        // a short window, so the row would start below the fold and only the link's scroll brings it in
+        await page.setViewportSize({ width: 390, height: 420 });
+        await page.goto(`${BASE}/?item=${encodeURIComponent(target.id)}`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        const first = page.getByTestId("waiting-row").first();
+        await page.waitForFunction(() => document.querySelector("[data-focus]")?.getBoundingClientRect().top < window.innerHeight, null, { timeout: 4000 }).catch(() => {});
+        const box = await first.evaluate((row) => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: window.innerHeight }; });
+        ck("item link: the marked item is in view at 390 px", (await first.getAttribute("data-focus")) === "1" && box.top >= -1 && box.bottom <= box.h + 1, JSON.stringify(box));
+        ck("item link: no sideways scroll at 390 px", (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+        await liveShot(page, "item-link", 390);
+        await ctx.close();
+      }
+      {
+        // an item answered since: the grant is allowed through the daemon, then the link to its request says so
+        const crew = (await api("GET", "/api/home")).body.waiting_for_you.find((i) => i.id.endsWith(`:${ids["allow-crew"]}`));
+        ck("item link: the seed's crew request waits", !!crew, ids["allow-crew"]);
+        const done = await api("POST", `/api/desk/${ids["allow-crew"]}/allow`, { words: "Reviewing is its job", scope: "all" });
+        ck("item link: the request is allowed through the daemon", done.status === 200, JSON.stringify(done));
+        const { ctx, page } = await liveContext(1440);
+        await page.goto(`${BASE}/?item=${encodeURIComponent(crew.id)}`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        const note = page.getByTestId("home-focus-answered");
+        await note.waitFor({ timeout: 5000 }).catch(() => {});
+        const said = (await note.count() ? await note.innerText() : "").replace(/\s+/g, " ").trim();
+        ck("item link: an answered item says who answered it and how",
+           /^Already answered: .+, by you, on Home, \S.*\./.test(said) && said.includes("gh pr view 12")
+           && (await page.locator("[data-focus]").count()) === 0 && (await page.getByTestId("home-focus-gone").count()) === 0, said);
+        await checkWords(page, ck, "live item link answered");
+        await ctx.close();
+      }
+      {
+        const { ctx, page } = await liveContext(1440);
+        let gone = true, why = "";
+        for (const id of ["question:D99999", "permission:nothing-here"]) {
+          await page.goto(`${BASE}/?item=${encodeURIComponent(id)}`, { waitUntil: "load" });
+          await page.getByTestId("factory-home").waitFor();
+          const note = page.getByTestId("home-focus-gone");
+          await note.waitFor({ timeout: 5000 }).catch(() => {});
+          const said = (await note.count() ? await note.innerText() : "").replace(/\s+/g, " ").trim();
+          const ok = /^The item that link named no longer waits for you\./.test(said) && (await page.locator("[data-focus]").count()) === 0
+            && (await page.getByTestId("home-focus-answered").count()) === 0 && (await page.getByTestId("waiting-row").count()) >= 1;
+          gone = gone && ok;
+          if (!ok) why += `${id}: ${said}; `;
+        }
+        ck("item link: an id that no longer waits says so", gone, why);
+        await checkWords(page, ck, "live item link gone");
+        await ctx.close();
+      }
+      {
+        // no id, an empty one, or one that is not <kind>:<ref> is no link: the plain Home, and not one read of the record
+        const { ctx, page } = await liveContext(1440);
+        let answersReads = 0;
+        page.on("request", (req) => { if (new URL(req.url()).pathname === "/api/answers") answersReads++; });
+        const plainFirst = async () => (await page.getByTestId("waiting-row").first().innerText()).trim();
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        const base = await plainFirst();
+        let same = true, bare = true;
+        for (const q of ["?item=", "?item=%20", "?item=abc", "?item=%3A", "?item=question%3A", "?item=%3AD7"]) {
+          await page.goto(`${BASE}/${q}`, { waitUntil: "load" });
+          await page.getByTestId("factory-home").waitFor();
+          await page.waitForLoadState("networkidle");
+          same = same && (await plainFirst()) === base;
+          bare = bare && (await page.locator("[data-focus], [data-testid=home-focus-label], [data-testid=home-focus-answered], [data-testid=home-focus-gone]").count()) === 0;
+        }
+        ck("item link: an empty or malformed id shows the plain Home", same && bare && answersReads === 0, `same=${same} bare=${bare} reads of the record=${answersReads}`);
+        await ctx.close();
+      }
+      {
+        const { ctx, page } = await liveContext(1440);
+        await page.goto(`${BASE}/feed?item=question%3AD7&x=1`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        const u = new URL(page.url());
+        ck("item link: /feed?item=x lands on /?item=x", u.pathname === "/" && u.search === "?item=question%3AD7&x=1", page.url());
+        await page.goto(`${BASE}/feed`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        ck("item link: /feed alone lands on /", new URL(page.url()).pathname === "/" && new URL(page.url()).search === "", page.url());
+        await ctx.close();
+      }
+
     }
 
     // TR-1125: an option of a desk question stays inside its card and wraps, however long it is
