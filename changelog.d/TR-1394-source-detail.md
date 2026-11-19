@@ -1,2 +1,0 @@
-Changed
-A connection's page has a new look: its head says what kind of connection it is, how often Tares checks it, which projects it is in, whether it is healthy and when it last received something, and a failing connection says how many times in a row it failed and why. Labels, sampled fields and recent events are rows that fit a phone, with a bar for each field's coverage when it varies. The delete dialog names what depends on the connection as rules and agents, and a push connection's address is labelled "endpoint to post to", here and on the project page (TR-1394).
