@@ -14,7 +14,10 @@ share one timer and one retry; a push that succeeds meanwhile leaves the files o
 pass (no usable file list) that failed is retried as a full pass and dominates the files named; a later full pass
 that succeeds clears the retry and its timer; a refusal (422) is no retry; a repo removed, and a folder dropped,
 end the retry (the folder drop with no GitHub or lore call); no licence or brain when the timer fires waits one
-more step; a push whose import succeeds the first time sets no timer; the shutdown cancels the timer.
+more step; GitHub (a tree error, a rate limit) or the token failing while a retry runs keeps the files for the next
+step, and a first try only GitHub cut short is no retry; an error that is not a lore answer counts; a failed delete of a dropped
+folder does not turn a later push into a retry; a push whose import succeeds the first time sets no timer; the shutdown
+cancels the timer and clears the back-off.
 
 Run: .venv/bin/python ee/tests/test_brain_decisions_repo_retry.py
 """
@@ -75,6 +78,7 @@ class Gh:
     def __init__(self):
         self.repos = {}
         self.requests = []
+        self.tree_fails = []   # statuses the next tree reads answer, one each
 
     def count(self, what):
         return len([p for p in self.requests if f"/{what}/" in p])
@@ -89,6 +93,8 @@ class Gh:
         if files is None:
             return httpx.Response(404, json={"message": "Not Found"})
         if rest.startswith("git/trees/"):
+            if self.tree_fails:
+                return httpx.Response(self.tree_fails.pop(0), json={"message": "down"})
             return httpx.Response(200, json={"tree": [{"path": p, "type": "blob", "sha": sha_of(files[p])} for p in files],
                                              "truncated": False})
         if rest.startswith("git/blobs/"):
@@ -288,6 +294,82 @@ async def main():
         ck("and nothing is left to retry: no state, the timer is cancelled", idle() and timer.cancelled(), f"{rd._retry} {timer}")
         reset()
 
+        print("== GitHub fails while a retry runs: the retry goes on ==")
+        gh.repos[REPO]["docs/adr/a016.md"] = "# a16\nnew\n"
+        down()
+        await ingest(push(REPO, added=["docs/adr/a016.md"]))
+        ck("the file waits a minute", sleeps == [60.0] and rd._retry == {REPO: {"docs/adr/a016.md"}}, f"{sleeps} {rd._retry}")
+        gh.tree_fails[:] = [502, 429]
+        await fire()
+        ck("GitHub answered 502 for the tree: the file is kept and the next step is two minutes", "docs/adr/a016.md" not in docs()
+           and sleeps == [60.0, 120.0] and rd._retry == {REPO: {"docs/adr/a016.md"}} and bool(rd._retry_tasks), f"{sleeps} {rd._retry} {rd._retry_tasks}")
+        await fire()
+        ck("a rate limit the next time: kept again, four minutes", "docs/adr/a016.md" not in docs() and sleeps == [60.0, 120.0, 240.0]
+           and rd._retry == {REPO: {"docs/adr/a016.md"}}, f"{sleeps} {rd._retry}")
+        await fire()
+        ck("GitHub is back: the document arrives and the retry ends", "docs/adr/a016.md" in docs() and idle(), f"{sorted(docs())} {rd._retry}")
+        reset()
+        gh.repos[REPO]["docs/adr/a017.md"] = "# a17\nnew\n"
+        gh.tree_fails[:] = [502]
+        await ingest(push(REPO, added=["docs/adr/a017.md"]))
+        ck("a first try that only GitHub cut short is no retry (the ticket is about lore)", "docs/adr/a017.md" not in docs() and idle()
+           and sleeps == [], f"{rd._retry} {sleeps}")
+        await ingest(push(REPO, added=["docs/adr/a017.md"]))
+        ck("the next push brings it", "docs/adr/a017.md" in docs() and idle(), str(sorted(docs())))
+        reset()
+
+        print("== an error that is not a lore answer counts too ==")
+        gh.repos[REPO]["docs/adr/a018.md"] = "# a18\nnew\n"
+        real_lore = rd._lore
+
+        def broken():
+            rd._lore = real_lore
+            raise RuntimeError("not a lore error")
+        rd._lore = broken   # the client factory itself fails, once
+        await ingest(push(REPO, added=["docs/adr/a018.md"]))
+        ck("the file is kept for a retry", sleeps == [60.0] and rd._retry == {REPO: {"docs/adr/a018.md"}}, f"{sleeps} {rd._retry}")
+        await fire()
+        ck("and the retry brings it", "docs/adr/a018.md" in docs() and idle(), str(sorted(docs())))
+        reset()
+
+        print("== no GitHub token while a retry runs: the retry goes on ==")
+        gh.repos[REPO]["docs/adr/a019.md"] = "# a19\nnew\n"
+        down()
+        await ingest(push(REPO, added=["docs/adr/a019.md"]))
+        real_token = rd._token
+
+        async def no_token(repo):
+            rd._token = real_token
+            raise ValueError("no token for this repo")
+        rd._token = no_token
+        await fire()
+        ck("the token could not be read: the file is kept and the next step is two minutes", "docs/adr/a019.md" not in docs()
+           and sleeps == [60.0, 120.0] and rd._retry == {REPO: {"docs/adr/a019.md"}}, f"{sleeps} {rd._retry}")
+
+        async def broken_token(repo):
+            rd._token = real_token
+            raise RuntimeError("the token store broke")
+        rd._token = broken_token
+        await fire()
+        ck("an error that is not a ValueError counts the same: kept, four minutes", "docs/adr/a019.md" not in docs()
+           and sleeps == [60.0, 120.0, 240.0] and rd._retry == {REPO: {"docs/adr/a019.md"}}, f"{sleeps} {rd._retry}")
+        await fire()
+        ck("the token is back: the document arrives", "docs/adr/a019.md" in docs() and idle(), str(sorted(docs())))
+        reset()
+
+        print("== a failed delete of a dropped folder is no push's retry ==")
+        lore.fail("delete_document", 500, "boom " + BRAIN_KEY)
+        await cx.put(f"/api/brain/repos/{REPO}/folders", json={"folders": ["docs/other"]})
+        await rd.wait()
+        ck("the folder's documents stay (lore failed) and no timer is set", sleeps == [] and idle(), f"{sleeps} {rd._retry}")
+        gh.repos[REPO]["docs/other/y.md"] = "# y\nnew\n"
+        await ingest(push(REPO, added=["docs/other/y.md"]))
+        ck("a later push that lore takes sets no retry for that old failure", "docs/other/y.md" in docs() and idle() and sleeps == [],
+           f"{rd._retry} {sleeps} {sorted(docs())}")
+        await cx.put(f"/api/brain/repos/{REPO}/folders", json={"folders": ["docs/adr"]})
+        await rd.wait()
+        reset()
+
         print("== a refusal is no outage ==")
         gh.repos[REPO]["docs/adr/a011.md"] = "# a11\nrefused\n"
         down(status=422)
@@ -351,8 +433,8 @@ async def main():
         waiting = rd._retry_tasks[REPO]
         ck("a timer waits", sleeps == [60.0] and not waiting.done(), str(sleeps))
         await cx.aclose()
-    ck("when the app shuts down the timer is cancelled and nothing is kept", waiting.cancelled() and not rd._retry and not rd._retry_tasks,
-       f"{waiting} {rd._retry} {rd._retry_tasks}")
+    ck("when the app shuts down the timer is cancelled and nothing is kept", waiting.cancelled() and idle(),
+       f"{waiting} {rd._retry} {rd._retry_tasks} {rd.retry_in}")
 
 
 asyncio.run(main())

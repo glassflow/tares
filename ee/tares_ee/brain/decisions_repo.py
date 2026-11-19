@@ -30,7 +30,8 @@ every document whose file is gone. A force push has no usable list either (it ca
 When lore fails while a push is followed (down or erroring: a put or a delete it did not take), the push's files
 are kept and tried again on a back-off (TR-1514): a minute after the first failure, doubling with each one in a row
 up to half an hour, as the syncer's retry does (TR-1510). The syncer's retry tells these listeners nothing, so this
-one is the importer's own. A success, a repo that was removed or a folder no longer chosen ends it.
+one is the importer's own. A success, a repo that was removed or a folder no longer chosen ends it; a try that
+GitHub cuts short (an error, a rate limit, no token) while the files wait does not, it takes the next step.
 An edit that makes a file stop counting (over the size limit, its blob gone, no usable commit date) deletes the
 file's document too. A folder an admin drops (a hook on `folders.HOOKS`) deletes every document
 no longer under a chosen folder; start-up does the same once, so a delete that failed is tried again.
@@ -232,6 +233,7 @@ class RepoDecisions:
         self._retry_n: dict[str, int] = {}            # repo -> back-off steps taken in a row
         self._retry_tasks: dict[str, asyncio.Task] = {}   # repo -> its timer; not in `_tasks`, so `wait()` never sits out a back-off
         self._lore_failed: set[str] = set()           # repos whose put or delete lore did not take, read by `_drain`
+        self._cut: set[str] = set()                   # repos whose last pass GitHub (or a missing token or brain) cut short, read by `_drain`
         self._sleep = asyncio.sleep                   # a test replaces it
         self.retry_in: dict[str, float] = {}          # repo -> the wait the last back-off step chose, for tests
         self._gone: set[tuple[str, str]] | None = None   # (repo, path) deleted while the seed walks lore's list
@@ -388,7 +390,7 @@ class RepoDecisions:
         if not self.active():   # no licence or no brain now: the files wait for the next step
             self._arm(repo)
             return
-        self._touch(repo, self._retry.pop(repo))
+        self._touch(repo, self._retry[repo])   # it stays in `_retry` (and the step count with it) until a pass takes it
         self._kick(repo)
 
     def _retry_done(self, repo: str, paths) -> None:
@@ -436,14 +438,18 @@ class RepoDecisions:
                 if repo in self._touched:
                     paths = self._touched.pop(repo)
                     self._lore_failed.discard(repo)
+                    self._cut.discard(repo)
                     try:
                         await self.import_changed(repo, paths)
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:   # noqa: BLE001
                         log.warning("brain repo decisions: following a push to %s failed: %s", repo, type(e).__name__)
-                    if repo in self._lore_failed:
-                        self._lore_failed.discard(repo)
+                    # lore did not take it, or GitHub cut a pass that a retry was waiting on short: try again later
+                    again = repo in self._lore_failed or (repo in self._cut and repo in self._retry)
+                    self._lore_failed.discard(repo)
+                    self._cut.discard(repo)
+                    if again:
                         self._retry_later(repo, paths)
                     else:
                         self._retry_done(repo, paths)
@@ -531,6 +537,7 @@ class RepoDecisions:
                 # reconnect is never lost and a push for a removed repo costs nothing.
                 self._stop_retry(repo)   # nothing is left to follow
                 done = await self._delete(repo, list(self._held.get(repo, ())))
+                self._lore_failed.discard(repo)   # no push follows, so a failed delete here is no retry
                 if self._pending.get(repo) or repo in self._touched or repo in self._prune:
                     self._kick(repo)   # settle what was queued: nothing for a repo that stays gone, the import for a reconnect
                 if not self._held.get(repo):
@@ -592,6 +599,7 @@ class RepoDecisions:
         those paths. Documents whose file the tree no longer has are deleted (every one under the folders, or
         the ones in `only`), unless GitHub cut the tree short."""
         if not self.active():
+            self._cut.add(repo)
             return 0
         folders = [f for f in await self._chosen(repo) if wanted is None or f in wanted]   # not trust the request: re-read
         if only is not None:   # a push that touched nothing in a chosen folder costs no GitHub call
@@ -605,9 +613,11 @@ class RepoDecisions:
             raise
         except ValueError as e:
             log.warning("brain repo decisions: cannot read %s: %s", repo, _say(e))
+            self._cut.add(repo)
             return 0
         except Exception as e:   # noqa: BLE001
             log.warning("brain repo decisions: cannot read %s: %s", repo, type(e).__name__)
+            self._cut.add(repo)
             return 0
         put = 0
         counts = {"large": 0, "undated": 0, "gone": 0}
@@ -617,6 +627,7 @@ class RepoDecisions:
                 entries, truncated = await self._tree(gh, repo)
             except _Stop as e:
                 log.warning("brain repo decisions: %s: %s", repo, e.why)
+                self._cut.add(repo)
                 return 0
             files = {}
             for e in entries:
@@ -674,6 +685,7 @@ class RepoDecisions:
                 if not ok:
                     return put
             if stop is not None:
+                self._cut.add(repo)
                 log.warning("brain repo decisions: %s: %s", repo, stop.why)
         skipped = ", ".join(f"{n} {k}" for k, n in counts.items() if n)
         log.info("brain repo decisions: %s: put %d documents%s", repo, put, f" (skipped: {skipped})" if skipped else "")
@@ -689,6 +701,7 @@ class RepoDecisions:
         """Put one batch of (document, digest). A document whose folder is no longer chosen is dropped
         first. Returns (carry on, documents put); a lore error is logged and ends the pass."""
         if not self.active():
+            self._cut.add(repo)
             return False, 0
         chosen = await self._chosen(repo)
         batch = [b for b in batch if self._under(b[0]["external_id"][len(repo) + 1:], chosen)]
@@ -931,5 +944,7 @@ class RepoDecisions:
                     self._retry.clear()
                     self._retry_n.clear()
                     self._lore_failed.clear()
+                    self._cut.clear()
+                    self.retry_in.clear()
 
         app.router.lifespan_context = lifespan
