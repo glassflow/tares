@@ -11,6 +11,9 @@ Stores by hand, with a DSN it names.
                        Postgres start has them all
   local_file_guards    the three guards before the copy reads `sessions.sqlite`: the file's
                        existence, its upgrade, and its ledger
+  split_crews_after_a_failed_start
+                       the split-crew merge of a first start that then fails is made again by the
+                       next try, whose copy brings the bare crew back
 """
 import contextlib
 import gc
@@ -18,7 +21,7 @@ import os
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -99,6 +102,11 @@ def same_rows(s, want, label):
         got = sorted((tuple(ts._norm(v) for v in r) for r in ts._session_rows(s, t)), key=repr)
         exp = sorted(want[t], key=repr)
         if t == "session_stations":
+            # the crew a data upgrade fills into a station that had none is left out; a crew the
+            # row had is compared (the last column)
+            crew = {r[0]: r[-1] for r in exp}
+            ck(f"{label}: {t} keeps each station's crew", all(
+                crew[r[0]] is None or r[-1] == crew[r[0]] for r in got), (got, exp))
             got, exp = [r[:-1] for r in got], [r[:-1] for r in exp]
         ck(f"{label}: {t} holds the same rows", got == exp, (got, exp))
 
@@ -172,6 +180,49 @@ def failed_first_start():
             close(s)
 
 
+def split_crews_after_a_failed_start():
+    print("== a split crew merged by a first start that then fails (TR-1517 review) ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    d, path = older_cell()
+    s = Store(path, state_dsn="")
+    t = datetime(2026, 11, 19, 9, 0, 0, tzinfo=timezone.utc)
+    with s._lock:
+        # one person's crew recorded without its machine and again with one: one crew (TR-1223)
+        s.con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
+        s.con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
+                      [t + timedelta(days=1), t + timedelta(days=2)])
+    with s.sessions_db.begin() as c:                   # the station is in the session store, as a cell
+        c.execute(text("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', "
+                       "'crew-orch', 'p1', :t, 'cb')"), {"t": t})   # that ran on SQLite has it
+    close(s)
+    with pg_schema() as dsn:
+        orig = state_db.move
+        state_db.move = _fail_move
+        try:
+            try:
+                Store(path, state_dsn=dsn)
+                ck("the move raising stops the start", False, "it started")
+            except StoreUnavailable:
+                ck("the move raising stops the start", True)
+        finally:
+            state_db.move = orig
+        gc.collect()
+        ck("the first try merged the crews in Postgres",
+           _pg_query(dsn, "SELECT crew_id FROM session_stations WHERE session = 's3'") == [("cn",)])
+        s = Store(path, state_dsn=dsn)
+        ck("the next start has the state database", state_db.moved(s.sc))
+        ck("the station is on the crew that has the machine, not on the bare one the copy brought back",
+           _pg_query(dsn, "SELECT crew_id FROM session_stations WHERE session = 's3'") == [("cn",)])
+        ck("the bare crew is gone and the kept one spans both",
+           [(r[0], r[1].date().isoformat(), r[2].date().isoformat())
+            for r in _pg_query(dsn, "SELECT id, first_seen, last_seen FROM crews WHERE person_id = 'person1'")]
+           == [("cn", "2026-11-19", "2026-11-21")],
+           _pg_query(dsn, "SELECT id, first_seen, last_seen FROM crews WHERE person_id = 'person1'"))
+        close(s)
+
+
 def _local_file_cell():
     """A cell that ran on SQLite first: sessions.sqlite holds a copy of DuckDB's rows."""
     d, path = older_cell()
@@ -229,5 +280,6 @@ def local_file_guards():
 if __name__ == "__main__":
     failed_first_start()
     local_file_guards()
+    split_crews_after_a_failed_start()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)
