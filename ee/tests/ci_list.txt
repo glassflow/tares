@@ -54,6 +54,7 @@ test_project_page_lead_items
 test_project_page_others
 test_project_secrets
 test_recording_person_team
+test_route_phase_metric
 test_setup_flow_team
 test_spec_questions
 test_sre_private_screens
