@@ -13,8 +13,13 @@ the number read, and a difference raises with the table's name and both numbers.
 On Postgres the session store is the cell's state database itself: the tables there are the live
 ones and the rows are already in place, so there is nothing to copy and the call returns at once.
 The exception is the cell's first start with a state database (`state_move`): its state is still in
-DuckDB, and these five tables go over here, before the data upgrades write to them. A cell that ran
-on SQLite first has its live rows in `sessions.sqlite`, so a table that file's ledger shows as copied
+DuckDB, and these five tables go over here, before the data upgrades write to them. Each table is
+copied afresh then: a start that failed after its copy (the data upgrade or the move raised) left
+rows and ledger entries in Postgres, the cell may have run on SQLite since and written to
+`sessions.sqlite`, and the next first start must bring those rows over. Nothing has been served
+from Postgres yet, so replacing its copy loses nothing; the delete, the copy and the ledger row
+share one transaction, so a failing copy leaves the earlier one as it was. A cell that ran on
+SQLite first has its live rows in `sessions.sqlite`, so a table that file's ledger shows as copied
 comes from the file, and DuckDB's older copy of it is not used.
 """
 from __future__ import annotations
@@ -24,7 +29,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from . import SessionStore
 from .engine import SQLITE_FILE
@@ -66,7 +71,7 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
     copied: dict[str, int] = {}
     try:
         for table in COPIED:
-            if _in_ledger(sessions_db, table):
+            if _in_ledger(sessions_db, table) and not state_move:
                 continue
             cols = [c.name for c in table.columns]
             from_local = local is not None and _in_ledger(local, table)
@@ -83,6 +88,14 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                     cur = store.con.execute(f"SELECT {', '.join(cols)} FROM {table.name}")
                     chunks = (lambda: [dict(zip(cols, r)) for r in cur.fetchmany(CHUNK)])
                 conn = stack.enter_context(sessions_db.begin())
+                if state_move:
+                    # The state has not moved, so nothing has served from these tables yet: a row
+                    # or ledger entry here is from a first start that copied and then failed, and
+                    # the cell may have written to the local file since. Copy the table afresh, in
+                    # this transaction, so a failure leaves the earlier copy as it was.
+                    conn.execute(delete(table))
+                    conn.execute(delete(session_store_copies).where(
+                        session_store_copies.c.table_name == table.name))
                 before = conn.execute(select(func.count()).select_from(table)).scalar_one()
                 read = 0
                 while True:

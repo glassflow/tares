@@ -873,6 +873,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                                  "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
                                  "UPDATE SET value = excluded.value", [now_utc().isoformat()])
                 self._use_pg_state(pg)
+                self._merge_split_crews()         # the bare crews the first merge kept (TR-1517)
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
             # agent_runs (a table with an index) replay after a hard stop into a corrupted index:
             # "Corrupted ART index", and every query after it fails until a restart.

@@ -657,7 +657,13 @@ class FactoryStore:
         """A person's crew recorded without its machine, before the cell had a licence, and the same
         crew recorded with one since are one crew (TR-1223): its sessions move to the crew with the
         machine and the bare record goes. Only when the person has exactly one crew of that name with
-        a machine; with several it can't be told which. Lock held (or no other thread yet)."""
+        a machine; with several it can't be told which. Lock held (or no other thread yet).
+
+        On the first start with a state database the crews are still in DuckDB and the session
+        tables are a copy that the next try of a failed start makes again from DuckDB's rows, which
+        name the bare crew. So the bare record stays until the state has moved (the start merges
+        again then): a second try finds it and remaps the stations again."""
+        unmoved = self.sessions_db.dialect == "postgresql" and self.sc is self.con
         rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen FROM crews").fetchall()
         groups: dict = {}
         for r in rows:
@@ -674,7 +680,8 @@ class FactoryStore:
                 with self.sessions_db.begin() as conn:
                     conn.execute(update(session_stations).where(session_stations.c.crew_id == b[0])
                                  .values(crew_id=keep[0]))
-                self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
+                if not unmoved:
+                    self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
             self.sc.execute("UPDATE crews SET first_seen = ?, last_seen = ? WHERE id = ?",
                             [min(firsts) if firsts else None, max(lasts) if lasts else None, keep[0]])
 
