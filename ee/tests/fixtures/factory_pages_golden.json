@@ -1,0 +1,1678 @@
+{
+ "home": {
+  "areas": [],
+  "counts": {
+   "mine": 0,
+   "team": 25
+  },
+  "crew": {
+   "desk_open": 0,
+   "heard": null,
+   "heard_at": null,
+   "how_far": {
+    "autonomy": "L3-review",
+    "releases": true,
+    "text": "Up to merge"
+   },
+   "members": [],
+   "running": false,
+   "summary": "Not running",
+   "where": null
+  },
+  "crew_limit": {
+   "mine": "you approve each merge",
+   "team": "you approve each merge",
+   "text": "The team allows up to merge. Yours can be stricter, not looser."
+  },
+  "crews": [],
+  "crews_quiet": [
+   "A crew"
+  ],
+  "edition": "factory",
+  "finished_count": 0,
+  "headline": "The crew is not running. Nothing waits for you.",
+  "later_count": 0,
+  "now": "2026-11-19T12:00:00+00:00",
+  "onboarding": {
+   "choices": {
+    "autonomy": null,
+    "builders_max": null,
+    "chosen": false,
+    "defaults": {
+     "autonomy": "L3-review",
+     "builders_max": 2,
+     "releaser": false
+    },
+    "releaser": null
+   },
+   "crew": {
+    "builders": {
+     "live": 0,
+     "max": 2
+    },
+    "machine": "",
+    "orchestrator": {
+     "last_at": null,
+     "state": "none"
+    },
+    "reviewer": {
+     "last_at": null,
+     "state": "none"
+    },
+    "up": false
+   },
+   "github": {
+    "connected": false,
+    "text": ""
+   },
+   "machine": {
+    "at": null,
+    "name": "",
+    "version": ""
+   }
+  },
+  "plan": {
+   "known": false,
+   "limits": [],
+   "share_text": null,
+   "title": "Claude plan"
+  },
+  "plan_command": "tares factory spec",
+  "projects": [],
+  "start": {
+   "done": 0,
+   "hidden": false,
+   "show": true,
+   "steps": [
+    {
+     "actions": [
+      {
+       "label": "Set up your factory",
+       "to": "/setup"
+      }
+     ],
+     "done": false,
+     "gets": "How your crew works, your GitHub, and where tickets, reviews and checks live.",
+     "key": "setup",
+     "title": "Set up your factory",
+     "where": "workspace"
+    },
+    {
+     "actions": [
+      {
+       "copy": "uv tool install tares",
+       "label": "Copy the command"
+      }
+     ],
+     "command": "uv tool install tares",
+     "done": false,
+     "gets": "The command that starts and watches the crew.",
+     "key": "install",
+     "title": "Install Tares",
+     "where": "terminal"
+    },
+    {
+     "actions": [
+      {
+       "copy": "tares login",
+       "label": "Copy the command"
+      }
+     ],
+     "command": "tares login",
+     "done": false,
+     "gets": "So the crew on your machine reports here.",
+     "key": "login",
+     "title": "Sign your machine in",
+     "where": "terminal"
+    },
+    {
+     "actions": [
+      {
+       "copy": "tares factory crew up",
+       "label": "Copy the command"
+      }
+     ],
+     "command": "tares factory crew up",
+     "done": false,
+     "gets": "It reads your choices from this workspace and asks only what belongs to your machine.",
+     "key": "crew",
+     "title": "Start the crew",
+     "where": "terminal"
+    }
+   ],
+   "total": 4
+  },
+  "summary": "Nothing waits for you.",
+  "waiting_for_you": [],
+  "waiting_total": 0,
+  "you_are_waiting_on": []
+ },
+ "project": {
+  "calls": [],
+  "calls_past": [],
+  "can_close": false,
+  "can_edit_icon": true,
+  "can_later": false,
+  "counts": {
+   "blocked": 1,
+   "canceled": 0,
+   "changes_asked": 1,
+   "in_progress": 2,
+   "in_review": 2,
+   "merged": 1,
+   "to_do": 3,
+   "total": 10
+  },
+  "decisions": [],
+  "docs": [],
+  "docs_total": 0,
+  "goal": "Goal of project 00",
+  "icon": null,
+  "id": "uc_budget00",
+  "later": false,
+  "linked": {
+   "tickets_in": null,
+   "url": null
+  },
+  "milestones": [
+   {
+    "accepted": false,
+    "can_accept": false,
+    "checks": [
+     {
+      "by": null,
+      "check": "open the home page",
+      "expect": "it loads",
+      "for": "crew",
+      "n": 1,
+      "note": null,
+      "result": null
+     }
+    ],
+    "checks_for": [],
+    "counts": {
+     "merged": 1,
+     "total": 5
+    },
+    "done": false,
+    "goal": "The pages are live.",
+    "id": "ms_1",
+    "name": "M1: first pages",
+    "needs_person": false,
+    "number": "M1",
+    "tickets_href": "/projects/uc_budget00/tickets?milestone=ms_1",
+    "yours": false
+   },
+   {
+    "accepted": false,
+    "can_accept": false,
+    "checks": [],
+    "checks_for": [],
+    "counts": {
+     "merged": 0,
+     "total": 5
+    },
+    "done": false,
+    "goal": "Search works.",
+    "id": "ms_2",
+    "name": "M2: search",
+    "needs_person": false,
+    "number": "M2",
+    "tickets_href": "/projects/uc_budget00/tickets?milestone=ms_2",
+    "yours": false
+   }
+  ],
+  "moving": [
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_budget00/tickets/T3",
+    "pr": {
+     "number": 3,
+     "state_text": "open, CI failing",
+     "url": "https://github.com/example-org/budget-00/pull/3"
+    },
+    "ref": "T3",
+    "review": null,
+    "state": "changes asked",
+    "title": "Ticket 02 of project 00",
+    "who": "Builder for M1"
+   },
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_budget00/tickets/T2",
+    "pr": {
+     "number": 2,
+     "state_text": "open, CI green",
+     "url": "https://github.com/example-org/budget-00/pull/2"
+    },
+    "ref": "T2",
+    "review": null,
+    "state": "in review",
+    "title": "Ticket 01 of project 00",
+    "who": null
+   },
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_budget00/tickets/T9",
+    "pr": {
+     "number": 9,
+     "state_text": "open, CI green",
+     "url": "https://github.com/example-org/budget-00/pull/9"
+    },
+    "ref": "T9",
+    "review": null,
+    "state": "in review",
+    "title": "Ticket 08 of project 00",
+    "who": null
+   },
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_budget00/tickets/T4",
+    "pr": null,
+    "ref": "T4",
+    "review": null,
+    "state": "in progress",
+    "title": "Ticket 03 of project 00",
+    "who": "Builder for M1"
+   },
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_budget00/tickets/T8",
+    "pr": null,
+    "ref": "T8",
+    "review": null,
+    "state": "in progress",
+    "title": "Ticket 07 of project 00",
+    "who": "Builder for M2"
+   }
+  ],
+  "moving_total": 6,
+  "name": "Budget project 00",
+  "next": {
+   "ticket": "T6",
+   "title": "Ticket 05 of project 00",
+   "why": "ready, nothing it depends on is open"
+  },
+  "now": "2026-11-19T12:00:00+00:00",
+  "people": {
+   "can_add": false,
+   "can_set_lead": true,
+   "lead": null,
+   "members": [],
+   "people": [
+    {
+     "id": "p_1",
+     "name": "Sam",
+     "picture": null
+    }
+   ],
+   "you": "p_1"
+  },
+  "prs_counts": {
+   "closed": 0,
+   "merged": 1,
+   "open": 3
+  },
+  "prs_recent": [
+   {
+    "base": null,
+    "branch": null,
+    "ci": "CI green",
+    "error": null,
+    "head": "aaaaaaa",
+    "number": 9,
+    "repo": "example-org/budget-00",
+    "review": null,
+    "size": null,
+    "state": "open",
+    "state_label": "Open",
+    "ticket": "T9",
+    "ticket_href": "/projects/uc_budget00/tickets/T9",
+    "ticket_title": "Ticket 08 of project 00",
+    "title": "Ticket 08 of project 00",
+    "url": "https://github.com/example-org/budget-00/pull/9",
+    "when": "opened"
+   },
+   {
+    "base": null,
+    "branch": null,
+    "ci": "CI failing",
+    "error": null,
+    "head": "aaaaaaa",
+    "number": 3,
+    "repo": "example-org/budget-00",
+    "review": null,
+    "size": null,
+    "state": "open",
+    "state_label": "Open",
+    "ticket": "T3",
+    "ticket_href": "/projects/uc_budget00/tickets/T3",
+    "ticket_title": "Ticket 02 of project 00",
+    "title": "Ticket 02 of project 00",
+    "url": "https://github.com/example-org/budget-00/pull/3",
+    "when": "opened"
+   },
+   {
+    "base": null,
+    "branch": null,
+    "ci": "CI green",
+    "error": null,
+    "head": "aaaaaaa",
+    "number": 2,
+    "repo": "example-org/budget-00",
+    "review": null,
+    "size": null,
+    "state": "open",
+    "state_label": "Open",
+    "ticket": "T2",
+    "ticket_href": "/projects/uc_budget00/tickets/T2",
+    "ticket_title": "Ticket 01 of project 00",
+    "title": "Ticket 01 of project 00",
+    "url": "https://github.com/example-org/budget-00/pull/2",
+    "when": "opened"
+   }
+  ],
+  "prs_total": 4,
+  "repos": [
+   "example-org/budget-00"
+  ],
+  "secrets": null,
+  "stage": "spec",
+  "stage_label": "Spec",
+  "state": "building",
+  "state_label": "Building",
+  "terminal": [
+   {
+    "command": "tares factory crew attach budget00-build-m1",
+    "label": "Open the builder's session"
+   }
+  ],
+  "tickets_href": "/projects/uc_budget00/tickets",
+  "waiting": [],
+  "waiting_others": []
+ },
+ "projects": {
+  "counts": {
+   "all": 25,
+   "building": 25,
+   "done": 0,
+   "later": 0,
+   "not_started": 0,
+   "ready_to_close": 0,
+   "waiting_on_you": 0
+  },
+  "now": "2026-11-19T12:00:00+00:00",
+  "projects": [
+   {
+    "builders": 1,
+    "can_close": false,
+    "goal": "Goal of project 00",
+    "icon": null,
+    "id": "uc_budget00",
+    "last_activity": "just now",
+    "last_activity_at": "2026-11-19T12:00:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "1 builder \u00b7 Active just now",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 00",
+    "repo_names": [
+     "example-org/budget-00"
+    ],
+    "repos": [
+     "budget-00"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 1,
+    "can_close": false,
+    "goal": "Goal of project 01",
+    "icon": null,
+    "id": "uc_budget01",
+    "last_activity": "3 minutes ago",
+    "last_activity_at": "2026-11-19T11:57:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "1 builder \u00b7 Active 3 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 01",
+    "repo_names": [
+     "example-org/budget-01"
+    ],
+    "repos": [
+     "budget-01"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 1,
+    "can_close": false,
+    "goal": "Goal of project 02",
+    "icon": null,
+    "id": "uc_budget02",
+    "last_activity": "6 minutes ago",
+    "last_activity_at": "2026-11-19T11:54:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "1 builder \u00b7 Active 6 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 02",
+    "repo_names": [
+     "example-org/budget-02"
+    ],
+    "repos": [
+     "budget-02"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 03",
+    "icon": null,
+    "id": "uc_budget03",
+    "last_activity": "9 minutes ago",
+    "last_activity_at": "2026-11-19T11:51:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 9 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 03",
+    "repo_names": [
+     "example-org/budget-03"
+    ],
+    "repos": [
+     "budget-03"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 04",
+    "icon": null,
+    "id": "uc_budget04",
+    "last_activity": "12 minutes ago",
+    "last_activity_at": "2026-11-19T11:48:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 12 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 04",
+    "repo_names": [
+     "example-org/budget-04"
+    ],
+    "repos": [
+     "budget-04"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 05",
+    "icon": null,
+    "id": "uc_budget05",
+    "last_activity": "15 minutes ago",
+    "last_activity_at": "2026-11-19T11:45:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 15 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 05",
+    "repo_names": [
+     "example-org/budget-05"
+    ],
+    "repos": [
+     "budget-05"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 06",
+    "icon": null,
+    "id": "uc_budget06",
+    "last_activity": "18 minutes ago",
+    "last_activity_at": "2026-11-19T11:42:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 18 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 06",
+    "repo_names": [
+     "example-org/budget-06"
+    ],
+    "repos": [
+     "budget-06"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 07",
+    "icon": null,
+    "id": "uc_budget07",
+    "last_activity": "21 minutes ago",
+    "last_activity_at": "2026-11-19T11:39:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 21 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 07",
+    "repo_names": [
+     "example-org/budget-07"
+    ],
+    "repos": [
+     "budget-07"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 08",
+    "icon": null,
+    "id": "uc_budget08",
+    "last_activity": "24 minutes ago",
+    "last_activity_at": "2026-11-19T11:36:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 24 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 08",
+    "repo_names": [
+     "example-org/budget-08"
+    ],
+    "repos": [
+     "budget-08"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 09",
+    "icon": null,
+    "id": "uc_budget09",
+    "last_activity": "27 minutes ago",
+    "last_activity_at": "2026-11-19T11:33:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 27 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 09",
+    "repo_names": [
+     "example-org/budget-09"
+    ],
+    "repos": [
+     "budget-09"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 10",
+    "icon": null,
+    "id": "uc_budget10",
+    "last_activity": "30 minutes ago",
+    "last_activity_at": "2026-11-19T11:30:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 30 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 10",
+    "repo_names": [
+     "example-org/budget-10"
+    ],
+    "repos": [
+     "budget-10"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 11",
+    "icon": null,
+    "id": "uc_budget11",
+    "last_activity": "33 minutes ago",
+    "last_activity_at": "2026-11-19T11:27:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 33 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 11",
+    "repo_names": [
+     "example-org/budget-11"
+    ],
+    "repos": [
+     "budget-11"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 12",
+    "icon": null,
+    "id": "uc_budget12",
+    "last_activity": "36 minutes ago",
+    "last_activity_at": "2026-11-19T11:24:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 36 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 12",
+    "repo_names": [
+     "example-org/budget-12"
+    ],
+    "repos": [
+     "budget-12"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 13",
+    "icon": null,
+    "id": "uc_budget13",
+    "last_activity": "39 minutes ago",
+    "last_activity_at": "2026-11-19T11:21:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 39 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 13",
+    "repo_names": [
+     "example-org/budget-13"
+    ],
+    "repos": [
+     "budget-13"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 14",
+    "icon": null,
+    "id": "uc_budget14",
+    "last_activity": "42 minutes ago",
+    "last_activity_at": "2026-11-19T11:18:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 42 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 14",
+    "repo_names": [
+     "example-org/budget-14"
+    ],
+    "repos": [
+     "budget-14"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 15",
+    "icon": null,
+    "id": "uc_budget15",
+    "last_activity": "45 minutes ago",
+    "last_activity_at": "2026-11-19T11:15:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 45 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 15",
+    "repo_names": [
+     "example-org/budget-15"
+    ],
+    "repos": [
+     "budget-15"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 16",
+    "icon": null,
+    "id": "uc_budget16",
+    "last_activity": "48 minutes ago",
+    "last_activity_at": "2026-11-19T11:12:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 48 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 16",
+    "repo_names": [
+     "example-org/budget-16"
+    ],
+    "repos": [
+     "budget-16"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 17",
+    "icon": null,
+    "id": "uc_budget17",
+    "last_activity": "51 minutes ago",
+    "last_activity_at": "2026-11-19T11:09:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 51 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 17",
+    "repo_names": [
+     "example-org/budget-17"
+    ],
+    "repos": [
+     "budget-17"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 18",
+    "icon": null,
+    "id": "uc_budget18",
+    "last_activity": "54 minutes ago",
+    "last_activity_at": "2026-11-19T11:06:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 54 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 18",
+    "repo_names": [
+     "example-org/budget-18"
+    ],
+    "repos": [
+     "budget-18"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 19",
+    "icon": null,
+    "id": "uc_budget19",
+    "last_activity": "57 minutes ago",
+    "last_activity_at": "2026-11-19T11:03:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 57 minutes ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 19",
+    "repo_names": [
+     "example-org/budget-19"
+    ],
+    "repos": [
+     "budget-19"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 20",
+    "icon": null,
+    "id": "uc_budget20",
+    "last_activity": "1 hour ago",
+    "last_activity_at": "2026-11-19T11:00:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 1 hour ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 20",
+    "repo_names": [
+     "example-org/budget-20"
+    ],
+    "repos": [
+     "budget-20"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 21",
+    "icon": null,
+    "id": "uc_budget21",
+    "last_activity": "1 hour ago",
+    "last_activity_at": "2026-11-19T10:57:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 1 hour ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 21",
+    "repo_names": [
+     "example-org/budget-21"
+    ],
+    "repos": [
+     "budget-21"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 22",
+    "icon": null,
+    "id": "uc_budget22",
+    "last_activity": "1 hour ago",
+    "last_activity_at": "2026-11-19T10:54:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 1 hour ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 22",
+    "repo_names": [
+     "example-org/budget-22"
+    ],
+    "repos": [
+     "budget-22"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 23",
+    "icon": null,
+    "id": "uc_budget23",
+    "last_activity": "1 hour ago",
+    "last_activity_at": "2026-11-19T10:51:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 1 hour ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 23",
+    "repo_names": [
+     "example-org/budget-23"
+    ],
+    "repos": [
+     "budget-23"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   },
+   {
+    "builders": 0,
+    "can_close": false,
+    "goal": "Goal of project 24",
+    "icon": null,
+    "id": "uc_budget24",
+    "last_activity": "1 hour ago",
+    "last_activity_at": "2026-11-19T10:48:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "No builders working \u00b7 Active 1 hour ago",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Budget project 24",
+    "repo_names": [
+     "example-org/budget-24"
+    ],
+    "repos": [
+     "budget-24"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "blocked": 1,
+     "merged": 1,
+     "total": 10
+    },
+    "yours": 0,
+    "yours_text": "10 tickets unassigned"
+   }
+  ],
+  "team": {
+   "counts": {
+    "mine": 0,
+    "team": 25
+   },
+   "hidden": []
+  }
+ },
+ "raw_ticket": {
+  "assignee": null,
+  "assignee_raw": null,
+  "assumptions": [],
+  "blocked_by": [],
+  "challenger": {
+   "clean": true,
+   "fixed": [],
+   "open": [],
+   "rounds": 0,
+   "sha": null,
+   "verdict": null,
+   "waived": []
+  },
+  "checks": [],
+  "decisions": [],
+  "depends_on": [],
+  "history": [
+   {
+    "at": "2026-11-16T12:00:00+00:00",
+    "by": "crew-orchestrator",
+    "by_label": "crew-orchestrator",
+    "field": "status",
+    "person": null,
+    "reason": null,
+    "role": "builder",
+    "value": "todo"
+   },
+   {
+    "at": "2026-11-16T13:00:00+00:00",
+    "by": "crew-orchestrator",
+    "by_label": "crew-orchestrator",
+    "field": "stage",
+    "person": null,
+    "reason": null,
+    "role": "builder",
+    "value": "doing"
+   },
+   {
+    "at": "2026-11-16T14:00:00+00:00",
+    "by": "crew-orchestrator",
+    "by_label": "crew-orchestrator",
+    "field": "holder",
+    "person": null,
+    "reason": null,
+    "role": "builder",
+    "value": null
+   },
+   {
+    "at": "2026-11-16T15:00:00+00:00",
+    "by": "crew-orchestrator",
+    "by_label": "crew-orchestrator",
+    "field": "stage",
+    "person": null,
+    "reason": null,
+    "role": "builder",
+    "value": "review"
+   }
+  ],
+  "holder": null,
+  "id": "tk_1",
+  "identifier": null,
+  "label": "T2",
+  "milestone": "ms_1",
+  "milestone_name": "M1: first pages",
+  "number": 2,
+  "owner": "tares",
+  "position": 2.0,
+  "pr": {
+   "behind_by": null,
+   "checked_at": "2026-11-19T12:00:00+00:00",
+   "ci": "success",
+   "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
+   "head": "aaaaaaa0001",
+   "merged": false,
+   "number": 2,
+   "repo": "example-org/budget-00",
+   "state": "open",
+   "url": "https://github.com/example-org/budget-00/pull/2"
+  },
+  "pr_note": null,
+  "ready": false,
+  "repo": "example-org/budget-00",
+  "reviews": [],
+  "stage": "review",
+  "stage_reason": null,
+  "status": "in_progress",
+  "title": "Ticket 01 of project 00",
+  "updated_at": "2026-11-19T12:00:00+00:00",
+  "url": null,
+  "verdict": null,
+  "working_doc": null,
+  "working_doc_body": null,
+  "working_doc_title": null
+ },
+ "raw_tickets": {
+  "github": null,
+  "linear": null,
+  "tickets": [
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_1",
+    "identifier": null,
+    "label": "T1",
+    "milestone": "ms_1",
+    "milestone_name": "M1: first pages",
+    "number": 1,
+    "owner": "tares",
+    "position": 1.0,
+    "pr": {
+     "checked_at": "2026-11-19T12:00:00+00:00",
+     "ci": "success",
+     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
+     "head": "aaaaaaa0000",
+     "merged": true,
+     "number": 1,
+     "repo": "example-org/budget-00",
+     "state": "closed",
+     "url": "https://github.com/example-org/budget-00/pull/1"
+    },
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "merged",
+    "stage_reason": null,
+    "status": "done",
+    "title": "Ticket 00 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_2",
+    "identifier": null,
+    "label": "T2",
+    "milestone": "ms_1",
+    "milestone_name": "M1: first pages",
+    "number": 2,
+    "owner": "tares",
+    "position": 2.0,
+    "pr": {
+     "behind_by": null,
+     "checked_at": "2026-11-19T12:00:00+00:00",
+     "ci": "success",
+     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
+     "head": "aaaaaaa0001",
+     "merged": false,
+     "number": 2,
+     "repo": "example-org/budget-00",
+     "state": "open",
+     "url": "https://github.com/example-org/budget-00/pull/2"
+    },
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "review",
+    "stage_reason": null,
+    "status": "in_progress",
+    "title": "Ticket 01 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": "budget00-build-m1",
+    "id": "tk_3",
+    "identifier": null,
+    "label": "T3",
+    "milestone": "ms_1",
+    "milestone_name": "M1: first pages",
+    "number": 3,
+    "owner": "tares",
+    "position": 3.0,
+    "pr": {
+     "checked_at": "2026-11-19T12:00:00+00:00",
+     "ci": "failure",
+     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
+     "head": "aaaaaaa0002",
+     "merged": false,
+     "number": 3,
+     "repo": "example-org/budget-00",
+     "state": "open",
+     "url": "https://github.com/example-org/budget-00/pull/3"
+    },
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "changes",
+    "stage_reason": null,
+    "status": "in_progress",
+    "title": "Ticket 02 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": "budget00-build-m1",
+    "id": "tk_4",
+    "identifier": null,
+    "label": "T4",
+    "milestone": "ms_1",
+    "milestone_name": "M1: first pages",
+    "number": 4,
+    "owner": "tares",
+    "position": 4.0,
+    "pr": null,
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "doing",
+    "stage_reason": null,
+    "status": "in_progress",
+    "title": "Ticket 03 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_5",
+    "identifier": null,
+    "label": "T5",
+    "milestone": "ms_1",
+    "milestone_name": "M1: first pages",
+    "number": 5,
+    "owner": "tares",
+    "position": 5.0,
+    "pr": null,
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "blocked",
+    "stage_reason": null,
+    "status": "in_progress",
+    "title": "Ticket 04 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_6",
+    "identifier": null,
+    "label": "T6",
+    "milestone": "ms_2",
+    "milestone_name": "M2: search",
+    "number": 6,
+    "owner": "tares",
+    "position": 6.0,
+    "pr": null,
+    "pr_note": null,
+    "ready": true,
+    "repo": "example-org/budget-00",
+    "stage": null,
+    "stage_reason": null,
+    "status": "todo",
+    "title": "Ticket 05 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_7",
+    "identifier": null,
+    "label": "T7",
+    "milestone": "ms_2",
+    "milestone_name": "M2: search",
+    "number": 7,
+    "owner": "tares",
+    "position": 7.0,
+    "pr": null,
+    "pr_note": null,
+    "ready": true,
+    "repo": "example-org/budget-00",
+    "stage": null,
+    "stage_reason": null,
+    "status": "todo",
+    "title": "Ticket 06 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": "budget00-build-m1",
+    "id": "tk_8",
+    "identifier": null,
+    "label": "T8",
+    "milestone": "ms_2",
+    "milestone_name": "M2: search",
+    "number": 8,
+    "owner": "tares",
+    "position": 8.0,
+    "pr": null,
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "doing",
+    "stage_reason": null,
+    "status": "in_progress",
+    "title": "Ticket 07 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_9",
+    "identifier": null,
+    "label": "T9",
+    "milestone": "ms_2",
+    "milestone_name": "M2: search",
+    "number": 9,
+    "owner": "tares",
+    "position": 9.0,
+    "pr": {
+     "behind_by": null,
+     "checked_at": "2026-11-19T12:00:00+00:00",
+     "ci": "success",
+     "error": "no GitHub credential on this Tares can read it (Settings, GitHub)",
+     "head": "aaaaaaa0008",
+     "merged": false,
+     "number": 9,
+     "repo": "example-org/budget-00",
+     "state": "open",
+     "url": "https://github.com/example-org/budget-00/pull/9"
+    },
+    "pr_note": null,
+    "ready": false,
+    "repo": "example-org/budget-00",
+    "stage": "review",
+    "stage_reason": null,
+    "status": "in_progress",
+    "title": "Ticket 08 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "depends_on": [],
+    "holder": null,
+    "id": "tk_10",
+    "identifier": null,
+    "label": "T10",
+    "milestone": "ms_2",
+    "milestone_name": "M2: search",
+    "number": 10,
+    "owner": "tares",
+    "position": 10.0,
+    "pr": null,
+    "pr_note": null,
+    "ready": true,
+    "repo": "example-org/budget-00",
+    "stage": null,
+    "stage_reason": null,
+    "status": "todo",
+    "title": "Ticket 09 of project 00",
+    "updated_at": "2026-11-19T12:00:00+00:00",
+    "url": null,
+    "verdict": null,
+    "working_doc": null,
+    "working_doc_title": null
+   }
+  ]
+ },
+ "ticket": {
+  "blocked_reason": null,
+  "blocks": [],
+  "calls": [],
+  "checks": [],
+  "decisions": [],
+  "depends_on": [],
+  "history": [
+   {
+    "at": "2026-11-16T15:00:00+00:00",
+    "text": null,
+    "what": "Moved to in review",
+    "when": "2 days ago",
+    "who": "the builder"
+   },
+   {
+    "at": "2026-11-16T14:00:00+00:00",
+    "text": null,
+    "what": "Taken off whoever had it",
+    "when": "2 days ago",
+    "who": "the builder"
+   },
+   {
+    "at": "2026-11-16T13:00:00+00:00",
+    "text": null,
+    "what": "Started",
+    "when": "2 days ago",
+    "who": "the builder"
+   },
+   {
+    "at": "2026-11-16T12:00:00+00:00",
+    "text": null,
+    "what": "Changed the status",
+    "when": "3 days ago",
+    "who": "the builder"
+   }
+  ],
+  "in": "Tares",
+  "milestone": {
+   "id": "ms_1",
+   "name": "M1: first pages",
+   "number": "M1"
+  },
+  "notes": "",
+  "now": "2026-11-19T12:00:00+00:00",
+  "pr": {
+   "number": 2,
+   "state_text": "open, CI green",
+   "url": "https://github.com/example-org/budget-00/pull/2"
+  },
+  "project": {
+   "href": "/projects/uc_budget00",
+   "icon": null,
+   "id": "uc_budget00",
+   "name": "Budget project 00"
+  },
+  "ref": "T2",
+  "reviews": [],
+  "state": "in_review",
+  "state_label": "In review",
+  "terminal": [],
+  "title": "Ticket 01 of project 00",
+  "url": null,
+  "who": null
+ }
+}

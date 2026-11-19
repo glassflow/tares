@@ -1,0 +1,323 @@
+# Tares enterprise licence, see ee/LICENSE
+"""How many statements each factory page runs (TR-1501), and what each page answers.
+
+A licensed factory cell with a team's worth of work: 25 projects of 10 tickets each (with history),
+3 of them handed to a crew, 40 crew sessions over 6 stations, and one person who signs in with a key
+(next to the cell's own `local` person, so the team parts of the pages run). That person reads the
+pages the console opens on: Home, the Projects list, one project, one ticket, and the two raw ticket
+routes. A counting stand-in replaces the store's connections, so every statement a route runs is
+counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc.execute`; a
+sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
+its BUDGET fails the test.
+
+The pages answer the same thing on every run: the clock is frozen, ids are numbered in the order they
+appear, and the bodies are compared with ee/tests/fixtures/factory_pages_golden.json. A later change
+that must move a body re-records it with `--write-golden` and says why in its PR.
+
+Run: .venv/bin/python ee/tests/test_factory_query_budget.py [--write-golden]
+Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_factory_query_budget.py
+"""
+import asyncio
+import contextvars
+import json
+import math
+import os
+import re
+import sys
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
+
+ROOT = licensed.REPO
+sys.path.insert(0, ROOT)
+GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "factory_pages_golden.json")
+WRITE_GOLDEN = "--write-golden" in sys.argv
+
+
+def _licence() -> str:
+    """A licence that is valid on any day the test runs: the clock below is frozen, so one issued
+    and ending on fixed dates."""
+    kit = licensed.kit
+    root_priv, _ = kit.keypair(kit.ROOT_PHRASE)
+    iss_priv, iss_pub = kit.keypair(kit.ISSUER_PHRASE)
+    cert = kit.issuer_cert(root_priv, iss_pub, "2099-01-01")
+    return kit.sign(iss_priv, cert, "Test Org", 5, ("enterprise",), "2020-01-01T00:00:00Z",
+                    "2099-01-01", "lic_ee_budget")
+
+
+os.environ["TZ"] = "UTC"      # DuckDB answers times in the machine's zone; the golden file is one zone's
+time.tzset()
+
+_TMP = tempfile.mkdtemp(prefix="tares-query-budget-")
+os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = _licence()
+os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-query-budget"
+os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_EDITION"] = "factory"
+
+import httpx
+
+from tares import factory_home as fh
+from tares.envelope import Envelope
+
+NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
+
+# The budget is shared by every lane of the project factory-perf-m1: any later ticket whose change
+# moves a count updates BUDGET in its own PR and says why; only TR-1472 and TR-1503 lower it on
+# purpose.
+#
+# Statements per route for the cell seeded below, by the backend the state is on (DuckDB, or Postgres
+# when TARES_TEST_PG is set): the count measured on 2026-11-19 plus 2 percent, rounded up (the
+# ticket says 5, but 5 percent of 780 is 39 statements and one query per project is 25: the definition
+# of done wants that caught, and the counts do not vary between runs). Both
+# backends measured the same today (449, 780, 374, 46, 13, 19), but each has its own entry so a
+# change that moves one (a sessions database, a Postgres-only read) can move only that one.
+_TODAY = {"home": 458, "projects": 796, "project": 382, "ticket": 47, "raw_tickets": 14, "raw_ticket": 20}
+BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
+
+ROUTES = [
+    ("home", "/api/home"),
+    ("projects", "/api/factory/projects"),
+    ("project", "/api/factory/projects/{uid}"),
+    ("ticket", "/api/factory/projects/{uid}/tickets/{ref}"),
+    ("raw_tickets", "/api/projects/{uid}/tickets"),
+    ("raw_ticket", "/api/projects/{uid}/tickets/{ref}"),
+]
+
+P = F = 0
+
+
+def ck(label, cond, detail=""):
+    global P, F
+    P += 1 if cond else 0
+    F += 0 if cond else 1
+    print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
+
+
+# ── the counting stand-in ────────────────────────────────────────────────────────────────────
+_COUNTER: contextvars.ContextVar = contextvars.ContextVar("query_counter", default=None)
+
+
+def _hit(n: int = 1) -> None:
+    c = _COUNTER.get()
+    if c is not None:
+        c[0] += n
+
+
+class CountingCon:
+    """Stands in for the DuckDB connection: counts execute and executemany, hands everything else
+    (cursor, close, fetch calls on a result) to the real one. The counter is a context variable, so
+    only the route being measured counts, whichever thread it runs a statement on (the daemon's
+    threads copy the context of the request that started them), and a background thread of the
+    daemon does not."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def execute(self, *a, **kw):
+        _hit()
+        return self._real.execute(*a, **kw)
+
+    def executemany(self, *a, **kw):
+        _hit()
+        return self._real.executemany(*a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def install_counters(store) -> str:
+    """Count every statement the store runs from now on. Returns the backend: duckdb or postgres."""
+    shared = store.sc is store.con
+    store.con = CountingCon(store.con)
+    if shared:
+        store.sc = store.con          # one connection under one lock, counted once per call
+        backend = "duckdb"
+    else:
+        backend = "postgres"
+        pg = store.sc
+        for name in ("execute", "executemany"):
+            real = getattr(pg, name)
+
+            def counted(*a, _real=real, **kw):
+                _hit()
+                return _real(*a, **kw)
+            setattr(pg, name, counted)
+    sdb = getattr(store, "sessions_db", None)   # a database of its own for sessions (TR-1493), when there is one
+    if sdb is not None:
+        from sqlalchemy import event
+        engine = getattr(sdb, "engine", sdb)
+        event.listen(engine, "before_cursor_execute", lambda *a, **kw: _hit())
+    return backend
+
+
+# ── a fixed clock, and bodies that read the same on every run ───────────────────────────────────
+def freeze_clock() -> None:
+    """Every `now_utc` the package imported answers NOW, so the words that say how long ago
+    something was (and the times a body holds) are the same on every run."""
+    for name, mod in list(sys.modules.items()):
+        if name.split(".")[0] in ("tares", "tares_ee") and getattr(mod, "now_utc", None) is not None:
+            mod.now_utc = lambda: NOW
+
+
+_ID = re.compile(r"\b([a-z]{1,6})_([0-9a-f]{8,32})\b")
+
+
+def steady(body):
+    """The body with each generated id (tk_1a2b..., ms_..., per_...) replaced by its prefix and the
+    order it first appears in, the same id by the same number."""
+    seen: dict[str, str] = {}
+    n: dict[str, int] = {}
+
+    def sub(m):
+        if m.group(0) not in seen:
+            n[m.group(1)] = n.get(m.group(1), 0) + 1
+            seen[m.group(0)] = f"{m.group(1)}_{n[m.group(1)]}"
+        return seen[m.group(0)]
+
+    def walk(v):
+        if isinstance(v, str):
+            return _ID.sub(sub, v)
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, dict):
+            return {walk(k): walk(x) for k, x in v.items()}
+        return v
+    return walk(body)
+
+
+def ago(**kw):
+    return NOW - timedelta(**kw)
+
+
+def seed(store):
+    """25 projects of 10 tickets each with history, 3 handed over, 40 sessions over 6 stations."""
+    stages = ["merged", "review", "changes", "doing", "blocked", None, None, "doing", "review", None]
+    by_project = {}
+    for i in range(25):
+        uid = f"uc_budget{i:02d}"
+        store.create_project(uid, "custom", f"Budget project {i:02d}", {}, goal=f"Goal of project {i:02d}")
+        store.set_project_kind(uid, "software_factory")
+        repo = f"example-org/budget-{i:02d}"
+        m1 = store.create_milestone(uid, "M1: first pages", "The pages are live.",
+                                    [{"check": "open the home page", "expect": "it loads"}])
+        m2 = store.create_milestone(uid, "M2: search", "Search works.", [])
+        tickets = []
+        for j in range(10):
+            stage = stages[j]
+            done = stage == "merged"
+            holder = f"budget{i % 3:02d}-build-m1" if stage in ("doing", "changes") else None
+            tid = store.create_ticket(uid, "tares", f"Ticket {j:02d} of project {i:02d}",
+                                      milestone=m1 if j < 5 else m2, repo=repo)
+            fields = {"stage": stage, "status": "done" if done else ("in_progress" if stage else "todo"),
+                      "holder": holder}
+            if stage in ("review", "changes", "merged"):
+                fields["pr"] = {"url": f"https://github.com/{repo}/pull/{j + 1}", "repo": repo,
+                                "number": j + 1, "head": f"aaaaaaa{j:04d}",
+                                "state": "closed" if done else "open", "merged": done,
+                                "ci": "success" if stage != "changes" else "failure"}
+            store.update_ticket(tid, **fields)
+            for k, (field, value) in enumerate((("status", "todo"), ("stage", "doing"), ("holder", holder),
+                                                ("stage", stage))):
+                store.add_ticket_history(tid, uid, field, value, None, holder or "crew-orchestrator",
+                                         "builder", ago(days=3, hours=-k))
+            tickets.append(tid)
+        by_project[uid] = tickets
+        # each project moved at its own minute, so the list's order does not hang on a tie
+        stamp = ago(minutes=i * 3)
+        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?", [stamp, uid])
+        store.sc.execute("UPDATE usecases SET created_at = ?, updated_at = ? WHERE id = ?",
+                         [ago(days=30, minutes=i), stamp, uid])
+        if i < 3:
+            store.set_handover(uid, [{"path": f"/Users/sam/code/budget-{i:02d}", "name": repo}],
+                               None, None, ago(days=2))
+    stations = [("crew-orchestrator", "orchestrator", ""), ("crew-reviewer", "reviewer", "crew-orchestrator"),
+                ("crew-releaser", "releaser", "crew-orchestrator")] + [
+        (f"budget{k:02d}-build-m1", "builder", "crew-orchestrator") for k in range(3)]
+    envs = []
+    for n in range(40):
+        station, role, parent = stations[n % 6]
+        sid = f"sess-{n:02d}"
+        store.set_session_station(sid, station, role, parent, f"uc_budget{n % 3:02d}" if role == "builder" else None,
+                                  ago(hours=n % 5 + 1))
+        for e in range(2):
+            t = ago(hours=n % 5, minutes=e * 7 + n)
+            envs.append(Envelope("claude_code", "claude_code", sid, "assistant", f"line {e} of {sid}",
+                                 t, {"session_id": sid}, {"session_id": sid}, t))
+    store.append(envs)
+    return by_project
+
+
+async def main():
+    from tares.daemon import make_app
+    freeze_clock()
+    app = make_app()
+    store = app.state.store
+    root = {"Authorization": f"Bearer {TOKEN}"}
+    bodies, counts = {}, {}
+
+    async def call(hdr, path):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                     headers=hdr, timeout=60) as cx:
+            return await cx.get(path)
+
+    async with app.router.lifespan_context(app):
+        r = await httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                    headers=root).post("/api/keys", json={
+                                        "name": "sam-laptop", "scopes": ["admin"],
+                                        "person": {"email": "sam-budget@example.com", "name": "Sam"}})
+        assert r.status_code in (200, 201), r.text
+        sam = {"Authorization": f"Bearer {r.json()['secret']}"}
+        by_project = seed(store)
+        ck("one person beside local, so the team parts run", not store.only_local_person())
+        backend = install_counters(store)
+        print(f"backend: {backend}")
+        uid = "uc_budget00"
+        ref = store.get_ticket(uid, by_project[uid][1])["id"]   # a ticket in review with a pull request
+        for name, tmpl in ROUTES:
+            path = tmpl.format(uid=uid, ref=ref)
+            fh.clear_cache()
+            counter = [0]
+            token = _COUNTER.set(counter)
+            try:
+                resp = await call(sam, path)
+            finally:
+                _COUNTER.reset(token)
+            ck(f"GET {tmpl} answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
+            counts[name] = counter[0]
+            bodies[name] = steady(resp.json())
+            print(f"  {name:<12} {counter[0]:>5} statements   {path}")
+
+    print("== the budget ==")
+    budget = BUDGET[backend]
+    for name, _ in ROUTES:
+        ck(f"{name} runs statements the counter can see", counts[name] > 0, counts[name])
+        ck(f"{name}: {counts[name]} statements, budget {budget.get(name)}",
+           name in budget and counts[name] <= budget[name],
+           f"{counts[name]} over a budget of {budget.get(name)}")
+    print("  a budget at this run's counts plus 2 percent:", {k: math.ceil(v * 1.02) for k, v in counts.items()})
+
+    print("== the bodies ==")
+    if WRITE_GOLDEN:
+        os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
+        with open(GOLDEN, "w") as f:
+            json.dump(bodies, f, indent=1, sort_keys=True)
+            f.write("\n")
+        print(f"  wrote {GOLDEN}")
+    else:
+        with open(GOLDEN) as f:
+            want = json.load(f)
+        for name, _ in ROUTES:
+            same = json.loads(json.dumps(bodies[name], sort_keys=True)) == want.get(name)
+            ck(f"{name} answers what the golden file has", same, "differs: run with --write-golden "
+               "to see the diff in git, and say why the body moved")
+    print(f"\n{P} passed, {F} failed")
+    sys.exit(1 if F else 0)
+
+
+asyncio.run(main())
