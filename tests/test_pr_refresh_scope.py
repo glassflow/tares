@@ -172,6 +172,28 @@ async def main():
                r.status_code == 200 and took < FAST, (r.status_code, took, r.text[:200]))
     ck("no GitHub call for any of them", gh.pulls == before, gh.pulls[len(before):])
 
+    print("== a read that has something to write refreshes even a fresh pull request ==")
+    fresh = now_utc().isoformat()
+    unmarked = ticket("Merged on GitHub, not marked", stage="review", status="in_progress",
+                      pr=pr(30, state="closed", merged=True, changed_files=2, checked_at=fresh))
+    changes = ticket("Changes asked, head known", stage="changes", status="in_progress",
+                     pr=pr(31, checked_at=fresh))
+    store.add_review(uid, changes, None, "0000oldhead", "changes", "ran it", "", "reviewer", [], {},
+                     lambda *a, **k: None, now_utc())     # a verdict given on an older commit
+    idle = ticket("Fresh and idle", stage="doing", status="in_progress", pr=pr(32, checked_at=fresh))
+    before = list(gh.pulls)
+    r, took = await timed(f"/api/projects/{uid}/tickets/{unmarked}")
+    ck("a fresh pull request that is merged but not marked is marked merged on the read",
+       r.status_code == 200 and r.json()["stage"] == "merged", (r.status_code, r.text[:200]))
+    ck("a merge already read in full makes no GitHub call", gh.pulls == before, gh.pulls[len(before):])
+    r, took = await timed(f"/api/projects/{uid}/tickets/{changes}")
+    ck("new commits after the verdict move a fresh changes ticket back to review, with no GitHub call",
+       r.status_code == 200 and r.json()["stage"] == "review" and 31 not in gh.pulls[len(before):],
+       (r.status_code, r.text[:160], gh.pulls[len(before):]))
+    r, took = await timed(f"/api/projects/{uid}/tickets/{idle}")
+    ck("a fresh pull request with nothing to follow is not read", 32 not in gh.pulls and took < FAST,
+       (gh.pulls[len(before):], took))
+
     print("== a failure never fails the read ==")
     r, took = await timed(f"/api/projects/{uid}/tickets/{broke}")
     ck(f"GitHub answering 500 gives the ticket, as cached ({took:.2f}s)", r.status_code == 200 and took < CAPPED,

@@ -141,14 +141,20 @@ async def _refresh_ticket_pr(store, uid: str, t: dict) -> None:
 
 def projects_with_open_prs(store) -> list[str]:
     """The factory projects with a ticket still open whose pull request is linked and neither
-    merged nor closed: the ones the background sync keeps current (TR-1010)."""
+    merged nor closed: the ones the background sync keeps current (TR-1010). Also a project that
+    has a ticket in the work with no pull request linked yet and a repo to look in, since only
+    the sync links a `factory/<ref>` branch now (a ticket read no longer does, TR-1474)."""
     out = []
     ids = [p["id"] for p in store.list_projects() if p.get("kind") == "software_factory"]
     for uid, tickets in store.tickets_by_project(ids).items():
+        has_repo = any((t.get("pr") or {}).get("repo") for t in tickets)
         for t in tickets:
             pr = t.get("pr") or {}
             if (pr.get("repo") and not pr.get("merged") and pr.get("state") != "closed"
                     and factory_mod.state_of(t) not in ("merged", "canceled")):
+                out.append(uid)
+                break
+            if has_repo and not pr and t.get("stage") in ("doing", "review", "changes", "blocked"):
                 out.append(uid)
                 break
     return out
