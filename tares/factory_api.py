@@ -146,7 +146,7 @@ def projects_with_open_prs(store) -> list[str]:
     has a ticket in the work with no pull request linked yet and a repo to look in, since only
     the sync links a `factory/<ref>` branch now (a ticket read no longer does, TR-1474)."""
     out = []
-    ids = [p["id"] for p in store.list_projects() if p.get("kind") == "software_factory"]
+    ids = [p["id"] for p in store.list_projects(kind="software_factory")]
     for uid, tickets in store.tickets_by_project(ids).items():
         has_repo = any((t.get("pr") or {}).get("repo") for t in tickets)
         for t in tickets:

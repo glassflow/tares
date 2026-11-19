@@ -547,8 +547,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     team = team_of(fx, request, now)
     # a private project the caller is not on is left out of every count and name
     hidden = fx.hidden_ids() if fx else set()
-    projects = [p for p in store.list_projects()
-                if p.get("kind") == "software_factory" and p["id"] not in hidden]
+    projects = store.list_projects(kind="software_factory", exclude_ids=hidden)
     # a project kept for later is off the home until someone starts it
     open_ps = [p for p in projects if p["status"] not in ("done", "later")]
     later_count = sum(1 for p in projects if p["status"] == "later")

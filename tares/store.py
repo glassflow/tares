@@ -18,7 +18,7 @@ import duckdb
 
 from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
-from .factory import DONE_STATUSES, OPEN_STAGES
+from .factory import DONE_STATUSES, OPEN_STAGES, state_of
 from .factory_store import FACTORY_SCHEMA, FactoryStore
 from .sre_store import SRE_SCHEMA, SreStore
 
@@ -815,6 +815,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 pg = state_db.PgState(state_dsn)
                 for stmt in state_db.state_ddl(self._ddl()):
                     pg.execute(stmt)
+                # Postgres only: DuckDB's ART indexes have broken after upgrades
+                pg.execute("CREATE INDEX IF NOT EXISTS tickets_project ON tickets(project)")
+                pg.execute("CREATE INDEX IF NOT EXISTS ticket_history_ticket "
+                           "ON ticket_history(ticket)")
                 if state_db.moved(pg):
                     self._use_pg_state(pg)        # upgrades below run on the moved state
                     if not moved_at:
@@ -2660,11 +2664,41 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "goal": r[8], "kind": r[9], "lead_person_id": r[10],
                 "scope": r[11] or "team", "icon": r[12]}
 
-    def list_projects(self) -> list[dict]:
+    def list_projects(self, *, kind=None, status_in=None, status_not_in=None, ids=None,
+                      exclude_ids=None) -> list[dict]:
+        """Every project, oldest first, or only those that match: `kind`, a status in or not in a
+        list (a project with no status is not in any list), `ids` (an empty list gives none) and
+        `exclude_ids`. With no argument it is every project."""
+        if ids is not None and not list(ids):
+            return []
+        where, args = [], []
+        if kind is not None:
+            where.append("kind = ?")
+            args.append(kind)
+        if status_in is not None:
+            vals = list(status_in)
+            if not vals:
+                return []
+            where.append(f"status IN ({', '.join('?' for _ in vals)})")
+            args += vals
+        if status_not_in:
+            vals = list(status_not_in)
+            where.append(f"(status IS NULL OR status NOT IN ({', '.join('?' for _ in vals)}))")
+            args += vals
+        if ids is not None:
+            vals = list(ids)
+            where.append(f"id IN ({', '.join('?' for _ in vals)})")
+            args += vals
+        if exclude_ids:
+            vals = list(exclude_ids)
+            where.append(f"id NOT IN ({', '.join('?' for _ in vals)})")
+            args += vals
+        cond = (" WHERE " + " AND ".join(where)) if where else ""
         with self._sread:
             rows = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind, lead_person_id, scope, icon FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind, lead_person_id, scope, icon FROM usecases" + cond
+                + " ORDER BY created_at", args).fetchall()
         return [self._project_row(r) for r in rows]
 
     # Licence-independent by design (TR-915): never consult licence or team here.
@@ -3247,6 +3281,53 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
             out[r[1]].append(self._ticket_row(r))
+        return out
+
+    def done_ticket_facts(self, project_ids: list[str]) -> dict[str, dict]:
+        """{project: {merged, blocked, total, repos, repo_from_pr, exact}} from two grouped
+        queries, so a finished project's row needs no ticket rows. merged, blocked and total are
+        what factory.progress gives ("done", "blocked" and "total"); repos are the full repo
+        names of the tickets in the order the ticket list shows them; repo_from_pr counts the
+        tickets with no repo whose pull request may name one. exact is False when groups cannot
+        give progress: a ticket that would read "to do" but lists dependencies (whether it is
+        blocked depends on those tickets), so the caller loads that project's tickets."""
+        if not project_ids:
+            return {}
+        marks = ", ".join("?" for _ in project_ids)
+        args = list(project_ids)
+        out = {p: {"merged": 0, "blocked": 0, "total": 0, "repos": [], "repo_from_pr": 0,
+                   "exact": True} for p in project_ids}
+        with self._sread:
+            groups = self.sc.execute(
+                "SELECT project, stage, status, "
+                "CASE WHEN depends_on IS NULL OR CAST(depends_on AS VARCHAR) IN ('', 'null', '[]') "
+                "THEN 0 ELSE 1 END, "
+                "CASE WHEN (repo IS NULL OR repo = '') AND pr IS NOT NULL "
+                "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, COUNT(*) "
+                f"FROM tickets WHERE project IN ({marks}) "
+                "GROUP BY project, stage, status, 4, 5", args).fetchall()
+            first = self.sc.execute(
+                "SELECT project, repo FROM (SELECT project, repo, position, created_at, "
+                "ROW_NUMBER() OVER (PARTITION BY project, repo ORDER BY position, created_at) AS rn "
+                f"FROM tickets WHERE project IN ({marks}) AND repo IS NOT NULL AND repo <> '') f "
+                "WHERE rn = 1 ORDER BY project, position, created_at", args).fetchall()
+        for project, stage, status, has_deps, from_pr, n in groups:
+            facts = out[project]
+            state = state_of({"stage": stage, "status": status})
+            if state == "to do" and has_deps:
+                facts["exact"] = False
+            if from_pr:
+                facts["repo_from_pr"] += n
+            if state == "merged":
+                facts["merged"] += n
+                facts["total"] += n
+            elif state == "blocked":
+                facts["blocked"] += n
+                facts["total"] += n
+            elif state != "canceled":
+                facts["total"] += n
+        for project, repo in first:
+            out[project]["repos"].append(repo)
         return out
 
     def get_ticket(self, project: str, ref: str) -> dict | None:

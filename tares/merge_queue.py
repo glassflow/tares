@@ -469,8 +469,7 @@ def climb_ladder(store, g: dict) -> None:
 def _gather(store) -> dict:
     """What one tick works on, read together: the projects a crew has, their tickets and
     milestone positions, and the open rows."""
-    projects = [p for p in store.list_projects()
-                if p.get("kind") == "software_factory" and crew_has(store, p)]
+    projects = [p for p in store.list_projects(kind="software_factory") if crew_has(store, p)]
     ids = [p["id"] for p in projects]
     tickets = store.tickets_by_project(ids)
     by_id = {t["id"]: t for ts in tickets.values() for t in ts}

@@ -44,9 +44,7 @@ def register(app, store, h, ctx):
     def rows(request: Request, now) -> list[dict]:
         hidden = h.hidden_ids()
         leads: dict[str, list[dict]] = {}
-        for p in store.list_projects():
-            if p.get("kind") != "software_factory" or p["id"] in hidden:
-                continue
+        for p in store.list_projects(kind="software_factory", exclude_ids=hidden):
             lead = p.get("lead_person_id")
             if lead:
                 leads.setdefault(lead, []).append({"id": p["id"], "name": p["name"],

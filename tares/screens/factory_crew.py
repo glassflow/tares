@@ -121,8 +121,8 @@ def register(app, store, h, ctx):
         stations = fx_.stations()
         settings = fx_.settings()
         hidden = h.hidden_ids()
-        projects = {p["id"]: p for p in store.list_projects()
-                    if p.get("kind") == "software_factory" and p["id"] not in hidden}
+        projects = {p["id"]: p for p in store.list_projects(kind="software_factory",
+                                                            exclude_ids=hidden)}
         names = {pid: p["name"] for pid, p in projects.items()}
         open_ids = [pid for pid, p in projects.items() if p["status"] != "done"]
         tickets = store.tickets_by_project(open_ids) if open_ids else {}
@@ -236,7 +236,7 @@ def register(app, store, h, ctx):
         plan["by_project"] = by_project(names, now)
         # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
         # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
-        hidden_names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
+        hidden_names = [p["name"] for p in store.list_projects(ids=hidden)]
         all_names = {p["id"]: p["name"] for p in store.list_projects()}
         proposals = []
         for r in store.list_rule_proposals("open"):

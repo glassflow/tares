@@ -38,8 +38,8 @@ def _list(items: list[str]) -> str:
 
 
 def _open_projects(store, hidden) -> list[dict]:
-    return [p for p in _safe(store.list_projects, []) or []
-            if p.get("kind") == "software_factory" and p.get("status") != "done" and p["id"] not in hidden]
+    return _safe(lambda: store.list_projects(kind="software_factory", status_not_in=("done",),
+                                             exclude_ids=hidden), []) or []
 
 
 def github(store, hidden=()) -> dict:

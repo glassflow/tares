@@ -80,7 +80,8 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # project, ticket, raw_tickets, raw_ticket). Each backend
 # has its own entry so a change that moves one (a sessions database, a Postgres-only read) can move
 # only that one.
-_TODAY = {"home": 108, "projects": 84, "project": 82, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1503 (the handlers read only the projects they show): home 108 to 107, projects 84 to 83.
+_TODAY = {"home": 107, "projects": 83, "project": 82, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
