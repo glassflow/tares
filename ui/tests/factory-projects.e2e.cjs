@@ -102,12 +102,12 @@ const today = () => {
     ck("New project links to /projects/new", (await page.getByTestId("new-project").getAttribute("href")) === "/projects/new");
     ck("Open is the chosen tab", (await tab("open").getAttribute("aria-selected")) === "true");
     ck("Open lists what is not finished, what needs you first",
-       JSON.stringify(await names()) === JSON.stringify(["project-w", "project-b1", "project-b2", "project-y", "project-q", "project-z"]), (await names()).join(","));
+       JSON.stringify(await names()) === JSON.stringify(["project-b1", "project-w", "project-b2", "project-y", "project-q", "project-z"]), (await names()).join(","));
     ck("a project that is not a factory project is not listed", !(await page.getByTestId("projects-list").innerText()).includes("project-n"));
     ck("the tabs are in order: Open, Waiting for you, Building, Not started, Ready to close, Later, Done, All",
        JSON.stringify(await page.getByRole("tab").evaluateAll((t) => t.map((x) => x.firstChild.textContent.trim()))) ===
        JSON.stringify(["Open", "Waiting for you", "Building", "Not started", "Ready to close", "Later", "Done", "All"]));
-    ck("each tab has its count", JSON.stringify(await counts()) === JSON.stringify(["6", "1", "2", "1", "2", "0", "2", "8"]), (await counts()).join(","));
+    ck("each tab has its count", JSON.stringify(await counts()) === JSON.stringify(["6", "2", "1", "1", "2", "0", "2", "8"]), (await counts()).join(","));
     ck("the finished ones are behind a link", (await page.getByTestId("show-finished").innerText()).trim() === "Show 2 finished");
     ck("the address has no filter for Open", !new URL(page.url()).searchParams.has("state"), page.url());
 
@@ -121,7 +121,9 @@ const today = () => {
     // 3. a row: name link, state, goal, repos and meta, bar, counts, milestone
     const b1 = row("project-b1");
     ck("a name links to its project", (await b1.getByTestId("project-name").getAttribute("href")) === `/projects/${ids["project-b1"]}`);
-    ck("the state is in words", (await b1.getByTestId("project-state").textContent()).trim() === "Building" &&
+    // b1 has a stuck ticket, and a stuck ticket is on the desk, so b1 waits for you
+    ck("the state is in words", (await b1.getByTestId("project-state").textContent()).trim() === "Waiting for you" &&
+       (await row("project-b2").getByTestId("project-state").textContent()).trim() === "Building" &&
        (await row("project-w").getByTestId("project-state").textContent()).trim() === "Waiting for you" &&
        (await row("project-y").getByTestId("project-state").textContent()).trim() === "Not started");
     ck("tickets merged and stuck, in one count line", (await b1.getByTestId("project-tickets").innerText()).replace(/\s+/g, " ").trim() === "1 merged, 1 stuck of 4",
@@ -150,7 +152,7 @@ const today = () => {
 
     // 5. each filter shows only its state, and lives in the address
     const reads0 = apiReads.length;
-    for (const [k, state, n] of [["waiting_on_you", "waiting_on_you", 1], ["building", "building", 2], ["not_started", "not_started", 1],
+    for (const [k, state, n] of [["waiting_on_you", "waiting_on_you", 2], ["building", "building", 1], ["not_started", "not_started", 1],
                                  ["ready_to_close", "ready_to_close", 2], ["done", "done", 2], ["all", null, 8]]) {
       await pick(k);
       const got = await states();
@@ -173,7 +175,7 @@ const today = () => {
     // 6. the filter survives a full load; a filter the page does not know falls back to Open
     await page.goto(`${BASE}/projects?state=building`, { waitUntil: "load" });
     await rows.first().waitFor();
-    ck("?state=building opens Building on a full load", (await tab("building").getAttribute("aria-selected")) === "true" && (await rows.count()) === 2);
+    ck("?state=building opens Building on a full load", (await tab("building").getAttribute("aria-selected")) === "true" && (await rows.count()) === 1);
     await page.goto(`${BASE}/projects?state=nonsense`, { waitUntil: "load" });
     await rows.first().waitFor();
     ck("an unknown filter opens Open", (await tab("open").getAttribute("aria-selected")) === "true" && (await rows.count()) === 6);
@@ -228,7 +230,7 @@ const today = () => {
     const sent = posts.filter((p) => p.url === `/api/projects/${ids["project-z"]}/finish`);
     ck("Close sends one finish for that project, with the words", sent.length === 1 && JSON.parse(sent[0].body).words === "Closed from the Projects list", JSON.stringify(sent));
     ck("it leaves Open", !(await names()).includes("project-z") && (await rows.count()) === 5);
-    ck("the counts follow: Ready to close 1, Done 3, Open 5", JSON.stringify(await counts()) === JSON.stringify(["5", "1", "2", "1", "1", "0", "3", "8"]), (await counts()).join(","));
+    ck("the counts follow: Ready to close 1, Done 3, Open 5", JSON.stringify(await counts()) === JSON.stringify(["5", "2", "1", "1", "1", "0", "3", "8"]), (await counts()).join(","));
     ck("the link to the finished follows", (await page.getByTestId("show-finished").innerText()).trim() === "Show 3 finished");
     await pick("done");
     ck("it is in Done, finished today", (await row("project-z").count()) === 1 && (await row("project-z").getByTestId("project-state").textContent()).trim() === "Done"
