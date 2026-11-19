@@ -24,8 +24,10 @@ poller and webhook stay off: the cell drives every sync.
   failure, doubling with each failure in a row up to `RETRY_CAP_SECONDS`. A retry is `request(repo)`
   with no head: lore fetches the newest head itself, so it costs no GitHub call. A push still syncs at
   once, and a success, a removed repo or a `failed` one ends the retrying. A token repo has the poll
-  and no back-off. The push listeners hear nothing on a retry: the push that failed already told them
-  (`on_envelopes` tells them as the event arrives, whatever the sync does), and a retry is not a push.
+  and no back-off. The push listeners hear nothing on a retry: `on_envelopes` tells them as the event
+  arrives, whatever the sync does, and a retry is not a push (telling them None would walk every chosen
+  folder at each step). A listener that fails on its own work retries it itself: the decision importer
+  keeps the files of a push lore did not take and tries them again on its own back-off (TR-1514).
 
 * The files a push touched are told to the `push_listeners` (the decision importer, TR-1219): from the
   event's payload (`pushed_files`), or None when it has none that can be trusted. A token repo has no
