@@ -30,6 +30,7 @@ from . import session_ingest, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
+from .session_store.tables import session_commands, session_messages
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
@@ -4663,6 +4664,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # the sessions table counts those lines too: a re-ship of them would count them twice
             with self.sessions_db.begin() as conn:
                 conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
+                # and so do the facts read from them (TR-1477); a call's results live on its row
+                conn.execute(delete(session_commands).where(session_commands.c.source == source))
+                conn.execute(delete(session_messages).where(session_messages.c.source == source))
         return n
 
     # ── subscriptions ─────────────────────────────────────────────────────────
