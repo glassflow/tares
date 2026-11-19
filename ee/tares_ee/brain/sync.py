@@ -50,7 +50,7 @@ from tares import licence
 from tares.envelope import now_utc
 from tares.factory import norm_repo
 
-from .index import RUNNING, _count, _line, record_update
+from .index import RUNNING, _count, _line, files_in_index, record_update
 from .lore import LoreClient, LoreError, scrub
 
 __all__ = ["RETRY_CAP_SECONDS", "RETRY_FIRST_SECONDS", "SHOW_AFTER", "SYNC_POLL_SECONDS", "Syncer", "TICK_SECONDS",
@@ -296,15 +296,18 @@ class Syncer:
         fields = {"last_synced": now_utc(), "error": None, "sync_error": None, "sync_failures": 0}
         if commit:
             fields["indexed_commit"] = commit
-        # A sync's report counts only the files the push touched (indexed or unchanged) and the ones it
-        # deleted, never the whole repo, so the repo's count is the one from its first index less what
-        # later pushes deleted (TR-1463). Files a push adds are counted from the next full index. Only a
-        # repo with no count yet takes the report's.
+        # Lore reports the repo's own file count as `files_in_index`: that is the count, a 0 included.
+        # An older lore has no such key. Its report counts only the files the push touched (indexed or
+        # unchanged) and the ones it deleted, never the whole repo, so the repo's count is the one from
+        # its first index less what later pushes deleted (TR-1463). Files a push adds are counted from
+        # the next full index. Only a repo with no count yet takes the report's.
         changed = _count(report.get("files_indexed"))
         deleted = _count(report.get("files_deleted"))
         row = self.store.get_brain_repo(repo)
         before = (row or {}).get("files_total") or 0
-        total = max(0, before - deleted) if before else changed + _count(report.get("files_unchanged"))
+        total = files_in_index(report)
+        if total is None:
+            total = max(0, before - deleted) if before else changed + _count(report.get("files_unchanged"))
         if total != before:
             fields["files_done"] = fields["files_total"] = total
         if self.store.update_brain_repo(repo, fields, only_in=("ready",)):
