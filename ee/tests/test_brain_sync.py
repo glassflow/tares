@@ -301,6 +301,39 @@ async def main():
         ck("a repo with no count yet takes the report's", row("acme/web")["files_total"] == 34, str(row("acme/web")))
         store.update_brain_repo("acme/web", {"files_done": 5, "files_total": 5})
 
+        print("== lore's own file count wins when the report has it; no key is an older lore (TR-1516) ==")
+        F1, F2, F3, F4 = "7" * 40, "6" * 40, "5" * 40, "4" * 40
+        report0 = dict(lore.sync_report)
+        lore.sync_report = report0 | {"indexed_commit": F1, "files_in_index": 61, "files_indexed": 2, "files_unchanged": 0, "files_deleted": 1}
+        await ingest(push("acme/web", F1))
+        await until(lambda: row("acme/web")["indexed_commit"] == F1)
+        ck("files_in_index is the count, whatever the push touched or deleted", (row("acme/web")["files_done"], row("acme/web")["files_total"]) == (61, 61),
+           str(row("acme/web")))
+        ck("... and the history says so", store.list_brain_repo_updates("acme/web")[0]["files_total"] == 61, str(store.list_brain_repo_updates("acme/web")[:1]))
+        lore.sync_report = report0 | {"indexed_commit": F2, "files_in_index": 0, "files_indexed": 4, "files_unchanged": 30, "files_deleted": 0}
+        await ingest(push("acme/web", F2))
+        await until(lambda: row("acme/web")["indexed_commit"] == F2)
+        ck("a files_in_index of 0 is a count: the card shows 0 files", (row("acme/web")["files_done"], row("acme/web")["files_total"]) == (0, 0),
+           str(row("acme/web")))
+        lore.sync_report = {k: v for k, v in report0.items() if k != "files_in_index"} | {
+            "indexed_commit": F3, "files_indexed": 4, "files_unchanged": 30, "files_deleted": 0}
+        await ingest(push("acme/web", F3))
+        await until(lambda: row("acme/web")["indexed_commit"] == F3)
+        ck("a report with no files_in_index at a 0 count takes the old rule: the report's touched files (an older lore)",
+           (row("acme/web")["files_done"], row("acme/web")["files_total"]) == (34, 34), str(row("acme/web")))
+        store.update_brain_repo("acme/web", {"files_done": 20, "files_total": 20})
+        lore.sync_report = {k: v for k, v in report0.items() if k != "files_in_index"} | {
+            "indexed_commit": F4, "files_indexed": 4, "files_unchanged": 30, "files_deleted": 5}
+        await ingest(push("acme/web", F4))
+        await until(lambda: row("acme/web")["indexed_commit"] == F4)
+        ck("... and with a count, no key keeps the count less the deletions", row("acme/web")["files_total"] == 15, str(row("acme/web")))
+        lore.sync_report = report0 | {"indexed_commit": "3" * 40, "files_in_index": "many"}
+        await ingest(push("acme/web", "3" * 40))
+        await until(lambda: row("acme/web")["indexed_commit"] == "3" * 40)
+        ck("a files_in_index that is not a number is no count: the old rule, the count stays", row("acme/web")["files_total"] == 15, str(row("acme/web")))
+        lore.sync_report = report0
+        store.update_brain_repo("acme/web", {"files_done": 5, "files_total": 5})
+
         print("== pushes that must not sync ==")
         make_repo("acme/off")
         n = len(syncs())
