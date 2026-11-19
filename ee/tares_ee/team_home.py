@@ -348,10 +348,9 @@ def waiting_on(t: HomeRead) -> list[dict]:
     handed = set(t.store.handed_over_projects())
     everything = bool(t.c.h.is_system(t.request))   # the cell's own credential waits on every project
     out = []
-    for p in t.store.list_projects():
-        if (p.get("kind") != "software_factory" or p["status"] in ("done", "later")
-                or p["id"] in handed or p["id"] in t.hidden
-                or not (everything or t.c.leads(p, t.me["id"], t.owners))):
+    for p in t.store.list_projects(kind="software_factory", status_not_in=("done", "later"),
+                                   exclude_ids=handed | t.hidden):
+        if not (everything or t.c.leads(p, t.me["id"], t.owners)):
             continue
         questions = [{"id": q["id"], "to": _ref(q["to_person"]) or t.person(q["to_person_id"]),
                       "asked_at": fh._iso(fh._dt(q["asked_at"])),
@@ -438,10 +437,10 @@ def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dic
                       "scope": p.get("scope") or "team", "yours": yours, "yours_text": text,
                       "mine": bool(t.c.leads(p, t.me["id"], t.owners) or yours or r["id"] in asked)})
     stubs = []
-    for p in t.store.list_projects():
-        if p["id"] in t.hidden and p.get("kind") == "software_factory" and p["status"] not in ("done", "later"):
-            lead = t.person(p.get("lead_person_id"))
-            stubs.append({"hidden": True, "lead": {"name": lead["name"]} if lead else None})
+    for p in t.store.list_projects(ids=t.hidden, kind="software_factory",
+                                   status_not_in=("done", "later")):
+        lead = t.person(p.get("lead_person_id"))
+        stubs.append({"hidden": True, "lead": {"name": lead["name"]} if lead else None})
     counts = {"mine": sum(1 for r in shown if r["mine"]), "team": len(shown)}
     view = which if which in PROJECT_VIEWS else "mine"
     out = {"projects": [r for r in shown if r["mine"]] if view == "mine" else shown + stubs,

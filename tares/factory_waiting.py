@@ -26,8 +26,7 @@ _SHOWN_CHOICES = 3
 
 def _open_projects(store) -> list[dict]:
     """The open software-factory projects; one kept for later waits for nobody until it starts."""
-    return [p for p in store.list_projects()
-            if p.get("kind") == "software_factory" and p["status"] not in ("done", "later")]
+    return store.list_projects(kind="software_factory", status_not_in=("done", "later"))
 
 
 def _for(waited: str) -> str:
@@ -277,7 +276,7 @@ def pr_owners(store, rows: list[dict], o=None) -> dict[tuple[str, str], tuple[st
     pids = sorted({q["project"] for q in rows})
     if not pids:
         return {}
-    projects = {p["id"]: p for p in store.list_projects() if p["id"] in pids}
+    projects = {p["id"]: p for p in store.list_projects(ids=pids)}
     tickets = {(pid, factory_mod.label(t)): t for pid, ts in store.tickets_by_project(pids).items() for t in ts}
     return {(q["project"], q["ticket"]): o.ticket(tickets.get((q["project"], q["ticket"])) or {},
                                                   projects.get(q["project"]))

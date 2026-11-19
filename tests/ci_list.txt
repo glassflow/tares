@@ -172,6 +172,7 @@ test_licence_api
 test_licence_cloud
 test_linear
 test_linear_write_scope
+test_list_projects_filters
 test_login
 test_login_json
 test_login_keyring

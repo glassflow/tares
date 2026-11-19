@@ -18,8 +18,8 @@ from fastapi import Request
 
 from ..envelope import now_utc
 from .. import factory_owners as owners_mod
-from ..factory_home import (_STATE_ORDER, _caller, _count, _dt, for_caller, plain_ago, project_row,
-                            caller_owns, caller_waiting, team_of)
+from ..factory_home import (_STATE_ORDER, _caller, _count, _dt, _short, for_caller, plain_ago,
+                            project_row, caller_owns, caller_waiting, team_of)
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
@@ -88,6 +88,30 @@ def row_for(p: dict, tickets: list[dict], handover: dict | None, waiting: list[d
     return row
 
 
+def done_row_for(p: dict, facts: dict, handover: dict | None, now) -> dict | None:
+    """The row `row_for` gives a finished project, from `store.done_ticket_facts` instead of its
+    tickets: the same keys in the same order. None when the facts cannot give it (the counts are
+    not exact, a repo would come from a pull request, or no finish time exists at all), and the
+    caller then reads that project's tickets."""
+    finished = _dt(((handover or {}).get("finished") or {}).get("at")) or _dt(p.get("updated_at"))
+    if not facts["exact"] or finished is None:
+        return None
+    full = [str(r.get("name") or "") for r in (handover or {}).get("repos") or []]
+    short = [n for n in (_short(r.get("name")) for r in (handover or {}).get("repos") or []) if n]
+    if (not short or not any(full)) and facts["repo_from_pr"]:
+        return None
+    repos = list(dict.fromkeys(short or [n for n in (_short(r) for r in facts["repos"]) if n]))
+    names = list(dict.fromkeys(n for n in full if n)) if any(full) else list(facts["repos"])
+    return {"id": p["id"], "name": p["name"], "icon": p.get("icon"), "goal": p.get("goal") or "",
+            "state": "done", "state_label": DONE_LABEL,
+            "milestone": "Finished " + plain_date(finished, now),
+            "tickets": {"merged": facts["merged"], "blocked": facts["blocked"],
+                        "total": facts["total"]},
+            "repos": repos, "builders": 0, "last_activity_at": finished.isoformat(),
+            "last_activity": plain_ago(finished, now) or None, "meta": "", "can_close": False,
+            "repo_names": names}
+
+
 def register(app, store, h, ctx):
     @app.get("/api/factory/projects")
     def factory_projects(request: Request):
@@ -99,17 +123,28 @@ def register(app, store, h, ctx):
         fx = ctx.fx
         stations = fx.stations() if fx else []
         hidden = h.hidden_ids()
-        projects = [p for p in store.list_projects()
-                    if p.get("kind") == "software_factory" and p["id"] not in hidden]
+        projects = store.list_projects(kind="software_factory", exclude_ids=hidden)
         ids = [p["id"] for p in projects]
-        tickets = store.tickets_by_project(ids)
-        milestones = store.milestones_by_project(ids)
         # what waits for the caller, as their home has it (never another person's items)
         fxc = for_caller(fx, request)
         home = team_of(fxc, request, now)   # built once: the waiting list and the team parts read it
-        waiting = caller_waiting(store, fxc, now, request, hidden, home)
         handovers = store.handovers_by_project(ids)
-        rows = [row_for(p, tickets[p["id"]], handovers.get(p["id"]), waiting, stations, now,
+        # A finished project's row needs only counts, not its tickets. On a team cell the seam
+        # (team_projects) also reads each ticket's assignee: it gets one stub per ticket with just that.
+        facts = store.done_ticket_facts([p["id"] for p in projects if p.get("status") == "done"])
+        done_rows = {p["id"]: done_row_for(p, facts[p["id"]], handovers.get(p["id"]), now)
+                     for p in projects if p["id"] in facts}
+        need = [i for i in ids if done_rows.get(i) is None]
+        tickets = store.tickets_by_project(need)
+        milestones = store.milestones_by_project(need)
+        if home:
+            for pid, row in done_rows.items():
+                if row is not None:
+                    tickets[pid] = [{"status": "done", "assignee_person_id": who}
+                                    for who, n in facts[pid]["assignees"].items() for _ in range(n)]
+        waiting = caller_waiting(store, fxc, now, request, hidden, home)
+        rows = [done_rows[p["id"]] if done_rows.get(p["id"]) is not None else
+                row_for(p, tickets[p["id"]], handovers.get(p["id"]), waiting, stations, now,
                         milestones[p["id"]]) for p in projects]
         # Close is for whoever owns the project's work (factory_owners)
         owners = owners_mod.Owners(store)
