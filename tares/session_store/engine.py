@@ -34,10 +34,16 @@ def pg_url(dsn: str) -> str:
 
 def make_engine(data_dir: str, state_dsn: str | None = None) -> Engine:
     if state_dsn:
+        pool = dict(pool_size=2, max_overflow=2, pool_pre_ping=True)
+        if "://" not in state_dsn:
+            # a libpq keyword DSN ("host=h dbname=d"), which PgState takes too: not a URL, so the
+            # driver connects with the string itself
+            import psycopg
+            return create_engine(
+                "postgresql+psycopg://",
+                creator=lambda: psycopg.connect(state_dsn, prepare_threshold=None), **pool)
         return create_engine(
-            make_url(pg_url(state_dsn)),
-            connect_args={"prepare_threshold": None},
-            pool_size=2, max_overflow=2, pool_pre_ping=True)
+            make_url(pg_url(state_dsn)), connect_args={"prepare_threshold": None}, **pool)
     if data_dir == MEMORY:
         engine = create_engine("sqlite://", poolclass=StaticPool,
                                connect_args={"check_same_thread": False})
@@ -49,6 +55,9 @@ def make_engine(data_dir: str, state_dsn: str | None = None) -> Engine:
 
 
 def _sqlite_events(engine: Engine) -> None:
+    # Every transaction starts with BEGIN IMMEDIATE, reads included, so a read waits behind a
+    # writer. Fine while the store holds little; a read path that must not queue (DEFERRED) is for
+    # the ticket that moves the busy reads here.
     @event.listens_for(engine, "connect")
     def _connect(dbapi_connection, _record):
         # pysqlite's own BEGIN handling is off: SQLAlchemy's begin event below emits it

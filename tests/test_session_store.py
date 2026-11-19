@@ -199,6 +199,10 @@ def dsn_rewrite():
     e = make_engine("/unused", "postgresql+psycopg://u:p@h/db")
     ck("a psycopg DSN is left alone", e.url.drivername == "postgresql+psycopg")
     e.dispose()
+    e = make_engine("/unused", "host=h port=5432 dbname=db user=u")
+    ck("a libpq keyword DSN gets a psycopg engine", e.url.drivername == "postgresql+psycopg"
+       and e.pool.size() == 2 and e.pool._pre_ping, str(e.url))
+    e.dispose()
     e = make_engine(":memory:", None)
     ck("a Store on :memory: gets an in-memory SQLite", str(e.url) == "sqlite://", str(e.url))
     e.dispose()
@@ -296,6 +300,43 @@ def postgres():
             th.join()
         ck("four threads on a pool of 2+2 finish", not errors, errors[:1])
         sdb.close()
+        # the keyword form of the same DSN reaches the same schema
+        parts = psycopg.conninfo.conninfo_to_dict(PG)
+        kw = " ".join(f"{k}={v}" for k, v in parts.items()) + f" options=-csearch_path={schema}"
+        kdb = SessionStore(d, kw)
+        ck("a keyword DSN reads the same schema", versions(kdb) == ["0001_base"], "")
+        ck("and its connections use no prepared statements",
+           kdb.engine.raw_connection().driver_connection.prepare_threshold is None, "")
+        kdb.close()
+        # cells starting together: two upgrades on an empty schema, one runs the revision
+        schema2 = "ss_" + uuid.uuid4().hex[:12]
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {schema2}")
+        try:
+            dsn2 = f"{PG}?options=-csearch_path%3D{schema2}"
+            a, b = SessionStore(d, dsn2), SessionStore(d, dsn2)
+            errs = []
+
+            def up(s_):
+                try:
+                    s_.upgrade()
+                except Exception as e:
+                    errs.append(e)
+
+            ths = [threading.Thread(target=up, args=(s_,)) for s_ in (a, b)]
+            with capture_logs("alembic.runtime.migration") as recs:   # one capture: the logger is shared
+                for th in ths:
+                    th.start()
+                for th in ths:
+                    th.join()
+            ck("two upgrades at once raise nothing", not errs, errs[:1])
+            ck("and the revision ran once", len(upgrade_lines(recs)) == 1, len(upgrade_lines(recs)))
+            ck("one version row", versions(a) == ["0001_base"], versions(a))
+            a.close()
+            b.close()
+        finally:
+            with psycopg.connect(PG, autocommit=True) as c:
+                c.execute(f"DROP SCHEMA IF EXISTS {schema2} CASCADE")
     finally:
         with psycopg.connect(PG, autocommit=True) as c:
             c.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
