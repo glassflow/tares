@@ -34,7 +34,7 @@ import httpx
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
-from tares import factory_github
+from tares import factory_api, factory_github
 from tares.envelope import Envelope
 
 P = F = 0
@@ -179,12 +179,14 @@ async def main():
                                event_time=datetime.now(timezone.utc), payload={},
                                labels={"repo": "acme/shop", "number": "8", "branch": "factory/T2",
                                        "action": "opened"})])
+        # the list shows what the sync kept (TR-1474); the daemon's sync links and reads
+        await factory_api._shared(store, shop)
         lt = {t["label"]: t for t in json.loads(await m.list_tickets(project="Shop"))["tickets"]}
         ck("a PR on factory/T2 in the project's repo links itself, CI running",
            lt["T2"]["pr"] and lt["T2"]["pr"].get("head") == "bbb222"
            and lt["T2"]["pr"].get("ci") == "pending", lt["T2"])
         n_calls = len(CALLS)
-        await m.list_tickets(project="Shop")
+        await factory_api._shared(store, shop)
         ck("a fresh read is not repeated within the minute", len(CALLS) == n_calls, CALLS[n_calls:])
         GH[7].update(merged=True, state="closed")
         t1 = store.get_ticket(shop, "T1")
@@ -201,6 +203,7 @@ async def main():
         GH[8].update(state="closed")
         t2 = store.get_ticket(shop, "T2")
         store.update_ticket(t2["id"], stage="merged", pr={**t2["pr"], "checked_at": None})
+        await factory_api._shared(store, shop)
         lt = {t["label"]: t for t in json.loads(await m.list_tickets(project="Shop"))["tickets"]}
         ck("merged on Tares but closed unmerged on GitHub: the ticket says so",
            "closed without merging" in (lt["T2"].get("pr_note") or ""), lt["T2"])

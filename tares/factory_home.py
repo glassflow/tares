@@ -482,6 +482,14 @@ def _caller(store, fx, request) -> dict:
             "orphans": False}
 
 
+def team_of(fx, request, now) -> dict:
+    """The team home for the caller (`fx.team_home`), or {} on a cell of one person and for a call
+    with no request. A route reads it once and hands it to caller_waiting and the team parts."""
+    if fx is not None and request is not None and hasattr(fx, "team_home"):
+        return fx.team_home(request, now)
+    return {}
+
+
 def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
     """THE list of what waits for the caller, which every screen that says "Waiting for you" or
     "Waiting on you" reads (the home, Projects, Tickets, a project's page): every builder's items
@@ -489,7 +497,7 @@ def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) ->
     the team home builds them (it adds spec questions and grants); without a licence the core
     builders do, by the same rule. `team` is a `fx.team_home` answer the caller already read."""
     if team is None:
-        team = fx.team_home(request, now) if fx is not None and request is not None and hasattr(fx, "team_home") else {}
+        team = team_of(fx, request, now)
     if team:
         return team["waiting_for_you"]
     return owners_mod.mine(waiting_items(store, fx, now, hidden), **_caller(store, fx, request))
@@ -509,10 +517,11 @@ def project_waiting(store, fx, now, request, project: str) -> tuple[list[dict], 
     return split_waiting(store, items, _caller(store, fx, request), now)
 
 
-def caller_owns(store, fx, request, project: dict, owners=None) -> bool:
+def caller_owns(store, fx, request, project: dict, owners=None, who: dict | None = None) -> bool:
     """The caller owns the project's work (factory_owners: its lead, else the admins), so Close
-    and its person checks are theirs; the system credential and a cell of one own everything."""
-    who = _caller(store, fx, request)
+    and its person checks are theirs; the system credential and a cell of one own everything.
+    `who` is the caller `_caller` resolved, which a list asks once for all its rows."""
+    who = who or _caller(store, fx, request)
     if who["everything"]:
         return True
     o = owners or owners_mod.Owners(store)
@@ -535,7 +544,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
-    team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
+    team = team_of(fx, request, now)
     # a private project the caller is not on is left out of every count and name
     hidden = fx.hidden_ids() if fx else set()
     projects = [p for p in store.list_projects()
@@ -553,11 +562,13 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     # a person's home never counts another person's desk item, licence or not (core, TR-1048)
     mine_desk = _cut(fx, "own_desk", request, desk)
     owners = owners_mod.Owners(store)
+    who = _caller(store, fx, request)
+    handovers = store.handovers_by_project(ids)
     rows = []
     for p in open_ps:
-        row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
+        row = project_row(p, tickets[p["id"]], handovers.get(p["id"]), waiting, stations, now,
                           milestones[p["id"]])
-        row["can_close"] = row["can_close"] and caller_owns(store, fx, request, p, owners)
+        row["can_close"] = row["can_close"] and caller_owns(store, fx, request, p, owners, who)
         rows.append(row)
     rows.sort(key=lambda r: (_STATE_ORDER[r["state"]],
                              -(_dt(r["last_activity_at"]) or datetime.fromtimestamp(0, timezone.utc)).timestamp()))

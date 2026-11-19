@@ -2735,6 +2735,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
                 for r in rows]
 
+    def members_by_project(self, uids: list[str]) -> dict[str, list[dict]]:
+        """{project: its members as list_project_members gives them} for `uids`, in one query."""
+        ids = sorted({u for u in uids if u})
+        if not ids:
+            return {}
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT project, person_id, added_by, added_at, reason FROM project_members "
+                f"WHERE project IN ({', '.join('?' for _ in ids)}) ORDER BY added_at, person_id",
+                ids).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r[0], []).append({"person_id": r[1], "added_by": r[2],
+                                             "added_at": r[3], "reason": r[4]})
+        return out
+
     # Licence-independent by design (TR-915): never consult licence or team here.
     def is_project_member(self, uid: str, person_id: str | None) -> bool:
         """The project's lead, or a person on its member list."""

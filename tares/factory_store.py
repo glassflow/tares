@@ -1481,25 +1481,58 @@ class FactoryStore:
         """The Codex challenger's reviews and waivers on a ticket's branch (factory/<ref>...) in
         the project `project` (its id), oldest first. A line stamped with the project's name (any
         case) or id counts; an unstamped one only from a session tied to the project."""
+        return self.challenge_events_many(source, [(project, ref)])[(project, ref)]
+
+    def challenge_events_many(self, source: str, tickets: list[tuple[str, str]]
+                              ) -> dict[tuple[str, str], list[dict]]:
+        """{(project id, ref): challenge_events} for every pair asked, from one read of the
+        challenger's lines (and one each for the projects' names and sessions, when a line
+        matched), however many tickets are asked. Each list is as challenge_events gives it."""
+        pairs = list(dict.fromkeys(tickets))
+        out: dict[tuple[str, str], list[dict]] = {p: [] for p in pairs}
+        refs = sorted({ref for _, ref in pairs})
+        rows = []
         with self._sread:
-            name = (self.sc.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
-                    or [project])[0]
-            rows = self.sc.execute(
-                "SELECT event_time, event_type, payload, key_value FROM challenges "
-                "WHERE source = ? AND (branch = ? OR branch LIKE ?) "
-                "AND (lower(tares_project) IN (lower(?), lower(?)) "
-                "     OR (tares_project IS NULL AND key_value IN "
-                "         (SELECT session FROM project_sessions WHERE project = ?))) "
-                "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
-                                        name, project, project]).fetchall()
-        out = []
-        for at, typ, pj, sid in rows:
-            try:
-                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-            except ValueError:
-                o = {}
-            ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
-            out.append({"at": at, "type": typ, "session": sid, "challenge": ch})
+            for i in range(0, len(refs), 150):
+                chunk = refs[i:i + 150]
+                where = " OR ".join("branch = ? OR branch LIKE ?" for _ in chunk)
+                args = [x for ref in chunk for x in (f"factory/{ref}", f"factory/{ref}-%")]
+                rows += self.sc.execute(
+                    "SELECT event_time, event_type, payload, key_value, branch, tares_project "
+                    f"FROM challenges WHERE source = ? AND ({where}) ORDER BY event_time",
+                    [source, *args]).fetchall()
+            if not rows:
+                return out
+            # a line can match refs in two chunks: keep it once, oldest first as before
+            rows = list({(r[0], r[1], r[3], r[4], r[5]): r for r in rows}.values())
+            rows.sort(key=lambda r: r[0])
+            projects = sorted({p for p, _ in pairs})
+            marks = ", ".join("?" for _ in projects)
+            names = dict(self.sc.execute(
+                f"SELECT id, name FROM usecases WHERE id IN ({marks})", projects).fetchall())
+            sessions: dict[str, set] = {}
+            for project, session in self.sc.execute(
+                    f"SELECT project, session FROM project_sessions WHERE project IN ({marks})",
+                    projects).fetchall():
+                sessions.setdefault(project, set()).add(session)
+        by_ref: dict[str, list] = {}
+        for ref in refs:
+            by_ref[ref] = [r for r in rows if r[4] == f"factory/{ref}"
+                           or (r[4] or "").startswith(f"factory/{ref}-")]
+        for project, ref in pairs:
+            stamps = {str(project).lower(), str(names.get(project, project)).lower()}
+            for at, typ, pj, sid, _branch, stamped in by_ref[ref]:
+                if stamped is not None:
+                    if str(stamped).lower() not in stamps:
+                        continue
+                elif sid not in sessions.get(project, ()):
+                    continue
+                try:
+                    o = json.loads(pj) if isinstance(pj, str) else (pj or {})
+                except ValueError:
+                    o = {}
+                ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
+                out[(project, ref)].append({"at": at, "type": typ, "session": sid, "challenge": ch})
         return out
 
     def _record_challenges(self, rows: list[tuple]) -> None:
@@ -1982,13 +2015,23 @@ class FactoryStore:
     def list_handover_overrides(self, project: str) -> list[dict]:
         """Every hand-over the lead pushed through without all sign-offs, oldest first:
         {at, reason, person, by_label}."""
+        return self._handover_overrides([project]).get(project, [])
+
+    def _handover_overrides(self, projects: list[str]) -> dict[str, list[dict]]:
+        """{project: its overrides, oldest first} for `projects`, in one query."""
+        if not projects:
+            return {}
         with self._sread:
             rows = self.sc.execute(
-                "SELECT \"at\", reason, person_id, handed_by FROM handover_overrides WHERE project = ? "
-                "ORDER BY \"at\", handed_by, person_id, reason", [project]).fetchall()
-        refs = self._person_refs(r[2] for r in rows)
-        return [{"at": r[0], "reason": r[1], "person": refs.get(r[2]),
-                 "by_label": by_label(refs.get(r[2]), r[3])} for r in rows]
+                "SELECT project, \"at\", reason, person_id, handed_by FROM handover_overrides "
+                f"WHERE project IN ({', '.join('?' for _ in projects)}) "
+                "ORDER BY \"at\", handed_by, person_id, reason", list(projects)).fetchall()
+        refs = self._person_refs(r[3] for r in rows)
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r[0], []).append({"at": r[1], "reason": r[2], "person": refs.get(r[3]),
+                                             "by_label": by_label(refs.get(r[3]), r[4])})
+        return out
 
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
@@ -2032,35 +2075,57 @@ class FactoryStore:
             self.sc.execute("UPDATE handovers SET released_at = ? WHERE project = ?",
                              [at, project])
 
+    _HANDOVER_COLS = ("project, repo, handed_by, handed_at, repos, autonomy, "
+                      "finished_at, finished_words, finished_decision, finished_by, "
+                      "taken_at, taken_words, taken_by, released_at, person_id, "
+                      "finished_person_id, taken_person_id, crew, override_reason, "
+                      "override_at, override_person_id")
+
     def get_handover(self, project: str) -> dict | None:
+        return self.handovers_by_project([project]).get(project)
+
+    def handovers_by_project(self, projects: list[str] | None = None) -> dict[str, dict]:
+        """{project id: hand-over, as get_handover gives it} for the projects handed over, among
+        `projects` (all of them for None), in one query plus one for the people and one for the
+        overrides, however many there are. A project never handed over is not in the answer."""
+        ids = None if projects is None else sorted({p for p in projects if p})
+        if ids is not None and not ids:
+            return {}
+        q = f"SELECT {self._HANDOVER_COLS} FROM handovers"
+        if ids is not None:
+            q += f" WHERE project IN ({', '.join('?' for _ in ids)})"
         with self._sread:
-            r = self.sc.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
-                                 "finished_at, finished_words, finished_decision, finished_by, "
-                                 "taken_at, taken_words, taken_by, released_at, person_id, "
-                                 "finished_person_id, taken_person_id, crew, override_reason, "
-                                 "override_at, override_person_id FROM handovers WHERE project = ?", [project]).fetchone()
-        if not r:
-            return None
-        repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
-        refs = self._person_refs([r[13], r[14], r[15], r[19]])
-        # who pushed the override through: the hand-over that gave it, not a later one; rows from
-        # before override_person_id fall back to the handing person
-        op, oby = (r[19], None) if r[19] else (r[13], r[1])
-        out = {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
-               "person": refs.get(r[13]), "by_label": by_label(refs.get(r[13]), r[1]),
-               "handed_by_person": refs.get(r[13]), "crew": r[16],
-               "override": ({"reason": r[17], "at": r[18], "person": refs.get(op),
-                             "by_label": by_label(refs.get(op), oby)} if r[17] else None),
-               # true only when the latest hand-over itself carried the override: a later clean
-               # one leaves `override` (the latest ever) in place but is not overridden
-               "overridden": bool(r[17] and r[18] is not None and r[18] == r[2]),
-               "overrides": self.list_handover_overrides(project) if r[17] else [],
-               "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8],
-                             "person": refs.get(r[14]), "by_label": by_label(refs.get(r[14]), r[8])}
-                            if r[5] else None),
-               "takeover": ({"at": r[9], "words": r[10], "by": r[11], "released_at": r[12],
-                             "person": refs.get(r[15]), "by_label": by_label(refs.get(r[15]), r[11])}
-                            if r[9] else None)}
+            rows = self.sc.execute(q, ids or []).fetchall()
+        if not rows:
+            return {}
+        refs = self._person_refs(x for r in rows for x in (r[14], r[15], r[16], r[20]))
+        overridden = [r[0] for r in rows if r[18]]
+        overrides = self._handover_overrides(overridden)
+        out = {}
+        for r in rows:
+            (project, repo, handed_by, handed_at, repos_json, autonomy, fin_at, fin_words, fin_decision,
+             fin_by, taken_at, taken_words, taken_by, released_at, person_id, fin_person, taken_person,
+             crew, o_reason, o_at, o_person) = r
+            repos = json.loads(repos_json) if repos_json else ([{"path": repo, "name": None}] if repo else [])
+            # who pushed the override through: the hand-over that gave it, not a later one; rows
+            # from before override_person_id fall back to the handing person
+            op, oby = (o_person, None) if o_person else (person_id, handed_by)
+            out[project] = {
+                "repo": repo, "repos": repos, "autonomy": autonomy, "by": handed_by, "at": handed_at,
+                "person": refs.get(person_id), "by_label": by_label(refs.get(person_id), handed_by),
+                "handed_by_person": refs.get(person_id), "crew": crew,
+                "override": ({"reason": o_reason, "at": o_at, "person": refs.get(op),
+                              "by_label": by_label(refs.get(op), oby)} if o_reason else None),
+                # true only when the latest hand-over itself carried the override: a later clean
+                # one leaves `override` (the latest ever) in place but is not overridden
+                "overridden": bool(o_reason and o_at is not None and o_at == handed_at),
+                "overrides": overrides.get(project, []) if o_reason else [],
+                "finished": ({"at": fin_at, "words": fin_words, "decision": fin_decision, "by": fin_by,
+                              "person": refs.get(fin_person), "by_label": by_label(refs.get(fin_person), fin_by)}
+                             if fin_at else None),
+                "takeover": ({"at": taken_at, "words": taken_words, "by": taken_by, "released_at": released_at,
+                              "person": refs.get(taken_person), "by_label": by_label(refs.get(taken_person), taken_by)}
+                             if taken_at else None)}
         return out
 
     # ── questions to an area owner (TR-636) ───────────────────────────────────
@@ -3124,6 +3189,18 @@ class FactoryStore:
                                 "project_integrations WHERE project_uid = ? AND slot = ?",
                                 [uid, slot]).fetchone()
         return self._integration_view(slot, r[0], r[1], r[2], r[3], project_uid=uid) if r else None
+
+    def projects_with_choice(self, slot: str, uids: list[str]) -> set[str]:
+        """The projects among `uids` that hold their own choice for the slot, in one query."""
+        self._integration_slot(slot, PROJECT_SLOTS)
+        ids = sorted({u for u in uids if u})
+        if not ids:
+            return set()
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT project_uid FROM project_integrations WHERE slot = ? AND project_uid IN "
+                f"({', '.join('?' for _ in ids)})", [slot, *ids]).fetchall()
+        return {r[0] for r in rows}
 
     @classmethod
     def project_field_refusal(cls, slot: str, name: str, key: str) -> str | None:
