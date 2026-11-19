@@ -337,12 +337,19 @@ jobs:
           npm run build
         working-directory: ui
 
-      # No pip cache here: setup-python keys it on lsb_release, which the Playwright image does not have.
+      # In a container, setup-python installs Python but leaves it off the PATH of later steps, and it
+      # can't cache pip (the cache key needs lsb_release, which the image lacks). So the step makes a
+      # venv from that Python and activates it: the suites start `tares` and `python3` by name. That
+      # Python finds libpython only through LD_LIBRARY_PATH, which a suite drops when it starts a daemon
+      # with a clean environment, so its lib directory goes to the linker's own list (the job is root).
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Browser e2e suites
         run: |
+          echo "$pythonLocation/lib" > /etc/ld.so.conf.d/setup-python.conf && ldconfig
+          "$pythonLocation/bin/python3" -m venv /tmp/venv
+          . /tmp/venv/bin/activate
           pip install -e .
           python tests/ci_e2e.py --shard ${{ matrix.shard }} --of 3
         env:
