@@ -550,7 +550,12 @@ async def main():
             took.append((time.perf_counter() - t0) * 1000)
         p95 = sorted(took)[18]
         print(f"       home() over 55 projects, {n} waiting: p95 {p95:.0f} ms, slowest {max(took):.0f} ms")
-        ck("p95 under 300 ms", p95 < 300, f"{p95:.0f} ms")
+        # 500 ms, not 300 (TR-1467): a laptop takes 100 to 250 ms, a GitHub runner anywhere from 180 to
+        # 310 ms for the same code. This catches a gross slowdown (tens of ms per project), not one more
+        # query per project (about 20 ms over these 55). What catches that is a count of the statements
+        # Home runs, not a stopwatch (TR-1501, ee/tests/test_factory_query_budget.py, on its way to main
+        # with the factory-perf work).
+        ck("p95 under 500 ms", p95 < 500, f"{p95:.0f} ms")
         h2 = fh.waiting_items(store, fx, now_utc())
         rest = [i for i in h2 if i["kind"] != "signoff"]
         key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
