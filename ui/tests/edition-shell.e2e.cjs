@@ -125,7 +125,7 @@ async function waitFor(url, tries = 150) {
     };
 
     const expect = {
-      factory: { name: "Software Factory", menu: ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
+      factory: { name: "Software Factory", menu: ["Home", "Integrations", "Feed", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
       // The AI SRE menu grows as each screen merges (Services, Incidents, Timeline, Settings): the menu must
       // keep the full order, start with Home, end with Settings and hold the entries that exist today.
       // The exact list is pinned per screen ticket in edition-routes.e2e.cjs.
@@ -180,7 +180,7 @@ async function waitFor(url, tries = 150) {
     // 1b. the factory menu: Home and Integrations, then the groups Work, Team and Knowledge (the Second Brain's
     // pages join Knowledge). A cell with no licence answers 404 on /api/brain: no brain. Entries below the group
     // names, in order; a name is a button that folds its group, not a link.
-    const FACTORY_ROWS = ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory"];
+    const FACTORY_ROWS = ["Home", "Integrations", "Feed", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory"];
     const GROUPS = "Work|Team|Knowledge";
     const BRAIN_ROWS = ["Repos", "Decisions", "Ask"];
     const brainReply = (page, status, json) => page.route(`${base("factory")}/api/brain`, (r) => r.fulfill({ status, json }));
@@ -227,8 +227,9 @@ async function waitFor(url, tries = 150) {
       // each group name sits right above its first row, and Settings stays below Second Brain
       const order = await nav.evaluate((n) => [...n.querySelectorAll('[data-testid^="menu-group-"], a')].map((el) => el.getAttribute("data-testid") || el.textContent.trim()));
       const at = (k) => order.indexOf(k);
-      ck(`${tag}: Work above Projects, Knowledge above Docs and memory, and Repos right after it`,
-         at("menu-group-work") + 1 === at("menu-projects") && at("menu-group-knowledge") + 1 === at("menu-docs") && at("menu-docs") + 1 === at("menu-brain-repos"), order.join(","));
+      ck("factory: Feed is the first row under Work", at("menu-group-work") + 1 === at("menu-feed") && at("menu-feed") + 1 === at("menu-projects"), order.join(","));
+      ck(`${tag}: Work above Feed and Projects, Knowledge above Docs and memory, and Repos right after it`,
+         at("menu-group-work") + 1 === at("menu-feed") && at("menu-feed") + 1 === at("menu-projects") && at("menu-group-knowledge") + 1 === at("menu-docs") && at("menu-docs") + 1 === at("menu-brain-repos"), order.join(","));
       ck(`${tag}: Settings is the last row`, order[order.length - 1] === "menu-settings");
       const g = nav.getByTestId("menu-group-knowledge");
       const gs = await g.evaluate((el) => { const c = getComputedStyle(el); return { size: c.fontSize, weight: c.fontWeight, tag: el.tagName }; });
@@ -261,10 +262,28 @@ async function waitFor(url, tries = 150) {
       await ctx.close();
     }
     {
+      // Feed: highlighted on its page and on a card's link, and at phone width it is in the drawer
+      const { page, ctx } = await open("factory", 1440);
+      await visit(page, "factory", "/feed");
+      const on = async () => (await page.locator('nav[aria-label="Main"] a[aria-current="page"]').allInnerTexts()).map((t) => t.trim()).join(",");
+      const first = await on();
+      await visit(page, "factory", "/feed?item=x");
+      const second = await on();
+      ck("factory: Feed is highlighted on /feed and /feed?item=x", first === "Feed" && second === "Feed", `${first} | ${second}`);
+      await ctx.close();
+      const phone = await open("factory", 390);
+      await visit(phone.page, "factory", "/projects");
+      await phone.page.getByTestId("menu-button").click();
+      await phone.page.locator('nav[aria-label="Main"]').waitFor();
+      ck("factory: Feed is in the phone menu", await phone.page.getByTestId("menu-feed").isVisible());
+      await phone.ctx.close();
+    }
+    {
       // the AI SRE cell never reads the brain
       const { page, ctx } = await open("sre", 1440);
       const reads = trackReads(page);
       await visit(page, "sre", expect.sre.page);
+      ck("sre: no Feed row", (await page.getByTestId("menu-feed").count()) === 0 && !(await labels(page)).map((x) => x.trim()).includes("Feed"));
       ck("sre: no read of /api/brain and no group names", !reads.includes("/api/brain") && (await page.locator('[data-testid^="menu-group-"]').count()) === 0, reads.join(","));
       await ctx.close();
     }

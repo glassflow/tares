@@ -205,6 +205,13 @@ export const Folder = (p: P) => (
   </S>
 );
 
+export const Inbox = (p: P) => (
+  <S {...p}>
+    <path d="M3 13h5l1.5 3h5L16 13h5" />
+    <path d="M5.5 5h13L21 13v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z" />
+  </S>
+);
+
 export const Ticket = (p: P) => (
   <S {...p}>
     <path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z" />

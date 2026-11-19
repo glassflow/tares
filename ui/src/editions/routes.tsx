@@ -117,7 +117,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-1205
     "/brain/connect": { page: lazyPage(() => import("./factory/BrainConnect")), fallback: "today" },
 
-    // P-TR-273: the human-in-the-loop feed, every decision the crew waits on, answered with Home's own actions; not in the menu yet
+    // P-TR-273: the human-in-the-loop feed, every decision the crew waits on, answered with Home's own actions; first row under Work in the factory menu (TR-1524)
     "/feed": { page: lazyPage(() => import("./factory/FactoryFeed")), fallback: { redirect: "/" } },
 
     // TR-732: the factory home is /, so Start (the login landing) goes there
