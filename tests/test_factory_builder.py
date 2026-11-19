@@ -273,7 +273,7 @@ async def main():
         listed = json.loads(await mf.list_crew())
         ck("list_crew shows it", next(s for s in listed if s["name"] == "shop-build-m1")["coordination_calls"] == 5, listed)
 
-    print("== a session is parsed again only when it has new tool calls (TR-683 review) ==")
+    print("== coordination counts come from the sessions table, nothing is parsed on a read (TR-683, TR-1499) ==")
     parsed = []
     real = factory.is_coordination
     factory.is_coordination = lambda tool: (parsed.append(tool), real(tool))[1]
@@ -283,26 +283,26 @@ async def main():
              "station": "shop-build-m2", "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop"},
             tool_line("b2", "mcp__tares__get_ticket", {"ticket": "T3"}, 10),
         ])
-        both = store.coordination_calls("claude_code", ["b1", "b2"])
-        ck("both sessions counted", both == {"b1": 5, "b2": 1}, both)
         parsed.clear()
-        ck("a different list of sessions reuses the counts",
+        both = store.coordination_calls("claude_code", ["b1", "b2"])
+        ck("both sessions counted, and the read parsed nothing", both == {"b1": 5, "b2": 1} and not parsed, (both, parsed))
+        ck("a different list of sessions gives its own counts",
            store.coordination_calls("claude_code", ["b1"]) == {"b1": 5} and not parsed, parsed)
         await ingest([tool_line("b2", "SendMessage", {"to": "crew-reviewer", "message": "[TF:REVIEW] T3"}, 5)])
         parsed.clear()
         again = store.coordination_calls("claude_code", ["b1", "b2"])
-        ck("a new call re-reads only its own session", again == {"b1": 5, "b2": 2} and len(parsed) == 2, (again, parsed))
-        print("== pruned events do not leave a stale count (TR-684) ==")
-        store.con.execute("DELETE FROM events WHERE key_value = 'b2'")
+        ck("a new call is counted into its own session", again == {"b1": 5, "b2": 2} and not parsed, (again, parsed))
+        print("== a purged source leaves no stale count (TR-684) ==")
+        store.purge_events("claude_code")
         gone = store.coordination_calls("claude_code", ["b1", "b2"])
-        ck("a session whose calls are all gone counts none", gone == {"b1": 5}, gone)
+        ck("a session whose calls are all gone counts none", gone == {}, gone)
         await ingest([tool_line("b2", "mcp__tares__get_ticket", {"ticket": "T3"}, 4)])
         back = store.coordination_calls("claude_code", ["b2"])
         ck("and counts again from what is there", back == {"b2": 1}, back)
-        store.con.execute("DELETE FROM events WHERE key_value = 'b2'")
+        store.purge_events("claude_code")
         await ingest([tool_line("b2", "Bash", {"command": "ls"}, 3)])
         swapped = store.coordination_calls("claude_code", ["b2"])
-        ck("pruned calls replaced by as many new ones are counted afresh", swapped == {}, swapped)
+        ck("purged calls replaced by calls that do not coordinate count none", swapped == {}, swapped)
     finally:
         factory.is_coordination = real
 

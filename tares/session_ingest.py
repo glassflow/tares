@@ -1,8 +1,10 @@
 """What each Claude Code session's lines add up to, kept in the `sessions` table (P-TR-295, TR-1471).
 
-A page that lists sessions used to count over the events table (`Store.session_activity`,
-`Store.coordination_calls`), and that table grows with every line. Here each line is counted once,
-as it is stored, into one row per session. Two writers keep the row right:
+A page that lists sessions used to count over the events table, and that table grows with every
+line. Here each line is counted once, as it is stored, into one row per session. The readers
+`Store.session_activity`, `Store.project_sessions`, `FactoryStore.station_sessions` and
+`FactoryStore.coordination_calls` read the row (TR-1499) and never touch events. Two writers keep
+the row right:
 
 - `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB. It
   adds the batch to each session's row in one transaction (`ON CONFLICT ... DO UPDATE`), so
@@ -15,11 +17,11 @@ as it is stored, into one row per session. Two writers keep the row right:
 
 DuckDB is never changed: `Store.append` keeps writing every line there.
 
-Two things to know when reading the table against the readers it replaces:
+Two things to know when reading the table:
 
-- It counts the lines of every claude_code source, while `Store.session_activity` and
-  `Store.coordination_calls` read the one source `cc_source` names. A cell with a second claude_code
-  source sees its sessions here too.
+- A row holds the `source` of the session's first line, and the readers ask for the one source
+  `cc_source` names, as the events scan did. A session whose lines come from two sources is
+  counted under the first one that wrote it.
 - The reconcile's mark is the newest `ingest_time` it read, and a line's `ingest_time` is set when
   its envelope is built, not when it is committed. The 10 minute margin before the mark covers a batch
   that commits late.
