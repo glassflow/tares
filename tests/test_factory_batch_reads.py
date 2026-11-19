@@ -3,8 +3,10 @@
 `challenge_events_many` is checked against the query `challenge_events` ran before (one name lookup
 and one select per ticket), over lines stamped with the project's name, its id, another project's,
 and unstamped lines from a session tied to the project or not. `projects_with_choice`,
-`members_by_project` and `handovers_by_project` are checked against their one-at-a-time reads, and
-`warm_gates` against `outside_gate`, project by project.
+`members_by_project` and `handovers_by_project` are checked against what was stored (people on one,
+two and no project; a hand-over with an override, a later clean one, one never handed over), and
+`warm_gates` against `outside_gate`, with an outside tool as the factory's gate and one project that
+keeps its own. `autonomy_of`'s memo is checked for two people with different crew settings.
 
 Run: .venv/bin/python tests/test_factory_batch_reads.py
 """
@@ -27,6 +29,24 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 from tares import factory_api
 from tares.daemon import make_app
+from tares.integrations import registry
+from tares.integrations.review import ReviewGate
+
+
+class FakeGate(ReviewGate):
+    """An outside review tool, so the factory's gate is not the crew reviewer."""
+    name = "fakegate"
+    title = "FakeBot"
+
+    def __init__(self, store):
+        pass
+
+    async def check_connection(self, settings):
+        return True, "ok"
+
+
+_real_get = registry.get
+registry.get = lambda slot, name: FakeGate if (slot, name) == ("review", "fakegate") else _real_get(slot, name)
 
 P = F = 0
 
@@ -106,40 +126,94 @@ def main():
     ck("more refs than one query holds read in chunks, the same answer",
        all(many[p] == old_challenge_events(store, "cx", *p) for p in big[:12]), "differs")
 
-    # projects that hold their own choice, in one query
+    # projects that hold their own choice, in one query. The factory's gate is an outside tool
+    # (a fake tool); uc_b keeps its own choice, the crew reviewer, so it has no outside gate
     store.set_choice("review", "tares", {}, "t")
     store.set_project_choice("uc_b", "review", "tares", {}, "t")
+    store.set_choice("review", "fakegate", {}, "t")
     ck("projects_with_choice names the projects with their own review choice",
        store.projects_with_choice("review", ["uc_a", "uc_b", "uc_c"]) == {"uc_b"})
     ck("projects_with_choice of nothing is empty", store.projects_with_choice("review", []) == set())
 
     # warm_gates fills the cache with what outside_gate gives for each project alone
     projects = ["uc_a", "uc_b", "uc_c"]
+    alone = {u: factory_api.outside_gate(store, u) for u in projects}
+    ck("the seeded gates differ: an outside tool for two projects, the crew reviewer for uc_b",
+       alone["uc_a"] is not None and alone["uc_a"] == ("fakegate", "FakeBot") and alone["uc_c"] == alone["uc_a"]
+       and alone["uc_b"] is None, str(alone))
     cache = {}
     factory_api.warm_gates(store, projects, cache)
-    for uid in projects:
-        alone = factory_api.outside_gate(store, uid)
-        ck(f"warm_gates: {uid} has the gate outside_gate gives it alone",
-           uid in cache or alone is None or uid == "uc_b", f"{cache} vs {alone}")
-        if uid in cache:
-            ck(f"warm_gates: {uid} matches outside_gate", cache[uid] == alone, f"{cache[uid]} vs {alone}")
+    ck("warm_gates: a project sharing the factory's gate has it in the cache, as outside_gate gives it",
+       cache.get("uc_a") == alone["uc_a"] and cache.get("uc_c") == alone["uc_c"], str(cache))
     ck("a project with its own choice is left for outside_gate to resolve", "uc_b" not in cache)
     ck("outside_gate with the cache answers the same as without",
-       all(factory_api.outside_gate(store, u, cache) == factory_api.outside_gate(store, u)
-           for u in projects))
+       all(factory_api.outside_gate(store, u, cache) == alone[u] for u in projects))
+    kept = {"uc_a": ("kept", "Kept")}
+    factory_api.warm_gates(store, projects, kept)
+    ck("warm_gates leaves what the cache already holds", kept["uc_a"] == ("kept", "Kept"))
 
-    # members in one query
+    # members in one query, with people who are on one project, on two, and on none
+    ana = store.create_person("Ana", email="ana@example.com")["id"]
+    ben = store.create_person("Ben", email="ben@example.com")["id"]
+    store.add_project_member("uc_a", ana, "t")
+    store.add_project_member("uc_a", ben, "t")
+    store.add_project_member("uc_b", ben, "t")
     ids = ["uc_a", "uc_b", "uc_c"]
     members = store.members_by_project(ids)
-    ck("members_by_project agrees with list_project_members",
+    ck("members_by_project names who is on each project",
+       {u: sorted(m["person_id"] for m in members.get(u, [])) for u in ids}
+       == {"uc_a": sorted([ana, ben]), "uc_b": [ben], "uc_c": []}, str(members))
+    ck("members_by_project agrees with list_project_members, in order",
        all([m["person_id"] for m in members.get(u, [])]
-           == [m["person_id"] for m in store.list_project_members(u)] for u in ids),
-       str(members))
+           == [m["person_id"] for m in store.list_project_members(u)] for u in ids))
+    ck("members_by_project leaves a project nobody is on out, or empty", not members.get("uc_c"))
 
-    # handovers in one query
+    # hand-overs: one with an override, then a clean one on another project, one never handed over
+    at1 = t0
+    at2 = t0 + timedelta(hours=1)
+    store.set_handover("uc_a", [{"path": "/r/a", "name": "o/a"}], "L4-ship", "Ana", at1, person_id=ana,
+                       crew="crew", override_reason="owner away")
+    store.set_handover("uc_b", [{"path": "/r/b", "name": "o/b"}], None, "Ben", at1, person_id=ben,
+                       override_reason="late")
+    store.set_handover("uc_b", [{"path": "/r/b", "name": "o/b"}], "L3-review", "Ben", at2, person_id=ben)
     got_h = store.handovers_by_project(ids)
-    ck("handovers_by_project agrees with get_handover for each project",
-       all(got_h.get(u) == store.get_handover(u) for u in ids), str(got_h))
+    ha, hb = got_h.get("uc_a") or {}, got_h.get("uc_b") or {}
+    ck("handovers_by_project holds the projects handed over and not the one never handed over",
+       set(got_h) == {"uc_a", "uc_b"}, str(sorted(got_h)))
+    ck("handovers_by_project: uc_a has its level, repo, person, crew and its override",
+       ha.get("autonomy") == "L4-ship" and ha.get("repo") == "/r/a" and (ha.get("person") or {}).get("id") == ana
+       and ha.get("crew") == "crew" and (ha.get("override") or {}).get("reason") == "owner away"
+       and ha.get("overridden") is True and [o["reason"] for o in ha.get("overrides") or []] == ["owner away"],
+       str(ha))
+    ck("handovers_by_project: uc_b's later clean hand-over keeps the override but is not overridden",
+       hb.get("autonomy") == "L3-review" and (hb.get("person") or {}).get("id") == ben
+       and (hb.get("override") or {}).get("reason") == "late" and hb.get("overridden") is False
+       and [o["reason"] for o in hb.get("overrides") or []] == ["late"], str(hb))
+    ck("handovers_by_project of one project gives that project only",
+       set(store.handovers_by_project(["uc_a"])) == {"uc_a"}
+       and store.handovers_by_project([]) == {} and set(store.handovers_by_project()) == {"uc_a", "uc_b"})
+    ck("get_handover gives the same hand-over, and None for a project never handed over",
+       store.get_handover("uc_a") == ha and store.get_handover("uc_c") is None)
+    ck("list_handover_overrides agrees with the override log",
+       [o["reason"] for o in store.list_handover_overrides("uc_a")] == ["owner away"])
+
+    # autonomy_of reads each crew setting once and keeps it per person: one memo, two people
+    store.set_setting(factory_api.CREW_SETTING, json.dumps({"autonomy": "L4-ship"}))
+    store.set_setting(f"{factory_api.CREW_SETTING}:{ana}", json.dumps({"autonomy": "L4-ship"}))
+    store.set_setting(f"{factory_api.CREW_SETTING}:{ben}", json.dumps({"autonomy": "L3-review"}))
+    store.set_handover("uc_a", [{"path": "/r/a", "name": "o/a"}], None, "Ana", at2, person_id=ana)
+    store.set_handover("uc_b", [{"path": "/r/b", "name": "o/b"}], None, "Ben", at2, person_id=ben)
+    from tares import merge_queue
+    hos = store.handovers_by_project(ids)
+    memo = {}
+    levels = {u: merge_queue.autonomy_of(store, u, hos, memo) for u in ("uc_a", "uc_b", "uc_a", "uc_b")}
+    ck("autonomy_of keeps each person's own crew setting in one memo",
+       levels == {"uc_a": "L4-ship", "uc_b": "L3-review"}, str(levels))
+    memo2 = {}
+    ck("the other order, in a fresh memo, gives the same levels",
+       [merge_queue.autonomy_of(store, u, hos, memo2) for u in ("uc_b", "uc_a")] == ["L3-review", "L4-ship"])
+    ck("without a memo or a read of the hand-overs the levels are the same",
+       [merge_queue.autonomy_of(store, u) for u in ("uc_a", "uc_b")] == ["L4-ship", "L3-review"])
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

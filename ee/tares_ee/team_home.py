@@ -584,6 +584,7 @@ def project_waiting(c, request, now, project: str) -> dict | None:
     if not _for_team(c, request):
         return None
     t = _home_read(c, request, now)
-    items = [i for i in t.items() if (i.get("project") or {}).get("id") == project]
+    # copies: the items are the request's own cached ones, and a caller cleans what it gets in place
+    items = [dict(i) for i in t.items() if (i.get("project") or {}).get("id") == project]
     mine, others = fh.split_waiting(t.store, items, t.caller(), now)
     return {"mine": mine, "others": others}
