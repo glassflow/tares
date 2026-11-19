@@ -15,8 +15,8 @@ The repo loop (`decisions_repo.RepoDecisions`) has no timer: a pass runs when a 
 or the app starts, and a failed pass is not queued again. The last scenario shows that: a lore that refuses
 every put gets one attempt per request and nothing more, so there is no loop there to back off.
 
-Covered: the wait rule as a pure function; which failures count (list, put, delete, a raise out of a pass, a
-failure in the pass that deletes after a project turned private); the first failure doubles the base; the cap;
+Covered: the wait rule as a pure function; which failures count (list, put, a put that raises, delete, a raise out of a pass, a
+failure in the pass that deletes after a project turned private); a document lore refuses (400, 413, 422) is put alone, stays out, and is no failure; the first failure doubles the base; the cap;
 a clean pass resets; a wake during a backoff starts no pass; a wake on the interval wait does; a raising pass
 still backs off and never spins; the loop stops with its task; the repo loop does not retry a failed put.
 
@@ -79,6 +79,10 @@ class Lore:
         self.calls.append("put")
         if "put" in self.mode:
             raise LoreError("The brain did not answer within 10 seconds")
+        if "putraise" in self.mode:
+            raise RuntimeError("the put broke")
+        if "refuse" in self.mode and any("bad" in d["external_id"] for d in documents):
+            raise LoreError("The brain refused the document", 413)
         for d in documents:
             self.docs[d["external_id"]] = d
         return {}
@@ -95,6 +99,8 @@ class Store:
 
     def __init__(self):
         self.private: set[str] = set()
+        self.ids = ["d1"]
+        self.body = "text"
 
     def private_projects(self):
         return [{"id": p} for p in self.private]
@@ -109,10 +115,10 @@ class Store:
         return {"repos": [{"name": "acme/web"}]}
 
     def list_docs(self, pid):
-        return [{"id": "d1", "kind": "spec"}]
+        return [{"id": i, "kind": "spec"} for i in self.ids]
 
     def get_doc(self, pid, doc_id):
-        return {"id": "d1", "kind": "spec", "title": "Spec", "body": "text", "updated_by": "Ann",
+        return {"id": doc_id, "kind": "spec", "title": "Spec", "body": self.body, "updated_by": "Ann",
                 "updated_at": "2026-03-01T00:00:00Z"}
 
 
@@ -205,6 +211,71 @@ async def which_failures_count():
     except RuntimeError:
         raised = True
     ck("a pass that raises goes up to `run`, which handles it", raised)
+    dec, lore = make()
+    lore.mode = {"putraise"}
+    ck("a put that raises something that is not a LoreError", await dec.reconcile() is True and not lore.docs)
+    dec, lore = make()
+    await dec.reconcile()
+    real_wanted = dec.wanted
+
+    def wanted_then_private():
+        got = real_wanted()
+        dec.store.private.add("p1")      # the project turns private while the pass runs
+        return got
+
+    dec.wanted = wanted_then_private
+    lore.mode = {"delete"}
+    ck("a delete that fails for a project made private during the pass (nothing else to delete)",
+       await dec.reconcile() is True and "project:p1:doc:d1" in lore.docs and lore.calls.count("delete") == 1, str(lore.calls))
+    lore.mode = set()
+    dec.wanted = real_wanted
+    ck("and the next pass removes it, no failure", await dec.reconcile() is False and not lore.docs)
+
+
+async def refused_documents():
+    print("== a document lore refuses is not a failed pass ==")
+    dec, lore = make()
+    dec.store.ids = ["d1", "bad", "d2"]
+    lore.mode = {"refuse"}
+    ck("one refused document of three: the pass is not failed", await dec.reconcile() is False, str(lore.calls))
+    ck("the other two landed", sorted(lore.docs) == ["project:p1:doc:d1", "project:p1:doc:d2"], str(sorted(lore.docs)))
+    ck("the batch was tried, then each document alone", lore.calls.count("put") == 4, str(lore.calls))
+    before = lore.calls.count("put")
+    ck("an unchanged refused document is not sent again", await dec.reconcile() is False and lore.calls.count("put") == before,
+       str(lore.calls))
+    dec.store.body = "new text"
+    ck("a changed one is tried again (and refused again, still not a failure)",
+       await dec.reconcile() is False and lore.calls.count("put") > before, str(lore.calls))
+    for status in (400, 422):
+        dec, lore = make()
+        dec.store.ids = ["bad"]
+        real = lore.put_documents
+
+        async def put(source, documents, status=status):
+            lore.calls.append("put")
+            raise LoreError("refused", status)
+
+        lore.put_documents = put
+        ck(f"a {status} is a refusal too", await dec.reconcile() is False and lore.calls.count("put") == 2, str(lore.calls))
+    for status in (500, 503, None):
+        dec, lore = make()
+        dec.store.ids = ["d1", "d2"]
+
+        async def put(source, documents, status=status):
+            lore.calls.append("put")
+            raise LoreError("down", status)
+
+        lore.put_documents = put
+        ck(f"a {status} is a failure, and the batch is not split", await dec.reconcile() is True and lore.calls.count("put") == 1,
+           str(lore.calls))
+    dec, lore = make()
+    dec.store.ids = ["d1", "bad"]
+    lore.mode = {"refuse"}
+    waits, starts = instrument(dec, 0.02)
+    dec.task = asyncio.create_task(dec.run())
+    ok = await until(lambda: len(waits) >= 3)
+    await stop(dec)
+    ck("run: a refused document leaves the wait at the base, every pass", ok and all(w == (BASE, False) for w in waits[:3]), str(waits[:4]))
 
 
 async def doubling_and_cap():
@@ -338,6 +409,7 @@ async def main():
     saved = dec_mod.INTERVAL_SECONDS
     try:
         await which_failures_count()
+        await refused_documents()
         await doubling_and_cap()
         await wakes()
         await repo_loop()
