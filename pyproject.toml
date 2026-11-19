@@ -38,6 +38,10 @@ dependencies = [
     # The crew engine (tares.crew) reads process state and stops stale station processes with psutil.
     "psutil>=5.9",
     "keyring>=24",  # tares login keeps the key in the OS keychain (tares/login.py); a file is the fallback
+    # The session store (tares/session_store): SQLAlchemy Core (no ORM) over SQLite locally or the
+    # state Postgres, with Alembic migrations that ship inside the package.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 # Tests only: tares.crew's JSON schemas are checked with it. Not a runtime dependency.

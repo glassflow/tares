@@ -239,6 +239,7 @@ test_services
 test_services_write
 test_session_flow
 test_session_project
+test_session_store
 test_setup_flow
 test_shared_code_context
 test_skill_pages
