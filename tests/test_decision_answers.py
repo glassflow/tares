@@ -174,6 +174,36 @@ async def main():
         out = json.loads(await mf.list_decisions("Teams"))
         ck("the MCP listing carries the answer", any(x.get("answer") == OPTS[0] for x in out), out)
 
+        print("== answered on a page or by message (TR-1521) ==")
+        as_station("crew-orchestrator", "orchestrator")
+        d6 = await ask("Ship the export button now?", ["Yes", "Not yet"])
+        d7 = await ask("Rename the export tab?", ["Yes", "Not yet"])
+        d8 = await ask("Move the export tab?", ["Yes", "Not yet"])
+        async with mk() as cx:
+            r = await cx.post(f"/api/desk/{d7['label']}/reply", json={"words": "A", "choice": "Yes"})
+        ck("a station key still cannot answer for the person", r.status_code == 403, r.text)
+        as_station()
+        # Home's one-tap choice sends the option's letter as the words
+        async with mk() as cx:
+            r = await cx.post(f"/api/desk/{d6['label']}/reply", json={"words": "A", "choice": "Yes"})
+            r2 = await cx.post(f"/api/desk/{d8['label']}/reply", json={"words": "A", "choice": "Yes"},
+                               headers={"X-Tares-Via": "message"})
+        ck("the replies are accepted", r.status_code == 200 and r2.status_code == 200, (r.text, r2.text))
+        rows = {x.get("label"): x for x in json.loads(await mf.list_decisions("Teams"))}
+        row = rows.get(d6["label"]) or {}
+        ck("a console answer reads back via console, as the option, without matched or a letter",
+           row.get("via") == "console" and row.get("answer") == "Yes"
+           and "matched" not in row and "words" not in row, row)
+        row = rows.get(d8["label"]) or {}
+        ck("a message answer reads back via message",
+           row.get("via") == "message" and row.get("answer") == "Yes"
+           and "matched" not in row and "words" not in row, row)
+        async with mk() as cx:
+            await cx.post(f"/api/projects/{uid}/handover", json={"repos": [{"path": "/w/teams"}]})
+        as_station("crew-orchestrator", "orchestrator")
+        out = await mf.finish_project("Teams", d8["label"])
+        ck("a finish hand-over is accepted from a message answer", "finished" in out and d8["label"] in out, out)
+
 
 unit()
 asyncio.run(main())

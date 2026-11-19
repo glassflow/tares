@@ -68,7 +68,7 @@ FOOT_END = "That is the whole queue. Merged and closed pull requests are on the 
 
 def where_of(decision: dict) -> dict:
     """{key, words, phrase} for where a decision was given. The decision records only `via`
-    ("console" or "slack"; none for a session). The merge queue page's own approval is told apart
+    ("console", "message" or "slack", and "feed" on old rows; none for a session). The merge queue page's own approval is told apart
     by the words and choice it records. Home, the project page and the Calls page all record a
     plain console answer, so they cannot be told apart: any other console answer reads "in the
     console"."""
@@ -78,6 +78,10 @@ def where_of(decision: dict) -> dict:
         return {"key": "merge_queue", "words": "merge queue page", "phrase": "on the merge queue page"}
     if via == "slack":
         return {"key": "slack", "words": "Slack", "phrase": "in Slack"}
+    if via == "feed":
+        return {"key": "feed", "words": "the feed", "phrase": "from the feed"}
+    if via == "message":
+        return {"key": "message", "words": "a message", "phrase": "from a message"}
     if via == "console":
         return {"key": "console", "words": "console", "phrase": "in the console"}
     return {"key": "session", "words": "Claude session", "phrase": "in a Claude session"}
