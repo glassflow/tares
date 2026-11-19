@@ -14,6 +14,15 @@ as it is stored, into one row per session. Two writers keep the row right:
   value is the right one, and a second pass changes nothing.
 
 DuckDB is never changed: `Store.append` keeps writing every line there.
+
+Two things to know when reading the table against the readers it replaces:
+
+- It counts the lines of every claude_code source, while `Store.session_activity` and
+  `Store.coordination_calls` read the one source `cc_source` names. A cell with a second claude_code
+  source sees its sessions here too.
+- The reconcile's mark is the newest `ingest_time` it read, and a line's `ingest_time` is set when
+  its envelope is built, not when it is committed. The 10 minute margin before the mark covers a batch
+  that commits late.
 """
 from __future__ import annotations
 
@@ -235,8 +244,9 @@ def start_reconcile(store) -> threading.Thread:
         t0 = time.perf_counter()
         try:
             n = reconcile_sessions(store)
-            print(f"taresd: sessions table caught up for {n} session(s) in "
-                  f"{time.perf_counter() - t0:.1f}s", flush=True)
+            if n:          # a start with nothing to catch up on prints nothing
+                print(f"taresd: sessions table caught up for {n} session(s) in "
+                      f"{time.perf_counter() - t0:.1f}s", flush=True)
         except Exception as e:
             print(f"taresd: sessions table catch-up failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)

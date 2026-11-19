@@ -30,6 +30,7 @@ from . import session_ingest, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
+from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
 _SCHEMA = """
@@ -4605,21 +4606,27 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return int(n)
 
     def purge_events(self, source: str) -> int:
-        with self._lock:
-            n = self.con.execute(
-                "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
-            self.con.execute("BEGIN TRANSACTION")
-            try:
-                self.con.execute("DELETE FROM events WHERE source = ?", [source])
-                self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
-                # Drop the maintained counters for this source (the only decrement path).
-                self.con.execute("DELETE FROM source_stats WHERE source = ?", [source])
-                self.con.execute("DELETE FROM entity_counts WHERE source = ?", [source])
-                self.con.execute("DELETE FROM entity_label_state WHERE source = ?", [source])
-                self.con.execute("COMMIT")
-            except Exception:
-                self.con.execute("ROLLBACK")
-                raise
+        # _sess_lock first, as append and the reconcile take it, so no line is counted into the
+        # sessions table between the purge and the delete of its rows.
+        with self._sess_lock:
+            with self._lock:
+                n = self.con.execute(
+                    "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
+                self.con.execute("BEGIN TRANSACTION")
+                try:
+                    self.con.execute("DELETE FROM events WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
+                    # Drop the maintained counters for this source (the only decrement path).
+                    self.con.execute("DELETE FROM source_stats WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM entity_counts WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM entity_label_state WHERE source = ?", [source])
+                    self.con.execute("COMMIT")
+                except Exception:
+                    self.con.execute("ROLLBACK")
+                    raise
+            # the sessions table counts those lines too: a re-ship of them would count them twice
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
         return n
 
     # ── subscriptions ─────────────────────────────────────────────────────────

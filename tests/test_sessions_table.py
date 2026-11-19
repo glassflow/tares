@@ -6,7 +6,10 @@ With the Postgres harness (every Store keeps its state in Postgres):
     TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres PYTHONPATH=tests/pg_harness \\
         python tests/test_sessions_table.py
 """
+import contextlib
+import io
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -203,6 +206,143 @@ def reconcile():
         x.close()
 
 
+def reconcile_extras():
+    print("== the reconcile keeps the earliest start and the latest line ==")
+    s = fresh_store()
+    s._append(sample())
+    session_ingest.reconcile_sessions(s)
+    with s.sessions_db.begin() as c:       # a row that starts late and ends early, as an older image leaves it
+        c.execute(sessions.update().where(sessions.c.session == "s1").values(
+            started_at=T0 + timedelta(hours=1), last_line_at=T0 - timedelta(hours=1)))
+    session_ingest.reconcile_sessions(s)
+    r = rows(s)["s1"]
+    ck("started_at goes back to DuckDB's first line (least)", r[3] == T0, r[3])
+    ck("last_line_at goes forward to DuckDB's last line (greatest)", r[4] == T0 + timedelta(seconds=6), r[4])
+    s.close()
+
+
+def start_output():
+    print("== the catch-up line, and the daemon starting it ==")
+    s = fresh_store()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        s.start_session_reconcile().join(30)
+    ck("a start with nothing to catch up on prints nothing", buf.getvalue() == "", buf.getvalue())
+    s._append(sample())
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        s.start_session_reconcile().join(30)
+    ck("a start that caught up sessions says so", "caught up for 3 session(s)" in buf.getvalue(), buf.getvalue())
+    broken = session_ingest.reconcile_sessions
+    session_ingest.reconcile_sessions = lambda store, chunk=0: (_ for _ in ()).throw(RuntimeError("down"))
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            s.start_session_reconcile().join(30)
+    finally:
+        session_ingest.reconcile_sessions = broken
+    ck("a failing catch-up says so", "catch-up failed (RuntimeError: down)" in buf.getvalue(), buf.getvalue())
+    s.close()
+    # make_app starts it: a process of its own, the daemon module reads its paths at import
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = tempfile.mkdtemp()
+    code = ("import os\n"
+            "from tares.store import Store\n"
+            "calls = []\n"
+            "orig = Store.start_session_reconcile\n"
+            "Store.start_session_reconcile = lambda self: (calls.append(1), orig(self))[1]\n"
+            "from tares import daemon\n"
+            "daemon.make_app()\n"
+            "print('CALLS', len(calls), flush=True)\n"
+            "os._exit(0)\n")
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": d, "PYTHONPATH": root,
+           "TARES_DB": os.path.join(d, "t.duckdb"), "TARES_CATALOG": os.path.join(d, "none.yaml"),
+           "TARES_OTLP_GRPC_PORT": "off"}
+    out = subprocess.run([sys.executable, "-c", code], env=env, cwd=d, capture_output=True, text=True,
+                         timeout=120)
+    ck("make_app starts the catch-up once", "CALLS 1" in out.stdout, (out.stdout[-300:], out.stderr[-300:]))
+
+
+def coordination_text():
+    print("== coordination_in: the text hint and the payload ==")
+    pay = {"message": {"content": [{"type": "tool_use", "name": "mcp__plugin_tares_tares__get_ticket"},
+                                   {"type": "tool_use", "name": "Read"}]}}
+    f = session_ingest.coordination_in
+    ck("a hinted text with a coordination tool in the payload counts it", f("→ mcp__plugin_tares_tares__get_ticket(x)", pay) == 1)
+    ck("the payload may be a JSON string", f("→ mcp__plugin_tares_tares__get_ticket(x)", json_dumps(pay)) == 1)
+    ck("a text without a hint counts nothing, whatever the payload says", f("→ Read(x)", pay) == 0)
+    ck("no text counts nothing", f(None, pay) == 0 and f("", pay) == 0)
+    ck("a payload that is not JSON counts nothing", f("→ Skill(x)", "{not json") == 0)
+    ck("a payload that is not an object counts nothing", f("→ Skill(x)", [1]) == 0)
+    ck("each coordination block counts once", f("→ Skill(x)", {"message": {"content": [
+        {"type": "tool_use", "name": "Skill"}, {"type": "tool_use", "name": "CronList"}]}}) == 2)
+
+
+def json_dumps(o):
+    import json
+    return json.dumps(o)
+
+
+def purge():
+    print("== purge_events drops the source's sessions rows ==")
+    s = fresh_store()
+    with s._swrite:
+        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    batch = [line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"), line("a", 2, source="laptop")]
+    s.append(batch + [line("keep", 0, tool="Skill")])
+    ck("the lines are counted", counts(s)["a"] == (3, 1, 1), counts(s))
+    n = s.purge_events("laptop")
+    ck("purge_events returns the events it removed", n == 3, n)
+    ck("the purged source's row is gone", "a" not in counts(s), counts(s))
+    ck("another source's row stays", counts(s).get("keep") == (1, 1, 1), counts(s))
+    s.append(batch)
+    ck("the same lines shipped again are counted once", counts(s)["a"] == (3, 1, 1), counts(s))
+    session_ingest.reconcile_sessions(s)
+    ck("and the reconcile agrees", counts(s)["a"] == (3, 1, 1), counts(s))
+    s.close()
+
+
+def lock_orders_record_and_reconcile():
+    print("== a reconcile does not run between a commit and its record ==")
+    s = fresh_store()
+    committed, release = threading.Event(), threading.Event()
+    real = session_ingest.record
+
+    def slow_record(store, envs):
+        committed.set()                      # the lines are in DuckDB, not yet counted
+        release.wait(30)
+        real(store, envs)
+
+    session_ingest.record = slow_record
+    errors = []
+    try:
+        a = threading.Thread(target=lambda: s.append([line("x", i) for i in range(3)]))
+        a.start()
+        ck("the batch reached the commit", committed.wait(30))
+
+        def run_reconcile():
+            try:
+                session_ingest.reconcile_sessions(s)
+            except Exception as e:
+                errors.append(e)
+
+        b = threading.Thread(target=run_reconcile)
+        b.start()
+        b.join(1.0)                          # with the lock, the reconcile waits; without it, it is done
+        release.set()
+        a.join(30)
+        b.join(30)
+    finally:
+        session_ingest.record = real
+        release.set()
+    with s._lock:
+        truth = s.con.execute("SELECT count(*) FROM events WHERE key_value = 'x'").fetchone()[0]
+    ck("neither writer failed", not errors, errors[:1])
+    ck("the row holds DuckDB's count, not a line twice", counts(s).get("x", (None,))[0] == truth == 3,
+       (counts(s), truth))
+    s.close()
+
+
 def concurrent():
     print("== four threads record at once ==")
     s = fresh_store()
@@ -311,7 +451,9 @@ def revision():
 
 
 def main():
-    for fn in (through_append, parity, catalog_source, reconcile, concurrent, failure_is_quiet, revision):
+    for fn in (through_append, parity, catalog_source, reconcile, reconcile_extras, start_output,
+               coordination_text, purge, lock_orders_record_and_reconcile, concurrent, failure_is_quiet,
+               revision):
         fn()
     if FAILS:
         print("FAIL", ", ".join(FAILS))
