@@ -110,7 +110,7 @@ async function waitFor(url, tries = 100) {
     const prLink = T("fact-pr").getByRole("link");
     ck("the pull request opens in a new tab and says how it stands",
        (await prLink.getAttribute("href")) === "https://github.com/example-org/docs-site/pull/12" && (await prLink.getAttribute("target")) === "_blank"
-       && (await txt(T("fact-pr"))).includes("PR #12, open, CI failing"));
+       && (await txt(T("fact-pr"))).includes("PR #12, open, checks failing"));
     ck("the terminal command is the one that opens the builder's session",
        (await raw(T("command-text"))) === "tares factory crew attach project-y-build-m1");
     await T("command-copy").click();
@@ -240,7 +240,7 @@ async function waitFor(url, tries = 100) {
 
     await open(page, "T3");
     ck("T3 is blocked, held by the lead, with no terminal and a blocking review",
-       (await raw(T("ticket-state"))) === "Blocked" && (await T("fact-terminal").count()) === 0 && (await txt(T("round"))).toLowerCase().includes("blocked"));
+       (await raw(T("ticket-state"))) === "Blocked" && (await T("fact-terminal").count()) === 0 && (await txt(T("round"))).toLowerCase().includes("reviewer stopped it"));
     ck("T3 says what it waits for, as the API words it",
        (await txt(T("ticket-blocked-reason"))).startsWith("Waiting for T2, "));
     await checkWords(page, ck, "T3");
@@ -357,7 +357,7 @@ async function waitFor(url, tries = 100) {
                && (await txt(q("ticket-lives-in"))) === "Lives in Linear" && (await txt(q("fact-who"))).includes("Nobody, it is finished"));
           } else if (name === "changes") {
             ck("changes: the builder's command, an open call, a pull request that passes",
-               (await q("command-text").count()) === 1 && (await raw(q("call-row"))).includes("Waiting for you") && (await txt(q("fact-pr"))).includes("open, CI green"));
+               (await q("command-text").count()) === 1 && (await raw(q("call-row"))).includes("Waiting for you") && (await txt(q("fact-pr"))).includes("open, checks passed"));
           } else if (name === "blocked") {
             ck("blocked: the Blocked state, no review, no pull request", (await raw(q("ticket-state"))) === "Blocked" && (await q("reviews-empty").count()) === 1
                && (await txt(q("fact-pr"))).includes("No pull request yet"));

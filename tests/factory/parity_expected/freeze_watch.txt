@@ -1,9 +1,9 @@
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -65,9 +65,9 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
 FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
@@ -219,9 +219,9 @@ exit: 0
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
 plugin: 2 station(s) run an older version; the freeze holds them (tares factory crew unfreeze lets the watch move each onto the checkout's)
 FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -402,9 +402,9 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
 plugin: 2 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
@@ -643,9 +643,9 @@ tares factory: crew-reviewer stopped; reviving it under the same name
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
 FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
@@ -1116,9 +1116,9 @@ tares factory: could not read the crew settings from Tares at http://127.0.0.1:<
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
 plugin: 2 station(s) run an older version; the freeze holds them (tares factory crew unfreeze lets the watch move each onto the checkout's)
 FROZEN: the kit (Tares does not say since when); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)

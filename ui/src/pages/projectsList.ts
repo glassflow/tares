@@ -11,10 +11,10 @@ export const SORTS: { key: Sort; label: string }[] = [
   { key: "name", label: "Name" },
 ];
 
-/** Tickets not done yet: to do, in progress and blocked. A project without tickets has none to count. */
+/** Tickets not finished yet: to do, in progress, queued and stuck. A project without tickets has none to count. */
 export function pendingWork(p: Project): number {
   const g = p.progress;
-  return g ? g.todo + g.doing + g.blocked : 0;
+  return g ? g.todo + g.doing + g.queued + g.stuck : 0;
 }
 
 /** When the project last moved: the server's `activity_at` (its newest ticket counts), else its own update. */

@@ -327,7 +327,8 @@ async def main():
             x = by["project-x"]
             ck("project-x is building, with its counts, repo and builder",
                x["state"] == "building" and x["state_label"] == "Building" and x["goal"] == "Ship the docs site"
-               and x["tickets"] == {"merged": 2, "blocked": 0, "total": 4} and x["repos"] == ["docs-site"]
+               and x["tickets"] == {"merged": 2, "closed": 0, "queued": 0, "stuck": 0, "total": 4,
+                                  "label": "2 merged of 4"} and x["repos"] == ["docs-site"]
                and x["builders"] == 1 and x["can_close"] is False, x)
             ck("its milestone line and its meta line", x["milestone"] == "Now on M2: search"
                and x["meta"].startswith("1 builder \u00b7 docs-site \u00b7 active ")
@@ -335,7 +336,8 @@ async def main():
             y = by["project-y"]
             ck("project-y has a spec and tickets but no hand-over: not started",
                y["state"] == "not_started" and y["state_label"] == "Not started" and y["builders"] == 0
-               and y["milestone"] is None and y["tickets"] == {"merged": 0, "blocked": 0, "total": 2}
+               and y["milestone"] is None and y["tickets"] == {"merged": 0, "closed": 0, "queued": 0, "stuck": 0, "total": 2,
+                                                         "label": "0 merged of 2"}
                and y["can_close"] is False, y)
             z = by["project-z"]
             ck("project-z is all merged: ready to close and can be closed",

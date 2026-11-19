@@ -1,10 +1,10 @@
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 plugin: 3 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you

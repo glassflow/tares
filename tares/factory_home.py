@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from . import claude_usage
 from . import factory as factory_mod
 from . import factory_owners as owners_mod
+from . import status_words
 from . import crew_onboarding, start_steps
 from .envelope import now_utc
 
@@ -33,8 +34,7 @@ KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "per
 ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later",
            "approve_merge", "accept_milestone")
 
-STATE_LABEL = {"building": "Building", "waiting_on_you": "Waiting on you",
-               "not_started": "Not started", "ready_to_close": "Ready to close"}
+STATE_LABEL = status_words.PROJECT_STATE
 _STATE_ORDER = {"waiting_on_you": 0, "building": 1, "not_started": 2, "ready_to_close": 3}
 
 ROLE_LINE = {"orchestrator": "Hands out work and brings you what needs you.",
@@ -70,22 +70,8 @@ def _iso(v) -> str | None:
     return t.isoformat() if t else None
 
 
-def _count(n: int, one: str, many: str | None = None) -> str:
-    return f"{n} {one if n == 1 else (many or one + 's')}"
-
-
-def plain_wait(minutes: int | None) -> str:
-    """A span in plain words: "just now", "5 minutes", "1 hour", "3 hours", "1 day", "6 days",
-    "3 weeks"."""
-    if minutes is None or minutes < 1:
-        return "just now"
-    if minutes < 60:
-        return _count(minutes, "minute")
-    if minutes < 1440:
-        return _count(minutes // 60, "hour")
-    if minutes < 10080:
-        return _count(minutes // 1440, "day")
-    return _count(minutes // 10080, "week")
+_count = status_words._count
+plain_wait = status_words.plain_wait   # the words live in status_words; screens import it from here
 
 
 def _minutes(ts, now) -> int | None:
@@ -199,7 +185,7 @@ def project_state(p: dict, tickets: list[dict], handover: dict | None, waiting: 
     prog = factory_mod.progress(tickets)
     if factory_mod.ready_to_close(p, tickets):
         return "ready_to_close"
-    if prog["done"] == 0 and prog["doing"] == 0:
+    if prog["merged"] == 0 and prog["closed"] == 0 and prog["doing"] == 0:
         return "not_started"
     mine = [w for w in waiting if (w.get("project") or {}).get("id") == p["id"]]
     # a ticket whose pull request waits for the person's merge is not the crew's work any more
@@ -256,7 +242,9 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
     return {"id": p["id"], "name": p["name"], "icon": p.get("icon"), "goal": p.get("goal") or "",
             "state": state,
             "state_label": STATE_LABEL[state], "milestone": milestone,
-            "tickets": {"merged": prog["done"], "blocked": prog["blocked"], "total": prog["total"]},
+            # merged only for a merge; queued (waits on a ticket) and stuck (a station stopped) apart
+            "tickets": {**{k: prog[k] for k in ("merged", "closed", "queued", "stuck", "total")},
+                        "label": status_words.count_line(prog)},
             "repos": repos, "builders": builders, "last_activity_at": _iso(at),
             "last_activity": ago or None, "meta": " · ".join(meta),
             # whether this caller may close it is the screen's to add (caller_owns)
@@ -285,19 +273,20 @@ def heard_ago(ts, now) -> str:
 def _state_text(state: str, since, now) -> str:
     """The state in words with its duration: "Working", "Idle for 8 minutes", "Waiting for you",
     "Not heard from in 2 hours", "Ended 1 day ago"."""
+    w = status_words.STATION
     if state == "working":
-        return "Working"
+        return w["working"]
     if state == "waiting":
-        return "Waiting for you"
+        return w["waiting"]
     m = _minutes(since, now)
     span = plain_wait(m) if m is not None else None
     if state == "ended":
-        return "Ended" if not span else ("Ended just now" if span == "just now" else f"Ended {span} ago")
+        return w["ended"] if not span else (f"{w['ended']} just now" if span == "just now" else f"{w['ended']} {span} ago")
     if state == "not heard":
-        return "Not heard from" if not span or span == "just now" else f"Not heard from in {span}"
+        return w["not_heard"] if not span or span == "just now" else f"{w['not_heard']} in {span}"
     if not span:
-        return "Idle"
-    return "Idle for less than a minute" if span == "just now" else f"Idle for {span}"
+        return w["idle"]
+    return f"{w['idle']} for less than a minute" if span == "just now" else f"{w['idle']} for {span}"
 
 
 def crew_member(station: dict, tickets_by_holder: dict[str, list[dict]], desk_open: int,
@@ -484,7 +473,7 @@ def _caller(store, fx, request) -> dict:
 
 def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
     """THE list of what waits for the caller, which every screen that says "Waiting for you" or
-    "Waiting on you" reads (the home, Projects, Tickets, a project's page): every builder's items
+    "Waiting for you" reads (the home, Projects, Tickets, a project's page): every builder's items
     kept to those whose `for_people` (factory_owners, one rule) names the caller. On a team cell
     the team home builds them (it adds spec questions and grants); without a licence the core
     builders do, by the same rule. `team` is a `fx.team_home` answer the caller already read."""

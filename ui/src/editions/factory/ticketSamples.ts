@@ -90,7 +90,7 @@ const OPEN: FactoryTicketData = {
   ...BASE, ref: "T7", title: "Sample set of 10 questions", state: "changes_asked", state_label: "Changes asked", in: "GitHub",
   who: "Builder for M1",
   depends_on: [link("T1", "Answer template for the docs site", "merged")], blocks: [link("T8", "Score the first answers", "blocked")],
-  pr: { number: 9, url: "https://github.com/example-org/docs-site/pull/9", state_text: "open, CI green" },
+  pr: { number: 9, url: "https://github.com/example-org/docs-site/pull/9", state_text: "open, checks passed" },
   reviews: [
     review(2, "asked for changes", "1 hour ago", "the tests on the branch, the diff", "the sample set in a browser", [
       find("Question 4 and question 7 are the same question.", "samples/questions.md", 31, true, "open", 5),

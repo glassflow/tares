@@ -221,7 +221,7 @@ async def main():
                a["blocks"] == [{"ref": "T3", "title": "Add the sitemap", "state_label": "Blocked",
                                 "href": f"/projects/{px}/tickets/T3"}], a["blocks"])
             ck("the pull request", a["pr"] == {"number": 12, "url": f"https://github.com/{REPO}/pull/12",
-                                                "state_text": "open, CI failing"}, a["pr"])
+                                                "state_text": "open, checks failing"}, a["pr"])
             ck("the project and a link back to it", a["project"] == {"id": px, "name": "project-x", "icon": None,
                                                                     "href": f"/projects/{px}"}, a["project"])
 
@@ -243,10 +243,10 @@ async def main():
                and f2["state_text"] == "open", [f1, f2])
             ck("a finding still open says open", rv[1]["findings"][0]["state_text"] == "open"
                and rv[2]["findings"] == [], rv[1:])
-            ck("a merged ticket's pass and a blocked ticket's block read the same way",
+            ck("a merged ticket's pass and a stopped ticket's block read the same way",
                (await cx.get(f"/api/factory/projects/{px}/tickets/T1")).json()["reviews"][0]["verdict_text"] == "passed"
                and (await cx.get(f"/api/factory/projects/{px}/tickets/T3")).json()["reviews"][0]["verdict_text"]
-               == "blocked")
+               == "reviewer stopped it")
 
             print("== checks, calls, decisions, history, notes ==")
             ck("the checks as the builder ran them, the folder swapped for the repo",

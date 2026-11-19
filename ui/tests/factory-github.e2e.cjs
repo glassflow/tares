@@ -109,7 +109,7 @@ async function waitFor(url, tries = 100) {
       const failing = api.nth(0).getByTestId("pr-facts");
       const f = await failing.innerText();
       ck("an open one: ticket, branch, who opened it, CI, review, size",
-         f.includes("T4") && f.includes("factory/T4 → main") && f.includes("by tares-crew") && f.includes("CI failing")
+         f.includes("T4") && f.includes("factory/T4 → main") && f.includes("by tares-crew") && f.includes("Checks failing")
          && f.includes("review round 1: changes asked") && f.includes("2 files +40 −12"), f);
       const merged = await api.nth(2).getByTestId("pr-facts").innerText();
       ck("a merged one says who merged it, with no CI", merged.includes("merged 5 hours ago by alex") && !merged.includes("CI"), merged);

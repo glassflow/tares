@@ -2045,14 +2045,16 @@ pre.payload {
 .fo-tag { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: var(--accent-soft); border: 1px solid var(--accent); padding: 3px 8px; }
 /* the tag and its ring stay together; the ring's slot is held while tickets load, so it never moves the page */
 .fo-name-tag { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 10px; white-space: nowrap; }
-/* the tickets' progress ring (ProgressRing.tsx): done, in progress, blocked, to do clockwise from
+/* the tickets' progress ring (ProgressRing.tsx): merged, closed, in progress, stuck, queued, to do clockwise from
    the top; the one round mark here, kept small and thin. On the Projects list with "3/8" beside
    it; on the project page alone next to the tag. */
 .fo-ring { flex: none; display: inline-block; vertical-align: middle; }
 .fo-ring-slot { flex: none; width: 16px; height: 16px; }   /* the page's ring before the tickets load */
-.fo-ring-done { stroke: var(--ok); }
+.fo-ring-merged { stroke: var(--ok); }
+.fo-ring-closed { stroke: color-mix(in srgb, var(--ok) 45%, var(--track)); }   /* finished, no merge */
 .fo-ring-doing { stroke: var(--accent); }
-.fo-ring-blocked { stroke: var(--err); }
+.fo-ring-stuck { stroke: var(--err); }
+.fo-ring-queued { stroke: var(--ink-faint); }   /* waits its turn: quiet, not an alarm */
 .fo-ring-todo { stroke: var(--track); }
 .fo-linear { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .fo-linear a { display: inline-flex; }.fo-linear a { font-weight: 600; }
@@ -2075,7 +2077,9 @@ pre.payload {
 .fo-bar i { flex: 1; height: 10px; background: var(--bg); border: 1px solid var(--line); }
 .fo-bar i.done { background: var(--ok); border-color: var(--ok); }
 .fo-bar i.run { background: var(--accent); border-color: var(--accent); }
-.fo-bar i.blocked { background: var(--err); border-color: var(--err); }
+.fo-bar i.stuck { background: var(--err); border-color: var(--err); }
+.fo-bar i.closed { background: color-mix(in srgb, var(--ok) 45%, var(--bg)); border-color: var(--ok); }
+.fo-bar i.queued { border-color: var(--ink-faint); }
 .fo-next { border: 2px solid var(--accent); background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
 .fo-next h2 { margin: 0; font-size: 20px; }
 .fo-next-empty { border-width: 1px; border-color: var(--line); }
@@ -2373,7 +2377,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .pj-n { font-weight: 600; font-variant-numeric: tabular-nums; }
 .pj-sub { font-size: 12px; color: var(--ink-soft); }
 .pj-sub.doing { color: var(--warn); }
-.pj-sub.blocked { color: var(--err); }
+.pj-sub.stuck { color: var(--err); }
 .pj-cue { display: none; margin-top: 1px; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
 .pj-updated { white-space: nowrap; color: var(--ink-soft); }
 .pj-actions { text-align: right; white-space: nowrap; }

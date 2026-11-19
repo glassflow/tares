@@ -18,13 +18,14 @@ from fastapi import Request
 
 from ..envelope import now_utc
 from .. import factory_owners as owners_mod
+from .. import status_words
 from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
                             caller_owns, caller_waiting)
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
-DONE_LABEL = "Done"
-LATER_LABEL = "Later"
+DONE_LABEL = status_words.PROJECT_DONE
+LATER_LABEL = status_words.PROJECT_LATER
 STATES = ("building", "waiting_on_you", "not_started", "ready_to_close", "later", "done")
 _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 
@@ -52,7 +53,7 @@ def row_for(p: dict, tickets: list[dict], handover: dict | None, waiting: list[d
     if p.get("status") == "done":
         finished = _dt(((handover or {}).get("finished") or {}).get("at")) or _dt(p.get("updated_at"))
         row["state"], row["state_label"], row["can_close"] = "done", DONE_LABEL, False
-        row["milestone"] = "Finished " + plain_date(finished, now) if finished else "Finished"
+        row["milestone"] = f"{DONE_LABEL} {plain_date(finished, now)}" if finished else DONE_LABEL
         row["last_activity_at"] = finished.isoformat() if finished else row["last_activity_at"]
         row["last_activity"] = plain_ago(finished, now) or None
         row["builders"] = 0
@@ -92,7 +93,7 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/projects")
     def factory_projects(request: Request):
         """{projects: [row], counts: {all, building, waiting_on_you, not_started, ready_to_close,
-        later, done}, now}. Sorted by state (waiting on you, building, not started, ready to close,
+        later, done}, now}. Sorted by state (waiting for you, building, not started, ready to close,
         later, done),
         newest activity first within a state."""
         now = now_utc()

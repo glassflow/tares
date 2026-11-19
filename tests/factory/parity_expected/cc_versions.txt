@@ -84,10 +84,10 @@ fix the items marked FIX
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/xhigh     done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     sonnet/high    done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/xhigh     Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     sonnet/high    Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://<TARES>/crew
@@ -105,10 +105,10 @@ crew-releaser	releaser		done	1.0.0 (older than 1.1.0)
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/xhigh     done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     sonnet/high    done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/xhigh     Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     sonnet/high    Idle                           -        
 claude code: 3 station(s) run an older Claude Code than 1.1.0; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you

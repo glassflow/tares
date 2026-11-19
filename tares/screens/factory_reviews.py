@@ -21,6 +21,7 @@ from fastapi import Query, Request
 
 from .. import factory_home as fh
 from .. import factory_waiting as fw
+from .. import status_words
 from ..envelope import now_utc
 
 AUTONOMY_TEXT = {
@@ -28,9 +29,9 @@ AUTONOMY_TEXT = {
     "L4-ship": "The crew merges after its review and green CI.",
 }
 # the dot of a CI sentence: ok (green), bad (red), go (amber, still going), none (grey)
-CI = {"success": ("CI passed", "ok"), "failure": ("CI failing", "bad"),
-      "pending": ("CI in progress", "go")}
-NO_CI = ("No CI", "none")
+_CI_TONE = {"success": "ok", "failure": "bad", "pending": "go"}
+CI = {k: (status_words.CI[k], tone) for k, tone in _CI_TONE.items()}
+NO_CI = (status_words.NO_CI, "none")
 _PULL = re.compile(r"/pull/(\d+)")
 
 
@@ -44,7 +45,7 @@ def review_words(verdict: dict | None) -> str:
     if kind == "changes":
         return f"Changes asked{suffix}"
     if kind == "block":
-        return f"Blocked by the reviewer{suffix}"
+        return status_words.reviewer_stopped() + suffix
     return "Not reviewed yet"
 
 
@@ -83,6 +84,9 @@ def _row(q: dict, now, milestones: dict[str, list[dict]]) -> dict:
         # who has it next ("The reviewer reviews it"), or why nobody does; null when it waits
         # for the person (TR-1009)
         "why": q.get("why"),
+        # whose turn it is (factory.turn_of, through factory_waiting.review_turn)
+        "turn": q["turn"], "turn_label": status_words.TURN[q["turn"]],
+        "whose": status_words.TURN_WHOSE[q["turn"]],
     }
 
 

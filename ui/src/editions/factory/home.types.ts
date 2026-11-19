@@ -100,7 +100,10 @@ export interface HomeProject {
   state: HomeProjectState;
   state_label: string;
   milestone: string | null; // "Now on M2: search", "3 milestones", "Ready to close"
-  tickets: { merged: number; blocked: number; total: number };
+  /** Tickets by count group (tares/factory.py `progress`): merged only for a merge, closed for done
+   *  without one, queued waits on another ticket, stuck a station stopped. `label` is the line
+   *  ("5 merged, 2 queued, 1 stuck of 8", status_words.count_line). */
+  tickets: { merged: number; closed: number; queued: number; stuck: number; total: number; label: string };
   repos: string[];
   builders: number;
   last_activity_at: string | null;

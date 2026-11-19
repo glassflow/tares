@@ -70,7 +70,7 @@ export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaiti
           <EmptyState title="Nothing waits for you." className="py-7" />
         ) : (
           <>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting for you" testid="waiting-now" flush />}
             {g.now.map(row)}
             {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}

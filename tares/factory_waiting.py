@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from . import factory as factory_mod
 from . import factory_home as fh
 from . import factory_owners as owners_mod
+from . import status_words
 
 # the role words a person reads ("The reviewer wants to use ..."), by the role the crew keeps
 _ROLE_WORD = {"orchestrator": "the orchestrator", "reviewer": "the reviewer",
@@ -180,7 +181,7 @@ NOBODY = {
     "not_handed": "The project was never handed to the crew",
     "taken": "You took this project over from the crew",
     "closed": "The pull request was closed without merging",
-    "blocked": "The reviewer blocked it; it needs your decision",
+    "blocked": "The reviewer stopped it; it needs your decision",
 }
 
 
@@ -203,10 +204,20 @@ def _crew_has(q: dict, level: str) -> str | None:
     if not (kind == "pass" and current):
         return f"Waiting for {outside}" if outside else "The reviewer reviews it"
     if q.get("ci") == "pending":
-        return "CI is still running; the crew merges it when CI passes"
+        return ("CI is still running; the crew merges it when CI passes" if level != DEFAULT_AUTONOMY
+                else "CI is still running; it waits for your merge when CI passes")
     if level != DEFAULT_AUTONOMY:
         return "The crew merges it"
     return None
+
+
+def review_turn(q: dict, level: str, queue_state: str | None = None) -> str:
+    """factory.turn_of for a row of the review queue: a pull request in review with the reviewer's
+    verdict on it, what CI said, its project's level and its open merge queue row's state. The
+    split below and the Reviews page's words both read this, so a pull request under "waiting for
+    you" always reads Ready for you."""
+    t = {"stage": "review", "pr": {"ci": q.get("ci")}}
+    return factory_mod.turn_of(t, None, q.get("verdict"), level, queue_state)
 
 
 def review_split(store, fx, rows: list[dict] | None = None
@@ -216,7 +227,8 @@ def review_split(store, fx, rows: list[dict] | None = None
     with `why` in words. A pull request waits for a person when the merge queue merges its
     project at L3-review (merge_queue.autonomy_of: the hand-over's level, else the crew of whoever
     handed it over, under the cell's ceiling; never the viewer's) and the reviewer passed it on its
-    current commit; which person is pr_owners' (the ticket's owner). Unless its project is finished or
+    current commit and CI does not run or fail on it (review_turn: Ready for you); which person
+    is pr_owners' (the ticket's owner). Unless its project is finished or
     the pull request was closed without merging. It is with the crew only when the crew has the
     project (handed over, not finished, not taken back) and a named role has the next step
     (`_crew_has`). Everything else is nobody's, with the reason (`NOBODY`). The Home page and
@@ -230,6 +242,8 @@ def review_split(store, fx, rows: list[dict] | None = None
     level: dict[str, str] = {}
     held: dict[str, str | None] = {}
     mine, theirs, nobody = [], [], []
+    # the merge queue's open rows by pull request: one the queue is merging is the crew's now
+    merging = {(r["repo"], r["pr"]): r for r in store.merge_queue_open()}
     for q in rows:
         pid = q["project"]
         if pid not in level:
@@ -242,16 +256,21 @@ def review_split(store, fx, rows: list[dict] | None = None
                          else "not_handed" if not ho
                          else "taken" if (ho.get("takeover") and not ho["takeover"].get("released_at"))
                          else None)
-        v = q.get("verdict") or {}
+        q = {**q, "turn": review_turn(q, level[pid], factory_mod.queue_state_of(
+            merging.get((q.get("repo"), q.get("number"))), q.get("head")))}
         # closed or finished: nobody's, whatever the review says
         gone = ("closed" if q.get("pr_state") == "closed" and not q.get("pr_merged")
                 else "finished" if held[pid] == "finished" else None)
         if gone:
             nobody.append({**q, "why": NOBODY[gone]})
-        elif level[pid] == DEFAULT_AUTONOMY and v.get("verdict") == "pass" and v.get("current"):
+        elif q["turn"] == "ready_for_you":
             mine.append({**q, "why": None})
         elif held[pid]:      # never handed over, or taken back: the crew does not have it
             nobody.append({**q, "why": NOBODY[held[pid]]})
+        elif q["turn"] == "merging":
+            theirs.append({**q, "why": "The crew merges it"})
+        elif q["turn"] == "next_to_merge":
+            theirs.append({**q, "why": "Approved; the merge queue merges it when its turn comes"})
         elif (has := _crew_has(q, level[pid])):
             theirs.append({**q, "why": has})
         else:
@@ -627,7 +646,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
         note = ("" if not open_ms else
                 f" {_and(open_ms)} {'is' if len(open_ms) == 1 else 'are'} not accepted yet.")
         out.append(owners_mod.tag(fh.home_item(
-            "signoff", label="Ready to close", title=p["name"],
+            "signoff", label=status_words.SIGNOFF, title=p["name"],
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
                    + "." + note + " Close the project when you have checked the result.",
             meta=_ready_for(since, now), since=since, now=now, project=_ref(p),

@@ -190,7 +190,8 @@ async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
                     checks: list[dict] | None = None, project: str = "") -> str:
     """Move a ticket you hold: `stage` is doing (you started), review (its PR is up: pass `pr`,
     the pull request's URL), changes (the reviewer asked for changes), merged, or blocked (say
-    why in `reason`). Only the releaser marks a ticket shipped. A ticket held by another station
+    why in `reason`; Tares puts the ticket on the desk for a person, unless an item about it is
+    already open, and takes it off when the ticket moves on). Only the releaser marks a ticket shipped. A ticket held by another station
     is refused; ask the orchestrator. For a ticket that lives in Linear or GitHub, also move it
     there (Linear's own tools, `gh` for GitHub). Name your branch factory/<ticket> (factory/T3)
     so Tares finds the pull request on its own too. Asking for review, pass the checks you ran

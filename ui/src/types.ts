@@ -900,8 +900,12 @@ export interface Project {
 export type ProjectScope = "team" | "private";
 export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
-// `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
-export interface TicketProgress { done: number; doing: number; blocked: number; todo: number; canceled: number; total: number }
+// `progress`): merged only for a merge, closed for done without one, queued (waits on a ticket)
+// apart from stuck (a station stopped); total is every group but canceled
+export interface TicketProgress {
+  merged: number; closed: number; doing: number; stuck: number; queued: number; todo: number;
+  canceled: number; total: number;
+}
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──
 

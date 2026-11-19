@@ -22,6 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .. import status_words  # standard library only, so the dispatcher stays light
 from . import claude, contract, state
 from .cc_update import cc_behind, cc_retry_in, station_cc  # moved there by TR-963, TR-964; status and roster read them
 from .client import TaresClient, TaresHTTPError, cksum
@@ -34,7 +35,7 @@ from .watch_revive import stuck_on_context  # moved there by TR-959; status and 
 
 LETTERS = "ABCDEFGH"
 DESK_END = f"Answer in the orchestrator's session, one at a time: {ME} crew attach orchestrator"
-ROW = "%-30s %-12s %-14s %-8s %-8s %s\n"
+ROW = "%-30s %-12s %-14s %-30s %-8s %s\n"
 
 
 # ---------- small helpers ----------
@@ -210,6 +211,39 @@ def pace_status_line(client: TaresClient) -> str:
 # ---------- adopt_unrecorded ----------
 
 
+def _background(job: dict) -> int:
+    """How many background tasks a session between turns still runs, from its job file's `inFlight`: the
+    kinds other than its own schedule (a session cron, which `quiet` does not count either), else `tasks`."""
+    inflight = job.get("inFlight") if isinstance(job, dict) else None
+    if not isinstance(inflight, dict):
+        return 0
+    kinds = inflight.get("kinds")
+    if isinstance(kinds, list) and kinds:
+        return sum(1 for k in kinds if k != "session_cron")
+    n = inflight.get("tasks")
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+
+def _ago(ts) -> str:
+    """"5 minutes ago", "just now": the time since an ISO time; "" when it does not parse."""
+    from datetime import datetime, timezone
+    try:
+        t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    t = t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    span = status_words.plain_wait(int((datetime.now(timezone.utc) - t).total_seconds() // 60))
+    return span if span == "just now" else f"{span} ago"
+
+
+def _asked(item: dict) -> str:
+    """The open item a station waits on, as the NEEDS column says it: "D3: Allow git push?, asked 5 minutes ago"."""
+    q = " ".join(_text(item.get("question")).split())
+    label = _text(item.get("label"))
+    when = _ago(item.get("created_at"))
+    return (f"{label}: {q}" if label else q) + (f", asked {when}" if when else "")
+
+
 def _job(sid: str) -> dict:
     try:
         return claude.job_state(sid)
@@ -319,6 +353,12 @@ def cmd_status(argv: list, env: dict) -> int:
     running = len(active)
     doc["running"] = running
     old = 0
+    # the open items for a person, fetched once: a station's NEEDS is the item that names it (the
+    # status-words spec, decisions 4 and 5), and the desk line below counts them
+    items = client.desk_json(mine=True)
+    asks: dict = {}
+    for i in items:
+        asks.setdefault(_text(i.get("station")), i)
     if running > 0:
         out.write(ROW % ("STATION", "ROLE", "MODEL", "STATE", "TEMPO", "DOING / NEEDS"))
     else:
@@ -336,8 +376,14 @@ def cmd_status(argv: list, env: dict) -> int:
         tempo = _field(job, "tempo", "-")
         detail = _field(job, "detail")
         needs = _field(job, "needs")
-        if needs:
-            detail = f"NEEDS: {needs}"
+        ask = asks.get(s)
+        if ask:
+            detail = _asked(ask)
+        elif needs:
+            # the station's own note says what it wants; only an item makes it a wait for you
+            when = _ago(job.get("updatedAt"))
+            detail = f"Its note: {needs}" + (f" ({when})" if when else "")
+        shown = status_words.station_state(st, _background(job), bool(ask))
         if stuck_on_context(paths, binary, s, agents):
             detail = f"STUCK on autocompact: {ME} crew watch starts it fresh"
         if (st and state.stations_get(s, "sessionId", paths=paths) and not paths.done_file(s).exists()
@@ -346,9 +392,10 @@ def cmd_status(argv: list, env: dict) -> int:
                 detail = "NEW PERMISSIONS: restarted with them once you leave its session"
             else:
                 detail = "NEW PERMISSIONS: the watch restarts it with them between turns"
-        out.write(ROW % (s, role, f"{model}/{effort}", st or "gone", tempo, detail[:70]))
+        out.write(ROW % (s, role, f"{model}/{effort}", shown, tempo, detail[:70]))
         doc["stations"].append({"station": s, "role": role, "model": model, "effort": effort,
-                                "state": st or "gone", "tempo": "" if tempo == "-" else tempo, "detail": detail})
+                                "state": st or "gone", "shown": shown, "asked": ask.get("label") if ask else None,
+                                "tempo": "" if tempo == "-" else tempo, "detail": detail})
     # two live sessions under one station name
     pattern = re.compile("^" + re.escape(state.crew_name(paths)) + "-|-build-")
     groups: dict = {}
@@ -421,7 +468,6 @@ def cmd_status(argv: list, env: dict) -> int:
                   f"you allowed in Tares; log in {paths.shown('watch.log')}\n")
     else:
         out.write(f"watch: not running; {ME} crew up starts it (or run {ME} crew watch yourself)\n")
-    items = client.desk_json(mine=True)
     # a finished project's questions only matter to a crew that is still running (TR-559)
     if running <= 0:
         items = [i for i in items if not _truthy(i.get("project_finished"))]

@@ -209,7 +209,7 @@ async def main():
         a, k = await page("ashish", done), await page("kiran", done)
         ck("Ashish cannot close Kiran's project and has no Ready to close of his own",
            a["can_close"] is False and not any(w["kind"] == "signoff" for w in a["waiting"])
-           and any(w["label"] == "Ready to close for Kiran" for w in a["waiting_others"]), (a["can_close"], a["waiting"], a["waiting_others"]))
+           and any(w["label"] == "Kiran can close it" for w in a["waiting_others"]), (a["can_close"], a["waiting"], a["waiting_others"]))
         ck("Kiran can", k["can_close"] is True and any(w["kind"] == "signoff" for w in k["waiting"]), k["can_close"])
         ps = {p["id"]: p for p in (await get("ashish", "/api/factory/projects"))["projects"]}
         ck("the Projects row offers Close to Kiran only", ps[done]["can_close"] is False

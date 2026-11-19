@@ -49,6 +49,7 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "token-contract": "eslint --quiet --config eslint-token-contract.config.mjs \"src/**/*.{ts,tsx}\"",
     "motion-contract": "node tests/motion.check.cjs",
+    "count-parity": "node tests/count-parity.check.cjs",
     "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\"",
     "time-baseline": "node scripts/time-baseline.mjs",
     "test:time": "node tests/time.selftest.cjs",

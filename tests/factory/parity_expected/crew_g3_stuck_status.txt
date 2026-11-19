@@ -1,10 +1,10 @@
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        STUCK on autocompact: tares factory crew watch starts it fresh
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        STUCK on autocompact: tares factory crew watch starts it fresh
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -13,10 +13,10 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      working  -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Working                        -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -25,10 +25,10 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      gone     -        STUCK on autocompact: tares factory crew watch starts it fresh
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Ended                          -        STUCK on autocompact: tares factory crew watch starts it fresh
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -37,10 +37,10 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        STUCK on autocompact: tares factory crew watch starts it fresh
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        STUCK on autocompact: tares factory crew watch starts it fresh
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
