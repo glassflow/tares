@@ -34,6 +34,7 @@ licensed.install_test_root()
 
 ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
+LICENCE_LINE = "Tares enterprise licence, see ee/LICENSE"   # the golden file is JSON, so the line is a key
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "factory_pages_golden.json")
 WRITE_GOLDEN = "--write-golden" in sys.argv
 
@@ -79,6 +80,8 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # change that moves one (a sessions database, a Postgres-only read) can move only that one.
 _TODAY = {"home": 458, "projects": 796, "project": 382, "ticket": 47, "raw_tickets": 14, "raw_ticket": 20}
 BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
+
+FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
 ROUTES = [
     ("home", "/api/home"),
@@ -300,18 +303,24 @@ async def main():
         ck(f"{name}: {counts[name]} statements, budget {budget.get(name)}",
            name in budget and counts[name] <= budget[name],
            f"{counts[name]} over a budget of {budget.get(name)}")
+        # a floor, so a counter that stops seeing statements, or a saving that is not written down, fails
+        ck(f"{name}: {counts[name]} statements is not far under the budget (lower BUDGET when a change saves queries)",
+           name in budget and counts[name] >= math.floor(budget[name] * FLOOR),
+           f"{counts[name]} is under {FLOOR:.0%} of the budget {budget.get(name)}: lower BUDGET")
     print("  a budget at this run's counts plus 2 percent:", {k: math.ceil(v * 1.02) for k, v in counts.items()})
 
     print("== the bodies ==")
     if WRITE_GOLDEN:
         os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
         with open(GOLDEN, "w") as f:
-            json.dump(bodies, f, indent=1, sort_keys=True)
+            json.dump({"_licence": LICENCE_LINE, **bodies}, f, indent=1, sort_keys=True)
             f.write("\n")
         print(f"  wrote {GOLDEN}")
     else:
         with open(GOLDEN) as f:
             want = json.load(f)
+        ck("the golden file keeps its licence line (tests/test_ee_headers.py reads it)",
+           want.get("_licence") == LICENCE_LINE, want.get("_licence"))
         for name, _ in ROUTES:
             same = json.loads(json.dumps(bodies[name], sort_keys=True)) == want.get(name)
             ck(f"{name} answers what the golden file has", same, "differs: run with --write-golden "
