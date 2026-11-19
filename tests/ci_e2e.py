@@ -34,12 +34,26 @@ PORT_STEP = 40
 # slot, so its page loads can reach its own daemon.
 BLOCKED = {10080}
 
+# Seconds each suite took on a CI runner, the mean of 9 green shards on 2026-11-19 (TR-1515). Refresh
+# from a run's e2e logs, where each suite ends with "-- <name>: exit 0, 0 FAIL line(s), <n>s"; a
+# table more than a few weeks old lets one shard run far longer than the others.
 DEFAULT_WEIGHT = 30
 WEIGHT = {
-    "factory-reviews": 49, "factory-home": 47, "factory-project": 44, "sre-runbooks": 36, "edition-routes": 24,
-    "factory-docs": 23, "factory-projects": 23, "factory-settings": 23, "factory-crew": 22, "projects-list": 19,
-    "edition-shell": 16, "capped-runs": 8, "project-idle": 7, "component-gallery": 5, "raise-limit": 4,
-    "login-handoff": 3, "session-picker": 2,
+    "licence": 262, "team-home": 169, "licence-needed": 167, "factory-project": 129, "away-answer": 124,
+    "factory-settings": 113, "sre-timeline": 104, "factory-tickets": 59, "factory-merge-queue": 57,
+    "factory-setup": 56, "brain-ask": 53, "factory-reviews": 52, "sre-services": 51, "factory-home": 48,
+    "factory-crew": 48, "sre-home": 47, "factory-ticket": 45, "sre-runbooks": 40, "sre-settings": 36,
+    "brain-connect": 33, "edition-routes": 29, "projects-list": 28, "factory-projects": 28,
+    "factory-docs": 28, "edition-shell": 27, "brain-repos": 27, "choose-edition": 26, "crew-people": 25,
+    "brain-decisions": 22, "sre-incidents": 21, "factory-project-controls": 19, "ee-chunk": 18,
+    "sre-start": 17, "source-claude-code": 17, "other-project": 16, "connect": 15, "a11y": 13,
+    "source-form": 11, "explore": 11, "factory-feed": 10, "redirects": 9, "factory-secrets": 9,
+    "component-gallery": 9, "source-new": 8, "reads": 8, "project-idle": 8, "ee-project-access": 8,
+    "resources": 7, "factory-team": 7, "factory-github": 7, "catalog-import": 7, "catalog-export": 7,
+    "sre-guards": 6, "source-discover": 6, "source-detail": 6, "raise-limit": 6, "motion": 6,
+    "grants-declined": 6, "capped-runs": 6, "brain-folders": 5, "sources": 4, "factory-people": 4,
+    "settings-people": 3, "login-handoff": 3, "factory-new-project": 3, "session-picker": 2,
+    "licence-words": 1,
 }
 
 TIMEOUT = 600  # seconds for one suite; a hung browser fails the suite instead of the whole job
