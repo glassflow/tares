@@ -19,6 +19,13 @@ poller and webhook stay off: the cell drives every sync.
   `sync_error` and `sync_failures` counts failures in a row. The next push tries again, and so does the next poll of a token repo; a repo the App covers is not polled (A25). From
   `SHOW_AFTER` in a row the reason is also the row's `error`, which is what the card shows. A
   success clears all three.
+* A repo the App covers has no poll, so after a failure it would wait for the next push, which on a quiet
+  repo can be days (TR-1510). It retries on a back-off instead: `RETRY_FIRST_SECONDS` after the first
+  failure, doubling with each failure in a row up to `RETRY_CAP_SECONDS`. A retry is `request(repo)`
+  with no head: lore fetches the newest head itself, so it costs no GitHub call. A push still syncs at
+  once, and a success, a removed repo or a `failed` one ends the retrying. A token repo has the poll
+  and no back-off. The push listeners hear nothing on a retry: the push that failed already told them
+  (`on_envelopes` tells them as the event arrives, whatever the sync does), and a retry is not a push.
 
 * The files a push touched are told to the `push_listeners` (the decision importer, TR-1219): from the
   event's payload (`pushed_files`), or None when it has none that can be trusted. A token repo has no
@@ -46,18 +53,27 @@ from tares.factory import norm_repo
 from .index import RUNNING, _count, _line, record_update
 from .lore import LoreClient, LoreError, scrub
 
-__all__ = ["SHOW_AFTER", "SYNC_POLL_SECONDS", "Syncer", "TICK_SECONDS", "github_head", "pushed_files"]
+__all__ = ["RETRY_CAP_SECONDS", "RETRY_FIRST_SECONDS", "SHOW_AFTER", "SYNC_POLL_SECONDS", "Syncer", "TICK_SECONDS",
+           "github_head", "pushed_files", "retry_delay"]
 
 log = logging.getLogger("tares_ee.brain.sync")
 
 SYNC_POLL_SECONDS = 60.0   # between two looks at the head of a token connection's repos
 TICK_SECONDS = 5.0         # between two looks at a push waiting for a repo to be ready (tests make it small)
+RETRY_FIRST_SECONDS = 60.0   # an App-covered repo retries this long after its first failed sync
+RETRY_CAP_SECONDS = 1800.0   # the wait doubles with each failure in a row up to this
 SHOW_AFTER = 3             # failures in a row before the card shows the error
 HEAD_TIMEOUT = 15          # seconds one head check may take
 GITHUB_TIMEOUT = 60        # seconds one repo listing may take
 PUSH_COMMITS_CAP = 20      # GitHub lists at most this many commits in a push event
 
 _SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def retry_delay(failures: int) -> float:
+    """Seconds to wait after `failures` failed syncs in a row (at least 1): the first wait, doubled each time, up to the cap."""
+    n = max(1, min(int(failures), 32))   # the cap is reached long before 32: this only keeps the power small
+    return min(RETRY_CAP_SECONDS, RETRY_FIRST_SECONDS * 2 ** (n - 1))
 
 
 async def github_head(api_url, token: str, repo: str, known=None) -> tuple[str, str]:
@@ -128,6 +144,9 @@ class Syncer:
         self._told: dict[str, str] = {}      # repo -> the head the push listeners last heard of from a poll
         self.push_listeners: list = []       # callables (repo, changed paths or None), told of every push
         self._tasks: dict[str, asyncio.Task] = {}     # repo -> its running sync
+        self._app: set[str] = set()          # repos a GitHub App covers (a push event or the poll said so): no poll, so a retry
+        self._retry_at: dict[str, float] = {}   # App repo -> when (self._clock) its failed sync is tried again
+        self._clock = time.monotonic          # tests move it
         self._wake = asyncio.Event()
         self.task: asyncio.Task | None = None
         self.poll_task: asyncio.Task | None = None
@@ -151,6 +170,7 @@ class Syncer:
             return
         for labels, payload in pushes:   # no store read here: this runs on the event loop, inside the ingest
             repo = norm_repo(labels["repo"])
+            self._app.add(repo)
             self._note(repo, labels.get("sha"))
             self._tell(repo, pushed_files(payload))
 
@@ -192,8 +212,9 @@ class Syncer:
         self._wake.set()
 
     def _forget(self, repo: str) -> None:
-        for book in (self._want, self._done, self._head, self._synced, self._seen, self._told):
+        for book in (self._want, self._done, self._head, self._synced, self._seen, self._told, self._retry_at):
             book.pop(repo, None)
+        self._app.discard(repo)
 
     def _outstanding(self) -> bool:
         return any(n > self._done.get(r, 0) for r, n in self._want.items())
@@ -210,6 +231,25 @@ class Syncer:
                 self._tasks[repo] = asyncio.create_task(self._run_repo(repo))
             elif row["state"] not in RUNNING:   # failed: nothing to keep current. Running: wait for ready
                 self._forget(repo)
+
+    def _start_retries(self) -> None:
+        """Ask again for every App repo whose back-off is over. Nothing to catch up (the repo is gone, failed,
+        indexing, already syncing or no longer failing) drops the retry."""
+        now = self._clock()
+        for repo, due in list(self._retry_at.items()):
+            if due > now:
+                continue
+            self._retry_at.pop(repo, None)
+            row = self.store.get_brain_repo(repo)
+            if row is None or row["state"] == "failed":
+                self._forget(repo)   # gone or failed: nothing to keep current
+                continue
+            if row["state"] != "ready" or not row.get("sync_failures") or repo in self._tasks:
+                continue   # a sync running now re-arms the retry if it fails
+            self._note(repo)   # no head: lore fetches the newest one, and the listeners are not told
+
+    def _next_retry(self) -> float | None:
+        return min(self._retry_at.values(), default=None)
 
     async def _run_repo(self, repo: str) -> None:
         try:
@@ -272,6 +312,7 @@ class Syncer:
                           files_deleted=deleted, files_total=total)
         if head or commit:   # an empty head would make every later poll look like a new commit
             self._synced[repo] = head or commit
+        self._retry_at.pop(repo, None)
         self.syncs += 1
 
     def _failed(self, repo: str, words: str) -> None:
@@ -286,6 +327,8 @@ class Syncer:
             fields["error"] = words
         if self.store.update_brain_repo(repo, fields, only_in=("ready",)):
             record_update(self.store, repo, "update", False, error=words, files_total=row.get("files_total") or 0)
+        if repo in self._app:   # no poll will ask again: back off, then try without waiting for a push
+            self._retry_at[repo] = self._clock() + retry_delay(n)
         log.info("brain sync of %s failed, %d in a row", repo, n)
 
     # -- the poll, for repos without webhooks -----------------------------------------------
@@ -336,7 +379,13 @@ class Syncer:
         try:
             target = await self._target(repo)
             if target is None:
+                self._app.add(repo)
+                if row.get("sync_failures") and repo not in self._retry_at:
+                    self._retry_at[repo] = self._clock()   # failed before this run knew: try now, then back off
+                    self.wake()
                 return 0
+            self._app.discard(repo)   # a token reads it now: the poll is its retry
+            self._retry_at.pop(repo, None)
             token, api = target
             sha, etag = await github_head(api, token, repo, self._seen.get(repo))
         except ValueError as e:
@@ -364,12 +413,16 @@ class Syncer:
                 next_poll = time.monotonic() + SYNC_POLL_SECONDS
             try:
                 if self.active():
+                    self._start_retries()
                     self._start_tasks()
                     if due and (self.poll_task is None or self.poll_task.done()):
                         self.poll_task = asyncio.create_task(self.poll())
             except Exception as e:   # noqa: BLE001
                 log.warning("brain sync could not read its repos: %s", type(e).__name__)
             delay = TICK_SECONDS if self._outstanding() else max(0.05, next_poll - time.monotonic())
+            retry = self._next_retry()
+            if retry is not None:
+                delay = min(delay, max(0.05, retry - self._clock()))
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), delay)
 
