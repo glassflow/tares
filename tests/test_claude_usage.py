@@ -28,8 +28,10 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
 
+from session_helpers import count, delete_rows, rows as session_rows, set_cols
 from tares import claude_usage as cu
 from tares.pricing import cost_usd
+from tares.session_store.tables import session_usage as su
 
 P = F = 0
 
@@ -201,8 +203,8 @@ async def main():
                                                                      "usage": {"input_tokens": 0, "output_tokens": 0}}},
         ])
         ck("the push is taken", r.status_code == 202, r.text)
-        rows = {x["message"]: x for x in [dict(zip(("session", "message", "output", "cost"), t)) for t in store.sc.execute(
-            "SELECT session, message, output_tokens, cost_usd FROM session_usage").fetchall()]}
+        rows = {x["message"]: x for x in [{"session": t["session"], "message": t["message"], "output": t["output_tokens"],
+                                          "cost": t["cost_usd"]} for t in session_rows(store, "session_usage")]}
         ck("one row per reply, none for Claude Code's own notices", sorted(rows) == ["m1", "m2", "m3", "m4", "m5", "m6"], rows)
         ck("the largest count wins", rows["m1"]["output"] == 40, rows["m1"])
         ck("priced at write time, an hour's writes at their rate",
@@ -270,41 +272,35 @@ async def main():
            and d["context_at"] and d["context_asked_at"], d.get("context_detail"))
 
         print("== the replies stored before ==")
-        with store._lock:
-            store.sc.execute("DELETE FROM session_usage")
-            store._claude_usage_fill()
-            n = store.sc.execute("SELECT count(*), max(output_tokens) FILTER (WHERE message = 'm1'), "
-                                  "any_value(project) FILTER (WHERE message = 'm3'), "
-                                  "count(cost_usd), any_value(cost_usd) FILTER (WHERE message = 'm2') "
-                                  "FROM session_usage").fetchone()
+        delete_rows(store, "session_usage")
+        store._claude_usage_fill()
+        got_rows = {r["message"]: r for r in session_rows(store, "session_usage")}
+        n = (len(got_rows), got_rows["m1"]["output_tokens"], got_rows["m3"]["project"],
+             sum(r["cost_usd"] is not None for r in got_rows.values()), got_rows["m2"]["cost_usd"])
         ck("filled from the stored lines, one row a reply", n[0] == 6 and n[1] == 40, n)
         ck("with the stamped project, and priced", n[2] == other and n[3] == 5, n)
         ck("an hour's cache writes priced at their rate",
            abs(n[4] - cost_usd("claude-opus-5-5", 2, 20, 1000, 50000, 1000)) < 1e-12, n)
-        with store._lock:
-            store.sc.execute("DELETE FROM session_usage WHERE message = 'm1'")
-            store._claude_usage_fill()
-            again = store.sc.execute("SELECT count(*) FROM session_usage").fetchone()[0]
+        delete_rows(store, "session_usage", su.c.message == "m1")
+        store._claude_usage_fill()
+        again = count(store, "session_usage")
         ck("a gap left by a version that did not count is filled at the next start", again == 6, again)
         from datetime import datetime, timezone
         store.record_reply_usage("b1", "mx", datetime.now(timezone.utc), "claude-opus-5-6", None, None,
                                  {"input_tokens": 5, "output_tokens": 5})
-        with store._lock:
-            store._claude_usage_fill()
-            unlisted = store.sc.execute(
-                "SELECT cost_usd FROM session_usage WHERE message = 'mx'").fetchone()[0]
-            store.sc.execute("DELETE FROM session_usage WHERE message = 'mx'")
+        store._claude_usage_fill()
+        unlisted = session_rows(store, "session_usage", su.c.message == "mx")[0]["cost_usd"]
+        delete_rows(store, "session_usage", su.c.message == "mx")
         ck("a model version the table does not list stays unpriced through the fill", unlisted is None, unlisted)
         # unpriced rows, as a version that did not price them leaves them; the fill prices what the table lists
         for msg, model in (("md", "claude-haiku-4-5-20251001"), ("mr", "claude-opus-4-10")):
             store.record_reply_usage("b1", msg, datetime.now(timezone.utc), model, None, None,
                                      {"input_tokens": 1_000_000, "output_tokens": 0})
-        with store._lock:
-            store.sc.execute("UPDATE session_usage SET cost_usd = NULL WHERE message IN ('md', 'mr')")
-            store._claude_usage_fill()
-            got = dict(store.sc.execute(
-                "SELECT message, cost_usd FROM session_usage WHERE message IN ('md', 'mr')").fetchall())
-            store.sc.execute("DELETE FROM session_usage WHERE message IN ('md', 'mr')")
+        set_cols(store, "session_usage", [su.c.message.in_(["md", "mr"])], cost_usd=None)
+        store._claude_usage_fill()
+        got = {r["message"]: r["cost_usd"] for r in session_rows(store, "session_usage",
+                                                                  su.c.message.in_(["md", "mr"]))}
+        delete_rows(store, "session_usage", su.c.message.in_(["md", "mr"]))
         ck("a dated snapshot is priced through the fill", got["md"] is not None and abs(got["md"] - 1.0) < 1e-9, got)
         ck("a version that runs on from a listed prefix stays unpriced through the fill", got["mr"] is None, got)
 

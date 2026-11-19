@@ -87,7 +87,11 @@ _TODAY = {"home": 107, "projects": 83, "project": 82, "ticket": 28, "raw_tickets
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
 DONE_EXTRA = 4
-BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
+# TR-1498: the session tables are read through the sessions database, and each of its SQLite
+# transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
+# times, projects 4, project 2. Postgres state keeps its counts.
+_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 86}
+BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 

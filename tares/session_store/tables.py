@@ -6,7 +6,8 @@ Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read a
 A table made by the old DDL and a table made from these declarations are the same table, which is
 how revision 0002 can take over a Postgres database that already has them.
 
-Nothing calls these tables yet: a later ticket switches the Store's methods over to them.
+The Store's session methods (store.py, factory_store.py, claude_usage_store.py) read and write
+these tables, and nothing else does outside `copy.py` and the tests' own seeding.
 """
 from __future__ import annotations
 

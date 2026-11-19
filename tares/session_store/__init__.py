@@ -9,15 +9,18 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import threading
 from collections.abc import Iterator
 
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, func, text
+from sqlalchemy.dialects.postgresql import insert as _pg_insert
+from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 
-from .engine import make_engine
+from .engine import MEMORY, make_engine
 
 log = logging.getLogger("tares.session_store")
 
@@ -28,14 +31,32 @@ _LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('tares_session_store_migrate'
 class SessionStore:
     def __init__(self, data_dir: str, state_dsn: str | None = None):
         self.engine = make_engine(data_dir, state_dsn)
+        # An in-memory SQLite is one shared connection (StaticPool): two threads in a transaction
+        # at once would interleave on it, so they take turns. A file or Postgres needs no lock.
+        self._turns = threading.RLock() if data_dir == MEMORY and not state_dsn else None
 
     @property
     def dialect(self) -> str:
         return self.engine.dialect.name        # "sqlite" or "postgresql"
 
-    def begin(self) -> contextlib.AbstractContextManager[Connection]:
+    @contextlib.contextmanager
+    def begin(self) -> Iterator[Connection]:
         """One transaction: commits when the block ends, rolls back when it raises."""
-        return self.engine.begin()
+        with self._turns or contextlib.nullcontext():
+            with self.engine.begin() as conn:
+                yield conn
+
+    def upsert(self, table):
+        """An INSERT for `table` that takes `.on_conflict_do_update(...)` and
+        `.on_conflict_do_nothing()`, in the dialect the store runs on."""
+        return (_pg_insert if self.dialect == "postgresql" else _sqlite_insert)(table)
+
+    def greatest(self, a, b):
+        """The larger of two values, a NULL one ignored (Postgres `greatest`; SQLite's scalar
+        `max` gives NULL for a NULL argument, so the other value is the fallback)."""
+        if self.dialect == "postgresql":
+            return func.greatest(a, b)
+        return func.coalesce(func.max(a, b), a, b)
 
     def close(self) -> None:
         self.engine.dispose()

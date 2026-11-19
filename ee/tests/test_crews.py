@@ -40,6 +40,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 import httpx
 
 import ship
+from session_helpers import seed_station
 import tares.mcp_server as m
 import tares.mcp_factory as mf
 
@@ -302,11 +303,11 @@ async def main():
 
         print("== sessions from before crews ==")
         from tares.store import Store
-        path = os.path.join(_TMP, "old.duckdb")
+        path = os.path.join(tempfile.mkdtemp(dir=_TMP), "old.duckdb")   # its own folder: the session store sits beside the file
         s0 = Store(path)
-        s0.sc.execute("INSERT INTO session_stations (session, station, role, parent, project, seen_at) "
-                       "VALUES ('old-1', 'crew-reviewer', 'reviewer', NULL, NULL, now())")
+        seed_station(s0, "old-1", "crew-reviewer", "reviewer")
         s0.con.close()
+        s0.close()
         s1 = Store(path)
         rows = s1.station_sessions("claude_code")
         crews = s1.list_crews()
