@@ -27,10 +27,11 @@ DuckDB is never changed: `Store.append` keeps writing every line there.
 The same two writers keep the facts the factory reads (TR-1477): the crew's protocol messages in
 `session_messages` and the shell commands sessions ran, with what they printed, in
 `session_commands`. `message_facts`, `command_facts` and `result_facts` are the extraction rules, one
-tool_use or tool_result line at a time; `record` writes what they find in the same transaction as
-the counts, and `fill_facts` runs them over the events a first start has not seen (the watermark
+tool_use or tool_result line at a time; `record` writes what they find in a transaction after the
+counts' (so a line the facts cannot take never loses a batch's counts), and `fill_facts` runs them over the events a first start has not seen (the watermark
 `session_facts`). A row is made by its tool_use id, so a resumed session that copies old lines, a
-batch written twice or a fill that runs twice adds nothing.
+batch written twice or a fill that runs twice adds nothing. A result sets the fields of the row of
+the call it answers and makes none: a result that comes before its call is written by the next fill.
 
 Two things to know when reading the table:
 
@@ -49,7 +50,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import bindparam, func, select
 
 from . import metrics
 from .envelope import now_utc
@@ -152,6 +153,15 @@ def _blocks(payload, requests: bool = True) -> list:
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
 
+def _text(v, limit: int | None = None, tail: bool = False) -> str:
+    """A string for a text column: without NUL bytes (Postgres refuses them in text), cut to `limit`
+    characters from the start, or from the end when `tail`."""
+    s = str(v or "").replace("\x00", "")
+    if limit is None:
+        return s
+    return s[-limit:] if tail else s[:limit]
+
+
 def _fact_id(block: dict, session: str, at: datetime, n: int) -> str:
     """A call's id: its tool_use id, or, for a block without one, a stand-in from the line."""
     return str(block["id"]) if block.get("id") else f"{session}:{at.isoformat()}:{n}"
@@ -169,12 +179,12 @@ def message_facts(event_type: str, text: str | None, payload, session: str, at: 
                 and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
             continue
         inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-        body = str(inp.get("message") or inp.get("content") or "")
+        body = _text(inp.get("message") or inp.get("content"))
         m = re.match(r"\s*\[TF:([A-Z_]+)\]", body)
         if not m:
             continue
         out.append({"tool_use_id": _fact_id(b, session, at, n), "source": source,
-                    "session": session, "at": at, "to_station": str(inp.get("to") or ""),
+                    "session": session, "at": at, "to_station": _text(inp.get("to")),
                     "type": m.group(1), "text": body[:MESSAGE_TEXT]})
     return out
 
@@ -190,7 +200,7 @@ def command_facts(event_type: str, text: str | None, payload, session: str, at: 
         if b.get("type") == "tool_use" and b.get("name") == "Bash":
             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
             out.append({"tool_use_id": _fact_id(b, session, at, n), "source": source,
-                        "session": session, "at": at, "command": str(inp.get("command") or "")})
+                        "session": session, "at": at, "command": _text(inp.get("command"))})
     return out
 
 
@@ -207,7 +217,7 @@ def result_facts(event_type: str, payload, at: datetime) -> list[dict]:
         if isinstance(c, list):
             c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
         out.append({"tool_use_id": str(b["tool_use_id"]), "exit_code": 1 if b.get("is_error") else 0,
-                    "output_tail": str(c or "")[-OUTPUT_TAIL:], "result_at": at})
+                    "output_tail": _text(c, OUTPUT_TAIL, tail=True), "result_at": at})
     return out
 
 
@@ -234,8 +244,9 @@ def facts_of(lines) -> dict:
 
 def _write_facts(conn, db, facts: dict) -> None:
     """Write `facts` (from `facts_of`) in the open transaction. A message is kept once. A command
-    row takes its call's fields only where it has none (a result may have made the row first), and a
-    result sets the result fields only, so either order and any repeat give the same row."""
+    row takes its call's fields only where it has none, so a repeat changes nothing, and a result
+    sets the result fields of the call's row (commands are written first, so a call and its result
+    in one batch pair)."""
     if facts["messages"]:
         conn.execute(db.upsert(session_messages).on_conflict_do_nothing(
             index_elements=["tool_use_id"]), facts["messages"])
@@ -250,15 +261,18 @@ def _write_facts(conn, db, facts: dict) -> None:
                   "at": func.coalesce(t.at, ex.at),
                   "command": func.coalesce(t.command, ex.command)}), facts["commands"])
     if facts["results"]:
-        stmt = db.upsert(session_commands)
-        ex = stmt.excluded
-        conn.execute(stmt.on_conflict_do_update(
-            index_elements=["tool_use_id"],
-            set_={"exit_code": ex.exit_code, "output_tail": ex.output_tail,
-                  "result_at": ex.result_at}), facts["results"])
+        # a result sets the fields of the call it answers, and makes no row of its own: it does not
+        # say which tool it answers, and a row for every tool's result would hold text no reader
+        # asks for. A result that comes before its call (a later batch) is written by the next fill.
+        t = session_commands.c
+        conn.execute(session_commands.update().where(t.tool_use_id == bindparam("r_id")).values(
+            exit_code=bindparam("r_exit"), output_tail=bindparam("r_out"),
+            result_at=bindparam("r_at")),
+            [{"r_id": r["tool_use_id"], "r_exit": r["exit_code"], "r_out": r["output_tail"],
+              "r_at": r["result_at"]} for r in facts["results"]])
 
 
-def _add(store, folded: dict, facts: dict | None = None) -> None:
+def _add(store, folded: dict) -> None:
     """Add each session's counts to its row, in one transaction. Rows are written in session order,
     so two writers on Postgres meet their rows in the same order and cannot deadlock."""
     db = store.sessions_db
@@ -278,8 +292,16 @@ def _add(store, folded: dict, facts: dict | None = None) -> None:
             for sid, r in sorted(folded.items())]
     with db.begin() as conn:
         conn.execute(stmt, rows)
-        if facts:
-            _write_facts(conn, db, facts)
+
+
+def _add_facts(store, facts: dict) -> None:
+    """Write a batch's facts in a transaction of their own: a line the facts cannot take must not
+    lose the batch's session counts."""
+    if not any(facts.values()):
+        return
+    db = store.sessions_db
+    with db.begin() as conn:
+        _write_facts(conn, db, facts)
 
 
 def record(store, envelopes) -> None:
@@ -291,13 +313,19 @@ def record(store, envelopes) -> None:
     t0 = time.perf_counter()
     ok = True
     try:
-        _add(store, _fold(envelopes), facts_of(
-            (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
-            for e in envelopes))
+        _add(store, _fold(envelopes))
     except Exception as e:
         ok = False
         print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
               f"({type(e).__name__}: {e}); caught up at the next start", flush=True)
+    try:
+        _add_facts(store, facts_of(
+            (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
+            for e in envelopes))
+    except Exception as e:
+        ok = False
+        print(f"taresd: writing the facts of {len(envelopes)} claude_code line(s) failed "
+              f"({type(e).__name__}: {e}); written at the next start", flush=True)
     metrics.session_ingest(time.perf_counter() - t0, ok)
 
 

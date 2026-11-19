@@ -115,9 +115,9 @@ session_messages = Table(
 Index("session_messages_session_at", session_messages.c.session, session_messages.c.at)
 
 # A shell command a session ran (the Bash call) with what it printed once its result arrived.
-# The result can come first (a later batch, another POST): the row is made by whichever line
-# arrives first, and `command` stays empty until the call does. A row without a `command` is not
-# a command yet and no reader lists it.
+# The call makes the row; a result sets the exit code, output and time of the row of the call it
+# answers and makes none (it does not name its tool). A result that came first is written by the
+# fill. The columns can be null (a row from a table this revision found already made).
 session_commands = Table(
     "session_commands", metadata,
     Column("tool_use_id", Text, primary_key=True),

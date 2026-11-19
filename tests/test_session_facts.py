@@ -30,7 +30,8 @@ from tares import session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import (metadata, session_commands,  # noqa: E402
-                                        session_ingest_marks, session_messages)
+                                        session_ingest_marks, session_messages,
+                                        sessions)
 from tares.store import Store  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
@@ -275,6 +276,14 @@ def main():
     s.append(BATCH1)
     s.append(BATCH2)
     ref_m, ref_c = ref_protocol_messages(s, SRC), ref_recorded_commands(s, SRC, ["sA"])
+    live_c = s.recorded_commands(SRC, ["sA"])
+    ck("live, a result that came in an earlier batch than its call is not written yet",
+       [c for c in live_c if c["command"] == "make build"][0]["output"] == "")
+    ck("live, every other command equals the old reader's",
+       [c for c in live_c if c["command"] != "make build"]
+       == [c for c in ref_c if c["command"] != "make build"])
+    ck("live, the messages equal the old reader's", s.protocol_messages(SRC) == ref_m)
+    session_ingest.fill_facts(s)           # the fill pairs the result that came first
     got_m, got_c = s.protocol_messages(SRC), s.recorded_commands(SRC, ["sA"])
     ck("the reference sees the seeded calls", len(ref_m) == 2 and len(ref_c) == 5,
        (len(ref_m), len(ref_c)))
@@ -282,7 +291,7 @@ def main():
     ck("recorded_commands equals the old reader", got_c == ref_c, (got_c, ref_c))
     by = {c["command"]: c for c in got_c}
     ck("a result that came in a later batch is paired", by["pytest -q"]["output"] == "3 passed\nok")
-    ck("a result that came before its call is paired", by["make build"]["output"] == "ran after its call arrives")
+    ck("a result that came before its call is paired by the fill", by["make build"]["output"] == "ran after its call arrives")
     ck("a call with no result has no output and no failure",
        by["echo no result"]["output"] == "" and by["echo no result"]["is_error"] is False)
     ck("a long output keeps its last 20000 characters and the failure",
@@ -357,13 +366,60 @@ def main():
             session_commands.c.tool_use_id == "c1")).one()
     ck("a result line sets the output and keeps the command", tuple(r) == ("live one", "later result"), tuple(r))
 
-    print("== a row made by a result alone is not a command ==")
+    print("== a result makes no row of its own ==")
+    s.append([result("sC", 30, "a_read_tool", "text some other tool printed"),
+              result("sC", 31, "never_called", "x" * 20000)])
     with s.sessions_db.begin() as c:
-        n_rows = c.execute(select(func.count()).select_from(session_commands)).scalar()
-        only = c.execute(select(func.count()).select_from(session_commands).where(
+        rows = c.execute(select(func.count()).select_from(session_commands)).scalar()
+        nocmd = c.execute(select(func.count()).select_from(session_commands).where(
             session_commands.c.command.is_(None))).scalar()
-    ck("the result of a call that never came has a row without a command", only == 1, (n_rows, only))
-    ck("and no reader lists it", all(c["command"] for c in s.recorded_commands(SRC, ["sA", "sC"])))
+        ghost = c.execute(select(func.count()).select_from(session_commands).where(
+            session_commands.c.tool_use_id.in_(["a_read_tool", "never_called", "bq"]))).scalar()
+    ck("a non-Bash result and a result with no call leave no row", ghost == 0, ghost)
+    ck("every row is a call", nocmd == 0 and rows == 6, (rows, nocmd))
+    ck("and no reader lists a result with no call", all(c["command"] for c in s.recorded_commands(SRC, ["sA", "sC"])))
+
+    print("== NUL bytes ==")
+    s.append([bash("sN", 40, "n1", "echo a\x00b"), result("sN", 41, "n1", "out\x00put"),
+              send("sN", 42, "n2", "or\x00ch", "[TF:FYI] he\x00llo")])
+    cm = [c for c in s.recorded_commands(SRC, ["sN"])]
+    mm = [m for m in s.protocol_messages(SRC) if m["type"] == "FYI" and m["to"].startswith("or")]
+    ck("a NUL in a command, an output and a message is dropped, the line is kept",
+       len(cm) == 1 and cm[0]["command"] == "echo ab" and cm[0]["output"] == "output"
+       and len(mm) == 1 and mm[0]["to"] == "orch" and "\x00" not in str(mm), (cm, mm))
+
+    print("== a facts failure keeps the counts ==")
+    real_write = session_ingest._write_facts
+
+    def broken(*a, **k):
+        raise RuntimeError("facts refused")
+    session_ingest._write_facts = broken
+    try:
+        with s.sessions_db.begin() as c:
+            before_n = c.execute(select(sessions.c.line_count).where(
+                sessions.c.session == "sF")).scalar()
+        s.append([bash("sF", 50, "f1", "echo f")])
+    finally:
+        session_ingest._write_facts = real_write
+    with s.sessions_db.begin() as c:
+        n_f = c.execute(select(sessions.c.line_count).where(sessions.c.session == "sF")).scalar()
+        f_rows = c.execute(select(func.count()).select_from(session_commands).where(
+            session_commands.c.tool_use_id == "f1")).scalar()
+    ck("the session's count is kept and the fact row is not written", (before_n, n_f, f_rows) == (None, 1, 0),
+       (before_n, n_f, f_rows))
+    session_ingest.fill_facts(s)
+    ck("the next fill writes it", [c["command"] for c in s.recorded_commands(SRC, ["sF"])] == ["echo f"])
+
+    print("== purging a source removes its facts ==")
+    s.purge_events(SRC)
+    with s.sessions_db.begin() as c:
+        left = (c.execute(select(func.count()).select_from(session_commands).where(
+                    session_commands.c.source == SRC)).scalar(),
+                c.execute(select(func.count()).select_from(session_messages).where(
+                    session_messages.c.source == SRC)).scalar())
+    ck("no command or message of the source is left", left == (0, 0), left)
+    ck("and the readers show none", s.protocol_messages(SRC) == []
+       and s.recorded_commands(SRC, ["sA", "sC", "sN", "sF"]) == [])
     s.con.close()
 
     print("== a resumed session repeats lines ==")
@@ -372,6 +428,7 @@ def main():
     s2.append(BATCH1)
     s2.append(BATCH2)
     s2.append(RESUMED)
+    session_ingest.fill_facts(s2)           # a result that came before its call waits for the fill
     ref_m, ref_c = ref_protocol_messages(s2, SRC), ref_recorded_commands(s2, SRC, ["sA", "sB"])
     got_m, got_c = s2.protocol_messages(SRC), s2.recorded_commands(SRC, ["sA", "sB"])
     ck("each call is listed once", len(got_m) == 2 and len(got_c) == 5, (len(got_m), len(got_c)))
