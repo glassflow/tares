@@ -14,10 +14,13 @@ export interface FactoryProjectRow {
   goal: string;
   state: ProjectState;
   state_label: string;
-  /** The line under the bar: "Now on M2: ...", "6 milestones", "All milestones done" or "Finished 20 Oct";
+  /** The line under the bar: "Now on M2: ...", "6 milestones", "All milestones done" or "Done 20 Oct";
    *  null for a project with no milestones. */
   milestone: string | null;
-  tickets: { merged: number; blocked: number; total: number };
+  /** Tickets by count group (tares/factory.py `progress`): merged only for a merge, closed for done
+   *  without one, queued waits on another ticket, stuck a station stopped. `label` is the line
+   *  ("5 merged, 2 queued, 1 stuck of 8", status_words.count_line). */
+  tickets: { merged: number; closed: number; queued: number; stuck: number; total: number; label: string };
   /** The repos in short, for a place that is tight. The list shows `repo_names`. */
   repos: string[];
   builders: number;

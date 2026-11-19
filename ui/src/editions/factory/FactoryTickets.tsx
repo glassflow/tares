@@ -83,8 +83,6 @@ const short = (s: string | null) =>
 /** The person the ticket is assigned to, or the name the source gave when nobody here matches. */
 const assigneeOf = (t: TicketRow) => t.assignee?.name ?? t.assignee_raw ?? "";
 const whoOf = (t: TicketRow) => t.who ?? (t.state_key === "canceled" ? "No one" : "");
-const blockedText = (t: TicketRow) => (t.blocked_by.length ? `Blocked by ${t.blocked_by.join(", ")}` : "Blocked");
-const stateText = (t: TicketRow) => (t.state_key === "blocked" ? blockedText(t) : STATE_LABEL[t.state_key] ?? t.state);
 const prText = (t: TicketRow) => {
   if (t.pr) return [t.pr.number != null ? `PR ${t.pr.number}` : "", t.pr.state_text].filter(Boolean).join(" ");
   return t.state_key === "in_progress" ? "No PR yet" : "";
@@ -122,6 +120,11 @@ function Dot({ k }: { k: StateKey }) {
   return <StatusDot tone={STATUS_TONES.ticket[k]} className="size-[9px]" />;
 }
 
+/** A ticket's own dot: whose turn it is, not the column it sits in. */
+function TurnDot({ t }: { t: TicketRow }) {
+  return <StatusDot tone={STATUS_TONES.turn[t.turn]} className="size-[9px]" />;
+}
+
 // ----------------------------------------------------------------------------------------- tickets
 
 /** The whole row or card is one link to the ticket; its words are the ticket's own. */
@@ -131,7 +134,7 @@ function Row({ t }: { t: TicketRow }) {
   const pr = prText(t);
   const cell = "min-w-0 text-[13px]";
   return (
-    <Link to={t.href} data-testid="ticket-row" data-ref={t.ref} data-state={t.state_key}
+    <Link to={t.href} data-testid="ticket-row" data-ref={t.ref} data-state={t.state_key} data-turn={t.turn}
           className={cn("group grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2.5 gap-y-1 border-t border-border px-3.5 py-3 first:border-t-0",
             "min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_112px_108px_130px_140px_88px] min-[1360px]:gap-x-3 min-[1360px]:px-4 min-[1360px]:py-2.5",
             "hover:bg-row-hover hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
@@ -155,8 +158,8 @@ function Row({ t }: { t: TicketRow }) {
         <span className={cn(cell, canceled && MUTED, "[overflow-wrap:anywhere]", "min-[1360px]:pt-px")}>{whoOf(t)}</span>
       </span>
       <span className={cn("col-start-2 row-start-1 flex items-baseline justify-end gap-[7px] text-[13px]", "min-[1360px]:col-auto min-[1360px]:row-auto min-[1360px]:justify-start min-[1360px]:pt-px", canceled && MUTED)}>
-        <span className="translate-y-px"><Dot k={t.state_key} /></span>
-        <span data-testid="ticket-state">{stateText(t)}</span>
+        <span className="translate-y-px"><TurnDot t={t} /></span>
+        <span data-testid="ticket-state">{t.turn_label}</span>
       </span>
       <span className={cn("col-start-1 row-start-4 min-w-0 text-[12.5px] [overflow-wrap:anywhere]", MUTED, "min-[1360px]:col-auto min-[1360px]:row-auto min-[1360px]:pt-0.5")}>{pr}</span>
       <span className={cn("col-start-2 row-start-4 whitespace-nowrap text-right text-[12.5px]", MUTED, "min-[1360px]:col-auto min-[1360px]:row-auto min-[1360px]:text-left min-[1360px]:pt-0.5")}>{t.changed ?? ""}</span>
@@ -179,10 +182,13 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
     : ctx === "project" ? [who || ms]
     : [who]).filter(Boolean).join(" · ");
   const person = ctx === "person" ? "" : assigneeOf(t);
-  const blocked = t.state_key === "blocked" && t.blocked_by.length > 0;
-  const pr = blocked ? blockedText(t) : prText(t);
+  // the column says the stage; the card adds the turn where it is news: queued (instead of the pull
+  // request, which a queued ticket has none of), a person's turn, and stuck
+  const queued = t.turn === "queued";
+  const loud = t.whose === "person";
+  const pr = queued ? t.turn_label : [loud ? t.turn_label : "", prText(t)].filter(Boolean).join(" · ");
   return (
-    <Link to={t.href} data-testid="ticket-card" data-ref={t.ref} data-state={t.state_key}
+    <Link to={t.href} data-testid="ticket-card" data-ref={t.ref} data-state={t.state_key} data-turn={t.turn}
           className={cn("group flex min-w-0 flex-col gap-[3px] border border-border bg-card px-2.5 py-[9px]",
             "hover:border-foreground hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
       <span className="flex min-w-0 justify-between gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
@@ -196,7 +202,8 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
       </span>
       {person && <span data-user-text data-testid="card-assignee" className="truncate text-xs font-medium" title={person}>{person}</span>}
       {meta && <span data-user-text className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{meta}</span>}
-      {pr && <span className={cn("text-xs [overflow-wrap:anywhere]", blocked ? "font-medium text-err" : MUTED)}>{pr}</span>}
+      {pr && <span data-testid="card-turn" className={cn("text-xs [overflow-wrap:anywhere]",
+        t.turn === "stuck" ? "font-medium text-err" : loud ? "font-medium" : MUTED)}>{pr}</span>}
     </Link>
   );
 }

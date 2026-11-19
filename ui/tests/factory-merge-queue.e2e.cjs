@@ -155,7 +155,7 @@ async function waitFor(url, tries = 100) {
       ck(`${width}: check labels are mono uppercase`, /mono/i.test(lab.fontFamily) && lab.textTransform === "uppercase", JSON.stringify(lab));
       const dot = await css(first.getByTestId("mq-dot").first(), ["borderRadius", "width", "height"]);
       ck(`${width}: check dots are squares`, dot.borderRadius === "0px" && dot.width === dot.height, JSON.stringify(dot));
-      ck(`${width}: a CI line that waits says so`, (await text(first.getByTestId("mq-check-ci"))).includes("Pending"), await text(first.getByTestId("mq-check-ci")));
+      ck(`${width}: a CI line that waits says so`, (await text(first.getByTestId("mq-check-ci"))).includes("Checks running"), await text(first.getByTestId("mq-check-ci")));
       ck(`${width}: a row with no question has no buttons`, (await page.getByTestId("mq-actions").count()) === 0);
       ck(`${width}: the merged list is closed until asked`, (await page.getByTestId("mq-merged-item").count()) === 0);
       ck(`${width}: the merged toggle is a flat row, not a boxed button`, await flat(page.getByTestId("mq-merged-toggle")), JSON.stringify(await css(page.getByTestId("mq-merged-toggle"), ["borderTopWidth", "backgroundColor", "display"])));
@@ -201,6 +201,7 @@ async function waitFor(url, tries = 100) {
       await open(page, "p-ask");
       const mine = rowOf(page, "ASK-1");
       ck(`${width}: your question: the chip says it needs your yes`, (await text(mine.getByTestId("mq-chip"))).toLowerCase() === "needs your yes", await text(mine.getByTestId("mq-chip")));
+      ck(`${width}: your question: the turn reads Ready for you`, (await text(mine.getByTestId("mq-turn"))) === "Ready for you" && (await mine.getAttribute("data-turn")) === "ready_for_you", await text(mine));
       ck(`${width}: your question has Yes, merge and No, hold`, (await text(mine.getByTestId("mq-yes"))) === "Yes, merge" && (await text(mine.getByTestId("mq-no"))) === "No, hold");
       ck(`${width}: your question has a left accent bar`, (await mine.getAttribute("data-bar")) === "you"
          && (await css(mine, ["boxShadow"])).boxShadow !== "none", await mine.getAttribute("data-bar"));
@@ -249,6 +250,7 @@ async function waitFor(url, tries = 100) {
       ck(`${width}: two groups, one per repo`, (await page.getByTestId("mq-group").count()) === 2);
       const rules = rowOf(page, "BLK-1");
       ck(`${width}: blocked by repo rules says why`, (await text(rules.getByTestId("mq-chip"))).toLowerCase() === "blocked" && (await text(rules)).includes("two approving reviews"), await text(rules));
+      ck(`${width}: blocked: the turn reads Stuck`, (await text(rules.getByTestId("mq-turn"))) === "Stuck", await text(rules));
       ck(`${width}: a blocked row has a left accent bar in red`, (await rules.getAttribute("data-bar")) === "bad", await rules.getAttribute("data-bar"));
       ck(`${width}: a blocked row leads in red`, (await css(rules.getByTestId("mq-lead-b"), ["color"])).color === (await token(page, "--err")));
       ck(`${width}: a blocked row links to the Calls page`, (await rules.getByTestId("mq-calls").count()) === 1
@@ -258,6 +260,7 @@ async function waitFor(url, tries = 100) {
       ck(`${width}: and its note links to the Calls page`, (await noGh.getByTestId("mq-calls").count()) === 1 && (await text(noGh.getByTestId("mq-calls"))) === "Calls page", await text(noGh));
       const back = rowOf(page, "BLK-3");
       ck(`${width}: sent back is out of line and says how often`, (await text(back.getByTestId("mq-chip"))).toLowerCase() === "sent back" && (await text(back.getByTestId("mq-bounce"))).includes("Sent back 2 of 3 times"), await text(back));
+      ck(`${width}: sent back: the turn reads Changes asked`, (await text(back.getByTestId("mq-turn"))) === "Changes asked", await text(back));
       ck(`${width}: sent back has a left accent bar in red and a red lead`, (await back.getAttribute("data-bar")) === "bad"
          && (await css(back.getByTestId("mq-lead-b"), ["color"])).color === (await token(page, "--err")));
       ck(`${width}: the ladder has five pips, two filled`, (await back.getByTestId("mq-pips").locator("span").count()) === 5

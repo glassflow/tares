@@ -169,7 +169,7 @@ async function waitFor(url, tries = 100) {
     ck("the ring and the word fit on one line with a paused project that has tickets", await (async () => {
       await page.route("**/api/projects", async (route) => {
         const res = await route.fetch(), body = await res.json();
-        for (const p of body.projects) if (p.name === "Checkout latency watch") p.progress = { done: 1, doing: 0, blocked: 0, todo: 2, canceled: 0, total: 3 };
+        for (const p of body.projects) if (p.name === "Checkout latency watch") p.progress = { merged: 1, closed: 0, doing: 0, stuck: 0, queued: 0, todo: 2, canceled: 0, total: 3 };
         await route.fulfill({ response: res, json: body });
       });
       await open("?show=all");
@@ -180,8 +180,9 @@ async function waitFor(url, tries = 100) {
       await page.unroute("**/api/projects");
       return ok;
     })());
-    const blocked = await rows.filter({ hasText: "Rius: Cursor Codex Gaps" }).locator(".pj-pending").innerText();
-    ck("pending shows what is in progress and blocked", /7/.test(blocked) && /1 in progress/.test(blocked) && /2 blocked/.test(blocked), blocked);
+    const pending = await rows.filter({ hasText: "Rius: Cursor Codex Gaps" }).locator(".pj-pending").innerText();
+    ck("pending shows what is in progress and stuck", /7/.test(pending) && /1 in progress/.test(pending) && /2 stuck/.test(pending)
+       && !/blocked/.test(pending), pending);
 
     await open("?show=all");
     const ring = (name) => rows.filter({ hasText: name }).locator(".pj-dot").evaluate((e) => getComputedStyle(e).borderTopWidth);

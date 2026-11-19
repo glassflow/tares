@@ -35,6 +35,7 @@ from .. import factory_home as fh
 from .. import factory_waiting as fw
 from .. import licence
 from .. import project_secrets
+from .. import status_words
 from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import plain_ago
@@ -42,12 +43,13 @@ from ..factory_home import plain_ago
 # ── words ─────────────────────────────────────────────────────────────────────
 
 STAGE_LABEL = {"spec": "Spec", "build": "Build", "review": "Review", "done": "Done"}
-STATE_LABEL = {**fh.STATE_LABEL, "finished": "Finished", "later": "Later"}
+STATE_LABEL = {**fh.STATE_LABEL, "finished": status_words.PROJECT_DONE,
+               "later": status_words.PROJECT_LATER}
 
 # a ticket's state in words, by its stage key
 _STAGE_WORD = factory_mod.STAGE_WORD
-_VERDICT_WORD = {"pass": "passed", "changes": "changes asked", "block": "blocked"}
-_CI_WORD = {"success": "CI green", "failure": "CI failing", "pending": "CI running"}
+_VERDICT_WORD = status_words.VERDICT
+_CI_WORD = status_words.CI
 # the crew's roles as a person says them, as the author of a call: "by the builder"
 _ROLE_BY = {"orchestrator": "the orchestrator", "reviewer": "the reviewer", "releaser": "the releaser",
             "builder": "the builder", "helper": "a helper"}
@@ -60,9 +62,9 @@ _PR_NUMBER = re.compile(r"/pull/(\d+)")
 # the states that move now, in the order the page lists them, and the key each state counts under
 _MOVING = ("changes asked", "in review", "in progress", "blocked")
 _MOVING_CAP = 5
-_COUNT_KEY = {"to do": "to_do", "in progress": "in_progress", "in review": "in_review",
-              "changes asked": "changes_asked", "blocked": "blocked", "merged": "merged",
-              "canceled": "canceled"}
+# a count group (factory.count_of) as the page's counts key it; work under way splits by its state
+_COUNT_KEY = {"todo": "to_do", "in progress": "in_progress", "in review": "in_review",
+              "changes asked": "changes_asked"}
 # a station whose newest session shows one of these plays no part now
 _GONE = ("ended", "stopped", "replaced")
 
@@ -123,6 +125,34 @@ def ticket_state(t: dict, blocked_by: list[str]) -> str:
     return factory_mod.state_of(t, blocked_by)
 
 
+class Turns:
+    """Whose turn each ticket is (factory.turn_of), for screens that list tickets of one or more
+    projects. Reads the project's autonomy once per project and the open merge queue once."""
+
+    def __init__(self, store):
+        self.store, self._level = store, {}
+        self._queue = {r["ticket"]: r for r in store.merge_queue_open() if r.get("ticket")}
+
+    def level(self, uid: str) -> str:
+        if uid not in self._level:
+            from ..merge_queue import autonomy_of   # merge_queue imports the screens' modules
+            self._level[uid] = autonomy_of(self.store, uid)
+        return self._level[uid]
+
+    def of(self, uid: str, t: dict, blocked_by: list[str], last: dict | None,
+           queue_state: str | None = None) -> dict:
+        """{turn, turn_label, whose} for a ticket; `blocked_by` the refs it waits on
+        (factory.readiness), `last` its last review (store.last_reviews). `queue_state` is for a
+        screen that holds the ticket's queue row itself; otherwise its open row is looked up."""
+        key = factory_mod.turn_of(t, blocked_by, factory_api.verdict_now(t, last), self.level(uid),
+                                  queue_state or factory_mod.queue_state_of(
+                                      self._queue.get(t["id"]), (t.get("pr") or {}).get("head")))
+        label = status_words.TURN[key]
+        if key == "queued" and blocked_by:
+            label += " after " + ", ".join(blocked_by)
+        return {"turn": key, "turn_label": label, "whose": status_words.TURN_WHOSE[key]}
+
+
 def _stamp(v) -> float:
     return v.timestamp() if hasattr(v, "timestamp") else 0.0
 
@@ -142,12 +172,11 @@ def _pr_out(t: dict) -> dict | None:
         text = "closed without merging"
     else:
         ci = _CI_WORD.get(pr.get("ci") or "")
-        text = "open, " + ci if ci else "open"
+        text = "open, " + ci[:1].lower() + ci[1:] if ci else "open"   # "open, checks passed"
     return {"number": number, "url": url, "state_text": text}
 
 
-_PR_STATE_LABEL = {"open": "Open", "draft": "Draft", "merged": "Merged",
-                   "closed": "Closed without merging"}
+_PR_STATE_LABEL = status_words.PR_STATE
 _PR_ORDER = {"open": 0, "draft": 0, "merged": 1, "closed": 2}
 
 
@@ -309,6 +338,7 @@ def register(app, store, h, ctx):
         roles, station_rows = read_roles()
         rd = factory_mod.readiness(tickets)
         reviews = store.last_reviews([t["id"] for t in tickets])
+        turns = Turns(store)
         number = {m["id"]: f"M{i + 1}" for i, m in enumerate(milestones)}
         refs = {t["id"]: factory_mod.label(t) for t in tickets}
 
@@ -323,12 +353,18 @@ def register(app, store, h, ctx):
                     "who": None if done else who_words(t.get("holder"), roles,
                                                        number.get(t.get("milestone"))),
                     "pr": _pr_out(t), "review": _review_out(reviews.get(t["id"]), t),
-                    "blocked_by": blocked_by, "href": f"/projects/{uid}/tickets/{ref}"}
+                    "blocked_by": blocked_by, "href": f"/projects/{uid}/tickets/{ref}",
+                    **turns.of(uid, t, blocked_by, reviews.get(t["id"]))}
 
         states = {t["id"]: ticket_state(t, rd[t["id"]]["blocked_by"]) for t in tickets}
-        counts = {"total": len(tickets), **{k: 0 for k in _COUNT_KEY.values()}}
+        group = {t["id"]: factory_mod.count_of(t, rd[t["id"]]["blocked_by"]) for t in tickets}
+        counts = {"total": len(tickets), **dict.fromkeys(
+            ("to_do", "in_progress", "in_review", "changes_asked", "queued", "stuck", "merged",
+             "closed", "canceled"), 0)}
         for t in tickets:
-            counts[_COUNT_KEY[states[t["id"]]]] += 1
+            g = group[t["id"]]
+            counts[_COUNT_KEY.get(states[t["id"]], "in_progress") if g == "doing" else _COUNT_KEY.get(g, g)] += 1
+        counts["label"] = status_words.count_line(factory_mod.progress(tickets))
         # the tickets that move now: changes asked, then in review, in progress, blocked; each
         # state in the project's own order
         movers = sorted((t for t in tickets if states[t["id"]] in _MOVING),
@@ -345,15 +381,20 @@ def register(app, store, h, ctx):
         crew_with_it = fw.crew_has(store, p)
         accepted = store.milestone_acceptances([m["id"] for m in milestones])
         for i, m in enumerate(milestones):
-            ts = [t for t in tickets if t.get("milestone") == m["id"] and states[t["id"]] != "canceled"]
-            merged = sum(1 for t in ts if states[t["id"]] == "merged")
+            ts = [t for t in tickets if t.get("milestone") == m["id"] and group[t["id"]] != "canceled"]
+            merged = sum(1 for t in ts if group[t["id"]] == "merged")
+            closed = sum(1 for t in ts if group[t["id"]] == "closed")
+            mc = {"total": len(ts), "merged": merged, "closed": closed,
+                  **{k: sum(1 for t in ts if group[t["id"]] == k) for k in ("queued", "stuck")}}
             res = results.get(m["id"]) or {}
             st = factory_mod.milestone_state(m, [t for t in tickets if t.get("milestone") == m["id"]],
                                              res, accepted.get(m["id"]), crew_with_it)
             out_ms.append({"id": m["id"], "number": f"M{i + 1}", "name": m["name"],
                            "goal": clean(m["goal"]),
-                           "done": bool(ts) and merged == len(ts),
-                           "counts": {"total": len(ts), "merged": merged},
+                           # done: every ticket finished, merged or closed without a merge
+                           "done": bool(ts) and merged + closed == len(ts),
+                           "counts": {"total": len(ts), "merged": merged, "closed": closed,
+                                      "label": status_words.count_line(mc)},
                            # each check with who it is for and its latest result (TR-1017)
                            "checks": [{"n": j + 1, "check": clean(c.get("check")),
                                        "expect": clean(c.get("expect")),
@@ -379,7 +420,7 @@ def register(app, store, h, ctx):
 
         # what waits for the caller here is what their home lists for this project; on a team
         # cell what waits for someone else is under "Waiting for others", named for them, with
-        # nothing to press, and does not make the project "Waiting on you" (fh.project_waiting)
+        # nothing to press, and does not make the project "Waiting for you" (fh.project_waiting)
         waiting, others = fh.project_waiting(store, fh.for_caller(ctx.fx, request), now, request, uid)
         for w in [*waiting, *others]:        # ids, links and what a button does stay as they are
             for k in ("label", "title", "detail", "meta"):

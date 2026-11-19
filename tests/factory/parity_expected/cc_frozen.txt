@@ -130,10 +130,10 @@ exit: 0
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 claude code: 3 station(s) run an older Claude Code than 1.10.1; the freeze stops the watch moving them (tares factory crew unfreeze lets it; tares factory crew update does it now; one that restarts starts on 1.10.1)
 FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)

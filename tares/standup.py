@@ -10,6 +10,7 @@ import json
 from datetime import datetime
 
 from . import factory as factory_mod
+from . import status_words
 
 DONE_STAGES = ("merged", "shipped")
 WORKING_STAGES = ("doing", "review", "changes")
@@ -102,7 +103,9 @@ def project_facts(store, uid: str, name: str, tickets: list[dict], history: list
     return {"id": uid, "name": name, "moved": moved,
             "finished": _in(finished_at, since, until),
             "progress": {"done": progress["tickets_done"], "total": progress["tickets_total"],
-                         "milestone": progress["milestone"]},
+                         "milestone": progress["milestone"],
+                         # the console's count line: merged apart from closed, queued from stuck
+                         "label": status_words.count_line(progress["progress"])},
             "done": done, "started": started, "doing": doing, "review": review,
             "blocked": blocked, "needs_you": desk}
 
@@ -178,7 +181,7 @@ def markdown(report: dict, summary: dict | None = None) -> str:
         out += ["Nothing moved in this range.", ""]
     for p in report["projects"]:
         pr = p["progress"]
-        head = f"## {p['name']}: {pr['done']}/{pr['total']} done"
+        head = f"## {p['name']}: {pr['label']}"
         if p["finished"]:
             head += ", finished"
         elif pr.get("milestone"):
@@ -201,7 +204,7 @@ def markdown(report: dict, summary: dict | None = None) -> str:
                                 + (" (blocking)" if d["blocking"] else ""))
     if report["quiet"]:
         out += ["**No movement:** " + ", ".join(
-            f"{q['name']} ({q['progress']['done']}/{q['progress']['total']})"
+            f"{q['name']} ({q['progress']['label']})"
             for q in report["quiet"]), ""]
     return "\n".join(out).rstrip() + "\n"
 

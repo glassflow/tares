@@ -32,7 +32,10 @@ async def what_needs_me() -> str:
 async def how_is_project(project: str) -> str:
     """How one project is doing, as its row on the home page shows it: where it stands, the
     milestone it is on, tickets merged and blocked out of all, builders working, repos and when
-    it last moved. `project` is its name or id."""
+    it last moved. Then every open ticket with whose turn it is, as the console words it ("Ready
+    for you", "Checks failing", "Queued after T3"), the person's first, and how many are with
+    each: you, the crew, GitHub's checks, or waiting on another ticket. `project` is its name or
+    id."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/home")
     if r.status_code >= 400:
@@ -43,7 +46,26 @@ async def how_is_project(project: str) -> str:
         names = ", ".join(p["name"] for p in rows)
         return f"No project called {project}. Projects: {names}." if names else \
             f"No project called {project}. There are no open projects."
-    return json.dumps(hit, default=str)
+    async with _cx(15) as cx:
+        r = await cx.get(f"{TARESD}/api/factory/tickets",
+                         params={"project": hit["id"], "sort": "open", "limit": TICKETS_MAX})
+    if r.status_code >= 400:
+        return f"error {r.status_code}: {r.text}"
+    page = r.json()
+    rows = [t for t in page.get("tickets") or [] if t.get("turn") not in _OVER]
+    rows.sort(key=lambda t: _WHOSE_ORDER.get(t.get("whose"), len(_WHOSE_ORDER)))  # stable: newest first within
+    whose = {_WHOSE_WORD[w]: sum(t.get("whose") == w for t in rows) for w in _WHOSE_ORDER}
+    return json.dumps({**hit, "whose_turn": whose,
+                       "open_tickets": [{k: t.get(k) for k in ("ref", "title", "turn", "turn_label", "whose")}
+                                        for t in rows],
+                       # the read is one page: say so rather than let a long project look shorter
+                       "open_tickets_cut": bool(page.get("more"))}, default=str)
+
+
+TICKETS_MAX = 200                                   # the Tickets API's own page limit
+_OVER = ("merged", "closed", "canceled")            # turns with nothing left to do
+_WHOSE_ORDER = {"person": 0, "crew": 1, "github": 2, "nobody": 3}
+_WHOSE_WORD = {"person": "you", "crew": "crew", "github": "checks", "nobody": "waiting"}
 
 
 @writable()

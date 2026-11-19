@@ -586,17 +586,6 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
             "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
-def _item_ids(item: str) -> list[str]:
-    """The ids the answers record may hold for one home item. A desk item is `question:D7` or
-    `permission:D7` on a cell of one and `desk:D7` on a team cell's Home, so a link that names any
-    of them finds the answer recorded under another."""
-    item = item.strip()
-    kind, _, rest = item.partition(":")
-    if kind in ("question", "permission", "desk") and rest and ":" not in rest:
-        return [f"question:{rest}", f"permission:{rest}", f"desk:{rest}"]
-    return [item]
-
-
 def register(app, store, h: Host) -> SimpleNamespace:
     """Add the crew's routes. `h` is the daemon's Host (tares/host.py), which documents the helpers
     it carries: err, project_or_404, by, current_person, is_admin, area_owner and the rest. Returns
@@ -1737,10 +1726,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if checks:
                 record_checks(uid, t, request, body, checks)
                 t = ticket_or_404(uid, t["id"])
+            was = t["stage"]
             store.update_ticket(t["id"], **fields)
             by, role = who(request, body)
             store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None,
                                      now_utc(), person_of(request))
+            if stage == "blocked":
+                stuck_on_desk(uid, t, reason, request, by)
+            elif was == "blocked":
+                unstuck_on_desk(uid, t, stage)
             if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
                 after = ticket_or_404(uid, t["id"])
                 merged = merged_fields(after, fields["pr"])
@@ -1757,6 +1751,40 @@ def register(app, store, h: Host) -> SimpleNamespace:
         await write_status(store, uid, after, after["stage"] or stage)
         return await asyncio.to_thread(
             lambda: h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False))
+
+    def stuck_items(uid: str, label: str) -> list[dict]:
+        """The open items a block filed for the ticket: Tares's question, about it alone."""
+        said = f"{label} is stuck. "
+        return [d for d in store.list_desk("open", uid)
+                if d["question"].startswith(said) and (d.get("tickets") or []) == [label]]
+
+    def stuck_on_desk(uid: str, t: dict, reason: str, request: Request, by: str) -> None:
+        """A stuck ticket is a person's turn (the status-words spec, decision 5: no "waiting for
+        you" without an item), so blocking one files a blocking desk item, addressed like any
+        other (the ticket's assignee, else the project's lead) and naming the station that
+        stopped, unless an open item already names the ticket: the station's own ASK, or this
+        one from an earlier block. An ASK that comes after it replaces it (`desk_add`)."""
+        label = factory_mod.label(t)
+        if any(label in (d.get("tickets") or []) for d in store.list_desk("open", uid)):
+            return
+        station = caller(request)["station"]
+        short = reason.rstrip(".")
+        short = short[:1].upper() + short[1:]
+        short = short if len(short) <= 160 else short[:157].rstrip() + "..."
+        store.add_desk_item(
+            uid, f"{label} is stuck. {short}. What should happen?",
+            f"{station or by or 'The crew'} moved {label} to blocked: {reason}", [],
+            "Say what the crew should do so it can continue",
+            "The station holding it cannot continue without a person.",
+            f"What happens to {label}", [label], True, station or by or "the crew", [], now_utc(),
+            station or None, None, person_of(request), desk_target(request, None, uid, [label]))
+
+    def unstuck_on_desk(uid: str, t: dict, stage: str) -> None:
+        """The ticket moved on: the item its block filed has nothing left to ask. Items a person
+        or the orchestrator wrote about it stay."""
+        label = factory_mod.label(t)
+        for d in stuck_items(uid, label):
+            store.close_desk_item(d["id"], "withdrawn", f"{label} moved on to {stage}", now_utc())
 
     @app.get("/api/projects/{uid}/tickets/{ref}/messages")
     def ticket_messages(uid: str, ref: str):
@@ -2625,10 +2653,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
             asm.append(got["label"])
         by, _ = who(request, body)
         to = desk_target(request, body.get("to"), uid, tickets)
+        stuck = [x for lb in tickets for x in stuck_items(uid, lb)]
         d = store.add_desk_item(uid, q, ctx, opts, rec, why,
                                 " ".join(str(body.get("blocks") or "").split())[:300], tickets,
                                 bool(body.get("blocking")), str(body.get("asked_by") or by)[:120],
-                                asm, now_utc(), station, command, person_of(request), to)
+                                asm, now_utc(), station or next((x["station"] for x in stuck
+                                                                 if x.get("station")), None),
+                                command, person_of(request), to)
+        for x in stuck:     # the station's own question says more than "is stuck"
+            store.close_desk_item(x["id"], "withdrawn", f"asked in {d['label']}", now_utc())
         return desk_out(d)
 
     @app.post("/api/factory/challenger/stopped")
@@ -2705,7 +2738,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             floor = datetime.fromisoformat(since.replace("Z", "+00:00")) if since.strip() else None
         except ValueError:
             h.err(ValueError("since is a time, like 2026-11-18T00:00:00Z"))
-        items = _item_ids(item) if item.strip() else None
+        items = answers_mod.item_ids(item) if item.strip() else None
         if floor is None:
             floor = (datetime(1970, 1, 1, tzinfo=timezone.utc) if items
                      else now_utc().replace(hour=0, minute=0, second=0, microsecond=0))

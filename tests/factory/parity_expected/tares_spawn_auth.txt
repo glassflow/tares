@@ -179,9 +179,9 @@ tares factory: Tares at http://<TARES> did not give the crew's projects (curl: (
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/xhigh     working  -        
-crew-reviewer                  reviewer     opus/high      working  -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/xhigh     Working                        -        
+crew-reviewer                  reviewer     opus/high      Working                        -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 project Links App: 1/2 tickets done, on Links 1/2

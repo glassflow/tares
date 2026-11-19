@@ -1,7 +1,8 @@
 """Seed a scratch factory Tares for factory-projects.e2e.cjs (TR-733): the Projects list as a cell with
 some history shows it. Invented names only.
   project-w (waiting on you): a question on the desk, one ticket merged, one not;
-  project-b1 and project-b2 (building): tickets in flight, one blocked on b1, repos, milestones;
+  project-b1 (waiting on you: its stuck ticket is on the desk) and project-b2 (building): tickets in
+    flight, repos, milestones;
   project-y (not started): tickets written, none begun; its goal carries markup;
   project-z and project-q (ready to close): every ticket merged;
   project-d and project-e (done): finished, one handed to the crew, one closed by hand;

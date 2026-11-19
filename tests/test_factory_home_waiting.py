@@ -449,7 +449,7 @@ async def main():
            sorted(sv) == ["project-q", "project-v"], sorted(sv))
         so = sv["project-v"]
         ck("the row: label, title, count without the canceled ticket, wait from the last ticket to finish",
-           so["label"] == "Ready to close" and so["title"] == "project-v" and so["id"] == f"signoff:{pv}"
+           so["label"] == "Close the project?" and so["title"] == "project-v" and so["id"] == f"signoff:{pv}"
            and so["detail"] == "All 2 tickets are merged. Close the project when you have checked the result."
            and so["meta"] == "Ready for 5 hours" and so["waited"] == "5 hours", so)
         ck("a project ready to close sorts after what holds the crew up, however long it has waited",

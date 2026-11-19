@@ -20,6 +20,8 @@
           "model": {"type": "string"},
           "effort": {"type": "string"},
           "state": {"description": "Whose turn the session is on; `gone` when it has no live session.", "type": "string"},
+          "shown": {"description": "The state in the words the console uses (tares/status_words.py STATION): Working, Waiting for you, Waiting, nothing asked yet, Waiting on a background task, Idle, Ended. `state` keeps the raw value.", "type": "string"},
+          "asked": {"description": "The label (D3) of the open item for a person that names this station; null when none does. Only then is it Waiting for you.", "type": ["string", "null"]},
           "tempo": {"description": "Empty when the station has not said.", "type": "string"},
           "detail": {"description": "What it is doing or needs, in full (the text view cuts it at 70 characters).", "type": "string"}
         },

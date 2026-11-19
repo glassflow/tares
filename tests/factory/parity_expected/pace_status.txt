@@ -1,11 +1,11 @@
 == step: status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
-links-app-build-m1             builder      opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
+links-app-build-m1             builder      opus/high      Idle                           -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
@@ -15,11 +15,11 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
-links-app-build-m1             builder      opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
+links-app-build-m1             builder      opus/high      Idle                           -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 pace: ok (5-hour 84%, week 89%)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -30,11 +30,11 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
-links-app-build-m1             builder      opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
+links-app-build-m1             builder      opus/high      Idle                           -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 pace: slow, no new builders and the longest ticks, until <TS> (5-hour 85%, week 89%)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -45,11 +45,11 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
-links-app-build-m1             builder      opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
+links-app-build-m1             builder      opus/high      Idle                           -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 pace: hold, builders finish their step and wait, until <TS> (5-hour 95%, week 90%)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -60,11 +60,11 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
-links-app-build-m1             builder      opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
+links-app-build-m1             builder      opus/high      Idle                           -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 pace: at the limit, stopped stations wait for the reset, until <TS> (5-hour 100%, week 10%)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -75,11 +75,11 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      done     -        
-links-app-build-m1             builder      opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Idle                           -        
+links-app-build-m1             builder      opus/high      Idle                           -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 pace: on, no reading of the plan limits yet
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -244,31 +244,31 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 

@@ -173,7 +173,7 @@ async def main():
                and foot["milestone"]["number"] == "M1" and foot["milestone"]["name"] == "M1: pages"
                and foot["who"] == "Reviewer"
                and foot["pr"] == {"number": 12, "url": f"https://github.com/{REPO}/pull/12",
-                                  "state_text": "open, CI green"}
+                                  "state_text": "open, checks passed"}
                and foot["changed"] == "1 hour ago" and foot["changed_at"]
                and foot["href"] == f"/projects/{px}/tickets/{foot['ref']}", foot)
             site = by_title["Add the sitemap"]
