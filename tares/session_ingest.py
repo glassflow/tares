@@ -24,6 +24,14 @@ events hold no claude_code line (nothing to catch up on). It is never unset.
 
 DuckDB is never changed: `Store.append` keeps writing every line there.
 
+The same two writers keep the facts the factory reads (TR-1477): the crew's protocol messages in
+`session_messages` and the shell commands sessions ran, with what they printed, in
+`session_commands`. `message_facts`, `command_facts` and `result_facts` are the extraction rules, one
+tool_use or tool_result line at a time; `record` writes what they find in the same transaction as
+the counts, and `fill_facts` runs them over the events a first start has not seen (the watermark
+`session_facts`). A row is made by its tool_use id, so a resumed session that copies old lines, a
+batch written twice or a fill that runs twice adds nothing.
+
 Two things to know when reading the table:
 
 - A row holds the `source` of the session's first line, and the readers ask for the one source
@@ -41,17 +49,21 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
-from .session_store.tables import session_ingest_marks, sessions
+from .session_store.tables import (session_commands, session_ingest_marks, session_messages,
+                                   sessions)
 
 MARK = "sessions_reconcile"          # the fill's row in session_ingest_marks
 CAUGHT_UP = "sessions_caught_up"     # its row when a pass has finished (TR-1520): readers use the table
 MARGIN = timedelta(minutes=10)       # a pass starts this long before the last one's newest line
 CHUNK = 200                          # sessions read from DuckDB under one hold of the lock
+FACTS_MARK = "session_facts"         # the facts fill's row in session_ingest_marks (TR-1477)
+OUTPUT_TAIL = 20000                  # characters of a command's output kept: a test run's summary is at the end
+MESSAGE_TEXT = 4000                  # characters of a protocol message kept
 
 # the rendered text names each tool as "→ name(": a cheap filter before the payload is parsed
 # (the same one `Store.coordination_calls` puts in its SQL)
@@ -121,7 +133,132 @@ def _fold(envelopes) -> dict:
     return out
 
 
-def _add(store, folded: dict) -> None:
+# ── the facts the factory reads (TR-1477) ────────────────────────────────────────────────────
+def _blocks(payload, requests: bool = True) -> list:
+    """The content blocks of a line's payload (a JSON object, or its text), [] when there are none.
+    `requests` False leaves out Claude Code's copy of a request (an older plugin recorded those as
+    `api-request...` lines): its calls are the same ones the transcript lines hold."""
+    if isinstance(payload, (str, bytes)):
+        try:
+            payload = json.loads(payload) if payload else {}
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(payload, dict):
+        return []
+    if not requests and str(payload.get("type") or "").startswith("api-request"):
+        return []
+    msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    content = msg.get("content")
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _fact_id(block: dict, session: str, at: datetime, n: int) -> str:
+    """A call's id: its tool_use id, or, for a block without one, a stand-in from the line."""
+    return str(block["id"]) if block.get("id") else f"{session}:{at.isoformat()}:{n}"
+
+
+def message_facts(event_type: str, text: str | None, payload, session: str, at: datetime,
+                  source: str) -> list[dict]:
+    """The protocol messages of one tool_use line: its SendMessage calls whose text starts
+    `[TF:<TYPE>]` (the crew's protocol, TR-429), as rows of `session_messages`."""
+    if event_type != "tool_use" or not text or "SendMessage" not in text:
+        return []
+    out = []
+    for n, b in enumerate(_blocks(payload, requests=False)):
+        if not (b.get("type") == "tool_use"
+                and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
+            continue
+        inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+        body = str(inp.get("message") or inp.get("content") or "")
+        m = re.match(r"\s*\[TF:([A-Z_]+)\]", body)
+        if not m:
+            continue
+        out.append({"tool_use_id": _fact_id(b, session, at, n), "source": source,
+                    "session": session, "at": at, "to_station": str(inp.get("to") or ""),
+                    "type": m.group(1), "text": body[:MESSAGE_TEXT]})
+    return out
+
+
+def command_facts(event_type: str, text: str | None, payload, session: str, at: datetime,
+                  source: str) -> list[dict]:
+    """The shell commands of one tool_use line: its Bash calls, as rows of `session_commands`
+    (without a result yet)."""
+    if event_type != "tool_use" or not text or "Bash(" not in text:
+        return []
+    out = []
+    for n, b in enumerate(_blocks(payload)):
+        if b.get("type") == "tool_use" and b.get("name") == "Bash":
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            out.append({"tool_use_id": _fact_id(b, session, at, n), "source": source,
+                        "session": session, "at": at, "command": str(inp.get("command") or "")})
+    return out
+
+
+def result_facts(event_type: str, payload, at: datetime) -> list[dict]:
+    """The results of one tool_result line, by the tool_use id they answer: the tail of what was
+    printed, and 1 when the tool failed (0 when it did not)."""
+    if event_type != "tool_result":
+        return []
+    out = []
+    for b in _blocks(payload):
+        if b.get("type") != "tool_result" or not b.get("tool_use_id"):
+            continue
+        c = b.get("content")
+        if isinstance(c, list):
+            c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+        out.append({"tool_use_id": str(b["tool_use_id"]), "exit_code": 1 if b.get("is_error") else 0,
+                    "output_tail": str(c or "")[-OUTPUT_TAIL:], "result_at": at})
+    return out
+
+
+def facts_of(lines) -> dict:
+    """What `lines` (rows of (source, session, time, event_type, text, payload)) hold:
+    {"messages": [...], "commands": [...], "results": [...]}, each deduplicated by tool_use id
+    (the first message and command of an id wins, the last result) and in id order, so two writers
+    meet their rows in the same order and cannot deadlock."""
+    messages: dict = {}
+    commands: dict = {}
+    results: dict = {}
+    for source, session, at, event_type, text, payload in lines:
+        at = _utc(at)
+        for r in message_facts(event_type, text, payload, session, at, source):
+            messages.setdefault(r["tool_use_id"], r)
+        for r in command_facts(event_type, text, payload, session, at, source):
+            commands.setdefault(r["tool_use_id"], r)
+        for r in result_facts(event_type, payload, at):
+            results[r["tool_use_id"]] = r
+    return {"messages": [messages[k] for k in sorted(messages)],
+            "commands": [commands[k] for k in sorted(commands)],
+            "results": [results[k] for k in sorted(results)]}
+
+
+def _write_facts(conn, db, facts: dict) -> None:
+    """Write `facts` (from `facts_of`) in the open transaction. A message is kept once. A command
+    row takes its call's fields only where it has none (a result may have made the row first), and a
+    result sets the result fields only, so either order and any repeat give the same row."""
+    if facts["messages"]:
+        conn.execute(db.upsert(session_messages).on_conflict_do_nothing(
+            index_elements=["tool_use_id"]), facts["messages"])
+    if facts["commands"]:
+        stmt = db.upsert(session_commands)
+        ex = stmt.excluded
+        t = session_commands.c
+        conn.execute(stmt.on_conflict_do_update(
+            index_elements=["tool_use_id"],
+            set_={"source": func.coalesce(t.source, ex.source),
+                  "session": func.coalesce(t.session, ex.session),
+                  "at": func.coalesce(t.at, ex.at),
+                  "command": func.coalesce(t.command, ex.command)}), facts["commands"])
+    if facts["results"]:
+        stmt = db.upsert(session_commands)
+        ex = stmt.excluded
+        conn.execute(stmt.on_conflict_do_update(
+            index_elements=["tool_use_id"],
+            set_={"exit_code": ex.exit_code, "output_tail": ex.output_tail,
+                  "result_at": ex.result_at}), facts["results"])
+
+
+def _add(store, folded: dict, facts: dict | None = None) -> None:
     """Add each session's counts to its row, in one transaction. Rows are written in session order,
     so two writers on Postgres meet their rows in the same order and cannot deadlock."""
     db = store.sessions_db
@@ -141,6 +278,8 @@ def _add(store, folded: dict) -> None:
             for sid, r in sorted(folded.items())]
     with db.begin() as conn:
         conn.execute(stmt, rows)
+        if facts:
+            _write_facts(conn, db, facts)
 
 
 def record(store, envelopes) -> None:
@@ -152,7 +291,9 @@ def record(store, envelopes) -> None:
     t0 = time.perf_counter()
     ok = True
     try:
-        _add(store, _fold(envelopes))
+        _add(store, _fold(envelopes), facts_of(
+            (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
+            for e in envelopes))
     except Exception as e:
         ok = False
         print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
@@ -290,9 +431,71 @@ def _reconcile_chunk(store, sources: list, sids: list) -> None:
             conn.execute(stmt, rows)
 
 
+def _facts_mark(store):
+    with store.sessions_db.begin() as conn:
+        return conn.execute(select(session_ingest_marks.c.at).where(
+            session_ingest_marks.c.name == FACTS_MARK)).scalar_one_or_none()
+
+
+def _set_facts_mark(store, at: datetime) -> None:
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).values(name=FACTS_MARK, at=at)
+    stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"at": stmt.excluded.at})
+    with db.begin() as conn:
+        conn.execute(stmt)
+
+
+def fill_facts(store, chunk: int = CHUNK) -> int:
+    """Write the facts of the lines DuckDB holds that this table has not seen: every tool_use and
+    tool_result line of a claude_code source newer than the `session_facts` mark minus the margin
+    (all of them on the first pass). The same functions `record` runs, written as an upsert, so a
+    line `record` already wrote, or a pass that runs twice, changes nothing. Reads DuckDB for
+    `chunk` sessions at a time, taking and letting go of the store's lock for each; the mark moves
+    to the newest `ingest_time` read once every chunk is written, so a pass that raised is read
+    again from the same place. Returns how many sessions it looked at."""
+    sources = sorted(claude_code_sources(store))
+    marks = ", ".join("?" for _ in sources)
+    mark = _facts_mark(store)
+    since = mark - MARGIN if mark is not None else None
+    with store._lock:
+        found = store.con.execute(
+            f"SELECT key_value, max(ingest_time) FROM events WHERE source IN ({marks}) "
+            "AND event_type IN ('tool_use', 'tool_result') "
+            "AND key_value IS NOT NULL AND key_value <> '' "
+            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
+            [*sources, since, since]).fetchall()
+    newest = max((r[1] for r in found), default=None)
+    sids = sorted(r[0] for r in found)
+    for i in range(0, len(sids), chunk):
+        _fill_chunk(store, sources, sids[i:i + chunk], since)
+    if newest is not None:
+        _set_facts_mark(store, _utc(newest))
+    return len(sids)
+
+
+def _fill_chunk(store, sources: list, sids: list, since) -> None:
+    marks = ", ".join("?" for _ in sources)
+    keys = ", ".join("?" for _ in sids)
+    with store._lock:
+        # the tool_use lines that name a tool the facts come from: a cheap filter before the parse
+        lines = store.con.execute(
+            "SELECT source, key_value, event_time, event_type, text, payload FROM events "
+            f"WHERE source IN ({marks}) AND key_value IN ({keys}) "
+            "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) "
+            "AND (event_type = 'tool_result' OR (event_type = 'tool_use' "
+            "AND (text LIKE '%SendMessage%' OR text LIKE '%Bash(%'))) ORDER BY event_time",
+            [*sources, *sids, since, since]).fetchall()
+    facts = facts_of(lines)
+    if not any(facts.values()):
+        return
+    db = store.sessions_db
+    with db.begin() as conn:
+        _write_facts(conn, db, facts)
+
+
 def start_reconcile(store) -> threading.Thread:
-    """Run `reconcile_sessions` in a background thread, once. A failure prints one line: the next
-    start tries again, and the table only undercounts until then."""
+    """Run `reconcile_sessions` and then `fill_facts` in a background thread, once. A failure
+    prints one line: the next start tries again, and the tables only undercount until then."""
     def run():
         t0 = time.perf_counter()
         try:
@@ -302,6 +505,15 @@ def start_reconcile(store) -> threading.Thread:
                       f"{time.perf_counter() - t0:.1f}s", flush=True)
         except Exception as e:
             print(f"taresd: sessions table catch-up failed ({type(e).__name__}: {e}); "
+                  "tried again at the next start", flush=True)
+        t1 = time.perf_counter()
+        try:
+            n = fill_facts(store)
+            if n:
+                print(f"taresd: session facts filled for {n} session(s) in "
+                      f"{time.perf_counter() - t1:.1f}s", flush=True)
+        except Exception as e:
+            print(f"taresd: session facts fill failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
