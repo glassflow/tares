@@ -11,8 +11,11 @@ import logging
 import re
 import uuid
 
+from sqlalchemy import func, select, update
+
 from .envelope import now_utc
 from .integrations import SLOTS
+from .session_store.tables import (project_sessions, session_states, session_stations)
 
 log = logging.getLogger("tares.factory_store")
 
@@ -667,7 +670,9 @@ class FactoryStore:
             firsts = [c[4] for c in [keep, *bare] if c[4] is not None]
             lasts = [c[5] for c in [keep, *bare] if c[5] is not None]
             for b in bare:
-                self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id = ?", [keep[0], b[0]])
+                with self.sessions_db.begin() as conn:
+                    conn.execute(update(session_stations).where(session_stations.c.crew_id == b[0])
+                                 .values(crew_id=keep[0]))
                 self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
             self.sc.execute("UPDATE crews SET first_seen = ?, last_seen = ? WHERE id = ?",
                             [min(firsts) if firsts else None, max(lasts) if lasts else None, keep[0]])
@@ -675,11 +680,14 @@ class FactoryStore:
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
-        if self.sc.execute("SELECT 1 FROM session_stations WHERE crew_id IS NULL LIMIT 1"
-                            ).fetchone():
+        with self.sessions_db.begin() as conn:
+            bare = conn.execute(select(session_stations.c.session).where(
+                session_stations.c.crew_id.is_(None)).limit(1)).first()
+        if bare:
             cid = self._crew_id("crew", "local", "", now_utc())
-            self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
-                             [cid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(session_stations).where(session_stations.c.crew_id.is_(None))
+                             .values(crew_id=cid))
         self._merge_split_crews()
         # an override kept before the log existed is its first entry (TR-640); one with no time of
         # its own takes the hand-over's, else now, so a log entry always has a time
@@ -1036,33 +1044,37 @@ class FactoryStore:
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
                             project: str | None, at, crew_id: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO session_stations (session, station, role, parent, project, seen_at, "
-                "crew_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
-                "station = excluded.station, role = excluded.role, parent = excluded.parent, "
-                "project = coalesce(excluded.project, session_stations.project), "
-                "crew_id = coalesce(excluded.crew_id, session_stations.crew_id)",
-                [session, station, role or None, parent or None, project, at, crew_id])
+        t = session_stations
+        stmt = self.sessions_db.upsert(t).values(
+            session=session, station=station, role=role or None, parent=parent or None,
+            project=project, seen_at=at, crew_id=crew_id)
+        x = stmt.excluded
+        stmt = stmt.on_conflict_do_update(index_elements=["session"], set_={
+            "station": x.station, "role": x.role, "parent": x.parent,
+            "project": func.coalesce(x.project, t.c.project),
+            "crew_id": func.coalesce(x.crew_id, t.c.crew_id)})
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt)
 
     def session_station(self, session: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute("SELECT station, role, parent, project FROM session_stations "
-                                 "WHERE session = ?", [session]).fetchone()
+        t = session_stations
+        with self.sessions_db.begin() as conn:
+            r = conn.execute(select(t.c.station, t.c.role, t.c.parent, t.c.project).where(
+                t.c.session == session)).first()
         return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
 
     def station_sessions(self, source: str) -> list[dict]:
         """Every session that played a station, with its station, role, parent and project, when
         it started and last did something (from its lines on `source`), its state, and the
         project it last named (project_sessions), newest activity first."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
-                "st.state, st.reason, st.state_at, "
-                "(SELECT p.project FROM project_sessions p WHERE p.session = ss.session "
-                " ORDER BY p.linked_at DESC LIMIT 1), ss.crew_id "
-                "FROM session_stations ss "
-                "LEFT JOIN session_states st ON st.session = ss.session").fetchall()
+        ss, st, ps = session_stations, session_states, project_sessions
+        named = (select(ps.c.project).where(ps.c.session == ss.c.session)
+                 .order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery())
+        q = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
+                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id)
+             .select_from(ss.outerjoin(st, st.c.session == ss.c.session)))
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q).all()
         act = self.session_activity(source, [r[0] for r in rows])
         out = []
         for r in rows:
@@ -1189,10 +1201,10 @@ class FactoryStore:
         out = {}
         for i in range(0, len(sessions), 500):
             chunk = sessions[i:i + 500]
-            with self._sread:
-                out.update(self.sc.execute(
-                    "SELECT session, station FROM session_stations "
-                    f"WHERE session IN ({', '.join('?' * len(chunk))})", chunk).fetchall())
+            with self.sessions_db.begin() as conn:
+                out.update((r[0], r[1]) for r in conn.execute(select(
+                    session_stations.c.session, session_stations.c.station).where(
+                    session_stations.c.session.in_(chunk))))
         return out
 
     def protocol_messages(self, source: str, limit: int = 3000) -> list[dict]:
@@ -1510,10 +1522,11 @@ class FactoryStore:
             marks = ", ".join("?" for _ in projects)
             names = dict(self.sc.execute(
                 f"SELECT id, name FROM usecases WHERE id IN ({marks})", projects).fetchall())
-            sessions: dict[str, set] = {}
-            for project, session in self.sc.execute(
-                    f"SELECT project, session FROM project_sessions WHERE project IN ({marks})",
-                    projects).fetchall():
+        sessions: dict[str, set] = {}
+        with self.sessions_db.begin() as conn:
+            for project, session in conn.execute(select(
+                    project_sessions.c.project, project_sessions.c.session).where(
+                    project_sessions.c.project.in_(projects))):
                 sessions.setdefault(project, set()).add(session)
         by_ref: dict[str, list] = {}
         for ref in refs:
@@ -1702,10 +1715,10 @@ class FactoryStore:
 
     def station_session_ids(self, station: str) -> list[str]:
         """The sessions that played `station` or a helper it started."""
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT session FROM session_stations WHERE station = ? OR parent = ?",
-                [station, station]).fetchall()]
+        t = session_stations
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(t.c.session).where(
+                (t.c.station == station) | (t.c.parent == station)))]
 
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
     _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
@@ -1962,9 +1975,9 @@ class FactoryStore:
         return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
 
     def role_sessions(self, role: str) -> list[str]:
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT session FROM session_stations WHERE role = ?", [role]).fetchall()]
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(session_stations.c.session).where(
+                session_stations.c.role == role))]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repos: list[dict], autonomy: str | None,

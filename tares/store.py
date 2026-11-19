@@ -24,8 +24,12 @@ from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
+from sqlalchemy import delete, select
+
 from . import state_db
 from .session_store import SessionStore
+from .session_store.copy import copy_from_duckdb
+from .session_store.tables import COPIED, project_sessions, session_stations, session_states
 from .reads import parse_window
 
 _SCHEMA = """
@@ -769,6 +773,10 @@ def day_month_words(when) -> str:
     return f"{when.day} {_MONTHS[when.month - 1][:3]}"
 
 
+# the five tables the session store holds (a state move leaves them out: copy_from_duckdb moved them)
+SESSION_TABLES = frozenset(t.name for t in COPIED)
+
+
 class StoreUnavailable(RuntimeError):
     """The database could not be opened or initialized — locked by another daemon, permissions,
     a full disk, a corrupt file. Raised instead of the raw DuckDB error so taresd can start in
@@ -842,11 +850,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 ":memory:" if path == ":memory:" else os.path.dirname(os.path.abspath(path)),
                 state_dsn or None)
             self.sessions_db.upgrade()
+            # The five session tables are copied in before the data upgrades, so the fills in
+            # _upgrade() write into a table that already holds its rows. On SQLite that is a copy
+            # from DuckDB (once; the ledger skips a table already copied). On the first start with
+            # a state database the same copy fills the new Postgres tables, and the one-time move
+            # below leaves them out. DuckDB's own copies are never changed.
+            first_pg_start = pg is not None and self.sc is self.con
+            copy_from_duckdb(self, self.sessions_db, state_move=first_pg_start)
             self._upgrade()
-            if pg is not None and self.sc is self.con:
+            if first_pg_start:
                 # first start with a state database: the state moves over once, then is read
                 # from Postgres only; the DuckDB copy is left as it was, as a fallback
-                state_db.move(self.con, pg, self._state_tables())
+                state_db.move(self.con, pg, [t for t in self._state_tables()
+                                             if t not in SESSION_TABLES])
                 self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                                  "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
                                  "UPDATE SET value = excluded.value", [now_utc().isoformat()])
@@ -1613,12 +1629,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The module's _exclude_sql, with the sessions linked to the hidden projects read from
         the state first."""
         ids = list((exclude or {}).get("ids") or [])
-        sessions: list = []
-        if ids:
-            with self._sread:
-                sessions = [r[0] for r in self.sc.execute(
-                    f"SELECT DISTINCT session FROM project_sessions WHERE project IN "
-                    f"({', '.join(['?'] * len(ids))})", ids).fetchall()]
+        sessions = self.sessions_of_projects(ids) if ids else []
         return _exclude_sql(exclude, sources, sessions)
 
     def _row_owners(self, rows: list, n: int) -> set[str]:
@@ -1644,10 +1655,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 keys.add(r[n])
         found.update(self.project_ids_named(sorted(named)))
         if keys:
-            with self._sread:
-                found.update(x[0] for x in self.sc.execute(
-                    f"SELECT DISTINCT project FROM project_sessions WHERE session IN "
-                    f"({', '.join(['?'] * len(keys))})", sorted(keys)).fetchall())
+            found.update(self.projects_of_sessions(sorted(keys)))
         return found
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
@@ -2823,6 +2831,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def delete_project(self, uid: str) -> None:
         with self._swrite:
+            # the state rows first: a delete that stops half way leaves session rows with no
+            # project, which every reader ignores
             # its keys stop working and nothing is delivered for it any more (TR-335)
             self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
                              "AND revoked_at IS NULL", [now_utc(), uid])
@@ -2836,14 +2846,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                             "(SELECT id FROM tickets WHERE project = ?)", [uid])
             self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self._factory_forget_project(uid)
-            self._usage_forget_project(uid)
-            self.sc.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
-            # a crew station's session serves every project: its state stays
-            self.sc.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
-                             "FROM project_sessions) AND session NOT IN (SELECT session FROM "
-                             "session_stations)")
             self.sc.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.sc.execute("DELETE FROM usecases WHERE id = ?", [uid])
+        self._usage_forget_project(uid)
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
+            # a crew station's session serves every project: its state stays
+            conn.execute(delete(session_states).where(
+                session_states.c.session.not_in(select(project_sessions.c.session)),
+                session_states.c.session.not_in(select(session_stations.c.session))))
 
     def get_project_setup(self, uid: str) -> dict | None:
         """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was
@@ -3390,28 +3401,48 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
         """The Claude Code session works in the project. True when it was not linked before."""
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM project_sessions WHERE project = ? AND "
-                                   "session = ?", [project, session]).fetchone()
-            if not had:
-                self.sc.execute("INSERT INTO project_sessions (project, session, repo, linked_at) "
-                                 "VALUES (?, ?, ?, ?)", [project, session, repo, now_utc()])
-        return not had
+        stmt = self.sessions_db.upsert(project_sessions).values(
+            project=project, session=session, repo=repo, linked_at=now_utc()
+        ).on_conflict_do_nothing(index_elements=["project", "session"])
+        with self.sessions_db.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def sessions_of_projects(self, projects: list[str]) -> list[str]:
+        """The sessions linked to any of the projects."""
+        out: set[str] = set()
+        for i in range(0, len(projects), 500):
+            with self.sessions_db.begin() as conn:
+                out.update(r[0] for r in conn.execute(
+                    select(project_sessions.c.session).where(
+                        project_sessions.c.project.in_(projects[i:i + 500]))))
+        return sorted(out)
+
+    def projects_of_sessions(self, sessions: list[str]) -> set[str]:
+        """The projects any of the sessions is linked to."""
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.begin() as conn:
+                out.update(r[0] for r in conn.execute(
+                    select(project_sessions.c.project).where(
+                        project_sessions.c.session.in_(sessions[i:i + 500]))))
+        return out
 
     def project_sessions(self, project: str) -> list[dict]:
         """The sessions that worked in the project, newest activity first, with when they started
         and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at, "
-                "x.station FROM project_sessions s "
-                "LEFT JOIN session_stations x ON x.session = s.session "
-                "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
-                # the crew's own stations serve every project: they show on the Crew page and
-                # never count as the project's build session (a pick-up must not replace them)
-                "AND s.session NOT IN (SELECT session FROM session_stations WHERE role IN "
-                "('orchestrator', 'reviewer', 'releaser', 'comms'))", [project]).fetchall()
+        ps, ss, st = project_sessions, session_stations, session_states
+        q = (select(ps.c.session, ps.c.repo, ps.c.linked_at, st.c.state, st.c.reason,
+                    st.c.state_at, ss.c.station)
+             .select_from(ps.outerjoin(ss, ss.c.session == ps.c.session)
+                          .outerjoin(st, st.c.session == ps.c.session))
+             .where(ps.c.project == project,
+                    # the crew's own stations serve every project: they show on the Crew page and
+                    # never count as the project's build session (a pick-up must not replace them)
+                    ps.c.session.not_in(select(ss.c.session).where(
+                        ss.c.role.in_(("orchestrator", "reviewer", "releaser", "comms"))))))
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q).all()
         seen, uniq = set(), []
         for r in rows:
             if r[0] not in seen:
@@ -3447,20 +3478,23 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                           force: bool = False) -> None:
         """The session's state now; an older line than the one stored does not win, unless
         `force` (a take-over is a decision, not a report)."""
-        when = "" if force else " WHERE excluded.state_at >= session_states.state_at"
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO session_states (session, state, reason, state_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (session) DO UPDATE SET state = excluded.state, "
-                "reason = excluded.reason, state_at = excluded.state_at" + when,
-                [session, state, reason or None, at])
+        stmt = self.sessions_db.upsert(session_states).values(
+            session=session, state=state, reason=reason or None, state_at=at)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["session"],
+            set_={"state": stmt.excluded.state, "reason": stmt.excluded.reason,
+                  "state_at": stmt.excluded.state_at},
+            where=None if force else stmt.excluded.state_at >= session_states.c.state_at)
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt)
 
     def session_state(self, session: str) -> dict | None:
         """The session's stored state {state, reason, state_at}, as reported (not as shown), or
         None when it never reported one."""
-        with self._sread:
-            row = self.sc.execute("SELECT state, reason, state_at FROM session_states "
-                                   "WHERE session = ?", [session]).fetchone()
+        with self.sessions_db.begin() as conn:
+            row = conn.execute(select(session_states.c.state, session_states.c.reason,
+                                      session_states.c.state_at).where(
+                session_states.c.session == session)).first()
         return {"state": row[0], "reason": row[1], "state_at": row[2]} if row else None
 
     def said_lately(self, source: str, session: str, n: int = 3) -> list[dict]:
@@ -3520,9 +3554,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return None
 
     def session_projects(self, session: str) -> list[str]:
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT project FROM project_sessions WHERE session = ?", [session]).fetchall()]
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(project_sessions.c.project).where(
+                project_sessions.c.session == session))]
 
     def get_project_linear(self, uid: str) -> dict | None:
         """The Linear project a project's tickets live in, with the last sync's state, or None."""

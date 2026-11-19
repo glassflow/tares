@@ -39,6 +39,9 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 
+from session_helpers import rows as session_rows
+from tares.session_store.tables import session_stations
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 P = F = 0
@@ -133,7 +136,7 @@ async def main():
         with store._swrite:
             store._merge_split_crews()
         after = crews_of(pid["adam"])
-        moved = store.sc.execute("SELECT crew_id FROM session_stations WHERE session = 'd-old'").fetchone()[0]
+        moved = session_rows(store, "session_stations", session_stations.c.session == "d-old")[0]["crew_id"]
         ck("after it: one crew, on its machine, with the old sessions in it, from when the old one began",
            len(after) == 1 and after[0]["id"] == new and moved == new
            and after[0]["first_seen"] < datetime.now(timezone.utc) - timedelta(days=2), after)

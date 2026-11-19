@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from _env import scrub_os_environ
+from session_helpers import seed_link
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-batch-reads-")
@@ -60,6 +61,7 @@ def ck(label, cond, detail=""):
 
 def old_challenge_events(store, source, project, ref):
     """What challenge_events ran before TR-1472."""
+    linked = store.sessions_of_projects([project])      # the session store's rows
     with store._sread:
         name = (store.sc.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
                 or [project])[0]
@@ -67,10 +69,9 @@ def old_challenge_events(store, source, project, ref):
             "SELECT event_time, event_type, payload, key_value FROM challenges "
             "WHERE source = ? AND (branch = ? OR branch LIKE ?) "
             "AND (lower(tares_project) IN (lower(?), lower(?)) "
-            "     OR (tares_project IS NULL AND key_value IN "
-            "         (SELECT session FROM project_sessions WHERE project = ?))) "
+            f"     OR (tares_project IS NULL AND key_value IN ({', '.join('?' * len(linked)) or 'NULL'}))) "
             "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
-                                    name, project, project]).fetchall()
+                                    name, project, *linked]).fetchall()
     out = []
     for at, typ, pj, sid in rows:
         o = json.loads(pj) if isinstance(pj, str) else (pj or {})
@@ -85,8 +86,8 @@ def main():
     t0 = datetime(2026, 11, 19, 9, 0, tzinfo=timezone.utc)
     for uid, name in (("uc_a", "Alpha"), ("uc_b", "Beta"), ("uc_c", "Gamma")):
         store.create_project(uid, "software_factory", name, {"objects": []})
-    store.sc.execute("INSERT INTO project_sessions (project, session, repo, linked_at) VALUES "
-                     "('uc_a', 's-a', 'r', ?), ('uc_b', 's-b', 'r', ?)", [t0, t0])
+    seed_link(store, "uc_a", "s-a", "r", t0)
+    seed_link(store, "uc_b", "s-b", "r", t0)
     rows, n = [], 0
 
     def line(session, branch, project, typ="challenge_commit"):
