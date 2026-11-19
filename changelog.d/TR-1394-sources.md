@@ -1,2 +1,0 @@
-Changed
-The connections list (Advanced, Connections) has a new look and is titled Connections: each connection is one row that says in words what it is, how often Tares checks it, which projects it is in, whether it is healthy and when it last received something, with its last error under it. The filters have labels, Import and Export sit beside Add a connection instead of in a menu, and the page fits a phone without scrolling sideways (TR-1394).
