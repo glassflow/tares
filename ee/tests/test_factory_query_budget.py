@@ -82,6 +82,11 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # only that one.
 # TR-1503 (the handlers read only the projects they show): home 108 to 107, projects 84 to 83.
 _TODAY = {"home": 107, "projects": 83, "project": 82, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
+# The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
+# project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
+# DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
+DONE_PROJECTS = 12
+DONE_EXTRA = 4
 BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -259,6 +264,79 @@ def seed(store):
     return by_project
 
 
+async def done_projects(store, sam, call, base):
+    """12 finished projects of 5 tickets (assigned to sam, to the cell's own person and to no one, one
+    canceled) join the cell. The Projects list on a team cell reads each project's tickets for its
+    "tickets yours" line; for a finished project it must read counts instead: a few statements more
+    than the page without them, not a few per project, and none of its ticket rows. The same page
+    with `done_ticket_facts` turned off (every finished project's tickets loaded, as before TR-1503)
+    gives the before: the same body, 60 more ticket rows read (the statements are about the same, as
+    the tickets of all projects come in one query)."""
+    sam_id = store.find_person_by_email("sam-budget@example.com")["id"]
+    local_id = next(p["id"] for p in store.list_people() if p["id"] != sam_id)
+    who = [sam_id, local_id, None]
+    for i in range(DONE_PROJECTS):
+        uid = f"uc_budgetdone{i:02d}"
+        store.create_project(uid, "custom", f"Finished project {i:02d}", {}, goal=f"Done goal {i:02d}",
+                             status="done")
+        store.set_project_kind(uid, "software_factory")
+        for j in range(5):
+            tid = store.create_ticket(uid, "tares", f"Done ticket {j} of {i:02d}", repo=f"example-org/done-{i:02d}",
+                                      assignee_person_id=who[(i + j) % 3])
+            store.update_ticket(tid, stage="merged", status="canceled" if j == 4 else "done")
+        store.set_handover(uid, [{"path": f"/Users/sam/code/done-{i:02d}", "name": f"example-org/done-{i:02d}"}],
+                           None, None, ago(days=9))
+        store.finish_handover(uid, "done", None, "crew", ago(days=1, hours=i))
+
+    rows = [0]
+    real_tickets = store.tickets_by_project
+
+    def counted_tickets(ids):
+        out = real_tickets(ids)
+        rows[0] += sum(len(v) for v in out.values())
+        return out
+
+    async def measure():
+        fh.clear_cache()
+        counter = [0]
+        rows[0] = 0
+        token = _COUNTER.set(counter)
+        store.tickets_by_project = counted_tickets
+        try:
+            resp = await call(sam, "/api/factory/projects")
+        finally:
+            store.tickets_by_project = real_tickets
+            _COUNTER.reset(token)
+        return resp, counter[0], rows[0]
+
+    after_resp, after, after_rows = await measure()
+    real = store.done_ticket_facts
+    store.done_ticket_facts = lambda ids: {}          # the way it read before: every ticket row
+    try:
+        before_resp, before, before_rows = await measure()
+    finally:
+        store.done_ticket_facts = real
+    ck("the Projects list with finished projects answers 200", after_resp.status_code == 200
+       and before_resp.status_code == 200, f"{after_resp.status_code} {before_resp.text[:200]}")
+    after_body, before_body = steady(after_resp.json()), steady(before_resp.json())
+    done_rows = [p for p in after_body["projects"] if p["state"] == "done"]
+    print(f"  without finished projects: {base} statements; with {DONE_PROJECTS}: {after} statements and "
+          f"{after_rows} ticket rows from counts, {before} and {before_rows} from ticket rows")
+    ck(f"all {DONE_PROJECTS} finished projects are listed", len(done_rows) == DONE_PROJECTS, len(done_rows))
+    ck("a finished project's yours_text names the assignees",
+       all(p.get("yours_text") for p in done_rows) and any("yours" in p["yours_text"] for p in done_rows),
+       [p.get("yours_text") for p in done_rows][:3])
+    ck("the canceled ticket is not counted in yours_text",
+       all(p["yours_text"].count("ticket") <= 1 and "5 " not in p["yours_text"] for p in done_rows),
+       [p["yours_text"] for p in done_rows][:3])
+    ck("the body from counts is the body from ticket rows", after_body == before_body,
+       "the team path changed what the page answers")
+    ck(f"finished projects add at most {DONE_EXTRA} statements ({after} against {base})",
+       after <= base + DONE_EXTRA, f"{after} over {base} + {DONE_EXTRA}")
+    ck(f"a finished project's tickets are not read ({after_rows} ticket rows against {before_rows})",
+       before_rows - after_rows == DONE_PROJECTS * 5, (after_rows, before_rows))
+
+
 async def main():
     from tares.daemon import make_app
     freeze_clock()
@@ -314,6 +392,8 @@ async def main():
             counts[name] = counter[0]
             bodies[name] = steady(resp.json())
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
+        print("== finished projects on a team cell (TR-1503) ==")
+        await done_projects(store, sam, call, counts["projects"])
 
     print("== the team home is built once per request ==")
     th.HomeRead.__init__, th._team_home = real_init, real_home
@@ -324,6 +404,7 @@ async def main():
     ck("home builds it (the counter sees a build)", built["home"]["read"] == 1, str(built["home"]))
     for name in ("home", "projects"):
         ck(f"{name} runs under 150 statements at 25 projects", counts[name] < 150, counts[name])
+
 
     print("== the budget ==")
     budget = BUDGET[backend]

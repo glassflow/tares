@@ -3284,35 +3284,40 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return out
 
     def done_ticket_facts(self, project_ids: list[str]) -> dict[str, dict]:
-        """{project: {merged, blocked, total, repos, repo_from_pr, exact}} from two grouped
+        """{project: {merged, blocked, total, repos, repo_from_pr, assignees, exact}} from two grouped
         queries, so a finished project's row needs no ticket rows. merged, blocked and total are
         what factory.progress gives ("done", "blocked" and "total"); repos are the full repo
         names of the tickets in the order the ticket list shows them; repo_from_pr counts the
         tickets with no repo whose pull request may name one. exact is False when groups cannot
         give progress: a ticket that would read "to do" but lists dependencies (whether it is
-        blocked depends on those tickets), so the caller loads that project's tickets."""
+        blocked depends on those tickets), so the caller loads that project's tickets. assignees is
+        {person id or None: how many tickets that are not canceled}, what a team cell's "tickets
+        yours" line reads."""
         if not project_ids:
             return {}
         marks = ", ".join("?" for _ in project_ids)
         args = list(project_ids)
         out = {p: {"merged": 0, "blocked": 0, "total": 0, "repos": [], "repo_from_pr": 0,
-                   "exact": True} for p in project_ids}
+                   "assignees": {}, "exact": True} for p in project_ids}
         with self._sread:
             groups = self.sc.execute(
                 "SELECT project, stage, status, "
                 "CASE WHEN depends_on IS NULL OR CAST(depends_on AS VARCHAR) IN ('', 'null', '[]') "
                 "THEN 0 ELSE 1 END, "
                 "CASE WHEN (repo IS NULL OR repo = '') AND pr IS NOT NULL "
-                "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, COUNT(*) "
+                "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, "
+                "assignee_person_id, COUNT(*) "
                 f"FROM tickets WHERE project IN ({marks}) "
-                "GROUP BY project, stage, status, 4, 5", args).fetchall()
+                "GROUP BY project, stage, status, 4, 5, assignee_person_id", args).fetchall()
             first = self.sc.execute(
                 "SELECT project, repo FROM (SELECT project, repo, position, created_at, "
                 "ROW_NUMBER() OVER (PARTITION BY project, repo ORDER BY position, created_at) AS rn "
                 f"FROM tickets WHERE project IN ({marks}) AND repo IS NOT NULL AND repo <> '') f "
                 "WHERE rn = 1 ORDER BY project, position, created_at", args).fetchall()
-        for project, stage, status, has_deps, from_pr, n in groups:
+        for project, stage, status, has_deps, from_pr, who, n in groups:
             facts = out[project]
+            if status != "canceled":
+                facts["assignees"][who] = facts["assignees"].get(who, 0) + n
             state = state_of({"stage": stage, "status": status})
             if state == "to do" and has_deps:
                 facts["exact"] = False

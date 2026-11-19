@@ -90,9 +90,10 @@ def project(uid, title="P"):
     CASES[uid] = []
 
 
-def ticket(uid, title, status="todo", stage=None, repo=None, position=None, deps=None, pr=None):
+def ticket(uid, title, status="todo", stage=None, repo=None, position=None, deps=None, pr=None,
+           who=None):
     tid = store.create_ticket(uid, "tares", title, status=status, position=position, repo=repo,
-                              depends_on=deps)
+                              depends_on=deps, assignee_person_id=who)
     extra = {}
     if stage:
         extra["stage"] = stage
@@ -110,13 +111,14 @@ def set_created(tid, at):
 
 
 project("p_merged")
-ticket("p_merged", "t1", "done", "merged", "o/a", 1)
-ticket("p_merged", "t2", "done", "shipped", "o/b", 2)
-ticket("p_merged", "t3", "done", None, "o/a", 3)
+ticket("p_merged", "t1", "done", "merged", "o/a", 1, who="per_sam")
+ticket("p_merged", "t2", "done", "shipped", "o/b", 2, who="per_sam")
+ticket("p_merged", "t3", "done", None, "o/a", 3, who="per_kim")
 
 project("p_cancel")
-ticket("p_cancel", "t1", "done", "merged", "o/a", 1)
-ticket("p_cancel", "t2", "canceled", None, "o/a", 2)
+ticket("p_cancel", "t1", "done", "merged", "o/a", 1, who="per_sam")
+ticket("p_cancel", "t2", "canceled", None, "o/a", 2, who="per_sam")
+ticket("p_cancel", "t3", "canceled", None, "o/a", 3, who="per_kim")
 
 project("p_todo_dep")
 t_a = ticket("p_todo_dep", "t1", "todo", None, "o/a", 1)
@@ -128,8 +130,8 @@ m1 = ticket("p_merged_dep", "t1", "done", "merged", "o/a", 1)
 ticket("p_merged_dep", "t2", "done", "merged", "o/a", 2, deps=[m1])
 
 project("p_mixed")          # doing, review, blocked, in progress, to do with no dependencies
-ticket("p_mixed", "t1", "in_progress", "doing", "o/a", 1)
-ticket("p_mixed", "t2", "in_review", "review", "o/a", 2)
+ticket("p_mixed", "t1", "in_progress", "doing", "o/a", 1, who="per_sam")
+ticket("p_mixed", "t2", "in_review", "review", "o/a", 2, who="per_kim")
 ticket("p_mixed", "t3", "in_progress", "blocked", "o/a", 3)
 ticket("p_mixed", "t4", "in_progress", None, "o/a", 4)
 ticket("p_mixed", "t5", "todo", None, "o/a", 5)
@@ -185,7 +187,20 @@ ck("a ticket with no repo and no pull request is not counted", facts["p_pr_empty
 ck("repos by first ticket", facts["p_order"]["repos"] == ["o/c", "o/b", "o/a"],
    facts["p_order"]["repos"])
 ck("an empty project", facts["p_empty"] == {"merged": 0, "blocked": 0, "total": 0, "repos": [],
-                                            "repo_from_pr": 0, "exact": True})
+                                            "repo_from_pr": 0, "assignees": {}, "exact": True})
+# the per-assignee counts are what a team cell's "tickets yours" line reads: every ticket that is
+# not canceled, by assignee (None for no one), whatever its stage
+for uid, tickets in tickets_of.items():
+    want = {}
+    for t in tickets:
+        if t["status"] != "canceled":
+            want[t.get("assignee_person_id")] = want.get(t.get("assignee_person_id"), 0) + 1
+    ck(f"{uid}: assignees equal the count of the tickets that are not canceled",
+       facts[uid]["assignees"] == want, (facts[uid]["assignees"], want))
+ck("canceled tickets are left out of assignees, no one is None",
+   facts["p_cancel"]["assignees"] == {"per_sam": 1}
+   and facts["p_merged"]["assignees"] == {"per_sam": 2, "per_kim": 1}
+   and facts["p_mixed"]["assignees"] == {"per_sam": 1, "per_kim": 1, None: 4}, facts["p_mixed"]["assignees"])
 ck("progress of the mixed project is what the groups give",
    (facts["p_mixed"]["merged"], facts["p_mixed"]["blocked"], facts["p_mixed"]["total"]) == (1, 1, 6))
 

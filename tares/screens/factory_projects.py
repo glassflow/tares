@@ -130,14 +130,18 @@ def register(app, store, h, ctx):
         home = team_of(fxc, request, now)   # built once: the waiting list and the team parts read it
         handovers = store.handovers_by_project(ids)
         # A finished project's row needs only counts, not its tickets. On a team cell the seam
-        # (team_projects) reads every row's tickets, done ones too, so they load as before.
-        done_ids = [] if home else [p["id"] for p in projects if p.get("status") == "done"]
-        facts = store.done_ticket_facts(done_ids)
+        # (team_projects) also reads each ticket's assignee: it gets one stub per ticket with just that.
+        facts = store.done_ticket_facts([p["id"] for p in projects if p.get("status") == "done"])
         done_rows = {p["id"]: done_row_for(p, facts[p["id"]], handovers.get(p["id"]), now)
                      for p in projects if p["id"] in facts}
         need = [i for i in ids if done_rows.get(i) is None]
         tickets = store.tickets_by_project(need)
         milestones = store.milestones_by_project(need)
+        if home:
+            for pid, row in done_rows.items():
+                if row is not None:
+                    tickets[pid] = [{"status": "done", "assignee_person_id": who}
+                                    for who, n in facts[pid]["assignees"].items() for _ in range(n)]
         waiting = caller_waiting(store, fxc, now, request, hidden, home)
         rows = [done_rows[p["id"]] if done_rows.get(p["id"]) is not None else
                 row_for(p, tickets[p["id"]], handovers.get(p["id"]), waiting, stations, now,
