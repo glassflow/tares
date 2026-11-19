@@ -94,6 +94,8 @@ def failed_words(repo: str, error) -> str:
     line = _line(error)
     if not line or line[0] in "{[":
         return f"The index of {repo} failed. Retry to start it again."
+    if line.startswith("The index of ") and line.endswith("Retry to start it again."):
+        return line   # the control plane already worded it (a stall, the deadline): show it as it is
     if any(h in line.lower() for h in _REFUSED):
         return (f"GitHub refused to let the brain clone {repo}: the token could not read it. "
                 "Check that a GitHub connection on this cell can read the repo, then retry.")
