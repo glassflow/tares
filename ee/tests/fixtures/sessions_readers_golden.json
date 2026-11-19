@@ -35,6 +35,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T08:04:00+00:00",
       "lines": 8,
       "machine": "",
@@ -70,6 +71,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T09:04:00+00:00",
       "lines": 9,
       "machine": "",
@@ -105,6 +107,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T10:04:00+00:00",
       "lines": 10,
       "machine": "",
@@ -140,6 +143,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T11:04:00+00:00",
       "lines": 13,
       "machine": "",
@@ -177,6 +181,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T12:04:00+00:00",
       "lines": 14,
       "machine": "",
@@ -214,6 +219,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T13:04:00+00:00",
       "lines": 15,
       "machine": "",
@@ -243,6 +249,7 @@
       "crew": null,
       "crew_id": null,
       "earlier": [],
+      "earlier_count": 0,
       "last_at": "2026-11-18T06:00:00+00:00",
       "lines": 0,
       "machine": "",
@@ -320,6 +327,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T08:04:00+00:00",
     "lines": 8,
     "machine": "",
@@ -355,6 +363,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T09:04:00+00:00",
     "lines": 9,
     "machine": "",
@@ -390,6 +399,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T10:04:00+00:00",
     "lines": 10,
     "machine": "",
@@ -425,6 +435,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T11:04:00+00:00",
     "lines": 13,
     "machine": "",
@@ -462,6 +473,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T12:04:00+00:00",
     "lines": 14,
     "machine": "",
@@ -499,6 +511,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T13:04:00+00:00",
     "lines": 15,
     "machine": "",
@@ -528,6 +541,7 @@
     "crew": null,
     "crew_id": null,
     "earlier": [],
+    "earlier_count": 0,
     "last_at": "2026-11-18T06:00:00+00:00",
     "lines": 0,
     "machine": "",
@@ -1227,6 +1241,7 @@
         "state": "replaced"
        }
       ],
+      "earlier_count": 1,
       "last_at": "2026-11-19T11:04:00+00:00",
       "lines": 13,
       "machine": "",
@@ -1256,6 +1271,7 @@
       "crew": null,
       "crew_id": null,
       "earlier": [],
+      "earlier_count": 0,
       "last_at": "2026-11-18T06:00:00+00:00",
       "lines": 0,
       "machine": "",
@@ -1319,6 +1335,7 @@
       "state": "replaced"
      }
     ],
+    "earlier_count": 1,
     "last_at": "2026-11-19T11:04:00+00:00",
     "lines": 13,
     "machine": "",
@@ -1348,6 +1365,7 @@
     "crew": null,
     "crew_id": null,
     "earlier": [],
+    "earlier_count": 0,
     "last_at": "2026-11-18T06:00:00+00:00",
     "lines": 0,
     "machine": "",

@@ -1144,28 +1144,25 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def stations(project: str | None = None) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
         never merge. Each row names its crew, machine and person."""
-        rows = store.station_sessions(h.cc_source())
+        # one row per station with its newest session, the few before it and the totals over all of
+        # them, so a station that has had many sessions costs no more than one that has had few
+        # (TR-1500); the earlier ones are read a page at a time (GET /api/factory/crew/.../sessions)
+        rollup = store.station_rollup(h.cc_source())
         names = {p["id"]: p["name"] for p in store.list_projects()}
         crews = {c["id"]: c for c in store.list_crews()}
         now = now_utc()
-        by: dict[tuple, list[dict]] = {}
-        for s in rows:
-            by.setdefault((s["crew_id"], s["station"]), []).append(s)
         out = []
-        for (cid, name), ss in by.items():
-            # the newest session plays the station now; an older one that never reported its
-            # end (killed) does not outrank it
-            ss.sort(key=lambda s: _ts(s["last_at"]), reverse=True)
-            cur = ss[0]
+        for g in rollup:
+            cid, name, cur = g["crew_id"], g["station"], g["cur"]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
             state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
             if state == "replaced":
                 state = "ended"
-            # the sessions that played the station before the current one: replaced by it
+            # the most recent sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],
                         "last_at": s["last_at"], "lines": s["lines"], "state": "replaced"}
-                       for s in ss if s is not cur]
+                       for s in g["earlier"]]
             crew = crews.get(cid) or {}
             out.append({"name": name, "role": cur["role"], "parent": cur["parent"],
                         "project": cur["project"], "project_name": names.get(cur["project"]),
@@ -1173,9 +1170,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "state_at": cur["state_at"], "quiet_minutes": quiet,
                         "session": cur["session"], "started_at": cur["started_at"],
                         "last_at": cur["last_at"], "lines": cur["lines"], "earlier": earlier,
+                        "earlier_count": g["earlier_count"],
                         "crew_id": cid, "crew": crew.get("name"),
                         "machine": crew.get("machine") or "", "person": crew.get("person"),
-                        "projects": sorted({s["project"] for s in ss if s["project"]})})
+                        "projects": g["projects"], "usage": g["usage"],
+                        "coordination_calls": g["coordination_calls"]})
         hidden = h.hidden_ids()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
             kept = []
@@ -1193,9 +1192,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 kept.append(st)
             out = kept
         meters = store.session_meters([st["session"] for st in out])
-        spent = store.usage_by_session([s["session"] for s in rows])
         retry = claude_retry()
-        coord = store.coordination_calls(h.cc_source(), [s["session"] for s in rows])
         for st in out:
             # the stations this one started: in its own crew, whose names may repeat in another
             st["children"] = sorted(x["name"] for x in out
@@ -1208,11 +1205,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
             pid = (crews.get(st["crew_id"]) or {}).get("person_id")
             st["claude_retry"] = (retry.get(retry_key(pid, st["crew"]), {}).get(st["name"])
                                   or retry.get(retry_key(pid, None), {}).get(st["name"]))
-            mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
-                    if s in spent]
-            st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
-            st["coordination_calls"] = sum(coord.get(s, 0) for s in
-                                           [st["session"], *(e["session"] for e in st["earlier"])])
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
@@ -1327,8 +1319,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
     @app.get("/api/crew")
     def get_crew(request: Request, mine: bool = False):
         """The crews (TR-628): one per person, crew name and machine, each with its stations (the
-        current session and state, the earlier sessions that played it, the stations it
-        started), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
+        current session and state, `earlier_count` and the 5 most recent earlier sessions that
+        played it as `earlier`, the stations it started; `usage`, `coordination_calls` and
+        `projects` cover every session; the rest of the earlier ones are paged by GET
+        /api/factory/crew/{crew_id}/{station}/sessions), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
         crews. `stations` is the same rows flat, for a client that does not group by crew yet. `pace`
         is the crew's pace as GET /api/crew/pace gives it. `claude_retry` maps each station the
         caller's person's crews are retrying onto a newer Claude Code to {target, fails, next_at};
