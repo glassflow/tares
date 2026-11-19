@@ -57,13 +57,16 @@ def state_of(t: dict, blocked_by: list[str] | None = None) -> str:
 TURNS = tuple(status_words.TURN)
 
 
-def queue_state_of(row: dict | None) -> str | None:
-    """The merge queue row's state as turn_of reads it: a row a person said yes to for its
-    current head (`approved_head`, set by the approval) is `approved` until the queue merges it."""
+def queue_state_of(row: dict | None, head: str | None = None) -> str | None:
+    """The merge queue row's state as turn_of reads it: a row a person said yes to for the pull
+    request's current head (`approved_head`, set by the approval) is `approved` until the queue
+    merges it. `head` is that head as the ticket has it; the row's own lags a new push, and a yes
+    for the old commit is not one for the new (TR-1450)."""
     if not row:
         return None
+    now = (head or row.get("head") or "").lower()
     if row["state"] in ("queued", "waiting_ci") and row.get("approved_head") \
-            and row.get("approved_head") == row.get("head"):
+            and row["approved_head"].lower() == now:
         return "approved"
     return row["state"]
 

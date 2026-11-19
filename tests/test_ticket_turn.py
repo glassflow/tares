@@ -61,6 +61,10 @@ eq("a queued row approved for its head reads approved", factory.queue_state_of(
    {"state": "queued", "head": "h2", "approved_head": "h2"}), "approved")
 eq("approved for an older head: just queued", factory.queue_state_of(
    {"state": "queued", "head": "h2", "approved_head": "h1"}), "queued")
+eq("a new push after the yes: just queued, though the row still names the old head",
+   factory.queue_state_of({"state": "queued", "head": "h1", "approved_head": "h1"}, "h2"), "queued")
+eq("the ticket's head matches the yes: approved", factory.queue_state_of(
+   {"state": "queued", "head": "h1", "approved_head": "H1"}, "h1"), "approved")
 eq("no row: none", factory.queue_state_of(None), None)
 eq("queue sent it back at L4: changes asked, not merging",
    turn("review", ci="success", verdict="pass", autonomy="L4-ship", queue="sent_back"), "changes_asked")

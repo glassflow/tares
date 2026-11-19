@@ -382,7 +382,7 @@ def register(app, store, h, ctx):
                 blocked = False
             # the row's own state, with a recorded answer read in: a yes makes it next to merge,
             # a no holds it until a person moves it
-            turn_state = factory_mod.queue_state_of(row)
+            turn_state = factory_mod.queue_state_of(row, pr.get("head"))
             if answer and answer["kind"] == "done":
                 turn_state = "approved" if answer["decision"] == "yes" else "blocked"
             pr_n = row["pr"]

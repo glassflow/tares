@@ -131,8 +131,7 @@ class Turns:
 
     def __init__(self, store):
         self.store, self._level = store, {}
-        self._queue = {r["ticket"]: factory_mod.queue_state_of(r) for r in store.merge_queue_open()
-                       if r.get("ticket")}
+        self._queue = {r["ticket"]: r for r in store.merge_queue_open() if r.get("ticket")}
 
     def level(self, uid: str) -> str:
         if uid not in self._level:
@@ -146,7 +145,8 @@ class Turns:
         (factory.readiness), `last` its last review (store.last_reviews). `queue_state` is for a
         screen that holds the ticket's queue row itself; otherwise its open row is looked up."""
         key = factory_mod.turn_of(t, blocked_by, factory_api.verdict_now(t, last), self.level(uid),
-                                  queue_state or self._queue.get(t["id"]))
+                                  queue_state or factory_mod.queue_state_of(
+                                      self._queue.get(t["id"]), (t.get("pr") or {}).get("head")))
         label = status_words.TURN[key]
         if key == "queued" and blocked_by:
             label += " after " + ", ".join(blocked_by)

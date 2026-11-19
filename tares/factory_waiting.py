@@ -243,7 +243,7 @@ def review_split(store, fx, rows: list[dict] | None = None
     held: dict[str, str | None] = {}
     mine, theirs, nobody = [], [], []
     # the merge queue's open rows by pull request: one the queue is merging is the crew's now
-    merging = {(r["repo"], r["pr"]): factory_mod.queue_state_of(r) for r in store.merge_queue_open()}
+    merging = {(r["repo"], r["pr"]): r for r in store.merge_queue_open()}
     for q in rows:
         pid = q["project"]
         if pid not in level:
@@ -256,7 +256,8 @@ def review_split(store, fx, rows: list[dict] | None = None
                          else "not_handed" if not ho
                          else "taken" if (ho.get("takeover") and not ho["takeover"].get("released_at"))
                          else None)
-        q = {**q, "turn": review_turn(q, level[pid], merging.get((q.get("repo"), q.get("number"))))}
+        q = {**q, "turn": review_turn(q, level[pid], factory_mod.queue_state_of(
+            merging.get((q.get("repo"), q.get("number"))), q.get("head")))}
         # closed or finished: nobody's, whatever the review says
         gone = ("closed" if q.get("pr_state") == "closed" and not q.get("pr_merged")
                 else "finished" if held[pid] == "finished" else None)
