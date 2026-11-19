@@ -853,10 +853,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # The five session tables are copied in before the data upgrades, so the fills in
             # _upgrade() write into a table that already holds its rows. On SQLite that is a copy
             # from DuckDB (once; the ledger skips a table already copied). On the first start with
-            # a state database the same copy fills the new Postgres tables, and the one-time move
-            # below leaves them out. DuckDB's own copies are never changed.
+            # a state database the same copy fills the new Postgres tables (from sessions.sqlite
+            # when the cell ran locally first, else from DuckDB), and the one-time move below
+            # leaves them out. DuckDB's own copies and sessions.sqlite are never changed.
             first_pg_start = pg is not None and self.sc is self.con
-            copy_from_duckdb(self, self.sessions_db, state_move=first_pg_start)
+            copy_from_duckdb(
+                self, self.sessions_db, state_move=first_pg_start,
+                local_dir=None if path == ":memory:" else os.path.dirname(os.path.abspath(path)))
             self._upgrade()
             if first_pg_start:
                 # first start with a state database: the state moves over once, then is read

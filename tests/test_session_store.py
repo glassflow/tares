@@ -486,6 +486,7 @@ def copy_on_postgres():
     s.con.execute("CHECKPOINT")
     s.con.close()
     s.close()
+    _drop_local_file(d)        # an older cell has no sessions.sqlite: its rows are only in DuckDB
     sch = "ss_" + uuid.uuid4().hex[:12]
     with psycopg.connect(PG, autocommit=True) as c:
         c.execute(f"CREATE SCHEMA {sch}")
@@ -516,6 +517,84 @@ def copy_on_postgres():
     finally:
         with psycopg.connect(PG, autocommit=True) as c:
             c.execute(f"DROP SCHEMA IF EXISTS {sch} CASCADE")
+
+
+def _drop_local_file(d):
+    for f in os.listdir(d):
+        if f.startswith("sessions.sqlite"):
+            os.remove(os.path.join(d, f))
+
+
+def local_then_postgres():
+    print("== a cell that ran on SQLite moves to Postgres (the rows since the copy come along) ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    s = Store(path, state_dsn="")
+    _seed_duckdb(s)                                        # what a version before the session store left in DuckDB
+    _forget_copy(s)
+    s.close()
+    s = Store(path, state_dsn="")                          # the local start: DuckDB's rows are copied to sessions.sqlite
+    ck("the local start copied DuckDB's rows", _count(s.sessions_db, "project_sessions") == 2)
+    s.link_session("p1", "s-local")                        # written after the copy, to sessions.sqlite only
+    s.set_session_state("s-local", "working", "after the copy", datetime(2026, 11, 20, tzinfo=timezone.utc))
+    with s.sessions_db.begin() as c:                       # and a row DuckDB still has that sessions.sqlite lost
+        c.execute(text("DELETE FROM project_sessions WHERE session = 's2'"))
+    local = {t: [tuple(_norm(v) for v in r) for r in _session_rows(s, t)] for t in SESSION_TABLES}
+    duck = {t: _duck_rows(s, t)[1] for t in SESSION_TABLES}
+    s.con.execute("CHECKPOINT")
+    s.con.close()
+    s.close()
+    sch = "ss_" + uuid.uuid4().hex[:12]
+    with psycopg.connect(PG, autocommit=True) as c:
+        c.execute(f"CREATE SCHEMA {sch}")
+    try:
+        s = Store(path, state_dsn=f"{PG}?options=-csearch_path%3D{sch}")   # the first start with a state database
+        if s.sessions_db.dialect != "postgresql":
+            print("  skip  the Store did not take the state database")
+            s.close()
+            return
+        ck("a link written after the local copy is in Postgres",
+           sorted(s.sessions_of_projects(["p1"])) == ["s-local", "s1"], s.sessions_of_projects(["p1"]))
+        ck("so is the state written after it", (s.session_state("s-local") or {}).get("state") == "working")
+        ck("a row only DuckDB still holds is not brought back (the move leaves the five tables alone)",
+           _count(s.sessions_db, "project_sessions") == 2)
+        for t in SESSION_TABLES:
+            got = sorted((tuple(_norm(v) for v in r) for r in _session_rows(s, t)), key=repr)
+            want = sorted(local[t], key=repr)             # Postgres and SQLite order '-' differently
+            if t == "session_stations":                    # the data upgrade fills the crew after the copy
+                got, want = [r[:-1] for r in got], [r[:-1] for r in want]
+            ck(f"{t} is what sessions.sqlite held", got == want, (got, want))
+        ck("the ledger names the five tables, with the local counts",
+           sorted(_ledger(s)) == sorted((t, len(local[t])) for t in SESSION_TABLES), _ledger(s))
+        ck("DuckDB's copies are untouched", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == duck)
+        s.close()
+        ck("sessions.sqlite was left as it was", os.path.exists(os.path.join(d, "sessions.sqlite")))
+    finally:
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"DROP SCHEMA IF EXISTS {sch} CASCADE")
+
+
+def greatest_null():
+    print("== SessionStore.greatest ignores a NULL ==")
+    from sqlalchemy import literal, select
+    sdb = SessionStore(":memory:")
+    cases = [((3, 5), 5), ((5, 3), 5), ((None, 5), 5), ((5, None), 5), ((None, None), None)]
+    for (a, b), want in cases:
+        with sdb.begin() as c:
+            got = c.execute(select(sdb.greatest(literal(a, Integer), literal(b, Integer)))).scalar()
+        ck(f"greatest({a}, {b}) is {want} on SQLite", got == want, got)
+    sdb.close()
+    if PG:
+        pg = SessionStore(":memory:", PG)
+        for (a, b), want in cases:
+            with pg.begin() as c:
+                got = c.execute(select(pg.greatest(literal(a, Integer), literal(b, Integer)))).scalar()
+            ck(f"greatest({a}, {b}) is {want} on Postgres", got == want, got)
+        pg.close()
 
 
 def _ledger(s):
@@ -756,6 +835,8 @@ if __name__ == "__main__":
     copy_sqlite()
     copy_at_start()
     copy_on_postgres()
+    local_then_postgres()
+    greatest_null()
     takeover()
     postgres()
     print("FAIL " + ", ".join(FAILS) if FAILS else "OK")
