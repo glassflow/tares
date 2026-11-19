@@ -757,7 +757,7 @@ def _station_line(s: dict) -> dict:
                                   "children", "crew", "machine",
                                   "coordination_calls")} | {
         "person": (s.get("person") or {}).get("name"),
-        "earlier_sessions": len(s.get("earlier") or [])}
+        "earlier_sessions": s.get("earlier_count", len(s.get("earlier") or []))}
 
 
 @mcp.tool()

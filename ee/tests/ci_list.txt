@@ -19,6 +19,7 @@ test_brain_repos
 test_brain_sync
 test_console_answers
 test_crew_page_by_person
+test_crew_sessions_route
 test_crew_split
 test_crewname_team
 test_crews
