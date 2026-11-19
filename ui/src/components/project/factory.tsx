@@ -42,6 +42,11 @@ function gist(body: string | null | undefined): string {
   return text.length > 280 ? `${text.slice(0, 277).replace(/\s+\S*$/, "")}…` : text;
 }
 
+/** Where a person answered on a page or by message, as the line under their answer reads it ("feed" is on rows from before the feed was removed). */
+const PERSON_VIA: Record<string, string> = {
+  console: "allowed in the console", feed: "from the feed", message: "from a message",
+};
+
 const STATUS_TEXT: Record<Ticket["status"], string> = {
   todo: "to do", in_progress: "in progress", done: "done", canceled: "canceled",
 };
@@ -281,10 +286,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
             {decisions!.decisions.map((d) => (
               <li key={d.id} style={{ display: "block" }}>
                 {d.label && <b>{d.label} </b>}{d.question}
-                <div>"{d.words}"{d.choice && d.via !== "console" && <span className="dim"> · {d.choice}</span>}</div>
+                <div>"{d.words}"{d.choice && !(d.via && PERSON_VIA[d.via]) && <span className="dim"> · {d.choice}</span>}</div>
                 <small style={{ display: "block" }}>
                   <TimeAgo ts={d.at} />
-                  {d.via === "console" ? " · allowed in the console"
+                  {d.via && PERSON_VIA[d.via] ? ` · ${PERSON_VIA[d.via]}`
                     : d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
                   {d.standing && (d.granted ? " · kept as a grant" : " · standing")}
                 </small>

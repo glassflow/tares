@@ -3046,7 +3046,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                  if a["standing"] else None)
         plan = assumption_plan(d, a["kept"], a["over"])
         return record_answer(d, a, plan, me["id"], grant, "the person, in the console", False,
-                             None, "console", me["id"], request)
+                             None, answers_mod.surface(request), me["id"], request)
 
     @app.post("/api/desk/{ref}/allow")
     def desk_allow(ref: str, request: Request, body: dict = Body(...)):
@@ -3092,7 +3092,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                              "the person, in the console")
         dec = store.add_decision(d["project"], d["id"], d["question"], words, "allowed", True,
                                  scope, False, None, True, d["tickets"], now_utc(),
-                                 via="console", person_id=person_of(request))
+                                 via=answers_mod.surface(request), person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
         answers_mod.record(store, request, item=f"permission:{d['label']}", kind="permission",
                            project=d["project"], ask=waiting_mod.ask_permission(d["command"]),
@@ -3430,7 +3430,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(ValueError(f"{d['label']} was asked about another project"), 409)
         dec = next((x for x in store.list_decisions(None) if x["desk_item"] == d["id"]), None)
         # the person's own words count: matched against their session, or typed by them in the console
-        said = dec is not None and (dec["matched"] or (dec.get("via") == "console" and dec.get("person")
+        said = dec is not None and (dec["matched"] or (dec.get("via") in answers_mod.PERSON_SURFACES and dec.get("person")
                                   and not d.get("command")))
         if d["state"] != "answered" or not said:
             h.err(ValueError(f"{d['label']} has no answer from the person yet: record their words "
