@@ -20,6 +20,7 @@ restart too. An edit Slack refuses for a while (rate limit, outage) is tried aga
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -46,6 +47,38 @@ SEEN = "*"                                # the item that says a person's list w
 
 NO_SCOPE = ("the Slack app cannot look people up by email: add the users:read.email bot scope "
             "and reinstall it")
+
+# Why Slack refused, in words a person can read (Settings shows them, sentence-cased, with a full
+# stop). A refusal about the app itself is the whole cell's problem, whoever's message met it; a
+# refusal about one conversation is that person's. Anything else (a message Slack found malformed)
+# is a fault on our side: the person is told it did not go, the log has the code.
+APP_REFUSED = {
+    **dict.fromkeys(("invalid_auth", "not_authed", "token_revoked", "token_expired"),
+                    "Slack no longer accepts the cell's bot token: connect Slack again with a new one"),
+    **dict.fromkeys(("account_inactive", "team_access_not_granted", "ekm_access_denied", "org_login_required"),
+                    "Slack refuses the cell's app: its workspace is gone, or no longer lets the app in"),
+    **dict.fromkeys(("missing_scope", "no_permission"),
+                    "the Slack app cannot send messages: add the chat:write bot scope and reinstall it"),
+}
+PERSON_REFUSED = {
+    **dict.fromkeys(("channel_not_found", "is_archived", "not_in_channel", "user_not_found",
+                     "cannot_dm_bot", "user_disabled"),
+                    "Slack would not deliver your last message: the conversation is closed or your "
+                    "account is deactivated"),
+    **dict.fromkeys(("restricted_action", "restricted_action_read_only_channel",
+                     "restricted_action_thread_only_channel"),
+                    "Slack would not deliver your last message: your workspace does not let the app "
+                    "message you"),
+}
+OTHER_REFUSED = "Slack would not take your last message: the cell's log has the reason"
+
+
+def slack_code(err: str | None) -> str:
+    """Slack's error code in what `slack.classify` or a lookup returned ("slack: channel_not_found
+    (hint)", or the bare code)."""
+    s = (err or "").strip()
+    s = s[len("slack:"):].strip() if s.startswith("slack:") else s
+    return s.split(" ", 1)[0]
 
 
 def is_on(store, person_id: str) -> bool:
@@ -158,8 +191,9 @@ class WaitingSlack:
         self._lookup = lookup or self._lookup_email
         self._users: dict[str, tuple[str | None, datetime]] = {}
         self._logged: set[str] = set()
-        self.problem: str | None = None        # a cell-wide reason nobody is found (Settings shows it)
         self._no_scope = False                 # the last lookup said the bot lacks users:read.email
+        self._refused: str | None = None       # Slack refused the app itself (a revoked token, a scope)
+        self._token: str | None = None         # a hash of the token the two above were learned with
         self.not_found: set[str] = set()       # people whose email Slack does not know
         self.send_failed: dict[str, str] = {}  # person -> why Slack refused their last message
 
@@ -219,12 +253,36 @@ class WaitingSlack:
         """One lookup by email, kept when Slack answered. It is also what says whether the bot can
         look people up at all: a missing scope stays known until a lookup gets an answer again."""
         uid, err = await self._lookup(token, key)
+        code = slack_code(err)
         if err is None:
             self._users[key] = (uid, now)
             self._no_scope = False
-        elif err == "missing_scope":
+            self._refused = None               # Slack took the token: whatever it refused is past
+        elif code == "missing_scope":
             self._no_scope = True
+        elif code in APP_REFUSED:
+            self._refused = APP_REFUSED[code]
         return uid, err
+
+    @property
+    def problem(self) -> str | None:
+        """The cell-wide reason nobody gets a message, for everyone's Settings."""
+        return NO_SCOPE if self._no_scope else self._refused
+
+    def _sync_token(self, token: str | None) -> None:
+        """A new token, or none: what Slack refused under the old one says nothing about this one.
+        So disconnecting Slack, or connecting it again, clears every notice it left (the missing
+        email scope too; the next lookup learns it again if it still holds)."""
+        h = hashlib.sha256(token.encode()).hexdigest() if token else None
+        if h != self._token:
+            self._token = h
+            self._refused, self._no_scope = None, False
+            self.send_failed.clear()
+
+    def switched(self, person_id: str, on: bool) -> None:
+        """The person switched their messages on or off: a notice about an old message goes."""
+        set_on(self.store, person_id, on)
+        self.send_failed.pop(person_id, None)
 
     def _log_once(self, key: str, text: str) -> None:
         if key not in self._logged:
@@ -242,6 +300,7 @@ class WaitingSlack:
         """Read every person's list once and send what is new. Returns {sent, people} for tests
         and the log; {skipped} when Slack is not connected."""
         token = slack_mod.resolve_token(self.store)[0]
+        self._sync_token(token)
         if not token:
             return {"skipped": "slack is not connected", "sent": 0}
         now = self.clock()
@@ -264,7 +323,6 @@ class WaitingSlack:
                                f"could not read what waits for {p['id']}: {type(e).__name__}: {e}")
                 continue
             sent += n
-        self.problem = NO_SCOPE if self._no_scope else None
         return {"sent": sent}
 
     async def _read_person(self, token: str, p: dict, now: datetime, away: bool) -> int:
@@ -309,12 +367,16 @@ class WaitingSlack:
                 if retry:
                     # Slack was busy or down: the items are new again for the next read
                     again += [i["id"] for i in its]
+                elif slack_code(err) in APP_REFUSED:
+                    # the app itself was refused: everyone's Settings says so, not only this person's
+                    self._refused = APP_REFUSED[slack_code(err)]
                 else:
-                    # Slack will not take it (a closed DM, a deactivated user): say so in Settings
-                    self.send_failed[pid] = f"the last message could not be sent ({err})"
+                    # Slack will not take it (a closed DM, a deactivated user): say so in their Settings
+                    self.send_failed[pid] = PERSON_REFUSED.get(slack_code(err), OTHER_REFUSED)
                 continue
             sent += 1
             self.send_failed.pop(pid, None)
+            self._refused = None
             if ref.get("channel") and ref.get("ts"):
                 await asyncio.to_thread(self.store.set_told_message, pid, [(i["id"], _ask(i)) for i in its],
                                         ref["channel"], ref["ts"])
@@ -362,11 +424,13 @@ class WaitingSlack:
 
     def status_for(self, person: dict | None) -> dict:
         """What Settings shows the person: their choice, whether Slack is connected, whether the
-        reader could find them there (None until it tried), and a problem: the cell-wide one, else
-        why Slack refused this person's last message. `claimed` is
+        reader could find them there (None until it tried), and a problem: the cell-wide one (the
+        app's scope or token), else why Slack refused this person's last message. `claimed` is
         false for the unclaimed `local` of a cell of one, whom the reader never messages."""
         pid = (person or {}).get("id")
-        connected = bool(slack_mod.resolve_token(self.store)[0])
+        token = slack_mod.resolve_token(self.store)[0]
+        self._sync_token(token)
+        connected = bool(token)
         found = None
         if pid and pid in self.not_found:
             found = False
@@ -399,5 +463,5 @@ def register(app, store, h, reader: WaitingSlack) -> None:
         if not isinstance(body.get("on"), bool):
             h.err(ValueError("send on as true or false"), 400)
         p = person_of(request)
-        set_on(store, p["id"], body["on"])
+        reader.switched(p["id"], body["on"])
         return reader.status_for(p)
