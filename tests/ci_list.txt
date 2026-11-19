@@ -102,6 +102,7 @@ test_duckdb_memory
 test_edition
 test_ee_headers
 test_ee_packaging
+test_factory_batch_reads
 test_factory_batching
 test_factory_build
 test_factory_builder
