@@ -53,7 +53,7 @@ def H(tok):
 BRAIN_KEY = "brain-" + "key-test-1"   # gitleaks:allow
 SHAPE = {"repo", "state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
          "place", "sync_failures", "sync_error", "added_by", "added_by_name", "added_at", "removing",
-         "remove_error", "folders", "decisions"}
+         "remove_error", "folders", "decisions", "last_update"}
 NOT_FOUND = {"detail": "Not Found"}
 ALL = (("GET", "/api/brain/repos/available", None),
        ("POST", "/api/brain/repos", {"repos": ["acme/web"]}),

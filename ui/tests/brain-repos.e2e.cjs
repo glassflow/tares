@@ -241,7 +241,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       ck("indexing: a progress bar at 45 percent", await idx.getByTestId("brain-progress").isVisible()
          && /45/.test((await idx.getByTestId("brain-progress").getAttribute("aria-valuenow")) ?? ""), String(await idx.getByTestId("brain-progress").getAttribute("aria-valuenow")));
       eq("indexing: files done of total", await text(idx.getByTestId("brain-files")), "812 of 1,816 files");
-      eq("indexing: started, and the grep line", await text(idx.getByTestId("brain-line")), "Started 14 minutes ago. Sessions use grep on this repo until it is ready.");
+      eq("indexing: when it started, and no grep line (TR-1463)", await text(idx.getByTestId("brain-line")), "Started 14 minutes ago.");
       ck("indexing: no buttons", (await idx.getByRole("button").count()) === 0);
 
       const q = card(page, "acme/docs-site");
@@ -251,15 +251,16 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
 
       const cl = card(page, "acme/fetcher");
       ck("cloning: the state, a bar and the started line", (await text(cl.getByTestId("brain-state"))) === "Cloning" && await cl.getByTestId("brain-progress").isVisible()
-         && (await text(cl.getByTestId("brain-line"))) === "Started 3 minutes ago. Sessions use grep on this repo until it is ready.");
+         && (await text(cl.getByTestId("brain-line"))) === "Started 3 minutes ago.");
 
       const rd = card(page, "acme/api");
       ck("ready: the state", (await text(rd.getByTestId("brain-state"))) === "Ready");
-      eq("ready: up to date with main at the 7 character commit", await text(rd.getByTestId("brain-synced")), "main at 8c41d2e, 2 minutes ago");
-      ck("ready: the label", (await text(rd)).includes("Up to date with main at 8c41d2e, 2 minutes ago"));
-      eq("ready: the files count", await text(rd.getByTestId("brain-file-count")), "640");
+      eq("ready: up to date with main at the 7 character commit", await text(rd.getByTestId("brain-synced")), "Up to date with main at 8c41d2e");
+      eq("ready: the commit opens on GitHub in a new tab (TR-1463)", [await rd.getByTestId("brain-commit").getAttribute("href"), await rd.getByTestId("brain-commit").getAttribute("target")],
+         ["https://github.com/acme/api/commit/8c41d2e9a7b0c3d4e5f6", "_blank"]);
+      eq("ready: when it was updated and the file count, on their own line", await text(rd.getByTestId("brain-updated")), "Updated 2 minutes ago. 640 files. History");
       ck("ready: no sync note", (await rd.getByTestId("brain-sync-note").count()) === 0);
-      eq("ready: Remove only", await rd.getByRole("button").allInnerTexts(), ["Remove"]);
+      eq("ready: History for everyone; Decision folders and Remove for an admin", await rd.getByRole("button").allInnerTexts(), ["History", "Decision folders", "Remove"]);
 
       const sf = card(page, "acme/web");
       ck("sync failing: still Ready, with a quiet note in words", (await text(sf.getByTestId("brain-state"))) === "Ready"
@@ -293,7 +294,9 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       ck("Retry removal has the dark border too", (await edge(rf.getByTestId("brain-retry-removal"))) === dark);
 
       const body = await text(page.locator("main"));
-      ck("no Decisions row, section or folders button (TR-1213)", !/Decisions the brain knows|Decision folders/.test(body) && !/\bDecisions\b/.test(await text(page.getByTestId("brain-cards"))));
+      ck("no Decisions the brain knows section (the Decisions page lists them)", !/Decisions the brain knows/.test(body));
+      eq("a Ready card says its decisions (TR-1454): none for a repo with no folders, and to pick one for an admin", await text(rd.getByTestId("brain-decisions")),
+         "Decisions: none. Pick a folder if your decisions live in this repo.");
       await checkWords(page, ck, "admin, every state");
       ck("no script errors", errors.length === 0, errors.join(" "));
       await shot(page, "brain-repos-all-1280.png");
@@ -307,7 +310,9 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const { ctx, page } = await open({ token: reader.json.secret, mock });
       await page.getByTestId("brain-card").first().waitFor({ timeout: 15000 });
       ck("read key: every card shows", (await page.getByTestId("brain-card").count()) === 8);
-      ck("read key: no Connect, Retry, Remove or Retry removal", (await page.getByTestId("brain-connect").count()) === 0 && (await page.getByTestId("brain-card").getByRole("button").count()) === 0);
+      ck("read key: no Connect, Retry, Remove, Retry removal or Decision folders; only History", (await page.getByTestId("brain-connect").count()) === 0
+         && JSON.stringify([...new Set(await page.getByTestId("brain-card").getByRole("button").allInnerTexts())]) === JSON.stringify(["History"]),
+         JSON.stringify(await page.getByTestId("brain-card").getByRole("button").allInnerTexts()));
       await checkWords(page, ck, "read key");
       await shot(page, "brain-repos-readonly-1280.png");
       await ctx.close();
@@ -621,7 +626,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
         // a read key
         { const o = await open({ token: reader.json.secret, mock: brainMock(allRows()), width: w });
           await o.page.getByTestId("brain-card").first().waitFor({ timeout: 15000 });
-          ck(`read key ${tag}: no buttons`, (await o.page.getByTestId("brain-card").getByRole("button").count()) === 0 && (await o.page.getByTestId("brain-connect").count()) === 0);
+          ck(`read key ${tag}: no buttons but History`, (await o.page.getByTestId("brain-card").getByRole("button").allInnerTexts()).every((t) => t.trim() === "History") && (await o.page.getByTestId("brain-connect").count()) === 0);
           await done(o.page, "readonly"); await o.ctx.close(); }
         // not set up, empty
         { const o = await open({ mock: brainMock([], { configured: false }), width: w, wait: false });

@@ -35,5 +35,9 @@ export async function availableRepos(): Promise<AvailableData | null> {
 /** POST /api/brain/repos, admin only. 201 `{repos: [row]}` for each repo connected. The whole list is
  *  checked first: 400 for a name that is not owner/name, a repeat, none, or more than 50; 409 for a
  *  repo already connected; 502 when the brain failed part way (the message names who got connected). */
-export const connectBrainRepos = (repos: string[]) =>
-  request<{ repos: { repo: string }[] }>("/api/brain/repos", { method: "POST", body: JSON.stringify({ repos }) });
+export const connectBrainRepos = (repos: string[], folders: Record<string, string[]> = {}) =>
+  request<{ repos: { repo: string }[] }>("/api/brain/repos", {
+    method: "POST",
+    // only the repos sent, and only with folders: a repo left out gets none (TR-1454)
+    body: JSON.stringify({ repos, folders: Object.fromEntries(repos.filter((r) => (folders[r] ?? []).length > 0).map((r) => [r, folders[r]])) }),
+  });

@@ -146,6 +146,21 @@ def unit():
     ck("the listing carries them", [(x["sync_failures"], x["sync_error"]) for x in s.list_brain_repos()] == [(0, None)])
     ck("the defaults are three failures and a one minute poll", (sync_mod.SHOW_AFTER, sync_mod.SYNC_POLL_SECONDS) == (3, 60.0))
 
+    print("== a repo's history of indexes and updates (TR-1463) ==")
+    for i in range(55):
+        s.add_brain_repo_update("acme/web", "update", True, f"2026-01-02T00:{i // 60:02d}:{i % 60:02d}Z", commit=f"c{i}", files_changed=i)
+    h = s.list_brain_repo_updates("acme/web", 100)
+    ck("the newest 50 are kept, newest first", len(h) == 50 and h[0]["indexed_commit"] == "c54" and h[-1]["indexed_commit"] == "c5", str([x["indexed_commit"] for x in h[:3]]))
+    ck("a list asks for at most what it says", len(s.list_brain_repo_updates("acme/web", 20)) == 20)
+    s.add_brain_repo_update("acme/api", "index", False, "2026-01-03T00:00:00Z", error="it broke")
+    last = s.last_brain_repo_updates()
+    ck("the newest of every repo", last["acme/web"]["indexed_commit"] == "c54" and last["acme/api"] == {
+        "at": last["acme/api"]["at"], "kind": "index", "ok": False, "indexed_commit": None, "files_changed": 0,
+        "files_deleted": 0, "files_total": 0, "error": "it broke"}, str(last.get("acme/api")))
+    s.add_brain_repo("acme/api", "src-2", None, "2026-01-01T00:00:00Z")
+    s.delete_brain_repo("acme/api")
+    ck("removing a repo drops its history", s.list_brain_repo_updates("acme/api") == [] and "acme/api" not in s.last_brain_repo_updates())
+
 
 async def main():
     from tares.daemon import make_app
@@ -244,7 +259,12 @@ async def main():
         took = time.monotonic() - t0
         r = row("acme/web")
         ck("the repo is synced and its commit, time and file count are updated", ok and r["state"] == "ready" and r["last_synced"] != before["last_synced"]
-           and (r["files_done"], r["files_total"]) == (43, 43), str(r))
+           and (r["files_done"], r["files_total"]) == (5, 5), str(r))
+        ck("a sync keeps the repo's file count: its report counts only the files the push touched (TR-1463)", r["files_total"] == 5, str(r))
+        hist = store.list_brain_repo_updates("acme/web")
+        ck("the update is kept in the repo's history: ok, its commit, the files it indexed, the count after",
+           len(hist) == 1 and hist[0]["kind"] == "update" and hist[0]["ok"] and hist[0]["indexed_commit"] == SHA[1]
+           and (hist[0]["files_changed"], hist[0]["files_deleted"], hist[0]["files_total"]) == (3, 0, 5), str(hist))
         ck("... well inside two minutes", took < 5, f"{took:.1f}s")
         ck("lore was told once, with the GitHub App's token for a repo only the App reads", len(syncs(sid_web)) == 1
            and syncs(sid_web)[0].json == {"token": TA}, str([c.json for c in syncs()]))
@@ -264,6 +284,22 @@ async def main():
         await ingest(env)
         ck("... a push without a sha label syncs the repo", await until(lambda: row("acme/nosha")["indexed_commit"] == SHA[3]), str(row("acme/nosha")))
         clean("no token in a row or a log line so far")
+
+        print("== a sync's deletions lower the count; a repo with no count takes the report's (TR-1463) ==")
+        D1, D2 = "9" * 40, "8" * 40   # not in SHA: later sections push those
+        lore.sync_report["indexed_commit"] = D1
+        lore.sync_report["files_indexed"], lore.sync_report["files_unchanged"], lore.sync_report["files_deleted"] = 1, 0, 2
+        await ingest(push("acme/web", D1))
+        await until(lambda: row("acme/web")["indexed_commit"] == D1)
+        ck("two files deleted: 5 becomes 3", row("acme/web")["files_total"] == 3, str(row("acme/web")))
+        ck("... and the history says so", store.list_brain_repo_updates("acme/web")[0]["files_deleted"] == 2, str(store.list_brain_repo_updates("acme/web")[:1]))
+        store.update_brain_repo("acme/web", {"files_done": 0, "files_total": 0})
+        lore.sync_report["indexed_commit"] = D2
+        lore.sync_report["files_indexed"], lore.sync_report["files_unchanged"], lore.sync_report["files_deleted"] = 4, 30, 0
+        await ingest(push("acme/web", D2))
+        await until(lambda: row("acme/web")["indexed_commit"] == D2)
+        ck("a repo with no count yet takes the report's", row("acme/web")["files_total"] == 34, str(row("acme/web")))
+        store.update_brain_repo("acme/web", {"files_done": 5, "files_total": 5})
 
         print("== pushes that must not sync ==")
         make_repo("acme/off")
@@ -373,6 +409,11 @@ async def main():
         await ingest(push("acme/fail", SHA[2]))
         await until(lambda: row("acme/fail")["sync_failures"] == 2)
         ck("two in a row: counted, still not on the card", (row("acme/fail")["sync_failures"], row("acme/fail")["error"]) == (2, None), str(row("acme/fail")))
+        fh = store.list_brain_repo_updates("acme/fail")
+        ck("each failed update is in the history with its reason, the count unchanged (TR-1463)",
+           len(fh) == 2 and not fh[0]["ok"] and "the index is busy" in (fh[0]["error"] or "") and fh[0]["files_total"] == 5, str(fh))
+        last = (await card())["last_update"]
+        ck("the card's last update is the newest one", last and last["ok"] is False and last["kind"] == "update", str(last))
         real_token = syncer.indexer.github_token
 
         async def broken_token(repo):

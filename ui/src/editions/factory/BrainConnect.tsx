@@ -8,6 +8,8 @@ import { Input as TextInput } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { availableRepos, connectBrainRepos, type AvailableData, type AvailableRepo } from "./BrainConnect.api";
+import { availableFolders, type FolderScan } from "./BrainFolders.api";
+import { FolderList } from "./BrainFolders";
 import { factoryPeople } from "./FactoryPeople.api";
 import {
   adminNames, ALL_CONNECTED_WORDS, ASK_ADMIN_WORDS, choosable, connectLabel, connectedNames, GITHUB_SETTINGS, hiddenChosen, hiddenWords,
@@ -24,6 +26,7 @@ import {
 const MUTED = "m-0 text-[13px] text-muted-foreground";
 const LINK = "text-brand-deep underline";
 const GENERIC_READ = "The cell did not answer. Try again in a moment.";
+const FOLDERS_READ = "Tares could not look for decision folders. Add one below if your decisions live in the repo.";
 
 function Head({ children }: { children?: React.ReactNode }) {
   return (
@@ -49,8 +52,7 @@ function Names({ names, mono = false }: { names: string[]; mono?: boolean }) {
   return <>{names.map((n, i) => <React.Fragment key={n}>{i > 0 && ", "}<span className={mono ? "font-mono text-[12.5px]" : "font-medium"} data-user-text>{n}</span></React.Fragment>)}</>;
 }
 
-/** One repo to tick. `under` is the room below it while it is ticked: the folders of its decisions
- *  fill it later (TR-1213), and while it holds nothing it takes no space. */
+/** One repo to tick. `under` is the room below it while it is ticked: the folders of its decisions (TR-1454). */
 function RepoRow({ r, checked, disabled, onToggle, under }: {
   r: AvailableRepo; checked: boolean; disabled: boolean; onToggle: (repo: string, on: boolean) => void; under?: React.ReactNode;
 }) {
@@ -68,8 +70,6 @@ function RepoRow({ r, checked, disabled, onToggle, under }: {
   );
 }
 
-// The room under a ticked repo, empty until TR-1213 puts the folder list there.
-const underRepo = (): React.ReactNode => null;
 
 function Loading() {
   return (
@@ -95,6 +95,23 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
   const [chosen, setChosen] = React.useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = React.useState(false);
   const [failure, setFailure] = React.useState("");
+  // the decision folders of each ticked repo: what Tares found (asked once per repo, when first ticked),
+  // and the ticked paths, which go with Connect
+  const [scans, setScans] = React.useState<Record<string, FolderScan | { error: string }>>({});
+  const [folders, setFolders] = React.useState<Record<string, string[]>>({});
+  const asked = React.useRef(new Set<string>());
+  const scan = (repo: string) => {
+    if (asked.current.has(repo)) return;
+    asked.current.add(repo);
+    availableFolders(repo).then(
+      (s) => {
+        setScans((m) => ({ ...m, [repo]: s }));
+        // what Tares found is ticked to start with, unless the admin already changed the list
+        setFolders((m) => (repo in m ? m : { ...m, [repo]: s.suggested.map((x) => x.path) }));
+      },
+      (e) => setScans((m) => ({ ...m, [repo]: { error: e instanceof ApiError ? plainError(e.message, FOLDERS_READ) : FOLDERS_READ } })),
+    );
+  };
 
   const open = choosable(data.repos);
   const shown = matching(open, query);
@@ -105,11 +122,12 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
 
   const toggle = (repo: string, on: boolean) => {
     setChosen((prev) => { const next = new Set(prev); if (on) next.add(repo); else next.delete(repo); return next; });
+    if (on) scan(repo);
   };
   const submit = async () => {
     setBusy(true); setFailure("");
     try {
-      await connectBrainRepos(toSend);
+      await connectBrainRepos(toSend, folders);
       navigate("/brain");
     } catch (e) {
       setFailure(e instanceof ApiError ? plainError(e.message, NOT_DONE) : NOT_DONE);
@@ -120,6 +138,8 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
     }
   };
 
+  const scanOf = (repo: string): FolderScan | null => { const s = scans[repo]; return s && !("error" in s) ? s : null; };
+  const errorOf = (repo: string): string | undefined => { const s = scans[repo]; return s && "error" in s ? s.error : undefined; };
   const trimmed = query.trim();
   return (
     <>
@@ -138,7 +158,10 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
         ) : (
           <ul className="m-0 list-none p-0" data-testid="brain-connect-rows">
             {shown.map((r) => (
-              <RepoRow key={r.repo} r={r} checked={chosen.has(r.repo)} disabled={busy} onToggle={toggle} under={chosen.has(r.repo) ? underRepo() : undefined} />
+              <RepoRow key={r.repo} r={r} checked={chosen.has(r.repo)} disabled={busy} onToggle={toggle} under={chosen.has(r.repo) ? (
+                <FolderList scan={scanOf(r.repo)} readError={errorOf(r.repo)} selected={folders[r.repo] ?? []} disabled={busy} now={Date.now()}
+                            onChange={(next) => setFolders((m) => ({ ...m, [r.repo]: next }))} data-testid="brain-connect-folders" />
+              ) : undefined} />
             ))}
           </ul>
         )}

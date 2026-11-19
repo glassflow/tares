@@ -3,6 +3,7 @@ a11y
 brain-ask
 brain-connect
 brain-decisions
+brain-folders
 brain-repos
 capped-runs
 catalog-export
