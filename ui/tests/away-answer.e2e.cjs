@@ -7,13 +7,13 @@
  * reader has already read Sam's list once. Then, as on a real cell:
  *   1. the orchestrator asks Sam a desk question (POST /api/desk with the key the crew runs on, Sam's);
  *   2. within one read of the reader (a minute), Sam gets one Slack message: the ask, its project, and a
- *      button to /feed?item=<the item Sam's own Home lists>;
- *   3. Sam opens that link, as given in the message, in a browser with Sam's key: the card is first and
- *      marked, and Sam taps its Yes;
- *   4. the record says it: one answer to that item, by Sam, from the feed (GET /api/answers?item=);
+ *      button "Open in Tares" to /?item=<the item Sam's own Home lists>;
+ *   3. Sam opens that link, as given in the message, in a browser with Sam's key: Home opens at the item,
+ *      first and marked, and Sam taps the option the crew suggested on its row;
+ *   4. the record says it: one answer to that item, by Sam, on Home (GET /api/answers?item=);
  *   5. the orchestrator's wake sees it: /api/desk/answered goes from 0 to 1 since its baseline (the call the
  *      crew watch makes every few seconds, T32; tests/test_crew_wake_console.py covers the watch's side);
- *   6. within the next read, the Slack message is edited to "Answered by you from the feed." with no
+ *   6. within the next read, the Slack message is edited to "Answered by you on Home." with no
  *      button, and nothing is sent a second time.
  * Takes about two and a half minutes: the reader reads once a minute and the run does not shorten it.
  * Run:  npm run test:away-answer     (builds first: the daemon serves ui/dist)
@@ -159,34 +159,35 @@ const words = (msg) => [msg.text || "", ...(msg.blocks || []).flatMap((b) => [b.
        && slack.of("users.lookupByEmail").some((c) => c.query.email === "sam@example.com"), JSON.stringify(msg.channel));
     ck("it says the ask and the project", words(msg).includes(QUESTION) && words(msg).includes("Shop"), words(msg));
     const links = buttonUrls(msg);
-    ck("its button opens the feed at that item", links.length === 1 && links[0] === `${BASE}/feed?item=${encodeURIComponent(homeItem?.id || "")}`,
+    ck("its button opens Home at that item", links.length === 1 && links[0] === `${BASE}/?item=${encodeURIComponent(homeItem?.id || "")}`,
        JSON.stringify(links));
     ck("no em dash in the message", !words(msg).includes("—"));
 
-    // 3. Sam opens the link from the message and answers in the feed
+    // 3. Sam opens the link from the message and answers on Home
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
     await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* blocked */ } }, ids.sam_key);
     const page = await ctx.newPage();
     await page.goto(links[0], { waitUntil: "load" });
-    await page.getByTestId("factory-feed").waitFor();
+    await page.getByTestId("factory-home").waitFor();
+    await page.getByTestId("waiting-row").first().waitFor();
     await page.waitForLoadState("networkidle");
-    const first = page.getByTestId("feed-card").first();
-    ck("the link lands on the card: first and marked", (await first.getAttribute("data-focus")) === "1"
-       && (await first.getByTestId("feed-ask").innerText()) === QUESTION, await first.innerText().catch(() => "no card"));
-    ck("its Yes is the suggested answer", (await first.getByTestId("feed-yes").innerText()).includes("Postgres"),
-       await first.getByTestId("feed-yes").innerText());
-    await checkWords(page, ck, "feed from the link");
+    const first = page.getByTestId("waiting-row").first();
+    ck("the link lands on the row: first and marked", (await first.getAttribute("data-focus")) === "1"
+       && (await first.innerText()).includes(QUESTION), await first.innerText().catch(() => "no row"));
+    const pick = first.getByRole("button", { name: "Postgres", exact: true });
+    ck("the suggested answer is one of its buttons", (await pick.count()) === 1, await first.innerText());
+    await checkWords(page, ck, "home from the link");
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "away-link.png"), fullPage: true });
-    await first.getByTestId("feed-yes").click();
-    await page.waitForFunction((q) => ![...document.querySelectorAll('[data-testid="feed-ask"]')].some((e) => e.innerText === q),
+    await pick.click();
+    await page.waitForFunction((q) => ![...document.querySelectorAll('[data-testid="waiting-row"]')].some((e) => e.innerText.includes(q)),
                                QUESTION, { timeout: 10000 }).catch(() => {});
-    ck("the card leaves the feed", (await page.getByTestId("feed-ask").getByText(QUESTION, { exact: true }).count()) === 0);
+    ck("the row leaves Home", (await page.getByTestId("waiting-row").filter({ hasText: QUESTION }).count()) === 0);
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "away-answered.png"), fullPage: true });
 
-    // 4. the record: from the feed
+    // 4. the record: on Home
     const rec = (await api(ids.sam_key, "GET", `/api/answers?item=${encodeURIComponent(homeItem.id)}`)).answers;
-    ck("one answer to that item, by Sam, from the feed", rec.length === 1 && rec[0].via === "feed" && rec[0].by === "Sam" && rec[0].mine === true
+    ck("one answer to that item, by Sam, on Home", rec.length === 1 && rec[0].via === "console" && rec[0].by === "Sam" && rec[0].mine === true
        && /Postgres/.test(JSON.stringify(rec[0])), JSON.stringify(rec));
 
     // 5. the orchestrator's wake
@@ -200,7 +201,7 @@ const words = (msg) => [msg.text || "", ...(msg.blocks || []).flatMap((b) => [b.
     ck("the message is edited within a read", !!edit, "no chat.update");
     if (edit) {
       ck("the same message: its DM and its ts", edit.body.channel === "D_SAM" && edit.body.ts === "1795000000.000101", JSON.stringify(edit.body));
-      ck("it says who answered and where", words(edit.body).includes("Answered by you from the feed."), words(edit.body));
+      ck("the message says it was answered on Home", words(edit.body).includes("Answered by you on Home."), words(edit.body));
       ck("the edited message has no button", buttonUrls(edit.body).length === 0, JSON.stringify(edit.body.blocks));
       ck("still the ask, so the DM reads on its own", words(edit.body).includes(QUESTION), words(edit.body));
     }

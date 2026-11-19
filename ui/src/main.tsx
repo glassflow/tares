@@ -5,6 +5,7 @@ import { createBrowserRouter, Navigate, RouterProvider, useLocation } from "reac
 import App from "./App";
 import AuthGate from "./components/AuthGate";
 import { EditionProvider, useEdition } from "./editions/edition";
+import FeedRedirect from "./editions/FeedRedirect";
 import { ByEdition } from "./editions/routes";
 import { EeLoader } from "./eeSlots";
 import { LicenceProvider } from "./licence";
@@ -140,7 +141,8 @@ const router = createBrowserRouter([
       // pages only the factory or sre edition has; a cell of the other edition lands on Home
       { path: "tickets", element: <ByEdition path="/tickets" today={<Navigate to="/" replace />} /> },
       { path: "reviews", element: <ByEdition path="/reviews" today={<Navigate to="/" replace />} /> },
-      { path: "feed", element: <ByEdition path="/feed" today={<Navigate to="/" replace />} /> },
+      // a link to /feed?item=<id> is in Slack messages already sent: every edition keeps the query, for good (TR-1527)
+      { path: "feed", element: <ByEdition path="/feed" today={<FeedRedirect />} /> },
       { path: "docs", element: <ByEdition path="/docs" today={<Navigate to="/" replace />} /> },
       { path: "people", element: <ByEdition path="/people" today={<Navigate to="/" replace />} /> },
       { path: "setup", element: <ByEdition path="/setup" today={<NotFound />} /> },

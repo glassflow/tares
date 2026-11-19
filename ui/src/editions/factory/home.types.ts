@@ -229,6 +229,23 @@ export interface HomeOnboarding {
   };
 }
 
+/** Where an answer was given, as the cell records it (tares/answers.py): Home is `console`; `feed` is
+ *  what rows from the old feed page still say. `message` is a reply by message. */
+export type HomeVia = "feed" | "console" | "session" | "message";
+
+/** The cell's record of one answer (GET /api/answers), read for a link to an item that no longer waits. */
+export interface HomeAnswered {
+  id: string;
+  ask: string;
+  /** Null for an answer that is neither: an option picked or words given to a question. */
+  choice: "yes" | "no" | null;
+  /** What was pressed or said, in its own words ("Postgres", "Later", "Agree"). */
+  said: string;
+  by: string;
+  at: string;
+  via: HomeVia;
+}
+
 export interface HomeData {
   edition: "factory";
   headline: string;
@@ -281,6 +298,9 @@ export interface HomeTeamCrewsProps { crews: HomeTeamCrew[]; quiet: string[] }
 export interface HomeReposProps { areas: HomeArea[] }
 export interface HomeWaitingProps {
   items: HomeItem[];
+  /** The id a link named (`/?item=<id>`, TR-1527): the matching row stands first, marked, outside any fold.
+   *  Only a well-formed id is passed; one that matches no row changes nothing. */
+  focus?: string;
   /** What a button of a row is; the page decides what a click does. */
   renderAction: (a: HomeAction, item: HomeItem) => ReactNode;
   /** A refusal's sentence by row id, shown under that row. */

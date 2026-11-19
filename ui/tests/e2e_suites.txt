@@ -20,7 +20,6 @@ ee-project-access
 explore
 factory-crew
 factory-docs
-factory-feed
 factory-github
 factory-home
 factory-merge-queue

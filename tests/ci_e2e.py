@@ -47,7 +47,7 @@ WEIGHT = {
     "factory-docs": 28, "edition-shell": 27, "brain-repos": 27, "choose-edition": 26, "crew-people": 25,
     "brain-decisions": 22, "sre-incidents": 21, "factory-project-controls": 19, "ee-chunk": 18,
     "sre-start": 17, "source-claude-code": 17, "other-project": 16, "connect": 15, "a11y": 13,
-    "source-form": 11, "explore": 11, "factory-feed": 10, "redirects": 9, "factory-secrets": 9,
+    "source-form": 11, "explore": 11, "redirects": 9, "factory-secrets": 9,
     "component-gallery": 9, "source-new": 8, "reads": 8, "project-idle": 8, "ee-project-access": 8,
     "resources": 7, "factory-team": 7, "factory-github": 7, "catalog-import": 7, "catalog-export": 7,
     "sre-guards": 6, "source-discover": 6, "source-detail": 6, "raise-limit": 6, "motion": 6,

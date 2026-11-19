@@ -1,7 +1,7 @@
 """A direct message on Slack when something new waits for a person (TR-1458).
 
 The reader reads each person's "Waiting for you" (factory_api.waiting_for_person) and sends one
-message per new item: its ask, what it holds up, and a link to the feed on that item. Slack's
+message per new item: its ask, what it holds up, and a link to Home at that item. Slack's
 lookup by email and chat.postMessage are stubbed. Checked here:
 
   - no Slack connected: nothing is read or sent;
@@ -183,8 +183,9 @@ async def main():
     ck("it says what it holds up", "Holds up M1: cart." in body, body)
     ck("it names the project", "Waiting for you in shop" in body, body)
     item = next(i for i in reader.waiting_for(kim, now_utc()) if d["question"] in str(i.get("detail")))
-    link = f"https://cell.example.com/feed?item={item['id'].replace(':', '%3A')}"
-    ck("it links to the feed on that item", link in body, (link, body))
+    link = f"https://cell.example.com/?item={item['id'].replace(':', '%3A')}"
+    ck("it links to Home on that item", link in body, (link, body))
+    ck("its button reads Open in Tares", "Open in Tares" in body and "open_item" in body, body)
     await read()
     ck("never twice", slack.take() == [])
 
@@ -246,7 +247,7 @@ async def main():
     ck("it lists the first ten and says how many more",
        "• Question 0?" in body and "• Question 9?" in body and "Question 10?" not in body
        and "and 2 more" in body, body)
-    ck("it links to the feed", "https://cell.example.com/feed'" in body, body)
+    ck("the list links to Home", "'url': 'https://cell.example.com/'" in body and "?item=" not in body, body)
     await read()
     ck("and none of them again", slack.take() == [])
 
@@ -259,7 +260,7 @@ async def main():
     e = ed[0] if ed else {}
     ck("of that item's own message, in Kim's DM", e.get("channel") == "DU_KIM" and e.get("ts"), e)
     ck("it says who answered it and where", "Answered by you from the feed." in str(e.get("blocks")), e)
-    ck("and no longer offers the button", "open_feed" not in str(e.get("blocks")), e)
+    ck("and no longer offers the button", "open_item" not in str(e.get("blocks")), e)
     await read()
     ck("not edited twice", slack.edits() == [])
 
