@@ -166,10 +166,6 @@ def add_review_work(store, uid: str, name: str, t0) -> None:
             for i, (v, f) in enumerate(verdicts)])
 
 
-async def _no_refresh(store, uid):
-    return None
-
-
 async def main():
     from tares.daemon import make_app
     app = make_app()
@@ -204,15 +200,9 @@ async def main():
         print("== tickets list (TR-657) ==")
         out, _ = await get(f"/api/projects/{big}/tickets")
         golden(normalize(out), "tickets.json")
-        # The PR refresh the route runs first still reads per ticket with a PR; it is out of this
-        # ticket's scope, so the count covers the list itself.
-        from tares import factory_api
-        refresh, factory_api.refresh_prs = factory_api.refresh_prs, _no_refresh
-        try:
-            _, q_small = await get(f"/api/projects/{small}/tickets")
-            _, q_big = await get(f"/api/projects/{big}/tickets")
-        finally:
-            factory_api.refresh_prs = refresh
+        # the list makes no GitHub call (TR-1474), so its count is the list itself
+        _, q_small = await get(f"/api/projects/{small}/tickets")
+        _, q_big = await get(f"/api/projects/{big}/tickets")
         ck("queries do not grow with the tickets (10 vs 30)", q_small == q_big,
            f"{q_small} queries for 10 tickets, {q_big} for 30")
         print(f"  {q_big} queries for 30 tickets")

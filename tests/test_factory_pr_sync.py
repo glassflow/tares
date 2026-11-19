@@ -80,7 +80,17 @@ async def main():
             c_done = ticket(pc, "Done in its home", 4)
             store.update_ticket(c_done, status="done")
             ticket(pd, "Closed already", 5, state="closed", merged=False)
+            pe = project("project-e")      # every linked pull request merged, a new ticket in the work
+            ticket(pe, "Merged earlier", 6, merged=True, state="closed")
+            e_new = store.create_ticket(pe, "tares", "New ticket, branch not linked yet", repo=REPO)
+            store.update_ticket(e_new, stage="doing")
+            pf = project("project-f")      # a ticket in the work, but no pull request in the project at all
+            f_new = store.create_ticket(pf, "tares", "First ticket", repo=REPO)
+            store.update_ticket(f_new, stage="doing")
             got = factory_api.projects_with_open_prs(store)
+            ck("a project whose pull requests are all merged but has a ticket in the work with none is read "
+               "(the sync links its branch)", pe in got, got)
+            ck("a project with no pull request linked anywhere is not read", pf not in got, got)
             ck("an open ticket with an open pull request is read", pa in got and pb in got, got)
             ck("merged, closed, or a ticket done in its home: not read", pc not in got and pd not in got, got)
 
