@@ -75,6 +75,14 @@ if AVAILABLE:
                               "inside it left out), so the phases of a route add up to its time",
                               ["route", "phase"],
                               buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60))
+    SESSION_INGEST_SECONDS = Histogram("tares_session_ingest_seconds",
+                                       "Wall time of writing one batch of claude_code lines into "
+                                       "the sessions table",
+                                       buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5))
+    SESSION_INGEST_FAILURES = Counter("tares_session_ingest_failures_total",
+                                      "Batches of claude_code lines the sessions table could not "
+                                      "take (the lines are stored; the next start catches the "
+                                      "table up)")
 
 _storage_probe = None
 _licence_probe = None
@@ -134,6 +142,14 @@ def trigger_evaluation(seconds: float, fired: list) -> None:
         TRIGGER_EVAL_SECONDS.observe(seconds)
         for name, _key in fired:
             TRIGGER_FIRINGS.labels(trigger=name).inc()
+
+
+def session_ingest(seconds: float, ok: bool = True) -> None:
+    """One batch written to the sessions table (TR-1471)."""
+    if AVAILABLE:
+        SESSION_INGEST_SECONDS.observe(seconds)
+        if not ok:
+            SESSION_INGEST_FAILURES.inc()
 
 
 def observe_request(route: str, method: str, status: str, seconds: float) -> None:

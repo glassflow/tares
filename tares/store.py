@@ -26,7 +26,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import delete, select
 
-from . import state_db
+from . import session_ingest, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
@@ -795,6 +795,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # connection and lock by default; with a state_dsn, Postgres, where reads take no lock and
         # run in parallel and writes take self._swrite, so read-then-write steps stay atomic.
         self._lock = threading.Lock()
+        # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
+        self._sess_lock = threading.Lock()
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -1478,6 +1480,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def append(self, envelopes: list[Envelope]) -> None:
         if not envelopes:
             return
+        cc = session_ingest.claude_code_lines(self, envelopes)
+        if not cc:
+            return self._append(envelopes)
+        # The claude_code lines of the batch are counted into `sessions` after the commit. The
+        # reconcile at start holds the same lock, so a line is never counted by both.
+        with self._sess_lock:
+            self._append(envelopes)
+            session_ingest.record(self, cc)
+
+    def start_session_reconcile(self):
+        """Catch the `sessions` table up with the events in a background thread (TR-1471)."""
+        return session_ingest.start_reconcile(self)
+
+    def _append(self, envelopes: list[Envelope]) -> None:
         # Explicit column list: the `labels` column was added by migration after first release,
         # so positional INSERT order is no longer guaranteed.
         rows = [

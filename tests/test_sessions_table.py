@@ -1,0 +1,323 @@
+"""The sessions table (TR-1471): each claude_code line is counted into its session's row as it is
+stored, and the reconcile at start brings the table up to what DuckDB holds.
+
+Plain:                python tests/test_sessions_table.py
+With the Postgres harness (every Store keeps its state in Postgres):
+    TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres PYTHONPATH=tests/pg_harness \\
+        python tests/test_sessions_table.py
+"""
+import os
+import sys
+import tempfile
+import threading
+import uuid
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from alembic import command  # noqa: E402
+from sqlalchemy import inspect, select, text  # noqa: E402
+
+from tares import metrics, session_ingest  # noqa: E402
+from tares.envelope import Envelope  # noqa: E402
+from tares.session_store import SessionStore  # noqa: E402
+from tares.session_store.tables import metadata, session_ingest_marks, sessions  # noqa: E402
+from tares.store import Store  # noqa: E402
+
+PG = os.environ.get("TARES_TEST_PG")
+FAILS = []
+T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
+
+
+def ck(name, ok, detail=""):
+    print(("  ok   " if ok else "  FAIL ") + name + ("" if ok else f"   {detail}"))
+    if not ok:
+        FAILS.append(name)
+
+
+def line(session, i, kind="assistant", tool=None, source="claude_code", at=None):
+    """One line of a Claude Code session. A tool_use line renders its tool as `→ name(...)` and
+    carries it in payload.message.content, as the connector writes it."""
+    payload = {}
+    text_ = f"line {i}"
+    if tool:
+        kind = "tool_use"
+        text_ = f"→ {tool}(x=1)"
+        payload = {"message": {"content": [{"type": "tool_use", "name": tool}]}}
+    return Envelope(source=source, source_type="agent_session", key_value=session, event_type=kind,
+                    text=text_, event_time=at or T0 + timedelta(seconds=i), payload=payload)
+
+
+def fresh_store():
+    d = tempfile.mkdtemp()
+    return Store(os.path.join(d, "t.duckdb"))
+
+
+def rows(store):
+    with store.sessions_db.begin() as c:
+        return {r.session: (r.line_count, r.tool_calls, r.coordination_calls, r.started_at,
+                            r.last_line_at, r.source, r.lines_complete)
+                for r in c.execute(select(sessions)).all()}
+
+
+def counts(store):
+    return {k: v[:3] for k, v in rows(store).items()}
+
+
+def sample():
+    """Three sessions: plain lines, tool calls, coordination calls (some by mcp, some not)."""
+    out = []
+    for i in range(5):
+        out.append(line("s1", i))
+    out.append(line("s1", 5, tool="Bash"))
+    out.append(line("s1", 6, tool="SendMessage"))
+    out.append(line("s2", 0, tool="mcp__plugin_tares_tares__get_ticket"))
+    out.append(line("s2", 1, tool="mcp__other__thing"))        # a tool call, not coordination
+    out.append(line("s2", 2, tool="Skill"))
+    out.append(line("s2", 3, tool="CronList"))
+    out.append(line("s3", 0, tool="Read"))
+    return out
+
+
+def expected_for(envs):
+    """The counts the two reads over DuckDB give for the same data (the rules the table replaces)."""
+    s = fresh_store()
+    s._append(envs)                       # DuckDB only: nothing reaches the table
+    sids = sorted({e.key_value for e in envs})
+    act = s.session_activity("claude_code", sids)
+    coord = s.coordination_calls("claude_code", sids)
+    with s._lock:
+        tools = dict(s.con.execute("SELECT key_value, count(*) FROM events WHERE event_type = 'tool_use' "
+                                   "GROUP BY key_value").fetchall())
+    s.close()
+    return {sid: (act[sid][2], tools.get(sid, 0), coord.get(sid, 0)) for sid in sids}, act
+
+
+def through_append():
+    print("== lines through Store.append ==")
+    s = fresh_store()
+    envs = sample()
+    s.append(envs)
+    got = counts(s)
+    ck("one row per session", sorted(got) == ["s1", "s2", "s3"], sorted(got))
+    ck("s1: 7 lines, 2 tool calls, 1 coordination", got["s1"] == (7, 2, 1), got["s1"])
+    ck("s2: 4 lines, 4 tool calls, 3 coordination", got["s2"] == (4, 4, 3), got["s2"])
+    ck("s3: 1 line, 1 tool call, none coordinating", got["s3"] == (1, 1, 0), got["s3"])
+    r = rows(s)
+    ck("started_at and last_line_at are the first and last line", r["s1"][3] == T0
+       and r["s1"][4] == T0 + timedelta(seconds=6), (r["s1"][3], r["s1"][4]))
+    ck("the row names its source", r["s1"][5] == "claude_code", r["s1"][5])
+    ck("lines_complete stays false", not any(v[6] for v in r.values()))
+    s.append([line("s1", 7), line("s1", 8, tool="ListAgents")])
+    got = counts(s)
+    ck("a second batch adds to the row", got["s1"] == (9, 3, 2), got["s1"])
+    s.append([line("s1", 0, at=T0 - timedelta(hours=1))])
+    r = rows(s)
+    ck("an older line moves started_at back and leaves last_line_at", r["s1"][3] == T0 - timedelta(hours=1)
+       and r["s1"][4] == T0 + timedelta(seconds=8), (r["s1"][3], r["s1"][4]))
+    s.append([line("other", 0, source="deploys"), Envelope("deploys", "event_stream", "", "deploy", "x", T0)])
+    ck("a line of another source writes no row", "other" not in counts(s), sorted(counts(s)))
+    ck("nor does a claude_code line without a session",
+       not any(k == "" for k in counts(s)))
+    s.close()
+
+
+def parity():
+    print("== the counts equal session_activity() and coordination_calls() ==")
+    envs = sample()
+    want, act = expected_for(envs)
+    s = fresh_store()
+    s.append(envs)
+    got = counts(s)
+    ck("line, tool call and coordination counts agree for every session", got == want, (got, want))
+    r = rows(s)
+    ck("and so do first and last line times", all(
+        r[sid][3] == act[sid][0] and r[sid][4] == act[sid][1] for sid in act),
+        {sid: (r[sid][3], act[sid][0]) for sid in act})
+    s.close()
+
+
+def catalog_source():
+    print("== a claude_code source with another name ==")
+    s = fresh_store()
+    with s._swrite:
+        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    s.append([line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"),
+              line("b", 0, source="deploys")])
+    got = counts(s)
+    ck("its lines are counted", got.get("a") == (2, 1, 1), got)
+    ck("a source of another connector is not", "b" not in got, got)
+    s.close()
+
+
+def reconcile():
+    print("== the reconcile ==")
+    envs = sample()
+    want, _ = expected_for(envs)
+    s = fresh_store()
+    s._append(envs)                          # stored without record(): an older image, or a failed record
+    ck("the table is empty before it", counts(s) == {}, counts(s))
+    n = session_ingest.reconcile_sessions(s)
+    ck("it looked at the three sessions", n == 3, n)
+    ck("and the rows equal what DuckDB holds", counts(s) == want, (counts(s), want))
+    before = rows(s)
+    n2 = session_ingest.reconcile_sessions(s)
+    ck("a second run changes no counter", counts(s) == want and {
+        k: v[3:] for k, v in rows(s).items()} == {k: v[3:] for k, v in before.items()}, counts(s))
+    ck("the second run looked only at the recent sessions", n2 == 3, n2)   # all within the 10 minute margin
+    # lines written through append after the pass are counted once, not twice, by the next pass
+    s.append([line("s1", 20), line("s4", 0, tool="Skill")])
+    session_ingest.reconcile_sessions(s)
+    got = counts(s)
+    ck("a line counted by record() is not counted again by the reconcile", got["s1"] == (8, 2, 1)
+       and got["s4"] == (1, 1, 1), got)
+    # a line stored without record() after the first pass is picked up
+    s._append([line("s1", 30), line("s5", 0)])
+    session_ingest.reconcile_sessions(s)
+    got = counts(s)
+    ck("a line stored without record() is picked up", got["s1"] == (9, 2, 1) and got["s5"] == (1, 0, 0), got)
+    # the mark moved, and it is the newest ingest_time read
+    with s.sessions_db.begin() as c:
+        mark = c.execute(select(session_ingest_marks.c.at).where(
+            session_ingest_marks.c.name == session_ingest.MARK)).scalar_one()
+    ck("the watermark is stored and aware", mark is not None and mark.tzinfo is not None, mark)
+    # in chunks: more sessions than one chunk
+    s2 = fresh_store()
+    many = [line(f"m{i:03d}", 0, tool="Skill") for i in range(25)] + [line("m000", 1)]
+    s2._append(many)
+    session_ingest.reconcile_sessions(s2, chunk=7)
+    g = counts(s2)
+    ck("chunks of 7 cover 25 sessions", len(g) == 25 and g["m000"] == (2, 1, 1) and g["m024"] == (1, 1, 1), len(g))
+    # a stored counter larger than DuckDB's (lines pruned from DuckDB) is kept
+    with s2.sessions_db.begin() as c:
+        c.execute(sessions.update().where(sessions.c.session == "m001").values(line_count=50))
+    with s2._lock:
+        s2.con.execute("UPDATE events SET ingest_time = now() WHERE key_value = 'm001'")
+    session_ingest.reconcile_sessions(s2)
+    ck("the larger of the stored and the computed count stays", counts(s2)["m001"][0] == 50, counts(s2)["m001"])
+    # the thread starter runs one pass
+    s3 = fresh_store()
+    s3._append(envs)
+    s3.start_session_reconcile().join(30)
+    ck("start_session_reconcile fills the table in the background", counts(s3) == want, counts(s3))
+    for x in (s, s2, s3):
+        x.close()
+
+
+def concurrent():
+    print("== four threads record at once ==")
+    s = fresh_store()
+    per = 25
+    errors = []
+
+    def work(k):
+        try:
+            for i in range(per):
+                session_ingest.record(s, [line("shared", i, tool="Skill" if i % 5 == 0 else None),
+                                          line(f"own{k}", i)])
+        except Exception as e:
+            errors.append(e)
+
+    ths = [threading.Thread(target=work, args=(k,)) for k in range(4)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join()
+    got = counts(s)
+    ck("no thread failed", not errors, errors[:1])
+    ck("the shared session lost no line, tool call or coordination call",
+       got["shared"] == (4 * per, 4 * 5, 4 * 5), got["shared"])
+    ck("each own session holds its lines", all(got[f"own{k}"] == (per, 0, 0) for k in range(4)), got)
+    s.close()
+
+
+def failure_is_quiet():
+    print("== a failing record never fails the append ==")
+    s = fresh_store()
+    before = []
+    orig = metrics.session_ingest
+    metrics.session_ingest = lambda seconds, ok=True: before.append(ok)
+    broken = s.sessions_db.begin
+    s.sessions_db.begin = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+    try:
+        s.append([line("f", 0), line("f", 1)])
+        ok_append = True
+    except Exception as e:
+        ok_append = False
+    s.sessions_db.begin = broken
+    metrics.session_ingest = orig
+    ck("append returns", ok_append)
+    ck("the failure is counted", before == [False], before)
+    with s._lock:
+        n = s.con.execute("SELECT count(*) FROM events WHERE key_value = 'f'").fetchone()[0]
+    ck("the lines are in DuckDB", n == 2, n)
+    session_ingest.reconcile_sessions(s)
+    ck("and the reconcile counts them", counts(s).get("f") == (2, 0, 0), counts(s))
+    s.close()
+
+
+def revision():
+    print("== revision 0003_sessions ==")
+    d = tempfile.mkdtemp()
+    schema = None
+    dsn = None
+    if PG:
+        import psycopg
+        schema = "ss_" + uuid.uuid4().hex[:12]
+        dsn = f"{PG}?options=-csearch_path%3D{schema}"
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {schema}")
+    try:
+        sdb = SessionStore(d, dsn)
+        sdb.upgrade()
+        names = inspect(sdb.engine).get_table_names()
+        ck("both tables exist", "sessions" in names and "session_ingest_marks" in names, names)
+        cols = {c["name"]: c for c in inspect(sdb.engine).get_columns("sessions")}
+        ck("sessions has the nine columns", sorted(cols) == sorted(
+            ["session", "source", "started_at", "last_line_at", "line_count", "tool_calls",
+             "coordination_calls", "lines_complete", "updated_at"]), sorted(cols))
+        ck("its counters are not null", all(not cols[c]["nullable"] for c in
+                                            ("line_count", "tool_calls", "coordination_calls", "lines_complete")))
+        ck("last_line_at has an index", any(i["column_names"] == ["last_line_at"]
+                                            for i in inspect(sdb.engine).get_indexes("sessions")))
+        with sdb.begin() as c:
+            c.execute(text("INSERT INTO sessions (session) VALUES ('x')"))
+            r = c.execute(select(sessions)).one()
+        ck("a row made with only its key gets zero counters and lines_complete false",
+           (r.line_count, r.tool_calls, r.coordination_calls, r.lines_complete) == (0, 0, 0, False), tuple(r))
+        with sdb.begin() as c:
+            cfg = sdb._config()
+            cfg.attributes["connection"] = c
+            command.downgrade(cfg, "0002_session_tables")
+        names = inspect(sdb.engine).get_table_names()
+        ck("a downgrade removes both tables", "sessions" not in names and "session_ingest_marks" not in names, names)
+        ck("and keeps the older ones", "session_stations" in names, names)
+        # the stamped case: the tables are already there (made by hand) while the version is behind
+        with sdb.begin() as c:
+            metadata.tables["sessions"].create(c)
+            metadata.tables["session_ingest_marks"].create(c)
+            c.execute(text("INSERT INTO sessions (session, line_count) VALUES ('kept', 3)"))
+        sdb.upgrade()
+        with sdb.begin() as c:
+            v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
+            kept = c.execute(select(sessions.c.line_count).where(sessions.c.session == "kept")).scalar()
+        ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
+           v == ["0003_sessions"] and kept == 3, (v, kept))
+        sdb.close()
+    finally:
+        if PG:
+            import psycopg
+            with psycopg.connect(PG, autocommit=True) as c:
+                c.execute(f"DROP SCHEMA {schema} CASCADE")
+
+
+def main():
+    for fn in (through_append, parity, catalog_source, reconcile, concurrent, failure_is_quiet, revision):
+        fn()
+    if FAILS:
+        print("FAIL", ", ".join(FAILS))
+        sys.exit(1)
+    print("OK")
+
+
+if __name__ == "__main__":
+    main()
