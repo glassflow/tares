@@ -81,7 +81,9 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # has its own entry so a change that moves one (a sessions database, a Postgres-only read) can move
 # only that one.
 # TR-1503 (the handlers read only the projects they show): home 108 to 107, projects 84 to 83.
-_TODAY = {"home": 107, "projects": 83, "project": 82, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1499 (station and project sessions read the sessions table, in the same read as their rows, not a
+# second pass over events): home 107 to 105, projects 83 to 81, project 82 to 80, ticket 28 to 27.
+_TODAY = {"home": 105, "projects": 81, "project": 80, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
@@ -90,7 +92,7 @@ DONE_EXTRA = 4
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 86}
+_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 85}
 BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it

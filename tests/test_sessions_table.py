@@ -8,6 +8,7 @@ With the Postgres harness (every Store keeps its state in Postgres):
 """
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
 from sqlalchemy import inspect, select, text  # noqa: E402
 
-from tares import metrics, session_ingest  # noqa: E402
+from tares import factory, metrics, session_ingest  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import metadata, session_ingest_marks, sessions  # noqa: E402
@@ -82,16 +83,27 @@ def sample():
 
 
 def expected_for(envs):
-    """The counts the two reads over DuckDB give for the same data (the rules the table replaces)."""
+    """The counts a scan of DuckDB gives for the same data: the rules the table keeps, computed
+    straight from events with no reader of the table (the readers over events were removed in TR-1499)."""
     s = fresh_store()
     s._append(envs)                       # DuckDB only: nothing reaches the table
     sids = sorted({e.key_value for e in envs})
-    act = s.session_activity("claude_code", sids)
-    coord = s.coordination_calls("claude_code", sids)
     with s._lock:
+        act = {sid: (first, last, int(n)) for sid, first, last, n in s.con.execute(
+            "SELECT key_value, min(event_time), max(event_time), count(*) FROM events "
+            "WHERE source = 'claude_code' GROUP BY key_value").fetchall()}
         tools = dict(s.con.execute("SELECT key_value, count(*) FROM events WHERE event_type = 'tool_use' "
                                    "GROUP BY key_value").fetchall())
+        lines = s.con.execute("SELECT key_value, text, payload FROM events WHERE event_type = 'tool_use'").fetchall()
     s.close()
+    coord = {}
+    for sid, text_, payload in lines:         # the rule of the scan the table replaced, written out
+        if not any(h in (text_ or "") for h in ("→ mcp__", "→ SendMessage(", "→ ListAgents(", "→ Skill(", "→ Cron")):
+            continue
+        msg = (json.loads(payload) if payload else {}).get("message") or {}
+        coord[sid] = coord.get(sid, 0) + sum(
+            1 for b in msg.get("content") or []
+            if isinstance(b, dict) and b.get("type") == "tool_use" and factory.is_coordination(b.get("name")))
     return {sid: (act[sid][2], tools.get(sid, 0), coord.get(sid, 0)) for sid in sids}, act
 
 
@@ -125,7 +137,7 @@ def through_append():
 
 
 def parity():
-    print("== the counts equal session_activity() and coordination_calls() ==")
+    print("== the counts equal a scan of events, and the readers answer them ==")
     envs = sample()
     want, act = expected_for(envs)
     s = fresh_store()
@@ -136,6 +148,14 @@ def parity():
     ck("and so do first and last line times", all(
         r[sid][3] == act[sid][0] and r[sid][4] == act[sid][1] for sid in act),
         {sid: (r[sid][3], act[sid][0]) for sid in act})
+    sids = sorted(want)
+    ra = s.session_activity("claude_code", sids)
+    ck("session_activity() reads the same lines and times", {k: (v[2], v[0], v[1]) for k, v in ra.items()} == {
+        k: (want[k][0], act[k][0], act[k][1]) for k in want}, ra)
+    ck("coordination_calls() reads the same counts, zeros left out", s.coordination_calls("claude_code", sids) == {
+        k: v[2] for k, v in want.items() if v[2]}, s.coordination_calls("claude_code", sids))
+    ck("a session asked for under another source is not read", s.session_activity("deploys", sids) == {}
+       and s.coordination_calls("deploys", sids) == {})
     s.close()
 
 

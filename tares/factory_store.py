@@ -11,11 +11,12 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 
 from .envelope import now_utc
 from .integrations import SLOTS
 from .session_store.tables import (project_sessions, session_states, session_stations)
+from .session_store.tables import sessions as sessions_table
 
 log = logging.getLogger("tares.factory_store")
 
@@ -1067,18 +1068,21 @@ class FactoryStore:
         """Every session that played a station, with its station, role, parent and project, when
         it started and last did something (from its lines on `source`), its state, and the
         project it last named (project_sessions), newest activity first."""
-        ss, st, ps = session_stations, session_states, project_sessions
+        ss, st, ps, sx = session_stations, session_states, project_sessions, sessions_table
         named = (select(ps.c.project).where(ps.c.session == ss.c.session)
                  .order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery())
+        # the lines come from the sessions table in the same read (TR-1499), not a scan of events
         q = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
-                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id)
-             .select_from(ss.outerjoin(st, st.c.session == ss.c.session)))
+                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id,
+                    sx.c.started_at, sx.c.last_line_at, sx.c.line_count)
+             .select_from(ss.outerjoin(st, st.c.session == ss.c.session)
+                          .outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
+                                              sx.c.line_count > 0))))
         with self.sessions_db.begin() as conn:
             rows = conn.execute(q).all()
-        act = self.session_activity(source, [r[0] for r in rows])
         out = []
         for r in rows:
-            first, last, n = act.get(r[0], (None, None, 0))
+            first, last, n = r[11], r[12], int(r[13] or 0)
             out.append({"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                         "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
                         "last_at": last or r[5], "lines": n, "state": r[6],
@@ -1259,47 +1263,20 @@ class FactoryStore:
         return out
 
     def coordination_calls(self, source: str, sessions: list[str]) -> dict[str, int]:
-        """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination).
-        A session is parsed again only when it has new tool calls, whichever sessions are asked for."""
-        from .factory import is_coordination
-        if not sessions:
-            return {}
-        marks = ", ".join("?" for _ in sessions)
-        with self._lock:
-            # count and newest call together: a prune that drops old calls while new ones arrive
-            # leaves the count alone but moves the newest
-            sizes = {sid: (n, newest) for sid, n, newest in self.con.execute(
-                f"SELECT key_value, count(*), max(event_time) FROM events WHERE source = ? AND "
-                f"event_type = 'tool_use' AND key_value IN ({marks}) GROUP BY key_value",
-                [source, *sessions]).fetchall()}
-            cache = self.__dict__.setdefault("_coord_cache", {})
-            for sid in sessions:
-                if sid not in sizes:   # every call of it is gone (pruned): forget its count
-                    cache.pop((source, sid), None)
-            fresh = [sid for sid in sizes if cache.get((source, sid), (None,))[0] != sizes[sid]]
-            rows = []
-            if fresh:
-                fmarks = ", ".join("?" for _ in fresh)
-                # the rendered text names each tool as "→ name(": a cheap filter before the parse
-                rows = self.con.execute(
-                    f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({fmarks}) "
-                    "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
-                    "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
-                    [source, *fresh]).fetchall()
-        found: dict[str, int] = {}
-        for sid, pj in rows:
-            try:
-                o = json.loads(pj) if pj else {}
-            except (TypeError, ValueError):
+        """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination),
+        read from the sessions table, where each line was counted as it was stored (session_ingest).
+        Sessions with none are left out."""
+        t = sessions_table
+        out: dict[str, int] = {}
+        for i in range(0, len(sessions), 500):
+            chunk = sessions[i:i + 500]
+            if not chunk:
                 continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")):
-                    found[sid] = found.get(sid, 0) + 1
-        for sid in fresh:
-            cache[(source, sid)] = (sizes[sid], found.get(sid, 0))
-        out = {sid: cache[(source, sid)][1] for sid in sessions if (source, sid) in cache}
-        return {sid: n for sid, n in out.items() if n}
+            q = select(t.c.session, t.c.coordination_calls).where(
+                t.c.source == source, t.c.session.in_(chunk), t.c.coordination_calls > 0)
+            with self.sessions_db.begin() as conn:
+                out.update((sid, int(n)) for sid, n in conn.execute(q))
+        return out
 
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "

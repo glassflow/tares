@@ -24,7 +24,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, select
 
 from . import session_ingest, state_db
 from .session_store import SessionStore
@@ -3451,11 +3451,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The sessions that worked in the project, newest activity first, with when they started
         and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
-        ps, ss, st = project_sessions, session_stations, session_states
+        ps, ss, st, sx = project_sessions, session_stations, session_states, sessions_table
+        # the lines come from the sessions table in the same read (TR-1499), not a scan of events
         q = (select(ps.c.session, ps.c.repo, ps.c.linked_at, st.c.state, st.c.reason,
-                    st.c.state_at, ss.c.station)
+                    st.c.state_at, ss.c.station, sx.c.started_at, sx.c.last_line_at, sx.c.line_count)
              .select_from(ps.outerjoin(ss, ss.c.session == ps.c.session)
-                          .outerjoin(st, st.c.session == ps.c.session))
+                          .outerjoin(st, st.c.session == ps.c.session)
+                          .outerjoin(sx, and_(sx.c.session == ps.c.session,
+                                              sx.c.source == "claude_code", sx.c.line_count > 0)))
              .where(ps.c.project == project,
                     # the crew's own stations serve every project: they show on the Crew page and
                     # never count as the project's build session (a pick-up must not replace them)
@@ -3468,29 +3471,27 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if r[0] not in seen:
                 seen.add(r[0])
                 uniq.append(r)
-        act = self.session_activity("claude_code", [r[0] for r in uniq])
         out = [{"session": r[0], "repo": r[1], "linked_at": r[2],
-                "started_at": act.get(r[0], (None,))[0], "last_at": act.get(r[0], (None, None))[1],
-                "lines": act.get(r[0], (None, None, 0))[2], "state": r[3], "state_reason": r[4],
-                "state_at": r[5], "station": r[6]} for r in uniq]
+                "started_at": r[7], "last_at": r[8], "lines": int(r[9] or 0),
+                "state": r[3], "state_reason": r[4], "state_at": r[5], "station": r[6]} for r in uniq]
         # newest activity first, sessions with no lines last
         out.sort(key=lambda s: (s["last_at"] is None, -(s["last_at"].timestamp())
                                 if s["last_at"] else 0))
         return out
 
     def session_activity(self, source: str, sessions: list[str]) -> dict:
-        """{session: (first event time, last event time, event count)} for the sessions that have
-        events on `source`."""
+        """{session: (first line time, last line time, line count)} for the sessions that have
+        lines on `source`, read from the sessions table (TR-1471 keeps it; nothing scans events)."""
         out = {}
+        t = sessions_table
         for i in range(0, len(sessions), 500):
             chunk = sessions[i:i + 500]
             if not chunk:
                 continue
-            with self._lock:
-                for sid, first, last, n in self.con.execute(
-                        "SELECT key_value, min(event_time), max(event_time), count(*) FROM events "
-                        f"WHERE source = ? AND key_value IN ({', '.join('?' * len(chunk))}) "
-                        "GROUP BY key_value", [source, *chunk]).fetchall():
+            q = select(t.c.session, t.c.started_at, t.c.last_line_at, t.c.line_count).where(
+                t.c.source == source, t.c.session.in_(chunk), t.c.line_count > 0)
+            with self.sessions_db.begin() as conn:
+                for sid, first, last, n in conn.execute(q):
                     out[sid] = (first, last, int(n))
         return out
 
