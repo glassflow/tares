@@ -27,6 +27,12 @@ Privacy ordering: a pass deletes before it puts, and the delete step does not de
 working (it falls back to what this process put earlier). A project is checked for privacy again just
 before each batch is sent and once more when the pass ends.
 
+When lore fails (a listing, a delete or a put does not go through, or a pass raises), the next pass waits
+longer: twice the last wait, up to `BACKOFF_MAX` times `INTERVAL_SECONDS`. A pass with no failure puts the
+wait back to `INTERVAL_SECONDS`. While the loop is backing off, a doc change (`wake`) does not cut the wait
+short; the pass after it reads everything again. Documents that were put are remembered, so a retry sends
+only what is still missing.
+
 Nothing secret is sent or logged: only the docs' own title, text and author name. A lore error is logged
 through the client's own scrubbed words; any other error by its type only.
 """
@@ -47,7 +53,7 @@ from tares.slack import public_base
 
 from .lore import LoreClient, LoreError, scrub
 
-__all__ = ["BATCH", "DOC_KINDS", "INTERVAL_SECONDS", "KIND", "Decisions", "SOURCE"]
+__all__ = ["BACKOFF_MAX", "BATCH", "DOC_KINDS", "INTERVAL_SECONDS", "KIND", "Decisions", "SOURCE", "next_wait"]
 
 log = logging.getLogger("tares_ee.brain.decisions")
 
@@ -56,11 +62,18 @@ KIND = "decision"                    # the lore kind of each one
 PREFIX = "project:"                  # every external id this loop owns starts with this
 DOC_KINDS = ("spec", "plan", "note") # the kinds of docs that go in; nothing else ever does
 INTERVAL_SECONDS = 60.0              # between two passes (a test makes it small)
+BACKOFF_MAX = 30                     # the longest wait after failed passes, in times INTERVAL_SECONDS
 BATCH = 50                           # documents in one request
 PAGE = 200                           # documents in one listing page
 MAX_PAGES = 1000                     # a listing that never ends is given up
 NAME_BYTES = 256                     # lore's limit for a name and a project id
 UNKNOWN = "Unknown"                  # the author of a doc that has none
+
+
+def next_wait(previous: float, failed: bool, base: float) -> float:
+    """The wait before the next pass: `base` after a pass with no failure, else twice `previous`, never
+    more than `BACKOFF_MAX` times `base`."""
+    return min(previous * 2, base * BACKOFF_MAX) if failed else base
 
 
 def _say(e) -> str:
@@ -231,14 +244,16 @@ class Decisions:
         self._sent.pop(ext, None)
         self._known.discard(ext)
 
-    async def reconcile(self) -> None:
-        """One pass: delete what must not be in lore, then put what is missing or changed."""
+    async def reconcile(self) -> bool:
+        """One pass: delete what must not be in lore, then put what is missing or changed. True when a
+        call to lore failed (the loop then waits longer)."""
         if not self.active():
-            return
+            return False
         async with self._lock:
-            await self._pass()
+            return await self._pass()
 
-    async def _pass(self) -> None:
+    async def _pass(self) -> bool:
+        failed = False
         wanted = await asyncio.to_thread(self.wanted)
         async with self._lore() as lore:
             listed = None
@@ -246,14 +261,17 @@ class Decisions:
                 listed = await self._listed(lore)
             except LoreError as e:
                 log.warning("brain decisions: could not list lore's documents: %s", _say(e))
+                failed = True
             except Exception as e:   # noqa: BLE001
                 log.warning("brain decisions: could not list lore's documents: %s", type(e).__name__)
+                failed = True
             if listed is not None:
                 self._known |= set(listed)
             # 1. deletes first. Without a listing, what this process put earlier is all it can name.
             current = set(listed) if listed is not None else set(self._known)
             for ext in sorted(e for e in current if e.startswith(PREFIX) and e not in wanted):
-                await self._delete(lore, ext)
+                if not await self._delete(lore, ext):
+                    failed = True
             # 2. puts, a project re-checked for privacy just before each batch
             todo = []
             for ext, doc in wanted.items():
@@ -271,9 +289,11 @@ class Decisions:
                     await lore.put_documents(SOURCE, [t[1] for t in batch])
                 except LoreError as e:
                     log.warning("brain decisions: could not put %d documents: %s", len(batch), _say(e))
+                    failed = True
                     continue
                 except Exception as e:   # noqa: BLE001
                     log.warning("brain decisions: could not put %d documents: %s", len(batch), type(e).__name__)
+                    failed = True
                     continue
                 for ext, _doc, digest in batch:
                     self._sent[ext] = digest
@@ -284,20 +304,34 @@ class Decisions:
                 if private:
                     for ext in sorted(e for e in self._known if e.startswith(PREFIX)
                                       and e[len(PREFIX):].split(":doc:", 1)[0] in private):
-                        await self._delete(lore, ext)
+                        if not await self._delete(lore, ext):
+                            failed = True
         self.passes += 1
+        return failed
 
     # -- the task ---------------------------------------------------------------------------
 
+    async def _pause(self, seconds: float, backing_off: bool) -> None:
+        """Wait before the next pass. After a clean pass a `wake` ends the wait early; while backing off
+        it does not (the wait is over only when its time is)."""
+        if backing_off:
+            await asyncio.sleep(seconds)
+            return
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._wake.wait(), seconds)
+
     async def run(self) -> None:
+        wait = max(0.05, INTERVAL_SECONDS)
         while True:
             self._wake.clear()
             try:
-                await self.reconcile()
+                failed = await self.reconcile()
             except Exception as e:   # noqa: BLE001  (one bad pass must not end the loop)
                 log.warning("brain decisions: a pass failed: %s", type(e).__name__)
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._wake.wait(), max(0.05, INTERVAL_SECONDS))
+                failed = True
+            base = max(0.05, INTERVAL_SECONDS)
+            wait = next_wait(wait, failed, base)
+            await self._pause(wait, failed)
 
     def attach(self, app) -> None:
         """Start the task with the app and stop it when the app stops."""
