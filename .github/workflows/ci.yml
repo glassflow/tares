@@ -337,11 +337,10 @@ jobs:
           npm run build
         working-directory: ui
 
+      # No pip cache here: setup-python keys it on lsb_release, which the Playwright image does not have.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
       - name: Browser e2e suites
         run: |
           pip install -e .
