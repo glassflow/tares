@@ -413,6 +413,22 @@ def outside_gate(store, uid: str, cache: dict | None = None) -> tuple[str, str] 
     return found
 
 
+def warm_gates(store, uids, cache: dict) -> None:
+    """Resolve the review gate of every project in `uids` into `cache` (the one outside_gate
+    reads) with one query for the projects that hold their own choice. The rest share the
+    factory's answer, which is the same for each (the review slot carries nothing from a
+    project), so it is read once; a project with its own choice resolves alone, as before."""
+    todo = [u for u in dict.fromkeys(uids) if u not in cache]
+    if not todo:
+        return
+    own = store.projects_with_choice("review", todo)
+    shared = [u for u in todo if u not in own]
+    if shared:
+        found = outside_gate(store, None)
+        for u in shared:
+            cache[u] = found
+
+
 async def _outside_verdict(store, uid: str, t: dict, pr: dict, gate: tuple[str, str]) -> None:
     """A ticket in review whose project's gate is an outside tool: ask the gate for its verdict on
     the pull request's current head and keep it as a review record, once per head and verdict
@@ -2087,10 +2103,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # for it too; its row then names the gate in `outside_gate`.
         hidden = h.hidden_ids()
         gates: dict = {}
-        waiting = [(n, t) for n, t in store.review_tickets()
-                   if t["project"] not in hidden and (keep is None or keep(t))
-                   and (outside or outside_gate(store, t["project"], gates) is None)]
+        reviewing = [(n, t) for n, t in store.review_tickets()
+                     if t["project"] not in hidden and (keep is None or keep(t))]
+        warm_gates(store, [t["project"] for _, t in reviewing], gates)
+        waiting = [(n, t) for n, t in reviewing
+                   if outside or outside_gate(store, t["project"], gates) is None]
         ids = [t["id"] for _, t in waiting]
+        events = store.challenge_events_many(
+            h.cc_source(), [(t["project"], factory_mod.label(t)) for _, t in waiting])
         siblings = store.milestone_statuses(sorted({t["milestone"] for _, t in waiting
                                                     if t["milestone"]}))
         entered = store.entered_stage(ids, "review")
@@ -2104,8 +2124,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             blocks = bool(t["milestone"]) and all(
                 x["status"] in factory_mod.DONE_STATUSES for x in others)
             since = entered.get(t["id"], t["updated_at"])
-            layer = factory_mod.challenger_layer(
-                store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
+            layer = factory_mod.challenger_layer(events[(uid, factory_mod.label(t))])
             v = verdict_now(t, lasts.get(t["id"]))
             out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
                         "title": t["title"], "holder": t["holder"],

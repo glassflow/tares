@@ -41,7 +41,7 @@ from . import factory as factory_mod
 from . import factory_api
 from . import factory_github
 from .envelope import now_utc
-from .factory_waiting import crew_has, effective_autonomy
+from .factory_waiting import crew_has, effective_autonomy, handover_of
 from .merge_ready import merge_ready
 
 # Head branches the queue never touches: a milestone branch is merged by the crew's releaser, not
@@ -90,15 +90,21 @@ def judge(decision: dict) -> tuple[bool, str]:
     return yes and not asks, said
 
 
-def autonomy_of(store, project_id: str) -> str:
+def autonomy_of(store, project_id: str, handovers: dict | None = None, memo: dict | None = None) -> str:
     """L4-ship when the hand-over (else the crew's setting, with the hand-over person's own over
     it) says so, and the team's stored autonomy, a ceiling, allows it; L3-review for anything
-    else. A hand-over's own L4-ship never beats a team set to L3-review."""
-    ho = store.get_handover(project_id) or {}
-    crew = factory_api.crew_settings(store, ho.get("person")).get("autonomy")
-    level = effective_autonomy(store, None, project_id, crew=crew)
-    team = factory_api.stored_crew_setting(store, factory_api.CREW_SETTING).get("autonomy")
-    level = factory_mod._stricter_autonomy(level, team)
+    else. A hand-over's own L4-ship never beats a team set to L3-review. A caller that asks for
+    many projects gives `handovers` ({project id: hand-over}, one read of them) and one `memo`
+    dict, so each crew setting is read once, not once per project."""
+    memo = {} if memo is None else memo
+    ho = handover_of(store, project_id, handovers) or {}
+    who = (ho.get("person") or {}).get("id")
+    if ("crew", who) not in memo:
+        memo[("crew", who)] = factory_api.crew_settings(store, ho.get("person")).get("autonomy")
+    level = effective_autonomy(store, None, project_id, crew=memo[("crew", who)], handovers=handovers)
+    if "team" not in memo:
+        memo["team"] = factory_api.stored_crew_setting(store, factory_api.CREW_SETTING).get("autonomy")
+    level = factory_mod._stricter_autonomy(level, memo["team"])
     return AUTO if level == AUTO else "L3-review"
 
 

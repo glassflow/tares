@@ -229,18 +229,13 @@ async def main():
             ck(f"{title} waits since its latest move to review",
                str(got_at).replace("T", " ")[:19] == str(want)[:19], f"{got_at} vs {want}")
         golden(normalize(out), "review_queue.json")
-        # queries other than the challenger lookup (one per ticket in review, TR-658 was
-        # skipped) do not grow with the tickets in review
-        real = store.challenge_events
-        store.challenge_events = lambda *a: []
-        try:
-            _, q_few = await get("/api/review-queue")
-            more = [t for t in store.list_tickets(big) if t["stage"] in ("doing", "changes")]
-            for t in more:
-                store.update_ticket(t["id"], stage="review")
-            _, q_many = await get("/api/review-queue")
-        finally:
-            store.challenge_events = real
+        # the queries do not grow with the tickets in review: the challenger lines and the
+        # review gates are read once for all of them (TR-1472)
+        _, q_few = await get("/api/review-queue")
+        more = [t for t in store.list_tickets(big) if t["stage"] in ("doing", "changes")]
+        for t in more:
+            store.update_ticket(t["id"], stage="review")
+        _, q_many = await get("/api/review-queue")
         ck(f"queries do not grow with the tickets in review (6 vs {6 + len(more)})",
            q_few == q_many, f"{q_few} vs {q_many}")
         print(f"  {q_many} queries for {6 + len(more)} tickets in review")

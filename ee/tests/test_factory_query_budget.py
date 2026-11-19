@@ -73,12 +73,14 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # purpose.
 #
 # Statements per route for the cell seeded below, by the backend the state is on (DuckDB, or Postgres
-# when TARES_TEST_PG is set): the count measured on 2026-11-19 plus 2 percent, rounded up (the
-# ticket says 5, but 5 percent of 780 is 39 statements and one query per project is 25: the definition
-# of done wants that caught, and the counts do not vary between runs). Both
-# backends measured the same today (449, 780, 374, 46, 13, 19), but each has its own entry so a
-# change that moves one (a sessions database, a Postgres-only read) can move only that one.
-_TODAY = {"home": 458, "projects": 796, "project": 382, "ticket": 29, "raw_tickets": 9, "raw_ticket": 15}
+# when TARES_TEST_PG is set): the count measured plus 2 percent, rounded up (the ticket says 5, but
+# 5 percent of 105 is 5 statements and one query per project is 25: the definition of done wants that
+# caught, and the counts do not vary between runs). TR-1472 lowered home, projects and project from 449, 780
+# and 374, and TR-1474 lowered ticket, raw_tickets and raw_ticket from 46, 13 and 19 (home, projects,
+# project, ticket, raw_tickets, raw_ticket). Each backend
+# has its own entry so a change that moves one (a sessions database, a Postgres-only read) can move
+# only that one.
+_TODAY = {"home": 108, "projects": 84, "project": 82, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 BUDGET = {"duckdb": dict(_TODAY), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -282,19 +284,45 @@ async def main():
         print(f"backend: {backend}")
         uid = "uc_budget00"
         ref = store.get_ticket(uid, by_project[uid][1])["id"]   # a ticket in review with a pull request
+        # how often a request builds the team home (TR-1472: at most once, whichever page)
+        from tares_ee import team_home as th
+        builds = {"read": 0, "home": 0}
+        real_init, real_home = th.HomeRead.__init__, th._team_home
+
+        def counted_init(self, *a, **kw):
+            builds["read"] += 1
+            return real_init(self, *a, **kw)
+
+        def counted_home(t):
+            builds["home"] += 1
+            return real_home(t)
+        th.HomeRead.__init__, th._team_home = counted_init, counted_home
+        built = {}
         for name, tmpl in ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
             counter = [0]
+            builds["read"] = builds["home"] = 0
             token = _COUNTER.set(counter)
             try:
                 resp = await call(sam, path)
             finally:
                 _COUNTER.reset(token)
+            built[name] = dict(builds)
             ck(f"GET {tmpl} answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
             counts[name] = counter[0]
             bodies[name] = steady(resp.json())
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
+
+    print("== the team home is built once per request ==")
+    th.HomeRead.__init__, th._team_home = real_init, real_home
+    for name, _ in ROUTES:
+        ck(f"{name}: the team home is read once at most ({built[name]['read']} reads, "
+           f"{built[name]['home']} builds)", built[name]["read"] <= 1 and built[name]["home"] <= 1,
+           str(built[name]))
+    ck("home builds it (the counter sees a build)", built["home"]["read"] == 1, str(built["home"]))
+    for name in ("home", "projects"):
+        ck(f"{name} runs under 150 statements at 25 projects", counts[name] < 150, counts[name])
 
     print("== the budget ==")
     budget = BUDGET[backend]

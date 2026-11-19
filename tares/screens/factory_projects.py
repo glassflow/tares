@@ -18,8 +18,8 @@ from fastapi import Request
 
 from ..envelope import now_utc
 from .. import factory_owners as owners_mod
-from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
-                            caller_owns, caller_waiting)
+from ..factory_home import (_STATE_ORDER, _caller, _count, _dt, for_caller, plain_ago, project_row,
+                            caller_owns, caller_waiting, team_of)
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
@@ -105,26 +105,30 @@ def register(app, store, h, ctx):
         tickets = store.tickets_by_project(ids)
         milestones = store.milestones_by_project(ids)
         # what waits for the caller, as their home has it (never another person's items)
-        waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
-        rows = [row_for(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
+        fxc = for_caller(fx, request)
+        home = team_of(fxc, request, now)   # built once: the waiting list and the team parts read it
+        waiting = caller_waiting(store, fxc, now, request, hidden, home)
+        handovers = store.handovers_by_project(ids)
+        rows = [row_for(p, tickets[p["id"]], handovers.get(p["id"]), waiting, stations, now,
                         milestones[p["id"]]) for p in projects]
         # Close is for whoever owns the project's work (factory_owners)
         owners = owners_mod.Owners(store)
+        who = _caller(store, fxc, request)
         by_id = {p["id"]: p for p in projects}
         for r in rows:
-            r["can_close"] = r["can_close"] and caller_owns(store, for_caller(fx, request), request,
-                                                            by_id[r["id"]], owners)
+            r["can_close"] = r["can_close"] and caller_owns(store, fxc, request, by_id[r["id"]],
+                                                            owners, who)
         rows.sort(key=lambda r: (ORDER[r["state"]],
                                  -(_dt(r["last_activity_at"]) or _EPOCH).timestamp()))
         counts = {"all": len(rows), **{s: sum(1 for r in rows if r["state"] == s) for s in STATES}}
         body = {"projects": rows, "counts": counts, "now": now.isoformat()}
-        team = _team(fx, request, projects, tickets, rows, now)
+        team = _team(fx, request, projects, tickets, rows, now, home)
         if team:
             body.update(team)
         return body
 
 
-def _team(fx, request, projects, tickets, rows, now) -> dict:
+def _team(fx, request, projects, tickets, rows, now, home: dict | None = None) -> dict:
     """What a cell of more than one person adds (TR-1277), or {} for a cell of one and a cell with no
     licence: each row gains its lead, members, scope, the person's tickets in words and `mine` (the
     person leads it, holds a ticket in it, or something in it waits for them), and `team` holds the
@@ -134,7 +138,8 @@ def _team(fx, request, projects, tickets, rows, now) -> dict:
     `mine` reads what waits for the caller's person (fx.team_home), not the cell's list."""
     if fx is None or not hasattr(fx, "team_home") or not hasattr(fx, "team_projects"):
         return {}
-    home = fx.team_home(request, now)
+    if home is None:
+        home = fx.team_home(request, now)
     if not home:
         return {}
     keys = fx.team_projects(request, projects, tickets, rows, "team", now, home["waiting_for_you"])
