@@ -26,10 +26,11 @@ from .sre_store import SRE_SCHEMA, SreStore
 AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import delete, select
 
-from . import state_db
+from . import session_ingest, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
+from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
 _SCHEMA = """
@@ -795,6 +796,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # connection and lock by default; with a state_dsn, Postgres, where reads take no lock and
         # run in parallel and writes take self._swrite, so read-then-write steps stay atomic.
         self._lock = threading.Lock()
+        # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
+        self._sess_lock = threading.Lock()
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -1478,6 +1481,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def append(self, envelopes: list[Envelope]) -> None:
         if not envelopes:
             return
+        cc = session_ingest.claude_code_lines(self, envelopes)
+        if not cc:
+            return self._append(envelopes)
+        # The claude_code lines of the batch are counted into `sessions` after the commit. The
+        # reconcile at start holds the same lock, so a line is never counted by both.
+        with self._sess_lock:
+            self._append(envelopes)
+            session_ingest.record(self, cc)
+
+    def start_session_reconcile(self):
+        """Catch the `sessions` table up with the events in a background thread (TR-1471)."""
+        return session_ingest.start_reconcile(self)
+
+    def _append(self, envelopes: list[Envelope]) -> None:
         # Explicit column list: the `labels` column was added by migration after first release,
         # so positional INSERT order is no longer guaranteed.
         rows = [
@@ -4589,21 +4606,27 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return int(n)
 
     def purge_events(self, source: str) -> int:
-        with self._lock:
-            n = self.con.execute(
-                "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
-            self.con.execute("BEGIN TRANSACTION")
-            try:
-                self.con.execute("DELETE FROM events WHERE source = ?", [source])
-                self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
-                # Drop the maintained counters for this source (the only decrement path).
-                self.con.execute("DELETE FROM source_stats WHERE source = ?", [source])
-                self.con.execute("DELETE FROM entity_counts WHERE source = ?", [source])
-                self.con.execute("DELETE FROM entity_label_state WHERE source = ?", [source])
-                self.con.execute("COMMIT")
-            except Exception:
-                self.con.execute("ROLLBACK")
-                raise
+        # _sess_lock first, as append and the reconcile take it, so no line is counted into the
+        # sessions table between the purge and the delete of its rows.
+        with self._sess_lock:
+            with self._lock:
+                n = self.con.execute(
+                    "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
+                self.con.execute("BEGIN TRANSACTION")
+                try:
+                    self.con.execute("DELETE FROM events WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
+                    # Drop the maintained counters for this source (the only decrement path).
+                    self.con.execute("DELETE FROM source_stats WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM entity_counts WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM entity_label_state WHERE source = ?", [source])
+                    self.con.execute("COMMIT")
+                except Exception:
+                    self.con.execute("ROLLBACK")
+                    raise
+            # the sessions table counts those lines too: a re-ship of them would count them twice
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
         return n
 
     # ── subscriptions ─────────────────────────────────────────────────────────

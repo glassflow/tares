@@ -29,8 +29,8 @@ from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0002_session_tables"      # the newest revision: tests that count revisions move with it
-REVISIONS = 2
+HEAD = "0003_sessions"              # the newest revision: tests that count revisions move with it
+REVISIONS = 3
 FAILS = []
 
 
@@ -84,7 +84,7 @@ def fresh_start():
     path = os.path.join(d, "t.duckdb")
     with capture_logs("alembic.runtime.migration") as recs:
         s = Store(path)
-    ck("a first start runs both revisions", len(upgrade_lines(recs)) == REVISIONS, [r.getMessage() for r in recs])
+    ck("a first start runs every revision", len(upgrade_lines(recs)) == REVISIONS, [r.getMessage() for r in recs])
     ck(f"the revision table holds {HEAD}", versions(s.sessions_db) == [HEAD], versions(s.sessions_db))
     if s.state_dsn:
         ck("with a state DSN the store is Postgres", s.sessions_db.dialect == "postgresql")
@@ -239,7 +239,7 @@ def upgrade_failure():
 
 
 SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
-ALL_TABLES = SESSION_TABLES + ["session_store_copies"]
+ALL_TABLES = SESSION_TABLES + ["session_store_copies", "session_ingest_marks", "sessions"]
 
 
 def shape(engine, names=ALL_TABLES):
@@ -735,7 +735,7 @@ def postgres():
         ck("the dialect is postgresql", sdb.dialect == "postgresql")
         with capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
-        ck("a first upgrade runs both revisions", len(upgrade_lines(recs)) == REVISIONS)
+        ck("a first upgrade runs every revision", len(upgrade_lines(recs)) == REVISIONS)
         ck("session_store_version is in the schema from the DSN", "session_store_version" in tables(schema),
            tables(schema))
         ck("and not in public", "session_store_version" not in tables("public"))

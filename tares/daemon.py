@@ -647,6 +647,10 @@ def make_app() -> FastAPI:
               f"({counts['sources']} sources, {counts['triggers']} triggers"
               f"{', ' + str(counts['projects']) + ' projects' if counts.get('projects') else ''})")
 
+    # The sessions table catches up with the events in the background (TR-1471); the lines stored
+    # from here on are counted as they arrive.
+    store.start_session_reconcile()
+
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)
     # poll connectors hold off while ingest is paused for storage (see storage_state)

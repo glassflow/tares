@@ -11,7 +11,8 @@ these tables, and nothing else does outside `copy.py` and the tests' own seeding
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Column, Double, Index, Integer, MetaData, Table, Text
+from sqlalchemy import (BigInteger, Boolean, Column, Double, Index, Integer, MetaData, Table, Text,
+                        false)
 
 from .types import UTCDateTime
 
@@ -77,6 +78,31 @@ session_meters = Table(
     Column("context_at", UTCDateTime),
     Column("context_asked_at", UTCDateTime),
     Column("status_person", Text),
+)
+
+# What a session's lines add up to (session_ingest.py): written as each claude_code line is
+# stored, and caught up from DuckDB at start. Station, role, project and state stay in their own
+# tables and are joined by the readers. `lines_complete` is set by the ticket that fills it
+# (TR-1478); until then it stays false.
+sessions = Table(
+    "sessions", metadata,
+    Column("session", Text, primary_key=True),
+    Column("source", Text),
+    Column("started_at", UTCDateTime),
+    Column("last_line_at", UTCDateTime),
+    Column("line_count", Integer, nullable=False, server_default="0"),
+    Column("tool_calls", Integer, nullable=False, server_default="0"),
+    Column("coordination_calls", Integer, nullable=False, server_default="0"),
+    Column("lines_complete", Boolean, nullable=False, server_default=false()),
+    Column("updated_at", UTCDateTime),
+)
+Index("sessions_last_line_at", sessions.c.last_line_at)
+
+# How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
+session_ingest_marks = Table(
+    "session_ingest_marks", metadata,
+    Column("name", Text, primary_key=True),
+    Column("at", UTCDateTime),
 )
 
 # One row per table copied from DuckDB by copy.py, so a second start copies nothing

@@ -58,6 +58,13 @@ class SessionStore:
             return func.greatest(a, b)
         return func.coalesce(func.max(a, b), a, b)
 
+    def least(self, a, b):
+        """The smaller of two values, a NULL one ignored (Postgres `least`; SQLite's scalar `min`
+        gives NULL for a NULL argument, so the other value is the fallback)."""
+        if self.dialect == "postgresql":
+            return func.least(a, b)
+        return func.coalesce(func.min(a, b), a, b)
+
     def close(self) -> None:
         self.engine.dispose()
 
