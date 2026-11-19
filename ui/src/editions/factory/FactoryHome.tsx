@@ -171,7 +171,10 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} top={it.id === top} />;
   return (
     <section aria-label="Waiting for you" className="min-w-0">
-      <SectionHead title="Waiting for you" aside={<span className={MUTED}>what holds the crew up first</span>} />
+      <SectionHead title="Waiting for you"
+                   aside={items.length > 0
+                     ? <Link to="/feed" data-testid="open-feed" className="text-xs text-foreground underline">Open the feed</Link>
+                     : <span className={MUTED}>what holds the crew up first</span>} />
       <div>
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-6" />

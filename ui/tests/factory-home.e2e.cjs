@@ -143,7 +143,7 @@ function cleanEnv(extra) {
       ck(`busy @${width}: the other rows' main actions keep the dark outline`,
          (await rows.nth(1).getByRole("button", { name: "Close project" }).getAttribute("data-primary")) === null);
       ck(`busy @${width}: no "more" button with 4 waiting`, (await page.getByRole("button", { name: /\d+ more/ }).count()) === 0);
-      ck(`busy @${width}: the caption says what comes first`, await page.getByText("what holds the crew up first").isVisible());
+      ck(`busy @${width}: the link to the feed stands where the caption was`, await page.getByTestId("open-feed").isVisible() && (await page.getByText("what holds the crew up first").count()) === 0);
       ck(`busy @${width}: the headline is the data's`, (await page.getByTestId("home-headline").innerText()).startsWith("4 things wait for you."));
       const second = rows.nth(1).getByRole("button");
       ck(`busy @${width}: a row's outline button comes before its primary one`,
@@ -308,6 +308,47 @@ function cleanEnv(extra) {
         release(); ctl.hold = null;
         await page.getByTestId("factory-home").waitFor();
         await oneRead(ck, "live");
+        await ctx.close();
+      }
+
+      // TR-1525: "Open the feed" beside the heading when something waits, and nothing when nothing does
+      {
+        const { ctx, page } = await liveContext(1440);
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        const listed = await page.getByTestId("waiting-row").count();
+        await page.getByTestId("open-feed").click();
+        await page.getByTestId("feed-card").first().waitFor({ timeout: 5000 }).catch(() => {});
+        const cards = await page.getByTestId("feed-card").count();
+        ck("live: Open the feed lands on the feed with the same items", new URL(page.url()).pathname === "/feed" && listed > 0 && cards === listed,
+           `${page.url()} home ${listed}, feed ${cards}`);
+        await ctx.close();
+      }
+      {
+        const { ctx, page } = await liveContext(1440);
+        await page.route("**/api/home", async (route) => {
+          const res = await route.fetch();
+          await route.fulfill({ response: res, json: { ...(await res.json()), waiting_for_you: [] } });
+        });
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        ck("live: no feed link when nothing waits", (await page.getByTestId("waiting-row").count()) === 0 && (await page.getByTestId("open-feed").count()) === 0
+           && (await page.getByText("what holds the crew up first").count()) === 1);
+        await ctx.close();
+      }
+      {
+        const { ctx, page } = await liveContext(360);
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        const h = await page.getByRole("heading", { name: "Waiting for you", exact: true }).evaluate((el) => {
+          const c = getComputedStyle(el);
+          const lh = c.lineHeight === "normal" ? parseFloat(c.fontSize) * 1.2 : parseFloat(c.lineHeight);
+          return { height: el.getBoundingClientRect().height, lineHeight: lh };
+        });
+        ck("live: the heading stays on one line at phone width", h.height <= h.lineHeight + 1, JSON.stringify(h));
         await ctx.close();
       }
 
