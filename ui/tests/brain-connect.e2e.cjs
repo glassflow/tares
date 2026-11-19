@@ -90,7 +90,9 @@ const LIST = () => [
 // ---- the brain API, answered here
 function brainMock(repos, extra = {}) {
   const m = {
-    repos, github: true, readStatus: 200, readDetail: "nope", gate: null, reads: 0, posts: [], postAnswer: null, ...extra,
+    repos, github: true, readStatus: 200, readDetail: "nope", gate: null, reads: 0, posts: [], postAnswer: null,
+    // the folders Tares finds per repo (TR-1454): none unless a test says, so the room under a repo says "none found"
+    scans: {}, folderReads: [], ...extra,
   };
   m.handle = async (route) => {
     const req = route.request();
@@ -101,6 +103,14 @@ function brainMock(repos, extra = {}) {
       if (m.gate) await m.gate;
       if (m.readStatus !== 200) return route.fulfill({ status: m.readStatus, json: { detail: m.readDetail } });
       return route.fulfill({ status: 200, json: { github: m.github, repos: m.repos } });
+    }
+    const fm = p.match(/^\/api\/brain\/repos\/available\/([^/]+)\/([^/]+)\/folders$/);
+    if (req.method() === "GET" && fm) {
+      const repo = `${decodeURIComponent(fm[1])}/${decodeURIComponent(fm[2])}`;
+      m.folderReads.push(repo);
+      const sc = m.scans[repo];
+      if (sc && sc.status) return route.fulfill({ status: sc.status, json: { detail: sc.detail || "nope" } });
+      return route.fulfill({ status: 200, json: { repo, folders: [], suggested: [], partial: false, scanned: true, scan_error: null, ...(sc || {}) } });
     }
     if (req.method() === "POST" && p === "/api/brain/repos") {
       const body = JSON.parse(req.postData() || "null");
@@ -252,7 +262,7 @@ const PEOPLE = [
       eq("nothing chosen: the button label", await label(page), "Connect repos");
       ck("nothing chosen: the button is disabled", await btn.isDisabled());
       eq("the explanation beside the button", await text(page.getByTestId("brain-connect-slow")),
-         "The first index of a large repo can take a while. Its card shows how far it has got, and the crew keeps working with grep meanwhile.");
+         "The first index of a large repo can take a while. Its card shows how far it has got.");
       ck("the explanation sits beside the button", await page.evaluate(() => {
         const b = document.querySelector('[data-testid="brain-connect-submit"]').getBoundingClientRect();
         const s = document.querySelector('[data-testid="brain-connect-slow"]').getBoundingClientRect();
@@ -281,9 +291,11 @@ const PEOPLE = [
       eq("one chosen: Connect 1 repo", await label(page), "Connect 1 repo");
       ck("one chosen: the button is enabled", await btn.isEnabled());
       const under = page.locator('[data-testid="brain-connect-under"][data-repo="acme/web"]');
-      ck("room under the checked repo, and it holds nothing yet", (await under.count()) === 1 && (await under.innerText()).trim() === "" && (await under.evaluate((e) => e.getBoundingClientRect().height)) === 0);
+      await under.getByTestId("brain-connect-folders-none").waitFor();
+      ck("room under the checked repo holds its folder list: none found here (TR-1454)", (await under.count()) === 1
+         && (await text(under.getByTestId("brain-connect-folders-none"))) === "No decision folders found. Add one if your decisions live in the repo.");
       eq("no room under the repos that are not checked", await page.getByTestId("brain-connect-under").count(), 1);
-      await row(page, "acme/api").locator("label").click();   // the name is a label: it checks too
+      await row(page, "acme/api").locator("label").first().click();   // the name is a label: it checks too
       await box(page, "acme/fetcher").click();
       eq("three chosen: Connect 3 repos", await label(page), "Connect 3 repos");
       eq("the three are checked", await checkedRepos(page), ["acme/api", "acme/fetcher", "acme/web"]);
@@ -321,7 +333,7 @@ const PEOPLE = [
       // the body: exactly the chosen repos, in the list's order (api was clicked after web)
       await btn.click();
       await page.waitForURL((u) => u.pathname === "/brain", { timeout: 10000 });
-      eq("POST: one request, exactly the chosen repos in the list's order", mock.posts, [{ repos: ["acme/api", "acme/web"] }]);
+      eq("POST: one request, exactly the chosen repos in the list's order, no folders when none were chosen", mock.posts, [{ repos: ["acme/api", "acme/web"], folders: {} }]);
       ck("success lands on /brain", new URL(page.url()).pathname === "/brain");
       await ctx.close();
     }
@@ -361,11 +373,11 @@ const PEOPLE = [
       ck("lookalike names: each checkbox has its own id", ids.length === 2 && ids[0] !== "" && ids[0] !== ids[1], ids.join(" | "));
       const forIds = await page.getByTestId("brain-connect-row").evaluateAll((els) => els.map((e) => e.querySelector("label").htmlFor));
       eq("lookalike names: each label points at the checkbox of its own row", forIds, ids);
-      await row(page, "a-b/c").locator("label").click();
+      await row(page, "a-b/c").locator("label").first().click();
       eq("lookalike names: the label of a-b/c checks only a-b/c", await checkedRepos(page), ["a-b/c"]);
-      await row(page, "a/b-c").locator("label").click();
+      await row(page, "a/b-c").locator("label").first().click();
       eq("lookalike names: the label of a/b-c checks only a/b-c, both are checked now", await checkedRepos(page), ["a/b-c", "a-b/c"]);
-      await row(page, "a-b/c").locator("label").click();
+      await row(page, "a-b/c").locator("label").first().click();
       eq("lookalike names: a second click unchecks only its own row", await checkedRepos(page), ["a/b-c"]);
       eq("lookalike names: the button counts one", await label(page), "Connect 1 repo");
       await ctx.close();
@@ -392,7 +404,7 @@ const PEOPLE = [
       mock.postAnswer = null;
       await page.getByTestId("brain-connect-submit").click();
       await page.waitForURL((u) => u.pathname === "/brain", { timeout: 10000 });
-      eq("a second try sends the same choice again", mock.posts, [{ repos: ["acme/api", "acme/web"] }, { repos: ["acme/api", "acme/web"] }]);
+      eq("a second try sends the same choice again", mock.posts, [{ repos: ["acme/api", "acme/web"], folders: {} }, { repos: ["acme/api", "acme/web"], folders: {} }]);
       await ctx.close();
       // not json, a network failure: a plain sentence, never a stack or a status line
       const m2 = brainMock(LIST(), { postAnswer: () => ({ status: 500, body: "<html>boom</html>", contentType: "text/html" }) });

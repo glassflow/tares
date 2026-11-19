@@ -7,10 +7,17 @@ import { useEdition } from "../edition";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { brainRepos, removeBrainRepo, retryBrainRepo, type BrainReposData, type BrainRepoRow } from "./BrainRepos.api";
-import { BRAIN_SAMPLES, isBrainSample, SAMPLE_NOW } from "./brainSamples";
+import { BRAIN_SAMPLES, isBrainSample, SAMPLE_FOLDERS, SAMPLE_NOW, SAMPLE_UPDATES } from "./brainSamples";
+import { repoFolders, repoUpdates, saveRepoFolders, type FolderScan, type RepoUpdate } from "./BrainFolders.api";
+import { FolderList } from "./BrainFolders";
+import {
+  commitHref, decisionsHref, decisionsWhere, filesWords, HISTORY_FAILED, HISTORY_EMPTY, HISTORY_LINE, HISTORY_TITLE, NO_DECISIONS_WORDS,
+  NOT_ADMIN_403, PICK_FOLDER_WORDS, REMOVING_409, SAVE_FAILED, updatedWords, updateWords,
+} from "./brainFoldersText";
+import { formatStampUTC } from "../../lib/time";
 import {
   actionError, addedParts, ago, cardKind, count, EMPTY_WORDS, NOT_SET_UP_WORDS, plainError, percent, pollMs, POLL_SLOW_MS, queuedWords,
-  REMOVE_WORDS, REMOVING_WORDS, shortCommit, STATE_WORDS, type CardKind,
+  REMOVE_WORDS, REMOVING_WORDS, shortCommit, STATE_WORDS, timeOf, type CardKind,
 } from "./brainText";
 
 // Repos (TR-1204), the first Second Brain page: every repo the brain knows, as a card, from one read
@@ -31,7 +38,11 @@ const MUTED = "m-0 text-[13px] text-muted-foreground";
 const SMALL_BUTTON = "h-8 px-3 text-[13px]";
 const MONO = "font-mono text-[12.5px]";
 
-function Lines({ r, all, now }: { r: BrainRepoRow; all: BrainRepoRow[]; now: number }) {
+/** "Updated 22 minutes ago, 3 files changed. 1,507 files." on a Ready card. */
+const readyLine = (updated: string, changed: string, files: number): string =>
+  [updated && updated + changed, `${count(files)} ${files === 1 ? "file" : "files"}`].filter(Boolean).join(". ") + ".";
+
+function Lines({ r, all, now, admin, onHistory }: { r: BrainRepoRow; all: BrainRepoRow[]; now: number; admin: boolean; onHistory: (repo: string) => void }) {
   const added = addedParts(r, now);
   const started = ago(r.added_at, now);
   switch (cardKind(r)) {
@@ -55,33 +66,43 @@ function Lines({ r, all, now }: { r: BrainRepoRow; all: BrainRepoRow[]; now: num
               {known ? `${count(r.files_done)} of ${count(r.files_total)} files` : cardKind(r) === "cloning" ? "Fetching the code." : "Counting files."}
             </div>
           </div>
-          <p className={MUTED} data-testid="brain-line">
-            {started && `Started ${started}. `}Sessions use grep on this repo until it is ready.
-          </p>
+          {started && <p className={MUTED} data-testid="brain-line">Started {started}.</p>}
         </>
       );
     }
-    case "ready":
+    case "ready": {
+      const href = commitHref(r.repo, r.indexed_commit);
+      const at = timeOf(r.last_update?.at ?? r.last_synced);
+      const last = r.last_update;
+      const changed = last && last.ok && last.kind === "update" ? `, ${filesWords(last.files_changed)} changed` : "";
+      const folders = r.folders ?? [];
       return (
-        <>
-          <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[13px]">
-            <dt className="text-muted-foreground">Up to date with</dt>
-            <dd className="m-0" data-testid="brain-synced">
-              <span className={MONO}>main</span>
-              {r.indexed_commit && <> at <span className={MONO} data-testid="brain-commit">{shortCommit(r.indexed_commit)}</span></>}
-              {r.last_synced && <>, {ago(r.last_synced, now)}</>}
-            </dd>
-            <dt className="text-muted-foreground">Files</dt>
-            <dd className="m-0" data-testid="brain-file-count">{count(r.files_total)}</dd>
-          </dl>
+        <div className="grid gap-1 text-[13px]">
+          <p className="m-0" data-testid="brain-synced">
+            Up to date with <span className={MONO}>main</span>
+            {r.indexed_commit && <> at {href
+              ? <a href={href} target="_blank" rel="noreferrer" className={cn(MONO, "text-foreground underline")} data-testid="brain-commit">{shortCommit(r.indexed_commit)}</a>
+              : <span className={MONO} data-testid="brain-commit">{shortCommit(r.indexed_commit)}</span>}</>}
+          </p>
+          <p className="m-0 text-muted-foreground" data-testid="brain-updated">
+            {readyLine(updatedWords(at, now), changed, r.files_total)}{" "}
+            <Button variant="quiet" className="inline h-auto p-0 align-baseline text-[13px] text-foreground underline hover:bg-transparent" onClick={() => onHistory(r.repo)} data-testid="brain-history">History</Button>
+          </p>
+          <p className="m-0" data-testid="brain-decisions">
+            Decisions: {folders.length > 0 ? (
+              <><Link to={decisionsHref(r.repo)} className="text-foreground underline" data-testid="brain-decisions-link">{count(r.decisions ?? 0)}</Link>{" "}
+                from {folders.length === 1 ? <span className={MONO} data-user-text>{decisionsWhere(folders)}</span> : decisionsWhere(folders)}</>
+            ) : <>{NO_DECISIONS_WORDS}{admin && <> {PICK_FOLDER_WORDS}</>}</>}
+          </p>
           {r.sync_failures > 0 && (
             <p className={MUTED} data-testid="brain-sync-note">
               {r.sync_failures === 1 ? "The last update from main did not go through." : `The last ${r.sync_failures} updates from main did not go through.`}
               {r.sync_error && <> <span data-user-text>{plainError(r.sync_error, "")}</span></>}
             </p>
           )}
-        </>
+        </div>
       );
+    }
     case "failed":
       return (
         <p className="m-0 text-[13px]" data-user-text data-testid="brain-error">
@@ -95,9 +116,10 @@ function Lines({ r, all, now }: { r: BrainRepoRow; all: BrainRepoRow[]; now: num
   }
 }
 
-function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval }: {
+function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval, onFolders, onHistory }: {
   r: BrainRepoRow; all: BrainRepoRow[]; now: number; admin: boolean; busy: boolean;
   onRetry: (repo: string) => void; onRemove: (repo: string) => void; onRetryRemoval: (repo: string) => void;
+  onFolders: (repo: string) => void; onHistory: (repo: string) => void;
 }) {
   const kind = cardKind(r);
   return (
@@ -110,9 +132,10 @@ function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval }: {
           {STATE_WORDS[kind]}
         </StatusLabel>
       </div>
-      <Lines r={r} all={all} now={now} />
+      <Lines r={r} all={all} now={now} admin={admin} onHistory={onHistory} />
       {admin && (kind === "ready" || kind === "failed" || kind === "remove_failed") && (
         <div className="flex flex-wrap gap-2">
+          {kind === "ready" && <Button variant="secondary" disabled={busy} className={SMALL_BUTTON} onClick={() => onFolders(r.repo)} data-testid="brain-folders">Decision folders</Button>}
           {kind === "failed" && <Button variant="secondary" busy={busy} className={cn(SMALL_BUTTON, "border-foreground")} onClick={() => onRetry(r.repo)} data-testid="brain-retry">Retry</Button>}
           {kind === "remove_failed" && <Button variant="secondary" busy={busy} className={cn(SMALL_BUTTON, "border-foreground")} onClick={() => onRetryRemoval(r.repo)} data-testid="brain-retry-removal">Retry removal</Button>}
           {kind !== "remove_failed" && <Button variant="secondary" disabled={busy} className={SMALL_BUTTON} onClick={() => onRemove(r.repo)} data-testid="brain-remove">Remove</Button>}
@@ -122,19 +145,111 @@ function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval }: {
   );
 }
 
+/** The Decision folders dialog of a Ready card (admins): the chosen folders, then the ones Tares found, then
+ *  one to type; Save sends the full list. The cell answers 409 while the repo is being removed. */
+function FoldersDialog({ repo, sample, now, onClose, onSaved }: {
+  repo: string | null; sample: boolean; now: number; onClose: () => void; onSaved: () => void;
+}) {
+  const [scan, setScan] = React.useState<FolderScan | null>(null);
+  const [readError, setReadError] = React.useState("");
+  const [selected, setSelected] = React.useState<string[]>([]);
+  const [saving, setSaving] = React.useState(false);
+  const [failure, setFailure] = React.useState("");
+  React.useEffect(() => {
+    if (!repo) return;
+    let live = true;
+    setScan(null); setReadError(""); setFailure(""); setSaving(false);
+    const read = sample ? Promise.resolve(SAMPLE_FOLDERS(repo)) : repoFolders(repo);
+    read.then((s) => { if (live) { setScan(s); setSelected(s.folders.map((f) => f.path)); } },
+              (e) => { if (live) setReadError(plainError((e as { message?: string }).message, NOT_DONE)); });
+    return () => { live = false; };
+  }, [repo, sample]);
+  const save = async () => {
+    if (!repo) return;
+    if (sample) { onSaved(); return; }
+    setSaving(true); setFailure("");
+    try { await saveRepoFolders(repo, selected); onSaved(); }
+    catch (e) {
+      const st = (e as { status?: number }).status;
+      setFailure(st === 409 ? REMOVING_409 : st === 403 ? NOT_ADMIN_403 : plainError((e as { message?: string }).message, SAVE_FAILED));
+    } finally { setSaving(false); }
+  };
+  return (
+    <Dialog open={repo !== null} onOpenChange={(o) => { if (!o && !saving) onClose(); }} data-testid="brain-folders-dialog"
+            title="Decision folders" description="The folders whose Markdown files the brain keeps as this repo's decisions."
+            footer={
+              <>
+                <Button variant="secondary" disabled={saving} onClick={onClose} data-testid="brain-folders-cancel">Cancel</Button>
+                <Button busy={saving} disabled={scan === null && !readError} onClick={save} data-testid="brain-folders-save">Save</Button>
+              </>
+            }>
+      <p className="m-0 font-mono text-[14px] [overflow-wrap:anywhere]" data-user-text>{repo}</p>
+      <FolderList scan={scan} readError={readError || undefined} selected={selected} onChange={setSelected} disabled={saving} now={now} data-testid="brain-folders-list" />
+      <Collapse>{failure && <Banner tone="error" data-testid="brain-folders-failed"><span data-user-text>{failure}</span></Banner>}</Collapse>
+    </Dialog>
+  );
+}
+
+/** A repo's first index and its updates since, newest first (TR-1463). Anyone can open it. */
+function HistoryDialog({ repo, sample, now, onClose }: { repo: string | null; sample: boolean; now: number; onClose: () => void }) {
+  const [updates, setUpdates] = React.useState<RepoUpdate[] | null>(null);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    if (!repo) return;
+    let live = true;
+    setUpdates(null); setFailed(false);
+    const read = sample ? Promise.resolve({ repo, updates: SAMPLE_UPDATES }) : repoUpdates(repo);
+    read.then((r) => { if (live) setUpdates(r.updates); }, () => { if (live) setFailed(true); });
+    return () => { live = false; };
+  }, [repo, sample]);
+  return (
+    <Dialog open={repo !== null} onOpenChange={(o) => { if (!o) onClose(); }} data-testid="brain-history-dialog"
+            title={HISTORY_TITLE} description={HISTORY_LINE}
+            footer={<Button variant="secondary" onClick={onClose} data-testid="brain-history-close">Close</Button>}>
+      <p className="m-0 font-mono text-[14px] [overflow-wrap:anywhere]" data-user-text>{repo}</p>
+      {failed ? <Banner tone="error" data-testid="brain-history-failed">{HISTORY_FAILED}</Banner>
+        : updates === null ? <p className={MUTED} role="status">Loading the history…</p>
+        : updates.length === 0 ? <p className={MUTED} data-testid="brain-history-empty">{HISTORY_EMPTY}</p>
+        : (
+          <ol className="m-0 max-h-[50vh] list-none overflow-y-auto border-t border-border p-0" data-testid="brain-history-list">
+            {updates.map((u, i) => {
+              const href = repo ? commitHref(repo, u.indexed_commit) : "";
+              const at = timeOf(u.at);
+              return (
+                <li key={i} className="grid gap-0.5 border-b border-border py-2 text-[13px]" data-testid="brain-history-row" data-ok={u.ok ? "1" : "0"}>
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span className={cn("font-medium", !u.ok && "text-err")}>{updateWords(u)}</span>
+                    {Number.isFinite(at) && <time dateTime={u.at} title={formatStampUTC(at)} className="text-muted-foreground">{ago(u.at, now)}</time>}
+                  </div>
+                  {u.indexed_commit && (
+                    <span className="text-muted-foreground">at {href
+                      ? <a href={href} target="_blank" rel="noreferrer" className={cn(MONO, "text-foreground underline")}>{shortCommit(u.indexed_commit)}</a>
+                      : <span className={MONO}>{shortCommit(u.indexed_commit)}</span>}</span>
+                  )}
+                  {!u.ok && u.error && <span data-user-text>{plainError(u.error, "")}</span>}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+    </Dialog>
+  );
+}
+
 function ConnectButton() {
   return <Button asChild><Link to="/brain/connect" data-testid="brain-connect">Connect a repo</Link></Button>;
 }
 
 const NONE: ReadonlySet<string> = new Set();
 
-export function BrainReposView({ data, admin, now, busy = NONE, onRetry = () => {}, onRemove = () => {}, onRetryRemoval = () => {} }: {
+export function BrainReposView({ data, admin, now, busy = NONE, onRetry = () => {}, onRemove = () => {}, onRetryRemoval = () => {}, onFolders = () => {}, onHistory = () => {} }: {
   data: BrainReposData; admin: boolean;
   /** The clock the "9 minutes ago" words count from (ms); a sample passes a fixed one. */
   now: number;
   /** The repos whose button was pressed and has not been answered yet, each until its own call ends. */
   busy?: ReadonlySet<string>;
   onRetry?: (repo: string) => void; onRemove?: (repo: string) => void; onRetryRemoval?: (repo: string) => void;
+  onFolders?: (repo: string) => void; onHistory?: (repo: string) => void;
 }) {
   if (!data.configured) {
     return (
@@ -157,7 +272,7 @@ export function BrainReposView({ data, admin, now, busy = NONE, onRetry = () => 
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]" data-testid="brain-cards">
         {data.repos.map((r) => (
           <Card key={r.repo} r={r} all={data.repos} now={now} admin={admin} busy={busy.has(r.repo)}
-                onRetry={onRetry} onRemove={onRemove} onRetryRemoval={onRetryRemoval} />
+                onRetry={onRetry} onRemove={onRemove} onRetryRemoval={onRetryRemoval} onFolders={onFolders} onHistory={onHistory} />
         ))}
       </div>
     </BrainHead>
@@ -207,6 +322,8 @@ export default function BrainRepos() {
   React.useEffect(() => { if (data) setMs(pollMs(data)); }, [data]);
 
   const [asking, setAsking] = React.useState<string | null>(null);
+  const [foldersFor, setFoldersFor] = React.useState<string | null>(null);
+  const [historyFor, setHistoryFor] = React.useState<string | null>(null);
   const [askError, setAskError] = React.useState("");
   // Each repo is busy until its own call ends: a press on another card does not free the first one.
   const [busy, setBusy] = React.useState<ReadonlySet<string>>(NONE);
@@ -252,7 +369,8 @@ export default function BrainRepos() {
         <>
           {banner && <div className="mb-6">{banner}</div>}
           <BrainReposView data={data} admin={canAct} now={now} busy={busy}
-                          onRetry={retry} onRemove={(r) => { setAskError(""); setAsking(r); }} onRetryRemoval={(r) => remove(r, false)} />
+                          onRetry={retry} onRemove={(r) => { setAskError(""); setAsking(r); }} onRetryRemoval={(r) => remove(r, false)}
+                          onFolders={(r) => setFoldersFor(r)} onHistory={(r) => setHistoryFor(r)} />
         </>
       )}
       <Dialog open={asking !== null} onOpenChange={(o) => { if (!o && !asked) setAsking(null); }} data-testid="brain-remove-dialog"
@@ -266,6 +384,9 @@ export default function BrainRepos() {
         <p className="m-0 font-mono text-[14px] [overflow-wrap:anywhere]" data-user-text data-testid="brain-remove-name">{asking}</p>
         <Collapse>{askError && <Banner tone="error" data-testid="brain-remove-failed"><span data-user-text>{askError}</span></Banner>}</Collapse>
       </Dialog>
+      <FoldersDialog repo={foldersFor} sample={sample !== null} now={now} onClose={() => setFoldersFor(null)}
+                     onSaved={() => { setFoldersFor(null); toast(sample ? SAMPLE_NOTE : "Saved. The brain reads the folders now."); reload(); }} />
+      <HistoryDialog repo={historyFor} sample={sample !== null} now={now} onClose={() => setHistoryFor(null)} />
       <Toaster />
     </>
   );

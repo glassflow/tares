@@ -261,6 +261,17 @@ async def main():
         r1 = row("acme/one")
         ck("the repo is ready with its commit, its time and its file count", r1["indexed_commit"] == "0" * 40 and r1["last_synced"] is not None
            and (r1["files_done"], r1["files_total"]) == (40, 40), str(r1))
+        h1 = store.list_brain_repo_updates("acme/one")
+        ck("the first index is in the repo's history: index, ok, its commit and file count (TR-1463)",
+           len(h1) == 1 and h1[0]["kind"] == "index" and h1[0]["ok"] and h1[0]["indexed_commit"] == "0" * 40
+           and (h1[0]["files_changed"], h1[0]["files_total"]) == (40, 40), str(h1))
+        r = await cx.get("/api/brain/repos/acme/one/updates")
+        ck("GET .../updates lists it, newest first", r.status_code == 200 and r.json()["repo"] == "acme/one"
+           and [u["kind"] for u in r.json()["updates"]] == ["index"], r.text[:300])
+        r = await cx.get("/api/brain/repos/acme/nothere/updates")
+        ck("... and answers 404 for a repo not connected", r.status_code == 404, f"{r.status_code}")
+        r = await cx.get("/api/brain")
+        ck("the card carries the last update", [x["last_update"]["kind"] for x in r.json()["repos"] if x["repo"] == "acme/one"] == ["index"], r.text[:300])
         ck("one job for the repo, however many polls", len(jobs_for("acme/one")) == 1)
         n_cp, n_lore = len(cp.requests), len(lore.requests)
         await asyncio.sleep(0.4)
@@ -276,6 +287,9 @@ async def main():
         e = row("acme/two")["error"]
         ck("the error says GitHub refused the clone of that repo", e.startswith("GitHub refused to let the brain clone acme/two") and "{" not in e, e)
         ck("... with no token in it", not any(t in e for t in TOKENS), e)
+        h2 = store.list_brain_repo_updates("acme/two")
+        ck("a failed index is in the history with the same words, and no token", len(h2) == 1 and h2[0]["kind"] == "index" and not h2[0]["ok"]
+           and h2[0]["error"] == e and not any(t in (h2[0]["error"] or "") for t in TOKENS), str(h2))
         r = await cx.get("/api/brain")
         ck("GET /api/brain shows the same error", [x["error"] for x in r.json()["repos"] if x["repo"] == "acme/two"] == [e])
         store.upsert_github_credential("setup", T1)

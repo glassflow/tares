@@ -3,6 +3,7 @@
 // they are. Repo names and the name of who added a repo are a person's own text.
 
 import { ApiError, request } from "../../api";
+import type { RepoUpdate } from "./BrainFolders.api";
 
 export type BrainState = "queued" | "cloning" | "indexing" | "ready" | "failed";
 
@@ -31,6 +32,12 @@ export interface BrainRepoRow {
   removing: boolean;
   /** Why the last removal gave up; null otherwise. */
   remove_error: string | null;
+  /** The paths of the repo's chosen decision folders (TR-1454); [] when none are chosen. */
+  folders?: string[];
+  /** How many decisions the brain holds from those folders' files. */
+  decisions?: number;
+  /** The repo's newest first index or update (TR-1463), or null before the first one ends. */
+  last_update?: RepoUpdate | null;
 }
 
 export interface BrainReposData {

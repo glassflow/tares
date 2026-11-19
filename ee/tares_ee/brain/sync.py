@@ -43,7 +43,7 @@ from tares import licence
 from tares.envelope import now_utc
 from tares.factory import norm_repo
 
-from .index import RUNNING, _count, _line
+from .index import RUNNING, _count, _line, record_update
 from .lore import LoreClient, LoreError, scrub
 
 __all__ = ["SHOW_AFTER", "SYNC_POLL_SECONDS", "Syncer", "TICK_SECONDS", "github_head", "pushed_files"]
@@ -256,10 +256,20 @@ class Syncer:
         fields = {"last_synced": now_utc(), "error": None, "sync_error": None, "sync_failures": 0}
         if commit:
             fields["indexed_commit"] = commit
-        files = _count(report.get("files_indexed")) + _count(report.get("files_unchanged"))
-        if files:
-            fields["files_done"] = fields["files_total"] = files
-        self.store.update_brain_repo(repo, fields, only_in=("ready",))
+        # A sync's report counts only the files the push touched (indexed or unchanged) and the ones it
+        # deleted, never the whole repo, so the repo's count is the one from its first index less what
+        # later pushes deleted (TR-1463). Files a push adds are counted from the next full index. Only a
+        # repo with no count yet takes the report's.
+        changed = _count(report.get("files_indexed"))
+        deleted = _count(report.get("files_deleted"))
+        row = self.store.get_brain_repo(repo)
+        before = (row or {}).get("files_total") or 0
+        total = max(0, before - deleted) if before else changed + _count(report.get("files_unchanged"))
+        if total != before:
+            fields["files_done"] = fields["files_total"] = total
+        if self.store.update_brain_repo(repo, fields, only_in=("ready",)):
+            record_update(self.store, repo, "update", True, commit=commit or None, files_changed=changed,
+                          files_deleted=deleted, files_total=total)
         if head or commit:   # an empty head would make every later poll look like a new commit
             self._synced[repo] = head or commit
         self.syncs += 1
@@ -274,7 +284,8 @@ class Syncer:
         fields = {"sync_failures": n, "sync_error": words}
         if n >= SHOW_AFTER:
             fields["error"] = words
-        self.store.update_brain_repo(repo, fields, only_in=("ready",))
+        if self.store.update_brain_repo(repo, fields, only_in=("ready",)):
+            record_update(self.store, repo, "update", False, error=words, files_total=row.get("files_total") or 0)
         log.info("brain sync of %s failed, %d in a row", repo, n)
 
     # -- the poll, for repos without webhooks -----------------------------------------------
