@@ -10,6 +10,11 @@ back-off and keeping its poll; a repo whose failure this run did not see (a rest
 listeners hearing the push once and nothing on a retry; the retry asking lore with no GitHub head and no token
 in any row or log line.
 
+TR-1513 adds: with the brain off (no licence, or no lore) a retry that is due does not wake the task every
+50 ms, and runs at once when the brain is back; a due retry for a repo with no failures, one already
+syncing and one still indexing is dropped without asking lore; an App repo a token connection now reads
+loses its back-off and its place in the App's repos.
+
 In process, no ports, against the shared fake lore (ee/tests/fake_lore.py). The syncer's clock is a fake one the
 test moves, so a half hour of back-off takes no real time; the real background task does the retrying.
 
@@ -107,7 +112,7 @@ async def main():
         await asyncio.Event().wait()
     index_mod.Indexer.run = never
 
-    visible = {"appcred": ["acme/app", "acme/push", "acme/gone", "acme/dead", "acme/ok", "acme/old", "acme/timer"], "setup": ["acme/tok"]}
+    visible = {"appcred": ["acme/app", "acme/push", "acme/gone", "acme/dead", "acme/ok", "acme/old", "acme/timer", "acme/spin"], "setup": ["acme/tok"]}
     tokens = {"appcred": TA, "setup": T1}
 
     async def listing(cred, query=""):
@@ -317,6 +322,85 @@ async def main():
         ck("nobody woke it: the retry came by itself, not before the wait", ok and len(syncs(sid)) == n + 1 and waited >= 0.45,
            f"{waited:.2f}s {row('acme/timer')}")
         sync_mod.RETRY_FIRST_SECONDS = 60.0
+
+        print("== with the brain off, a retry that is due does not spin the task (TR-1513) ==")
+        sid = make_repo("acme/spin", failures=2)
+        syncer._app.add("acme/spin")
+        syncer._retry_at["acme/spin"] = syncer._clock() - 30   # due, and the brain is off so nothing takes it
+        looks = [0]
+        real_next = syncer._next_retry
+
+        def counted():
+            looks[0] += 1
+            return real_next()
+        syncer._next_retry = counted
+        syncer.active = lambda: False   # the licence is off, or lore is not set up
+        syncer.wake()
+        await quiet(0.1)
+        looks[0] = 0
+        await quiet(1.0)
+        ck("a second with the retry due: the task looked at most twice, not every 50 ms", looks[0] <= 2, f"{looks[0]} looks")
+        n = len(syncs(sid))
+        ck("... lore was not asked and the retry is still planned", len(syncs(sid)) == n and "acme/spin" in syncer._retry_at, str(syncer._retry_at))
+        del syncer.active
+        syncer._next_retry = real_next
+        lore.sync_report["indexed_commit"] = SHA[7]
+        syncer.wake()
+        ok = await until(lambda: row("acme/spin")["sync_failures"] == 0)
+        ck("the brain comes back: the due retry runs at once", ok and len(syncs(sid)) == n + 1 and "acme/spin" not in syncer._retry_at, str(row("acme/spin")))
+
+        print("== a due retry with nothing to catch up is dropped without asking lore (TR-1513) ==")
+        sid = make_repo("acme/nofail")
+        syncer._app.add("acme/nofail")
+        syncer._retry_at["acme/nofail"] = syncer._clock() - 1
+        want = syncer._want.get("acme/nofail", 0)
+        n = len(syncs(sid))
+        syncer.wake()
+        ok = await until(lambda: "acme/nofail" not in syncer._retry_at)
+        await quiet()
+        ck("a repo with no failures: the retry is dropped, nothing asked", ok and len(syncs(sid)) == n and syncer._want.get("acme/nofail", 0) == want,
+           str((syncer._retry_at, syncer._want.get("acme/nofail"))))
+        ck("... and it stays the App's", "acme/nofail" in syncer._app)
+
+        sid = make_repo("acme/busy", failures=1)
+        syncer._app.add("acme/busy")
+        running = asyncio.create_task(asyncio.Event().wait())   # a sync that is under way for this repo
+        syncer._tasks["acme/busy"] = running
+        syncer._retry_at["acme/busy"] = syncer._clock() - 1
+        want = syncer._want.get("acme/busy", 0)
+        n = len(syncs(sid))
+        syncer.wake()
+        ok = await until(lambda: "acme/busy" not in syncer._retry_at)
+        await quiet()
+        ck("a repo already syncing: the retry is dropped and no second ask is queued", ok and len(syncs(sid)) == n and syncer._want.get("acme/busy", 0) == want,
+           str((syncer._retry_at, syncer._want.get("acme/busy"))))
+        running.cancel()
+        syncer._tasks.pop("acme/busy", None)
+
+        sid = make_repo("acme/busy2", failures=1)
+        syncer._app.add("acme/busy2")
+        store.update_brain_repo("acme/busy2", {"state": "indexing"})
+        syncer._retry_at["acme/busy2"] = syncer._clock() - 1
+        want = syncer._want.get("acme/busy2", 0)
+        n = len(syncs(sid))
+        syncer.wake()
+        ok = await until(lambda: "acme/busy2" not in syncer._retry_at)
+        await quiet()
+        ck("a repo that is indexing: the retry is dropped and nothing is asked", ok and len(syncs(sid)) == n and syncer._want.get("acme/busy2", 0) == want
+           and row("acme/busy2")["state"] == "indexing", str((syncer._retry_at, row("acme/busy2"))))
+
+        print("== an App repo a token now reads loses its back-off (TR-1513) ==")
+        visible["setup"].append("acme/turn")
+        sid = make_repo("acme/turn", failures=3)
+        heads["acme/turn"] = SHA[0]   # the head is the indexed commit: the poll has nothing to sync
+        syncer._app.add("acme/turn")
+        syncer._retry_at["acme/turn"] = syncer._clock() + 600
+        n = len(syncs(sid))
+        looked = await syncer._poll_repo(row("acme/turn"))
+        ck("the poll looked at it", looked == 1)
+        ck("it is no longer the App's and has no back-off planned", "acme/turn" not in syncer._app and "acme/turn" not in syncer._retry_at,
+           str((syncer._app, syncer._retry_at)))
+        ck("... the poll saw the index current and cleared the failure, with no sync", len(syncs(sid)) == n and row("acme/turn")["sync_failures"] == 0, str(row("acme/turn")))
 
         everything = repr([row(r["repo"]) for r in store.list_brain_repos()]) + "\n".join(logs.lines)
         ck("no token in a row or a log line", not any(t in everything for t in TOKENS), "a token is in a row or a log line")

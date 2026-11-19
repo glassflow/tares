@@ -424,7 +424,7 @@ class Syncer:
                 log.warning("brain sync could not read its repos: %s", type(e).__name__)
             delay = TICK_SECONDS if self._outstanding() else max(0.05, next_poll - time.monotonic())
             retry = self._next_retry()
-            if retry is not None:
+            if retry is not None and self.active():   # off: _start_retries does not run, so a due retry would only spin this loop
                 delay = min(delay, max(0.05, retry - self._clock()))
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), delay)
