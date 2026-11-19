@@ -17,7 +17,11 @@ lookup by email and chat.postMessage are stubbed. Checked here:
   - an item that goes with no answer recorded says it no longer waits; an edit Slack refuses for
     a while is tried again;
   - a restart (a new reader on the same store) sends nothing again and still edits what it sent;
-  - a message Slack refuses for good is shown in the person's Settings until one goes;
+  - a message Slack refuses for good is shown in the person's Settings until one goes, in one
+    plain sentence made from Slack's real error (slack.classify), never its code (TR-1511);
+  - switching messages off, a new bot token, or disconnecting Slack clears that notice;
+  - a refusal of the app itself (a revoked token, no chat:write) is shown to everyone, also to
+    someone who had nothing new, until Slack takes the token again;
   - an email Slack does not know, and a bot without users:read.email, send nothing and say so.
 
 Run: .venv/bin/python tests/test_waiting_slack.py
@@ -47,7 +51,9 @@ os.environ["TARES_PUBLIC_URL"] = "https://cell.example.com"
 
 import httpx
 
+from tares import slack as slack_mod
 from tares import waiting_slack as ws
+from tares import words
 from tares.store import now_utc
 
 P = F = 0
@@ -71,6 +77,16 @@ class FakeSlack:
         self.error: str | None = None
         self.send_error: tuple[str, bool] | None = None
         self.refused: list[dict] = []
+
+    def refuse(self, code: str | None):
+        """Refuse every send from now on as Slack does with `code`, through the real classify, so
+        the error text is what the reader gets from Slack (hint included)."""
+        if code is None:
+            self.send_error = None
+            return
+        ok, err, retry = slack_mod.classify(200, {"ok": False, "error": code})
+        assert not ok
+        self.send_error = (err, retry)
 
     async def send(self, token, msg):
         if self.send_error:
@@ -116,6 +132,9 @@ async def main():
     alex = store.create_person("Alex", email="alex@example.com", is_admin=True)
     kim = store.create_person("Kim", email="kim@example.com")
     secret = "kim-key-waiting-slack"
+    alex_key = "alex-key-waiting-slack"
+    store.insert_api_key("k_alex", "Alex's key", "nvf_alex", hashlib.sha256(alex_key.encode()).hexdigest(),
+                         ["read", "ingest"], person_id=alex["id"])
     store.insert_api_key("k_kim", "Kim's key", "nvf_kim", hashlib.sha256(secret.encode()).hexdigest(),
                          ["read", "ingest"], person_id=kim["id"])
     uid = "uc_shop"
@@ -321,14 +340,23 @@ async def main():
     ck("and only once", slack.take() == [])
     gone = ask("Ship it to a closed channel?", to=alex["id"])
     slack.refused = []
-    slack.send_error = ("slack: channel_not_found", False)
+    slack.refuse("channel_not_found")
     await read()
-    slack.send_error = None
+    slack.refuse(None)
     await read()
     ck("a refusal that will not change is not tried every minute",
        len(slack.refused) == 1 and slack.take() == [], slack.refused)
-    ck("Settings says the last message could not be sent",
-       "could not be sent" in str(reader.status_for(alex)["problem"]), reader.status_for(alex))
+
+    async def notice(key):
+        async with cx(key) as c:
+            r = await c.get("/api/me/slack")
+        assert r.status_code == 200, r.text
+        return r.json()["problem"]
+
+    closed = ws.PERSON_REFUSED["channel_not_found"]
+    said = await notice(alex_key)
+    ck("Settings says, in words, why the closed DM got nothing", said == closed, said)
+    ck("no Slack code, no brackets", said and "_" not in said and "(" not in said and "slack:" not in said, said)
     ck("only to the person it was for", reader.status_for(kim)["problem"] is None, reader.status_for(kim))
     opened = ask("Ship it to an open channel?", to=alex["id"])
     await read()
@@ -337,6 +365,91 @@ async def main():
     for d in (busy, gone, opened):      # off Alex's list again, for the checks below
         store.close_desk_item(d["id"], "dismissed", None, now_utc())
     await read()
+    slack.edits()
+
+    async def refused_for_alex(code, question):
+        slack.refuse(code)
+        d = ask(question, to=alex["id"])
+        await read()
+        slack.refuse(None)
+        store.close_desk_item(d["id"], "dismissed", None, now_utc())
+        return await notice(alex_key)
+
+    print("== switching messages off clears the notice ==")
+    ck("an archived DM", await refused_for_alex("is_archived", "Ship to the archive?") == closed)
+    async with cx(alex_key) as c:
+        off = (await c.put("/api/me/slack", json={"on": False})).json()
+        on = (await c.put("/api/me/slack", json={"on": True})).json()
+    ck("off: no notice", off["problem"] is None, off)
+    ck("on again: the old one does not come back", on["problem"] is None, on)
+
+    print("== a new bot token, or Slack disconnected, clears the notice ==")
+    ck("refused again", await refused_for_alex("channel_not_found", "Ship to nowhere?") == closed)
+    os.environ["TARES_SLACK_BOT_TOKEN"] = "xoxb-test-2"
+    ck("a new token: no notice", await notice(alex_key) is None)
+    ck("refused under it", await refused_for_alex("channel_not_found", "Ship to nowhere again?") == closed)
+    del os.environ["TARES_SLACK_BOT_TOKEN"]
+    ck("disconnected: not connected", reader.status_for(alex)["connected"] is False)
+    os.environ["TARES_SLACK_BOT_TOKEN"] = "xoxb-test-2"
+    ck("connected again with the same token: the old notice does not come back",
+       await notice(alex_key) is None)
+
+    print("== a message Slack finds malformed: told it did not go, no code ==")
+    said = await refused_for_alex("invalid_blocks", "Ship a bad message?")
+    ck("the person reads that it did not go", said == ws.OTHER_REFUSED, said)
+    good = ask("Ship a good one?", to=alex["id"])
+    await read()
+    ck("cleared by the next message that goes", len(slack.take()) == 1 and await notice(alex_key) is None)
+
+    print("== a revoked token is everyone's problem ==")
+    revoked = ws.APP_REFUSED["token_revoked"]
+    said = await refused_for_alex("token_revoked", "Ship with a revoked token?")
+    ck("Alex, whose message met it, reads it", said == revoked, said)
+    ck("Kim, who had nothing new, reads it too", await notice(secret) == revoked)
+    ck("it is not recorded as Alex's own", alex["id"] not in reader.send_failed, reader.send_failed)
+    good2 = ask("Ship it now the token works?", to=alex["id"])
+    await read()
+    ck("Slack takes the token again: the message goes, nobody's Settings names it",
+       len(slack.take()) == 1 and await notice(secret) is None and await notice(alex_key) is None)
+
+    print("== a lookup refused the same way, before any send: everyone's problem too ==")
+    reader._users.clear()
+    slack.error = "token_revoked"
+    logo = ask("Pick a logo?", to=kim["id"])
+    await read()
+    ck("nothing went", slack.take() == [])
+    ck("Alex reads it, though the lookup was for Kim", await notice(alex_key) == revoked)
+    slack.error = None
+    slack.refuse("channel_not_found")
+    await read()
+    slack.refuse(None)
+    ck("a lookup Slack answers clears it, whatever then happens to the message",
+       await notice(alex_key) is None)
+    ck("Kim reads only her own", await notice(secret) == closed)
+    tidy = ask("Pick a font?", to=kim["id"])
+    await read()
+    ck("her next message goes and clears hers", [m["channel"] for m in slack.take()] == ["U_KIM"]
+       and await notice(secret) is None)
+    ck("no chat:write scope: everyone's too",
+       await refused_for_alex("missing_scope", "Ship without the scope?") == ws.APP_REFUSED["missing_scope"]
+       and await notice(secret) == ws.APP_REFUSED["missing_scope"])
+    ck("its words name the chat:write scope", "chat:write" in str(await notice(secret)))
+    back = ask("Ship once it is back?", to=alex["id"])
+    await read()
+    ck("cleared when a message goes", len(slack.take()) == 1 and await notice(secret) is None)
+
+    print("== the words of every notice ==")
+    texts = {ws.NO_SCOPE, ws.OTHER_REFUSED, *ws.APP_REFUSED.values(), *ws.PERSON_REFUSED.values()}
+    bad = [(t, words.offenders(t)) for t in texts if words.offenders(t)]
+    ck("every notice passes the words check", not bad, bad)
+    ck("none ends in a full stop (the console adds it)", not [t for t in texts if t.endswith(".")])
+    ck("each code Slack names in the reader maps to its own words",
+       all(ws.slack_code(slack_mod.classify(200, {"ok": False, "error": c})[1]) == c
+           for c in [*ws.APP_REFUSED, *ws.PERSON_REFUSED]))
+    for d in (good, good2, logo, tidy, back):        # off the lists again, for the checks below
+        store.close_desk_item(d["id"], "dismissed", None, now_utc())
+    await read()
+    slack.take()
     slack.edits()
 
     print("== an email Slack does not know ==")
