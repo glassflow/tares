@@ -2,7 +2,7 @@
 """On a team cell, what a project asks of its lead waits for the lead only, on every screen.
 
 Seen on the factory cell: Kiran leads tares-desktop. Ashish (the cell's owner) is not on it, yet its
-page showed him four "Milestone to check" items and "calls to confirm" under "Waiting for you", and
+page showed him four "Milestone to check" items and "crew answers to confirm" under "Waiting for you", and
 the project as "Waiting on you". His home showed none of them. The project page read the
 single-person list, which asks nobody who an item is for. Now every screen reads the team home's
 rule:
@@ -122,7 +122,7 @@ async def main():
         ck("the milestone waits for Kiran, nothing to press",
            "Milestone to check for Kiran" in others and others["Milestone to check for Kiran"]["actions"] == []
            and others["Milestone to check for Kiran"]["for_person"]["id"] == pid["kiran"], list(others))
-        ck("the call waits for Kiran", "1 call to confirm for Kiran" in others, list(others))
+        ck("the call waits for Kiran", "1 crew answer to confirm for Kiran" in others, list(others))
         ck("no item is named for anyone but Kiran", all(w["label"].endswith("for Kiran") for w in a["waiting_others"]),
            list(others))
         h = await get("ashish", "/api/home")
@@ -271,7 +271,7 @@ async def main():
            == ["calls_to_confirm", "milestone_to_check"])
         k = await page("kiran", gone)
         ck("for Kiran they wait for Ashish", k["waiting"] == []
-           and sorted(w["label"] for w in k["waiting_others"]) == ["1 call to confirm for Ashish", "Milestone to check for Ashish"],
+           and sorted(w["label"] for w in k["waiting_others"]) == ["1 crew answer to confirm for Ashish", "Milestone to check for Ashish"],
            [w["label"] for w in k["waiting_others"]])
 
         print("== no admin on the cell: an orphan waits for no one, never for everyone ==")

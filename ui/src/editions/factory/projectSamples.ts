@@ -43,7 +43,7 @@ const REVIEW = { ...item("prs_to_review", "PR to review", "project-y, Show a las
   "T6, Show a last checked date, PR 17. It holds up a milestone.",
   "Waiting 3 hours · example-org/docs-site", [act("Review", true, { href: `/reviews?project=${PID}` })]),
   checks: { ci: "passing" as const, behind_by: 0, line: "Checks pass. Up to date with main." } };
-const CALLS = item("calls_to_confirm", "2 calls to confirm", "project-y",
+const CALLS = item("calls_to_confirm", "2 crew answers to confirm", "project-y",
   "The crew decided without you: ISO dates, the standard logger. Keep both?", "Made by the builder and the reviewer",
   [act("Read them", false, { href: `/projects/${PID}/calls` }), act("Keep both", true, { do: "keep_assumptions" })]);
 const PERMISSION = item("permission", "Permission", "project-y",
