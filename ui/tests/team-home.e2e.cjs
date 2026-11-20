@@ -145,7 +145,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       {
         const { ctx, page, ctl } = await open("alex", width);
         let release; ctl.hold = new Promise((r) => { release = r; });
-        const oneRead = expectOneCall(page, "/api/home");
+        const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home-loading").waitFor();
         ck(t("placeholders while the first read is out"), (await page.getByTestId("waiting-row").count()) === 0);
@@ -160,7 +160,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       {
         const { ctx, page, ctl } = await open("alex", width);
         ctl.fail = true;
-        const oneRead = expectOneCall(page, "/api/home");
+        const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home-error").waitFor();
         await oneRead(ck, t("error"));
@@ -172,7 +172,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       }
       {
         const { ctx, page } = await open("alex", width);
-        const oneRead = expectOneCall(page, "/api/home");
+        const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
         await settle(page);
@@ -199,7 +199,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       }
       {
         const { ctx, page } = await open("lee", width);
-        const oneRead = expectOneCall(page, "/api/home");
+        const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
         await oneRead(ck, t("lee"));
@@ -218,7 +218,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     for (const width of [390, 1440]) {
       const t = (s) => `live @${width}: ${s}`;
       const { ctx, page } = await open("alex", width);
-      const oneRead = expectOneCall(page, "/api/home");
+      const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await oneRead(ck, t("alex"));
@@ -581,6 +581,23 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
 
+      // TR-1528: a team home lists the day's answers too, folded, as the record has them
+      await page.getByTestId("home-answered-section").waitFor({ timeout: 9000 });
+      const todayFold = page.getByTestId("home-answered-fold");
+      ck(t("answered today: folded by default on a team home"), (await todayFold.getAttribute("aria-expanded")) === "false"
+         && (await page.getByTestId("home-answered").count()) === 0);
+      await todayFold.click();
+      const todayRows = page.getByTestId("home-answered");
+      const recordedToday = (await answered()).length;
+      const bannerRow = todayRows.filter({ hasText: "Which colour for the shop banner" });
+      const bannerSaid = (await bannerRow.innerText()).replace(/\s+/g, " ");
+      ck(t("answered today: the team home lists each answer, an option said in its words, by you, on Home"),
+         (await todayRows.count()) === recordedToday && recordedToday >= 3 && (await bannerRow.getAttribute("data-choice")) === "answered"
+         && /\banswered\s*blue, by you, on Home, \d{4}-\d\d-\d\d \d\d:\d\dZ/i.test(bannerSaid)
+         && (await todayRows.filter({ hasText: "Medium, the same height as the menu." }).count()) === 1, bannerSaid);
+      await checkWords(page, ck, t("answered today, open"));
+      await todayFold.click();
+
       // Agree and Decline
       const g1 = row(page, "merge to acme/web");
       await g1.getByRole("button", { name: "Agree" }).click();
@@ -687,7 +704,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
       const { ctx, page } = await open("alex", width);
-      const oneRead = expectOneCall(page, "/api/home");
+      const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
@@ -702,7 +719,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
       const { ctx, page } = await open("alex", width);
-      const oneRead = expectOneCall(page, "/api/home");
+      const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
@@ -723,7 +740,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
       const { ctx, page } = await open("solo", width);
-      const oneRead = expectOneCall(page, "/api/home");
+      const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
       await page.goto(`http://127.0.0.1:${SOLO}/`, { waitUntil: "load" });
       const soloUp = await page.getByTestId("factory-home").waitFor({ timeout: 15000 }).then(() => true, () => false);
       ck(t("a cell of one shows its home"), soloUp);

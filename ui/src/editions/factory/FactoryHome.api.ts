@@ -44,6 +44,13 @@ export async function getAnswerTo(item: string): Promise<HomeAnswered | null> {
   return answers.length ? toAnswered(answers[0]) : null;
 }
 
+/** The answers given today, UTC, newest first, for Answered today. No `since`: the daemon starts the day
+ *  itself (factory_api.answers_list), so the browser's own day never counts. */
+export async function getAnsweredToday(): Promise<HomeAnswered[]> {
+  const { answers } = await request<{ answers: AnswerRow[] }>("/api/answers");
+  return answers.map(toAnswered);
+}
+
 /** Mark one call the crew made as kept. `item` is the Home item that offered it, so the answer is
  *  recorded under the id the feed and Home showed (a project with calls for two owners has two). */
 export function keepAssumption(project: string, ref: string, item?: string): Promise<unknown> {
