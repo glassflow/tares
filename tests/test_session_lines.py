@@ -551,6 +551,11 @@ def reads():
         SRC, "t1", "toolu_nope") == (None, "table"))
     ck("a tool id of another session is not found in this one", s.key_tool_result_from(
         SRC, "t2", "toolu_t1") == (None, "table"))
+    s.append(envelopes(SRC, [raw("sub", "tool_use", 1, id="toolu_sub10"), raw("sub", "tool_result", 2, id="toolu_sub10")]))
+    session_ingest.reconcile_sessions(s)
+    ck("an id that only appears inside a longer id is not that call: None, as DuckDB",
+       tool_equal(s, "sub", "toolu_sub1")[0] and s.key_tool_result_from(SRC, "sub", "toolu_sub1") == (None, "table")
+       and s.key_tool_result_from(SRC, "sub", "toolu_sub10")[0] is not None)
     ck("paging past the end is an empty list, like DuckDB", s.key_events_from(SRC, "t1", 10, 50) == ([], "table"))
 
     print("== lines at the same instant, lines out of order, and a limit ==")
@@ -613,6 +618,13 @@ def archived():
         ck("merged by time: the line that arrives later but is older sits among the archived ones",
            reads_equal(s, "a1", label="mixed") and [e["text"] for e in ev if e["text"] == "in between"] != [],
            [e["text"][:12] for e in ev])
+        s.append(envelopes(SRC, [raw("a1", "assistant", 3, text="same instant as an archived line")]))
+        session_ingest.reconcile_sessions(s)
+        ev, _ = s.key_events_from(SRC, "a1")
+        same_at = [e["text"] for e in ev if e["event_time"] == ev[2]["event_time"]]
+        ck("a late line at the instant of an archived one comes after it, as DuckDB has it",
+           reads_equal(s, "a1", label="tie across part and table") and len(same_at) == 2
+           and same_at[-1] == "same instant as an archived line", same_at)
         ck("a tool result in the table and one in the part are both found", tool_equal(s, "a1", "toolu_new")[0]
            and tool_equal(s, "a1", "toolu_a1")[0] and s.key_tool_result_from(SRC, "a1", "toolu_new")[1] == "both"
            and s.key_tool_result_from(SRC, "a1", "toolu_a1")[0] is not None)
@@ -637,10 +649,10 @@ def broken_archive():
     s = open_store()
     folder = tempfile.mkdtemp()
     with archive_at(folder) as b:
-        for name in ("missing", "short", "flip", "rot", "count", "none"):
+        for name in ("missing", "short", "flip", "rot", "count", "none", "sum"):
             make_session(s, name, n=4)
         session_archive.archive_pass(s, b, NOW, limit=10)
-        want = {n: duck_read(s, SRC, n)[0] for n in ("missing", "short", "flip", "rot", "count", "none")}
+        want = {n: duck_read(s, SRC, n)[0] for n in ("missing", "short", "flip", "rot", "count", "none", "sum")}
         key = lambda n: parts_of(s, n)[0].key
         os.remove(os.path.join(folder, key("missing")))
         path = os.path.join(folder, key("short"))
@@ -660,7 +672,10 @@ def broken_archive():
                 bytes=len(junk), md5=hashlib.md5(junk).hexdigest()))
         with s.sessions_db.begin() as c:                     # the row says more lines than the file holds
             c.execute(session_archive_parts.update().where(session_archive_parts.c.session == "count").values(lines=9))
-        for n in ("missing", "short", "flip", "rot"):
+        with s.sessions_db.begin() as c:                     # a file that is whole but is not the one written
+            c.execute(session_archive_parts.update().where(session_archive_parts.c.session == "sum").values(
+                md5="0" * 32))
+        for n in ("missing", "short", "flip", "rot", "sum"):
             session_read._WARNED.clear()
             with printed() as out:
                 got, where = s.key_events_from(SRC, n)
@@ -674,7 +689,7 @@ def broken_archive():
         ck("a count that does not add up reads DuckDB", where == "events" and got == want["count"], where)
         with printed() as out:
             for _ in range(3):
-                s.key_events_from(SRC, "rot")      # the last one that logged above
+                s.key_events_from(SRC, "sum")      # the last one that logged above
         ck("the same session logs once a minute, not once a read: the first read above logged, these three do not",
            out.getvalue().count("read from DuckDB") == 0, out.getvalue())
         with printed():
