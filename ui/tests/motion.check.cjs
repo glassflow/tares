@@ -40,7 +40,7 @@ for (const file of cssFiles(path.join(UI, "src"))) {
 }
 
 // 2. src/lib/motion.ts mirrors the tokens
-if (!tokens) fail("src/styles.css", "no `@theme static` block defining --dur-1");
+if (!tokens) fail("src/paper/paper-motion.css", "no `@theme static` block defining --dur-1");
 else {
   const css = Object.fromEntries([...tokens.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
   const ts = fs.readFileSync(path.join(UI, "src/lib/motion.ts"), "utf8");
@@ -49,13 +49,13 @@ else {
   if (!pairs.length) fail("src/lib/motion.ts", "no DUR table");
   for (const [n, ms] of pairs) {
     const want = css[`dur-${n}`];
-    if (want !== `${ms}ms`) fail("src/lib/motion.ts", `DUR[${n}] is ${ms}ms, styles.css --dur-${n} is ${want ?? "missing"}`);
+    if (want !== `${ms}ms`) fail("src/lib/motion.ts", `DUR[${n}] is ${ms}ms, paper-motion.css --dur-${n} is ${want ?? "missing"}`);
   }
   for (const n of Object.keys(css).filter((k) => /^dur-\d$/.test(k))) {
     if (!pairs.some(([k]) => `dur-${k}` === n)) fail("src/lib/motion.ts", `DUR has no entry for --${n}`);
   }
   const ease = /EASE_OUT = "([^"]+)"/.exec(ts)?.[1];
-  if (ease !== css["ease-out"]) fail("src/lib/motion.ts", `EASE_OUT is ${ease}, styles.css --ease-out is ${css["ease-out"]}`);
+  if (ease !== css["ease-out"]) fail("src/lib/motion.ts", `EASE_OUT is ${ease}, paper-motion.css --ease-out is ${css["ease-out"]}`);
 }
 
 // 3. every browser suite runs quiet
