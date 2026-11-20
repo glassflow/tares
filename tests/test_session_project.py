@@ -260,6 +260,14 @@ async def tares(shipped):
         texts = [x["text"] for x in r.json()["lines"]]
         ck("read the session top to bottom", texts[0] == "let's build an invoice parser"
            and "session works in project Invoices" in texts, texts)
+        ck("the lines come from DuckDB until the table holds them all: lines_from says events",
+           r.json().get("lines_from") == "events", r.json().get("lines_from"))
+        from tares import session_ingest
+        session_ingest.reconcile_sessions(store)
+        r2 = await cx.get(f"/api/projects/{uid}/sessions/{SID}")
+        ck("once the lines are complete the same session reads from the table, with the same text",
+           r2.json().get("lines_from") == "table" and [x["text"] for x in r2.json()["lines"]] == texts,
+           r2.json().get("lines_from"))
         ck("the claude_code source is in the project", "claude_code" in store.project_sources(uid))
         print("== Tares: session state ==")
         ck("no state before the plugin reports one", ss[0]["state"] is None, ss[0])

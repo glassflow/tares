@@ -71,6 +71,16 @@ REFRESH_WAIT = 2.5     # seconds a ticket read waits for its pull request before
 _READS_AT_ONCE = 4
 
 
+def lines_from(read: list[str]) -> str:
+    """Where a response's lines came from (TR-1507): `table`, `archive`, `both`, or `events` (DuckDB).
+    One read says so itself; several say `events` when any of them fell back, `both` when they
+    differ, and `events` when nothing was read."""
+    kinds = set(read)
+    if not kinds or "events" in kinds:
+        return "events"
+    return kinds.pop() if len(kinds) == 1 else "both"
+
+
 def _shared(store, uid: str) -> "asyncio.Task":
     """The one refresh of a project that is running, or a new one. Only the background sync
     (`sync_prs`) runs it: no read waits on a whole project's pull requests (TR-1474)."""
@@ -1618,8 +1628,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                  "stage": t["stage"], "repo": t.get("repo"),
                                  "pr": (t["pr"] or {}).get("url")})
         n = min(max(recent, 0), 200)
-        lines = store.key_events(h.cc_source(), st["session"], limit=n,
-                                 offset=max((st["lines"] or 0) - n, 0)) if n else []
+        read = []       # where each read of the session's lines came from (TR-1507)
+        lines = []
+        if n:
+            lines, where = store.key_events_from(h.cc_source(), st["session"], limit=n,
+                                                 offset=max((st["lines"] or 0) - n, 0))
+            read.append(where)
         m = store.session_meters([st["session"]]).get(st["session"]) or {}
         convo = {}
         c = min(max(conversation, 0), 500)
@@ -1628,9 +1642,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
             start = max(end - c, 0)
             if since is not None and before is None:
                 start = max(min(since, end), end - SINCE_MAX, 0)
-            rows = store.key_payload_rows(h.cc_source(), st["session"], limit=end - start, offset=start)
+            rows, where = store.key_payload_rows_from(h.cc_source(), st["session"],
+                                                      limit=end - start, offset=start)
+            read.append(where)
             convo = {"conversation": crew_conversation.build(rows)[0], "conversation_from": start}
-        return {**st, "tickets": held, **convo,
+        return {**st, "tickets": held, **convo, "lines_from": lines_from(read),
                 "context_detail": m.get("context"), "context_at": m.get("context_at"),
                 "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
@@ -1642,11 +1658,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """One tool call's whole result in the station's current session (TR-1177): what a card on
         the Crew page loads when it is opened and the list held only the start of it."""
         st = pick_station(name, request, crew)
-        b = store.key_tool_result(h.cc_source(), st["session"], tool_id) if st["session"] else None
+        b, where = (store.key_tool_result_from(h.cc_source(), st["session"], tool_id)
+                    if st["session"] else (None, "events"))
         if b is None:
             raise HTTPException(404, f"no tool call {tool_id} in {name}'s session")
         return {"id": tool_id, "output": crew_conversation._result_text(b.get("content")),
-                "failed": bool(b.get("is_error"))}
+                "failed": bool(b.get("is_error")), "lines_from": where}
 
     @app.post("/api/crew/{name}/end")
     def end_station(name: str, request: Request, body: dict | None = Body(None),

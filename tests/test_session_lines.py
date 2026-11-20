@@ -3,13 +3,17 @@
 `session_ingest.record` writes each claude_code line it counts into `session_lines`, numbered within
 its session by `seq` (from the `line_count` the `sessions` upsert returns, in the same transaction),
 and `sessions.lines_complete` says whether the table holds every line DuckDB holds for the session.
-The reconcile sets that flag, at start and every ten minutes. Nothing reads the table yet.
+The reconcile sets that flag, at start and every ten minutes. A session whose lines are complete is read from
+the table and the archive (TR-1507): `Store.key_events`, `key_payload_rows` and `key_tool_result` answer what
+DuckDB answers, and `*_from` also say where the lines came from (`table`, `archive`, `both`, `events`).
 
 Plain:                python tests/test_session_lines.py
 With the Postgres harness (every Store keeps its state in Postgres):
     TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres PYTHONPATH=tests/pg_harness:. \\
         python tests/test_session_lines.py
 """
+import contextlib
+import io
 import json
 import os
 import sys
@@ -23,10 +27,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
 from sqlalchemy import func, inspect, select, text  # noqa: E402
 
-from tares import metrics, session_ingest  # noqa: E402
+from tares import metrics, session_archive, session_ingest, session_read  # noqa: E402
+from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import metadata, session_lines, sessions  # noqa: E402
+from tares.session_archive import FileBackend  # noqa: E402
+from tares.session_store.tables import metadata, session_archive_parts, session_lines, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
@@ -391,8 +397,306 @@ def cycle():
     session_ingest.CYCLE = old
 
 
+SECRET = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+NOW = T0 + timedelta(days=30)
+
+
+def raw(session, kind, seq, **kw):
+    """One transcript line as the plugin ships it (sessionId, uuid, a timestamp `seq` seconds in)."""
+    ts = (T0 + timedelta(seconds=seq)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    base = {"sessionId": session, "uuid": f"{session}-{seq}", "timestamp": ts}
+    if kind == "user":
+        return {**base, "type": "user", "message": {"role": "user", "content": kw.get("text", f"question {seq}")}}
+    if kind == "assistant":
+        return {**base, "type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": kw.get("text", f"answer {seq}")}]}}
+    if kind == "thinking":
+        return {**base, "type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": kw.get("text", "private reasoning")}]}}
+    if kind == "tool_use":
+        return {**base, "type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": kw["id"], "name": "Bash", "input": {"command": "ls"}}]}}
+    if kind == "tool_result":
+        return {**base, "type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": kw["id"], "content": kw.get("text", "out " + kw["id"])}]}}
+    raise ValueError(kind)
+
+
+def envelopes(source, lines, config=None):
+    """What the claude_code connector makes of raw lines, the way ingest does (text, labels, payload)."""
+    c = ClaudeCodeConnector(type("Cfg", (), {"name": source, "type": "claude_code", "config": config or {}})(),
+                            store=None)
+    out = []
+    for r in lines:
+        out += c.map_payload(r)
+    return out
+
+
+def duck_read(s, source, session, limit=1000, offset=0):
+    """What DuckDB answers for the three readers: the path before TR-1507."""
+    with s._lock:
+        ev = s.con.execute(
+            "SELECT event_type, text, event_time, labels FROM events WHERE source = ? AND key_value = ? "
+            "ORDER BY event_time, ingest_time LIMIT ? OFFSET ?", [source, session, limit, offset]).fetchall()
+        pay = s.con.execute(
+            "SELECT event_type, text, event_time, payload FROM events WHERE source = ? AND key_value = ? "
+            "ORDER BY event_time, ingest_time LIMIT ? OFFSET ?", [source, session, limit, offset]).fetchall()
+    return ([{"event_type": r[0], "text": r[1], "event_time": r[2], "labels": json.loads(r[3]) if r[3] else {}}
+             for r in ev],
+            [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]} for r in pay])
+
+
+def same(a, b):
+    """Equal as lists of dicts; a time is the same instant (DuckDB answers in the session's zone)."""
+    return a == b
+
+
+def parts_of(s, session):
+    with s.sessions_db.begin() as c:
+        return c.execute(select(session_archive_parts).where(session_archive_parts.c.session == session)
+                         .order_by(session_archive_parts.c.part)).all()
+
+
+@contextlib.contextmanager
+def archive_at(folder):
+    """TARES_ARCHIVE_URL points at a folder, the way a cell is set up to archive."""
+    old = os.environ.get("TARES_ARCHIVE_URL")
+    os.environ["TARES_ARCHIVE_URL"] = "file://" + folder
+    try:
+        yield FileBackend(folder)
+    finally:
+        if old is None:
+            os.environ.pop("TARES_ARCHIVE_URL", None)
+        else:
+            os.environ["TARES_ARCHIVE_URL"] = old
+
+
+@contextlib.contextmanager
+def printed():
+    buf, old = io.StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        yield buf
+    finally:
+        sys.stdout = old
+
+
+def make_session(s, session, n=6, config=None, source=SRC, extra=()):
+    """A session of n lines (user, assistant, a tool call and its result, a secret, thinking...)."""
+    kinds = [("user", {"text": "hello " + SECRET}), ("assistant", {}), ("tool_use", {"id": "toolu_" + session}),
+             ("tool_result", {"id": "toolu_" + session}), ("thinking", {}), ("user", {"text": "x" * 6000})]
+    lines = []
+    for i in range(n):
+        k, kw = kinds[i % len(kinds)]
+        lines.append(raw(session, k, i + 1, **kw))
+    lines += list(extra)
+    s.append(envelopes(source, lines, config))
+    session_ingest.reconcile_sessions(s)
+
+
+def reads_equal(s, session, source=SRC, label=""):
+    """The three readers answer what DuckDB answers, for the whole session and for pages of it."""
+    ok = True
+    for limit, offset in ((1000, 0), (2, 0), (2, 2), (3, 4), (10, 50)):
+        want_ev, want_pay = duck_read(s, source, session, limit, offset)
+        got_ev, w1 = s.key_events_from(source, session, limit, offset)
+        got_pay, w2 = s.key_payload_rows_from(source, session, limit, offset)
+        if not (same(got_ev, want_ev) and same(got_pay, want_pay)):
+            print("   ", label, limit, offset, "\n    want", want_ev, "\n    got ", got_ev)
+            ok = False
+        if not (s.key_events(source, session, limit, offset) == got_ev
+                and s.key_payload_rows(source, session, limit, offset) == got_pay):
+            ok = False
+    return ok
+
+
+def tool_equal(s, session, tool_id, source=SRC):
+    with s._lock:
+        rows = s.con.execute(
+            "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = 'tool_result' "
+            "AND payload LIKE ? ORDER BY event_time DESC LIMIT 5", [source, session, f"%{tool_id}%"]).fetchall()
+    want = None
+    for (pj,) in rows:
+        for b in (json.loads(pj).get("message") or {}).get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_result" and str(b.get("tool_use_id")) == tool_id:
+                want = want or b
+    return s.key_tool_result(source, session, tool_id) == want, want
+
+
+def reads():
+    print("== a session whose lines are complete is read from the table, with DuckDB's answer ==")
+    s = open_store()
+    with s._swrite:
+        s.sc.execute("INSERT INTO catalog_sources (name, connector, config) VALUES "
+                     "('open', 'claude_code', ?)", [json.dumps({"redact": False, "include_thinking": True})])
+    make_session(s, "t1")
+    make_session(s, "t2", n=3)
+    make_session(s, "o1", config={"redact": False, "include_thinking": True}, source="open")
+    ck("the lines are complete", row(s, "t1") == (6, True) and row(s, "o1") == (6, True), (row(s, "t1"), row(s, "o1")))
+    ck("the three readers answer what DuckDB answers, whole and by page", reads_equal(s, "t1", label="t1"))
+    ck("a source with redact off and thinking on is read the same way", reads_equal(s, "o1", "open", "o1"))
+    ev, where = s.key_events_from(SRC, "t1")
+    ck("lines_from says table", where == "table" and s.key_payload_rows_from(SRC, "t1")[1] == "table", where)
+    ck("the secret is hidden in the text, and the thinking is left out",
+       SECRET not in json.dumps(ev, default=str) and not any("private reasoning" in e["text"] for e in ev), ev[:1])
+    ov, _ = s.key_events_from("open", "o1")
+    ck("a source with redact off shows the secret in the text, and thinking", any(SECRET in e["text"] for e in ov)
+       and any("private reasoning" in e["text"] for e in ov), [e["text"][:40] for e in ov])
+    ck("the long turn is cut at the same length DuckDB cut it", any(len(e["text"]) > 500 for e in ev)
+       and reads_equal(s, "t1"), [len(e["text"]) for e in ev])
+    ok, want = tool_equal(s, "t1", "toolu_t1")
+    ck("key_tool_result answers the block DuckDB answers", ok and want and want["tool_use_id"] == "toolu_t1", want)
+    ck("and says table", s.key_tool_result_from(SRC, "t1", "toolu_t1")[1] == "table")
+    ck("a tool id the session does not hold is None, from the table", s.key_tool_result_from(
+        SRC, "t1", "toolu_nope") == (None, "table"))
+    ck("a tool id of another session is not found in this one", s.key_tool_result_from(
+        SRC, "t2", "toolu_t1") == (None, "table"))
+    ck("paging past the end is an empty list, like DuckDB", s.key_events_from(SRC, "t1", 10, 50) == ([], "table"))
+
+    print("== lines at the same instant, lines out of order, and a limit ==")
+    t = [raw("tie", "user", 5), raw("tie", "assistant", 5), raw("tie", "assistant", 5, text="third"),
+         raw("tie", "user", 1), raw("tie", "assistant", 9)]
+    s.append(envelopes(SRC, t))
+    session_ingest.reconcile_sessions(s)
+    ck("lines with one timestamp come in the order they were stored, older first", reads_equal(s, "tie", label="tie"))
+    ck("by time, not by arrival", [e["event_time"] for e in s.key_events(SRC, "tie")] == sorted(
+        e["event_time"] for e in s.key_events(SRC, "tie")))
+
+    print("== a session the table does not hold in full reads DuckDB ==")
+    s.append(envelopes(SRC, [raw("gap", "user", 1), raw("gap", "assistant", 2)]))
+    ev, where = s.key_events_from(SRC, "gap")
+    ck("before the reconcile the flag is false: lines_from is events, the lines are all there",
+       row(s, "gap") == (2, False) and where == "events" and len(ev) == 2 and same(ev, duck_read(s, SRC, "gap")[0]), row(s, "gap"))
+    with s.sessions_db.begin() as c:
+        c.execute(session_lines.delete().where(session_lines.c.session == "t2", session_lines.c.seq == 2))
+    ck("a row the table lost reads DuckDB even though the flag says complete", row(s, "t2") == (3, True)
+       and s.key_events_from(SRC, "t2")[1] == "events" and same(s.key_events(SRC, "t2"), duck_read(s, SRC, "t2")[0]))
+    ck("so does the payload reader and the tool reader", s.key_payload_rows_from(SRC, "t2")[1] == "events"
+       and s.key_tool_result_from(SRC, "t2", "toolu_t2")[1] == "events")
+    ck("a session with no row in sessions reads DuckDB", s.key_events_from(SRC, "no-such")[1] == "events"
+       and s.key_events_from(SRC, "no-such")[0] == [])
+    ck("another source's session of that name reads DuckDB: the table does not know the source",
+       s.key_events_from("other", "t1") == ([], "events"))
+    ck("a missing session on every reader", s.key_payload_rows_from(SRC, "no-such") == ([], "events")
+       and s.key_tool_result_from(SRC, "no-such", "x") == (None, "events"))
+    s.close()
+
+
+def archived():
+    print("== an archived session is read from the archive, a mixed one from both ==")
+    s = open_store()
+    folder = tempfile.mkdtemp()
+    with archive_at(folder) as b:
+        make_session(s, "a1")
+        make_session(s, "a2", n=4)
+        before = (s.key_events(SRC, "a1"), s.key_payload_rows(SRC, "a1"))
+        ck("table only first", s.key_events_from(SRC, "a1")[1] == "table")
+        moved = session_archive.archive_pass(s, b, NOW)
+        ck("both sessions moved to parts", moved == 2 and len(parts_of(s, "a1")) == 1
+           and total_of(s, "a1") == 0, (moved, total_of(s, "a1")))
+        ev, where = s.key_events_from(SRC, "a1")
+        ck("lines_from says archive", where == "archive" and s.key_payload_rows_from(SRC, "a1")[1] == "archive"
+           and s.key_tool_result_from(SRC, "a1", "toolu_a1")[1] == "archive", where)
+        ck("the readers answer what DuckDB answers, whole and by page", reads_equal(s, "a1", label="a1"))
+        ck("and what they answered before the archive moved the rows", (ev, s.key_payload_rows(SRC, "a1")) == before)
+        ok, want = tool_equal(s, "a1", "toolu_a1")
+        ck("the tool result comes from the part", ok and want is not None, want)
+        ck("a tool id the part does not hold is None", s.key_tool_result_from(SRC, "a1", "toolu_nope") == (None, "archive"))
+
+        print("== lines that arrive after the archive: both ==")
+        s.append(envelopes(SRC, [raw("a1", "user", 100, text="later"), raw("a1", "assistant", 50, text="in between"),
+                                 raw("a1", "tool_use", 101, id="toolu_new"), raw("a1", "tool_result", 102, id="toolu_new")]))
+        session_ingest.reconcile_sessions(s)
+        ck("a1 is complete across a part and the table", row(s, "a1") == (10, True) and total_of(s, "a1") == 4, row(s, "a1"))
+        ev, where = s.key_events_from(SRC, "a1")
+        ck("lines_from says both", where == "both" and s.key_payload_rows_from(SRC, "a1")[1] == "both", where)
+        ck("merged by time: the line that arrives later but is older sits among the archived ones",
+           reads_equal(s, "a1", label="mixed") and [e["text"] for e in ev if e["text"] == "in between"] != [],
+           [e["text"][:12] for e in ev])
+        ck("a tool result in the table and one in the part are both found", tool_equal(s, "a1", "toolu_new")[0]
+           and tool_equal(s, "a1", "toolu_a1")[0] and s.key_tool_result_from(SRC, "a1", "toolu_new")[1] == "both"
+           and s.key_tool_result_from(SRC, "a1", "toolu_a1")[0] is not None)
+
+        print("== a second part ==")
+        session_archive.archive_pass(s, b, NOW + timedelta(days=1))
+        session_ingest.reconcile_sessions(s)
+        ck("two parts, nothing left in the table", len(parts_of(s, "a1")) == 2 and total_of(s, "a1") == 0)
+        ck("read from the archive, same as DuckDB", s.key_events_from(SRC, "a1")[1] == "archive"
+           and reads_equal(s, "a1", label="two parts"))
+    s.close()
+
+
+def total_of(s, session):
+    with s.sessions_db.begin() as c:
+        return c.execute(select(func.count()).select_from(session_lines).where(
+            session_lines.c.session == session)).scalar()
+
+
+def broken_archive():
+    print("== a part that cannot be read falls back to DuckDB and logs one line ==")
+    s = open_store()
+    folder = tempfile.mkdtemp()
+    with archive_at(folder) as b:
+        for name in ("missing", "short", "flip", "rot", "count", "none"):
+            make_session(s, name, n=4)
+        session_archive.archive_pass(s, b, NOW, limit=10)
+        want = {n: duck_read(s, SRC, n)[0] for n in ("missing", "short", "flip", "rot", "count", "none")}
+        key = lambda n: parts_of(s, n)[0].key
+        os.remove(os.path.join(folder, key("missing")))
+        path = os.path.join(folder, key("short"))
+        data = open(path, "rb").read()
+        open(path, "wb").write(data[:len(data) // 2])
+        path = os.path.join(folder, key("flip"))
+        data = bytearray(open(path, "rb").read())
+        data[len(data) // 2] ^= 0x01
+        open(path, "wb").write(bytes(data))
+        import gzip
+        path = os.path.join(folder, key("rot"))              # same size and MD5 cannot hold: change both rows
+        junk = gzip.compress(b"not json\n", mtime=0)
+        open(path, "wb").write(junk)
+        import hashlib
+        with s.sessions_db.begin() as c:
+            c.execute(session_archive_parts.update().where(session_archive_parts.c.session == "rot").values(
+                bytes=len(junk), md5=hashlib.md5(junk).hexdigest()))
+        with s.sessions_db.begin() as c:                     # the row says more lines than the file holds
+            c.execute(session_archive_parts.update().where(session_archive_parts.c.session == "count").values(lines=9))
+        for n in ("missing", "short", "flip", "rot"):
+            session_read._WARNED.clear()
+            with printed() as out:
+                got, where = s.key_events_from(SRC, n)
+            log = [x for x in out.getvalue().splitlines() if "read from DuckDB" in x]
+            ck(f"{n}: DuckDB answers, and lines_from says events", where == "events" and got == want[n], where)
+            ck(f"{n}: one line is logged naming the session", len(log) == 1 and n in log[0], log)
+        with s.sessions_db.begin() as c:
+            c.execute(sessions.update().where(sessions.c.session == "count").values(line_count=9))
+        with printed():
+            got, where = s.key_events_from(SRC, "count")
+        ck("a count that does not add up reads DuckDB", where == "events" and got == want["count"], where)
+        with printed() as out:
+            for _ in range(3):
+                s.key_events_from(SRC, "rot")      # the last one that logged above
+        ck("the same session logs once a minute, not once a read: the first read above logged, these three do not",
+           out.getvalue().count("read from DuckDB") == 0, out.getvalue())
+        with printed():
+            ok_tool = s.key_tool_result_from(SRC, "short", "toolu_short")
+            ok_pay = s.key_payload_rows_from(SRC, "short")
+        ck("the payload and tool readers fall back too", ok_tool[1] == "events" and ok_tool[0] is not None
+           and ok_pay[1] == "events", (ok_tool[1], ok_pay[1]))
+        with printed() as out:
+            os.environ.pop("TARES_ARCHIVE_URL", None)         # no archive configured on this cell any more
+            session_read._WARNED.clear()
+            got, where = s.key_events_from(SRC, "none")
+        if s.sessions_db.dialect == "postgresql":
+            ck("no archive configured: DuckDB answers", where == "events" and got == want["none"], where)
+        else:
+            ck("no URL set: SQLite's own archive folder is read, which holds no such file, so DuckDB answers",
+               where == "events" and got == want["none"], where)
+    s.close()
+
+
 def main():
-    for fn in (revision, lines_in_both, complete_flag, concurrent_appends, purge_and_gauges, cycle):
+    for fn in (revision, lines_in_both, complete_flag, concurrent_appends, purge_and_gauges, cycle,
+               reads, archived, broken_archive):
         fn()
     print()
     if FAILS:
