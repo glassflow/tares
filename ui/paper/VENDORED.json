@@ -1,0 +1,12 @@
+{
+  "files": {
+    "paper/tokens.css": "720b8f34004977dcd0175d5072cd07548a42d0054efc6e8316c3dbd0e72c6250",
+    "src/paper/paper-motion.css": "ebe6c988815c026e594497a85e161c9db2ea248120672bf8c930e27d8392bd4d",
+    "src/paper/paper-theme.css": "9f95fc2c1f9bfa2553fda178239906279585adadcb92cfff5a699819c9d3f50d"
+  },
+  "repo": "glassflow/arche-design",
+  "tokens": {
+    "commit": "746e3f7e0863441e4dcf3268c338b966637f9c7e",
+    "tag": "paper-tokens-v2"
+  }
+}
