@@ -1,5 +1,5 @@
 import { request } from "../../api";
-import type { HomeData } from "./home.types";
+import type { HomeAnswered, HomeData, HomeVia } from "./home.types";
 
 
 // The calls of the live factory home. Edition code stays here, so nothing is added to the shared
@@ -18,6 +18,30 @@ const enc = encodeURIComponent;
 /** The whole home page in one read. A team cell lists `projects` for the view asked (`mine` unless told). */
 export function getHome(projects?: "mine" | "team"): Promise<HomeData> {
   return request<HomeData>(projects ? `/api/home?projects=${projects}` : "/api/home");
+}
+
+/** One row of GET /api/answers (factory_api.answers_list); only what Home reads. */
+interface AnswerRow {
+  id: string;
+  ask: string;
+  choice: "yes" | "no" | null;
+  said: string;
+  by: string | null;
+  mine: boolean;
+  at: string;
+  via: HomeVia;
+}
+
+const toAnswered = (a: AnswerRow): HomeAnswered => ({
+  id: a.id, ask: a.ask, choice: a.choice, said: a.said,
+  by: a.mine ? "you" : a.by ?? "someone", at: a.at, via: a.via,
+});
+
+/** The latest answer to one item, of any day, or null (TR-1459): a link to an item opened after it was
+ *  answered says who answered it. A desk item is found under any of its ids. */
+export async function getAnswerTo(item: string): Promise<HomeAnswered | null> {
+  const { answers } = await request<{ answers: AnswerRow[] }>(`/api/answers?item=${encodeURIComponent(item)}`);
+  return answers.length ? toAnswered(answers[0]) : null;
 }
 
 /** Mark one call the crew made as kept. `item` is the Home item that offered it, so the answer is

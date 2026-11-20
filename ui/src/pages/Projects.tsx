@@ -52,7 +52,7 @@ function StatusCell({ u }: { u: Project }) {
       {ring && u.progress ? (
         <>
           <ProgressRing progress={u.progress} />
-          <span className="pj-count" aria-hidden="true">{u.progress.done}/{u.progress.total}</span>
+          <span className="pj-count" aria-hidden="true">{u.progress.merged + u.progress.closed}/{u.progress.total}</span>
         </>
       ) : <span className="pj-dot" />}
       {tag && <span className="pj-tag" aria-hidden="true">{tag}</span>}
@@ -99,7 +99,8 @@ function PendingCell({ u }: { u: Project }) {
     <span className="pj-pending">
       <span className={n ? "pj-n" : "dim"}>{n || "None"}</span>
       {g.doing > 0 && <span className="pj-sub doing">{g.doing} in progress</span>}
-      {g.blocked > 0 && <span className="pj-sub blocked">{g.blocked} blocked</span>}
+      {g.queued > 0 && <span className="pj-sub queued">{g.queued} queued</span>}
+      {g.stuck > 0 && <span className="pj-sub stuck">{g.stuck} stuck</span>}
     </span>
   );
 }

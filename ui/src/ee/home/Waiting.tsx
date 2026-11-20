@@ -9,6 +9,7 @@ import type { HomeAction, HomeItem, HomeWaitingOn, HomeWaitingOnProps, HomeWaiti
 import { Sender, senderWords } from "./Sender";
 import { InlineIcon, ItemIcon } from "@/editions/factory/ProjectIcon";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "@/editions/factory/waitingGroups";
+import { FOCUS_ROW, FocusLabel, splitFocus } from "@/editions/factory/homeFocus";
 
 // The team's side of the factory home: "Waiting for you" with who each item is from, and "You are
 // waiting on". A cell of one keeps the plain list in FactoryHome.tsx.
@@ -17,16 +18,20 @@ const SHOW_FIRST = 8;
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
 
-function Row({ item, renderAction, error, panel }: {
+function Row({ item, renderAction, error, panel, focused }: {
   item: HomeItem; renderAction: (a: HomeAction, item: HomeItem) => React.ReactNode; error?: string; panel?: React.ReactNode;
+  /** A link named this row (`/?item=`, TR-1527): it is marked. */
+  focused?: boolean;
 }) {
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <ListRow data-testid="waiting-row" className="items-start justify-between gap-x-4 gap-y-3 px-0 py-4">
+    <ListRow data-testid="waiting-row" className={cn("items-start justify-between gap-x-4 gap-y-3 px-0 py-4", focused && FOCUS_ROW)}
+             data-focus={focused ? "1" : undefined} aria-current={focused ? "true" : undefined}>
       <div className="flex min-w-0 flex-[1_1_360px] gap-3">
         <Sender from={item.from} />
         <div className="min-w-0">
+          {focused && <FocusLabel />}
           <div className="[overflow-wrap:anywhere]">
             <span className={cn(KIND, "mr-2.5")}>{item.label}</span>
             <span className="font-semibold" data-user-text><ItemIcon project={item.project} title={item.title} />{item.title}</span>
@@ -54,9 +59,11 @@ function Row({ item, renderAction, error, panel }: {
   );
 }
 
-export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaitingProps) {
+export function WaitingForYou({ items, focus, renderAction, errors, panels }: HomeWaitingProps) {
   const [all, setAll] = React.useState(false);
-  const g = groupWaiting(items);
+  // the row a link named stands above the groups, outside the fold of "Show all"
+  const named = splitFocus(items, focus);
+  const g = groupWaiting(named.rest);
   const rest = all ? g.rest : g.rest.slice(0, SHOW_FIRST);
   const row = (it: HomeItem) => <Row key={it.id} item={it} renderAction={renderAction} error={errors?.[it.id]} panel={panels?.[it.id]} />;
   return (
@@ -70,7 +77,9 @@ export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaiti
           <EmptyState title="Nothing waits for you." className="py-7" />
         ) : (
           <>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
+            {named.focus && <Row key={named.focus.id} item={named.focus} renderAction={renderAction} error={errors?.[named.focus.id]}
+              panel={panels?.[named.focus.id]} focused />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting for you" testid="waiting-now" flush />}
             {g.now.map(row)}
             {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}

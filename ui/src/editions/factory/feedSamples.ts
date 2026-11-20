@@ -62,7 +62,7 @@ const ITEMS: HomeItem[] = [
     ],
   }),
   item("calls_to_confirm:link-expiry", {
-    kind: "calls_to_confirm", label: "2 calls to confirm", project: linkExpiry,
+    kind: "calls_to_confirm", label: "2 crew answers to confirm", project: linkExpiry,
     title: "link-expiry", detail: "The crew decided without you:", ask: "Keep 2 calls on link-expiry",
     lines: ["Expired links answer 410, not 404", "Expiry is checked on read, no sweeper"],
     since: "2026-11-16T10:00:00Z", waited: "2 days",

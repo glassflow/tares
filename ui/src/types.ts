@@ -459,7 +459,7 @@ export interface DeskReplied {
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
-  via: "console" | null;   // "console": a permission allowed there, with no typed words to match
+  via: "console" | "feed" | "message" | null;   // a page of the console or a message (feed on rows from before the feed was removed): a permission allowed there, or an answer given there, with no typed words to match
   person?: PersonRef | null;   // who decided
 }
 export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
@@ -610,7 +610,7 @@ export interface SpecQuestion {
   id: string; to_person_id: string; to_person?: PersonRef | null; repo: string; text: string;
   asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
   answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
-  via?: "console" | null;   // "console": answered on the page
+  via?: "console" | "feed" | "message" | null;   // answered on a page of the console
 }
 export interface Handover { override?: HandoverOverride | null; overridden?: boolean; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
@@ -900,8 +900,12 @@ export interface Project {
 export type ProjectScope = "team" | "private";
 export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
-// `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
-export interface TicketProgress { done: number; doing: number; blocked: number; todo: number; canceled: number; total: number }
+// `progress`): merged only for a merge, closed for done without one, queued (waits on a ticket)
+// apart from stuck (a station stopped); total is every group but canceled
+export interface TicketProgress {
+  merged: number; closed: number; doing: number; stuck: number; queued: number; todo: number;
+  canceled: number; total: number;
+}
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──
 

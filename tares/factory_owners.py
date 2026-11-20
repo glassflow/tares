@@ -1,6 +1,6 @@
 """Who a thing waits for on a factory cell: THE rule, the one every screen reads.
 
-Every waiting item (a pull request to merge, a milestone to check, calls to confirm, a desk
+Every waiting item (a pull request to merge, a milestone to check, crew answers to confirm, a desk
 question, a spec ready to hand over, a project ready to close, a spec question, a grant) names the
 people it waits for in `for_people`. Home, a project's page, Projects, Tickets and Reviews then
 only split: what is the caller's ("Waiting for you"), and what is someone else's ("Waiting for
@@ -22,6 +22,8 @@ Licence-independent by design (TR-915): the rule is core, so a team cell without
 each person their own. The team code only adds kinds of item and names the others.
 """
 from __future__ import annotations
+
+from tares import status_words
 
 
 def claimed(person: dict) -> bool:
@@ -139,7 +141,9 @@ def for_others(owners: Owners, items: list[dict]) -> list[dict]:
         label = i["label"]
         base = label[: -len(" for you")] if label.endswith(" for you") else label
         first = (i.get("for_people") or [None])[0]
-        out.append({**i, "label": f"{base} for {who}", "actions": [], "question": None,
+        # the close item is a question to its lead; to anyone else it says who can answer it
+        said = status_words.signoff_for(who) if i.get("kind") == "signoff" and names else f"{base} for {who}"
+        out.append({**i, "label": said, "actions": [], "question": None,
                     "for_person": (owners.who([first]) or [None])[0] if first else None})
     return out
 

@@ -1,5 +1,6 @@
 import { request } from "../../api";
 import { deskReply } from "./FactoryHome.api";
+import type { TicketTurnFields } from "./FactoryProject.api";
 
 // The merge queue page's one read (TR-1094): GET /api/projects/{uid}/merge-queue. Every sentence
 // comes from the API worded for people; the page only shows it.
@@ -25,7 +26,10 @@ export interface MqAnswer {
   when: string; commit: string;
 }
 
-export interface MqRow {
+/** `turn` and its words are the ticket's (whose turn it is); `chip` is what the queue does with it. A row with no ticket has turn null. */
+export interface MqRow extends Omit<TicketTurnFields, "turn" | "whose"> {
+  turn: TicketTurnFields["turn"] | null;
+  whose: TicketTurnFields["whose"] | null;
   id: string;
   position: number | null;
   state: MqState;

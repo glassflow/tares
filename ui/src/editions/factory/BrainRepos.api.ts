@@ -2,7 +2,7 @@
 // words in `error`, `sync_error` and `remove_error` are worded by the cell for people and shown as
 // they are. Repo names and the name of who added a repo are a person's own text.
 
-import { ApiError, request } from "../../api";
+import { request } from "../../api";
 import type { RepoUpdate } from "./BrainFolders.api";
 
 export type BrainState = "queued" | "cloning" | "indexing" | "ready" | "failed";
@@ -51,15 +51,7 @@ export interface BrainRemoveAnswer { ok: boolean; removed?: boolean; removing?: 
 
 const repoPath = (repo: string) => `/api/brain/repos/${repo.split("/").map(encodeURIComponent).join("/")}`;
 
-/** The read. A cell with no licence answers 404, as one that never had the route: that is "not set up". */
-export async function brainRepos(): Promise<BrainReposData> {
-  try {
-    return await request<BrainReposData>("/api/brain");
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return { configured: false, repos: [] };
-    throw e;
-  }
-}
+// The read is the shell's (editions/brainRead.ts), shared with the menu and the Ask page (TR-1438).
 
 /** `request` answers any 2xx as the body, so a 202 comes back as `{ok, removing: true}`, not an error. */
 export const removeBrainRepo = (repo: string) =>

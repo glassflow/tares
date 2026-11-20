@@ -35,7 +35,7 @@ from fastapi import HTTPException, Request
 from .. import factory as factory_mod
 from ..envelope import now_utc
 from ..factory_home import _dt, for_caller, plain_ago, caller_waiting
-from .factory_project import _pr_out, _review_out, station_roles, ticket_state, who_words
+from .factory_project import Turns, _pr_out, _review_out, station_roles, ticket_state, who_words
 from .factory_projects import ORDER, row_for
 
 # the states a person can pick, in the order the page lists them, with the key each counts under
@@ -205,9 +205,11 @@ def register(app, store, h, ctx):
             picked.sort(key=stamp, reverse=True)
         page = picked[offset:offset + limit]
         reviews = store.last_reviews([r[1]["id"] for r in page])
+        turns = Turns(store)
         out = []
         for _, t, row in page:
             row["review"] = _review_out(reviews.get(t["id"]), t)
+            row.update(turns.of(row["project"]["id"], t, row["blocked_by"], reviews.get(t["id"])))
             out.append(row)
 
         return {"tickets": out, "total": len(picked), "offset": offset, "limit": limit,

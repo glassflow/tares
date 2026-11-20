@@ -16,10 +16,12 @@
     "objects": []
    },
    "progress": {
-    "blocked": 1,
     "canceled": 0,
+    "closed": 2,
     "doing": 3,
-    "done": 3,
+    "merged": 1,
+    "queued": 1,
+    "stuck": 0,
     "todo": 3,
     "total": 10
    },
@@ -48,10 +50,12 @@
     "objects": []
    },
    "progress": {
-    "blocked": 4,
     "canceled": 0,
+    "closed": 6,
     "doing": 9,
-    "done": 9,
+    "merged": 3,
+    "queued": 4,
+    "stuck": 0,
     "todo": 8,
     "total": 30
    },
@@ -80,10 +84,12 @@
     "objects": []
    },
    "progress": {
-    "blocked": 0,
     "canceled": 0,
+    "closed": 1,
     "doing": 2,
-    "done": 1,
+    "merged": 0,
+    "queued": 0,
+    "stuck": 0,
     "todo": 0,
     "total": 3
    },

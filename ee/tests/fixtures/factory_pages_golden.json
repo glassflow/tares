@@ -155,12 +155,15 @@
   "can_edit_icon": true,
   "can_later": false,
   "counts": {
-   "blocked": 1,
    "canceled": 0,
    "changes_asked": 1,
+   "closed": 0,
    "in_progress": 2,
    "in_review": 2,
+   "label": "1 merged, 1 stuck of 10",
    "merged": 1,
+   "queued": 0,
+   "stuck": 1,
    "to_do": 3,
    "total": 10
   },
@@ -192,6 +195,8 @@
     ],
     "checks_for": [],
     "counts": {
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 5",
      "merged": 1,
      "total": 5
     },
@@ -210,6 +215,8 @@
     "checks": [],
     "checks_for": [],
     "counts": {
+     "closed": 0,
+     "label": "0 merged of 5",
      "merged": 0,
      "total": 5
     },
@@ -229,42 +236,51 @@
     "href": "/projects/uc_budget00/tickets/T3",
     "pr": {
      "number": 3,
-     "state_text": "open, CI failing",
+     "state_text": "open, checks failing",
      "url": "https://github.com/example-org/budget-00/pull/3"
     },
     "ref": "T3",
     "review": null,
     "state": "changes asked",
     "title": "Ticket 02 of project 00",
-    "who": "Builder for M1"
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "blocked_by": [],
     "href": "/projects/uc_budget00/tickets/T2",
     "pr": {
      "number": 2,
-     "state_text": "open, CI green",
+     "state_text": "open, checks passed",
      "url": "https://github.com/example-org/budget-00/pull/2"
     },
     "ref": "T2",
     "review": null,
     "state": "in review",
     "title": "Ticket 01 of project 00",
-    "who": null
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": null,
+    "whose": "crew"
    },
    {
     "blocked_by": [],
     "href": "/projects/uc_budget00/tickets/T9",
     "pr": {
      "number": 9,
-     "state_text": "open, CI green",
+     "state_text": "open, checks passed",
      "url": "https://github.com/example-org/budget-00/pull/9"
     },
     "ref": "T9",
     "review": null,
     "state": "in review",
     "title": "Ticket 08 of project 00",
-    "who": null
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": null,
+    "whose": "crew"
    },
    {
     "blocked_by": [],
@@ -274,7 +290,10 @@
     "review": null,
     "state": "in progress",
     "title": "Ticket 03 of project 00",
-    "who": "Builder for M1"
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "blocked_by": [],
@@ -284,7 +303,10 @@
     "review": null,
     "state": "in progress",
     "title": "Ticket 07 of project 00",
-    "who": "Builder for M2"
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M2",
+    "whose": "crew"
    }
   ],
   "moving_total": 6,
@@ -318,7 +340,7 @@
    {
     "base": null,
     "branch": null,
-    "ci": "CI green",
+    "ci": "Checks passed",
     "error": null,
     "head": "aaaaaaa",
     "number": 9,
@@ -337,7 +359,7 @@
    {
     "base": null,
     "branch": null,
-    "ci": "CI failing",
+    "ci": "Checks failing",
     "error": null,
     "head": "aaaaaaa",
     "number": 3,
@@ -356,7 +378,7 @@
    {
     "base": null,
     "branch": null,
-    "ci": "CI green",
+    "ci": "Checks passed",
     "error": null,
     "head": "aaaaaaa",
     "number": 2,
@@ -428,8 +450,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -459,8 +484,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -490,8 +518,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -521,8 +552,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -552,8 +586,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -583,8 +620,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -614,8 +654,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -645,8 +688,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -676,8 +722,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -707,8 +756,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -738,8 +790,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -769,8 +824,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -800,8 +858,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -831,8 +892,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -862,8 +926,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -893,8 +960,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -924,8 +994,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -955,8 +1028,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -986,8 +1062,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1017,8 +1096,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1048,8 +1130,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1079,8 +1164,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1110,8 +1198,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1141,8 +1232,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1172,8 +1266,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 1,
+     "closed": 0,
+     "label": "1 merged, 1 stuck of 10",
      "merged": 1,
+     "queued": 0,
+     "stuck": 1,
      "total": 10
     },
     "yours": 0,
@@ -1651,7 +1748,7 @@
   "now": "2026-11-19T12:00:00+00:00",
   "pr": {
    "number": 2,
-   "state_text": "open, CI green",
+   "state_text": "open, checks passed",
    "url": "https://github.com/example-org/budget-00/pull/2"
   },
   "project": {

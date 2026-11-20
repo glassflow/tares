@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 import httpx
 
+from . import status_words
 from .envelope import now_utc
 
 READ_EVERY = 60
@@ -440,7 +441,7 @@ async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squas
 REVIEW_POST_TIMEOUT = 45    # seconds the whole post may take; the MCP call waits longer than this
 REVIEW_TITLE_MAX = 100     # GitHub shows a check run's title in one line; the status text had this too
 _VERDICT_CONCLUSION = {"pass": "success", "changes": "failure", "block": "failure"}
-_VERDICT_WORDS = {"pass": "Pass", "changes": "Changes requested", "block": "Blocked"}
+_VERDICT_WORDS = status_words.VERDICT_ON_GITHUB
 
 
 def _plain(text) -> str:

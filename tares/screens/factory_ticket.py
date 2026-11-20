@@ -26,6 +26,7 @@ from urllib.parse import quote
 from fastapi import HTTPException
 
 from .. import factory as factory_mod
+from .. import status_words
 from .. import factory_api
 from ..envelope import now_utc
 from ..factory_home import _iso, plain_ago
@@ -33,7 +34,7 @@ from .factory_project import (_GONE, _ROLE_BY, _STAGE_WORD, _pr_out, _stamp, sta
                               ticket_state, who_words)
 from .factory_tickets import KEYS
 
-_VERDICT_TEXT = {"pass": "passed", "changes": "asked for changes", "block": "blocked"}
+_VERDICT_TEXT = {"pass": "passed", "changes": "asked for changes", "block": status_words.VERDICT["block"]}
 _CALL_STATE = {"open": "waiting for you", "kept": "confirmed", "overturned": "you changed it"}
 # a folder under a home directory that is not the crew's own: show its last name. It has to start
 # there, or right after file://, not inside a word or a longer path (ui/src/components/Users/List.tsx

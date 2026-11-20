@@ -23,6 +23,9 @@ log = logging.getLogger("tares.answers")
 HEADER = "x-tares-via"
 # the surfaces a console call may name; `session` is set by the route that matched the words
 FROM_CONSOLE = ("feed", "message")
+# the surfaces where a person answered on a page or by message; `feed` stays for rows stored
+# before the feed page was removed, nothing new writes it
+PERSON_SURFACES = ("console",) + FROM_CONSOLE
 
 
 def item_ids(item: str) -> list[str]:

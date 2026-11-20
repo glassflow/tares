@@ -74,6 +74,15 @@ def _count(v) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
 
 
+def files_in_index(report: dict) -> int | None:
+    """The repo's file count as lore reports it (`files_in_index`, in the index report, the sync report
+    and each repo of lore's repo list), or None when the report has no such number: an older lore.
+    A 0 is a count (an empty index), not the sign of an older lore; only a missing or non-number
+    value is."""
+    v = report.get("files_in_index") if isinstance(report, dict) else None
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
 def record_update(store, repo: str, kind: str, ok: bool, **fields) -> None:
     """Keep a first index or a later update in the repo's history (TR-1463). The history is for people to
     read: a failure to write it is logged and never stops the index or the sync."""
@@ -94,6 +103,8 @@ def failed_words(repo: str, error) -> str:
     line = _line(error)
     if not line or line[0] in "{[":
         return f"The index of {repo} failed. Retry to start it again."
+    if line.startswith("The index of ") and line.endswith("Retry to start it again."):
+        return line   # the control plane already worded it (a stall, the deadline): show it as it is
     if any(h in line.lower() for h in _REFUSED):
         return (f"GitHub refused to let the brain clone {repo}: the token could not read it. "
                 "Check that a GitHub connection on this cell can read the repo, then retry.")
@@ -339,7 +350,9 @@ class Indexer:
         except Exception as e:   # noqa: BLE001
             log.warning("brain adoption of %s failed: %s", repo, type(e).__name__)
             return self._fail(repo, f"The index of {repo} finished, but the brain could not take it over.")
-        total = max(row["files_total"] or 0, _count(report.get("files_indexed")) + _count(report.get("files_unchanged")))
+        total = files_in_index(report)   # lore's own count of the repo; an older lore has none
+        if total is None:
+            total = max(row["files_total"] or 0, _count(report.get("files_indexed")) + _count(report.get("files_unchanged")))
         commit = report.get("indexed_commit")
         commit = commit if isinstance(commit, str) and commit else None
         if self.store.update_brain_repo(repo, {

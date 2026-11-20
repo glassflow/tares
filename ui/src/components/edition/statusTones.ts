@@ -9,7 +9,7 @@
 
 import type { Tone } from "./StatusLabel";
 import type { ProjectState } from "../../editions/factory/FactoryProjects.api";
-import type { ProjectPageState, PrState, TicketState } from "../../editions/factory/FactoryProject.api";
+import type { ProjectPageState, PrState, TicketState, TicketTurn } from "../../editions/factory/FactoryProject.api";
 import type { StateKey } from "../../editions/factory/FactoryTickets.api";
 import type { TicketStateKey } from "../../editions/factory/FactoryTicket.api";
 import type { MemberState } from "../../editions/factory/FactoryCrew.api";
@@ -51,6 +51,24 @@ const ticket = {
   merged: "ready",
   canceled: "quiet",
 } satisfies Record<StateKey | TicketStateKey | Keyed<TicketState>, Tone>;
+
+// Whose turn a ticket is. A person's turn is the one waiting tone (ready for you); stuck is rose; a
+// ticket queued behind another is quiet, not an error: nothing is wrong, it is next in line.
+const turn = {
+  to_do: "quiet",
+  queued: "quiet",
+  building: "working",
+  reviewing: "working",
+  changes_asked: "working",
+  checks_running: "working",
+  checks_failing: "bad",
+  ready_for_you: "waiting", next_to_merge: "working",
+  merging: "working",
+  stuck: "bad",
+  merged: "ready",
+  closed: "done",
+  canceled: "quiet",
+} satisfies Record<TicketTurn, Tone>;
 
 const pr = {
   open: "waiting",
@@ -165,7 +183,7 @@ const docTicket = {
 } satisfies Record<TicketStatus, Tone>;
 
 /** Every table, by domain. The gallery and its test walk this, so a new domain shows up there too. */
-export const STATUS_TONES = { project, ticket, pr, ci, crew, verdict, finding, call, incident, service, source, resource, projectRun, docTicket } as const;
+export const STATUS_TONES = { project, ticket, turn, pr, ci, crew, verdict, finding, call, incident, service, source, resource, projectRun, docTicket } as const;
 export type StatusDomain = keyof typeof STATUS_TONES;
 
 /** The tone of a status the API sends as a plain string. An unknown one reads quiet and warns once,

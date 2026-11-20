@@ -5,7 +5,7 @@ import { api } from "../../api";
 import { CrewState, Desk, attachCmd, onCrewSide } from "../../pages/Crew";
 import { CopyButton, TimeAgo, usePolling } from "../bits";
 import { StatusLabel, STATUS_TONES } from "../edition";
-import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
+import { ProgressRing, countLine, ticketBucket, ticketProgress } from "../ProgressRing";
 import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
 import { Slot } from "../../eeSlots";
 import { AccessMark } from "./accessMark";
@@ -42,12 +42,17 @@ function gist(body: string | null | undefined): string {
   return text.length > 280 ? `${text.slice(0, 277).replace(/\s+\S*$/, "")}…` : text;
 }
 
+/** Where a person answered on a page or by message, as the line under their answer reads it ("feed" is on rows from before the feed was removed). */
+const PERSON_VIA: Record<string, string> = {
+  console: "allowed in the console", feed: "from the feed", message: "from a message",
+};
+
 const STATUS_TEXT: Record<Ticket["status"], string> = {
   todo: "to do", in_progress: "in progress", done: "done", canceled: "canceled",
 };
 // a ticket's cell in the progress bar, by its bucket in the ring
 const BAR_CLASS: Record<ReturnType<typeof ticketBucket>, string> = {
-  done: "done", doing: "run", blocked: "blocked", todo: "", canceled: "",
+  merged: "done", closed: "closed", doing: "run", stuck: "stuck", queued: "queued", todo: "", canceled: "",
 };
 
 export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
@@ -83,7 +88,8 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   // counted like the ring in the header, so the ring and the counts below it agree
   const prog = ticketProgress(tickets);
   const live = tickets.filter((t) => ticketBucket(t) !== "canceled");
-  const { done, doing } = prog;
+  const { doing } = prog;
+  const done = prog.merged + prog.closed;   // finished, with a merge or without
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
   const building = tickets.some((t) => t.status === "in_progress");
@@ -162,12 +168,14 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       {live.length > 0 && (
         <div className="fo-progress">
           <div className="fo-progress-row">
-            <span><b>{done} of {live.length} tickets done</b> · tickets live {where}</span>
+            <span><b>{countLine(prog)}</b> · tickets live {where}</span>
             <span className="fo-counts">
               <span><b>{prog.todo}</b> to do</span>
               <span><b>{doing}</b> in progress</span>
-              {prog.blocked > 0 && <span><b>{prog.blocked}</b> blocked</span>}
-              <span><b>{done}</b> done</span>
+              {prog.queued > 0 && <span><b>{prog.queued}</b> queued</span>}
+              {prog.stuck > 0 && <span><b>{prog.stuck}</b> stuck</span>}
+              <span><b>{prog.merged}</b> merged</span>
+              {prog.closed > 0 && <span><b>{prog.closed}</b> closed</span>}
             </span>
           </div>
           <div className="fo-bar" aria-hidden="true">
@@ -278,10 +286,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
             {decisions!.decisions.map((d) => (
               <li key={d.id} style={{ display: "block" }}>
                 {d.label && <b>{d.label} </b>}{d.question}
-                <div>"{d.words}"{d.choice && d.via !== "console" && <span className="dim"> · {d.choice}</span>}</div>
+                <div>"{d.words}"{d.choice && !(d.via && PERSON_VIA[d.via]) && <span className="dim"> · {d.choice}</span>}</div>
                 <small style={{ display: "block" }}>
                   <TimeAgo ts={d.at} />
-                  {d.via === "console" ? " · allowed in the console"
+                  {d.via && PERSON_VIA[d.via] ? ` · ${PERSON_VIA[d.via]}`
                     : d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
                   {d.standing && (d.granted ? " · kept as a grant" : " · standing")}
                 </small>
@@ -408,13 +416,13 @@ function PRIcon() {
 function prStatus(p: RepoPR): string {
   const bits: string[] = [];
   const stage: Record<string, string> = { doing: "being built", review: "waiting for review",
-    changes: "changes asked", blocked: "blocked" };
+    changes: "changes asked", blocked: "stuck" };
   if (p.review && p.review.current && p.stage !== "changes")
-    bits.push(p.review.verdict === "pass" ? "review passed" : p.review.verdict === "changes" ? "changes asked" : "review blocked");
+    bits.push(p.review.verdict === "pass" ? "review passed" : p.review.verdict === "changes" ? "changes asked" : "reviewer stopped it");
   else if (p.stage && stage[p.stage]) bits.push(stage[p.stage]);
-  if (p.ci === "success") bits.push("CI passed");
-  else if (p.ci === "failure") bits.push("CI failed");
-  else if (p.ci === "pending") bits.push("CI running");
+  if (p.ci === "success") bits.push("checks passed");
+  else if (p.ci === "failure") bits.push("checks failing");
+  else if (p.ci === "pending") bits.push("checks running");
   return bits.join(" · ");
 }
 

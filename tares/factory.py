@@ -17,6 +17,7 @@ import posixpath
 import re
 from datetime import datetime, timezone
 
+from . import status_words
 from .docs import DocError, title_ok
 
 MAX_GOAL = 500
@@ -28,9 +29,7 @@ MAX_DEPENDS = 30
 DONE_STATUSES = ("done", "canceled")
 # the stages of a ticket still in the work; a done or canceled status clears them (TR-1008)
 OPEN_STAGES = ("todo", "doing", "review", "changes", "blocked")
-STAGE_WORD = {"todo": "to do", "doing": "in progress", "review": "in review",
-              "changes": "changes asked", "blocked": "blocked", "merged": "merged",
-              "shipped": "merged", "canceled": "canceled"}
+STAGE_WORD = status_words.TICKET_STAGE
 
 
 def state_of(t: dict, blocked_by: list[str] | None = None) -> str:
@@ -53,6 +52,83 @@ def state_of(t: dict, blocked_by: list[str] | None = None) -> str:
         return "in progress"
     return "blocked" if blocked_by else "to do"
 
+
+
+TURNS = tuple(status_words.TURN)
+
+
+def queue_state_of(row: dict | None, head: str | None = None) -> str | None:
+    """The merge queue row's state as turn_of reads it: a row a person said yes to for the pull
+    request's current head (`approved_head`, set by the approval) is `approved` until the queue
+    merges it. `head` is that head as the ticket has it; the row's own lags a new push, and a yes
+    for the old commit is not one for the new (TR-1450)."""
+    if not row:
+        return None
+    now = (head or row.get("head") or "").lower()
+    if row["state"] in ("queued", "waiting_ci") and row.get("approved_head") \
+            and row["approved_head"].lower() == now:
+        return "approved"
+    return row["state"]
+
+
+def turn_of(t: dict, blocked_by: list[str] | None = None, verdict: dict | None = None,
+            autonomy: str = "L3-review", queue_state: str | None = None) -> str:
+    """Whose turn a ticket is, as a key of status_words.TURN. state_of says where the crew's
+    workflow has the ticket; this reads the same ticket with what happened since: the reviewer's
+    verdict on the current head (`verdict`, factory_api.verdict_now), CI on the pull request,
+    the project's autonomy (merge_queue.autonomy_of) and the ticket's open merge queue row.
+
+    It splits what state_of runs together: a ticket waiting on another is `queued`, one a
+    station stopped is `stuck`, and `in review` becomes reviewing, checks running or failing,
+    ready for you (L3: the merge is a person's) or merging (L4, or the queue is merging it).
+    A queue row sent back reads changes asked; one the queue cannot merge reads stuck; one a
+    person said yes to reads next to merge (queue_state_of).
+    A done status with no merge is `closed`, not merged."""
+    pr = t.get("pr") or {}
+    stage, status = t.get("stage"), t.get("status")
+    if stage in ("merged", "shipped") or pr.get("merged"):
+        return "merged"
+    if status == "done":
+        return "closed"
+    if status == "canceled":
+        return "canceled"
+    if stage == "blocked":
+        return "stuck"
+    if stage == "changes":
+        return "changes_asked"
+    if stage == "doing":
+        return "building"
+    if stage == "review":
+        if queue_state == "merging":
+            return "merging"
+        # the queue sent it back to its builder, or cannot merge it (repo rules, no connection
+        # that can write, GitHub unsure): neither is the crew's merge, whatever the verdict says
+        if queue_state == "sent_back":
+            return "changes_asked"
+        if queue_state == "blocked":
+            return "stuck"
+        v = verdict or {}
+        if not v.get("current"):
+            return "reviewing"
+        if v.get("verdict") == "changes":
+            return "changes_asked"
+        if v.get("verdict") == "block":
+            return "stuck"
+        if pr.get("ci") == "pending":
+            return "checks_running"
+        if pr.get("ci") == "failure":
+            return "checks_failing"
+        # passed and green, but it merges after a ticket it depends on: nobody's merge yet
+        if blocked_by:
+            return "queued"
+        # a person said yes to this commit: the queue merges it when its turn comes
+        if queue_state == "approved":
+            return "next_to_merge"
+        # passed, no checks on the repo, or checks the cell cannot read: the merge is next
+        return "merging" if autonomy == "L4-ship" else "ready_for_you"
+    if status == "in_progress":
+        return "building"
+    return "queued" if blocked_by else "to_do"
 
 def goal_ok(goal) -> str:
     g = " ".join(str(goal or "").split())
@@ -419,20 +495,31 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
     return out
 
 
+# the groups a project counts its tickets in (status-words spec, decision 2), read off the
+# ticket's turn so a count and the ticket's own word never disagree: merged only for a merge, a
+# ticket closed without one apart, a wait on another ticket (queued) apart from a stop (stuck).
+# Every other turn is work under way.
+COUNTS = ("merged", "closed", "doing", "stuck", "queued", "todo", "canceled")
+COUNT_OF_TURN = {"merged": "merged", "closed": "closed", "canceled": "canceled", "stuck": "stuck",
+                 "queued": "queued", "to_do": "todo"}
+
+
+def count_of(t: dict, blocked_by: list[str] | None = None) -> str:
+    """The group of COUNTS a ticket counts in. Read without the review verdict, so a ticket
+    counts as stuck only when a station stopped it, not while the reviewer's block is on it."""
+    return COUNT_OF_TURN.get(turn_of(t, blocked_by), "doing")
+
+
 def progress(tickets: list[dict]) -> dict:
-    """{done, doing, blocked, todo, canceled, total}: a project's tickets as its progress ring
-    shows them. Done goes by the stage as much as the status: a Linear or GitHub ticket keeps
-    its home's status, which can still say in progress after the crew merged it. Blocked is a
-    station's "blocked", or a ticket to do that waits on one not delivered. Canceled ones stay
-    out of the total. The project page counts its ring the same way
-    (ui/src/components/ProgressRing.tsx)."""
+    """{merged, closed, doing, stuck, queued, todo, canceled, total}: a project's tickets as its
+    progress ring and its count line show them (count_of). Canceled ones stay out of the total;
+    closed ones count in it, as finished without a merge. The project page counts its ring the
+    same way (ui/src/components/ProgressRing.tsx)."""
     waits = readiness(tickets)
-    n = {"done": 0, "doing": 0, "blocked": 0, "todo": 0, "canceled": 0}
-    ring = {"merged": "done", "canceled": "canceled", "blocked": "blocked", "in progress": "doing",
-            "in review": "doing", "changes asked": "doing", "to do": "todo"}
+    n = dict.fromkeys(COUNTS, 0)
     for t in tickets:
-        n[ring[state_of(t, waits[t["id"]]["blocked_by"])]] += 1
-    return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
+        n[count_of(t, waits[t["id"]]["blocked_by"])] += 1
+    return {**n, "total": sum(v for k, v in n.items() if k != "canceled")}
 
 
 def activity_at(updated_at, tickets: list[dict]):

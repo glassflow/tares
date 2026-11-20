@@ -1,5 +1,9 @@
+import { countLine } from "@/components/ProgressRing";
 import type { StartBlock, StartStep } from "../StartChecklist.api";
 import type { HomeCrew, HomeCrewMember, HomeData, HomeItem, HomeOnboarding, HomeProject, OnboardingMember } from "./home.types";
+
+/** A row's ticket counts with their line, as the server sends them. */
+const counted = <T extends { merged: number; total: number }>(c: T) => ({ ...c, label: countLine(c) });
 
 // Sample bodies of the factory home, in the shape of GET /api/home. They show only behind the
 // sample flag (src/editions/sample.ts), never on a live cell. Every name here is invented.
@@ -26,7 +30,7 @@ const BUSY_WAITING: HomeItem[] = [
     ],
   }),
   item("signoff:project-y", {
-    kind: "signoff", label: "Ready to close", title: "project-y",
+    kind: "signoff", label: "Close the project?", title: "project-y",
     detail: "All 27 tickets are merged. Close the project when you have checked the result.", meta: "Ready for 3 days",
     waited: "3 days", project: { id: "project-y", name: "project-y" },
     actions: [
@@ -55,7 +59,7 @@ const BUSY_WAITING: HomeItem[] = [
 export function project(id: string, over: Partial<HomeProject>): HomeProject {
   return {
     id, name: id, goal: "", state: "building", state_label: "Building", milestone: null,
-    tickets: { merged: 0, blocked: 0, total: 0 }, repos: [], builders: 1, last_activity_at: null,
+    tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 0 }), repos: [], builders: 1, last_activity_at: null,
     last_activity: null, meta: "", can_close: false, ...over,
   };
 }
@@ -63,24 +67,24 @@ export function project(id: string, over: Partial<HomeProject>): HomeProject {
 const BUSY_PROJECTS: HomeProject[] = [
   project("project-x", {
     goal: "Publish 1,000 answer articles on the docs site.", meta: "Started 12 days ago",
-    milestone: "Now on M4: 1,000 articles live", tickets: { merged: 15, blocked: 4, total: 21 },
+    milestone: "Now on M4: 1,000 articles live", tickets: counted({ merged: 15, closed: 0, queued: 3, stuck: 1, total: 21 }),
   }),
   project("docs-site", {
     goal: "Give the console an edition for each kind of team.", meta: "Started 4 days ago",
-    milestone: "Now on M1: Foundations", tickets: { merged: 34, blocked: 23, total: 61 },
+    milestone: "Now on M1: Foundations", tickets: counted({ merged: 34, closed: 0, queued: 22, stuck: 1, total: 61 }),
   }),
   project("project-y", {
     goal: "Let a team share one crew.", state: "ready_to_close", state_label: "Ready to close",
-    meta: "Ready for 3 days", milestone: "All milestones done", tickets: { merged: 27, blocked: 0, total: 27 },
+    meta: "Ready for 3 days", milestone: "All milestones done", tickets: counted({ merged: 27, closed: 0, queued: 0, stuck: 0, total: 27 }),
     builders: 0, can_close: true,
   }),
   project("project-z", {
-    goal: "Show every pull request in one list.", state: "waiting_on_you", state_label: "Waiting on you",
-    meta: "Planned 1 day ago", milestone: "3 milestones", tickets: { merged: 0, blocked: 0, total: 9 }, builders: 0,
+    goal: "Show every pull request in one list.", state: "waiting_on_you", state_label: "Waiting for you",
+    meta: "Planned 1 day ago", milestone: "3 milestones", tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 9 }), builders: 0,
   }),
   project("project-w", {
     goal: "Move the settings page to the new layout.", state: "not_started", state_label: "Not started",
-    meta: "Planned 5 days ago", milestone: "2 milestones", tickets: { merged: 0, blocked: 0, total: 0 }, builders: 0,
+    meta: "Planned 5 days ago", milestone: "2 milestones", tickets: counted({ merged: 0, closed: 0, queued: 0, stuck: 0, total: 0 }), builders: 0,
   }),
 ];
 
@@ -135,7 +139,7 @@ const many: HomeItem[] = Array.from({ length: 20 }, (_, i) =>
         actions: [reviewsAction],
       })
     : item(`signoff:project-${i}`, {
-        kind: "signoff", label: "Ready to close", title: `project-${i}`,
+        kind: "signoff", label: "Close the project?", title: `project-${i}`,
         detail: "All tickets are merged. Close the project when you have checked the result.", meta: `Ready for ${20 - i} days`,
         waited: `${20 - i} days`,
         // The first row lists its primary action first, so the page has to put it last.
@@ -192,7 +196,7 @@ export const longGoals: HomeData = {
     project(LONG_NAME, {
       name: LONG_NAME, goal: LONG_GOAL, meta: "Started 12 days ago",
       milestone: "Now on M1: A very long milestone name that should wrap and never push the bar out of its card",
-      tickets: { merged: 3, blocked: 11, total: 15 },
+      tickets: counted({ merged: 3, closed: 0, queued: 10, stuck: 1, total: 15 }),
     }),
   ],
 };

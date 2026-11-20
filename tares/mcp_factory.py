@@ -190,7 +190,8 @@ async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
                     checks: list[dict] | None = None, project: str = "") -> str:
     """Move a ticket you hold: `stage` is doing (you started), review (its PR is up: pass `pr`,
     the pull request's URL), changes (the reviewer asked for changes), merged, or blocked (say
-    why in `reason`). Only the releaser marks a ticket shipped. A ticket held by another station
+    why in `reason`; Tares puts the ticket on the desk for a person, unless an item about it is
+    already open, and takes it off when the ticket moves on). Only the releaser marks a ticket shipped. A ticket held by another station
     is refused; ask the orchestrator. For a ticket that lives in Linear or GitHub, also move it
     there (Linear's own tools, `gh` for GitHub). Name your branch factory/<ticket> (factory/T3)
     so Tares finds the pull request on its own too. Asking for review, pass the checks you ran
@@ -556,9 +557,11 @@ async def desk_withdraw(item: str, reason: str) -> str:
 async def list_decisions(project: str = "", limit: int = 15, offset: int = 0,
                          detail: str = "") -> str:
     """What the person decided on the project, newest first: the question, their words, the
-    choice, whether it stands from now on and whether it matched what they typed (`via`
-    "console": they answered or allowed it in the console; a permission they allowed there
-    restarts that station with it). Follow them; relay them to stations by quoting the words.
+    choice and whether it stands from now on. `via` is where the person answered: console or
+    message (a page of the console or a message; a permission they allowed in the console
+    restarts that station with it), slack, or session; feed on rows from before the feed was
+    removed. `matched` shows only for words typed in a session, and `words` is left out when it
+    was only the option's letter. Follow them; relay them to stations by quoting the words.
     The newest `limit` come (a last entry {"more": ...} says how to read older ones with
     `offset`), each question cut to 200 characters, `person` as its name only, and `choice` left out
     when it is the `answer`; `detail="full"` gives all of them whole, as before."""
@@ -569,6 +572,7 @@ async def list_decisions(project: str = "", limit: int = 15, offset: int = 0,
         r = await cx.get(f"{TARESD}/api/projects/{uid}/decisions")
     if r.status_code >= 400:
         return _out(r)
+    from . import answers as answers_mod
     from . import factory as factory_mod
     full = detail == "full"
     rows = []
@@ -582,6 +586,12 @@ async def list_decisions(project: str = "", limit: int = 15, offset: int = 0,
                 row["person"] = {"name": row["person"].get("name")}
             if row["choice"] == row["answer"]:
                 row.pop("choice")
+            if row["via"] in answers_mod.PERSON_SURFACES:
+                # answered on a page or by message: nothing was typed to match, and a bare
+                # letter is how the page sent the option, not what the person said
+                row.pop("matched")
+                if factory_mod.option_letter(row["words"] or "") is not None:
+                    row.pop("words")
         rows.append(row)
     if full:
         return json.dumps(rows, default=str)

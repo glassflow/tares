@@ -1,6 +1,6 @@
 """Seed a scratch factory Tares for factory-github.e2e.cjs: a project's GitHub page. Invented names only.
 Writes straight to the cell's database, so no daemon runs here.
-  project-g: two repos; pull requests open (CI green, CI failing), a draft, merged (with size and
+  project-g: two repos; pull requests open (checks passed, checks failing), a draft, merged (with size and
       who merged), closed without merging, and one ticket with no pull request;
   project-n: tickets, none with a pull request.
 Every pull request is marked read just now, so the page shows it as seeded.

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import {
   Banner, Button, Dialog, EmptyState, ListRow, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
@@ -16,12 +16,13 @@ import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { CopyCommand } from "../StartChecklist";
 import {
-  acceptMilestone, allowDesk, approveMerge, deskReply, finishProject, getHome, keepAssumption, keepForLater,
+  acceptMilestone, allowDesk, approveMerge, deskReply, finishProject, getAnswerTo, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
+  HomeAction, HomeAnswered, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
 } from "./home.types";
+import { FOCUS_ROW, FocusLabel, FocusNote, parseFocus, sameItem, splitFocus } from "./homeFocus";
 import { HOME_SAMPLES } from "./homeSamples";
 import { Detail, DetailLines } from "./HomeDetail";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
@@ -122,12 +123,18 @@ function ActionButton({ action, item, onAction, state, top }: {
   );
 }
 
-function WaitingRow({ item, onAction, state, top }: { item: HomeItem; onAction?: OnAction; state?: RowState; top?: boolean }) {
+function WaitingRow({ item, onAction, state, top, focused }: {
+  item: HomeItem; onAction?: OnAction; state?: RowState; top?: boolean;
+  /** A link named this row (`/?item=`): it is marked. */
+  focused?: boolean;
+}) {
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <ListRow data-testid="waiting-row" className="justify-between gap-y-3 px-0">
+    <ListRow data-testid="waiting-row" className={cn("justify-between gap-y-3 px-0", focused && FOCUS_ROW)}
+             data-focus={focused ? "1" : undefined} aria-current={focused ? "true" : undefined}>
       <div className="min-w-0 flex-[1_1_280px]">
+        {focused && <FocusLabel />}
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold" data-user-text><ItemIcon project={item.project} title={item.title} />{item.title}</div>
         <div className="line-clamp-3" title={item.detail} data-user-text><Detail text={item.detail} /></div>
@@ -162,12 +169,16 @@ function WaitingPending() {
 /** A cell with more than one person sends these keys; a cell of one never does. */
 const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
-function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAction; rows?: Record<string, RowState> }) {
+function Waiting({ items, focus, onAction, rows }: {
+  items: HomeItem[]; focus?: string; onAction?: OnAction; rows?: Record<string, RowState>;
+}) {
   const [all, setAll] = React.useState(false);
-  const g = groupWaiting(items);
+  // the row a link named stands above the groups, outside the fold, and has the page's one primary button
+  const named = splitFocus(items, focus);
+  const g = groupWaiting(named.rest);
   const rest = all ? g.rest : g.rest.slice(0, SHOW_FIRST);
   const more = g.rest.length - rest.length;
-  const top = topItem(items)?.id;
+  const top = named.focus?.id ?? topItem(named.rest)?.id;
   const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} top={it.id === top} />;
   return (
     <section aria-label="Waiting for you" className="min-w-0">
@@ -177,7 +188,8 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
           <EmptyState title="Nothing waits for you." className="py-6" />
         ) : (
           <>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
+            {named.focus && <WaitingRow key={named.focus.id} item={named.focus} onAction={onAction} state={rows?.[named.focus.id]} top focused />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting for you" testid="waiting-now" flush />}
             {g.now.map(row)}
             {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}
@@ -316,31 +328,37 @@ const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 // Setting the factory up lives on /setup (the Setup menu entry), so the home shows no first-run list.
-export function FactoryHomeView({ data, onAction, rows, notice, panels }: {
+export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, focusAnswer }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
+  /** The id a link named (`/?item=<id>`, well formed), and what the record says of it once it no longer waits:
+   *  undefined until read (or when nothing was read, as in a sample), null when no answer was recorded. */
+  focus?: string; focusAnswer?: HomeAnswered | null;
   /** Hand over anyway on a row of You are waiting on. */
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
 }) {
   const name = useFirstName();
   const eePending = useEePending();
-  const top = topItem(data.waiting_for_you)?.id;
+  const named = splitFocus(data.waiting_for_you, focus);
+  const top = named.focus?.id ?? topItem(named.rest)?.id;
+  const closed = !!focus && !named.focus && focusAnswer !== undefined;
   return (
     <div className={PAGE} data-testid="factory-home">
       <TopBar name={name} headline={<p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
       {notice}
+      {closed && <FocusNote answer={focusAnswer ?? null} more={data.waiting_for_you.length > 0} />}
       <div className={COLS}>
         <div className={LEFT}>
           {isTeam(data) ? (
             // the team's lists are enterprise: without it the single-person list shows
-            <Slot name="home.waiting" items={data.waiting_for_you}
+            <Slot name="home.waiting" items={data.waiting_for_you} focus={focus}
               renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} top={item.id === top} />}
               errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
               panels={panels}
               // while the ee chunk is on its way, core's rows would flash with the team's buttons on them
-              fallback={eePending ? <WaitingPending /> : <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />} />
+              fallback={eePending ? <WaitingPending /> : <Waiting items={data.waiting_for_you} focus={focus} onAction={onAction} rows={rows} />} />
           ) : (
-            <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
+            <Waiting items={data.waiting_for_you} focus={focus} onAction={onAction} rows={rows} />
           )}
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
           {data.plan_command && data.projects.length === 0 && data.finished_count === 0 && !data.later_count && (
@@ -715,7 +733,7 @@ function useAllSamples(): Record<string, HomeSample> {
   return React.useMemo(() => ({ ...HOME_SAMPLES, ...ee }), [ee]);
 }
 
-function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeSample> }) {
+function SampleHome({ sample, all, focus }: { sample: string; all: Record<string, HomeSample>; focus?: string }) {
   const [tries, setTries] = React.useState(0);
   const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
   let body: React.ReactNode;
@@ -723,7 +741,7 @@ function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeS
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={sampleData(all[sample])} onAction={onAction} rows={rows} panels={panels} />;
+  else body = <FactoryHomeView data={sampleData(all[sample])} onAction={onAction} rows={rows} panels={panels} focus={focus} />;
   return (
     <>
       {body}
@@ -742,8 +760,11 @@ function hhmm(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function LiveHome() {
+function LiveHome({ focus }: { focus?: string }) {
   const { data, error, reload } = usePagePolling(() => getHome(), POLL_MS);
+  // What the record says of the item a link named, read once it is known not to wait: with the first home
+  // read, and again when the row leaves the list (it was just answered). Nothing shows before the read lands.
+  const [recorded, setRecorded] = React.useState<{ id: string; answer: HomeAnswered | null }>();
   const [readAt, setReadAt] = React.useState<Date>();
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
@@ -753,6 +774,16 @@ function LiveHome() {
     if (data && overlay && Date.now() >= overlay.until) setOverlay(null);
   }, [data, overlay]);
   React.useEffect(() => () => clearTimeout(timer.current), []);
+  const loaded = !!data;
+  // an answer just given hides its row at once, before the daemon's own list has caught up
+  const waits = !!focus && !!data && data.waiting_for_you.some((i) => sameItem(i.id, focus) && !overlay?.items.has(i.id));
+  React.useEffect(() => {
+    if (!focus || !loaded || waits) return;
+    let current = true;
+    // the answers are a nicety: when the read fails, the page says the item no longer waits
+    getAnswerTo(focus).catch(() => null).then((answer) => { if (current) setRecorded({ id: focus, answer }); });
+    return () => { current = false; };
+  }, [focus, loaded, waits]);
 
   const { rows, onAction, dialogs, panels } = useHomeActions(true, (done) => {
     if (done) {
@@ -781,7 +812,10 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} />;
+    body = (
+      <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} focus={focus}
+        focusAnswer={recorded?.id === focus ? recorded?.answer : undefined} />
+    );
   }
   return (
     <>
@@ -796,10 +830,11 @@ export default function FactoryHome() {
   const sample = useSample();
   const all = useAllSamples();
   const eePending = useEePending();
+  const focus = parseFocus(useLocation().search);
   if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(all, sample))) {
-    return <SampleHome key={sample} sample={sample} all={all} />;
+    return <SampleHome key={sample} sample={sample} all={all} focus={focus} />;
   }
   // a team sample is ee's: while the chunk loads, wait for it instead of showing the live home and swapping
   if (sample && eePending) return <FactoryHomeLoading />;
-  return <LiveHome />;
+  return <LiveHome key={focus ?? ""} focus={focus} />;
 }

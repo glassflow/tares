@@ -3327,21 +3327,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return out
 
     def done_ticket_facts(self, project_ids: list[str]) -> dict[str, dict]:
-        """{project: {merged, blocked, total, repos, repo_from_pr, assignees, exact}} from two grouped
-        queries, so a finished project's row needs no ticket rows. merged, blocked and total are
-        what factory.progress gives ("done", "blocked" and "total"); repos are the full repo
+        """{project: {merged, closed, queued, stuck, total, repos, repo_from_pr, assignees, exact}}
+        from two grouped queries, so a finished project's row needs no ticket rows. merged, closed,
+        queued, stuck and total are what factory.progress gives for the same keys; repos are the full repo
         names of the tickets in the order the ticket list shows them; repo_from_pr counts the
         tickets with no repo whose pull request may name one. exact is False when groups cannot
         give progress: a ticket that would read "to do" but lists dependencies (whether it is
-        blocked depends on those tickets), so the caller loads that project's tickets. assignees is
+        queued depends on those tickets), or one still open that has a pull request (it counts as
+        merged when that pull request is), so the caller loads that project's tickets. assignees is
         {person id or None: how many tickets that are not canceled}, what a team cell's "tickets
         yours" line reads."""
         if not project_ids:
             return {}
         marks = ", ".join("?" for _ in project_ids)
         args = list(project_ids)
-        out = {p: {"merged": 0, "blocked": 0, "total": 0, "repos": [], "repo_from_pr": 0,
-                   "assignees": {}, "exact": True} for p in project_ids}
+        out = {p: {"merged": 0, "closed": 0, "queued": 0, "stuck": 0, "total": 0, "repos": [],
+                   "repo_from_pr": 0, "assignees": {}, "exact": True} for p in project_ids}
         with self._sread:
             groups = self.sc.execute(
                 "SELECT project, stage, status, "
@@ -3349,31 +3350,37 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "THEN 0 ELSE 1 END, "
                 "CASE WHEN (repo IS NULL OR repo = '') AND pr IS NOT NULL "
                 "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, "
+                "CASE WHEN pr IS NOT NULL AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') "
+                "THEN 1 ELSE 0 END, "
                 "assignee_person_id, COUNT(*) "
                 f"FROM tickets WHERE project IN ({marks}) "
-                "GROUP BY project, stage, status, 4, 5, assignee_person_id", args).fetchall()
+                "GROUP BY project, stage, status, 4, 5, 6, assignee_person_id", args).fetchall()
             first = self.sc.execute(
                 "SELECT project, repo FROM (SELECT project, repo, position, created_at, "
                 "ROW_NUMBER() OVER (PARTITION BY project, repo ORDER BY position, created_at) AS rn "
                 f"FROM tickets WHERE project IN ({marks}) AND repo IS NOT NULL AND repo <> '') f "
                 "WHERE rn = 1 ORDER BY project, position, created_at", args).fetchall()
-        for project, stage, status, has_deps, from_pr, who, n in groups:
+        for project, stage, status, has_deps, from_pr, has_pr, who, n in groups:
             facts = out[project]
             if status != "canceled":
                 facts["assignees"][who] = facts["assignees"].get(who, 0) + n
             state = state_of({"stage": stage, "status": status})
+            merged = stage in ("merged", "shipped")
             if state == "to do" and has_deps:
                 facts["exact"] = False
+            if has_pr and not merged and state not in ("merged", "canceled"):
+                facts["exact"] = False      # its pull request may be merged: factory.turn_of
             if from_pr:
                 facts["repo_from_pr"] += n
-            if state == "merged":
+            if state == "canceled":
+                continue
+            facts["total"] += n
+            if merged:                      # factory.turn_of: merged only for a merge
                 facts["merged"] += n
-                facts["total"] += n
+            elif state == "merged":
+                facts["closed"] += n        # a done status with no merge
             elif state == "blocked":
-                facts["blocked"] += n
-                facts["total"] += n
-            elif state != "canceled":
-                facts["total"] += n
+                facts["stuck"] += n
         for project, repo in first:
             out[project]["repos"].append(repo)
         return out

@@ -634,6 +634,76 @@ async def main():
 
 
 
+        print("== a stuck ticket is on the desk (the status-words spec, ticket 6) ==")
+        as_station()
+        feed = json.loads(await m.write_ticket("Feed", project="Blog"))
+        ref = feed.get("label") or feed.get("id")
+
+        async def open_on(label):
+            async with mk() as cx:
+                ds = (await cx.get("/api/desk?state=open")).json()["desk"]
+            return [d for d in ds if label in (d.get("tickets") or [])]
+
+        async def stage(to, reason=""):
+            as_station("blog-build-m1", "builder", "crew-orchestrator")
+            out = json.loads(await mf.set_stage(ref, to, reason=reason, project="Blog"))
+            as_station()
+            return out
+
+        async with mk() as cx:
+            r = await cx.post(f"/api/projects/{blog}/tickets/{ref}/assign", json={"holder": "blog-build-m1"})
+        ck("the builder holds the ticket", r.status_code == 200, r.text)
+        await stage("doing")
+        ck("a ticket at work has no item", await open_on(ref) == [])
+        out = await stage("blocked", "No RSS library is on the allowed list.")
+        items = await open_on(ref)
+        ck("blocking it files one item", out.get("stage") == "blocked" and len(items) == 1, items)
+        it = items[0] if items else {}
+        ck("the item asks what should happen, with the station's reason",
+           it.get("question") == f"{ref} is stuck. No RSS library is on the allowed list. What should happen?", it)
+        ck("it blocks work and names the station that stopped",
+           it.get("blocking") is True and it.get("station") == "blog-build-m1" and not it.get("command"), it)
+        await stage("blocked", "Still no RSS library.")
+        ck("blocking it again files no second item", [d["id"] for d in await open_on(ref)] == [it.get("id")])
+        await stage("doing")
+        ck("moving on withdraws the item it filed", await open_on(ref) == [])
+        async with mk() as cx:
+            ds = (await cx.get("/api/desk?state=withdrawn")).json()["desk"]
+        gone = next((d for d in ds if d["id"] == it.get("id")), {})
+        ck("withdrawn, saying where the ticket went",
+           gone.get("state") == "withdrawn" and gone.get("reason") == f"{ref} moved on to doing", gone)
+
+        as_station("crew-orchestrator", "orchestrator")
+        asked = json.loads(await mf.desk_add(f"{ref}: which RSS library?", "feedparser", "it is maintained",
+                                             tickets=[ref], blocking=True, project="Blog"))
+        await stage("blocked", "Waiting on the library question.")
+        ck("an open item about the ticket is enough: none is filed",
+           [d["label"] for d in await open_on(ref)] == [asked["label"]], await open_on(ref))
+        await stage("doing")
+        ck("and moving on leaves an item it did not file",
+           [d["label"] for d in await open_on(ref)] == [asked["label"]], await open_on(ref))
+
+        search = json.loads(await m.write_ticket("Search", project="Blog"))
+        ref = search.get("label") or search.get("id")
+        async with mk() as cx:
+            await cx.post(f"/api/projects/{blog}/tickets/{ref}/assign", json={"holder": "blog-build-m1"})
+        await stage("doing")
+        await stage("blocked", "The index needs a decision.")
+        auto = (await open_on(ref) or [{}])[0]
+        as_station("crew-orchestrator", "orchestrator")
+        own = json.loads(await mf.desk_add(f"{ref}: SQLite FTS or Meilisearch?", "SQLite FTS", "no new service",
+                                           tickets=[ref], blocking=True, project="Blog"))
+        now_open = await open_on(ref)
+        ck("the station's own question replaces the item the block filed",
+           [d["label"] for d in now_open] == [own["label"]], now_open)
+        ck("and keeps the station, so the station still reads waiting for you",
+           (now_open or [{}])[0].get("station") == "blog-build-m1", now_open)
+        async with mk() as cx:
+            ds = (await cx.get("/api/desk?state=withdrawn")).json()["desk"]
+        ck("the replaced one says where it was asked",
+           next((d.get("reason") for d in ds if d["id"] == auto.get("id")), None) == f"asked in {own['label']}", ds)
+
+
 unit()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")

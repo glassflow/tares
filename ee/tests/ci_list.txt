@@ -9,6 +9,7 @@ test_brain_decisions_projects_backfill
 test_brain_decisions_repo
 test_brain_decisions_repo_count
 test_brain_decisions_repo_remove
+test_brain_decisions_repo_retry
 test_brain_decisions_repo_sync
 test_brain_folders
 test_brain_folders_available
@@ -17,6 +18,7 @@ test_brain_lore_client
 test_brain_remove
 test_brain_repos
 test_brain_sync
+test_brain_sync_retry
 test_console_answers
 test_crew_page_by_person
 test_crew_sessions_route

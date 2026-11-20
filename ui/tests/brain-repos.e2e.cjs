@@ -99,6 +99,7 @@ function brainMock(rows, extra = {}) {
     if (req.method() === "GET" && p === "/api/brain") {
       m.reads++;
       if (m.readStatus !== 200) return route.fulfill({ status: m.readStatus, json: { detail: "nope" } });
+      if ("readBody" in m) return route.fulfill({ status: 200, contentType: "application/json", body: m.readBody });
       return route.fulfill({ status: 200, json: { configured: m.configured, repos: m.rows } });
     }
     const repo = p.replace("/api/brain/repos/", "").replace(/\/retry$/, "");
@@ -504,13 +505,34 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const lo = await browser.newContext({ viewport: { width: 1280, height: 900 } });
       await lo.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, admin.json.secret);
       const lp = await lo.newPage();
-      await lp.route(isBrainApi, async (route) => { if (new URL(route.request().url()).pathname === "/api/brain" && slow.reads >= 1) await gate; return slow.handle(route); });
+      await lp.route(isBrainApi, async (route) => { if (new URL(route.request().url()).pathname === "/api/brain") await gate; /* the shell's one read is the page's (TR-1438) */ return slow.handle(route); });
       await lp.goto(d.base + "/brain");
       await lp.getByTestId("brain-loading").waitFor({ timeout: 15000 });
       ck("loading: a skeleton shows", await lp.getByTestId("brain-loading").isVisible());
       await shot(lp, "brain-repos-loading-1280.png");
       await card(lp, "acme/api").waitFor({ timeout: 15000 });
       await lo.close();
+    }
+
+    // ---- odd answers from the cell (TR-1438): never Loading for good, never a crash
+    {
+      const empty = await open({ mock: brainMock([], { readBody: "null" }), wait: false });
+      await empty.page.getByRole("button", { name: "Retry" }).waitFor({ timeout: 15000 });
+      ck("an empty body: the page says the read failed, with Retry, not Loading for good",
+         (await empty.page.getByTestId("brain-loading").count()) === 0 && (await text(empty.page.locator("main"))).includes("Repos did not load."));
+      await empty.ctx.close();
+      const noList = await open({ mock: brainMock([], { readBody: JSON.stringify({ configured: true }) }) });
+      await noList.page.getByTestId("brain-empty").waitFor({ timeout: 15000 });
+      ck("configured with no repos list: the empty state, no crash", (await noList.page.getByTestId("brain-empty").count()) === 1);
+      await noList.ctx.close();
+      const junk = await open({ mock: brainMock([], { readBody: JSON.stringify({ configured: true, repos: [null, "x", { state: "ready" }, READY("acme/ok")] }) }) });
+      await card(junk.page, "acme/ok").waitFor({ timeout: 15000 });
+      eq("rows that name no repo are left out; the good one shows", await junk.page.getByTestId("brain-card").count(), 1);
+      await junk.ctx.close();
+      const notObj = await open({ mock: brainMock([], { readBody: JSON.stringify([1, 2]) }), wait: false });
+      await notObj.page.getByRole("button", { name: "Retry" }).waitFor({ timeout: 15000 });
+      ck("a list instead of an object: a failed read too", (await text(notObj.page.locator("main"))).includes("Repos did not load."));
+      await notObj.ctx.close();
     }
 
     // ---- the pace of the read, on a fake clock
@@ -642,7 +664,7 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
           const lo = await browser.newContext({ viewport: { width: w, height: 900 } });
           await lo.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, admin.json.secret);
           const lp = await lo.newPage();
-          await lp.route(isBrainApi, async (route) => { if (new URL(route.request().url()).pathname === "/api/brain" && slow.reads >= 1) await gate; return slow.handle(route); });
+          await lp.route(isBrainApi, async (route) => { if (new URL(route.request().url()).pathname === "/api/brain") await gate; /* the shell's one read is the page's (TR-1438) */ return slow.handle(route); });
           await lp.goto(d.base + "/brain");
           await lp.getByTestId("brain-loading").waitFor({ timeout: 15000 });
           ck(`loading ${tag}: a skeleton shows`, await lp.getByTestId("brain-loading").isVisible());

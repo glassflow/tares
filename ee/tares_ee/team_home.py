@@ -258,7 +258,7 @@ def desk_items(t: HomeRead) -> list[dict]:
             actions.append({"label": "Keep it" if n == 1 else "Keep both" if n == 2 else "Keep all",
                             "primary": True, "do": "keep_batch", "desk": d["label"],
                             "kept": [a["label"] for a in calls]})
-            item = fh.home_item("desk", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
+            item = fh.home_item("desk", label="1 crew answer to confirm" if n == 1 else f"{n} crew answers to confirm",
                                 detail=d["question"], lines=fw.call_lines(calls), **base, actions=actions,
                                 ask=fw.ask_calls(n, project["name"] if project else "every project"))
         elif d.get("command"):

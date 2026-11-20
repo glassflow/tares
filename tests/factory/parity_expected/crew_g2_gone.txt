@@ -18,10 +18,10 @@ exit: 0
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      working  -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Working                        -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 TWO SESSIONS named crew-reviewer: 00000001, 0000dup1; stop the one stations.json does not list (tares factory roster)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
@@ -35,10 +35,10 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      working  -        
-crew-releaser                  releaser     opus/high      done     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Working                        -        
+crew-releaser                  releaser     opus/high      Idle                           -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 project Links App: null/null tickets done, no tickets yet

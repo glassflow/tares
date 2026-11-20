@@ -52,9 +52,9 @@ The crew takes a few minutes to check in. Next:
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/xhigh     working  -        
-crew-reviewer                  reviewer     opus/high      working  -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/xhigh     Working                        -        
+crew-reviewer                  reviewer     opus/high      Working                        -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://<TARES>/crew
@@ -63,9 +63,9 @@ Crew page: http://<TARES>/crew
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/xhigh     working  -        
-crew-reviewer                  reviewer     opus/high      working  -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/xhigh     Working                        -        
+crew-reviewer                  reviewer     opus/high      Working                        -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://<TARES>/crew

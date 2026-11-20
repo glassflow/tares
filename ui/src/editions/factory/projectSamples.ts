@@ -2,21 +2,34 @@
 // sample flag (see sample.ts). It is invented: project-x, project-y, project-z, example-org/docs-site,
 // Alex, Kim, Lee. No sample is real cell data.
 
+import { countLine } from "@/components/ProgressRing";
 import type { HomeAction, HomeItem } from "./home.types";
-import type { FactoryProjectData, MovingTicket, ProjectCall, ProjectMilestone, TicketState } from "./FactoryProject.api";
+import type { FactoryProjectData, MovingTicket, ProjectCall, ProjectMilestone, TicketState, TicketTurn, TurnWhose } from "./FactoryProject.api";
 
 const NOW = "2026-11-02T10:00:00+00:00";
 const PID = "uc_sample";
 const TICKETS = `/projects/${PID}/tickets`;
 
-const COUNT_KEY: Record<TicketState, keyof FactoryProjectData["counts"]> = {
+const COUNT_KEY: Record<TicketState, Exclude<keyof FactoryProjectData["counts"], "label">> = {
   "to do": "to_do", "in progress": "in_progress", "in review": "in_review", "changes asked": "changes_asked",
-  blocked: "blocked", merged: "merged", canceled: "canceled",
+  blocked: "stuck", merged: "merged", canceled: "canceled",
 };
 
-const ticket = (ref: string, title: string, state: TicketState, extra: Partial<MovingTicket> = {}): MovingTicket => ({
-  ref, title, state, who: null, pr: null, review: null, blocked_by: [], href: `/projects/${PID}/tickets/${ref}`, ...extra,
-});
+// a sample ticket's turn from its state, as factory.turn_of would read it with no verdict yet
+const TURN: Record<TicketState, [TicketTurn, string, TurnWhose]> = {
+  "to do": ["to_do", "To do", "crew"], "in progress": ["building", "Building", "crew"],
+  "in review": ["reviewing", "Reviewing", "crew"], "changes asked": ["changes_asked", "Changes asked", "crew"],
+  blocked: ["queued", "Queued", "nobody"], merged: ["merged", "Merged", "nobody"], canceled: ["canceled", "Canceled", "nobody"],
+};
+
+const ticket = (ref: string, title: string, state: TicketState, extra: Partial<MovingTicket> = {}): MovingTicket => {
+  const [turn, label, whose] = TURN[state];
+  const blocked_by = extra.blocked_by ?? [];
+  return {
+    ref, title, state, who: null, pr: null, review: null, blocked_by, href: `/projects/${PID}/tickets/${ref}`,
+    turn, whose, turn_label: turn === "queued" && blocked_by.length ? `${label} after ${blocked_by.join(", ")}` : label, ...extra,
+  };
+};
 
 type SampleCheck = { check: string; expect: string } & Partial<ProjectMilestone["checks"][number]>;
 const ms = (n: number, name: string, goal: string, total: number, merged: number,
@@ -25,7 +38,7 @@ const ms = (n: number, name: string, goal: string, total: number, merged: number
   const full = checks.map((c, i) => ({ n: i + 1, for: "crew" as const, result: done ? "pass" as const : null, note: null, by: done ? "the crew" : null, ...c }));
   const open = full.some((c) => c.for === "person" && !c.result);
   return {
-    id: `ms${n}`, number: `M${n}`, name, goal, done, counts: { total, merged }, checks: full,
+    id: `ms${n}`, number: `M${n}`, name, goal, done, counts: { total, merged, closed: 0, label: countLine({ merged, total }) }, checks: full,
     accepted: done && !open, needs_person: done && open, can_accept: false,
     tickets_href: `${TICKETS}?milestone=ms${n}`,
   };
@@ -43,7 +56,7 @@ const REVIEW = { ...item("prs_to_review", "PR to review", "project-y, Show a las
   "T6, Show a last checked date, PR 17. It holds up a milestone.",
   "Waiting 3 hours · example-org/docs-site", [act("Review", true, { href: `/reviews?project=${PID}` })]),
   checks: { ci: "passing" as const, behind_by: 0, line: "Checks pass. Up to date with main." } };
-const CALLS = item("calls_to_confirm", "2 calls to confirm", "project-y",
+const CALLS = item("calls_to_confirm", "2 crew answers to confirm", "project-y",
   "The crew decided without you: ISO dates, the standard logger. Keep both?", "Made by the builder and the reviewer",
   [act("Read them", false, { href: `/projects/${PID}/calls` }), act("Keep both", true, { do: "keep_assumptions" })]);
 const PERMISSION = item("permission", "Permission", "project-y",
@@ -97,15 +110,16 @@ interface Parts {
 
 function make(p: Parts): FactoryProjectData {
   const moving = p.moving ?? [];
-  const counts = { total: p.total ?? 0, to_do: 0, in_progress: 0, in_review: 0, changes_asked: 0, blocked: 0,
-                   merged: p.merged ?? 0, canceled: p.canceled ?? 0 };
-  for (const t of moving) counts[COUNT_KEY[t.state]] += 1;
+  const counts = { total: p.total ?? 0, to_do: 0, in_progress: 0, in_review: 0, changes_asked: 0, queued: 0,
+                   stuck: 0, merged: p.merged ?? 0, closed: 0, canceled: p.canceled ?? 0, label: "" };
+  for (const t of moving) (counts[COUNT_KEY[t.state]] as number) += 1;
+  counts.label = countLine({ ...counts, total: counts.total - counts.canceled });
   const state = p.state ?? "building";
   return {
     id: PID, name: p.name, goal: p.goal, stage: p.stage ?? "build",
     stage_label: { spec: "Spec", build: "Build", review: "Review", done: "Done" }[p.stage ?? "build"],
-    state, state_label: p.state_label ?? { building: "Building", waiting_on_you: "Waiting on you", not_started: "Not started",
-      ready_to_close: "Ready to close", later: "Later", finished: "Finished" }[state],
+    state, state_label: p.state_label ?? { building: "Building", waiting_on_you: "Waiting for you", not_started: "Not started",
+      ready_to_close: "Ready to close", later: "Later", finished: "Done" }[state],
     waiting: p.waiting ?? [], counts, moving, moving_total: p.moving_total ?? moving.length, tickets_href: TICKETS,
     next: p.next ?? null, milestones: p.milestones ?? [], decisions: p.decisions ?? [], calls: p.calls ?? [],
     docs: p.docs ?? DOCS, terminal: p.terminal ?? TERMINAL,
@@ -124,9 +138,9 @@ const BUILDING = make({
   waiting: [REVIEW, CALLS, PERMISSION, QUESTION],
   moving: [
     ticket("T14", "Show a last checked date on each answer", "in review", { who: "Reviewer", review: "round 1: waiting for the reviewer",
-      pr: { number: 17, url: "https://example.com/pull/17", state_text: "PR #17 open, CI green" } }),
+      pr: { number: 17, url: "https://example.com/pull/17", state_text: "PR #17 open, checks passed" } }),
     ticket("T15", "Add the answers to the docs sidebar", "changes asked", { who: "Builder for M2", review: "round 2: changes asked",
-      pr: { number: 18, url: "https://example.com/pull/18", state_text: "PR #18 open, CI failing" } }),
+      pr: { number: 18, url: "https://example.com/pull/18", state_text: "PR #18 open, checks failing" } }),
     ticket("T16", "Tag answers by product area", "in progress", { who: "Builder for M2" }),
     ticket("T17", "Search page lists the answers", "in progress", { who: "Builder for M2" }),
     ticket("T18", "Translate the first 50 answers", "blocked", { blocked_by: ["T16"] }),
@@ -226,7 +240,7 @@ export function sampleClose(name: string): { open: boolean; error: string } {
 
 /** The sample after its project was closed here: finished, nothing left to close. */
 export const sampleClosed = (d: FactoryProjectData): FactoryProjectData => ({
-  ...d, stage: "done", stage_label: "Done", state: "finished", state_label: "Finished", can_close: false,
+  ...d, stage: "done", stage_label: "Done", state: "finished", state_label: "Done", can_close: false,
 });
 
 // The Pull requests page's merge queue samples (`queue-*`, see mergeQueueSamples.ts) borrow the ready project for the frame.

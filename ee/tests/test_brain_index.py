@@ -108,6 +108,15 @@ def unit():
     ck("... also for repository not found", "GitHub refused" in words("acme/web", "remote: Repository not found."))
     ck("another failure keeps its last line", words("acme/web", "fatal: out of memory\n") == "The index of acme/web failed: fatal: out of memory. Retry to start it again.",
        words("acme/web", "fatal: out of memory\n"))
+    stall = "The index of acme/web stopped: no progress for 15 minutes. Retry to start it again."
+    ck("a stall reason from the control plane is shown as it is", words("acme/web", stall) == stall, words("acme/web", stall))
+    deadline = "The index of acme/web stopped: it ran past the 12 hour limit. Retry to start it again."
+    ck("a deadline reason from the control plane is shown as it is", words("acme/web", deadline) == deadline, words("acme/web", deadline))
+    ck("a control plane reason is scrubbed and kept on one line", words("acme/web", f"The index of acme/web stopped: {T2}\nno progress. Retry to start it again.")
+       == "The index of acme/web stopped: [hidden] no progress. Retry to start it again.", words("acme/web", f"The index of acme/web stopped: {T2}\nno progress. Retry to start it again."))
+    ck("a line that only starts like it is wrapped as before", words("acme/web", "The index of acme/web broke") == "The index of acme/web failed: The index of acme/web broke. Retry to start it again.")
+    ck("a line that only ends like it is wrapped as before", words("acme/web", "fatal: x. Retry to start it again.")
+       == "The index of acme/web failed: fatal: x. Retry to start it again. Retry to start it again.")
     for blank in (None, "", "   ", '{"message": "x"}', "[1]"):
         w = words("acme/web", blank)
         ck(f"no usable log line ({blank!r}) is a plain sentence naming the repo", w == "The index of acme/web failed. Retry to start it again.", w)
@@ -166,7 +175,7 @@ async def main():
     os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
     os.environ["TARES_BRAIN_KEY"] = BRAIN_KEY
     names = ("one", "two", "three", "c1", "c2", "c3", "c4", "poll", "poll2", "gone", "gone2", "gone3", "gone4", "stale", "stale2", "stale3", "adopt", "lic", "nobrain",
-             "race", "old", "inprog", "nulls", "nocp", "nocp2", "odd", "wake", "asked", "mid", "dup", "leak")
+             "race", "old", "inprog", "nulls", "nocp", "nocp2", "odd", "wake", "asked", "mid", "dup", "leak", "fi1", "fi2", "fi3", "fi4")
     readable = [{"full_name": f"acme/{n}"} for n in names]
 
     async def readable_repos(cred, query=""):
@@ -476,6 +485,41 @@ async def main():
         await state_is("acme/gone4", "ready")
         ck("a Job that is gone and a done run that finished after it was asked for is adopted", row("acme/gone4")["error"] is None,
            str(row("acme/gone4")["error"]))
+
+        print("== lore's own file count wins when the report has it (TR-1516) ==")
+
+        async def adopt_with(repo, report_extra, seen=40):
+            """Index `repo` to `seen` files by progress, lose its Job, let lore's done run be adopted."""
+            lore.sync_report = dict(base_report) | report_extra
+            await connect(repo)
+            await state_is(repo, "cloning")
+            lore.progress[src(repo)] = {"stage": "indexing", "files_done": seen, "files_total": seen}
+            await state_is(repo, "indexing", files_total=seen)
+            del cp.jobs[src(repo)]
+            lore.progress[src(repo)] = {"stage": "done", "finished_at": datetime.now(timezone.utc).isoformat()}
+            await state_is(repo, "ready")
+            return row(repo)
+
+        base_report = dict(lore.sync_report)
+        r = await adopt_with("acme/fi1", {"files_in_index": 57, "files_indexed": 3, "files_unchanged": 1})
+        ck("files_in_index is the repo's count, not the progress's or the report's touched files",
+           (r["files_done"], r["files_total"]) == (57, 57), str(r))
+        ck("... and the first index in the history carries it", store.list_brain_repo_updates("acme/fi1")[0]["files_total"] == 57,
+           str(store.list_brain_repo_updates("acme/fi1")))
+        r = await adopt_with("acme/fi2", {"files_in_index": 12, "files_indexed": 90, "files_unchanged": 0})
+        ck("a count lower than the progress's wins too: lore knows the repo, the cell does not",
+           (r["files_done"], r["files_total"]) == (12, 12), str(r))
+        r = await adopt_with("acme/fi3", {"files_in_index": 0, "files_indexed": 90, "files_unchanged": 0})
+        ck("a files_in_index of 0 is a count: the repo has no files in the index", (r["files_done"], r["files_total"]) == (0, 0), str(r))
+        r = await adopt_with("acme/fi4", {"files_indexed": 7, "files_unchanged": 90})   # no files_in_index key: an older lore
+        ck("a report with no files_in_index keeps the old rule, the larger of the progress's count and the report's",
+           (r["files_done"], r["files_total"]) == (97, 97), str(r))
+        lore.sync_report = dict(base_report)
+        ck("files_in_index() reads an int of 0 or more and nothing else",
+           [index_mod.files_in_index(x) for x in ({}, {"files_in_index": 0}, {"files_in_index": 9}, {"files_in_index": None},
+                                                  {"files_in_index": "9"}, {"files_in_index": True}, {"files_in_index": -1},
+                                                  {"files_in_index": 2.0}, None)]
+           == [None, 0, 9, None, None, None, None, None, None], "")
 
         print("== a run lore holds from an earlier attempt is not this Job's progress ==")
         old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()

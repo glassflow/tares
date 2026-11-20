@@ -1,11 +1,11 @@
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      working  -        
-crew-reviewer                  reviewer     opus/high      done     -        
-shop-build-m1                  builder      opus/high      blocked  -        
-shop-build-m2                  builder      opus/high      gone     -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Working                        -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+shop-build-m1                  builder      opus/high      Waiting, nothing asked yet     -        
+shop-build-m2                  builder      opus/high      Ended                          -        
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 claude code: 1 station(s) run an older Claude Code than 2.1.310; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
@@ -190,8 +190,8 @@ Answer in the orchestrator's session, one at a time: tares factory crew attach o
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/pace key=no 
 GET /api/desk?state=open&mine=1 key=no 
+GET /api/crew/pace key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
