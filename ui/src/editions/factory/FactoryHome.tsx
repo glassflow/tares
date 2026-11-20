@@ -565,8 +565,7 @@ const SAMPLE_OPENS = ["answer", "decline"];
 
 /** Everything the buttons of the page do. With `live` off (a sample) Copy works and the answer
  *  and decline panels open, but nothing reaches the cell: the page says so. `changed` tells the page what
- *  to hide at once and to read again; a sample tells it too, so a page that keeps its own list (the feed)
- *  can move the row. The feed calls it as well, so an answer there takes the same path as one here. */
+ *  to hide at once and to read again; a sample tells it too, so a page that keeps its own list can move the row. */
 export function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const { toast } = useToast();
   const [rows, setRows] = React.useState<Record<string, RowState>>({});

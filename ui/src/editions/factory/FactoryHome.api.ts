@@ -52,7 +52,7 @@ export async function getAnsweredToday(): Promise<HomeAnswered[]> {
 }
 
 /** Mark one call the crew made as kept. `item` is the Home item that offered it, so the answer is
- *  recorded under the id the feed and Home showed (a project with calls for two owners has two). */
+ *  recorded under the id Home showed (a project with calls for two owners has two). */
 export function keepAssumption(project: string, ref: string, item?: string): Promise<unknown> {
   return request(`/api/projects/${enc(project)}/assumptions/${enc(ref)}/state`, {
     method: "POST",

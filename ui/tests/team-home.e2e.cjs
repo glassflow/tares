@@ -550,11 +550,11 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await checkWords(kim.page, ck, t("kim after the answer"));
       await kim.ctx.close();
 
-      // TR-1527: a link to one waiting item opens Home at it (the feed page is Home now, TR-1527), and the answer
+      // TR-1527: a link to one waiting item opens Home at it (the feed page is gone, TR-1529), and the answer
       // given there is recorded from the console. The record names a desk item question:<D>, the team row desk:<D>.
       const banner = await api("POST", "/api/desk", { question: "Which colour for the shop banner?", options: ["red", "blue"],
         recommendation: "blue", why: "it matches the logo", project: ids.project, to: ids.people.alex });
-      ck(t("TR-1451: a question for the feed is put on the desk"), banner.status < 300, JSON.stringify(banner));
+      ck(t("TR-1451: a question for the item link is put on the desk"), banner.status < 300, JSON.stringify(banner));
       await new Promise((r) => setTimeout(r, 5600));   // the daemon keeps /api/home for 5 seconds per credential
       await page.goto(`${BASE}/?item=${encodeURIComponent(`question:${banner.body.label}`)}`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();

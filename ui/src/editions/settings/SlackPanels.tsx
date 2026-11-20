@@ -198,7 +198,7 @@ export function WaitingDmPanel() {
           <>
             <Switch checked={st.on} disabled={busy} onCheckedChange={(on) => void flip(on)} data-testid="slack-me-switch"
                     label="Message me on Slack when something new waits for me"
-                    hint="One direct message for each: what it asks, what it holds up, and a link to it in the feed." />
+                    hint="One direct message for each: what it asks, what it holds up, and a link to it on Home." />
             <Collapse>{why && <p className={TEXT} data-testid="slack-me-blocked">{why}</p>}</Collapse>
             <Collapse>{st.on && st.problem && <Banner tone="warn">{sentence(st.problem)}.</Banner>}</Collapse>
           </>
