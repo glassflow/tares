@@ -90,6 +90,14 @@ if AVAILABLE:
                                 "Size in bytes of the session_lines table: with its indexes on "
                                 "Postgres, the whole session store file on SQLite; read every "
                                 "ten minutes")
+    ARCHIVE_SESSIONS = Counter("tares_archive_sessions_total",
+                               "Sessions the hourly archive moved from session_lines to the "
+                               "archive (a session with a late line counts again)")
+    ARCHIVE_BYTES = Counter("tares_archive_bytes_total",
+                            "Bytes of gzip parts the hourly archive wrote and checked")
+    ARCHIVE_FAILURES = Counter("tares_archive_failures_total",
+                               "Sessions the hourly archive could not move (the rows stay in "
+                               "session_lines; the next pass tries again)")
 
 _storage_probe = None
 _licence_probe = None
@@ -164,6 +172,19 @@ def session_lines_size(rows: int, size: int) -> None:
     if AVAILABLE:
         SESSION_LINES_ROWS.set(rows)
         SESSION_LINES_BYTES.set(size)
+
+
+def session_archived(nbytes: int) -> None:
+    """One session's lines written to the archive, checked and deleted from session_lines (TR-1506)."""
+    if AVAILABLE:
+        ARCHIVE_SESSIONS.inc()
+        ARCHIVE_BYTES.inc(nbytes)
+
+
+def archive_failed() -> None:
+    """One session the archive could not move (TR-1506)."""
+    if AVAILABLE:
+        ARCHIVE_FAILURES.inc()
 
 
 def observe_request(route: str, method: str, status: str, seconds: float) -> None:

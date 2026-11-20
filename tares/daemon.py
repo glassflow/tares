@@ -59,6 +59,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
 from . import licence
+from . import session_archive
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -732,6 +733,8 @@ def make_app() -> FastAPI:
         # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
         licence_task = asyncio.create_task(licence.run(store, loop_stop))
         waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
+        # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
+        archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -755,6 +758,7 @@ def make_app() -> FastAPI:
         morning_task.cancel()
         licence_task.cancel()
         waiting_task.cancel()
+        archive_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()

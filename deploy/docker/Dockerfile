@@ -21,7 +21,7 @@ COPY claude-plugin/ ./claude-plugin/
 COPY --from=ui /ui/dist ./ui/dist
 # an image never ships without the console: a missing ui/dist fails this build instead of building without it
 ENV TARES_REQUIRE_CONSOLE=1
-RUN pip install --no-cache-dir ".[otlp-grpc,postgres-state,ee]"
+RUN pip install --no-cache-dir ".[otlp-grpc,postgres-state,archive-s3,ee]"
 
 # Run as a non-root user. Own /data before declaring the VOLUME so a first-mount Docker named
 # volume inherits the ownership; on k8s an empty PVC needs fsGroup: 1000 (set in the cell chart).

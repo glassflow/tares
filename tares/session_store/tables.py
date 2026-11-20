@@ -194,6 +194,23 @@ session_lines = Table(
 )
 Index("session_lines_session_at", session_lines.c.session, session_lines.c.at)
 
+# One gzip JSON-lines part of a session's lines that the hourly archive wrote and checked, and then
+# deleted from `session_lines` (TR-1506). `first_seq` to `last_seq` are the numbers the part held,
+# `lines` how many rows it holds, `bytes` the size of the file, `md5` its MD5 as a hex string and
+# `key` where the archive keeps it. A late line makes a later part: `seq` only grows.
+session_archive_parts = Table(
+    "session_archive_parts", metadata,
+    Column("session", Text, primary_key=True),
+    Column("part", Integer, primary_key=True, autoincrement=False),
+    Column("first_seq", Integer),
+    Column("last_seq", Integer),
+    Column("lines", Integer),
+    Column("bytes", BigInteger),
+    Column("md5", Text),
+    Column("key", Text),
+    Column("written_at", UTCDateTime),
+)
+
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
     "session_ingest_marks", metadata,
