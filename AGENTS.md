@@ -133,6 +133,8 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_PLATFORM_PROVIDER_URL`, `TARES_PLATFORM_PROVIDER_KEY`, `TARES_PLATFORM_PROVIDER_NAME` | seed an OpenAI-compatible provider entry the deployment hands the cell (Tares Cloud's LiteLLM with a per-cell key); the default unless a console choice or `TARES_MODEL_PROVIDER` says otherwise; not editable in the console |
 | `TARES_MODEL_PROVIDER` | id of the default provider (`anthropic`, `openai`, or a saved endpoint's id) when none is chosen in the console |
 | `TARES_AGENT_MODEL` | model for Tares agents on the default provider |
+| `TARES_ARCHIVE_URL` | where the hourly job archives sessions idle for a week: `file:///path` or `s3://bucket/prefix/`; unset gives `<data dir>/archive/` on SQLite and nothing on Postgres |
+| `TARES_ARCHIVE_ENDPOINT`, `TARES_ARCHIVE_REGION`, `TARES_ARCHIVE_ACCESS_KEY_ID`, `TARES_ARCHIVE_SECRET_ACCESS_KEY` | the S3 endpoint, region and keys for the archive (needs the `archive-s3` extra); unset, boto3's own credential chain applies |
 | `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507) and polls pause; default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |

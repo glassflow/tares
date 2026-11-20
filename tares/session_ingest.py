@@ -52,8 +52,10 @@ Postgres. DuckDB does not deduplicate a line, so `session_lines` does not either
 can be compared: `sessions.lines_complete` is true when a session has as many rows in
 `session_lines` as lines in DuckDB. A new row starts false; the reconcile sets it for the sessions
 it reads (every 10 minutes, and at start), and a `record` that could not write a session's lines
-sets it false. Nothing reads `session_lines` yet (TR-1507 does) and nothing fills it from old
-events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
+sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
+a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
+is the rows of `session_lines` plus the `lines` of the parts. Nothing reads `session_lines` yet
+(TR-1507 does) and nothing fills it from old events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
 
 Two things to know when reading the table:
 
@@ -79,9 +81,9 @@ from sqlalchemy import bindparam, delete, func, insert, select, text, update
 from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
-from .session_store.tables import (session_commands, session_files, session_ingest_marks,
-                                   session_lines, session_messages, session_said, session_turns,
-                                   sessions)
+from .session_store.tables import (session_archive_parts, session_commands, session_files,
+                                   session_ingest_marks, session_lines, session_messages,
+                                   session_said, session_turns, sessions)
 
 MARK = "sessions_reconcile"          # the fill's row in session_ingest_marks
 CAUGHT_UP = "sessions_caught_up"     # its row when a pass has finished (TR-1520): readers use the table
@@ -737,14 +739,19 @@ def _reconcile_chunk(store, sources: list, sids: list) -> None:
 
 def _set_lines_complete(conn, wanted: dict) -> None:
     """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}): true when
-    `session_lines` holds as many rows, else false. DuckDB's count was read under the lock that
-    `Store.append` holds from its commit to the end of `record`, so neither side moves meanwhile."""
-    t = session_lines.c
+    `session_lines` holds as many rows, archived parts included (TR-1506), else false. DuckDB's
+    count was read under the lock that `Store.append` holds from its commit to the end of
+    `record`, so neither side moves meanwhile."""
     sids = sorted(wanted)
     have: dict = {}
+    # one statement, so one snapshot on Postgres: a session the archive moves between two queries
+    # (rows deleted, part inserted, one transaction) would be counted twice or not at all
+    kept = select(func.count()).where(session_lines.c.session == sessions.c.session).scalar_subquery()
+    archived = select(func.coalesce(func.sum(session_archive_parts.c.lines), 0)).where(
+        session_archive_parts.c.session == sessions.c.session).scalar_subquery()
     for i in range(0, len(sids), 500):
-        have.update(conn.execute(select(t.session, func.count()).where(
-            t.session.in_(sids[i:i + 500])).group_by(t.session)).all())
+        have.update(conn.execute(select(sessions.c.session, kept + archived).where(
+            sessions.c.session.in_(sids[i:i + 500]))).all())
     for flag in (True, False):
         mine = [sid for sid in sids if (have.get(sid, 0) == wanted[sid]) is flag]
         for i in range(0, len(mine), 500):
