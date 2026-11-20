@@ -177,6 +177,8 @@ def lines_in_both():
     ck("payload and labels are the text DuckDB stores, character for character", len(a) == len(d) == 3
        and all(r[6] == dd[2] and r[4] == dd[1] for r, dd in zip(a, d)), (a, d))
     ck("a NUL byte and non-ASCII text keep their meaning", json.loads(b[0][6])["text"] == "é ✓ \u0000 nul")
+    ck("the non-ASCII payload is the same text DuckDB stores, character for character",
+       b[0][6] == duck(s, "b")[0][2] and b[0][6].isascii(), (b[0][6], duck(s, "b")))
     ck("the render flags are the connector's defaults for a source with no setting",
        json.loads(a[0][5]) == {"include_thinking": False, "redact": True}
        and json.loads(c[0][5]) == {"include_thinking": False, "redact": True}, (a[0][5], c[0][5]))
@@ -345,6 +347,9 @@ def cycle():
     s = open_store()
     try:
         s.append([line("c", "user", {"uuid": "c1"})])
+        passes = []
+        real = session_ingest._reconcile_pass
+        session_ingest._reconcile_pass = lambda st, t0: (passes.append(1), real(st, t0))[1]
         th = s.start_session_reconcile()
         th.join(30)
         ck("the first pass ends (the thread returned does not run forever)", not th.is_alive())
@@ -359,13 +364,31 @@ def cycle():
             time.sleep(0.1)
         ck("a session that was false becomes true on a later pass, without a restart", row(s, "c") == (2, True),
            row(s, "c"))
+        end = time.time() + 15
+        while time.time() < end and len(passes) < 3:
+            time.sleep(0.1)
+        ck("the cycle keeps repeating: the start-up pass and at least two more", len(passes) >= 3, len(passes))
     finally:
+        session_ingest._reconcile_pass = real
         session_ingest.CYCLE = old
         s.close()
     end = time.time() + 10
     while time.time() < end and "sessions-reconcile-cycle" in [t.name for t in threading.enumerate()]:
         time.sleep(0.1)
     ck("Store.close ends it", "sessions-reconcile-cycle" not in [t.name for t in threading.enumerate()])
+
+    print("== a store that is dropped without close is freed ==")
+    import gc
+    import weakref
+    session_ingest.CYCLE = 600.0
+    s2 = open_store()
+    s2.start_session_reconcile().join(30)
+    ref = weakref.ref(s2)
+    del s2
+    gc.collect()
+    ck("the repeating thread does not keep the store alive (the daemon exits without close)",
+       ref() is None, ref())
+    session_ingest.CYCLE = old
 
 
 def main():

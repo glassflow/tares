@@ -71,6 +71,7 @@ import json
 import re
 import threading
 import time
+import weakref
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import bindparam, delete, func, insert, select, text, update
@@ -566,8 +567,9 @@ def record(store, envelopes) -> None:
         return
     t0 = time.perf_counter()
     ok = True
-    folded = _fold(envelopes)
+    folded: dict = {}
     try:
+        folded = _fold(envelopes)
         _add(store, folded, _line_rows(store, envelopes))
     except Exception as e:
         ok = False
@@ -911,23 +913,31 @@ def _fill_turns_chunk(store, sources: list, sids: list, since) -> None:
 
 
 def _reconcile_pass(store, t0: float) -> None:
-    try:
-        n = reconcile_sessions(store)
-        if n:          # a start with nothing to catch up on prints nothing
-            print(f"taresd: sessions table caught up for {n} session(s) in "
-                  f"{time.perf_counter() - t0:.1f}s", flush=True)
-    except Exception as e:
-        print(f"taresd: sessions table catch-up failed ({type(e).__name__}: {e}); "
-              "tried again at the next start", flush=True)
-    refresh_lines_gauges(store)
+    # one pass at a time: the start-up pass can still be running when the first cycle comes round
+    with store.__dict__.setdefault("_reconcile_pass_lock", threading.Lock()):
+        try:
+            n = reconcile_sessions(store)
+            if n:          # a start with nothing to catch up on prints nothing
+                print(f"taresd: sessions table caught up for {n} session(s) in "
+                      f"{time.perf_counter() - t0:.1f}s", flush=True)
+        except Exception as e:
+            print(f"taresd: sessions table catch-up failed ({type(e).__name__}: {e}); "
+                  "tried again at the next start", flush=True)
+        refresh_lines_gauges(store)
 
 
-def _cycle(store, stop: threading.Event) -> None:
+def _cycle(ref, stop: threading.Event) -> None:
     """After the first pass: `reconcile_sessions` again every `CYCLE` seconds, so a session that
     `record` wrote in full becomes `lines_complete` within minutes, and the gauges of
-    `session_lines` follow. Ends when `Store.close` sets `stop`."""
+    `session_lines` follow. Ends when `Store.close` sets `stop`, or when the store is gone: the
+    thread holds a weak reference, so a process that exits without closing its store (the daemon)
+    is not kept from freeing its DuckDB connection by a thread parked in `stop.wait`."""
     while not stop.wait(CYCLE):
+        store = ref()
+        if store is None:
+            return
         _reconcile_pass(store, time.perf_counter())
+        del store
 
 
 def start_reconcile(store) -> threading.Thread:
@@ -959,6 +969,6 @@ def start_reconcile(store) -> threading.Thread:
     stop = getattr(store, "_reconcile_stop", None)
     if stop is None:
         stop = store._reconcile_stop = threading.Event()
-        threading.Thread(target=_cycle, args=(store, stop), name="sessions-reconcile-cycle",
+        threading.Thread(target=_cycle, args=(weakref.ref(store), stop), name="sessions-reconcile-cycle",
                          daemon=True).start()
     return th
