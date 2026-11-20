@@ -22,6 +22,7 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `tares login --json` (not a factory command) | one document per line: `step: open`, then `step: done` | `login.json` |
 | `tares login --show [--json]` | one document | `login.json` |
 | `tares logout --json` | one document | `logout.json` |
+| `tares capabilities --json` (not a factory command) | one document | `capabilities.json` |
 | `crew up --yes`, `crew down`, `crew halt`, `crew resume`, `crew freeze`, `crew unfreeze`, `crew update`, `crew restart`, and a station's `restart`, `revive`, `retire`, each with `--json` | one document | `result.json` |
 | `tidy --json` | nothing on success; the error shape on a refusal | `error.json` |
 | any of them, when it fails with `--json` | one document | `error.json` |
@@ -96,6 +97,31 @@ know. A secret field never has a `value`: `saved` says whether the cell holds on
   (any other answer, or none). Exactly one of the three forms per call; a bad mix (`--progress` with `--repos`,
   `--credential` or `--via` without `--repos`, an unknown argument) is `usage`, exit 2. Without `--json` it is a usage
   line on stderr, exit 2, as for `events`.
+
+## capabilities
+
+`tares capabilities --json` prints one document, and exits 0, so an app can ask what this engine and the Tares it is
+signed in to can do before it relies on either:
+`{"schema_version": 1, "engine", "commands": [...], "cell": {"url", "version", "capabilities": [...]}}`.
+
+- `engine` is the version `tares --version` shows.
+- `commands` is the fixed list `COMMANDS` in `tares/crew/capabilities.py`: the dotted names of the machine commands
+  of this engine, the ones in the table above (`factory.status`, `factory.crew.up`, `login`, `capabilities`, ...). A
+  station's `restart`, `revive` and `retire` are `factory.restart`, `factory.revive` and `factory.retire`. An app
+  checks that a name is listed before it calls the command, and a name that is missing means this engine is too
+  old for it.
+- `cell` is what the cell's `/health` says (`version`, and its `capabilities` list; `[]` when it lists none). The
+  address is the one in `TARES_FACTORY_URL` or `TARESD_URL`, else the one `tares login` saved. Not signed in (no such
+  address; the local default does not count): `url` and `version` are `null` and `capabilities` is `[]`. An address
+  that does not answer within a few seconds, or answers an error or something that is not JSON: `url` is the
+  address, `version` is `null` and `capabilities` is `[]`. Neither is an error: the command still exits 0. Only
+  the address is taken from the saved login: the key is not used, sent or printed. A bug is the usual `error` document, exit 1.
+
+**The rule:** a new machine command (a command with `--json` and a schema here) adds its dotted name to `COMMANDS` in
+the same pull request. `tests/test_crew_capabilities.py` enforces it: it lists every command the CLI registers (the
+`tares factory` commands in `tares/crew/dispatch.py` and the top-level words of `tares/cli.py`), each either
+mapped to a dotted name or left out with a reason, and it fails for a registered command that is neither, and
+for a name in `COMMANDS` no registered command has. `factory.setup.apply` is not listed yet: it is added by the pull request that adds the command (TR-1421).
 
 ## events
 

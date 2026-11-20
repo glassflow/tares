@@ -316,6 +316,11 @@ def _logout(args: argparse.Namespace):
     raise SystemExit(logout(json_out=args.json))
 
 
+def _capabilities(args: argparse.Namespace):
+    from .crew.capabilities import cmd_capabilities
+    raise SystemExit(cmd_capabilities(json_out=args.json))
+
+
 def plugin_dir() -> Path:
     """The Claude Code plugin for Tares: inside the installed package, or claude-plugin/ in a
     checkout (an editable install). TARES_PLUGIN_DIR, when set, names the plugin to use instead: a
@@ -392,6 +397,16 @@ def main():
     reject_legacy_env()
     if len(sys.argv) > 1 and sys.argv[1] == "factory":
         _factory(sys.argv[2:])
+    p = build_parser()
+    args = p.parse_args()
+    if not getattr(args, "func", None):
+        p.print_help()
+        return
+    args.func(args)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The `tares` command line: every top-level word. A function of its own so a test can read the words."""
     p = argparse.ArgumentParser(prog="tares", description="Tares; a data plane for AI agents.")
     p.add_argument("--version", action="version", version=f"tares {_pkg_version()}")
     sub = p.add_subparsers(dest="cmd")
@@ -457,8 +472,7 @@ def main():
     st.add_argument("--json", action="store_true", help="machine-readable output")
     st.set_defaults(func=_status)
 
-    args = p.parse_args()
-    if not getattr(args, "func", None):
-        p.print_help()
-        return
-    args.func(args)
+    ca = sub.add_parser("capabilities", help="what this tares can do and what the Tares it is signed in to can do")
+    ca.add_argument("--json", action="store_true", help="machine-readable output: one JSON document")
+    ca.set_defaults(func=_capabilities)
+    return p

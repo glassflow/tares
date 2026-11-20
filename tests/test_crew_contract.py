@@ -19,6 +19,8 @@ Untested on real Windows (TR-946): the file id of a rotated events file is what 
 
 Run: python tests/test_crew_contract.py
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -226,7 +228,7 @@ class Stub(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
-        body = {"/health": {"status": "ok", "capabilities": ["guardrail_rules", LAUNCH_CAPABILITY]},
+        body = {"/health": {"status": "ok", "version": "9.9.9", "capabilities": ["guardrail_rules", LAUNCH_CAPABILITY]},
                 RULES_PATH: rules_answer(q.get("station", ""), q.get("role", "builder"), "", "", ""),
                 "/api/crew/settings": {"settings": WORLD["settings"]},
                 "/api/crew/projects": {"projects": WORLD["projects"]},
@@ -342,7 +344,7 @@ def pretty(doc):
 
 print("== the schemas")
 ck("a schema for every --json output and for the error shape",
-   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup", "setup_questions", "setup_answers", "result", "error", "login", "logout"}
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup", "setup_questions", "setup_answers", "result", "error", "login", "logout", "capabilities"}
    <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
@@ -371,6 +373,142 @@ ck("a document that is not the shape fails",
    and problems("projects", {"schema_version": 1, "projects": [{"name": "n"}]}) != []
    and problems("projects", {"schema_version": 1, "projects": [{"name": "n", "builders": 0, "tickets_done": 1, "extra": True}]}) == []
    and problems("setup_answers", {"schema_version": 1, "saved": "crew_name", "grants": 1}) != [])
+_CAP = {"schema_version": 1, "engine": "1.0.0", "commands": ["factory.status", "login"],
+        "cell": {"url": "https://x.example.com", "version": "1.0.0", "capabilities": ["recall"]}}
+ck("capabilities.json takes the shape, a cell of nulls, a cell key it does not know, and refuses the rest",
+   problems("capabilities", _CAP) == []
+   and problems("capabilities", dict(_CAP, cell={"url": None, "version": None, "capabilities": []})) == []
+   and problems("capabilities", dict(_CAP, cell=dict(_CAP["cell"], later="x"))) == []
+   and problems("capabilities", dict(_CAP, commands=[])) == []
+   and all(problems("capabilities", {k: v for k, v in _CAP.items() if k != drop}) != [] for drop in _CAP)
+   and all(problems("capabilities", dict(_CAP, cell={k: v for k, v in _CAP["cell"].items() if k != drop})) != [] for drop in _CAP["cell"])
+   and problems("capabilities", dict(_CAP, commands=["login", "login"])) != []
+   and problems("capabilities", dict(_CAP, commands=["login", 3])) != []
+   and problems("capabilities", dict(_CAP, commands="login")) != []
+   and problems("capabilities", dict(_CAP, commands=["Factory Status"])) != []
+   and problems("capabilities", dict(_CAP, engine=None)) != []
+   and problems("capabilities", dict(_CAP, cell=None)) != []
+   and problems("capabilities", dict(_CAP, cell=dict(_CAP["cell"], url=5))) != []
+   and problems("capabilities", dict(_CAP, cell=dict(_CAP["cell"], version=1))) != []
+   and problems("capabilities", dict(_CAP, cell=dict(_CAP["cell"], capabilities="recall"))) != []
+   and problems("capabilities", dict(_CAP, cell=dict(_CAP["cell"], capabilities=[1]))) != []
+   and problems("capabilities", dict(_CAP, schema_version=2)) != []
+   and problems("capabilities", dict(_CAP, extra=1)) != [])
+
+# ---------- capabilities --json (TR-1415): no fake Claude Code needed, so it runs on Windows too ----------
+
+print("== capabilities --json")
+
+
+class Odd(BaseHTTPRequestHandler):
+    """A cell whose /health is an error (500) that still carries a version, JSON whose fields are the wrong types
+    (/odd), or a page that is not JSON (every other path)."""
+    protocol_version = "HTTP/1.0"
+
+    def do_GET(self):  # noqa: N802
+        err, odd = self.path.startswith("/err"), self.path.startswith("/odd")
+        raw = (b'{"version": "8.8.8", "capabilities": ["from_an_error"]}' if err
+               else b'{"version": 5, "capabilities": ["recall", 1, null, "launch"]}' if odd else b"<html>not a tares</html>")
+        self.send_response(500 if err else 200)
+        self.send_header("Content-Type", "application/json" if err or odd else "text/html")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *a):
+        pass
+
+
+ODD = ThreadingHTTPServer(("127.0.0.1", 0), Odd)
+threading.Thread(target=ODD.serve_forever, daemon=True).start()
+ODD_URL = f"http://127.0.0.1:{ODD.server_address[1]}"
+CAP_HOME = TOP / "cap-home"
+CAP_HOME.mkdir()
+THE_KEY = "nvf_" + "k9_topsecret_key"   # built here so the file holds no key-shaped literal (gitleaks)
+
+
+def cap(url="", argv=("capabilities", "--json"), home=CAP_HOME, saved=None):
+    """(exit code, stdout, stderr) of `tares capabilities --json`, the real entry point, with every TARES_ variable
+    gone but the data home; `url` is TARESD_URL, `saved` a login.json to put in the home."""
+    e = {k: v for k, v in os.environ.items() if not k.startswith(("TARES_", "FACTORY_")) and k not in ("TARESD_URL", "PYTHONSTARTUP")}
+    e.update(TARES_HOME=str(home), TARES_KEYRING="off", PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8")
+    if url:
+        e["TARESD_URL"] = url
+    lf = Path(home) / "login.json"
+    lf.unlink(missing_ok=True)
+    if saved is not None:
+        lf.write_bytes(json.dumps(saved).encode("utf-8"))
+    p = subprocess.run([sys.executable, "-c", "import sys; from tares.cli import main; main()", *argv], env=e, cwd=str(ROOT),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    return p.returncode, p.stdout, p.stderr
+
+
+code, out, err = cap(UP)
+doc = one_document("capabilities, a cell that answers", code, out, err, "capabilities")
+ck("capabilities: the cell is what /health says", doc.get("cell") == {"url": UP, "version": "9.9.9", "capabilities": ["guardrail_rules", LAUNCH_CAPABILITY]}, doc.get("cell"))
+ck("capabilities: commands are the fixed list, with the machine commands named in the README",
+   doc.get("commands") == list(__import__("tares.crew.capabilities", fromlist=["COMMANDS"]).COMMANDS)
+   and {"factory.status", "factory.crew.up", "factory.restart", "login", "logout", "capabilities"} <= set(doc.get("commands", [])), doc.get("commands"))
+vcode, vout, _ = cap(argv=("--version",))
+ck("capabilities: engine is what tares --version shows", vcode == 0 and vout.strip() == f"tares {doc.get('engine')}", (vout, doc.get("engine")))
+fixture("capabilities.json", stable(out, TOP).replace(json.dumps(doc.get("engine")), '"<ENGINE>"'))
+
+code, out, err = cap(saved={"cell_url": UP + "/", "cell": "factory", "key": THE_KEY, "machine": "m"})
+doc = one_document("capabilities, the saved login", code, out, err, "capabilities")
+ck("capabilities: the saved login's address is used, and its key is in no output",
+   doc.get("cell", {}).get("url") == UP and doc.get("cell", {}).get("version") == "9.9.9" and THE_KEY not in out + err, out)
+code, out, err = cap(UP, saved={"cell_url": ODD_URL})
+ck("capabilities: TARESD_URL beats the saved login", json.loads(out).get("cell", {}).get("url") == UP, out)
+
+code, out, err = cap()
+doc = one_document("capabilities, not signed in", code, out, err, "capabilities")
+ck("capabilities: not signed in is nulls and no capabilities, not a failure",
+   doc.get("cell") == {"url": None, "version": None, "capabilities": []} and bool(doc.get("commands")), doc)
+
+for label, url in (("a cell that is not there", DOWN), ("a /health that answers an error", ODD_URL + "/err"),
+                   ("a /health that is not JSON", ODD_URL)):
+    code, out, err = cap(url)
+    doc = one_document(f"capabilities, {label}", code, out, err, "capabilities")
+    ck(f"capabilities, {label}: the address, no version, no capabilities, exit 0",
+       doc.get("cell") == {"url": url, "version": None, "capabilities": []}, doc.get("cell"))
+
+code, out, err = cap(ODD_URL + "/odd")
+doc = one_document("capabilities, a /health with the wrong types", code, out, err, "capabilities")
+ck("capabilities: a version that is not a string is none, and only the string capabilities are kept",
+   doc.get("cell") == {"url": ODD_URL + "/odd", "version": None, "capabilities": ["recall", "launch"]}, doc.get("cell"))
+
+# a bug inside the command: with --json still the one error document, exit 1; without it the traceback stands
+from tares.crew import capabilities as _cap  # noqa: E402
+
+
+def _boom():
+    raise RuntimeError("boom")
+
+
+_real_collect = _cap.collect
+_cap.collect = _boom
+try:
+    _buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(_buf):
+            _code = _cap.cmd_capabilities(json_out=True)
+    except Exception as _e:  # the command let the bug out instead of printing the error document
+        _code = f"raised {type(_e).__name__}"
+    _doc = json.loads(_buf.getvalue()) if _buf.getvalue().strip() else {}
+    ck("capabilities --json, a crash: the error document, exit 1", _code == 1 and _doc.get("error", {}).get("code") == "error"
+       and "boom" in _doc.get("error", {}).get("message", "") and problems("error", _doc) == [], (_code, _buf.getvalue()))
+    try:
+        _cap.cmd_capabilities(json_out=False)
+        _raised = False
+    except RuntimeError:
+        _raised = True
+    ck("capabilities without --json, a crash: it is not hidden", _raised)
+finally:
+    _cap.collect = _real_collect
+
+code, out, err = cap(argv=("capabilities",))
+ck("capabilities without --json prints text for a person", code == 0 and out.startswith("tares ") and "not signed in" in out and not out.lstrip().startswith("{"), (code, out, err))
+
 
 if NO_FAKE_CLAUDE:
     print("skip: the commands below run a fake Claude Code, a bash script, and bash is not here")
@@ -804,8 +942,6 @@ ck("parse_cursor reads a cursor", events.parse_cursor("12:345") == (12, 345))
 
 # a reader that goes away: EPIPE and EINVAL (what a closed pipe says on Windows) end the command quietly
 import errno  # noqa: E402
-import io  # noqa: E402
-import contextlib  # noqa: E402
 
 real_emit = events.contract.emit
 
@@ -1065,7 +1201,7 @@ ck("setup.json: a key it does not know passes at every level",
 
 print("== the samples")
 for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
-             "setup_questions.json", "setup_answers.json", "result.json", "error.json", "watch.json"):
+             "setup_questions.json", "setup_answers.json", "result.json", "error.json", "watch.json", "capabilities.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
