@@ -46,6 +46,20 @@ class SessionStore:
             with self.engine.begin() as conn:
                 yield conn
 
+    @contextlib.contextmanager
+    def snapshot(self) -> Iterator[Connection]:
+        """One transaction whose statements all see the same data, for a read that joins the answers
+        of several queries. SQLite already gives that (every transaction takes the write lock, so
+        no writer runs meanwhile). Postgres would let a row committed between two statements show
+        in the second only, so the transaction runs at REPEATABLE READ: set for this transaction
+        only, which is what PgBouncer in transaction mode allows."""
+        with self._turns or contextlib.nullcontext():
+            with self.engine.connect() as conn:
+                if self.dialect == "postgresql":
+                    conn = conn.execution_options(isolation_level="REPEATABLE READ")
+                with conn.begin():
+                    yield conn
+
     def upsert(self, table):
         """An INSERT for `table` that takes `.on_conflict_do_update(...)` and
         `.on_conflict_do_nothing()`, in the dialect the store runs on."""

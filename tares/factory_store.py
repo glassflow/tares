@@ -1159,7 +1159,7 @@ class FactoryStore:
         spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
                  .select_from(ss.join(u, u.c.session == ss.c.session))
                  .group_by(ss.c.crew_id, ss.c.station))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
             top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
             worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
         out: dict[tuple, dict] = {}
