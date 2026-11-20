@@ -43,6 +43,8 @@
     "test:choose-edition": "vite build && node tests/choose-edition.e2e.cjs",
     "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs",
     "test:tokens": "node tests/tokens.parity.cjs",
+    "test:paper": "node tests/paper.vendored.cjs",
+    "paper:sync": "node scripts/paper-sync.mjs",
     "words-baseline": "node tests/words.check.cjs --write",
     "test:settings-people": "vite build && node tests/settings-people.e2e.cjs",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",

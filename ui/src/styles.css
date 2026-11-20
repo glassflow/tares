@@ -61,7 +61,7 @@
    argus-ui docs/design/heroui-v3-figma-variables.json, 2026-08-13). Both products share one
    palette by construction. Components never reference --kit-*; they consume the semantic tokens.
    `npm run test:tokens` (TR-1268, in CI) fails when a --kit-* value drifts from the shared paper token
-   in tests/paper-tokens.css, unless tests/tokens.parity.allow.json lists it with its reason.
+   in paper/tokens.css (vendored from arche-design by `npm run paper:sync`), unless tests/tokens.parity.allow.json lists it with its reason.
 
    ADOPTED from the kit: canvas + surface tiers + overlay + border, eclipse ink + muted, the accent
    (fixed across modes; the kit's Button "Primary" is the accent role), the dark anchors, and
@@ -78,7 +78,7 @@
 
    RULES: no color literal below these token layers; new micro-labels/badges/code use var(--mono),
    var(--pixel) is for headline numerals only; when the kit changes, re-extract the JSON in argus-ui
-   first, then the skill in arche-design, then re-vendor ui/tests/paper-tokens.css, then --kit-* here. */
+   first, then the tokens in arche-design (tag them), then `npm run paper:sync` here, then --kit-* here. */
 :root {
   --kit-background: #f0efe2;          /* background/background */
   --kit-surface: #faf9ec;             /* surface/surface */

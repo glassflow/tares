@@ -12,3 +12,9 @@ regexes = [
   '''TARES_MAX_DB_SIZE=''',
   '''TARES_TRIGGER_DEBOUNCE_SECONDS=''',
 ]
+# ui/paper/VENDORED.json lists the sha256 of each vendored paper file (TR-1539), next to a path that
+# says "tokens"; generic-api-key reads that pair as a key. The file holds only paths and hashes, so
+# it is skipped by path, and nothing else under ui/paper is.
+paths = [
+  '''(^|/)ui/paper/VENDORED\.json$''',
+]

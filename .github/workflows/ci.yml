@@ -53,6 +53,7 @@ jobs:
           npm run lint
           npm run token-contract
           npm run test:tokens
+          npm run test:paper
           node tests/words.selftest.cjs
           node tests/time.selftest.cjs
           node tests/words.check.cjs

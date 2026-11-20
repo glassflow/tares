@@ -1,0 +1,190 @@
+/* vendored from glassflow/arche-design paper-tokens-v2 746e3f7e0863441e4dcf3268c338b966637f9c7e: do not edit, run npm run paper:sync */
+/*
+ * paper-motion.css — the GlassFlow paper motion, shared by Rius and Tares.
+ *
+ * What it is: the duration and curve tokens (`@theme static`), the reduced-motion guard
+ * (`@layer base`), and the motion classes and keyframes (`@layer components`): motion-scrim,
+ * motion-dialog, motion-pop, motion-drawer, motion-toast, motion-page, motion-wait,
+ * motion-collapse, motion-wash and motion-tabs, and the page crossfade on a theme switch.
+ * Values are the console's exactly: nothing here is a new duration or curve.
+ *
+ * It pairs with tokens.css and paper-theme.css, all three at the same `paper-tokens-vN` tag.
+ * It is the source: an app vendors a tagged copy with `npm run paper:sync` and never edits it.
+ * A change is made here, in a PR, then tagged. See README.md, "How the paper skill is kept
+ * true". An app that mirrors the tokens in code (a DUR table, an easing string) checks them
+ * against the `@theme static` block below.
+ *
+ * What an app brings itself:
+ * - The Tailwind import and the `@layer` order (theme, base, legacy, components, utilities),
+ *   which come before this file is imported. The guard is in `base` and the classes in
+ *   `components`, so the order matters.
+ * - Colours. motion-wash reads --color-wash-strong, which paper-theme.css maps.
+ *
+ * Left out on purpose, because only one console screen reads them (the console keeps these
+ * in its own stylesheet): the keyframes sheet-fade, sheet-slide, node-pulse and builder-spin,
+ * and the reduced-motion lines of the screens that own them. --dur-spin and --dur-pulse stay
+ * in the token block, since the scale is one list; the console keyframes above read them.
+ */
+
+
+/* ── Motion (TR-1431) ──
+   One scale for every duration and curve in the console; nothing below names a raw time. The rule
+   in .impeccable.md (Motion) says what moves; `npm run motion-contract` (tests/motion.check.cjs) fails
+   on a raw duration in CSS, and the design-contract lint on one in a component.
+   - dur-1, 120ms: hover, press, colour, a menu or a select opening, anything leaving
+   - dur-2, 180ms: a dialog, a fold, a banner, a tab underline
+   - dur-3, 260ms: a page's content, the phone drawer, a toast, a row moving
+   - dur-4, 900ms: the wash on a value that just changed, fading out
+   - dur-wait, 200ms: how long a skeleton holds back, so a fast read never shows one
+   - dur-instant, 1ms: what every animation becomes under prefers-reduced-motion (transitions: 0s)
+   Things arrive on ease-out (fast, then settle) and leave on ease-in, faster than they came.
+   Under prefers-reduced-motion every one of them collapses to an instant (the guard in @layer base).
+   `static`: Tailwind emits these even where no utility names them, since the CSS below reads them. */
+@theme static {
+  --dur-1: 120ms;
+  --dur-2: 180ms;
+  --dur-3: 260ms;
+  --dur-4: 900ms;
+  --dur-wait: 200ms;
+  --dur-instant: 1ms;
+  --dur-spin: 0.8s;
+  --dur-pulse: 1.2s;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.2, 1);
+  --default-transition-duration: var(--dur-1);
+  --default-transition-timing-function: var(--ease-out);
+}
+
+/* ── Motion (TR-1431 to TR-1436) ──
+   What moves, and how, in one place; components name these classes, not durations. Each piece says
+   which ticket wants it. The rule is in .impeccable.md (Motion); the tokens are at the top of this file. */
+
+/* The guard. A person who asked the OS for less motion gets none: every transition and animation
+   ends at once. An animation gets 1ms, not 0, so an exit still finishes and the element leaves. A
+   transition gets 0s: transition-property defaults to `all`, so a 1ms duration on every element would
+   start a transition on any style change anywhere, and a colour read in the same tick would get the
+   old value. 0s is the default, the browser's "no transition". In @layer
+   base and important: an important declaration in an earlier layer beats every later layer, so no
+   utility or component can win it back. Skeleton delays drop too, since nothing then fades them in. */
+@layer base {
+  :root { interpolate-size: allow-keywords; }
+
+  /* A fold opens to its height instead of jumping (TR-1434). Browsers without ::details-content keep the jump. */
+  details::details-content {
+    block-size: 0; overflow-y: clip;
+    transition: block-size var(--dur-2) var(--ease-out), content-visibility var(--dur-2) allow-discrete;
+  }
+  details[open]::details-content { block-size: auto; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after, ::details-content {
+      animation-duration: var(--dur-instant) !important;
+      animation-delay: 0s !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0s !important;
+      transition-delay: 0s !important;
+      scroll-behavior: auto !important;
+    }
+    /* Leaving is no animation at all, not a 1ms one: Radix Presence and usePresence unmount at once
+       when the closed state has no animation, but wait for animationend when it has one, and that
+       arrives a frame or more later. A dialog closed by a click would linger past the next read. */
+    [data-state="closed"] { animation-name: none !important; }
+    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  }
+}
+
+@layer components {
+  @keyframes m-fade-in { from { opacity: 0; } }
+  @keyframes m-fade-out { to { opacity: 0; } }
+  /* --m-x, --m-y and --m-s say where an element comes from; it leaves the way it came. `transform`
+     only: Tailwind 4's translate and scale utilities write their own properties, so a centred dialog
+     keeps its -50% while it moves. */
+  @keyframes m-arrive { from { opacity: 0; transform: translate(var(--m-x, 0), var(--m-y, 0)) scale(var(--m-s, 1)); } }
+  @keyframes m-leave { to { opacity: 0; transform: translate(var(--m-x, 0), var(--m-y, 0)) scale(var(--m-s, 1)); } }
+
+  /* TR-1432: the scrim behind a dialog or the phone menu. */
+  .motion-scrim { animation: m-fade-in var(--dur-2) var(--ease-out); }
+  .motion-scrim[data-state="closed"] { animation: m-fade-out var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1432: a dialog rises a little and settles; it leaves faster than it came. */
+  .motion-dialog { --m-y: 6px; --m-s: 0.97; animation: m-arrive var(--dur-2) var(--ease-out); }
+  .motion-dialog[data-state="closed"] { animation: m-leave var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1432: a menu or a select opens from the side it hangs on, 4px, grown from its anchor. */
+  .motion-pop {
+    --m-s: 0.98; transform-origin: var(--radix-popper-transform-origin, top center);
+    animation: m-arrive var(--dur-1) var(--ease-out);
+  }
+  .motion-pop[data-side="bottom"] { --m-y: -4px; }
+  .motion-pop[data-side="top"] { --m-y: 4px; }
+  .motion-pop[data-side="left"] { --m-x: 4px; }
+  .motion-pop[data-side="right"] { --m-x: -4px; }
+  .motion-pop[data-state="closed"] { animation: m-leave var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1432: the phone menu slides in from the left edge and back. */
+  .motion-drawer { --m-x: -100%; animation: m-arrive var(--dur-3) var(--ease-out); }
+  .motion-drawer[data-state="closed"] { animation: m-leave var(--dur-2) var(--ease-in) forwards; }
+
+  /* TR-1432: a toast rises in, leaves faded, and follows a finger that swipes it right. */
+  .motion-toast { --m-y: 12px; animation: m-arrive var(--dur-3) var(--ease-out); }
+  .motion-toast[data-state="closed"] { animation: m-fade-out var(--dur-1) var(--ease-in) forwards; }
+  .motion-toast[data-swipe="move"] { transform: translateX(var(--radix-toast-swipe-move-x)); animation: none; }
+  .motion-toast[data-swipe="cancel"] { transform: translateX(0); transition: transform var(--dur-2) var(--ease-out); }
+  .motion-toast[data-swipe="end"] { --m-x: 100%; animation: m-swipe-out var(--dur-1) var(--ease-in) forwards; }
+  @keyframes m-swipe-out { from { transform: translateX(var(--radix-toast-swipe-end-x)); } to { opacity: 0; transform: translateX(100%); } }
+
+  /* TR-1433: a page's content fades in when it replaces the skeleton or the last page. The Shell puts
+     this on the element that holds the page, so only its top element animates, once, as it arrives;
+     a poll that re-renders the same element moves nothing. Opacity only: a transform, even for a
+     moment, would make the page the containing block of anything fixed inside it. */
+  .motion-page > * { animation: m-fade-in var(--dur-3) var(--ease-out); }
+
+  /* TR-1433: a skeleton waits 200ms before it shows, so a fast read never flashes one. */
+  .motion-wait { animation: m-fade-in var(--dur-2) var(--ease-out) var(--dur-wait) both; }
+
+  /* TR-1434: a banner (or anything in a Collapse) grows open from nothing and shrinks shut, so the
+     page below moves with it instead of jumping. Clipped only while it moves: both keyframes name
+     the overflow, so a focus ring is never cut once it stands still. Without interpolate-size the
+     height snaps and only the fade is left. */
+  /* The gap the parent puts beside it (a grid's gap-5) opens and closes with it, or the page would still
+     jump by the gap as the element mounts and unmounts. A grid track never goes below 0, so the element's
+     own negative margin cannot take the gap back; the next sibling can, by moving up over it. Collapse
+     measures the parent's gap into --m-gap on the parent, where the sibling inherits it. With nothing
+     after it, the element pulls itself (--m-gap-s): exact in a flex column, close in a grid. */
+  @keyframes m-grow {
+    from { block-size: 0; opacity: 0; overflow: clip; margin-block-start: calc(-1 * var(--m-gap-s, 0px)); }
+    to { overflow: clip; }
+  }
+  @keyframes m-shrink {
+    from { overflow: clip; }
+    to { block-size: 0; opacity: 0; overflow: clip; margin-block-start: calc(-1 * var(--m-gap-s, 0px)); }
+  }
+  @keyframes m-pull-in { from { margin-block-start: calc(-1 * var(--m-gap, 0px)); } }
+  @keyframes m-pull-out { to { margin-block-start: calc(-1 * var(--m-gap, 0px)); } }
+  .motion-collapse[data-state="open"]:not([data-initial]) { animation: m-grow var(--dur-2) var(--ease-out); }
+  .motion-collapse[data-state="open"]:not([data-initial]) + * { animation: m-pull-in var(--dur-2) var(--ease-out); }
+  .motion-collapse[data-state="closed"] { animation: m-shrink var(--dur-1) var(--ease-in) forwards; }
+  .motion-collapse[data-state="closed"] + * { animation: m-pull-out var(--dur-1) var(--ease-in) forwards; }
+
+  /* TR-1435: a value that just changed under a poll washes and fades back. */
+  @keyframes m-wash { from { background-color: var(--color-wash-strong); } }
+  .motion-wash { animation: m-wash var(--dur-4) var(--ease-out); }
+
+  /* TR-1436: the tab underline slides to the tab chosen. The list places it (TabsList); once placed,
+     the tabs' own underline goes quiet and this one moves. */
+  .motion-tabs > [data-tab-line] {
+    position: absolute; left: 0; bottom: 0; block-size: 2px; pointer-events: none;
+  }
+  .motion-tabs[data-line="on"] > [data-tab-line] {
+    transition: transform var(--dur-2) var(--ease-out), inline-size var(--dur-2) var(--ease-out);
+  }
+  /* the border goes at once: a tab transitions only its colour and background (tabs.tsx), never its border,
+     so placing the line is not a fade on first paint. A transition-property set here would lose to the
+     trigger's utility class, which sits in a later layer. */
+  .motion-tabs[data-line="on"] > [role="tab"] { border-bottom-color: transparent !important; }
+
+  /* TR-1436: the theme switch crossfades the whole page (a view transition, where the browser has them). */
+  ::view-transition-old(root) { animation: m-fade-out var(--dur-3) var(--ease-in-out) both; }
+  ::view-transition-new(root) { animation: m-fade-in var(--dur-3) var(--ease-in-out) both; }
+}
