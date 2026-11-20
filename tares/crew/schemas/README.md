@@ -12,6 +12,9 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `events --json [--follow] [--since <cursor>]` | one document per line | `events.json` |
 | `doctor --json` | one document | `doctor.json` |
 | `projects --json` | one document | `projects.json` |
+| `setup --json` | one document | `setup.json` |
+| `setup --progress --json` | one document | `setup.json` |
+| `setup --repos [--credential <name>] [--via app] --json` | one document | `setup.json` |
 | `crew setup --questions` | one document | `setup_questions.json` |
 | `crew setup --answers <file> --json` | one document | `setup_answers.json` |
 | `settings <station>` | Claude Code's settings file, no `schema_version` | `settings.json` |
@@ -53,7 +56,7 @@ its types from them.
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
 `station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `setup_needed`, `tares_error`
 (a call to Tares failed), `not_signed_in` (no Tares is configured: no saved `tares login`, no address set, and nothing at
-the local default), `crew_home_untrusted` (Claude Code has not trusted the crew home; `error.folder` is that folder, an optional string only this code sets). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `cell_unreachable`, `key_refused`, `key_lacks_admin`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
+the local default), `crew_home_untrusted` (Claude Code has not trusted the crew home; `error.folder` is that folder, an optional string only this code sets). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `cell_unreachable`, `key_refused`, `key_lacks_admin`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. `setup` also uses `cell_too_old` (the cell answers 404: it is older than the route), `key_refused` (401) and adds `forbidden` (403: the key may not read the setup, which is for an admin). A bug with `--json` is `error` with the exception named. The code is a name that matches `^[a-z][a-z0-9_]*$`, not a closed list: a caller treats a code it does not know like `error`.
 
 ## login and logout
 
@@ -68,6 +71,31 @@ usage error, exit 2), checks `/health` and the key, saves the login with `cloud`
 document. `cell_unreachable` carries the connection or certificate error, `key_refused` is a 401 or 403 and
 `key_lacks_admin` a key without the admin scope or a project key (the cell says so at `/api/whoami`; a cell that answers 404 there is trusted on the key check alone and the `done` document carries `scope_checked` false; any other answer there that is not a scopes list is `cell_unreachable`). `tares logout` after such a login deletes the saved login and
 leaves the key on the cell (`key_removed` false).
+
+## setup
+
+`setup --json` hands a program what the console's Setup screen shows, so an app can draw the same screen. It prints
+`{"schema_version": 1, "setup": <the cell's GET /api/factory/setup document>}`: the steps (`steps[]`, each with its
+`slot`, `name`, `why` and `state`), the integrations connected and available in each step, and the settings form of each
+(`form.fields[]`, a field with its `name`, `label`, `kind`, `required`, `value`, `saved`, `options`, `rows`, `help` and
+`placeholder`). `progress` is `{set, total, text}`. The cell owns the shape: the crew passes the document on as it came,
+the schema names the keys an app is likely to read and closes none of them, and a caller ignores every key it does not
+know. A secret field never has a `value`: `saved` says whether the cell holds one.
+
+- `setup --progress --json` prints `{"progress": {set, total, text, projects}}` (GET `/api/factory/setup/progress`):
+  how far setup is, and how many factory projects the cell has.
+- `setup --repos [--credential <name>] [--via app] --json` prints `{"repos": ["owner/name", ...]}`, the repositories
+  GitHub lets the cell see (GET `/api/factory/setup/github/repos`, which the GitHub Issues form's repository picker
+  reads). `--via` is `app` by default; any other value makes the cell list every github.com credential instead of
+  its GitHub App connections, and the command passes it on as given. `repos` is a list of strings, sorted. `--credential` names a GitHub credential stored on the cell; without
+  it the cell uses its GitHub App connections, else every github.com credential. An empty list can mean GitHub is
+  still listing: ask again in a minute. When GitHub refuses the listing, the command fails with `tares_error` and
+  GitHub's reason in `message`, never an empty list.
+- It needs a key that may read the setup (an admin's). Failures are the error shape: `not_signed_in` (no Tares is
+  configured, exit 1), `cell_too_old` (the cell answers 404), `key_refused` (401), `forbidden` (403), `tares_error`
+  (any other answer, or none). Exactly one of the three forms per call; a bad mix (`--progress` with `--repos`,
+  `--credential` or `--via` without `--repos`, an unknown argument) is `usage`, exit 2. Without `--json` it is a usage
+  line on stderr, exit 2, as for `events`.
 
 ## events
 

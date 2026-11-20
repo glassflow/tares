@@ -84,7 +84,120 @@ def problems(name, doc):
 
 # ---------- a stub Tares ----------
 
-WORLD = {"desk": [], "projects": [], "settings": {"autonomy": "L4-ship"}}
+WORLD = {"desk": [], "projects": [], "settings": {"autonomy": "L4-ship"},
+         "setup": {}, "setup_progress": {}, "setup_repos": {}, "setup_http": 200, "setup_seen": []}
+
+
+def _field(name, label, kind="text", required=False, help="", placeholder="", options=(), rows=(), value="",
+           saved=False, picker=""):
+    """A field of a setup form with the keys the cell sends for one (tares/screens/factory_setup.py field_of):
+    a secret has no `value`, only `saved`; a bool has a boolean; a mapping has `rows` (its keys are `rows[].key`, its
+    `options` are [] and its `value` is null); a select has `options`."""
+    out = {"name": name, "label": label, "kind": kind, "required": required,
+           "requirement": "Required" if required else "Optional", "placeholder": placeholder, "help": help,
+           "error": "" if kind == "bool" else f"Enter {label.lower()}.", "options": list(options),
+           "rows": list(rows), "value": value, "saved": saved, "saved_note": "A key is saved. Leave this blank to keep it." if saved else "",
+           "picker": picker, "picker_help": "", "picker_placeholder": "", "picker_loading": "", "picker_more": ""}
+    if kind == "secret":
+        del out["value"]
+    if kind == "mapping":
+        out["options"], out["value"] = [], None
+    return out
+
+
+def _form(mode, title, fields):
+    return {"mode": mode, "title": title, "lead": f"{title}. It becomes the default.",
+            "save_label": "Save and connect" if mode == "connect" else "Save", "save_as_default": mode == "connect",
+            "test_hint": f"Test connection checks the settings above with {title}. Nothing is saved by it.", "fields": fields}
+
+
+def _integration(id, title, form=None, **more):
+    return {"id": id, "title": title, "description": f"{title} is a sample.", **more, "form": form}
+
+
+def sample_setup():
+    """The document GET /api/factory/setup gives, cut to three steps, with invented names. Every kind of field is
+    in it: text, secret (saved and not), bool, select and mapping. The cell's own integrations carry no select or
+    bool field in a factory form today; they are here so the sample shows every kind a form can hold."""
+    mapping = [{"key": k, "label": lab, "aria_label": f"Orders status for {lab}", "value": v} for k, lab, v in
+               (("todo", "To do", "Open"), ("in_progress", "In progress", "Doing"), ("in_review", "In review", ""), ("done", "Done", "Closed"))]
+    tickets = {
+        "slot": "tickets", "number": 1, "name": "Tickets", "why": "Where the crew's tickets live and where their status is kept.",
+        "state": "set", "set": True, "line": "Tares and 1 more", "note": None, "banner": None,
+        "connected_heading": "Connected (2)",
+        "connected": [
+            _integration("tares", "Tares", tags=[{"key": "default", "text": "Default"}, {"key": "built_in", "text": "Built in"}],
+                         default=True, built_in=True, via=None, who="", picked_by=[], follows=1, use="Projects use it unless they pick another.",
+                         actions=[], blocked=None, confirm=None, last_test=None),
+            _integration("linear", "Linear", tags=[{"key": "key", "text": "API key"}], default=False, built_in=False, via="key", who="",
+                         picked_by=[{"uid": "p1", "name": "shop"}], follows=0, use="Used by shop.",
+                         actions=[{"key": "edit", "label": "Edit settings"}, {"key": "make_default", "label": "Make default"},
+                                  {"key": "remove", "label": "Remove"}],
+                         blocked=None, confirm={"title": "Remove Linear", "text": "1 project picks Linear: shop. They move to the default, Tares.",
+                                                "yes": "Remove it", "no": "Keep it", "moves_projects": True},
+                         form=_form("edit", "Edit Linear", [_field("api_key", "API key", "secret", saved=True, placeholder="Saved. Leave blank to keep it.",
+                                                                  help="A Linear personal API key.")]),
+                         last_test=None)],
+        "available_heading": "Connect another",
+        "available": [
+            {"id": "github", "title": "GitHub Issues", "description": "Tickets are issues in one repository.", "enterprise": False,
+             "allowed": True, "button": "Connect GitHub", "reason": None,
+             "app": {"url": "https://connect.example.test/github", "service": "GitHub", "app_name": "GlassFlow GitHub App",
+                     "button": "Connect GitHub", "repo_step": True, "steps": ["GitHub opens in this window."],
+                     "note": "Tares reads and writes issues through the app.", "use_key_label": "Use a GitHub credential instead",
+                     "use_app_label": "Connect with the GitHub App instead", "stage": "start", "done": None},
+             "form": _form("connect", "Connect GitHub Issues", [
+                 _field("repo", "Repository", required=True, placeholder="owner/name", picker="github_repo",
+                        help="The repository that holds the issues, as owner/name."),
+                 _field("credential", "GitHub credential", help="The name of a GitHub credential stored on this cell."),
+                 _field("issue_label", "Issue label")])},
+            {"id": "jira", "title": "Jira", "description": "Tickets live in a Jira project.", "enterprise": True, "allowed": False,
+             "button": "Connect", "reason": "This cell has no licence. Without it, Jira cannot be connected.", "app": None, "form": None}],
+        "footer": {"hint": "", "next": "Next: Review"}}
+    review = {
+        "slot": "review", "number": 2, "name": "Review", "why": "Who reviews each pull request before it can merge.",
+        "state": "not_set", "set": False, "line": "Tares (not set yet)", "note": None, "banner": None,
+        "connected_heading": "Connected (1)",
+        "connected": [_integration("tares", "Tares", tags=[{"key": "default", "text": "Default"}], default=True, built_in=True, via=None,
+                                   who="", picked_by=[], follows=0, use="Every project uses it.",
+                                   actions=[{"key": "keep", "label": "Use Tares"}], blocked=None, confirm=None, last_test=None)],
+        "available_heading": "Connect another",
+        "available": [{"id": "northreview", "title": "Northreview", "description": "Northreview reviews each pull request.",
+                       "enterprise": False, "allowed": True, "button": "Connect", "reason": None, "app": None,
+                       "form": _form("connect", "Connect Northreview", [
+                           _field("key", "API key", "secret", required=True, help="A Northreview API key."),
+                           _field("strict", "Block on every comment", "bool", value=False),
+                           _field("mode", "Review depth", "select", options=["quick", "thorough"], value="quick")])}],
+        "footer": {"hint": "", "next": "Next: CI"}}
+    ci = {
+        "slot": "ci", "number": 3, "name": "CI", "why": "Where Tares looks to see whether a pull request's checks pass.",
+        "state": "set", "set": True, "line": "GitHub Actions for GitHub repos, local checks otherwise", "note": None, "banner": None,
+        "connected_heading": "Connected (1)",
+        "connected": [_integration("local", "Automatic", tags=[{"key": "default", "text": "Default"}], default=True, built_in=True,
+                                   via=None, who="", picked_by=[], follows=0, use="", actions=[], blocked=None, confirm=None, last_test=None)],
+        "available_heading": "Connect another",
+        "available": [{"id": "ordersboard", "title": "Orders board", "description": "Reads statuses from a board.", "enterprise": False,
+                       "allowed": True, "button": "Connect", "reason": None, "app": None,
+                       "form": _form("connect", "Connect Orders board", [
+                           _field("site", "Site address", required=True, placeholder="https://orders.example.test"),
+                           _field("status", "Status mapping", "mapping", rows=mapping,
+                                  help="Match each Tares stage to the status that means it.")])}],
+        "footer": {"hint": "", "next": "Finish setup"}}
+    return {"title": "Set up your factory", "exit_label": "Exit setup",
+            "edition": {"key": "self_hosted", "name": "Self-hosted", "cloud": False},
+            "licence": {"state": "none", "ended_on": None, "text": "This cell has no licence."},
+            "progress": {"set": 3, "total": 6, "text": "3 of 6 done"},
+            "onboarding": {"choices": {"chosen": False}, "github": {"connected": False}},
+            "terminal": [{"id": "install", "where": "terminal", "done": True}],
+            "tools": {"github": {"connected": False, "detail": ""}, "slack": {"connected": False, "detail": ""}},
+            "steps": [tickets, review, ci]}
+
+
+WORLD["setup"] = sample_setup()
+WORLD["setup_progress"] = {"set": 3, "total": 6, "text": "3 of 6 done", "projects": 1}
+WORLD["setup_repos"] = {"repos": ["northwind/orders-api", "northwind/web-shop"], "error": "", "note": ""}
+SETUP_ROUTES = {"/api/factory/setup": "setup", "/api/factory/setup/progress": "setup_progress",
+                "/api/factory/setup/github/repos": "setup_repos"}
 
 
 class Stub(BaseHTTPRequestHandler):
@@ -93,6 +206,16 @@ class Stub(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         path, _, query = self.path.partition("?")
         q = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
+        if path in SETUP_ROUTES:   # the setup screen's routes (tares/screens/factory_setup.py); setup_http is the status they answer with
+            WORLD["setup_seen"].append(self.path)
+            status = WORLD["setup_http"]
+            raw = json.dumps(WORLD[SETUP_ROUTES[path]] if status == 200 else {"detail": "stub says no"}).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if path.startswith("/api/factory/stations/") and path.endswith("/launch"):   # the launch `settings` starts from (TR-870)
             hit = launch_answer(self.path, self.headers, WORLD["projects"], lambda name, role: rules_answer("", role, name, "", ""),
                                 WORLD["settings"]["autonomy"], UP)
@@ -219,7 +342,7 @@ def pretty(doc):
 
 print("== the schemas")
 ck("a schema for every --json output and for the error shape",
-   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "result", "error", "login", "logout"}
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup", "setup_questions", "setup_answers", "result", "error", "login", "logout"}
    <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
@@ -837,6 +960,107 @@ finally:
         pass
     p3.wait(10)
 
+# ---------- setup ----------
+# `setup` needs no Claude Code, so it runs here on every platform, the fake Claude's bash script or not.
+
+print("== setup --json")
+SETUP_SEEN = WORLD["setup_seen"]
+env, tmp = world({}, [])
+code, out, err = tares(env, ["setup", "--json"])
+doc = one_document("setup", code, out, err, "setup")
+ck("setup: the cell's document as it came, under `setup`, and nothing else", set(doc) == {"schema_version", "setup"}
+   and doc.get("setup") == WORLD["setup"], list(doc))
+ck("setup: it asked GET /api/factory/setup", SETUP_SEEN[-1:] == ["/api/factory/setup"], SETUP_SEEN)
+steps = doc.get("setup", {}).get("steps", [])
+every = [i for st in steps for i in st["connected"] + st["available"]]
+fields = [f for i in every if i.get("form") for f in i["form"]["fields"]]
+ck("setup: a step with a connected integration that has a form", any(i.get("form") for st in steps for i in st["connected"]))
+ck("setup: an integration with an app block", any(i.get("app") for i in every))
+ck("setup: every kind of field is in the sample", {f["kind"] for f in fields} == {"text", "secret", "bool", "select", "mapping"}, {f["kind"] for f in fields})
+ck("setup: a saved secret has `saved` and no `value`", any(f["kind"] == "secret" and f["saved"] and "value" not in f for f in fields))
+fixture("setup.json", pretty(doc))
+progress_doc = one_document("setup --progress", *tares(env, ["setup", "--progress", "--json"]), "setup")
+ck("setup --progress: the cell's progress under `progress`, and nothing else", set(progress_doc) == {"schema_version", "progress"}
+   and progress_doc.get("progress") == WORLD["setup_progress"], progress_doc)
+ck("setup --progress: it asked GET /api/factory/setup/progress", SETUP_SEEN[-1:] == ["/api/factory/setup/progress"], SETUP_SEEN)
+fixture("setup_progress.json", pretty(progress_doc))
+repos_doc = one_document("setup --repos", *tares(env, ["setup", "--repos", "--credential", "acme&app#1", "--via", "app", "--json"]), "setup")
+ck("setup --repos: the `repos` list only", set(repos_doc) == {"schema_version", "repos"}
+   and repos_doc.get("repos") == ["northwind/orders-api", "northwind/web-shop"], repos_doc)
+ck("setup --repos: the credential and via go in the query, encoded", SETUP_SEEN[-1:] == ["/api/factory/setup/github/repos?credential=acme%26app%231&via=app"], SETUP_SEEN)
+fixture("setup_repos.json", pretty(repos_doc))
+one_document("setup --repos, = form", *tares(env, ["setup", "--repos", "--credential=main", "--json"]), "setup")
+ck("setup --repos --credential=<name>: the same query without via", SETUP_SEEN[-1:] == ["/api/factory/setup/github/repos?credential=main"], SETUP_SEEN)
+one_document("setup --repos, no credential", *tares(env, ["setup", "--repos", "--json"]), "setup")
+ck("setup --repos, no credential: no query", SETUP_SEEN[-1:] == ["/api/factory/setup/github/repos"], SETUP_SEEN)
+
+saved = WORLD["setup"]
+WORLD["setup"] = dict(saved, brand_new_key={"a": 1}, steps=[dict(saved["steps"][0], new_step_key=True)] + saved["steps"][1:])
+doc = one_document("setup, keys the schema does not know", *tares(env, ["setup", "--json"]), "setup")
+ck("setup, keys the schema does not know: passed on, and valid", doc.get("setup", {}).get("brand_new_key") == {"a": 1}
+   and doc["setup"]["steps"][0].get("new_step_key") is True, doc)
+WORLD["setup"] = saved
+WORLD["setup_repos"] = {"repos": [], "error": "", "note": "GitHub is still listing your repositories. Type the repository as owner/name."}
+doc = one_document("setup --repos, still listing", *tares(env, ["setup", "--repos", "--json"]), "setup")
+ck("setup --repos, still listing: an empty list, not an error", doc.get("repos") == [], doc)
+WORLD["setup_repos"] = {"repos": [], "error": "Bad credentials.", "note": "GitHub did not list the repositories: Bad credentials. Type the repository as owner/name."}
+doc = one_document("setup --repos, GitHub refused", *tares(env, ["setup", "--repos", "--json"]), "error", want_code=1)
+ck("setup --repos, GitHub refused: tares_error, and GitHub's reason", doc.get("error", {}).get("code") == "tares_error"
+   and "Bad credentials" in doc["error"]["message"], doc)
+WORLD["setup_repos"] = {"repos": ["northwind/orders-api", "northwind/web-shop"], "error": "", "note": ""}
+
+for status, want in ((404, "cell_too_old"), (403, "forbidden"), (401, "key_refused"), (500, "tares_error")):
+    WORLD["setup_http"] = status
+    for argv in (["setup", "--json"], ["setup", "--progress", "--json"], ["setup", "--repos", "--json"]):
+        doc = one_document(f"{' '.join(argv[:-1])}, the cell answers {status}", *tares(env, argv), "error", want_code=1)
+        ck(f"{' '.join(argv[:-1])}, {status}: code {want}", doc.get("error", {}).get("code") == want, doc)
+WORLD["setup_http"] = 403
+doc = one_document("setup, 403 keeps the cell's reason", *tares(env, ["setup", "--json"]), "error", want_code=1)
+ck("setup, 403: the cell's detail is in the message", "stub says no" in doc.get("error", {}).get("message", ""), doc)
+WORLD["setup_http"] = 200
+
+code, out, err = tares(env, ["setup", "--json"], {"TARESD_URL": DOWN, "TARES_FACTORY_SOURCE": "local default", "TARES_HOME": str(tmp / "no-login")})
+doc = one_document("setup, nothing configured", code, out, err, "error", want_code=1)
+ck("setup, nothing configured: not_signed_in", doc.get("error", {}).get("code") == "not_signed_in", doc)
+doc = one_document("setup, a Tares that is named but down", *tares(env, ["setup", "--json"], {"TARESD_URL": DOWN, "TARES_HOME": str(tmp / "no-login")}), "error", want_code=1)
+ck("setup, a named Tares that is down: error, not not_signed_in", doc.get("error", {}).get("code") == "error", doc)
+
+before = len(SETUP_SEEN)
+code, out, err = tares(env, ["setup"])
+ck("setup without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory setup" in err, (code, out, err))
+for argv, why in ((["setup", "--progress", "--repos", "--json"], "--progress with --repos"),
+                  (["setup", "--credential", "x", "--json"], "--credential without --repos"),
+                  (["setup", "--progress", "--via", "app", "--json"], "--via with --progress"),
+                  (["setup", "--repos", "--credential", "--json"], "--credential with no name"),
+                  (["setup", "--repos", "--via=", "--json"], "--via= with no value"),
+                  (["setup", "--nope", "--json"], "an unknown argument"), (["setup", "extra", "--json"], "a stray word")):
+    doc = one_document(f"setup, {why}", *tares(env, argv), "error", want_code=2)
+    ck(f"setup, {why}: usage", doc.get("error", {}).get("code") == "usage", doc)
+ck("setup: a usage error asks the cell nothing", len(SETUP_SEEN) == before, SETUP_SEEN[before:])
+
+_SETUP_OK = {"schema_version": 1, "setup": {"title": "t", "progress": {"set": 0, "total": 1}, "steps": []}}
+ck("setup.json: one of setup, progress or repos, and no more",
+   problems("setup", _SETUP_OK) == []
+   and problems("setup", {"schema_version": 1}) != []
+   and problems("setup", {"schema_version": 1, "setup": _SETUP_OK["setup"], "repos": []}) != []
+   and problems("setup", {"schema_version": 1, "progress": {"set": 0, "total": 1}, "repos": []}) != []
+   and problems("setup", {"schema_version": 1, "progress": {"set": 0, "total": 1}}) == []
+   and problems("setup", {"schema_version": 1, "repos": ["a/b"]}) == [])
+ck("setup.json: a document that is not the shape fails",
+   problems("setup", {"schema_version": 1, "repos": "a/b"}) != []
+   and problems("setup", {"schema_version": 1, "repos": [{"full_name": "a/b"}]}) != []
+   and problems("setup", {"schema_version": 1, "progress": {"set": 0}}) != []
+   and problems("setup", {"schema_version": 1, "setup": {"title": "t", "progress": {"set": 0, "total": 1}}}) != []
+   and problems("setup", {"schema_version": 1, "setup": dict(_SETUP_OK["setup"], steps=[{"slot": "tickets"}])}) != []
+   and problems("setup", {"schema_version": 1, "repos": [], "extra": 1}) != []
+   and problems("setup", {"schema_version": 2, "repos": []}) != [])
+ck("setup.json: a key it does not know passes at every level",
+   problems("setup", {"schema_version": 1, "setup": dict(
+       _SETUP_OK["setup"], extra=1, progress={"set": 0, "total": 1, "extra": 1},
+       steps=[{"slot": "s", "name": "n", "state": "set", "extra": 1, "connected": [
+           {"id": "i", "title": "t", "extra": 1, "form": {"extra": 1, "fields": [{"name": "f", "kind": "text", "extra": 1}]}}],
+           "available": [{"id": "i", "title": "t", "app": {"extra": 1}, "form": None}]}])}) == [])
+
 # ---------- the samples ----------
 
 print("== the samples")
@@ -850,6 +1074,14 @@ for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor
         continue
     bad = problems(path.stem, doc)
     ck(f"sample {name} validates against {path.stem}.json", not bad, bad)
+for name in ("setup.json", "setup_progress.json", "setup_repos.json"):
+    try:
+        doc = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        ck(f"sample {name} is JSON", False, e)
+        continue
+    bad = problems("setup", doc)
+    ck(f"sample {name} validates against setup.json", not bad, bad)
 sample_lines = (FIXTURES / "events.jsonl").read_text(encoding="utf-8").splitlines() if (FIXTURES / "events.jsonl").is_file() else []
 ck("sample events.jsonl validates line by line against events.json",
    len(sample_lines) == 4 and all(not problems("events", json.loads(x)) for x in sample_lines), sample_lines)

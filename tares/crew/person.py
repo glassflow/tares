@@ -1,10 +1,11 @@
-"""The commands a person runs on the crew from their own terminal: `projects`, `finish`, `context`, `plan`,
+"""The commands a person runs on the crew from their own terminal: `projects`, `setup`, `finish`, `context`, `plan`,
 `spec` and `session`. The port of cmd_projects, cmd_finish, cmd_context, cmd_plan, read_quiet, send_meter,
 local_only, cmd_spec, cmd_session and the helpers the last two call (person_claude, spec_contributor,
 session_dir, session_project, session_idea, match_project, factory_projects, releasing_projects, repos_in,
 has_commit).
 
   tares factory projects [--json]            every project handed to the crew: progress, milestone, builders, repos
+  tares factory setup --json [--progress | --repos [--credential <name>] [--via app]]   the cell's factory setup (JSON only)
   tares factory finish <project> ["words"]   the person marks a project done (never a station)
   tares factory context <role|station>       read a station's /context and send it to Tares
   tares factory plan                         read the plan's limits (/usage) and send them to Tares
@@ -26,11 +27,12 @@ import signal
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote
 
 from . import contract, state
 from .claude import _child_env, _creationflags, _home, claude_bin, claude_command, job_state
 from .client import TaresClient, TaresHTTPError
-from .errors import CrewError
+from .errors import CrewError, UsageError
 from .paths import ME, CrewPaths, default_home
 
 READ_TIMEOUT = 600  # seconds a reading may take; bash waits as long as Claude Code does
@@ -476,6 +478,124 @@ def _projects(args: list, env: dict) -> int:
             done = f"{_t(p.get('tickets_done'))}/{_t(p.get('tickets_total'))}"
             print(f"{name[:28]:<28} {done:<8} {_milestone(p)[:22]:<22} {builders_of(p.get('name'), client.paths):<9} {_repos(p)}")
         return 0
+
+
+# ---------- setup ----------
+#
+# `setup --json` hands a program the cell's factory setup (GET /api/factory/setup and its two neighbours), so a
+# desktop app can draw the screen the console draws. The cell owns the shape; this passes it on in a document
+# (schemas/setup.json). A new command with no bash twin.
+
+SETUP_USAGE = (f"usage: {ME} setup --json | {ME} setup --progress --json | "
+               f"{ME} setup --repos [--credential <name>] [--via app] --json")
+
+
+class SetupError(CrewError):
+    """A refusal of the setup routes with its own error code (`forbidden`, `cell_too_old`, `key_refused`)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _setup_args(args: list) -> tuple:
+    """(kind, credential, via) from the arguments after the word `setup`: kind is "setup", "progress" or
+    "repos"; credential and via are None when not given. A bad combination is a UsageError."""
+    kind, credential, via, i = "setup", None, None, 0
+    seen = set()
+
+    def value(flag: str, inline):
+        nonlocal i
+        if inline is None:
+            i += 1
+            inline = args[i] if i < len(args) else ""
+        if not inline or inline.startswith("--"):
+            raise UsageError(f"{flag} needs a value; {SETUP_USAGE}")
+        return inline
+
+    while i < len(args):
+        a = args[i]
+        flag, eq, inline = a.partition("=")
+        if a == "--json":
+            pass
+        elif a in ("--progress", "--repos"):
+            seen.add(a)
+        elif flag in ("--credential", "--via"):
+            got = value(flag, inline if eq else None)
+            if flag == "--credential":
+                credential = got
+            else:
+                via = got
+        else:
+            raise UsageError(f"unknown argument {a}; {SETUP_USAGE}")
+        i += 1
+    if len(seen) > 1:
+        raise UsageError(f"--progress and --repos cannot be combined; {SETUP_USAGE}")
+    if seen:
+        kind = seen.pop()[2:]
+    if kind != "repos" and (credential is not None or via is not None):
+        raise UsageError(f"--credential and --via go with --repos; {SETUP_USAGE}")
+    return kind, credential, via
+
+
+def cmd_setup(argv: list, env: dict) -> int:
+    """`setup --json`, `setup --progress --json`, `setup --repos [--credential <name>] [--via app] --json`.
+    argv starts with the word setup. JSON only: without --json it is a usage line on stderr, exit 2."""
+    if not contract.wants_json(argv):
+        print(f"{ME}: setup prints JSON only; {SETUP_USAGE}", file=sys.stderr)
+        return contract.EXIT_USAGE
+    try:
+        return _setup(argv[1:], env)
+    except CrewError as e:
+        contract.refuse(e, argv)
+        return contract.EXIT_USAGE if isinstance(e, UsageError) else contract.EXIT_FAILED
+
+
+def _setup_get(client: TaresClient, path: str):
+    """The JSON object Tares answers at path. Its refusals get the codes of schemas/README.md: 401 `key_refused`,
+    403 `forbidden`, 404 `cell_too_old` (the route is newer than the cell), anything else `tares_error`."""
+    try:
+        body = client.tares_http("GET", path)
+    except TaresHTTPError as e:
+        why = f": {e.detail}" if e.detail else ""
+        if e.status == 401:
+            raise SetupError("key_refused", f"Tares at {client.tares} refused the key{why}{client.no_key_hint()}") from None
+        if e.status == 403:
+            raise SetupError("forbidden", f"Tares would not give the setup to this key{why or ' (HTTP 403)'}") from None
+        if e.status == 404:
+            raise SetupError("cell_too_old", f"Tares at {client.tares} is too old to give the factory setup. "
+                             "Upgrade it, then run this again.") from None
+        if e.status is None:
+            raise SetupError("tares_error", f"could not reach Tares at {client.tares}") from None
+        raise SetupError("tares_error", f"Tares did not give the setup (HTTP {e.status}){why}") from None
+    try:
+        doc = state.loads_json(body)
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict):
+        raise SetupError("tares_error", f"Tares at {client.tares} answered {path} with something that is not a JSON object")
+    return doc
+
+
+def _setup(args: list, env: dict) -> int:
+    kind, credential, via = _setup_args(args)
+    client = prelude(["setup", *args], env)
+    with client:
+        if kind == "progress":
+            contract.emit({"progress": _setup_get(client, "/api/factory/setup/progress")}, "setup")
+        elif kind == "repos":
+            query = "&".join(f"{k}={quote(v, safe='')}" for k, v in (("credential", credential), ("via", via)) if v)
+            doc = _setup_get(client, "/api/factory/setup/github/repos" + (f"?{query}" if query else ""))
+            repos = doc.get("repos")
+            if not isinstance(repos, list):
+                raise SetupError("tares_error", f"Tares at {client.tares} did not give a list of repositories")
+            if doc.get("error"):
+                # the route says `error` only when nothing was listed; `note` is the sentence the console shows
+                raise SetupError("tares_error", f"GitHub did not list the repositories: {str(doc['error']).rstrip('.')}.")
+            contract.emit({"repos": repos}, "setup")
+        else:
+            contract.emit({"setup": _setup_get(client, "/api/factory/setup")}, "setup")
+    return 0
 
 
 # ---------- spec and session: the person's own Claude Code session ----------

@@ -1,0 +1,537 @@
+{
+  "schema_version": 1,
+  "setup": {
+    "title": "Set up your factory",
+    "exit_label": "Exit setup",
+    "edition": {
+      "key": "self_hosted",
+      "name": "Self-hosted",
+      "cloud": false
+    },
+    "licence": {
+      "state": "none",
+      "ended_on": null,
+      "text": "This cell has no licence."
+    },
+    "progress": {
+      "set": 3,
+      "total": 6,
+      "text": "3 of 6 done"
+    },
+    "onboarding": {
+      "choices": {
+        "chosen": false
+      },
+      "github": {
+        "connected": false
+      }
+    },
+    "terminal": [
+      {
+        "id": "install",
+        "where": "terminal",
+        "done": true
+      }
+    ],
+    "tools": {
+      "github": {
+        "connected": false,
+        "detail": ""
+      },
+      "slack": {
+        "connected": false,
+        "detail": ""
+      }
+    },
+    "steps": [
+      {
+        "slot": "tickets",
+        "number": 1,
+        "name": "Tickets",
+        "why": "Where the crew's tickets live and where their status is kept.",
+        "state": "set",
+        "set": true,
+        "line": "Tares and 1 more",
+        "note": null,
+        "banner": null,
+        "connected_heading": "Connected (2)",
+        "connected": [
+          {
+            "id": "tares",
+            "title": "Tares",
+            "description": "Tares is a sample.",
+            "tags": [
+              {
+                "key": "default",
+                "text": "Default"
+              },
+              {
+                "key": "built_in",
+                "text": "Built in"
+              }
+            ],
+            "default": true,
+            "built_in": true,
+            "via": null,
+            "who": "",
+            "picked_by": [],
+            "follows": 1,
+            "use": "Projects use it unless they pick another.",
+            "actions": [],
+            "blocked": null,
+            "confirm": null,
+            "last_test": null,
+            "form": null
+          },
+          {
+            "id": "linear",
+            "title": "Linear",
+            "description": "Linear is a sample.",
+            "tags": [
+              {
+                "key": "key",
+                "text": "API key"
+              }
+            ],
+            "default": false,
+            "built_in": false,
+            "via": "key",
+            "who": "",
+            "picked_by": [
+              {
+                "uid": "p1",
+                "name": "shop"
+              }
+            ],
+            "follows": 0,
+            "use": "Used by shop.",
+            "actions": [
+              {
+                "key": "edit",
+                "label": "Edit settings"
+              },
+              {
+                "key": "make_default",
+                "label": "Make default"
+              },
+              {
+                "key": "remove",
+                "label": "Remove"
+              }
+            ],
+            "blocked": null,
+            "confirm": {
+              "title": "Remove Linear",
+              "text": "1 project picks Linear: shop. They move to the default, Tares.",
+              "yes": "Remove it",
+              "no": "Keep it",
+              "moves_projects": true
+            },
+            "last_test": null,
+            "form": {
+              "mode": "edit",
+              "title": "Edit Linear",
+              "lead": "Edit Linear. It becomes the default.",
+              "save_label": "Save",
+              "save_as_default": false,
+              "test_hint": "Test connection checks the settings above with Edit Linear. Nothing is saved by it.",
+              "fields": [
+                {
+                  "name": "api_key",
+                  "label": "API key",
+                  "kind": "secret",
+                  "required": false,
+                  "requirement": "Optional",
+                  "placeholder": "Saved. Leave blank to keep it.",
+                  "help": "A Linear personal API key.",
+                  "error": "Enter api key.",
+                  "options": [],
+                  "rows": [],
+                  "saved": true,
+                  "saved_note": "A key is saved. Leave this blank to keep it.",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                }
+              ]
+            }
+          }
+        ],
+        "available_heading": "Connect another",
+        "available": [
+          {
+            "id": "github",
+            "title": "GitHub Issues",
+            "description": "Tickets are issues in one repository.",
+            "enterprise": false,
+            "allowed": true,
+            "button": "Connect GitHub",
+            "reason": null,
+            "app": {
+              "url": "https://connect.example.test/github",
+              "service": "GitHub",
+              "app_name": "GlassFlow GitHub App",
+              "button": "Connect GitHub",
+              "repo_step": true,
+              "steps": [
+                "GitHub opens in this window."
+              ],
+              "note": "Tares reads and writes issues through the app.",
+              "use_key_label": "Use a GitHub credential instead",
+              "use_app_label": "Connect with the GitHub App instead",
+              "stage": "start",
+              "done": null
+            },
+            "form": {
+              "mode": "connect",
+              "title": "Connect GitHub Issues",
+              "lead": "Connect GitHub Issues. It becomes the default.",
+              "save_label": "Save and connect",
+              "save_as_default": true,
+              "test_hint": "Test connection checks the settings above with Connect GitHub Issues. Nothing is saved by it.",
+              "fields": [
+                {
+                  "name": "repo",
+                  "label": "Repository",
+                  "kind": "text",
+                  "required": true,
+                  "requirement": "Required",
+                  "placeholder": "owner/name",
+                  "help": "The repository that holds the issues, as owner/name.",
+                  "error": "Enter repository.",
+                  "options": [],
+                  "rows": [],
+                  "value": "",
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "github_repo",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                },
+                {
+                  "name": "credential",
+                  "label": "GitHub credential",
+                  "kind": "text",
+                  "required": false,
+                  "requirement": "Optional",
+                  "placeholder": "",
+                  "help": "The name of a GitHub credential stored on this cell.",
+                  "error": "Enter github credential.",
+                  "options": [],
+                  "rows": [],
+                  "value": "",
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                },
+                {
+                  "name": "issue_label",
+                  "label": "Issue label",
+                  "kind": "text",
+                  "required": false,
+                  "requirement": "Optional",
+                  "placeholder": "",
+                  "help": "",
+                  "error": "Enter issue label.",
+                  "options": [],
+                  "rows": [],
+                  "value": "",
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                }
+              ]
+            }
+          },
+          {
+            "id": "jira",
+            "title": "Jira",
+            "description": "Tickets live in a Jira project.",
+            "enterprise": true,
+            "allowed": false,
+            "button": "Connect",
+            "reason": "This cell has no licence. Without it, Jira cannot be connected.",
+            "app": null,
+            "form": null
+          }
+        ],
+        "footer": {
+          "hint": "",
+          "next": "Next: Review"
+        }
+      },
+      {
+        "slot": "review",
+        "number": 2,
+        "name": "Review",
+        "why": "Who reviews each pull request before it can merge.",
+        "state": "not_set",
+        "set": false,
+        "line": "Tares (not set yet)",
+        "note": null,
+        "banner": null,
+        "connected_heading": "Connected (1)",
+        "connected": [
+          {
+            "id": "tares",
+            "title": "Tares",
+            "description": "Tares is a sample.",
+            "tags": [
+              {
+                "key": "default",
+                "text": "Default"
+              }
+            ],
+            "default": true,
+            "built_in": true,
+            "via": null,
+            "who": "",
+            "picked_by": [],
+            "follows": 0,
+            "use": "Every project uses it.",
+            "actions": [
+              {
+                "key": "keep",
+                "label": "Use Tares"
+              }
+            ],
+            "blocked": null,
+            "confirm": null,
+            "last_test": null,
+            "form": null
+          }
+        ],
+        "available_heading": "Connect another",
+        "available": [
+          {
+            "id": "northreview",
+            "title": "Northreview",
+            "description": "Northreview reviews each pull request.",
+            "enterprise": false,
+            "allowed": true,
+            "button": "Connect",
+            "reason": null,
+            "app": null,
+            "form": {
+              "mode": "connect",
+              "title": "Connect Northreview",
+              "lead": "Connect Northreview. It becomes the default.",
+              "save_label": "Save and connect",
+              "save_as_default": true,
+              "test_hint": "Test connection checks the settings above with Connect Northreview. Nothing is saved by it.",
+              "fields": [
+                {
+                  "name": "key",
+                  "label": "API key",
+                  "kind": "secret",
+                  "required": true,
+                  "requirement": "Required",
+                  "placeholder": "",
+                  "help": "A Northreview API key.",
+                  "error": "Enter api key.",
+                  "options": [],
+                  "rows": [],
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                },
+                {
+                  "name": "strict",
+                  "label": "Block on every comment",
+                  "kind": "bool",
+                  "required": false,
+                  "requirement": "Optional",
+                  "placeholder": "",
+                  "help": "",
+                  "error": "",
+                  "options": [],
+                  "rows": [],
+                  "value": false,
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                },
+                {
+                  "name": "mode",
+                  "label": "Review depth",
+                  "kind": "select",
+                  "required": false,
+                  "requirement": "Optional",
+                  "placeholder": "",
+                  "help": "",
+                  "error": "Enter review depth.",
+                  "options": [
+                    "quick",
+                    "thorough"
+                  ],
+                  "rows": [],
+                  "value": "quick",
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                }
+              ]
+            }
+          }
+        ],
+        "footer": {
+          "hint": "",
+          "next": "Next: CI"
+        }
+      },
+      {
+        "slot": "ci",
+        "number": 3,
+        "name": "CI",
+        "why": "Where Tares looks to see whether a pull request's checks pass.",
+        "state": "set",
+        "set": true,
+        "line": "GitHub Actions for GitHub repos, local checks otherwise",
+        "note": null,
+        "banner": null,
+        "connected_heading": "Connected (1)",
+        "connected": [
+          {
+            "id": "local",
+            "title": "Automatic",
+            "description": "Automatic is a sample.",
+            "tags": [
+              {
+                "key": "default",
+                "text": "Default"
+              }
+            ],
+            "default": true,
+            "built_in": true,
+            "via": null,
+            "who": "",
+            "picked_by": [],
+            "follows": 0,
+            "use": "",
+            "actions": [],
+            "blocked": null,
+            "confirm": null,
+            "last_test": null,
+            "form": null
+          }
+        ],
+        "available_heading": "Connect another",
+        "available": [
+          {
+            "id": "ordersboard",
+            "title": "Orders board",
+            "description": "Reads statuses from a board.",
+            "enterprise": false,
+            "allowed": true,
+            "button": "Connect",
+            "reason": null,
+            "app": null,
+            "form": {
+              "mode": "connect",
+              "title": "Connect Orders board",
+              "lead": "Connect Orders board. It becomes the default.",
+              "save_label": "Save and connect",
+              "save_as_default": true,
+              "test_hint": "Test connection checks the settings above with Connect Orders board. Nothing is saved by it.",
+              "fields": [
+                {
+                  "name": "site",
+                  "label": "Site address",
+                  "kind": "text",
+                  "required": true,
+                  "requirement": "Required",
+                  "placeholder": "https://orders.example.test",
+                  "help": "",
+                  "error": "Enter site address.",
+                  "options": [],
+                  "rows": [],
+                  "value": "",
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                },
+                {
+                  "name": "status",
+                  "label": "Status mapping",
+                  "kind": "mapping",
+                  "required": false,
+                  "requirement": "Optional",
+                  "placeholder": "",
+                  "help": "Match each Tares stage to the status that means it.",
+                  "error": "Enter status mapping.",
+                  "options": [],
+                  "rows": [
+                    {
+                      "key": "todo",
+                      "label": "To do",
+                      "aria_label": "Orders status for To do",
+                      "value": "Open"
+                    },
+                    {
+                      "key": "in_progress",
+                      "label": "In progress",
+                      "aria_label": "Orders status for In progress",
+                      "value": "Doing"
+                    },
+                    {
+                      "key": "in_review",
+                      "label": "In review",
+                      "aria_label": "Orders status for In review",
+                      "value": ""
+                    },
+                    {
+                      "key": "done",
+                      "label": "Done",
+                      "aria_label": "Orders status for Done",
+                      "value": "Closed"
+                    }
+                  ],
+                  "value": null,
+                  "saved": false,
+                  "saved_note": "",
+                  "picker": "",
+                  "picker_help": "",
+                  "picker_placeholder": "",
+                  "picker_loading": "",
+                  "picker_more": ""
+                }
+              ]
+            }
+          }
+        ],
+        "footer": {
+          "hint": "",
+          "next": "Finish setup"
+        }
+      }
+    ]
+  }
+}

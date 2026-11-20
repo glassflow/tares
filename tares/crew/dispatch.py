@@ -177,14 +177,14 @@ for _name in ("status", "desk", "roster", "attach", "logs"):
 
 
 def _person(name: str) -> Callable[[list[str], dict], int]:
-    """A command of person.py (projects, finish, context, plan), imported when it runs."""
+    """A command of person.py (projects, finish, context, plan, setup), imported when it runs."""
     def run_it(argv: list[str], env: dict) -> int:
         from . import person
         return getattr(person, name)(argv, env)
     return run_it
 
 
-for _word in ("projects", "finish", "context", "plan", "spec", "session"):
+for _word in ("projects", "finish", "context", "plan", "spec", "session", "setup"):
     PORTED[(_word,)] = _person(f"cmd_{_word}")
 
 
