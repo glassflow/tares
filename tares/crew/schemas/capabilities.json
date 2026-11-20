@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/capabilities.json",
+  "title": "tares capabilities --json: what this engine and the Tares it is signed in to can do",
+  "type": "object",
+  "required": ["schema_version", "engine", "commands", "cell"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "engine": {"description": "The version of this tares, as `tares --version` shows it.", "type": "string"},
+    "commands": {
+      "description": "The dotted names of the machine commands this engine has (`factory.status`, `factory.crew.up`, `login`, ...): the commands an app drives with `--json`: each prints a document with a schema in this folder, except `factory.settings` (Claude Code's settings file) and `factory.tidy` (nothing on success, the error shape on a refusal). A name that is not here is a command this engine does not have.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*$"}
+    },
+    "cell": {
+      "description": "What the Tares this machine is signed in to says at /health. Not signed in: url, version null and capabilities empty. Signed in but not answering, or answering something that is not a Tares: url set, version null, capabilities empty. Never an error.",
+      "type": "object",
+      "required": ["url", "version", "capabilities"],
+      "properties": {
+        "url": {"description": "The address of the Tares; null when none is named.", "type": ["string", "null"]},
+        "version": {"description": "The Tares's version; null when it did not say.", "type": ["string", "null"]},
+        "capabilities": {"description": "The names /health lists; empty when it lists none or did not answer.", "type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}
