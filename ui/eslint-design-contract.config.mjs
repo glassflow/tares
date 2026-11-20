@@ -17,7 +17,7 @@
 //                    inset accent bar above; a section opens with a 1px top rule.
 //   voice-contract   Copy carries no em dash. A string or JSX text holding one fails, except a
 //                    lone '—' (the no-value mark in a cell). Comments are not copy.
-//   motion-contract  Time in motion comes from the tokens (TR-1431, styles.css "Motion"): no
+//   motion-contract  Time in motion comes from the tokens (TR-1431, paper-motion.css "Motion"): no
 //                    duration-150, duration-[..], delay-.., ease-[..] or animate-[..] utility,
 //                    and no raw time in a transition or animation of a style object. Name a
 //                    token (duration-(--dur-2), ease-out) or a motion-* class instead. The CSS
@@ -103,7 +103,7 @@ const SELECTORS = {
       `Property[key.name=/${MOTION_KEY}/] Literal[value=/${RAW_TIME}/], ` +
       // in a template the unit can follow the expression: `${ms}ms`
       `Property[key.name=/${MOTION_KEY}/] TemplateElement[value.raw=/${RAW_TIME}|^m?s\\b/]`,
-    message: `Motion takes its time from the tokens: duration-(--dur-1..4), ease-out / ease-in, or a motion-* class from styles.css. ${DOC} (motion-contract)`,
+    message: `Motion takes its time from the tokens: duration-(--dur-1..4), ease-out / ease-in, or a motion-* class from paper-motion.css. ${DOC} (motion-contract)`,
   },
   emDash: {
     selector: `Literal[value=/${EM_DASH_PROSE}/], TemplateElement[value.cooked=/${EM_DASH_PROSE}/], JSXText[value=/${EM_DASH_PROSE}/]`,

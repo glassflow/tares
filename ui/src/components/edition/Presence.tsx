@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 // Leaving takes a moment (TR-1432, TR-1434). React removes an element the instant its condition goes
 // false, so nothing could animate out. usePresence keeps it mounted with data-state="closed" until every
 // animation on it and inside it has finished, then lets it go. The CSS decides what closing looks like
-// (the motion-* classes in styles.css); with no animation, or under reduced motion, it goes at once.
+// (the motion-* classes in paper-motion.css); with no animation, or under reduced motion, it goes at once.
 
 export type PresenceState = "open" | "closed";
 
@@ -71,7 +71,7 @@ export function Collapse({ children, className, ...props }: CollapseProps) {
   const { mounted, state, ref } = usePresence<HTMLDivElement>(show);
   if (!show && initial) setInitial(false);
   // The parent's gap beside it: a stack's gap-5 would otherwise appear whole as it mounts and vanish whole
-  // as it unmounts. The CSS folds it in (styles.css, m-pull-*): the next sibling moves up over it, reading
+  // as it unmounts. The CSS folds it in (paper-motion.css, m-pull-*): the next sibling moves up over it, reading
   // --m-gap from the parent; with no next sibling, the element pulls itself (--m-gap-s). Set before paint.
   React.useLayoutEffect(() => {
     const el = ref.current;

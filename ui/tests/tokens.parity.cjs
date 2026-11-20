@@ -1,5 +1,5 @@
 /*
- * TR-1268: Tares and Rius stay one family. Every `--kit-*` value in src/styles.css must equal the
+ * TR-1268: Tares and Rius stay one family. Every `--kit-*` value in src/paper/paper-theme.css (vendored, the role layer the console imports) must equal the
  * shared paper token it copies (`--agency-*` in paper/tokens.css, vendored from glassflow/arche-design by
  * `npm run paper:sync`; paper/VENDORED.json names the tag and commit), unless
  * tests/tokens.parity.allow.json lists it with the reason Tares differs on purpose.
@@ -17,7 +17,7 @@ const fs = require("fs");
 const path = require("path");
 
 const UI = path.join(__dirname, "..");
-const STYLES = process.env.TOKENS_STYLES || path.join(UI, "src", "styles.css");
+const STYLES = process.env.TOKENS_STYLES || path.join(UI, "src", "paper", "paper-theme.css");
 const SHARED = path.join(__dirname, "..", "paper", "tokens.css");
 const ALLOW = path.join(__dirname, "tokens.parity.allow.json");
 const TOLERANCE = 3;
@@ -86,7 +86,7 @@ for (const [name, value] of kit) {
     problems.push(`--${name} ${differs}. Fix the value, or list it in tokens.parity.allow.json with the reason Tares differs`);
   }
 }
-for (const name of Object.keys(allow)) if (!used.has(name)) problems.push(`${name} is in tokens.parity.allow.json but not in styles.css: remove the entry`);
+for (const name of Object.keys(allow)) if (!used.has(name)) problems.push(`${name} is in tokens.parity.allow.json but not in paper-theme.css: remove the entry`);
 
 for (const p of problems) console.log(`FAIL ${p}`);
 console.log(`\n${matched} kit tokens match the shared paper tokens, ${onPurpose} differ on purpose, ${problems.length} problems`);

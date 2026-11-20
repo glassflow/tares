@@ -1,5 +1,5 @@
 // The motion tokens for motion driven from script (TR-1431): the list glide (auto-animate) and the
-// theme crossfade. They mirror --dur-* and --ease-out in styles.css; `npm run motion-contract`
+// theme crossfade. They mirror --dur-* and --ease-out in paper-motion.css; `npm run motion-contract`
 // (tests/motion.check.cjs) fails when the two disagree.
 
 export const DUR = { 1: 120, 2: 180, 3: 260, 4: 900 } as const;
