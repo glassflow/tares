@@ -97,6 +97,21 @@ SESSION = [
 ]
 
 
+def utc(x):
+    """The same answer with every time written as a UTC instant: DuckDB answers in the cell's zone, the
+    table in UTC, and the two are one instant."""
+    if isinstance(x, dict):
+        return {k: utc(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [utc(v) for v in x]
+    if isinstance(x, str) and len(x) > 19 and x[4] == "-" and x[10] == "T":
+        try:
+            return datetime.fromisoformat(x).astimezone(timezone.utc).isoformat()
+        except ValueError:
+            return x
+    return x
+
+
 async def main():
     from tares.daemon import make_app
     app = make_app()
@@ -151,6 +166,27 @@ async def main():
         said = [i for i in items if i["kind"] == "said"]
         ck("what the station said is its own item", [s["text"] for s in said] == ["Reading the page first.", "Done. Opened #12."])
 
+        ck("before the session's lines are all in the table, they come from DuckDB: lines_from says events",
+           d.get("lines_from") == "events" and plain.get("lines_from") == "events", d.get("lines_from"))
+        async with mk() as cx:
+            r = await cx.get(f"/api/crew/{ST}/tool/t-log")
+            ck("the tool answer says events too", r.json().get("lines_from") == "events", r.text[:200])
+        from tares import session_ingest
+        session_ingest.reconcile_sessions(app.state.store)       # the lines are now complete in the table
+        async with mk() as cx:
+            t = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
+            ck("lines_from says table, and the conversation and the recent lines are what DuckDB gave",
+               t.get("lines_from") == "table"
+               and utc(t["recent"]) == utc(d["recent"]) and utc(t["conversation"]) == utc(d["conversation"])
+               and t["conversation_from"] == d["conversation_from"],
+               (t.get("lines_from"), t["recent"][:1], d["recent"][:1], t["conversation_from"], d["conversation_from"]))
+            r = await cx.get(f"/api/crew/{ST}/tool/t-log")
+            ck("the full output of a call is the same from the table", r.status_code == 200
+               and r.json()["output"] == LONG and r.json()["lines_from"] == "table", r.text[:200])
+            r = await cx.get(f"/api/crew/{ST}/tool/nope")
+            ck("an unknown call is still 404 from the table", r.status_code == 404)
+            ck("asking for no conversation and no recent lines reads nothing: lines_from is events",
+               (await cx.get(f"/api/crew/{ST}", params={"recent": 0})).json().get("lines_from") == "events")
         async with mk() as cx:
             r = await cx.get(f"/api/crew/{ST}/tool/t-log")
             ck("the full output of one call loads on its own", r.status_code == 200 and r.json()["output"] == LONG

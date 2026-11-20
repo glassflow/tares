@@ -54,8 +54,8 @@ can be compared: `sessions.lines_complete` is true when a session has as many ro
 it reads (every 10 minutes, and at start), and a `record` that could not write a session's lines
 sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
 a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
-is the rows of `session_lines` plus the `lines` of the parts. Nothing reads `session_lines` yet
-(TR-1507 does) and nothing fills it from old events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
+is the rows of `session_lines` plus the `lines` of the parts. `session_read.py` (TR-1507) reads a
+complete session from the table and the parts instead of DuckDB; nothing fills the table from old events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
 
 Two things to know when reading the table:
 

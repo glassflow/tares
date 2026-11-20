@@ -24,6 +24,10 @@ A file is named `<session>/<part>.jsonl.gz` under the prefix (the session is per
 id can leave its folder). A failure of any step leaves the rows where they are and prints one line;
 the next pass tries the session again. Deleting archive files is not done here.
 
+A read (`session_read.py`, TR-1507) fetches a part, checks its size and MD5 against the part's row
+and its lines against the row's range, and `decode`s it; any step that fails raises `ArchiveError`
+and the reader falls back to DuckDB.
+
 On Postgres a session is archived in one transaction that starts with
 `pg_try_advisory_xact_lock(hashtext('tares_session_archive:' || session))`: two cells (or two
 passes) on one database never write the same part, and a session someone else holds is skipped.
@@ -201,6 +205,43 @@ def encode(rows) -> bytes:
     return buf.getvalue()
 
 
+def decode(data: bytes) -> list[dict]:
+    """The rows of one part, in file order, each as the dict `encode` wrote (`at` an ISO string or
+    None). Raises `ArchiveError` for a file that is not gzip JSON-lines of such rows."""
+    try:
+        rows = [json.loads(ln) for ln in gzip.decompress(data).decode("ascii").splitlines()]
+    except (OSError, EOFError, ValueError) as e:
+        raise ArchiveError(f"part is not gzip JSON-lines ({type(e).__name__}: {e})") from e
+    for r in rows:
+        if not isinstance(r, dict) or not isinstance(r.get("seq"), int):
+            raise ArchiveError("part holds a line that is not a session line")
+    return rows
+
+
+def read_part(backend: Backend, part) -> list[dict]:
+    """One part's rows, after checking the file against its row in `session_archive_parts`: the
+    size, the MD5, and that it holds `lines` rows numbered `first_seq` to `last_seq` in order.
+    Raises `ArchiveError` (or the backend's own error) for anything else."""
+    data = backend.get(part.key)
+    if len(data) != part.bytes or hashlib.md5(data).hexdigest() != part.md5:
+        raise ArchiveError(f"{part.key} does not match its record (size {len(data)} of {part.bytes})")
+    rows = decode(data)
+    seqs = [r["seq"] for r in rows]
+    if (len(rows) != part.lines or not seqs or seqs[0] != part.first_seq or seqs[-1] != part.last_seq
+            or seqs != sorted(set(seqs))):
+        raise ArchiveError(f"{part.key} holds {len(rows)} lines, not the {part.lines} recorded")
+    return rows
+
+
+def backend_of(store) -> Backend | None:
+    """The backend the environment names for this store (see the module docstring), or None when
+    there is none. An unusable URL raises `ArchiveError`."""
+    # a store with no file (":memory:") has no data directory to default to
+    data_dir = "" if str(store.path) == ":memory:" else os.path.dirname(os.path.abspath(store.path))
+    return backend_for(os.environ.get("TARES_ARCHIVE_URL"), data_dir,
+                       store.sessions_db.dialect == "postgresql")
+
+
 def _lock(conn, session: str) -> bool:
     return bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('tares_session_archive:' "
                                   "|| CAST(:s AS text)))"), {"s": session}).scalar())
@@ -275,9 +316,7 @@ def archive_pass(store, backend: Backend | None = None, now: datetime | None = N
     db = store.sessions_db
     if backend is None:
         try:
-            # a store with no file (":memory:") has no data directory to default to
-            data_dir = "" if str(store.path) == ":memory:" else os.path.dirname(os.path.abspath(store.path))
-            backend = backend_for(os.environ.get("TARES_ARCHIVE_URL"), data_dir, db.dialect == "postgresql")
+            backend = backend_of(store)
         except Exception as e:
             metrics.archive_failed()
             print(f"taresd: session archive off ({type(e).__name__}: {e})", flush=True)

@@ -5979,9 +5979,9 @@ def make_app() -> FastAPI:
             _err(KeyError(f"session {sid!r} did not work in this project"), 404)
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
-        return {"session": sid,
-                "lines": store.key_events(src, sid, limit=min(max(limit, 1), 1000),
-                                          offset=max(offset, 0))}
+        lines, where = store.key_events_from(src, sid, limit=min(max(limit, 1), 1000),
+                                             offset=max(offset, 0))
+        return {"session": sid, "lines": lines, "lines_from": where}
 
     # ── picking up a build where a session stopped: what a fresh session needs to carry on the
     # ticket in progress, from what Tares recorded (works after a crash too) ────────────────

@@ -26,7 +26,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import and_, delete, null, select
 
-from . import session_ingest, state_db
+from . import session_ingest, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
@@ -4402,26 +4402,57 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def key_events(self, source: str, key: str, limit: int = 200,
                    offset: int = 0) -> list[dict]:
         """One entity's events on one source, oldest first (a session read top to bottom)."""
+        return self.key_events_from(source, key, limit, offset)[0]
+
+    def key_events_from(self, source: str, key: str, limit: int = 200,
+                        offset: int = 0) -> tuple[list[dict], str]:
+        """`key_events` and where the lines came from: `table`, `archive`, `both` (the session's
+        own tables and archive, TR-1507) or `events` (DuckDB, for a session they do not hold in
+        full)."""
+        got = session_read.lines(self, source, key, limit, offset)
+        if got is not None:
+            rows, where = got
+            return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
+                     "labels": r["labels"]} for r in rows], where
         with self._lock:
             rows = self.con.execute(
                 "SELECT event_type, text, event_time, labels FROM events WHERE source = ? AND "
                 "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
                 [source, key, int(limit), int(offset)]).fetchall()
         return [{"event_type": r[0], "text": r[1], "event_time": r[2],
-                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows]
+                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows], "events"
 
     def key_payload_rows(self, source: str, key: str, limit: int = 200, offset: int = 0) -> list[dict]:
         """One entity's events with their lossless payload, oldest first (TR-1177: a session as a
         conversation). The payload is the transcript line as it came in."""
+        return self.key_payload_rows_from(source, key, limit, offset)[0]
+
+    def key_payload_rows_from(self, source: str, key: str, limit: int = 200,
+                              offset: int = 0) -> tuple[list[dict], str]:
+        """`key_payload_rows` and where the lines came from (see `key_events_from`)."""
+        got = session_read.lines(self, source, key, limit, offset)
+        if got is not None:
+            rows, where = got
+            return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
+                     "payload": r["payload"]} for r in rows], where
         with self._lock:
             rows = self.con.execute(
                 "SELECT event_type, text, event_time, payload FROM events WHERE source = ? AND "
                 "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
                 [source, key, int(limit), int(offset)]).fetchall()
-        return [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]} for r in rows]
+        return [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]}
+                for r in rows], "events"
 
     def key_tool_result(self, source: str, key: str, tool_use_id: str) -> dict | None:
         """The stored line that holds one tool call's result in this entity's events, or None."""
+        return self.key_tool_result_from(source, key, tool_use_id)[0]
+
+    def key_tool_result_from(self, source: str, key: str,
+                             tool_use_id: str) -> tuple[dict | None, str]:
+        """`key_tool_result` and where the lines came from (see `key_events_from`)."""
+        got = session_read.tool_result(self, source, key, tool_use_id)
+        if got is not None:
+            return got
         with self._lock:
             rows = self.con.execute(
                 "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = 'tool_result' "
@@ -4435,8 +4466,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             msg = o.get("message") if isinstance(o.get("message"), dict) else {}
             for b in msg.get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_result" and str(b.get("tool_use_id")) == tool_use_id:
-                    return b
-        return None
+                    return b, "events"
+        return None, "events"
 
     def last_finding(self, source: str, agent: str, key: str) -> str | None:
         """The newest delivered finding this agent wrote for this key, or None. Feeds the next
