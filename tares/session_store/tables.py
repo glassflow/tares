@@ -82,8 +82,8 @@ session_meters = Table(
 
 # What a session's lines add up to (session_ingest.py): written as each claude_code line is
 # stored, and caught up from DuckDB at start. Station, role, project and state stay in their own
-# tables and are joined by the readers. `lines_complete` is set by the ticket that fills it
-# (TR-1478); until then it stays false.
+# tables and are joined by the readers. `lines_complete` says whether `session_lines` holds every
+# line DuckDB holds for the session (TR-1478): false for a new row, set by the reconcile.
 sessions = Table(
     "sessions", metadata,
     Column("session", Text, primary_key=True),
@@ -172,6 +172,27 @@ session_files = Table(
     Column("last_at", UTCDateTime),
 )
 Index("session_files_session_last_at", session_files.c.session, session_files.c.last_at)
+
+# A claude_code line as it was stored, one row per line, numbered within its session (TR-1478).
+# `seq` comes from `sessions.line_count` in the transaction that adds the line, so it is dense and
+# unique per session: the lines of a batch get `line_count - n + 1 .. line_count` in order. It is
+# the primary key because DuckDB does not deduplicate (a line sent twice is stored twice) and this
+# table mirrors it, so the two counts can be compared. `line_key` names the line (its uuid, else
+# a hash of its payload) and is not unique. `render` holds the flags the line's text was built with
+# (`{"include_thinking": ..., "redact": ...}`), and `payload` the JSON text exactly as DuckDB keeps
+# it. The text is not kept: it is rebuilt from the payload with those flags.
+session_lines = Table(
+    "session_lines", metadata,
+    Column("session", Text, primary_key=True),
+    Column("seq", Integer, primary_key=True, autoincrement=False),
+    Column("line_key", Text),
+    Column("at", UTCDateTime),
+    Column("type", Text),
+    Column("labels", Text),
+    Column("render", Text),
+    Column("payload", Text),
+)
+Index("session_lines_session_at", session_lines.c.session, session_lines.c.at)
 
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(

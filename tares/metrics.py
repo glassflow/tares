@@ -83,6 +83,13 @@ if AVAILABLE:
                                       "Batches of claude_code lines the sessions table could not "
                                       "take (the lines are stored; the next start catches the "
                                       "table up)")
+    SESSION_LINES_ROWS = Gauge("tares_session_lines_rows",
+                               "Rows in the session_lines table (every claude_code line stored "
+                               "since it was added), read every ten minutes")
+    SESSION_LINES_BYTES = Gauge("tares_session_lines_bytes",
+                                "Size in bytes of the session_lines table: with its indexes on "
+                                "Postgres, the whole session store file on SQLite; read every "
+                                "ten minutes")
 
 _storage_probe = None
 _licence_probe = None
@@ -150,6 +157,13 @@ def session_ingest(seconds: float, ok: bool = True) -> None:
         SESSION_INGEST_SECONDS.observe(seconds)
         if not ok:
             SESSION_INGEST_FAILURES.inc()
+
+
+def session_lines_size(rows: int, size: int) -> None:
+    """The size of the session_lines table (TR-1478), set by the sessions reconcile."""
+    if AVAILABLE:
+        SESSION_LINES_ROWS.set(rows)
+        SESSION_LINES_BYTES.set(size)
 
 
 def observe_request(route: str, method: str, status: str, seconds: float) -> None:

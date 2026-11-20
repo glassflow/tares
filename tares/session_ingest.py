@@ -45,6 +45,16 @@ session touched. A turn and a said line are made by (session, line key), a file 
 so a repeat adds nothing. The readers `FactoryStore.person_turns`, `Store.said_lately`,
 `Store.last_said` and `Store.files_touched` read these tables and no longer scan events.
 
+The same writers keep `session_lines` (TR-1478): every claude_code line as it was stored, numbered
+within its session by `seq`. `record` takes `seq` from the `line_count` the `sessions` upsert returns
+and inserts the lines in that transaction, so `seq` is dense and unique per session on SQLite and
+Postgres. DuckDB does not deduplicate a line, so `session_lines` does not either, and the two counts
+can be compared: `sessions.lines_complete` is true when a session has as many rows in
+`session_lines` as lines in DuckDB. A new row starts false; the reconcile sets it for the sessions
+it reads (every 10 minutes, and at start), and a `record` that could not write a session's lines
+sets it false. Nothing reads `session_lines` yet (TR-1507 does) and nothing fills it from old
+events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
+
 Two things to know when reading the table:
 
 - A row holds the `source` of the session's first line, and the readers ask for the one source
@@ -61,15 +71,17 @@ import json
 import re
 import threading
 import time
+import weakref
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import bindparam, delete, func, select
+from sqlalchemy import bindparam, delete, func, insert, select, text, update
 
 from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
 from .session_store.tables import (session_commands, session_files, session_ingest_marks,
-                                   session_messages, session_said, session_turns, sessions)
+                                   session_lines, session_messages, session_said, session_turns,
+                                   sessions)
 
 MARK = "sessions_reconcile"          # the fill's row in session_ingest_marks
 CAUGHT_UP = "sessions_caught_up"     # its row when a pass has finished (TR-1520): readers use the table
@@ -83,6 +95,7 @@ FILES_READ = 400                     # the newest file-editing tool_use lines pe
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 OUTPUT_TAIL = 20000                  # characters of a command's output kept: a test run's summary is at the end
 MESSAGE_TEXT = 4000                  # characters of a protocol message kept
+CYCLE = 600.0                        # seconds between the reconcile passes after the first (TR-1478)
 
 # the rendered text names each tool as "→ name(": a cheap filter before the payload is parsed
 # (the same one `Store.coordination_calls` puts in its SQL)
@@ -454,9 +467,13 @@ def _add_turns(store, rows: dict) -> None:
         _write_turns(conn, db, rows)
 
 
-def _add(store, folded: dict) -> None:
+def _add(store, folded: dict, lines: dict | None = None) -> None:
     """Add each session's counts to its row, in one transaction. Rows are written in session order,
-    so two writers on Postgres meet their rows in the same order and cannot deadlock."""
+    so two writers on Postgres meet their rows in the same order and cannot deadlock. With `lines`
+    ({session: [row of session_lines without its seq, ...]}, from `_line_rows`) the same
+    transaction numbers each session's lines from the `line_count` the upsert returns, and inserts
+    them: a line is counted and stored together or not at all, and two batches of one session never
+    take the same `seq`."""
     db = store.sessions_db
     now = now_utc()
     stmt = db.upsert(sessions)
@@ -473,7 +490,63 @@ def _add(store, folded: dict) -> None:
              "line_count": r[3], "tool_calls": r[4], "coordination_calls": r[5], "updated_at": now}
             for sid, r in sorted(folded.items())]
     with db.begin() as conn:
-        conn.execute(stmt, rows)
+        if not lines:
+            conn.execute(stmt, rows)
+            return
+        c = sessions.c
+        total = dict(conn.execute(stmt.returning(c.session, c.line_count), rows).all())
+        out = []
+        for sid in sorted(lines):
+            mine = lines[sid]
+            first = total[sid] - len(mine) + 1
+            out += [{**r, "session": sid, "seq": first + i} for i, r in enumerate(mine)]
+        conn.execute(insert(session_lines), out)
+
+
+def render_flags(store, sources) -> dict:
+    """{source: the `render` text of `session_lines`} for the claude_code sources of a batch: the
+    flags the connector builds a line's text with (`include_thinking`, `redact`), read from the
+    source's config in the catalog, with the connector's defaults when the source has none."""
+    flags = {s: {"include_thinking": False, "redact": True} for s in sources}
+    with store._sread:
+        rows = store.sc.execute(
+            "SELECT name, config FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
+    for name, raw in rows:
+        if name not in flags:
+            continue
+        try:
+            cfg = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            cfg = {}
+        cfg = cfg if isinstance(cfg, dict) else {}
+        flags[name] = {"include_thinking": bool(cfg.get("include_thinking", False)),
+                       "redact": bool(cfg.get("redact", True))}
+    return {s: json.dumps(f, sort_keys=True) for s, f in flags.items()}
+
+
+def _line_rows(store, envelopes) -> dict:
+    """{session: [the rows of `session_lines` the session's lines make, in batch order]}, without
+    `seq` (`_add` numbers them). `payload` and `labels` are the text DuckDB stores for the line
+    (`Store._append` dumps them the same way), so the table holds what the events table holds."""
+    render = render_flags(store, {e.source for e in envelopes})
+    out: dict = {}
+    for e in envelopes:
+        out.setdefault(e.key_value, []).append({
+            "line_key": _text(line_key(e.payload)), "at": _utc(e.event_time),
+            "type": _text(e.event_type), "labels": json.dumps(e.labels),
+            "render": render[e.source], "payload": json.dumps(e.payload)})
+    return out
+
+
+def _lines_incomplete(store, sids) -> None:
+    """Say a session's lines are not all in `session_lines`: set `lines_complete` false for each
+    session (one that has no row yet starts false)."""
+    sids = sorted(sids)
+    db = store.sessions_db
+    with db.begin() as conn:
+        for i in range(0, len(sids), 500):
+            conn.execute(update(sessions).where(sessions.c.session.in_(sids[i:i + 500]))
+                         .values(lines_complete=False))
 
 
 def _add_facts(store, facts: dict) -> None:
@@ -494,12 +567,24 @@ def record(store, envelopes) -> None:
         return
     t0 = time.perf_counter()
     ok = True
+    folded: dict = {}
     try:
-        _add(store, _fold(envelopes))
+        folded = _fold(envelopes)
+        _add(store, folded, _line_rows(store, envelopes))
     except Exception as e:
         ok = False
         print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
               f"({type(e).__name__}: {e}); caught up at the next start", flush=True)
+        # the counts must not be lost to a line `session_lines` cannot take: count again without
+        # the lines, and say their sessions are missing some
+        try:
+            _add(store, folded)
+        except Exception:
+            pass
+        try:
+            _lines_incomplete(store, folded)
+        except Exception:
+            pass
     try:
         _add_facts(store, facts_of(
             (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
@@ -647,6 +732,48 @@ def _reconcile_chunk(store, sources: list, sids: list) -> None:
                  "updated_at": now} for sid, c in sorted(computed.items())]
         with db.begin() as conn:
             conn.execute(stmt, rows)
+            _set_lines_complete(conn, {sid: c[3] for sid, c in computed.items()})
+
+
+def _set_lines_complete(conn, wanted: dict) -> None:
+    """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}): true when
+    `session_lines` holds as many rows, else false. DuckDB's count was read under the lock that
+    `Store.append` holds from its commit to the end of `record`, so neither side moves meanwhile."""
+    t = session_lines.c
+    sids = sorted(wanted)
+    have: dict = {}
+    for i in range(0, len(sids), 500):
+        have.update(conn.execute(select(t.session, func.count()).where(
+            t.session.in_(sids[i:i + 500])).group_by(t.session)).all())
+    for flag in (True, False):
+        mine = [sid for sid in sids if (have.get(sid, 0) == wanted[sid]) is flag]
+        for i in range(0, len(mine), 500):
+            conn.execute(update(sessions).where(sessions.c.session.in_(mine[i:i + 500]))
+                         .values(lines_complete=flag))
+
+
+def lines_size(store) -> tuple[int, int]:
+    """(rows, bytes) of `session_lines`, for the gauges: the row count, and the table's size with
+    its indexes on Postgres (`pg_total_relation_size`) or the whole file's size on SQLite (pages
+    times page size: SQLite has no size per table without a build option)."""
+    db = store.sessions_db
+    with db.begin() as conn:
+        rows = conn.execute(select(func.count()).select_from(session_lines)).scalar_one()
+        if db.dialect == "postgresql":
+            size = conn.execute(text("SELECT pg_total_relation_size('session_lines')")).scalar_one()
+        else:
+            size = (conn.execute(text("PRAGMA page_count")).scalar_one()
+                    * conn.execute(text("PRAGMA page_size")).scalar_one())
+    return int(rows), int(size)
+
+
+def refresh_lines_gauges(store) -> None:
+    """Set `tares_session_lines_rows` and `tares_session_lines_bytes`; a failure leaves them as
+    they were and prints nothing (a gauge must never be the news)."""
+    try:
+        metrics.session_lines_size(*lines_size(store))
+    except Exception:
+        pass
 
 
 def _facts_mark(store):
@@ -785,11 +912,9 @@ def _fill_turns_chunk(store, sources: list, sids: list, since) -> None:
         _write_turns(conn, db, rows)
 
 
-def start_reconcile(store) -> threading.Thread:
-    """Run `reconcile_sessions`, `fill_facts` and then `fill_turns` in a background thread, once. A
-    failure prints one line: the next start tries again, and the tables only undercount until then."""
-    def run():
-        t0 = time.perf_counter()
+def _reconcile_pass(store, t0: float) -> None:
+    # one pass at a time: the start-up pass can still be running when the first cycle comes round
+    with store.__dict__.setdefault("_reconcile_pass_lock", threading.Lock()):
         try:
             n = reconcile_sessions(store)
             if n:          # a start with nothing to catch up on prints nothing
@@ -798,6 +923,29 @@ def start_reconcile(store) -> threading.Thread:
         except Exception as e:
             print(f"taresd: sessions table catch-up failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)
+        refresh_lines_gauges(store)
+
+
+def _cycle(ref, stop: threading.Event) -> None:
+    """After the first pass: `reconcile_sessions` again every `CYCLE` seconds, so a session that
+    `record` wrote in full becomes `lines_complete` within minutes, and the gauges of
+    `session_lines` follow. Ends when `Store.close` sets `stop`, or when the store is gone: the
+    thread holds a weak reference, so a process that exits without closing its store (the daemon)
+    is not kept from freeing its DuckDB connection by a thread parked in `stop.wait`."""
+    while not stop.wait(CYCLE):
+        store = ref()
+        if store is None:
+            return
+        _reconcile_pass(store, time.perf_counter())
+        del store
+
+
+def start_reconcile(store) -> threading.Thread:
+    """Run `reconcile_sessions`, `fill_facts` and then `fill_turns` in a background thread, once
+    (the thread returned), and `reconcile_sessions` again every ten minutes in another. A failure
+    prints one line: the next pass tries again, and the tables only undercount until then."""
+    def run():
+        _reconcile_pass(store, time.perf_counter())
         t1 = time.perf_counter()
         try:
             n = fill_facts(store)
@@ -818,4 +966,9 @@ def start_reconcile(store) -> threading.Thread:
                   "tried again at the next start", flush=True)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
+    stop = getattr(store, "_reconcile_stop", None)
+    if stop is None:
+        stop = store._reconcile_stop = threading.Event()
+        threading.Thread(target=_cycle, args=(weakref.ref(store), stop), name="sessions-reconcile-cycle",
+                         daemon=True).start()
     return th
