@@ -1,2 +1,0 @@
-Changed
-Agent tracing (Factory Settings > Observability, and Settings > Observability on the AI SRE edition) has a new look: a switch with a sentence saying whether traces are sent and where, labelled fields with hints, and a refused endpoint explained under the field. Tracing switched on to Rius without an API key now says that nothing arrives until there is one, instead of reading as on (TR-1392).

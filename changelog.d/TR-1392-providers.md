@@ -1,2 +1,0 @@
-Changed
-The model provider settings (Factory Settings > Models > Providers, and Settings > Model providers on the AI SRE edition) have a new look: each provider says where its key comes from and what its model list is, as sentences instead of a table, labelled fields with hints, a refused base URL explained under the field, removing a provider asks in a dialog, and the platform's own provider no longer offers an Edit that the daemon refuses (TR-1392).
