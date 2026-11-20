@@ -8,7 +8,7 @@ import type { HomeAnswered, HomeItem } from "./home.types";
 // row stands first and marked, outside any fold. When the item no longer waits, a line at the top says
 // who answered it and when, from the answers record of any day, or that it no longer waits.
 
-const VIA: Record<HomeAnswered["via"], string> = {
+export const VIA: Record<HomeAnswered["via"], string> = {
   feed: "from the feed", console: "on Home", session: "in the crew lead's session", message: "from a message",
 };
 
@@ -46,7 +46,7 @@ export function FocusLabel() {
 /** The row's classes when a link named it: the accent bar at its edge, and a wash. */
 export const FOCUS_ROW = "shadow-[inset_3px_0_0_var(--accent)] bg-muted pl-3";
 
-const CHOICE = (a: HomeAnswered) => (a.choice === "yes" ? "Yes" : a.choice === "no" ? "No" : "Answered");
+export const CHOICE = (a: HomeAnswered) => (a.choice === "yes" ? "Yes" : a.choice === "no" ? "No" : "Answered");
 
 /** What Home says when the item a link named no longer waits: who answered it and when, or that it is gone.
  *  `answer` is null when nothing recorded one (or the read failed). */

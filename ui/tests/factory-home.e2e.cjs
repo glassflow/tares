@@ -88,6 +88,8 @@ function cleanEnv(extra) {
     ck("daemon up", await waitFor(`${BASE}/health`));
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
 
+    // every read of the answers a sample page makes (TR-1528: none)
+    const sampleAnswerReads = [];
     // A context with the sample flag set and a stand-in clipboard that records what is written to it.
     const flagged = async (width) => {
       const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
@@ -96,7 +98,9 @@ function cleanEnv(extra) {
         window.__copied = [];
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t) => { window.__copied.push(t); return Promise.resolve(); } } });
       });
-      return { ctx, page: await ctx.newPage() };
+      const page = await ctx.newPage();
+      page.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/answers")) sampleAnswerReads.push(req.url()); });
+      return { ctx, page };
     };
     const open = async (page, sample) => {
       await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
@@ -240,6 +244,8 @@ function cleanEnv(extra) {
       await ctx.close();
     }
 
+    ck("answered today: a sample reads no answers", sampleAnswerReads.length === 0, sampleAnswerReads.join(" "));
+
     // ── live: the same daemon, seeded through its API, the page opened without the sample flag ──
     const seeded = spawnSync(process.env.TARES_E2E_PYTHON || "python3", [path.join(__dirname, "seed-factory-home.py"), String(PORT)],
                              { cwd: REPO, encoding: "utf8", env: cleanEnv({ PYTHONPATH: REPO }) });
@@ -299,7 +305,7 @@ function cleanEnv(extra) {
       {
         const { ctx, page, ctl } = await liveContext(1440);
         let release; ctl.hold = new Promise((r) => { release = r; });
-        const oneRead = expectOneCall(page, "/api/home");
+        const oneRead = expectOneCall(page, "/api/home", ["/api/answers"]);
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home-loading").waitFor();
         ck("live: placeholders while the first read is out", (await page.getByTestId("waiting-row").count()) === 0
@@ -333,9 +339,21 @@ function cleanEnv(extra) {
         const { ctx, page, ctl } = await liveContext(width);
         const rows = page.getByTestId("waiting-row");
         const t = (s) => `live @${width}: ${s}`;
+        const answersRead = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/answers");
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
         await page.waitForLoadState("networkidle");
+        const todayRead = await answersRead;
+        if (width === 390) {
+          // the seed closed Old report, and the daemon records that as an answer: the read is the day's list, with no since,
+          // and the section holds that one, folded
+          const todayBody = await todayRead.json();
+          ck("answered today: the day's read has no since, and lists what the seed answered", todayRead.ok() && !new URL(todayRead.url()).search
+             && todayBody.answers.length === 1 && todayBody.answers[0].ask === "Close Old report"
+             && (await page.getByTestId("home-answered-count").innerText()) === "1"
+             && (await page.getByTestId("home-answered-fold").getAttribute("aria-expanded")) === "false",
+             `${todayRead.status()} ${todayRead.url()} ${JSON.stringify(todayBody).slice(0, 300)}`);
+        }
         await liveShot(page, "start", width);
         await checkWords(page, ck, t("page"));
         ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
@@ -395,6 +413,25 @@ function cleanEnv(extra) {
         await page.unroute("**/assumptions/*/state");
         await page.waitForFunction(() => /^The crew is not running\. 5 things wait for you/.test(document.querySelector('[data-testid="home-headline"]')?.textContent || ""), null, { timeout: 9000 });
         ck(t("Keep: and again once the daemon's own answer has moved on, the row is still gone"), (await calls.count()) === 0 && (await api("GET", `/api/projects/${ids["Billing export"]}/assumptions?state=open`)).body.assumptions.length === 0);
+
+        // Answered today: the Keep just answered two calls, from here; the section appears with the next read, folded
+        const todaySection = page.getByTestId("home-answered-section");
+        await todaySection.waitFor({ timeout: 9000 });
+        const fold = page.getByTestId("home-answered-fold");
+        const recorded = (await api("GET", "/api/answers")).body.answers.length;
+        ck("answered today: folded by default", (await fold.getAttribute("aria-expanded")) === "false"
+           && (await page.getByTestId("home-answered").count()) === 0 && (await todaySection.getByRole("heading", { name: "Answered today" }).count()) === 1
+           && (await page.getByTestId("home-answered-count").innerText()) === String(recorded), await page.getByTestId("home-answered-count").innerText());
+        await fold.click();
+        const today = page.getByTestId("home-answered");
+        ck("answered today: an answer on Home moves to Answered today, on Home", (await fold.getAttribute("aria-expanded")) === "true"
+           && (await today.count()) === recorded && recorded > 0 && (await today.first().getAttribute("data-choice")) === "yes"
+           && /Kept: .+, by you, on Home, \d{4}-\d\d-\d\d \d\d:\d\dZ/.test((await today.first().innerText()).replace(/\s+/g, " "))
+           && /ago$|just now$/.test((await today.first().locator("[title]").first().getAttribute("title")) || ""),
+           (await today.allInnerTexts()).join(" | "));
+        await checkWords(page, ck, t("answered today, open"));
+        ck(t("answered today: no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+        await fold.click();
 
         // Allow
         const dialog = page.getByTestId("allow-dialog");
@@ -601,7 +638,8 @@ function cleanEnv(extra) {
         // no id, an empty one, or one that is not <kind>:<ref> is no link: the plain Home, and not one read of the record
         const { ctx, page } = await liveContext(1440);
         let answersReads = 0;
-        page.on("request", (req) => { if (new URL(req.url()).pathname === "/api/answers") answersReads++; });
+        // the read of one item's record; the day's list (no query) is Answered today's, read by every Home
+        page.on("request", (req) => { const u = new URL(req.url()); if (u.pathname === "/api/answers" && u.search) answersReads++; });
         const plainFirst = async () => (await page.getByTestId("waiting-row").first().innerText()).trim();
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
@@ -627,6 +665,36 @@ function cleanEnv(extra) {
         await page.goto(`${BASE}/feed`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
         ck("item link: /feed alone lands on /", new URL(page.url()).pathname === "/" && new URL(page.url()).search === "", page.url());
+        await ctx.close();
+      }
+      {
+        // nothing answered today: the read comes back empty and the section is not on the page (the seed's own answer is stubbed away)
+        const { ctx, page } = await liveContext(1440);
+        await page.route("**/api/answers", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ answers: [] }) }));
+        const read = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/answers");
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        await read;
+        ck("answered today: no section when nothing was answered today", (await page.getByTestId("waiting-row").count()) >= 1
+           && (await page.getByTestId("home-answered-section").count()) === 0 && (await page.getByText("Answered today", { exact: true }).count()) === 0);
+        await ctx.close();
+      }
+      {
+        // a failed read of today's answers hides the section, says so once in the console, and leaves the waiting list alone
+        const { ctx, page } = await liveContext(1440);
+        const warns = [];
+        page.on("console", (m) => { if (m.type() === "warning" && /today's answers/.test(m.text())) warns.push(m.text()); });
+        let failed = 0;
+        await page.route("**/api/answers", (route) => { failed++; return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) }); });
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        await reread(page);
+        await page.waitForTimeout(600);
+        ck("answered today: a failed read keeps the waiting list", failed >= 2 && (await page.getByTestId("waiting-row").count()) >= 1
+           && (await page.getByTestId("home-answered-section").count()) === 0 && (await page.getByTestId("stale-banner").count()) === 0
+           && (await page.getByTestId("factory-home-error").count()) === 0 && warns.length === 1, `${failed} failed reads, ${warns.length} warnings, ${await page.getByTestId("waiting-row").count()} rows`);
         await ctx.close();
       }
 

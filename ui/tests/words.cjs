@@ -62,7 +62,7 @@ async function checkWords(page, ck, label) {
 // the returned check says exactly one GET went to `route` (query string ignored) and no other GET
 // went to /api/. /api/whoami (the shell's edition read), /api/licence (the licence read, every page), /api/brain (the shell's read for the Second Brain menu, factory only) and /api/factory/setup/progress (the menu's Setup card, factory only) are not counted unless it is the route asked about (the chooser's one read), and nothing after the check
 // is (a person's clicks are actions).
-function expectOneCall(page, route) {
+function expectOneCall(page, route, also = []) {
   const gets = [];
   let recording = true;
   const onRequest = (req) => {
@@ -77,7 +77,7 @@ function expectOneCall(page, route) {
     recording = false;
     page.off("request", onRequest);
     const hits = gets.filter((p) => p === route);
-    const others = gets.filter((p) => p !== route);
+    const others = gets.filter((p) => p !== route && !also.includes(p));
     ck(`${label}: one call to ${route}`, hits.length === 1, `${hits.length} calls`);
     ck(`${label}: no other read call`, others.length === 0, others.join(", "));
   };

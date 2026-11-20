@@ -2,11 +2,13 @@ import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import {
-  Banner, Button, Dialog, EmptyState, ListRow, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
-  Toaster, toneOf, useToast,
+  Banner, Button, Dialog, EmptyState, ListRow, ProgressBar, Skeleton, SkeletonRows, StatusDot, StatusLabel,
+  Textarea, Toaster, toneOf, useToast,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
+import { formatDistance, formatStampUTC } from "../../lib/time";
+import { formatCount } from "../../lib/number";
 import { licenceSentence } from "@/components/LicenceNeeded";
 import { useCloud } from "@/cloud";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useEeSamples, useLicenceNoAnswer } from "@/eeSlots";
@@ -16,13 +18,13 @@ import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { CopyCommand } from "../StartChecklist";
 import {
-  acceptMilestone, allowDesk, approveMerge, deskReply, finishProject, getAnswerTo, getHome, keepAssumption, keepForLater,
+  acceptMilestone, allowDesk, approveMerge, deskReply, finishProject, getAnsweredToday, getAnswerTo, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
   HomeAction, HomeAnswered, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
 } from "./home.types";
-import { FOCUS_ROW, FocusLabel, FocusNote, parseFocus, sameItem, splitFocus } from "./homeFocus";
+import { CHOICE, FOCUS_ROW, FocusLabel, FocusNote, parseFocus, sameItem, splitFocus, VIA } from "./homeFocus";
 import { HOME_SAMPLES } from "./homeSamples";
 import { Detail, DetailLines } from "./HomeDetail";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
@@ -162,6 +164,37 @@ function WaitingPending() {
     <section aria-label="Waiting for you" className="min-w-0" data-testid="waiting-pending">
       <SectionHead title="Waiting for you" />
       <SkeletonRows className={FLUSH_ROWS} />
+    </section>
+  );
+}
+
+/** One answer of the day: greyed, what was asked, what was said, by whom, from where and when. */
+function AnsweredRow({ a }: { a: HomeAnswered }) {
+  const same = !a.said || a.said === CHOICE(a);
+  return (
+    <ListRow className="flex-col items-stretch gap-y-1 px-0 text-muted-foreground" data-testid="home-answered" data-choice={a.choice ?? "answered"}>
+      <span className="text-[15px] [overflow-wrap:anywhere]" data-user-text><Detail text={a.ask} /></span>
+      <span className="text-[13px]">
+        <StatusLabel tone="done" className="mr-2">{CHOICE(a)}</StatusLabel>
+        {!same && <><span data-user-text>{a.said}</span>, </>}
+        by {a.by}, {VIA[a.via]}, <span className="font-mono" title={formatDistance(Date.parse(a.at), Date.now())}>{formatStampUTC(a.at)}</span>
+      </span>
+    </ListRow>
+  );
+}
+
+/** What was answered today (UTC), under Waiting for you and folded: the cell's own record, read with Home's
+ *  poll. Nothing at all when nothing was answered (or the read failed). */
+function AnsweredToday({ answers }: { answers?: HomeAnswered[] }) {
+  const [open, setOpen] = React.useState(false);
+  if (!answers || answers.length === 0) return null;
+  return (
+    <section aria-label="Answered today" className="min-w-0" data-testid="home-answered-section">
+      <SectionHead title="Answered today" aside={<span className={MUTED} data-testid="home-answered-count">{formatCount(answers.length)}</span>} />
+      <Button variant="quiet" className="px-0 text-foreground underline" aria-expanded={open} data-testid="home-answered-fold" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide the answers" : "Show the answers"}
+      </Button>
+      {open && <div>{answers.map((a, i) => <AnsweredRow key={`${a.id}:${a.at}:${i}`} a={a} />)}</div>}
     </section>
   );
 }
@@ -328,11 +361,13 @@ const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 // Setting the factory up lives on /setup (the Setup menu entry), so the home shows no first-run list.
-export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, focusAnswer }: {
+export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, focusAnswer, answered }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
   /** The id a link named (`/?item=<id>`, well formed), and what the record says of it once it no longer waits:
    *  undefined until read (or when nothing was read, as in a sample), null when no answer was recorded. */
   focus?: string; focusAnswer?: HomeAnswered | null;
+  /** The answers given today, newest first; none when nothing was read (a sample, or a read that failed). */
+  answered?: HomeAnswered[];
   /** Hand over anyway on a row of You are waiting on. */
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
@@ -360,6 +395,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, f
           ) : (
             <Waiting items={data.waiting_for_you} focus={focus} onAction={onAction} rows={rows} />
           )}
+          <AnsweredToday answers={answered} />
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
           {data.plan_command && data.projects.length === 0 && data.finished_count === 0 && !data.later_count && (
             <PlanFirst command={data.plan_command} />
@@ -760,12 +796,19 @@ function hhmm(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** The failed read of today's answers is said once per page load, not on every poll. */
+let answeredWarned = false;
+
 function LiveHome({ focus }: { focus?: string }) {
   const { data, error, reload } = usePagePolling(() => getHome(), POLL_MS);
   // What the record says of the item a link named, read once it is known not to wait: with the first home
   // read, and again when the row leaves the list (it was just answered). Nothing shows before the read lands.
   const [recorded, setRecorded] = React.useState<{ id: string; answer: HomeAnswered | null }>();
   const [readAt, setReadAt] = React.useState<Date>();
+  // Today's answers: read after each home read, so an answer given here shows within one re-read. A failed
+  // read hides the section and never touches the waiting list.
+  const [answered, setAnswered] = React.useState<HomeAnswered[]>();
+  const answeredSeq = React.useRef(0);
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
   React.useEffect(() => { if (data) { setReadAt(new Date()); } }, [data]);
@@ -774,6 +817,18 @@ function LiveHome({ focus }: { focus?: string }) {
     if (data && overlay && Date.now() >= overlay.until) setOverlay(null);
   }, [data, overlay]);
   React.useEffect(() => () => clearTimeout(timer.current), []);
+  React.useEffect(() => {
+    if (!data) return;
+    const mine = ++answeredSeq.current;
+    getAnsweredToday()
+      .then((list) => { if (mine === answeredSeq.current) setAnswered(list); })
+      .catch((e) => {
+        if (mine !== answeredSeq.current) return;
+        setAnswered(undefined);
+        if (!answeredWarned) { answeredWarned = true; console.warn("Home: could not read today's answers", e); }
+      });
+  }, [data]);
+  React.useEffect(() => () => { answeredSeq.current += 1; }, []);
   const loaded = !!data;
   // an answer just given hides its row at once, before the daemon's own list has caught up
   const waits = !!focus && !!data && data.waiting_for_you.some((i) => sameItem(i.id, focus) && !overlay?.items.has(i.id));
@@ -814,7 +869,7 @@ function LiveHome({ focus }: { focus?: string }) {
     ) : undefined;
     body = (
       <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} focus={focus}
-        focusAnswer={recorded?.id === focus ? recorded?.answer : undefined} />
+        focusAnswer={recorded?.id === focus ? recorded?.answer : undefined} answered={answered} />
     );
   }
   return (
