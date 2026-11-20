@@ -208,6 +208,27 @@ async def main():
         ck("Shop's row reads 'waiting on you' for Alex and not for Kim", row(await home("alex"))["state"]
            == "waiting_on_you" and row(await home("kim"))["state"] != "waiting_on_you",
            (row(await home("alex"))["state"], row(await home("kim"))["state"]))
+        # the project page cleans the waiting items it gets in place; they must not be the request's
+        # own cached items (TR-1472), which its home and tickets parts read after it
+        seen = []
+        real_items = th.HomeRead.items
+
+        def watching_items(self):
+            got = real_items(self)
+            if not seen:
+                seen.append((got, [(i, i.get("actions")) for i in got]))
+            return got
+        th.HomeRead.items = watching_items
+        try:
+            page = await call("alex", "GET", f"/api/factory/projects/{shop}")
+        finally:
+            th.HomeRead.items = real_items
+        cached, before = seen[0] if seen else ([], [])
+        ck("the project page lists what waits for Alex", page.status_code == 200
+           and any(w["id"] == f"question:{qid}" or qid in str(w["id"]) for w in page.json().get("waiting", [])),
+           page.text[:300])
+        ck("it read the request's cached items, and left every one as it was",
+           bool(before) and all(i.get("actions") is a for i, a in before), len(before))
         r = await call("alex", "POST", f"/api/projects/{shop}/questions/{qid}/answer", {"answer": "The cart"})
         ck("Alex answers it", r.status_code == 200, r.text)
         ck("it is gone", "question" not in by_kind(await home("alex")))

@@ -44,6 +44,19 @@ class HomeRead:
         """The review queue, read once per request."""
         return self.c.queue(keep) if keep is not None else self._read("queue", self.c.queue)
 
+    def handovers(self) -> dict[str, dict]:
+        """{project id: hand-over} of every project handed over, one read for every builder."""
+        return self._read("handovers", self.store.handovers_by_project)
+
+    def members(self, ids: list[str]) -> dict[str, list[dict]]:
+        """{project id: the people on it besides its lead}, one read for the ids asked."""
+        return self._read(("members", tuple(ids)), lambda: self.store.members_by_project(ids))
+
+    def items(self) -> list[dict]:
+        """Every builder's items for everyone (all_items), built once: team_home and a project's
+        waiting list read the same build."""
+        return self._read("items", lambda: all_items(self))
+
     def projects(self) -> dict[str, dict]:
         """{project id: project row} of every project."""
         return self._read("projects", lambda: {p["id"]: p for p in self.store.list_projects()})
@@ -72,6 +85,20 @@ class HomeRead:
         system = bool(self.c.h.is_system(self.request))
         return {"me": self.me["id"], "everything": False, "orphans": system,
                 "admin": bool(system or self.c.h.is_admin(self.request))}
+
+
+def _home_read(c, request, now) -> HomeRead:
+    """The caller's HomeRead for this request: one per request, so Home, Projects, Tickets and a
+    project's page build the team home at most once however many parts of the route ask (the
+    team seams: team_home, project_waiting, team_projects). With no request there is nothing to
+    keep it on, and each call reads afresh."""
+    state = getattr(request, "state", None)
+    got = getattr(state, "tares_home_read", None) if state is not None else None
+    if got is None:
+        got = HomeRead(c, request, c.work_person(request), now)
+        if state is not None:
+            state.tares_home_read = got
+    return got
 
 
 def _for_team(c, request) -> bool:
@@ -260,7 +287,8 @@ def milestone_items(t: HomeRead) -> list[dict]:
     """The single-person rule (factory_waiting.milestones_to_check, TR-1017 and TR-1021): only
     what truly needs a person, nothing for a project ready to close, and the crew's unrecorded
     checks stay the crew's on a project it works on."""
-    return [{**i, "from": YOUR_CREW} for i in fw.milestones_to_check(t.store, None, t.now)
+    return [{**i, "from": YOUR_CREW}
+            for i in fw.milestones_to_check(t.store, None, t.now, t.handovers())
             if (i.get("project") or {}).get("id") not in t.hidden]
 
 
@@ -269,7 +297,7 @@ def milestone_items(t: HomeRead) -> list[dict]:
 def pr_items(t: HomeRead) -> list[dict]:
     from types import SimpleNamespace
     fx = SimpleNamespace(queue=t.queue, settings=lambda: t.c.settings(t.request))
-    return [i for i in fw.prs_to_review(t.store, fx, t.now)
+    return [i for i in fw.prs_to_review(t.store, fx, t.now, t.handovers())
             if (i["project"] or {}).get("id") not in t.hidden]
 
 
@@ -283,7 +311,7 @@ def lead_items(t: HomeRead) -> list[dict]:
     batched = {(d["project"], x) for d in _desk(t) if d.get("assumptions") for x in d["assumptions"]}
     calls = fw.calls_to_confirm(t.store, fx, t.now, skip=batched)
     return [i for i in [*fw.ready_to_start(t.store, fx, t.now), *calls,
-                        *fw.projects_to_close(t.store, fx, t.now)]
+                        *fw.projects_to_close(t.store, fx, t.now, t.handovers())]
             if (i["project"] or {}).get("id") not in t.hidden]
 
 
@@ -320,10 +348,9 @@ def waiting_on(t: HomeRead) -> list[dict]:
     handed = set(t.store.handed_over_projects())
     everything = bool(t.c.h.is_system(t.request))   # the cell's own credential waits on every project
     out = []
-    for p in t.store.list_projects():
-        if (p.get("kind") != "software_factory" or p["status"] in ("done", "later")
-                or p["id"] in handed or p["id"] in t.hidden
-                or not (everything or t.c.leads(p, t.me["id"], t.owners))):
+    for p in t.store.list_projects(kind="software_factory", status_not_in=("done", "later"),
+                                   exclude_ids=handed | t.hidden):
+        if not (everything or t.c.leads(p, t.me["id"], t.owners)):
             continue
         questions = [{"id": q["id"], "to": _ref(q["to_person"]) or t.person(q["to_person_id"]),
                       "asked_at": fh._iso(fh._dt(q["asked_at"])),
@@ -395,8 +422,9 @@ def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dic
     not on is not among them and shows only as {hidden: true, lead: {name}} in the team view."""
     if not _for_team(c, request):
         return {}
-    t = HomeRead(c, request, c.work_person(request), now)
+    t = _home_read(c, request, now)
     by_id = {p["id"]: p for p in open_ps}
+    members = t.members([r["id"] for r in rows])
     asked = {(i["project"] or {}).get("id") for i in waiting}   # projects with something for the person
     shown = []
     for r in rows:
@@ -404,15 +432,15 @@ def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dic
         yours, text = _yours_text(t, tickets.get(p["id"], []), p)
         lead_id = p.get("lead_person_id")
         shown.append({**r, "lead": t.person(lead_id),
-                      "members": [t.person(m["person_id"]) for m in t.store.list_project_members(p["id"])
+                      "members": [t.person(m["person_id"]) for m in members.get(p["id"], [])
                                   if m["person_id"] != lead_id],
                       "scope": p.get("scope") or "team", "yours": yours, "yours_text": text,
                       "mine": bool(t.c.leads(p, t.me["id"], t.owners) or yours or r["id"] in asked)})
     stubs = []
-    for p in t.store.list_projects():
-        if p["id"] in t.hidden and p.get("kind") == "software_factory" and p["status"] not in ("done", "later"):
-            lead = t.person(p.get("lead_person_id"))
-            stubs.append({"hidden": True, "lead": {"name": lead["name"]} if lead else None})
+    for p in t.store.list_projects(ids=t.hidden, kind="software_factory",
+                                   status_not_in=("done", "later")):
+        lead = t.person(p.get("lead_person_id"))
+        stubs.append({"hidden": True, "lead": {"name": lead["name"]} if lead else None})
     counts = {"mine": sum(1 for r in shown if r["mine"]), "team": len(shown)}
     view = which if which in PROJECT_VIEWS else "mine"
     out = {"projects": [r for r in shown if r["mine"]] if view == "mine" else shown + stubs,
@@ -522,8 +550,12 @@ def team_home(c, request, now) -> dict:
     answers: a cell of one, or a key with no person."""
     if not _for_team(c, request):
         return {}
-    t = HomeRead(c, request, c.work_person(request), now)
-    waiting = owners_mod.mine(all_items(t), **t.caller())
+    t = _home_read(c, request, now)
+    return t._read("team_home", lambda: _team_home(t))
+
+
+def _team_home(t: HomeRead) -> dict:
+    waiting = owners_mod.mine(t.items(), **t.caller())
     on = waiting_on(t)
     crew_rows, quiet = crews(t)
     return {"waiting_for_you": waiting, "waiting_total": len(waiting),
@@ -550,7 +582,8 @@ def project_waiting(c, request, now, project: str) -> dict | None:
     with nothing to press. None on a cell the single-person home answers."""
     if not _for_team(c, request):
         return None
-    t = HomeRead(c, request, c.work_person(request), now)
-    items = [i for i in all_items(t) if (i.get("project") or {}).get("id") == project]
+    t = _home_read(c, request, now)
+    # copies: the items are the request's own cached ones, and a caller cleans what it gets in place
+    items = [dict(i) for i in t.items() if (i.get("project") or {}).get("id") == project]
     mine, others = fh.split_waiting(t.store, items, t.caller(), now)
     return {"mine": mine, "others": others}

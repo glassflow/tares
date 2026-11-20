@@ -2,6 +2,7 @@
 # Tests CI runs for the enterprise code, one per line, in sorted order (ee/tests/<name>.py).
 test_areas
 test_areas_licence
+test_brain_decisions_backoff
 test_brain_decisions_hand
 test_brain_decisions_projects
 test_brain_decisions_projects_backfill
@@ -20,6 +21,7 @@ test_brain_sync
 test_brain_sync_retry
 test_console_answers
 test_crew_page_by_person
+test_crew_sessions_route
 test_crew_split
 test_crewname_team
 test_crews
@@ -31,6 +33,7 @@ test_factory_crew_team
 test_factory_people
 test_factory_private_screens
 test_factory_project_controls
+test_factory_query_budget
 test_factory_team_home
 test_grant_decline_sticks
 test_grants_teams
@@ -55,9 +58,12 @@ test_project_page_lead_items
 test_project_page_others
 test_project_secrets
 test_recording_person_team
+test_route_phase_metric
+test_sessions_readers
 test_setup_flow_team
 test_spec_questions
 test_sre_private_screens
 test_sre_start_team
+test_state_indexes
 test_teams_e2e
 test_ticket_assignee

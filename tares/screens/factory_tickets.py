@@ -107,9 +107,10 @@ def register(app, store, h, ctx):
         # what waits for the caller, as their home has it (never another person's items)
         waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
         stations = fx.stations() if fx else []
+        handovers = store.handovers_by_project(ids)
         ranked = []
         for p in projects:
-            r = row_for(p, tickets_of[p["id"]], store.get_handover(p["id"]), waiting, stations,
+            r = row_for(p, tickets_of[p["id"]], handovers.get(p["id"]), waiting, stations,
                         now, milestones_of[p["id"]])
             ranked.append(((ORDER[r["state"]],
                             -(_dt(r["last_activity_at"]) or _EPOCH).timestamp()), p))
@@ -119,7 +120,7 @@ def register(app, store, h, ctx):
         def cleaner(p):
             # the crew's folders stay on the crew's machine: a title that names one shows the repo
             hidden = {}
-            for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
+            for r in (handovers.get(p["id"]) or {}).get("repos") or []:
                 base = factory_mod.hidden_key(r.get("path"))
                 if base:
                     hidden[base] = r.get("name") or factory_mod.folder_name(base) or "the repo"

@@ -110,7 +110,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Backend — tests
         run: |
-          pip install -e ".[postgres-state]"
+          pip install -e ".[postgres-state,archive-s3]"
           if [ "${{ matrix.suite }}" = mit ]; then
             python -c "import importlib.util as u; assert u.find_spec('tares_ee') is None, 'tares_ee is importable in the mit run'"
           fi
@@ -190,7 +190,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Enterprise tests
         run: |
-          pip install -e ".[postgres-state,ee]"
+          pip install -e ".[postgres-state,archive-s3,ee]"
           bash tests/check_ci_list.sh ee/tests/ci_list.txt
           if [ "${{ matrix.db }}" = postgres ]; then
             export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres

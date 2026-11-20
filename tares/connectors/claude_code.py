@@ -312,11 +312,7 @@ class ClaudeCodeConnector(Connector):
         # a person's turn is what a desk answer is matched against line by line (TR-697), so a long
         # paste is kept whole
         etype = self._event_type(o, msg)
-        cap = (4000 if o.get("type") in self.CHALLENGE_TYPES
-               else self.USER_TURN_CAP if etype == "user" else 500)
-        text = self._render_text(o, msg, include_thinking)[:cap]
-        if redact:
-            text = _redact(text)
+        text = self.line_text(o, etype, redact, include_thinking)
 
         payload = _redact_obj(o) if redact else o
 
@@ -345,6 +341,16 @@ class ClaudeCodeConnector(Connector):
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 out[k] = v
         return out
+
+    @classmethod
+    def line_text(cls, o: dict, etype: str, redact: bool, include_thinking: bool) -> str:
+        """The text of one line: what `_obj_to_envelope` stores in the events table, and what the
+        session readers rebuild from the stored payload and `render` flags (TR-1507)."""
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        cap = (4000 if o.get("type") in cls.CHALLENGE_TYPES
+               else cls.USER_TURN_CAP if etype == "user" else 500)
+        text = cls._render_text(o, msg, include_thinking)[:cap]
+        return _redact(text) if redact else text
 
     @staticmethod
     def _ts(o: dict) -> datetime:

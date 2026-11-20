@@ -3,7 +3,8 @@
 What a cell is doing, for a fleet dashboard and alerts: events in, poll errors, source health,
 agent runs and their outcomes, model calls, tokens and spend by provider, database size against
 its limit, trigger evaluations and how long they take, the event loop's lag, and how long each
-HTTP route takes (`tares_http_request_duration_seconds`, TR-652). Labels name the source, agent,
+HTTP route takes (`tares_http_request_duration_seconds`, TR-652) and where the time of the ticket
+brief, the builder brief and merge-ready goes (`tares_route_phase_seconds`, TR-1476). Labels name the source, agent,
 provider, route template or status; never an entity key, an ID or anything from a payload.
 
 The endpoint is public unless TARES_METRICS_TOKEN is set; then it wants
@@ -15,6 +16,8 @@ guards its calls. The endpoint answers 404 in that case.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import time
 
 try:
@@ -67,6 +70,34 @@ if AVAILABLE:
                              "for a streaming response), per route template, method and status class",
                              ["route", "method", "status"],
                              buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
+    PHASE_SECONDS = Histogram("tares_route_phase_seconds",
+                              "Own wall time of one phase of a route (the time of the phases "
+                              "inside it left out), so the phases of a route add up to its time",
+                              ["route", "phase"],
+                              buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60))
+    SESSION_INGEST_SECONDS = Histogram("tares_session_ingest_seconds",
+                                       "Wall time of writing one batch of claude_code lines into "
+                                       "the sessions table",
+                                       buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5))
+    SESSION_INGEST_FAILURES = Counter("tares_session_ingest_failures_total",
+                                      "Batches of claude_code lines the sessions table could not "
+                                      "take (the lines are stored; the next start catches the "
+                                      "table up)")
+    SESSION_LINES_ROWS = Gauge("tares_session_lines_rows",
+                               "Rows in the session_lines table (every claude_code line stored "
+                               "since it was added), read every ten minutes")
+    SESSION_LINES_BYTES = Gauge("tares_session_lines_bytes",
+                                "Size in bytes of the session_lines table: with its indexes on "
+                                "Postgres, the whole session store file on SQLite; read every "
+                                "ten minutes")
+    ARCHIVE_SESSIONS = Counter("tares_archive_sessions_total",
+                               "Sessions the hourly archive moved from session_lines to the "
+                               "archive (a session with a late line counts again)")
+    ARCHIVE_BYTES = Counter("tares_archive_bytes_total",
+                            "Bytes of gzip parts the hourly archive wrote and checked")
+    ARCHIVE_FAILURES = Counter("tares_archive_failures_total",
+                               "Sessions the hourly archive could not move (the rows stay in "
+                               "session_lines; the next pass tries again)")
 
 _storage_probe = None
 _licence_probe = None
@@ -128,11 +159,97 @@ def trigger_evaluation(seconds: float, fired: list) -> None:
             TRIGGER_FIRINGS.labels(trigger=name).inc()
 
 
+def session_ingest(seconds: float, ok: bool = True) -> None:
+    """One batch written to the sessions table (TR-1471)."""
+    if AVAILABLE:
+        SESSION_INGEST_SECONDS.observe(seconds)
+        if not ok:
+            SESSION_INGEST_FAILURES.inc()
+
+
+def session_lines_size(rows: int, size: int) -> None:
+    """The size of the session_lines table (TR-1478), set by the sessions reconcile."""
+    if AVAILABLE:
+        SESSION_LINES_ROWS.set(rows)
+        SESSION_LINES_BYTES.set(size)
+
+
+def session_archived(nbytes: int) -> None:
+    """One session's lines written to the archive, checked and deleted from session_lines (TR-1506)."""
+    if AVAILABLE:
+        ARCHIVE_SESSIONS.inc()
+        ARCHIVE_BYTES.inc(nbytes)
+
+
+def archive_failed() -> None:
+    """One session the archive could not move (TR-1506)."""
+    if AVAILABLE:
+        ARCHIVE_FAILURES.inc()
+
+
 def observe_request(route: str, method: str, status: str, seconds: float) -> None:
     """One HTTP request (TR-652). `route` is a route template or `static`/`unmatched`, never a
     raw path; `status` is the class (`2xx` .. `5xx`)."""
     if AVAILABLE:
         HTTP_SECONDS.labels(route=route, method=method, status=status).observe(seconds)
+
+
+# The routes that report their phases, and the phases each one has (TR-1476). Every label set is
+# made at zero on import, so the family is on /metrics before the first call.
+ROUTE_PHASES = {
+    "brief": ("pr_refresh", "ticket_read", "recorded_commands", "challenger", "decisions",
+              "recurring", "repo_map", "render"),
+    "builder_brief": ("pr_refresh", "ticket_read", "recorded_commands", "challenger", "milestone",
+                      "dependencies", "agents_docs", "repo_map", "desk", "protocol_messages",
+                      "render"),
+    "merge_ready": ("pr_read", "review", "ci", "pr_files", "guardrails"),
+}
+if AVAILABLE:
+    for _route, _phases in ROUTE_PHASES.items():
+        for _name in _phases:
+            PHASE_SECONDS.labels(route=_route, phase=_name)
+
+_phase_route: contextvars.ContextVar = contextvars.ContextVar("tares_phase_route", default=None)
+_phase_open: contextvars.ContextVar = contextvars.ContextVar("tares_phase_open", default=None)
+
+
+@contextlib.contextmanager
+def bind_route(route: str):
+    """Name the route being served, so `step(name)` calls deeper down (a helper that does not know
+    which route called it) report under it. Outside this block `step` does nothing."""
+    tok = _phase_route.set(route)
+    try:
+        yield
+    finally:
+        _phase_route.reset(tok)
+
+
+@contextlib.contextmanager
+def phase(route: str, name: str):
+    """Time the block as phase `name` of `route` (TR-1476). A phase inside it is left out of this
+    one's time, so a route's phases add up to its time and a rate of one is not counted twice.
+    The time is reported when the block raises too. A no-op without the client library."""
+    if not AVAILABLE:
+        yield
+        return
+    parent = _phase_open.get()
+    frame = [0.0]                       # what the phases inside this one took
+    tok = _phase_open.set(frame)
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        _phase_open.reset(tok)
+        took = time.perf_counter() - t0
+        if parent is not None:
+            parent[0] += took
+        PHASE_SECONDS.labels(route=route, phase=name).observe(max(0.0, took - frame[0]))
+
+
+def step(name: str):
+    """`phase` for the route `bind_route` named; a block that runs on no bound route is not timed."""
+    route = _phase_route.get()
+    return phase(route, name) if route else contextlib.nullcontext()
 
 
 # Path prefixes the API answers under; a request outside them that matched no route is the console

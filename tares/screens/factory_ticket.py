@@ -61,7 +61,7 @@ def register(app, store, h, ctx):
         t = store.get_ticket(uid, ref)
         if t is None:
             raise HTTPException(404, f"no ticket {ref!r} in this project")
-        await factory_api.refresh_prs(store, uid)
+        await factory_api.refresh_pr(store, uid, t)   # this ticket's pull request only (TR-1474)
         return await asyncio.to_thread(build, uid, p, t["id"])
 
     def build(uid: str, p: dict, tid: str) -> dict:

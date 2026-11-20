@@ -11,8 +11,14 @@ import logging
 import re
 import uuid
 
+from sqlalchemy import and_, func, null, or_, select, update
+
+from . import session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
+from .session_store.tables import (project_sessions, session_commands, session_messages,
+                                   session_states, session_stations, session_turns, session_usage)
+from .session_store.tables import sessions as sessions_table
 
 log = logging.getLogger("tares.factory_store")
 
@@ -596,6 +602,9 @@ FACTORY_SCHEMA = [
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
 PROJECT_SLOTS = ("tickets", "review", "ci")
+
+# a station row lists this many of its earlier sessions; the rest are read a page at a time (TR-1500)
+EARLIER_KEPT = 5
 # the monitoring integrations kept in the tracing settings (TR-866)
 MONITORING_NAMES = ("off", "rius", "otlp")
 
@@ -653,7 +662,13 @@ class FactoryStore:
         """A person's crew recorded without its machine, before the cell had a licence, and the same
         crew recorded with one since are one crew (TR-1223): its sessions move to the crew with the
         machine and the bare record goes. Only when the person has exactly one crew of that name with
-        a machine; with several it can't be told which. Lock held (or no other thread yet)."""
+        a machine; with several it can't be told which. Lock held (or no other thread yet).
+
+        On the first start with a state database the crews are still in DuckDB and the session
+        tables are a copy that the next try of a failed start makes again from DuckDB's rows, which
+        name the bare crew. So the bare record stays until the state has moved (the start merges
+        again then): a second try finds it and remaps the stations again."""
+        unmoved = self.sessions_db.dialect == "postgresql" and self.sc is self.con
         rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen FROM crews").fetchall()
         groups: dict = {}
         for r in rows:
@@ -667,19 +682,25 @@ class FactoryStore:
             firsts = [c[4] for c in [keep, *bare] if c[4] is not None]
             lasts = [c[5] for c in [keep, *bare] if c[5] is not None]
             for b in bare:
-                self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id = ?", [keep[0], b[0]])
-                self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
+                with self.sessions_db.begin() as conn:
+                    conn.execute(update(session_stations).where(session_stations.c.crew_id == b[0])
+                                 .values(crew_id=keep[0]))
+                if not unmoved:
+                    self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
             self.sc.execute("UPDATE crews SET first_seen = ?, last_seen = ? WHERE id = ?",
                             [min(firsts) if firsts else None, max(lasts) if lasts else None, keep[0]])
 
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
-        if self.sc.execute("SELECT 1 FROM session_stations WHERE crew_id IS NULL LIMIT 1"
-                            ).fetchone():
+        with self.sessions_db.begin() as conn:
+            bare = conn.execute(select(session_stations.c.session).where(
+                session_stations.c.crew_id.is_(None)).limit(1)).first()
+        if bare:
             cid = self._crew_id("crew", "local", "", now_utc())
-            self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
-                             [cid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(session_stations).where(session_stations.c.crew_id.is_(None))
+                             .values(crew_id=cid))
         self._merge_split_crews()
         # an override kept before the log existed is its first entry (TR-640); one with no time of
         # its own takes the hand-over's, else now, so a log entry always has a time
@@ -1036,37 +1057,53 @@ class FactoryStore:
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
                             project: str | None, at, crew_id: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO session_stations (session, station, role, parent, project, seen_at, "
-                "crew_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
-                "station = excluded.station, role = excluded.role, parent = excluded.parent, "
-                "project = coalesce(excluded.project, session_stations.project), "
-                "crew_id = coalesce(excluded.crew_id, session_stations.crew_id)",
-                [session, station, role or None, parent or None, project, at, crew_id])
+        t = session_stations
+        stmt = self.sessions_db.upsert(t).values(
+            session=session, station=station, role=role or None, parent=parent or None,
+            project=project, seen_at=at, crew_id=crew_id)
+        x = stmt.excluded
+        stmt = stmt.on_conflict_do_update(index_elements=["session"], set_={
+            "station": x.station, "role": x.role, "parent": x.parent,
+            "project": func.coalesce(x.project, t.c.project),
+            "crew_id": func.coalesce(x.crew_id, t.c.crew_id)})
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt)
 
     def session_station(self, session: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute("SELECT station, role, parent, project FROM session_stations "
-                                 "WHERE session = ?", [session]).fetchone()
+        t = session_stations
+        with self.sessions_db.begin() as conn:
+            r = conn.execute(select(t.c.station, t.c.role, t.c.parent, t.c.project).where(
+                t.c.session == session)).first()
         return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
 
     def station_sessions(self, source: str) -> list[dict]:
         """Every session that played a station, with its station, role, parent and project, when
         it started and last did something (from its lines on `source`), its state, and the
         project it last named (project_sessions), newest activity first."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
-                "st.state, st.reason, st.state_at, "
-                "(SELECT p.project FROM project_sessions p WHERE p.session = ss.session "
-                " ORDER BY p.linked_at DESC LIMIT 1), ss.crew_id "
-                "FROM session_stations ss "
-                "LEFT JOIN session_states st ON st.session = ss.session").fetchall()
-        act = self.session_activity(source, [r[0] for r in rows])
+        ss, st, ps, sx = session_stations, session_states, project_sessions, sessions_table
+        named = (select(ps.c.project).where(ps.c.session == ss.c.session)
+                 .order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery())
+        # once the sessions table has caught up (TR-1520) the lines come from it in the same read
+        # (TR-1499); before, from a scan of events below
+        table = session_ingest.caught_up(self)
+        lines = ((sx.c.started_at, sx.c.last_line_at, sx.c.line_count) if table
+                 else (null(), null(), null()))
+        j = ss.outerjoin(st, st.c.session == ss.c.session)
+        if table:
+            j = j.outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
+                                     sx.c.line_count > 0))
+        q = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
+                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, *lines)
+             .select_from(j))
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q).all()
+        act = None if table else self.session_activity(source, [r[0] for r in rows])
         out = []
         for r in rows:
-            first, last, n = act.get(r[0], (None, None, 0))
+            if act is None:
+                first, last, n = r[11], r[12], int(r[13] or 0)
+            else:
+                first, last, n = act.get(r[0], (None, None, 0))
             out.append({"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                         "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
                         "last_at": last or r[5], "lines": n, "state": r[6],
@@ -1074,6 +1111,171 @@ class FactoryStore:
         out.sort(key=lambda s: s["last_at"].timestamp() if s["last_at"] else float("-inf"),
                  reverse=True)
         return out
+
+    def _station_join(self, source: str):
+        """The sessions a station played, with their state and, once the sessions table has caught
+        up, their lines on `source`: (join, project the session named, last activity)."""
+        ss, st, ps, sx = session_stations, session_states, project_sessions, sessions_table
+        named = (select(ps.c.project).where(ps.c.session == ss.c.session)
+                 .order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery())
+        j = (ss.outerjoin(st, st.c.session == ss.c.session)
+             .outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
+                                 sx.c.line_count > 0)))
+        return j, named, func.coalesce(sx.c.last_line_at, ss.c.seen_at)
+
+    @staticmethod
+    def _joined_row(r) -> dict:
+        """A station_sessions row from the columns `station_rollup` and `station_earlier` select."""
+        first, last, n = r[11], r[12], int(r[13] or 0)
+        return {"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
+                "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
+                "last_at": last or r[5], "lines": n, "state": r[6],
+                "state_reason": r[7], "state_at": r[8], "crew_id": r[10]}
+
+    def station_rollup(self, source: str, keep: int = EARLIER_KEPT) -> list[dict]:
+        """One row per station (crew id and name), however many sessions played it (TR-1500):
+        `cur` the newest session (as station_sessions gives it), `earlier` the `keep` most recent
+        before it, `earlier_count` how many there are in all, and the totals over every session:
+        `projects` (sorted), `usage` (None when none of them has any) and `coordination_calls`.
+        Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
+        stays the size of the stations; before, the same is built from the full list."""
+        if not session_ingest.caught_up(self):
+            return self._rollup_from_rows(source, keep)
+        ss, sx, u = session_stations, sessions_table, session_usage
+        j, named, last = self._station_join(source)
+        rank = func.row_number().over(
+            partition_by=(ss.c.crew_id, ss.c.station),
+            order_by=(last.desc().nulls_last(), ss.c.session.desc())).label("rank")
+        ranked = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project,
+                         ss.c.seen_at, session_states.c.state, session_states.c.reason,
+                         session_states.c.state_at, named.label("named"), ss.c.crew_id,
+                         sx.c.started_at, sx.c.last_line_at, sx.c.line_count, rank)
+                  .select_from(j).subquery())
+        top = select(ranked).where(ranked.c.rank <= keep + 1).order_by(ranked.c.rank)
+        sums = (select(ss.c.crew_id, ss.c.station, func.count(),
+                       func.sum(func.coalesce(sx.c.coordination_calls, 0)))
+                .select_from(j).group_by(ss.c.crew_id, ss.c.station))
+        worked = select(ss.c.crew_id, ss.c.station, func.coalesce(ss.c.project, named)).distinct()
+        spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
+                 .select_from(ss.join(u, u.c.session == ss.c.session))
+                 .group_by(ss.c.crew_id, ss.c.station))
+        with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
+            top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
+            worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
+        out: dict[tuple, dict] = {}
+        for r in top_rows:
+            g = out.setdefault((r[10], r[1]), {"crew_id": r[10], "station": r[1], "sessions": [],
+                                               "projects": set(), "usage": None})
+            g["sessions"].append(self._joined_row(r))
+        for cid, name, n, coord in sum_rows:
+            out[(cid, name)].update(earlier_count=int(n) - 1, coordination_calls=int(coord or 0))
+        for cid, name, project in worked_rows:
+            if project:
+                out[(cid, name)]["projects"].add(project)
+        for cid, name, *cols in spent_rows:
+            out[(cid, name)]["usage"] = self._totals(cols)
+        for g in out.values():
+            rows = g.pop("sessions")
+            g.update(cur=rows[0], earlier=rows[1:], projects=sorted(g["projects"]))
+        return list(out.values())
+
+    def projects_by_session(self, sessions: list[str]) -> dict[str, list[str]]:
+        """The projects each session worked in (its station's project and every one it is linked
+        to), sorted; a session that worked in none is left out."""
+        out: dict[str, set[str]] = {}
+        ss, ps = session_stations, project_sessions
+        for i in range(0, len(sessions), 500):
+            chunk = list(sessions[i:i + 500])
+            with self.sessions_db.begin() as conn:
+                for sid, project in conn.execute(
+                        select(ss.c.session, ss.c.project).where(ss.c.session.in_(chunk))):
+                    if project:
+                        out.setdefault(sid, set()).add(project)
+                for sid, project in conn.execute(
+                        select(ps.c.session, ps.c.project).where(ps.c.session.in_(chunk))):
+                    out.setdefault(sid, set()).add(project)
+        return {k: sorted(v) for k, v in out.items()}
+
+    @staticmethod
+    def _newest_first(rows: list[dict]) -> list[dict]:
+        """station_sessions rows by last activity, newest first, ties by session id (the order the
+        grouped queries give)."""
+        rows = sorted(rows, key=lambda r: r["session"], reverse=True)
+        rows.sort(key=lambda r: r["last_at"].timestamp() if r["last_at"] else float("-inf"),
+                  reverse=True)
+        return rows
+
+    def _rollup_from_rows(self, source: str, keep: int) -> list[dict]:
+        """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
+        rows = self._newest_first(self.station_sessions(source))
+        spent = self.usage_by_session([r["session"] for r in rows])
+        coord = self.coordination_calls(source, [r["session"] for r in rows])
+        by: dict[tuple, list[dict]] = {}
+        for r in rows:   # newest first
+            by.setdefault((r["crew_id"], r["station"]), []).append(r)
+        out = []
+        for (cid, name), ss in by.items():
+            mine = [spent[r["session"]] for r in ss if r["session"] in spent]
+            out.append({"crew_id": cid, "station": name, "cur": ss[0], "earlier": ss[1:keep + 1],
+                        "earlier_count": len(ss) - 1,
+                        "projects": sorted({r["project"] for r in ss if r["project"]}),
+                        "usage": {k: sum(x[k] for x in mine) for k in mine[0]} if mine else None,
+                        "coordination_calls": sum(coord.get(r["session"], 0) for r in ss)})
+        return out
+
+    def station_earlier(self, source: str, crew_id: str | None, station: str, limit: int = 50,
+                        before=None) -> dict | None:
+        """The sessions that played one station before its current one, newest first, `limit` at
+        a time (TR-1500): {"earlier_count", "projects" (every project the station worked in),
+        "sessions" (rows as station_sessions gives them), "next_before"}. `before` (a datetime)
+        keeps those last active before it; `next_before` is the last one's time to pass as
+        `before` for the next page, None on the last. A page never splits sessions that share one
+        time. None when no such station has reported."""
+        ss, sx = session_stations, sessions_table
+        j, named, last = self._station_join(source)
+        mine = and_(ss.c.station == station,
+                    ss.c.crew_id.is_(None) if crew_id is None else ss.c.crew_id == crew_id)
+        cols = (ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
+                session_states.c.state, session_states.c.reason, session_states.c.state_at,
+                named, ss.c.crew_id, sx.c.started_at, sx.c.last_line_at, sx.c.line_count)
+        order = (last.desc().nulls_last(), ss.c.session.desc())
+        if not session_ingest.caught_up(self):
+            rows = [r for r in self._newest_first(self.station_sessions(source))
+                    if r["station"] == station and r["crew_id"] == crew_id]
+            if not rows:
+                return None
+            cur, rows = rows[0], rows[1:]
+            total = len(rows)
+            projects = sorted({r["project"] for r in [cur, *rows] if r["project"]})
+            if before is not None:
+                rows = [r for r in rows if r["last_at"] is not None and r["last_at"] < before]
+            page = rows[:limit]
+            while len(rows) > len(page) and rows[len(page)]["last_at"] == page[-1]["last_at"]:
+                page.append(rows[len(page)])
+            return {"earlier_count": total, "projects": projects,
+                    "sessions": page,
+                    "next_before": page[-1]["last_at"] if len(rows) > len(page) else None}
+        with self.sessions_db.begin() as conn:
+            n = conn.execute(select(func.count()).select_from(ss).where(mine)).scalar_one()
+            if not n:
+                return None
+            cur = conn.execute(select(ss.c.session).select_from(j).where(mine)
+                               .order_by(*order).limit(1)).scalar_one()
+            projects = sorted(p for p in conn.execute(
+                select(func.coalesce(ss.c.project, named)).where(mine).distinct()).scalars() if p)
+            q = select(*cols).select_from(j).where(mine, ss.c.session != cur)
+            if before is not None:
+                q = q.where(last < before)
+            rows = [self._joined_row(r) for r in conn.execute(q.order_by(*order).limit(limit + 1))]
+            page, more = rows[:limit], len(rows) > limit
+            if more and rows[limit]["last_at"] == page[-1]["last_at"]:
+                # sessions that share the last one's time all belong to this page
+                tied = conn.execute(q.where(last == page[-1]["last_at"])
+                                    .order_by(*order)).all()
+                page = [r for r in page if r["last_at"] != page[-1]["last_at"]] + [
+                    self._joined_row(r) for r in tied]
+        return {"earlier_count": n - 1, "projects": projects, "sessions": page,
+                "next_before": page[-1]["last_at"] if more else None}
 
     # ── the ledger's history (TR-427) ─────────────────────────────────────────
     def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,
@@ -1189,91 +1391,65 @@ class FactoryStore:
         out = {}
         for i in range(0, len(sessions), 500):
             chunk = sessions[i:i + 500]
-            with self._sread:
-                out.update(self.sc.execute(
-                    "SELECT session, station FROM session_stations "
-                    f"WHERE session IN ({', '.join('?' * len(chunk))})", chunk).fetchall())
+            with self.sessions_db.begin() as conn:
+                out.update((r[0], r[1]) for r in conn.execute(select(
+                    session_stations.c.session, session_stations.c.station).where(
+                    session_stations.c.session.in_(chunk))))
         return out
 
     def protocol_messages(self, source: str, limit: int = 3000) -> list[dict]:
         """The crew's recorded protocol messages (TR-429): SendMessage calls whose text starts
         `[TF:<TYPE>]`, oldest first, with the sending station (from its session) and the one it
-        was sent to."""
-        # parsed once per new tool call on the source: a cheap count says whether anything came
-        with self._lock:
-            n = self.con.execute("SELECT count(*) FROM events WHERE source = ? AND "
-                                 "event_type = 'tool_use'", [source]).fetchone()[0]
-        hit = getattr(self, "_proto_cache", None)
-        if hit and hit[0] == (source, n):
-            return hit[1]
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT e.key_value, e.event_time, e.payload FROM events e "
-                "WHERE e.source = ? AND e.event_type = 'tool_use' "
-                "AND e.text LIKE '%SendMessage%' "
-                "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
-                "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
+        was sent to. Read from `session_messages`, where each call was written once as its line was
+        stored (session_ingest, TR-1477); the sender is looked up now, so a station renamed later
+        shows under its new name."""
+        t = session_messages.c
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(select(t.session, t.at, t.to_station, t.type, t.text).where(
+                t.source == source).order_by(t.at.desc(), t.tool_use_id.desc()).limit(limit)
+            ).fetchall()
         stations = self._station_of({r[0] for r in rows})
-        out, seen = [], set()
-        for sid, at, pj in reversed(rows):
-            station = stations.get(sid)
-            try:
-                o = json.loads(pj) if pj else {}
-            except (TypeError, ValueError):
-                continue
-            if str(o.get("type") or "").startswith("api-request"):
-                continue   # Claude Code's copy of a request, recorded by an older plugin
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if not (isinstance(b, dict) and b.get("type") == "tool_use"
-                        and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
-                    continue
-                # one call, once: the same transcript line can be stored more than once
-                # (a resumed session's file copies the old lines under its own session id)
-                if b.get("id"):
-                    if b["id"] in seen:
-                        continue
-                    seen.add(b["id"])
-                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                text = str(inp.get("message") or inp.get("content") or "")
-                m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text)
-                if not m:
-                    continue
-                out.append({"at": at, "session": sid, "from": station or "", "to":
-                            str(inp.get("to") or ""), "type": m.group(1),
-                            "first_line": m.group(2).splitlines()[0][:300] if m.group(2) else "",
-                            "text": text[:4000]})
-        self._proto_cache = ((source, n), out)
+        out = []
+        for sid, at, to, typ, text in reversed(rows):
+            m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text or "")
+            out.append({"at": at, "session": sid, "from": stations.get(sid) or "", "to": to or "",
+                        "type": typ, "text": text or "",
+                        "first_line": m.group(2).splitlines()[0][:300] if m and m.group(2) else ""})
         return out
 
     def coordination_calls(self, source: str, sessions: list[str]) -> dict[str, int]:
-        """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination).
-        A session is parsed again only when it has new tool calls, whichever sessions are asked for."""
+        """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination),
+        read from the sessions table, where each line was counted as it was stored (session_ingest),
+        once the table has caught up (TR-1520); before, from a scan of events. Sessions with none
+        are left out."""
+        if not session_ingest.caught_up(self):
+            return self._coordination_calls_scan(source, sessions)
+        t = sessions_table
+        out: dict[str, int] = {}
+        for i in range(0, len(sessions), 500):
+            chunk = sessions[i:i + 500]
+            if not chunk:
+                continue
+            q = select(t.c.session, t.c.coordination_calls).where(
+                t.c.source == source, t.c.session.in_(chunk), t.c.coordination_calls > 0)
+            with self.sessions_db.begin() as conn:
+                out.update((sid, int(n)) for sid, n in conn.execute(q))
+        return out
+
+    def _coordination_calls_scan(self, source: str, sessions: list[str]) -> dict[str, int]:
+        """`coordination_calls` from the events table: what a cell not yet caught up has to use, a
+        parse of each asked session's calls on every read (nothing is kept between reads)."""
         from .factory import is_coordination
         if not sessions:
             return {}
         marks = ", ".join("?" for _ in sessions)
         with self._lock:
-            # count and newest call together: a prune that drops old calls while new ones arrive
-            # leaves the count alone but moves the newest
-            sizes = {sid: (n, newest) for sid, n, newest in self.con.execute(
-                f"SELECT key_value, count(*), max(event_time) FROM events WHERE source = ? AND "
-                f"event_type = 'tool_use' AND key_value IN ({marks}) GROUP BY key_value",
-                [source, *sessions]).fetchall()}
-            cache = self.__dict__.setdefault("_coord_cache", {})
-            for sid in sessions:
-                if sid not in sizes:   # every call of it is gone (pruned): forget its count
-                    cache.pop((source, sid), None)
-            fresh = [sid for sid in sizes if cache.get((source, sid), (None,))[0] != sizes[sid]]
-            rows = []
-            if fresh:
-                fmarks = ", ".join("?" for _ in fresh)
-                # the rendered text names each tool as "→ name(": a cheap filter before the parse
-                rows = self.con.execute(
-                    f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({fmarks}) "
-                    "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
-                    "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
-                    [source, *fresh]).fetchall()
+            # the rendered text names each tool as "→ name(": a cheap filter before the parse
+            rows = self.con.execute(
+                f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({marks}) "
+                "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
+                "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
+                [source, *sessions]).fetchall()
         found: dict[str, int] = {}
         for sid, pj in rows:
             try:
@@ -1284,10 +1460,7 @@ class FactoryStore:
             for b in msg.get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")):
                     found[sid] = found.get(sid, 0) + 1
-        for sid in fresh:
-            cache[(source, sid)] = (sizes[sid], found.get(sid, 0))
-        out = {sid: cache[(source, sid)][1] for sid in sessions if (source, sid) in cache}
-        return {sid: n for sid, n in out.items() if n}
+        return found
 
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
@@ -1481,25 +1654,59 @@ class FactoryStore:
         """The Codex challenger's reviews and waivers on a ticket's branch (factory/<ref>...) in
         the project `project` (its id), oldest first. A line stamped with the project's name (any
         case) or id counts; an unstamped one only from a session tied to the project."""
+        return self.challenge_events_many(source, [(project, ref)])[(project, ref)]
+
+    def challenge_events_many(self, source: str, tickets: list[tuple[str, str]]
+                              ) -> dict[tuple[str, str], list[dict]]:
+        """{(project id, ref): challenge_events} for every pair asked, from one read of the
+        challenger's lines (and one each for the projects' names and sessions, when a line
+        matched), however many tickets are asked. Each list is as challenge_events gives it."""
+        pairs = list(dict.fromkeys(tickets))
+        out: dict[tuple[str, str], list[dict]] = {p: [] for p in pairs}
+        refs = sorted({ref for _, ref in pairs})
+        rows = []
         with self._sread:
-            name = (self.sc.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
-                    or [project])[0]
-            rows = self.sc.execute(
-                "SELECT event_time, event_type, payload, key_value FROM challenges "
-                "WHERE source = ? AND (branch = ? OR branch LIKE ?) "
-                "AND (lower(tares_project) IN (lower(?), lower(?)) "
-                "     OR (tares_project IS NULL AND key_value IN "
-                "         (SELECT session FROM project_sessions WHERE project = ?))) "
-                "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
-                                        name, project, project]).fetchall()
-        out = []
-        for at, typ, pj, sid in rows:
-            try:
-                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-            except ValueError:
-                o = {}
-            ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
-            out.append({"at": at, "type": typ, "session": sid, "challenge": ch})
+            for i in range(0, len(refs), 150):
+                chunk = refs[i:i + 150]
+                where = " OR ".join("branch = ? OR branch LIKE ?" for _ in chunk)
+                args = [x for ref in chunk for x in (f"factory/{ref}", f"factory/{ref}-%")]
+                rows += self.sc.execute(
+                    "SELECT event_time, event_type, payload, key_value, branch, tares_project "
+                    f"FROM challenges WHERE source = ? AND ({where}) ORDER BY event_time",
+                    [source, *args]).fetchall()
+            if not rows:
+                return out
+            # a line can match refs in two chunks: keep it once, oldest first as before
+            rows = list({(r[0], r[1], r[3], r[4], r[5]): r for r in rows}.values())
+            rows.sort(key=lambda r: r[0])
+            projects = sorted({p for p, _ in pairs})
+            marks = ", ".join("?" for _ in projects)
+            names = dict(self.sc.execute(
+                f"SELECT id, name FROM usecases WHERE id IN ({marks})", projects).fetchall())
+        sessions: dict[str, set] = {}
+        with self.sessions_db.begin() as conn:
+            for project, session in conn.execute(select(
+                    project_sessions.c.project, project_sessions.c.session).where(
+                    project_sessions.c.project.in_(projects))):
+                sessions.setdefault(project, set()).add(session)
+        by_ref: dict[str, list] = {}
+        for ref in refs:
+            by_ref[ref] = [r for r in rows if r[4] == f"factory/{ref}"
+                           or (r[4] or "").startswith(f"factory/{ref}-")]
+        for project, ref in pairs:
+            stamps = {str(project).lower(), str(names.get(project, project)).lower()}
+            for at, typ, pj, sid, _branch, stamped in by_ref[ref]:
+                if stamped is not None:
+                    if str(stamped).lower() not in stamps:
+                        continue
+                elif sid not in sessions.get(project, ()):
+                    continue
+                try:
+                    o = json.loads(pj) if isinstance(pj, str) else (pj or {})
+                except ValueError:
+                    o = {}
+                ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
+                out[(project, ref)].append({"at": at, "type": typ, "session": sid, "challenge": ch})
         return out
 
     def _record_challenges(self, rows: list[tuple]) -> None:
@@ -1526,52 +1733,23 @@ class FactoryStore:
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
         printed and whether it failed, oldest first: what a builder's claimed checks are
-        compared with."""
+        compared with. Read from `session_commands`, where each call was written as its line was
+        stored and its result added when that arrived (session_ingest, TR-1477). A command whose
+        result has not arrived shows no output and no failure."""
         if not sessions:
             return []
-        marks = ", ".join("?" for _ in sessions)
-        with self._lock:
-            # the Bash calls first (their rendered text names the tool), then the results that
-            # came after the oldest of them: other tools' rows never push a Bash run out
-            uses = self.con.execute(
-                f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-                f"AND key_value IN ({marks}) AND event_type = 'tool_use' "
-                "AND text LIKE '%Bash(%' ORDER BY event_time DESC LIMIT ?",
-                [source, *sessions, limit // 2]).fetchall()
-            oldest = min((u[0] for u in uses), default=None)
-            results = self.con.execute(
-                f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-                f"AND key_value IN ({marks}) AND event_type = 'tool_result' AND event_time >= ? "
-                "ORDER BY event_time DESC LIMIT ?",
-                [source, *sessions, oldest, limit * 2]).fetchall() if uses else []
-            rows = uses + results
-        uses: dict[str, dict] = {}
-        results: dict[str, dict] = {}
-        for at, typ, pj, sid in sorted(rows, key=lambda r: r[0]):
-            try:
-                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-            except ValueError:
-                continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "tool_use" and b.get("name") == "Bash":
-                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                    uses[str(b.get("id"))] = {"at": at, "session": sid,
-                                              "command": str(inp.get("command") or "")}
-                elif b.get("type") == "tool_result":
-                    c = b.get("content")
-                    if isinstance(c, list):
-                        c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
-                    # the tail: a test run's summary line is at the end
-                    results[str(b.get("tool_use_id"))] = {"output": str(c or "")[-20000:],
-                                                          "is_error": bool(b.get("is_error"))}
-        out = []
-        for tid, u in uses.items():
-            r = results.get(tid) or {"output": "", "is_error": False}
-            out.append({**u, **r})
-        return sorted(out, key=lambda x: x["at"])
+        t = session_commands.c
+        rows = []
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.begin() as conn:
+                rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code)
+                                     .where(t.source == source, t.session.in_(sessions[i:i + 500]),
+                                            t.command.is_not(None), t.at.is_not(None))
+                                     .order_by(t.at.desc(), t.tool_use_id.desc())
+                                     .limit(limit // 2)).fetchall()
+        rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
+        return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
+                 "is_error": bool(code)} for at, sid, command, tail, code in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
@@ -1669,10 +1847,10 @@ class FactoryStore:
 
     def station_session_ids(self, station: str) -> list[str]:
         """The sessions that played `station` or a helper it started."""
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT session FROM session_stations WHERE station = ? OR parent = ?",
-                [station, station]).fetchall()]
+        t = session_stations
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(t.c.session).where(
+                (t.c.station == station) | (t.c.parent == station)))]
 
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
     _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
@@ -1904,34 +2082,26 @@ class FactoryStore:
         `sessions` (every session when None) since `since`, newest first (TR-450). With `person`,
         only turns whose recording carries that `tares_person` (TR-620), in any session; the
         person `local` also owns the recordings that carry none (the system credential's)
-        (TR-634)."""
-        q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
-             "event_type = 'user' AND event_time >= ? AND "
-             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
-        # Claude Code also writes other sessions' messages, scheduled prompts, task notifications
-        # and compaction summaries as user lines; none of them is the person typing (TR-634)
-        q += (" AND coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'"
-              " AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
-              " AND coalesce(json_extract_string(payload, '$.isCompactSummary'), 'false') <> 'true'"
-              " AND coalesce(json_extract_string(payload, '$.origin.kind'), 'human') = 'human'")
-        vals: list = [source, since]
+        (TR-634). Read from `session_turns`, where each turn was written once as its line was
+        stored (session_ingest, TR-1505)."""
+        t = session_turns.c
+        q = select(t.session, t.at, t.text).where(t.source == source, t.at >= since)
         if person:
-            who = "json_extract_string(labels, '$.tares_person')"
-            q += f" AND ({who} = ?" + (f" OR {who} IS NULL" if person == "local" else "") + ")"
-            vals.append(person)
+            q = q.where(or_(t.person == person, t.person.is_(None)) if person == "local"
+                        else t.person == person)
         if sessions is not None:
             if not sessions:
                 return []
-            q += f" AND key_value IN ({', '.join('?' for _ in sessions)})"
-            vals += sessions
-        with self._lock:
-            rows = self.con.execute(q + " ORDER BY event_time DESC LIMIT 2000", vals).fetchall()
+            q = q.where(t.session.in_(list(sessions)))
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q.order_by(t.at.desc(), t.session.desc(), t.line_key.desc())
+                                .limit(2000)).fetchall()
         return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
 
     def role_sessions(self, role: str) -> list[str]:
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT session FROM session_stations WHERE role = ?", [role]).fetchall()]
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(session_stations.c.session).where(
+                session_stations.c.role == role))]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repos: list[dict], autonomy: str | None,
@@ -1982,13 +2152,23 @@ class FactoryStore:
     def list_handover_overrides(self, project: str) -> list[dict]:
         """Every hand-over the lead pushed through without all sign-offs, oldest first:
         {at, reason, person, by_label}."""
+        return self._handover_overrides([project]).get(project, [])
+
+    def _handover_overrides(self, projects: list[str]) -> dict[str, list[dict]]:
+        """{project: its overrides, oldest first} for `projects`, in one query."""
+        if not projects:
+            return {}
         with self._sread:
             rows = self.sc.execute(
-                "SELECT \"at\", reason, person_id, handed_by FROM handover_overrides WHERE project = ? "
-                "ORDER BY \"at\", handed_by, person_id, reason", [project]).fetchall()
-        refs = self._person_refs(r[2] for r in rows)
-        return [{"at": r[0], "reason": r[1], "person": refs.get(r[2]),
-                 "by_label": by_label(refs.get(r[2]), r[3])} for r in rows]
+                "SELECT project, \"at\", reason, person_id, handed_by FROM handover_overrides "
+                f"WHERE project IN ({', '.join('?' for _ in projects)}) "
+                "ORDER BY \"at\", handed_by, person_id, reason", list(projects)).fetchall()
+        refs = self._person_refs(r[3] for r in rows)
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r[0], []).append({"at": r[1], "reason": r[2], "person": refs.get(r[3]),
+                                             "by_label": by_label(refs.get(r[3]), r[4])})
+        return out
 
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
@@ -2032,35 +2212,57 @@ class FactoryStore:
             self.sc.execute("UPDATE handovers SET released_at = ? WHERE project = ?",
                              [at, project])
 
+    _HANDOVER_COLS = ("project, repo, handed_by, handed_at, repos, autonomy, "
+                      "finished_at, finished_words, finished_decision, finished_by, "
+                      "taken_at, taken_words, taken_by, released_at, person_id, "
+                      "finished_person_id, taken_person_id, crew, override_reason, "
+                      "override_at, override_person_id")
+
     def get_handover(self, project: str) -> dict | None:
+        return self.handovers_by_project([project]).get(project)
+
+    def handovers_by_project(self, projects: list[str] | None = None) -> dict[str, dict]:
+        """{project id: hand-over, as get_handover gives it} for the projects handed over, among
+        `projects` (all of them for None), in one query plus one for the people and one for the
+        overrides, however many there are. A project never handed over is not in the answer."""
+        ids = None if projects is None else sorted({p for p in projects if p})
+        if ids is not None and not ids:
+            return {}
+        q = f"SELECT {self._HANDOVER_COLS} FROM handovers"
+        if ids is not None:
+            q += f" WHERE project IN ({', '.join('?' for _ in ids)})"
         with self._sread:
-            r = self.sc.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
-                                 "finished_at, finished_words, finished_decision, finished_by, "
-                                 "taken_at, taken_words, taken_by, released_at, person_id, "
-                                 "finished_person_id, taken_person_id, crew, override_reason, "
-                                 "override_at, override_person_id FROM handovers WHERE project = ?", [project]).fetchone()
-        if not r:
-            return None
-        repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
-        refs = self._person_refs([r[13], r[14], r[15], r[19]])
-        # who pushed the override through: the hand-over that gave it, not a later one; rows from
-        # before override_person_id fall back to the handing person
-        op, oby = (r[19], None) if r[19] else (r[13], r[1])
-        out = {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
-               "person": refs.get(r[13]), "by_label": by_label(refs.get(r[13]), r[1]),
-               "handed_by_person": refs.get(r[13]), "crew": r[16],
-               "override": ({"reason": r[17], "at": r[18], "person": refs.get(op),
-                             "by_label": by_label(refs.get(op), oby)} if r[17] else None),
-               # true only when the latest hand-over itself carried the override: a later clean
-               # one leaves `override` (the latest ever) in place but is not overridden
-               "overridden": bool(r[17] and r[18] is not None and r[18] == r[2]),
-               "overrides": self.list_handover_overrides(project) if r[17] else [],
-               "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8],
-                             "person": refs.get(r[14]), "by_label": by_label(refs.get(r[14]), r[8])}
-                            if r[5] else None),
-               "takeover": ({"at": r[9], "words": r[10], "by": r[11], "released_at": r[12],
-                             "person": refs.get(r[15]), "by_label": by_label(refs.get(r[15]), r[11])}
-                            if r[9] else None)}
+            rows = self.sc.execute(q, ids or []).fetchall()
+        if not rows:
+            return {}
+        refs = self._person_refs(x for r in rows for x in (r[14], r[15], r[16], r[20]))
+        overridden = [r[0] for r in rows if r[18]]
+        overrides = self._handover_overrides(overridden)
+        out = {}
+        for r in rows:
+            (project, repo, handed_by, handed_at, repos_json, autonomy, fin_at, fin_words, fin_decision,
+             fin_by, taken_at, taken_words, taken_by, released_at, person_id, fin_person, taken_person,
+             crew, o_reason, o_at, o_person) = r
+            repos = json.loads(repos_json) if repos_json else ([{"path": repo, "name": None}] if repo else [])
+            # who pushed the override through: the hand-over that gave it, not a later one; rows
+            # from before override_person_id fall back to the handing person
+            op, oby = (o_person, None) if o_person else (person_id, handed_by)
+            out[project] = {
+                "repo": repo, "repos": repos, "autonomy": autonomy, "by": handed_by, "at": handed_at,
+                "person": refs.get(person_id), "by_label": by_label(refs.get(person_id), handed_by),
+                "handed_by_person": refs.get(person_id), "crew": crew,
+                "override": ({"reason": o_reason, "at": o_at, "person": refs.get(op),
+                              "by_label": by_label(refs.get(op), oby)} if o_reason else None),
+                # true only when the latest hand-over itself carried the override: a later clean
+                # one leaves `override` (the latest ever) in place but is not overridden
+                "overridden": bool(o_reason and o_at is not None and o_at == handed_at),
+                "overrides": overrides.get(project, []) if o_reason else [],
+                "finished": ({"at": fin_at, "words": fin_words, "decision": fin_decision, "by": fin_by,
+                              "person": refs.get(fin_person), "by_label": by_label(refs.get(fin_person), fin_by)}
+                             if fin_at else None),
+                "takeover": ({"at": taken_at, "words": taken_words, "by": taken_by, "released_at": released_at,
+                              "person": refs.get(taken_person), "by_label": by_label(refs.get(taken_person), taken_by)}
+                             if taken_at else None)}
         return out
 
     # ── questions to an area owner (TR-636) ───────────────────────────────────
@@ -3124,6 +3326,18 @@ class FactoryStore:
                                 "project_integrations WHERE project_uid = ? AND slot = ?",
                                 [uid, slot]).fetchone()
         return self._integration_view(slot, r[0], r[1], r[2], r[3], project_uid=uid) if r else None
+
+    def projects_with_choice(self, slot: str, uids: list[str]) -> set[str]:
+        """The projects among `uids` that hold their own choice for the slot, in one query."""
+        self._integration_slot(slot, PROJECT_SLOTS)
+        ids = sorted({u for u in uids if u})
+        if not ids:
+            return set()
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT project_uid FROM project_integrations WHERE slot = ? AND project_uid IN "
+                f"({', '.join('?' for _ in ids)})", [slot, *ids]).fetchall()
+        return {r[0] for r in rows}
 
     @classmethod
     def project_field_refusal(cls, slot: str, name: str, key: str) -> str | None:

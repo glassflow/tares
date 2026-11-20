@@ -12,9 +12,9 @@ route. Settings for pace and grants live on the Settings page, not here.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from .. import claude_usage
 from .. import factory as factory_mod
@@ -121,8 +121,8 @@ def register(app, store, h, ctx):
         stations = fx_.stations()
         settings = fx_.settings()
         hidden = h.hidden_ids()
-        projects = {p["id"]: p for p in store.list_projects()
-                    if p.get("kind") == "software_factory" and p["id"] not in hidden}
+        projects = {p["id"]: p for p in store.list_projects(kind="software_factory",
+                                                            exclude_ids=hidden)}
         names = {pid: p["name"] for pid, p in projects.items()}
         open_ids = [pid for pid, p in projects.items() if p["status"] != "done"]
         tickets = store.tickets_by_project(open_ids) if open_ids else {}
@@ -236,7 +236,7 @@ def register(app, store, h, ctx):
         plan["by_project"] = by_project(names, now)
         # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
         # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
-        hidden_names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
+        hidden_names = [p["name"] for p in store.list_projects(ids=hidden)]
         all_names = {p["id"]: p["name"] for p in store.list_projects()}
         proposals = []
         for r in store.list_rule_proposals("open"):
@@ -271,3 +271,45 @@ def register(app, store, h, ctx):
         member's `crew` is its crew's id, for the detail call. The top-level summary, talk_to,
         reviewer, releaser and builders are the first crew's."""
         return build(request)
+
+    @app.get("/api/factory/crew/{crew_id}/{station}/sessions")
+    def get_station_sessions(request: Request, crew_id: str, station: str, limit: int = 50,
+                             before: str = ""):
+        """The sessions that played one station before its current one (TR-1500), newest first, for
+        the page that opens a member's earlier sessions. `crew_id` is the member's `crew` (a crew's
+        id; `-` for a station with no crew) and `station` its name. `limit` is 1 to 200 (default
+        50); `before` is a time from a page's `next_before`, to read the page after it. The
+        response is
+        {station, crew_id, earlier_count, projects, sessions, next_before}: `earlier_count` is
+        every earlier session the station has, `projects` the ids of the projects the caller may see
+        it worked in (every session of the station, this page or not), `sessions` this page, each {session, started_at, last_at, lines, state
+        ("replaced"), projects}, and `next_before` the time to pass as `before` for the next page,
+        null on the last. A page never splits sessions that share one time, so it can hold more
+        than `limit`. The station's current session is not listed; it is on the row GET
+        /api/factory/crew gives. A project the caller cannot see is left out of `projects` and
+        `sessions[].projects`; a station that only worked in such projects, or does not exist,
+        answers 404. Same auth as GET /api/factory/crew."""
+        if not 1 <= limit <= 200:
+            h.err(ValueError("limit is 1 to 200"))
+        at = None
+        if before:
+            try:
+                at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+            except ValueError:
+                h.err(ValueError("before is a time from a page's next_before"))
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+        hidden = h.hidden_ids()
+        res = store.station_earlier(h.cc_source(), None if crew_id == "-" else crew_id, station,
+                                    limit, at)
+        if res is None or (res["projects"] and set(res["projects"]) <= hidden):
+            raise HTTPException(404, "no such station")
+        by = store.projects_by_session([s["session"] for s in res["sessions"]])
+        return {"station": station, "crew_id": None if crew_id == "-" else crew_id,
+                "earlier_count": res["earlier_count"],
+                "projects": [u for u in res["projects"] if u not in hidden],
+                "sessions": [{"session": s["session"], "started_at": s["started_at"],
+                              "last_at": s["last_at"], "lines": s["lines"], "state": "replaced",
+                              "projects": [u for u in by.get(s["session"], []) if u not in hidden]}
+                             for s in res["sessions"]],
+                "next_before": res["next_before"]}

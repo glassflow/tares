@@ -290,9 +290,7 @@ def register(app, store, h, ctx):
         if slot not in PROJECT_SLOTS:
             return picks, follow
         hidden = h.hidden_ids()
-        for p in safe(store.list_projects, []) or []:
-            if p["id"] in hidden:
-                continue
+        for p in safe(lambda: store.list_projects(exclude_ids=hidden), []) or []:
             row = safe(lambda: store.get_project_choice(p["id"], slot), None)
             if row:
                 picks.setdefault(row["name"], []).append({"uid": p["id"], "name": p.get("name") or p["id"]})
@@ -732,7 +730,7 @@ def register(app, store, h, ctx):
         """How far the factory is set up: the count the console's Setup menu entry shows, and how many
         factory projects the cell has (the console opens on Setup while it has none and setup is not done)."""
         guard(request)
-        projects = sum(1 for p in store.list_projects() if p.get("kind") == "software_factory")
+        projects = len(store.list_projects(kind="software_factory"))
         return {**progress_of(all_steps(), around(request)), "projects": projects}
 
     @app.get("/api/factory/setup")

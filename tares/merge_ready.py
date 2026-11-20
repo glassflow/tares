@@ -16,13 +16,20 @@ The pull request must belong to a ticket (its ticket names the project, so which
 apply). Nothing here raises: an empty or bad reference, no ticket, a failed GitHub read, a
 review gate or CI source that cannot be reached, a bad `required` list, all come back as
 `ready` False with a reason. Nothing merges here; the merge queue (merge_queue.py) does that.
+
+The time of each part (`pr_read`, `review`, `ci`, `pr_files`, `guardrails`) is reported on
+`tares_route_phase_seconds` (TR-1476), so a slow answer shows which part it waited for.
 """
 from __future__ import annotations
 
 from . import factory as factory_mod
 from . import factory_github
+from . import metrics
 from .integrations import hooks, registry, resolve
 from .integrations.types import PRRef
+
+
+ROUTE = "merge_ready"      # the label its phases carry on tares_route_phase_seconds (TR-1476)
 
 
 def _answer(ready: bool, reasons: list[str], **more) -> dict:
@@ -55,7 +62,8 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
         return no_ticket(repo, number)
     uid = t["project"]
     base = {"ticket": factory_mod.label(t), "project": uid}
-    pr = await factory_github.read_pr(store, repo, number, prev=t.get("pr"))
+    with metrics.phase(ROUTE, "pr_read"):
+        pr = await factory_github.read_pr(store, repo, number, prev=t.get("pr"))
     head = str(pr.get("head") or "").strip()
     brief = {"repo": repo, "number": number, "url": pr.get("url") or "",
              "state": pr.get("state"), "draft": bool(pr.get("draft")),
@@ -87,7 +95,8 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
         eff = resolve.effective("review", uid, store=store)
         review["integration"] = eff.integration
         cls = registry.get("review", eff.integration)
-        v = await cls(store).verdict(ref)
+        with metrics.phase(ROUTE, "review"):
+            v = await cls(store).verdict(ref)
         review.update({"state": v.state, "by": v.by, "summary": v.summary,
                        "findings": list(v.findings), "url": v.url})
         if v.state == "approved" and v.head and head and not factory_mod.same_commit(v.head, head):
@@ -116,7 +125,8 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
         ci["integration"] = eff.integration
         cls = registry.get("ci", eff.integration)
         inst = cls(store, source=source) if eff.integration == "local" else cls(store)
-        c = await inst.state(ref, [])
+        with metrics.phase(ROUTE, "ci"):
+            c = await inst.state(ref, [])
         ci.update({"state": c.state, "failing": list(c.failing), "summary": c.summary, "url": c.url})
         if c.state == "failure":
             names = ", ".join(c.failing)
@@ -134,14 +144,16 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
     # ── guardrails ──
     rails: list[dict] = []
     try:
-        files = await factory_github.pr_files(store, repo, number)
-        decisions = await hooks.run("pre_merge", uid, {
-            "repo": repo, "pr": number, "number": number, "head": head, "base": ref.base,
-            "files": [{"path": f.get("filename") or "", "additions": int(f.get("additions") or 0),
-                       "deletions": int(f.get("deletions") or 0)} for f in files or []],
-            "ticket": base["ticket"], "url": ref.url,
-            "review": {"state": review["state"], "by": review["by"]},
-            "ci": {"state": ci["state"], "failing": list(ci["failing"])}}, ticket=t["id"])
+        with metrics.phase(ROUTE, "pr_files"):
+            files = await factory_github.pr_files(store, repo, number)
+        with metrics.phase(ROUTE, "guardrails"):
+            decisions = await hooks.run("pre_merge", uid, {
+                "repo": repo, "pr": number, "number": number, "head": head, "base": ref.base,
+                "files": [{"path": f.get("filename") or "", "additions": int(f.get("additions") or 0),
+                           "deletions": int(f.get("deletions") or 0)} for f in files or []],
+                "ticket": base["ticket"], "url": ref.url,
+                "review": {"state": review["state"], "by": review["by"]},
+                "ci": {"state": ci["state"], "failing": list(ci["failing"])}}, ticket=t["id"])
         for d in decisions or []:
             rails.append({"allow": bool(d.allow), "reason": d.reason,
                           "integration": d.integration, "warn_only": bool(d.warn_only)})

@@ -102,6 +102,7 @@ test_duckdb_memory
 test_edition
 test_ee_headers
 test_ee_packaging
+test_factory_batch_reads
 test_factory_batching
 test_factory_build
 test_factory_builder
@@ -171,6 +172,7 @@ test_licence_api
 test_licence_cloud
 test_linear
 test_linear_write_scope
+test_list_projects_filters
 test_login
 test_login_json
 test_login_keyring
@@ -209,6 +211,7 @@ test_plugin_shims
 test_plugin_ship_once
 test_postgres
 test_pr_one_tap
+test_pr_refresh_scope
 test_pricing
 test_private_any_licence
 test_project_access_single
@@ -237,8 +240,16 @@ test_seed
 test_seed_new_cell_only
 test_services
 test_services_write
+test_session_archive
+test_session_copy_start
+test_session_facts
 test_session_flow
+test_session_lines
 test_session_project
+test_session_store
+test_session_turns
+test_sessions_caught_up
+test_sessions_table
 test_setup_flow
 test_shared_code_context
 test_skill_pages
@@ -269,6 +280,7 @@ test_sre_start
 test_sre_timeline
 test_startup_fill
 test_state_postgres
+test_station_rollup_snapshot
 test_status
 test_status_words
 test_store_methods

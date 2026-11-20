@@ -27,8 +27,7 @@ _SHOWN_CHOICES = 3
 
 def _open_projects(store) -> list[dict]:
     """The open software-factory projects; one kept for later waits for nobody until it starts."""
-    return [p for p in store.list_projects()
-            if p.get("kind") == "software_factory" and p["status"] not in ("done", "later")]
+    return store.list_projects(kind="software_factory", status_not_in=("done", "later"))
 
 
 def _for(waited: str) -> str:
@@ -166,10 +165,17 @@ def desk_question(d: dict) -> dict | None:
 DEFAULT_AUTONOMY = "L3-review"
 
 
-def effective_autonomy(store, fx, project: str, crew: str | None = None) -> str:
+def handover_of(store, project: str, handovers: dict | None = None) -> dict | None:
+    """The project's hand-over: from `handovers` ({project id: hand-over}, one read of every
+    project's) when the caller has it, else read now."""
+    return store.get_handover(project) if handovers is None else handovers.get(project)
+
+
+def effective_autonomy(store, fx, project: str, crew: str | None = None,
+                       handovers: dict | None = None) -> str:
     """The autonomy a project's pull requests are merged at: the one its hand-over set, else the
     crew's, else L3-review. `crew` is the crew's setting when the caller has read it already."""
-    own = (store.get_handover(project) or {}).get("autonomy")
+    own = (handover_of(store, project, handovers) or {}).get("autonomy")
     if crew is None and fx is not None:
         crew = (fx.settings() or {}).get("autonomy")
     return own or crew or DEFAULT_AUTONOMY
@@ -220,7 +226,7 @@ def review_turn(q: dict, level: str, queue_state: str | None = None) -> str:
     return factory_mod.turn_of(t, None, q.get("verdict"), level, queue_state)
 
 
-def review_split(store, fx, rows: list[dict] | None = None
+def review_split(store, fx, rows: list[dict] | None = None, handovers: dict | None = None
                  ) -> tuple[list[dict], list[dict], list[dict]]:
     """THE rule for who has each pull request in review (assumption A10, TR-1009): the queue rows
     (`fx.queue()`) split into (waits for the person, with the crew, nobody is on it), each row
@@ -233,12 +239,15 @@ def review_split(store, fx, rows: list[dict] | None = None
     project (handed over, not finished, not taken back) and a named role has the next step
     (`_crew_has`). Everything else is nobody's, with the reason (`NOBODY`). The Home page and
     the Reviews page both read this and pr_owners and nowhere else, so their lists are always the
-    same. `fx` gives the queue."""
+    same. `fx` gives the queue; `handovers` is a read of every hand-over the caller has already."""
     if fx is None:
         return [], [], []
     from .merge_queue import autonomy_of   # merge_queue imports this module
     rows = fx.queue() if rows is None else rows
     projects = {p["id"]: p for p in store.list_projects()}
+    if handovers is None:
+        handovers = store.handovers_by_project({q["project"] for q in rows})
+    memo: dict = {}     # the crew settings read for the levels, once each
     level: dict[str, str] = {}
     held: dict[str, str | None] = {}
     mine, theirs, nobody = [], [], []
@@ -249,8 +258,8 @@ def review_split(store, fx, rows: list[dict] | None = None
         if pid not in level:
             # the level the merge queue merges this project at (its hand-over, else the crew of
             # whoever handed it over): the same for every viewer, so Home and Reviews agree
-            level[pid] = autonomy_of(store, pid)
-            ho = store.get_handover(pid)
+            level[pid] = autonomy_of(store, pid, handovers, memo)
+            ho = handovers.get(pid)
             p = projects.get(pid) or {}
             held[pid] = ("finished" if p.get("status") == "done" or (ho or {}).get("finished")
                          else "not_handed" if not ho
@@ -286,16 +295,16 @@ def pr_owners(store, rows: list[dict], o=None) -> dict[tuple[str, str], tuple[st
     pids = sorted({q["project"] for q in rows})
     if not pids:
         return {}
-    projects = {p["id"]: p for p in store.list_projects() if p["id"] in pids}
+    projects = {p["id"]: p for p in store.list_projects(ids=pids)}
     tickets = {(pid, factory_mod.label(t)): t for pid, ts in store.tickets_by_project(pids).items() for t in ts}
     return {(q["project"], q["ticket"]): o.ticket(tickets.get((q["project"], q["ticket"])) or {},
                                                   projects.get(q["project"]))
             for q in rows}
 
 
-def waits_for_person(store, fx) -> list[dict]:
+def waits_for_person(store, fx, handovers: dict | None = None) -> list[dict]:
     """The queue rows that wait for the person to merge: the first half of review_split."""
-    return review_split(store, fx)[0]
+    return review_split(store, fx, handovers=handovers)[0]
 
 
 def holds_prs(rows: list[dict], tickets: list[dict], milestones: list[dict]) -> str | None:
@@ -347,7 +356,7 @@ def _merge_asks(store) -> tuple[dict[tuple[str, int], tuple[dict, dict]], set]:
     return out, approved
 
 
-def prs_to_review(store, fx, now) -> list[dict]:
+def prs_to_review(store, fx, now, handovers: dict | None = None) -> list[dict]:
     """Each pull request that waits for the person (waits_for_person), one item each: the
     reviewer passed it on its current commit and the project's autonomy leaves the merge to the
     person. The others wait for the reviewer, the builder or the crew. An item carries its CI
@@ -358,7 +367,7 @@ def prs_to_review(store, fx, now) -> list[dict]:
     if fx is None:
         return []
     o = owners_mod.Owners(store)
-    rows_in = waits_for_person(store, fx)
+    rows_in = waits_for_person(store, fx, handovers)
     owners = pr_owners(store, rows_in, o)
     projects = {p["id"]: p for p in store.list_projects()}
     pids = sorted({q["project"] for q in rows_in})
@@ -543,26 +552,30 @@ def desk_items(store, fx, now) -> list[dict]:
 
 # ── milestones whose tickets all merged ───────────────────────────────────────
 
-def crew_has(store, project: dict) -> bool:
+def crew_has(store, project: dict, handovers: dict | None = None) -> bool:
     """The project is with a crew that will run its checks (TR-1021): handed over, not finished
-    and not taken back."""
+    and not taken back. `handovers` is a read of every hand-over the caller has already."""
     if project.get("status") == "done":
         return False
-    ho = store.get_handover(project["id"])
+    ho = handover_of(store, project["id"], handovers)
     if not ho or ho.get("finished"):
         return False
     return not (ho.get("takeover") and not ho["takeover"].get("released_at"))
 
 
-def _milestone_states(store, projects: list[dict]) -> dict[str, list[tuple[int, dict, dict, list[dict]]]]:
-    """{project id: [(position, milestone, factory.milestone_state, its tickets)]} in three queries."""
+def _milestone_states(store, projects: list[dict], handovers: dict | None = None
+                      ) -> dict[str, list[tuple[int, dict, dict, list[dict]]]]:
+    """{project id: [(position, milestone, factory.milestone_state, its tickets)]} in three queries
+    (and the hand-overs, unless the caller gives them)."""
     ids = [p["id"] for p in projects]
+    if handovers is None:
+        handovers = store.handovers_by_project(ids)
     tickets, milestones = store.tickets_by_project(ids), store.milestones_by_project(ids)
     mids = [m["id"] for ms in milestones.values() for m in ms]
     results, accepted = store.milestone_check_results(mids), store.milestone_acceptances(mids)
     out: dict[str, list] = {}
     for p in projects:
-        has = crew_has(store, p)
+        has = crew_has(store, p, handovers)
         for i, m in enumerate(milestones.get(p["id"]) or [], 1):
             mine = [t for t in tickets.get(p["id"]) or [] if t["milestone"] == m["id"]]
             st = factory_mod.milestone_state(m, mine, results.get(m["id"]), accepted.get(m["id"]), has)
@@ -570,7 +583,7 @@ def _milestone_states(store, projects: list[dict]) -> dict[str, list[tuple[int, 
     return out
 
 
-def milestones_to_check(store, fx, now) -> list[dict]:
+def milestones_to_check(store, fx, now, handovers: dict | None = None) -> list[dict]:
     """Per open project, each milestone that needs the person (TR-1017): every ticket merged,
     not accepted, nothing failed, and a check marked for a person still open, or crew checks the
     crew never recorded (a milestone from before results were kept), which the person may accept
@@ -579,7 +592,7 @@ def milestones_to_check(store, fx, now) -> list[dict]:
     projects = [p for p in _open_projects(store)]
     if not projects:
         return []
-    states = _milestone_states(store, projects)
+    states = _milestone_states(store, projects, handovers)
     tickets = store.tickets_by_project([p["id"] for p in projects])
     o = owners_mod.Owners(store)
     out = []
@@ -625,7 +638,7 @@ def _ready_for(since, now) -> str:
     return "Ready just now" if w == "just now" else f"Ready for {w}"
 
 
-def projects_to_close(store, fx, now) -> list[dict]:
+def projects_to_close(store, fx, now, handovers: dict | None = None) -> list[dict]:
     """Open projects whose every ticket is finished and at least one merged: the console offers
     Close. Closing runs the project's own finish route, so the item ends with the project."""
     projects = _open_projects(store)
@@ -633,7 +646,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
         return []
     tickets = store.tickets_by_project([p["id"] for p in projects])
     ready = [p for p in projects if factory_mod.ready_to_close(p, tickets.get(p["id"]) or [])]
-    states = _milestone_states(store, ready) if ready else {}
+    states = _milestone_states(store, ready, handovers) if ready else {}
     o = owners_mod.Owners(store)
     out = []
     for p in ready:

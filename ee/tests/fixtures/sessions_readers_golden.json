@@ -1,0 +1,1988 @@
+{
+ "_licence": "Tares enterprise licence, see ee/LICENSE",
+ "crew": {
+  "claude_retry": {},
+  "crews": [
+   {
+    "id": null,
+    "last_seen": null,
+    "machine": "",
+    "name": null,
+    "person": null,
+    "person_id": null,
+    "stations": [
+     {
+      "children": [
+       "crew-releaser",
+       "crew-reviewer",
+       "readers0-build-m1",
+       "readers1-build-m1",
+       "readers2-build-m1",
+       "spec"
+      ],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 4,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T04:00:00+00:00",
+        "lines": 5,
+        "session": "sess-0-0",
+        "started_at": "2026-11-19T02:50:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T08:04:00+00:00",
+      "lines": 8,
+      "machine": "",
+      "name": "crew-orchestrator",
+      "parent": null,
+      "person": null,
+      "project": null,
+      "project_name": null,
+      "projects": [],
+      "quiet_minutes": 236,
+      "role": "orchestrator",
+      "session": "sess-0-1",
+      "started_at": "2026-11-19T06:45:00+00:00",
+      "state": "quiet",
+      "state_at": "2026-11-19T12:00:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 4,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T05:00:00+00:00",
+        "lines": 6,
+        "session": "sess-1-0",
+        "started_at": "2026-11-19T03:45:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T09:04:00+00:00",
+      "lines": 9,
+      "machine": "",
+      "name": "crew-reviewer",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": null,
+      "project_name": null,
+      "projects": [],
+      "quiet_minutes": 176,
+      "role": "reviewer",
+      "session": "sess-1-1",
+      "started_at": "2026-11-19T07:40:00+00:00",
+      "state": "quiet",
+      "state_at": "2026-11-19T11:59:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 4,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T06:00:00+00:00",
+        "lines": 7,
+        "session": "sess-2-0",
+        "started_at": "2026-11-19T04:40:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T10:04:00+00:00",
+      "lines": 10,
+      "machine": "",
+      "name": "crew-releaser",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": null,
+      "project_name": null,
+      "projects": [],
+      "quiet_minutes": 116,
+      "role": "releaser",
+      "session": "sess-2-1",
+      "started_at": "2026-11-19T08:35:00+00:00",
+      "state": "quiet",
+      "state_at": "2026-11-19T11:58:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 6,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T07:02:00+00:00",
+        "lines": 10,
+        "session": "sess-3-0",
+        "started_at": "2026-11-19T05:35:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T11:04:00+00:00",
+      "lines": 13,
+      "machine": "",
+      "name": "readers0-build-m1",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": "uc_readers00",
+      "project_name": "Readers project 00",
+      "projects": [
+       "uc_readers00"
+      ],
+      "quiet_minutes": 56,
+      "role": "builder",
+      "session": "sess-3-1",
+      "started_at": "2026-11-19T09:30:00+00:00",
+      "state": "quiet",
+      "state_at": "2026-11-19T11:57:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 6,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T08:02:00+00:00",
+        "lines": 11,
+        "session": "sess-4-0",
+        "started_at": "2026-11-19T06:30:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T12:04:00+00:00",
+      "lines": 14,
+      "machine": "",
+      "name": "readers1-build-m1",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": "uc_readers01",
+      "project_name": "Readers project 01",
+      "projects": [
+       "uc_readers01"
+      ],
+      "quiet_minutes": -4,
+      "role": "builder",
+      "session": "sess-4-1",
+      "started_at": "2026-11-19T10:25:00+00:00",
+      "state": "idle",
+      "state_at": "2026-11-19T11:56:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 4,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T07:00:00+00:00",
+        "lines": 0,
+        "session": "sess-5-0",
+        "started_at": "2026-11-19T07:00:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T13:04:00+00:00",
+      "lines": 15,
+      "machine": "",
+      "name": "readers2-build-m1",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": "uc_readers02",
+      "project_name": "Readers project 02",
+      "projects": [
+       "uc_readers02"
+      ],
+      "quiet_minutes": -64,
+      "role": "builder",
+      "session": "sess-5-1",
+      "started_at": "2026-11-19T11:20:00+00:00",
+      "state": "waiting",
+      "state_at": "2026-11-19T11:55:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 0,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [],
+      "earlier_count": 0,
+      "last_at": "2026-11-18T06:00:00+00:00",
+      "lines": 0,
+      "machine": "",
+      "name": "spec",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": "uc_readers00",
+      "project_name": "Readers project 00",
+      "projects": [
+       "uc_readers00"
+      ],
+      "quiet_minutes": 1800,
+      "role": "builder",
+      "session": "sess-spec",
+      "started_at": "2026-11-18T06:00:00+00:00",
+      "state": "quiet",
+      "state_at": null,
+      "state_reason": null,
+      "usage": null
+     }
+    ]
+   }
+  ],
+  "grants": "",
+  "now": "2026-11-19T12:00:00+00:00",
+  "pace": {
+   "at_limit": false,
+   "known": false,
+   "level": 0,
+   "note": "Pacing is off.",
+   "on": false,
+   "session_pct": null,
+   "state": "off",
+   "until": null,
+   "weekly_pct": null
+  },
+  "settings": {
+   "autonomy": null,
+   "builders_max": null,
+   "challenger": null,
+   "claude_update": null,
+   "docker_cleanup": null,
+   "docker_keep": null,
+   "idle_wake": true,
+   "kit": {
+    "frozen": null
+   },
+   "pace": null,
+   "prod_pattern": null,
+   "release_profile": null,
+   "releaser": null
+  },
+  "stations": [
+   {
+    "children": [
+     "crew-releaser",
+     "crew-reviewer",
+     "readers0-build-m1",
+     "readers1-build-m1",
+     "readers2-build-m1",
+     "spec"
+    ],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 4,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T04:00:00+00:00",
+      "lines": 5,
+      "session": "sess-0-0",
+      "started_at": "2026-11-19T02:50:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T08:04:00+00:00",
+    "lines": 8,
+    "machine": "",
+    "name": "crew-orchestrator",
+    "parent": null,
+    "person": null,
+    "project": null,
+    "project_name": null,
+    "projects": [],
+    "quiet_minutes": 236,
+    "role": "orchestrator",
+    "session": "sess-0-1",
+    "started_at": "2026-11-19T06:45:00+00:00",
+    "state": "quiet",
+    "state_at": "2026-11-19T12:00:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 4,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T05:00:00+00:00",
+      "lines": 6,
+      "session": "sess-1-0",
+      "started_at": "2026-11-19T03:45:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T09:04:00+00:00",
+    "lines": 9,
+    "machine": "",
+    "name": "crew-reviewer",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": null,
+    "project_name": null,
+    "projects": [],
+    "quiet_minutes": 176,
+    "role": "reviewer",
+    "session": "sess-1-1",
+    "started_at": "2026-11-19T07:40:00+00:00",
+    "state": "quiet",
+    "state_at": "2026-11-19T11:59:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 4,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T06:00:00+00:00",
+      "lines": 7,
+      "session": "sess-2-0",
+      "started_at": "2026-11-19T04:40:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T10:04:00+00:00",
+    "lines": 10,
+    "machine": "",
+    "name": "crew-releaser",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": null,
+    "project_name": null,
+    "projects": [],
+    "quiet_minutes": 116,
+    "role": "releaser",
+    "session": "sess-2-1",
+    "started_at": "2026-11-19T08:35:00+00:00",
+    "state": "quiet",
+    "state_at": "2026-11-19T11:58:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 6,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T07:02:00+00:00",
+      "lines": 10,
+      "session": "sess-3-0",
+      "started_at": "2026-11-19T05:35:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T11:04:00+00:00",
+    "lines": 13,
+    "machine": "",
+    "name": "readers0-build-m1",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": "uc_readers00",
+    "project_name": "Readers project 00",
+    "projects": [
+     "uc_readers00"
+    ],
+    "quiet_minutes": 56,
+    "role": "builder",
+    "session": "sess-3-1",
+    "started_at": "2026-11-19T09:30:00+00:00",
+    "state": "quiet",
+    "state_at": "2026-11-19T11:57:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 6,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T08:02:00+00:00",
+      "lines": 11,
+      "session": "sess-4-0",
+      "started_at": "2026-11-19T06:30:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T12:04:00+00:00",
+    "lines": 14,
+    "machine": "",
+    "name": "readers1-build-m1",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": "uc_readers01",
+    "project_name": "Readers project 01",
+    "projects": [
+     "uc_readers01"
+    ],
+    "quiet_minutes": -4,
+    "role": "builder",
+    "session": "sess-4-1",
+    "started_at": "2026-11-19T10:25:00+00:00",
+    "state": "idle",
+    "state_at": "2026-11-19T11:56:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 4,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T07:00:00+00:00",
+      "lines": 0,
+      "session": "sess-5-0",
+      "started_at": "2026-11-19T07:00:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T13:04:00+00:00",
+    "lines": 15,
+    "machine": "",
+    "name": "readers2-build-m1",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": "uc_readers02",
+    "project_name": "Readers project 02",
+    "projects": [
+     "uc_readers02"
+    ],
+    "quiet_minutes": -64,
+    "role": "builder",
+    "session": "sess-5-1",
+    "started_at": "2026-11-19T11:20:00+00:00",
+    "state": "waiting",
+    "state_at": "2026-11-19T11:55:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 0,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [],
+    "earlier_count": 0,
+    "last_at": "2026-11-18T06:00:00+00:00",
+    "lines": 0,
+    "machine": "",
+    "name": "spec",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": "uc_readers00",
+    "project_name": "Readers project 00",
+    "projects": [
+     "uc_readers00"
+    ],
+    "quiet_minutes": 1800,
+    "role": "builder",
+    "session": "sess-spec",
+    "started_at": "2026-11-18T06:00:00+00:00",
+    "state": "quiet",
+    "state_at": null,
+    "state_reason": null,
+    "usage": null
+   }
+  ]
+ },
+ "docs": {
+  "doc": null,
+  "empty": true,
+  "finished": [],
+  "projects": [],
+  "shared": [
+   {
+    "id": "agents",
+    "kind": "agents",
+    "label": "Rules",
+    "title": "Rules for every project"
+   },
+   {
+    "id": "memory",
+    "kind": "memory",
+    "label": "Memory",
+    "title": "Memory for every project"
+   }
+  ]
+ },
+ "factory_crew": {
+  "builders": [
+   {
+    "members": [
+     {
+      "crew": null,
+      "doing": "Builds the tickets of its project.",
+      "heard": "56 minutes ago",
+      "helpers": 0,
+      "memory_pct": null,
+      "memory_text": null,
+      "role_label": "Builder",
+      "state": "not heard",
+      "state_text": "Not heard from in 56 minutes",
+      "station": "readers0-build-m1"
+     },
+     {
+      "crew": null,
+      "doing": "Builds the tickets of its project.",
+      "heard": "1 day ago",
+      "helpers": 0,
+      "memory_pct": null,
+      "memory_text": null,
+      "role_label": "Builder",
+      "state": "not heard",
+      "state_text": "Not heard from in 1 day",
+      "station": "spec"
+     }
+    ],
+    "project": {
+     "icon": null,
+     "id": "uc_readers00",
+     "name": "Readers project 00"
+    }
+   },
+   {
+    "members": [
+     {
+      "crew": null,
+      "doing": "Changes asked on Ticket 2 of project 01",
+      "heard": "just now",
+      "helpers": 0,
+      "memory_pct": null,
+      "memory_text": null,
+      "role_label": "Builder",
+      "state": "idle",
+      "state_text": "Idle for 4 minutes",
+      "station": "readers1-build-m1"
+     }
+    ],
+    "project": {
+     "icon": null,
+     "id": "uc_readers01",
+     "name": "Readers project 01"
+    }
+   },
+   {
+    "members": [
+     {
+      "crew": null,
+      "doing": "Builds the tickets of its project.",
+      "heard": "just now",
+      "helpers": 0,
+      "memory_pct": null,
+      "memory_text": null,
+      "role_label": "Builder",
+      "state": "waiting for you",
+      "state_text": "Waiting for you",
+      "station": "readers2-build-m1"
+     }
+    ],
+    "project": {
+     "icon": null,
+     "id": "uc_readers02",
+     "name": "Readers project 02"
+    }
+   }
+  ],
+  "crews": [
+   {
+    "builders": [
+     {
+      "members": [
+       {
+        "crew": null,
+        "doing": "Builds the tickets of its project.",
+        "heard": "56 minutes ago",
+        "helpers": 0,
+        "memory_pct": null,
+        "memory_text": null,
+        "role_label": "Builder",
+        "state": "not heard",
+        "state_text": "Not heard from in 56 minutes",
+        "station": "readers0-build-m1"
+       },
+       {
+        "crew": null,
+        "doing": "Builds the tickets of its project.",
+        "heard": "1 day ago",
+        "helpers": 0,
+        "memory_pct": null,
+        "memory_text": null,
+        "role_label": "Builder",
+        "state": "not heard",
+        "state_text": "Not heard from in 1 day",
+        "station": "spec"
+       }
+      ],
+      "project": {
+       "icon": null,
+       "id": "uc_readers00",
+       "name": "Readers project 00"
+      }
+     },
+     {
+      "members": [
+       {
+        "crew": null,
+        "doing": "Changes asked on Ticket 2 of project 01",
+        "heard": "just now",
+        "helpers": 0,
+        "memory_pct": null,
+        "memory_text": null,
+        "role_label": "Builder",
+        "state": "idle",
+        "state_text": "Idle for 4 minutes",
+        "station": "readers1-build-m1"
+       }
+      ],
+      "project": {
+       "icon": null,
+       "id": "uc_readers01",
+       "name": "Readers project 01"
+      }
+     },
+     {
+      "members": [
+       {
+        "crew": null,
+        "doing": "Builds the tickets of its project.",
+        "heard": "just now",
+        "helpers": 0,
+        "memory_pct": null,
+        "memory_text": null,
+        "role_label": "Builder",
+        "state": "waiting for you",
+        "state_text": "Waiting for you",
+        "station": "readers2-build-m1"
+       }
+      ],
+      "project": {
+       "icon": null,
+       "id": "uc_readers02",
+       "name": "Readers project 02"
+      }
+     }
+    ],
+    "ended": false,
+    "id": null,
+    "last_heard": "just now",
+    "machine": "",
+    "machine_shown": false,
+    "mine": false,
+    "name": "",
+    "person": {
+     "id": null,
+     "name": null
+    },
+    "releaser": {
+     "crew": null,
+     "doing": "Tags, deploys and checks each release.",
+     "heard": "1 hour ago",
+     "helpers": 0,
+     "memory_pct": null,
+     "memory_text": null,
+     "role_label": "Releaser",
+     "state": "not heard",
+     "state_text": "Not heard from in 1 hour",
+     "station": "crew-releaser"
+    },
+    "reviewer": {
+     "crew": null,
+     "doing": "Reviews every pull request before you see it.",
+     "heard": "2 hours ago",
+     "helpers": 0,
+     "memory_pct": null,
+     "memory_text": null,
+     "role_label": "Reviewer",
+     "state": "not heard",
+     "state_text": "Not heard from in 2 hours",
+     "station": "crew-reviewer"
+    },
+    "summary": "Not heard from in 3 hours",
+    "talk_to": {
+     "crew": null,
+     "doing": "Hands out work and brings you what needs you.",
+     "heard": "3 hours ago",
+     "helpers": 0,
+     "memory_pct": null,
+     "memory_text": null,
+     "role_label": "Orchestrator",
+     "state": "not heard",
+     "state_text": "Not heard from in 3 hours",
+     "station": "crew-orchestrator"
+    }
+   }
+  ],
+  "how_far": {
+   "detail": "Releases wait for you.",
+   "settings_href": "/settings#crew",
+   "text": "You approve each merge."
+  },
+  "now": "2026-11-19T12:00:00+00:00",
+  "pacing": null,
+  "plan": {
+   "by_project": [],
+   "known": false,
+   "limits": [],
+   "share_text": null,
+   "title": "Claude plan"
+  },
+  "releaser": {
+   "crew": null,
+   "doing": "Tags, deploys and checks each release.",
+   "heard": "1 hour ago",
+   "helpers": 0,
+   "memory_pct": null,
+   "memory_text": null,
+   "role_label": "Releaser",
+   "state": "not heard",
+   "state_text": "Not heard from in 1 hour",
+   "station": "crew-releaser"
+  },
+  "reviewer": {
+   "crew": null,
+   "doing": "Reviews every pull request before you see it.",
+   "heard": "2 hours ago",
+   "helpers": 0,
+   "memory_pct": null,
+   "memory_text": null,
+   "role_label": "Reviewer",
+   "state": "not heard",
+   "state_text": "Not heard from in 2 hours",
+   "station": "crew-reviewer"
+  },
+  "rule_proposals": [],
+  "standup": null,
+  "summary": "Not heard from in 3 hours",
+  "talk_to": {
+   "crew": null,
+   "doing": "Hands out work and brings you what needs you.",
+   "heard": "3 hours ago",
+   "helpers": 0,
+   "memory_pct": null,
+   "memory_text": null,
+   "role_label": "Orchestrator",
+   "state": "not heard",
+   "state_text": "Not heard from in 3 hours",
+   "station": "crew-orchestrator"
+  }
+ },
+ "guardrail_rules": {
+  "defaults": [
+   {
+    "id": "default-crew-files",
+    "kind": "allow",
+    "reason": "A station keeps its reports, settings and worktrees in the crew's own folders.",
+    "role": "all",
+    "source": "default",
+    "text": "Creating and editing files under {home} (the crew's own folder), and git worktrees under the .factory/worktrees folder of {wt_repos} or under {home}/worktrees, is expected work for this crew station."
+   },
+   {
+    "id": "default-crew-tidy",
+    "kind": "allow",
+    "reason": "Tidy refuses anything outside the crew's folders, so a station can clean up after itself.",
+    "role": "all",
+    "source": "default",
+    "text": "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station."
+   },
+   {
+    "id": "default-crew-records",
+    "kind": "allow",
+    "reason": "The plan, the tickets and the desk live on Tares, and Tares limits each role on its own.",
+    "role": "all",
+    "source": "default",
+    "text": "Reading and writing this crew's records on Tares at {tares} through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role."
+   },
+   {
+    "id": "default-orchestrator-sessions",
+    "kind": "allow",
+    "reason": "The orchestrator runs the crew's stations; the person agreed to that by starting the crew.",
+    "role": "orchestrator",
+    "source": "default",
+    "text": "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in {stations_file} with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that {human} authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
+   },
+   {
+    "id": "default-builder-push",
+    "kind": "allow",
+    "reason": "A builder delivers its tickets as pull requests; Tares merges them, never the builder.",
+    "role": "builder",
+    "source": "default",
+    "text": "Pushing `factory/*` branches to {where}, and opening pull requests there, is expected work that {human} authorized."
+   },
+   {
+    "id": "default-reviewer-verdicts",
+    "kind": "allow",
+    "reason": "The reviewer's verdict is a comment and a commit status; the merge gate reads them.",
+    "role": "reviewer",
+    "source": "default",
+    "text": "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in {repos}, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that {human} authorized."
+   },
+   {
+    "id": "default-releaser-release",
+    "kind": "allow",
+    "reason": "The releaser ships what was merged, in the local cluster only.",
+    "role": "releaser",
+    "source": "default",
+    "text": "Building container images, loading them into the local kind cluster `{cluster}`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in {repos}, are expected work that {human} authorized."
+   },
+   {
+    "id": "default-production",
+    "kind": "deny",
+    "reason": "Production is the person's call, never a station's.",
+    "role": "all",
+    "source": "default",
+    "text": "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern {prod_pattern}. That needs {human} directly."
+   }
+  ],
+  "rules": []
+ },
+ "home": {
+  "areas": [],
+  "counts": {
+   "mine": 0,
+   "team": 3
+  },
+  "crew": {
+   "desk_open": 0,
+   "heard": null,
+   "heard_at": null,
+   "how_far": {
+    "autonomy": "L3-review",
+    "releases": true,
+    "text": "Up to merge"
+   },
+   "members": [],
+   "running": false,
+   "summary": "Not running",
+   "where": null
+  },
+  "crew_limit": {
+   "mine": "you approve each merge",
+   "team": "you approve each merge",
+   "text": "The team allows up to merge. Yours can be stricter, not looser."
+  },
+  "crews": [],
+  "crews_quiet": [
+   "A crew"
+  ],
+  "edition": "factory",
+  "finished_count": 0,
+  "headline": "The crew is not running. Nothing waits for you.",
+  "later_count": 0,
+  "now": "2026-11-19T12:00:00+00:00",
+  "onboarding": {
+   "choices": {
+    "autonomy": null,
+    "builders_max": null,
+    "chosen": false,
+    "defaults": {
+     "autonomy": "L3-review",
+     "builders_max": 2,
+     "releaser": false
+    },
+    "releaser": null
+   },
+   "crew": {
+    "builders": {
+     "live": 0,
+     "max": 2
+    },
+    "machine": "",
+    "orchestrator": {
+     "last_at": null,
+     "state": "none"
+    },
+    "reviewer": {
+     "last_at": null,
+     "state": "none"
+    },
+    "up": false
+   },
+   "github": {
+    "connected": false,
+    "text": ""
+   },
+   "machine": {
+    "at": null,
+    "name": "",
+    "version": ""
+   }
+  },
+  "plan": {
+   "known": false,
+   "limits": [],
+   "share_text": null,
+   "title": "Claude plan"
+  },
+  "plan_command": "tares factory spec",
+  "projects": [],
+  "start": {
+   "done": 0,
+   "hidden": false,
+   "show": true,
+   "steps": [
+    {
+     "actions": [
+      {
+       "label": "Set up your factory",
+       "to": "/setup"
+      }
+     ],
+     "done": false,
+     "gets": "How your crew works, your GitHub, and where tickets, reviews and checks live.",
+     "key": "setup",
+     "title": "Set up your factory",
+     "where": "workspace"
+    },
+    {
+     "actions": [
+      {
+       "copy": "uv tool install tares",
+       "label": "Copy the command"
+      }
+     ],
+     "command": "uv tool install tares",
+     "done": false,
+     "gets": "The command that starts and watches the crew.",
+     "key": "install",
+     "title": "Install Tares",
+     "where": "terminal"
+    },
+    {
+     "actions": [
+      {
+       "copy": "tares login",
+       "label": "Copy the command"
+      }
+     ],
+     "command": "tares login",
+     "done": false,
+     "gets": "So the crew on your machine reports here.",
+     "key": "login",
+     "title": "Sign your machine in",
+     "where": "terminal"
+    },
+    {
+     "actions": [
+      {
+       "copy": "tares factory crew up",
+       "label": "Copy the command"
+      }
+     ],
+     "command": "tares factory crew up",
+     "done": false,
+     "gets": "It reads your choices from this workspace and asks only what belongs to your machine.",
+     "key": "crew",
+     "title": "Start the crew",
+     "where": "terminal"
+    }
+   ],
+   "total": 4
+  },
+  "summary": "Nothing waits for you.",
+  "waiting_for_you": [],
+  "waiting_total": 0,
+  "you_are_waiting_on": []
+ },
+ "messages": {
+  "messages": []
+ },
+ "project": {
+  "calls": [],
+  "calls_past": [],
+  "can_close": false,
+  "can_edit_icon": true,
+  "can_later": false,
+  "counts": {
+   "canceled": 0,
+   "changes_asked": 1,
+   "closed": 0,
+   "in_progress": 1,
+   "in_review": 1,
+   "label": "0 merged of 4",
+   "merged": 0,
+   "queued": 0,
+   "stuck": 0,
+   "to_do": 1,
+   "total": 4
+  },
+  "decisions": [],
+  "docs": [],
+  "docs_total": 0,
+  "goal": "Goal of project 00",
+  "icon": null,
+  "id": "uc_readers00",
+  "later": false,
+  "linked": {
+   "tickets_in": null,
+   "url": null
+  },
+  "milestones": [
+   {
+    "accepted": false,
+    "can_accept": false,
+    "checks": [
+     {
+      "by": null,
+      "check": "open the home page",
+      "expect": "it loads",
+      "for": "crew",
+      "n": 1,
+      "note": null,
+      "result": null
+     }
+    ],
+    "checks_for": [],
+    "counts": {
+     "closed": 0,
+     "label": "0 merged of 4",
+     "merged": 0,
+     "total": 4
+    },
+    "done": false,
+    "goal": "The pages are live.",
+    "id": "ms_1",
+    "name": "M1: first pages",
+    "needs_person": false,
+    "number": "M1",
+    "tickets_href": "/projects/uc_readers00/tickets?milestone=ms_1",
+    "yours": false
+   }
+  ],
+  "moving": [
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_readers00/tickets/T3",
+    "pr": null,
+    "ref": "T3",
+    "review": null,
+    "state": "changes asked",
+    "title": "Ticket 2 of project 00",
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_readers00/tickets/T2",
+    "pr": null,
+    "ref": "T2",
+    "review": null,
+    "state": "in review",
+    "title": "Ticket 1 of project 00",
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": null,
+    "whose": "crew"
+   },
+   {
+    "blocked_by": [],
+    "href": "/projects/uc_readers00/tickets/T1",
+    "pr": null,
+    "ref": "T1",
+    "review": null,
+    "state": "in progress",
+    "title": "Ticket 0 of project 00",
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
+   }
+  ],
+  "moving_total": 3,
+  "name": "Readers project 00",
+  "next": {
+   "ticket": "T4",
+   "title": "Ticket 3 of project 00",
+   "why": "ready, nothing it depends on is open"
+  },
+  "now": "2026-11-19T12:00:00+00:00",
+  "people": {
+   "can_add": false,
+   "can_set_lead": true,
+   "lead": null,
+   "members": [],
+   "people": [
+    {
+     "id": "p_1",
+     "name": "Sam",
+     "picture": null
+    }
+   ],
+   "you": "p_1"
+  },
+  "prs_counts": {
+   "closed": 0,
+   "merged": 0,
+   "open": 0
+  },
+  "prs_recent": [],
+  "prs_total": 0,
+  "repos": [
+   "example-org/readers-00"
+  ],
+  "secrets": null,
+  "stage": "spec",
+  "stage_label": "Spec",
+  "state": "building",
+  "state_label": "Building",
+  "terminal": [
+   {
+    "command": "tares factory crew attach readers0-build-m1",
+    "label": "Open the builder's session"
+   },
+   {
+    "command": "tares factory crew attach spec",
+    "label": "Open the builder's session"
+   }
+  ],
+  "tickets_href": "/projects/uc_readers00/tickets",
+  "waiting": [],
+  "waiting_others": []
+ },
+ "project_crew": {
+  "coordination": {
+   "calls": 6,
+   "merged_prs": 0,
+   "per_merged_pr": null,
+   "stations": {
+    "readers0-build-m1": 6,
+    "spec": 0
+   }
+  },
+  "crews": [
+   {
+    "id": null,
+    "last_seen": null,
+    "machine": "",
+    "name": null,
+    "person": null,
+    "person_id": null,
+    "stations": [
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 6,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [
+       {
+        "last_at": "2026-11-19T07:02:00+00:00",
+        "lines": 10,
+        "session": "sess-3-0",
+        "started_at": "2026-11-19T05:35:00+00:00",
+        "state": "replaced"
+       }
+      ],
+      "earlier_count": 1,
+      "last_at": "2026-11-19T11:04:00+00:00",
+      "lines": 13,
+      "machine": "",
+      "name": "readers0-build-m1",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": "uc_readers00",
+      "project_name": "Readers project 00",
+      "projects": [
+       "uc_readers00"
+      ],
+      "quiet_minutes": 56,
+      "role": "builder",
+      "session": "sess-3-1",
+      "started_at": "2026-11-19T09:30:00+00:00",
+      "state": "quiet",
+      "state_at": "2026-11-19T11:57:00+00:00",
+      "state_reason": null,
+      "usage": null
+     },
+     {
+      "children": [],
+      "claude_retry": null,
+      "claude_version": null,
+      "context": null,
+      "coordination_calls": 0,
+      "crew": null,
+      "crew_id": null,
+      "earlier": [],
+      "earlier_count": 0,
+      "last_at": "2026-11-18T06:00:00+00:00",
+      "lines": 0,
+      "machine": "",
+      "name": "spec",
+      "parent": "crew-orchestrator",
+      "person": null,
+      "project": "uc_readers00",
+      "project_name": "Readers project 00",
+      "projects": [
+       "uc_readers00"
+      ],
+      "quiet_minutes": 1800,
+      "role": "builder",
+      "session": "sess-spec",
+      "started_at": "2026-11-18T06:00:00+00:00",
+      "state": "quiet",
+      "state_at": null,
+      "state_reason": null,
+      "usage": null
+     }
+    ]
+   }
+  ],
+  "handover": {
+   "at": "2026-11-17T12:00:00+00:00",
+   "autonomy": null,
+   "by": null,
+   "by_label": null,
+   "crew": null,
+   "finished": null,
+   "handed_by_person": null,
+   "overridden": false,
+   "override": null,
+   "overrides": [],
+   "person": null,
+   "repo": "/Users/sam/code/readers-00",
+   "repos": [
+    {
+     "name": "example-org/readers-00",
+     "path": "/Users/sam/code/readers-00"
+    }
+   ],
+   "takeover": null
+  },
+  "now": "2026-11-19T12:00:00+00:00",
+  "stations": [
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 6,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [
+     {
+      "last_at": "2026-11-19T07:02:00+00:00",
+      "lines": 10,
+      "session": "sess-3-0",
+      "started_at": "2026-11-19T05:35:00+00:00",
+      "state": "replaced"
+     }
+    ],
+    "earlier_count": 1,
+    "last_at": "2026-11-19T11:04:00+00:00",
+    "lines": 13,
+    "machine": "",
+    "name": "readers0-build-m1",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": "uc_readers00",
+    "project_name": "Readers project 00",
+    "projects": [
+     "uc_readers00"
+    ],
+    "quiet_minutes": 56,
+    "role": "builder",
+    "session": "sess-3-1",
+    "started_at": "2026-11-19T09:30:00+00:00",
+    "state": "quiet",
+    "state_at": "2026-11-19T11:57:00+00:00",
+    "state_reason": null,
+    "usage": null
+   },
+   {
+    "children": [],
+    "claude_retry": null,
+    "claude_version": null,
+    "context": null,
+    "coordination_calls": 0,
+    "crew": null,
+    "crew_id": null,
+    "earlier": [],
+    "earlier_count": 0,
+    "last_at": "2026-11-18T06:00:00+00:00",
+    "lines": 0,
+    "machine": "",
+    "name": "spec",
+    "parent": "crew-orchestrator",
+    "person": null,
+    "project": "uc_readers00",
+    "project_name": "Readers project 00",
+    "projects": [
+     "uc_readers00"
+    ],
+    "quiet_minutes": 1800,
+    "role": "builder",
+    "session": "sess-spec",
+    "started_at": "2026-11-18T06:00:00+00:00",
+    "state": "quiet",
+    "state_at": null,
+    "state_reason": null,
+    "usage": null
+   }
+  ]
+ },
+ "project_docs": {
+  "doc": null,
+  "groups": [],
+  "project": {
+   "icon": null,
+   "id": "uc_readers00",
+   "name": "Readers project 00"
+  },
+  "total": 0
+ },
+ "project_sessions": {
+  "now": "2026-11-19T12:00:00+00:00",
+  "sessions": [
+   {
+    "last_at": "2026-11-19T11:04:00+00:00",
+    "lines": 13,
+    "linked_at": "2026-11-19T12:00:00+00:00",
+    "repo": "example-org/readers-00",
+    "session": "sess-3-1",
+    "started_at": "2026-11-19T09:30:00+00:00",
+    "state": "quiet",
+    "state_at": "2026-11-19T11:57:00+00:00",
+    "state_reason": null,
+    "station": "readers0-build-m1"
+   },
+   {
+    "last_at": null,
+    "lines": 0,
+    "linked_at": "2026-11-19T12:00:00+00:00",
+    "repo": "example-org/readers-00",
+    "session": "sess-spec",
+    "started_at": null,
+    "state": null,
+    "state_at": null,
+    "state_reason": null,
+    "station": "spec"
+   }
+  ]
+ },
+ "projects": {
+  "counts": {
+   "all": 3,
+   "building": 3,
+   "done": 0,
+   "later": 0,
+   "not_started": 0,
+   "ready_to_close": 0,
+   "waiting_on_you": 0
+  },
+  "now": "2026-11-19T12:00:00+00:00",
+  "projects": [
+   {
+    "builders": 2,
+    "can_close": false,
+    "goal": "Goal of project 00",
+    "icon": null,
+    "id": "uc_readers00",
+    "last_activity": "just now",
+    "last_activity_at": "2026-11-19T12:00:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "2 builders \u00b7 Active just now",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Readers project 00",
+    "repo_names": [
+     "example-org/readers-00"
+    ],
+    "repos": [
+     "readers-00"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "closed": 0,
+     "label": "0 merged of 4",
+     "merged": 0,
+     "queued": 0,
+     "stuck": 0,
+     "total": 4
+    },
+    "yours": 0,
+    "yours_text": "4 tickets unassigned"
+   },
+   {
+    "builders": 1,
+    "can_close": false,
+    "goal": "Goal of project 01",
+    "icon": null,
+    "id": "uc_readers01",
+    "last_activity": "just now",
+    "last_activity_at": "2026-11-19T12:00:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "1 builder \u00b7 Active just now",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Readers project 01",
+    "repo_names": [
+     "example-org/readers-01"
+    ],
+    "repos": [
+     "readers-01"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "closed": 0,
+     "label": "0 merged of 4",
+     "merged": 0,
+     "queued": 0,
+     "stuck": 0,
+     "total": 4
+    },
+    "yours": 0,
+    "yours_text": "4 tickets unassigned"
+   },
+   {
+    "builders": 1,
+    "can_close": false,
+    "goal": "Goal of project 02",
+    "icon": null,
+    "id": "uc_readers02",
+    "last_activity": "just now",
+    "last_activity_at": "2026-11-19T12:00:00+00:00",
+    "lead": null,
+    "members": [],
+    "meta": "1 builder \u00b7 Active just now",
+    "milestone": "Now on M1: first pages",
+    "mine": false,
+    "name": "Readers project 02",
+    "repo_names": [
+     "example-org/readers-02"
+    ],
+    "repos": [
+     "readers-02"
+    ],
+    "scope": "team",
+    "state": "building",
+    "state_label": "Building",
+    "tickets": {
+     "closed": 0,
+     "label": "0 merged of 4",
+     "merged": 0,
+     "queued": 0,
+     "stuck": 0,
+     "total": 4
+    },
+    "yours": 0,
+    "yours_text": "4 tickets unassigned"
+   }
+  ],
+  "team": {
+   "counts": {
+    "mine": 0,
+    "team": 3
+   },
+   "hidden": []
+  }
+ },
+ "ticket": {
+  "blocked_reason": null,
+  "blocks": [],
+  "calls": [],
+  "checks": [],
+  "decisions": [],
+  "depends_on": [],
+  "history": [],
+  "in": "Tares",
+  "milestone": {
+   "id": "ms_1",
+   "name": "M1: first pages",
+   "number": "M1"
+  },
+  "notes": "",
+  "now": "2026-11-19T12:00:00+00:00",
+  "pr": null,
+  "project": {
+   "href": "/projects/uc_readers00",
+   "icon": null,
+   "id": "uc_readers00",
+   "name": "Readers project 00"
+  },
+  "ref": "T1",
+  "reviews": [],
+  "state": "in_progress",
+  "state_label": "In progress",
+  "terminal": [
+   {
+    "command": "tares factory crew attach readers0-build-m1",
+    "label": "Open the builder's session"
+   }
+  ],
+  "title": "Ticket 0 of project 00",
+  "url": null,
+  "who": "Builder for M1"
+ },
+ "tickets": {
+  "assignees": [],
+  "counts": {
+   "blocked": 0,
+   "canceled": 0,
+   "changes_asked": 3,
+   "in_progress": 3,
+   "in_review": 3,
+   "merged": 0,
+   "moving": 9,
+   "to_do": 3,
+   "total": 12
+  },
+  "hidden_canceled": 0,
+  "limit": 25,
+  "me": "p_1",
+  "milestones": [
+   {
+    "id": "ms_1",
+    "name": "M1: first pages",
+    "number": "M1",
+    "project": "uc_readers00"
+   },
+   {
+    "id": "ms_2",
+    "name": "M1: first pages",
+    "number": "M1",
+    "project": "uc_readers01"
+   },
+   {
+    "id": "ms_3",
+    "name": "M1: first pages",
+    "number": "M1",
+    "project": "uc_readers02"
+   }
+  ],
+  "more": false,
+  "now": "2026-11-19T12:00:00+00:00",
+  "offset": 0,
+  "projects": [
+   {
+    "count": 4,
+    "id": "uc_readers00",
+    "name": "Readers project 00"
+   },
+   {
+    "count": 4,
+    "id": "uc_readers01",
+    "name": "Readers project 01"
+   },
+   {
+    "count": 4,
+    "id": "uc_readers02",
+    "name": "Readers project 02"
+   }
+  ],
+  "tickets": [
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers00/tickets/T1",
+    "milestone": {
+     "id": "ms_1",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers00",
+     "name": "Readers project 00"
+    },
+    "ref": "T1",
+    "review": null,
+    "state": "in progress",
+    "state_key": "in_progress",
+    "title": "Ticket 0 of project 00",
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers00/tickets/T2",
+    "milestone": {
+     "id": "ms_1",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers00",
+     "name": "Readers project 00"
+    },
+    "ref": "T2",
+    "review": null,
+    "state": "in review",
+    "state_key": "in_review",
+    "title": "Ticket 1 of project 00",
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": "Not picked up yet",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers00/tickets/T3",
+    "milestone": {
+     "id": "ms_1",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers00",
+     "name": "Readers project 00"
+    },
+    "ref": "T3",
+    "review": null,
+    "state": "changes asked",
+    "state_key": "changes_asked",
+    "title": "Ticket 2 of project 00",
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers00/tickets/T4",
+    "milestone": {
+     "id": "ms_1",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers00",
+     "name": "Readers project 00"
+    },
+    "ref": "T4",
+    "review": null,
+    "state": "to do",
+    "state_key": "to_do",
+    "title": "Ticket 3 of project 00",
+    "turn": "to_do",
+    "turn_label": "To do",
+    "who": "Not picked up yet",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers01/tickets/T1",
+    "milestone": {
+     "id": "ms_2",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers01",
+     "name": "Readers project 01"
+    },
+    "ref": "T1",
+    "review": null,
+    "state": "in progress",
+    "state_key": "in_progress",
+    "title": "Ticket 0 of project 01",
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers01/tickets/T2",
+    "milestone": {
+     "id": "ms_2",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers01",
+     "name": "Readers project 01"
+    },
+    "ref": "T2",
+    "review": null,
+    "state": "in review",
+    "state_key": "in_review",
+    "title": "Ticket 1 of project 01",
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": "Not picked up yet",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers01/tickets/T3",
+    "milestone": {
+     "id": "ms_2",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers01",
+     "name": "Readers project 01"
+    },
+    "ref": "T3",
+    "review": null,
+    "state": "changes asked",
+    "state_key": "changes_asked",
+    "title": "Ticket 2 of project 01",
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers01/tickets/T4",
+    "milestone": {
+     "id": "ms_2",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers01",
+     "name": "Readers project 01"
+    },
+    "ref": "T4",
+    "review": null,
+    "state": "to do",
+    "state_key": "to_do",
+    "title": "Ticket 3 of project 01",
+    "turn": "to_do",
+    "turn_label": "To do",
+    "who": "Not picked up yet",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers02/tickets/T1",
+    "milestone": {
+     "id": "ms_3",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers02",
+     "name": "Readers project 02"
+    },
+    "ref": "T1",
+    "review": null,
+    "state": "in progress",
+    "state_key": "in_progress",
+    "title": "Ticket 0 of project 02",
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers02/tickets/T2",
+    "milestone": {
+     "id": "ms_3",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers02",
+     "name": "Readers project 02"
+    },
+    "ref": "T2",
+    "review": null,
+    "state": "in review",
+    "state_key": "in_review",
+    "title": "Ticket 1 of project 02",
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": "Not picked up yet",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers02/tickets/T3",
+    "milestone": {
+     "id": "ms_3",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers02",
+     "name": "Readers project 02"
+    },
+    "ref": "T3",
+    "review": null,
+    "state": "changes asked",
+    "state_key": "changes_asked",
+    "title": "Ticket 2 of project 02",
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
+   },
+   {
+    "assignee": null,
+    "assignee_raw": null,
+    "blocked_by": [],
+    "changed": "just now",
+    "changed_at": "2026-11-19T12:00:00+00:00",
+    "href": "/projects/uc_readers02/tickets/T4",
+    "milestone": {
+     "id": "ms_3",
+     "name": "M1: first pages",
+     "number": "M1"
+    },
+    "pr": null,
+    "project": {
+     "id": "uc_readers02",
+     "name": "Readers project 02"
+    },
+    "ref": "T4",
+    "review": null,
+    "state": "to do",
+    "state_key": "to_do",
+    "title": "Ticket 3 of project 02",
+    "turn": "to_do",
+    "turn_label": "To do",
+    "who": "Not picked up yet",
+    "whose": "crew"
+   }
+  ],
+  "total": 12
+ }
+}

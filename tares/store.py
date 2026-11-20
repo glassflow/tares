@@ -18,13 +18,22 @@ import duckdb
 
 from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
-from .factory import DONE_STATUSES, OPEN_STAGES
+from .factory import DONE_STATUSES, OPEN_STAGES, state_of
 from .factory_store import FACTORY_SCHEMA, FactoryStore
 from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
-from . import state_db
+from sqlalchemy import and_, delete, null, select
+
+from . import session_ingest, session_read, state_db
+from .session_store import SessionStore
+from .session_store.copy import copy_from_duckdb
+from .session_store.tables import COPIED, project_sessions, session_stations, session_states
+from .session_store.tables import session_commands, session_messages
+from .session_store.tables import (session_archive_parts, session_files, session_lines, session_said,
+                                    session_turns)
+from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
 _SCHEMA = """
@@ -768,6 +777,10 @@ def day_month_words(when) -> str:
     return f"{when.day} {_MONTHS[when.month - 1][:3]}"
 
 
+# the five tables the session store holds (a state move leaves them out: copy_from_duckdb moved them)
+SESSION_TABLES = frozenset(t.name for t in COPIED)
+
+
 class StoreUnavailable(RuntimeError):
     """The database could not be opened or initialized — locked by another daemon, permissions,
     a full disk, a corrupt file. Raised instead of the raw DuckDB error so taresd can start in
@@ -786,6 +799,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # connection and lock by default; with a state_dsn, Postgres, where reads take no lock and
         # run in parallel and writes take self._swrite, so read-then-write steps stay atomic.
         self._lock = threading.Lock()
+        # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
+        self._sess_lock = threading.Lock()
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -814,6 +829,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 pg = state_db.PgState(state_dsn)
                 for stmt in state_db.state_ddl(self._ddl()):
                     pg.execute(stmt)
+                # Postgres only: DuckDB's ART indexes have broken after upgrades
+                pg.execute("CREATE INDEX IF NOT EXISTS tickets_project ON tickets(project)")
+                pg.execute("CREATE INDEX IF NOT EXISTS ticket_history_ticket "
+                           "ON ticket_history(ticket)")
                 if state_db.moved(pg):
                     self._use_pg_state(pg)        # upgrades below run on the moved state
                     if not moved_at:
@@ -830,21 +849,53 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                         f"this cell's state moved to Postgres on {moved_at[0]}, but the database "
                         "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
                         "state database and restart.", path)
+            # The session store: SQLite beside the DuckDB file, or the state Postgres. Built here,
+            # where the guards above have passed (a start refused for a missing DSN leaves no file)
+            # and the DuckDB-or-Postgres choice is made (state_dsn is set), before any data upgrade.
+            self.sessions_db = SessionStore(
+                ":memory:" if path == ":memory:" else os.path.dirname(os.path.abspath(path)),
+                state_dsn or None)
+            self.sessions_db.upgrade()
+            # The five session tables are copied in before the data upgrades, so the fills in
+            # _upgrade() write into a table that already holds its rows. On SQLite that is a copy
+            # from DuckDB (once; the ledger skips a table already copied). On the first start with
+            # a state database the same copy fills the new Postgres tables (from sessions.sqlite
+            # when the cell ran locally first, else from DuckDB), and the one-time move below
+            # leaves them out. DuckDB's own copies and sessions.sqlite are never changed.
+            first_pg_start = pg is not None and self.sc is self.con
+            copy_from_duckdb(
+                self, self.sessions_db, state_move=first_pg_start,
+                local_dir=None if path == ":memory:" else os.path.dirname(os.path.abspath(path)))
             self._upgrade()
-            if pg is not None and self.sc is self.con:
+            # an empty cell has nothing to catch up on: its readers use the sessions table at once
+            # (one with claude_code lines scans events until its reconcile finishes, TR-1520)
+            session_ingest.mark_caught_up_if_empty(self)
+            if first_pg_start:
                 # first start with a state database: the state moves over once, then is read
                 # from Postgres only; the DuckDB copy is left as it was, as a fallback
-                state_db.move(self.con, pg, self._state_tables())
+                state_db.move(self.con, pg, [t for t in self._state_tables()
+                                             if t not in SESSION_TABLES])
                 self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                                  "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
                                  "UPDATE SET value = excluded.value", [now_utc().isoformat()])
                 self._use_pg_state(pg)
+                self._merge_split_crews()         # the bare crews the first merge kept (TR-1517)
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
             # agent_runs (a table with an index) replay after a hard stop into a corrupted index:
             # "Corrupted ART index", and every query after it fails until a restart.
             self.con.execute("CHECKPOINT")
         except Exception as e:
             raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
+
+    def close(self) -> None:
+        """Let go of the session store's connections. The DuckDB and Postgres state connections are
+        left to the process, as before."""
+        stop = getattr(self, "_reconcile_stop", None)
+        if stop is not None:
+            stop.set()          # the ten minute reconcile (session_ingest._cycle) ends
+        sessions_db = getattr(self, "sessions_db", None)
+        if sessions_db is not None:
+            sessions_db.close()
 
     def _use_duckdb_state(self) -> None:
         self.sc, self._sread, self._swrite = self.con, self._lock, self._lock
@@ -1440,6 +1491,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def append(self, envelopes: list[Envelope]) -> None:
         if not envelopes:
             return
+        cc = session_ingest.claude_code_lines(self, envelopes)
+        if not cc:
+            return self._append(envelopes)
+        # The claude_code lines of the batch are counted into `sessions` after the commit. The
+        # reconcile at start holds the same lock, so a line is never counted by both.
+        with self._sess_lock:
+            self._append(envelopes)
+            session_ingest.record(self, cc)
+
+    def start_session_reconcile(self):
+        """Catch the `sessions` table up with the events in a background thread (TR-1471). The four
+        session readers scan events until this has finished once, and read the table after (TR-1520);
+        a failed pass leaves them on the scan and the next start tries again."""
+        return session_ingest.start_reconcile(self)
+
+    def _append(self, envelopes: list[Envelope]) -> None:
         # Explicit column list: the `labels` column was added by migration after first release,
         # so positional INSERT order is no longer guaranteed.
         rows = [
@@ -1594,12 +1661,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The module's _exclude_sql, with the sessions linked to the hidden projects read from
         the state first."""
         ids = list((exclude or {}).get("ids") or [])
-        sessions: list = []
-        if ids:
-            with self._sread:
-                sessions = [r[0] for r in self.sc.execute(
-                    f"SELECT DISTINCT session FROM project_sessions WHERE project IN "
-                    f"({', '.join(['?'] * len(ids))})", ids).fetchall()]
+        sessions = self.sessions_of_projects(ids) if ids else []
         return _exclude_sql(exclude, sources, sessions)
 
     def _row_owners(self, rows: list, n: int) -> set[str]:
@@ -1625,10 +1687,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 keys.add(r[n])
         found.update(self.project_ids_named(sorted(named)))
         if keys:
-            with self._sread:
-                found.update(x[0] for x in self.sc.execute(
-                    f"SELECT DISTINCT project FROM project_sessions WHERE session IN "
-                    f"({', '.join(['?'] * len(keys))})", sorted(keys)).fetchall())
+            found.update(self.projects_of_sessions(sorted(keys)))
         return found
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
@@ -2645,11 +2704,41 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "goal": r[8], "kind": r[9], "lead_person_id": r[10],
                 "scope": r[11] or "team", "icon": r[12]}
 
-    def list_projects(self) -> list[dict]:
+    def list_projects(self, *, kind=None, status_in=None, status_not_in=None, ids=None,
+                      exclude_ids=None) -> list[dict]:
+        """Every project, oldest first, or only those that match: `kind`, a status in or not in a
+        list (a project with no status is not in any list), `ids` (an empty list gives none) and
+        `exclude_ids`. With no argument it is every project."""
+        if ids is not None and not list(ids):
+            return []
+        where, args = [], []
+        if kind is not None:
+            where.append("kind = ?")
+            args.append(kind)
+        if status_in is not None:
+            vals = list(status_in)
+            if not vals:
+                return []
+            where.append(f"status IN ({', '.join('?' for _ in vals)})")
+            args += vals
+        if status_not_in:
+            vals = list(status_not_in)
+            where.append(f"(status IS NULL OR status NOT IN ({', '.join('?' for _ in vals)}))")
+            args += vals
+        if ids is not None:
+            vals = list(ids)
+            where.append(f"id IN ({', '.join('?' for _ in vals)})")
+            args += vals
+        if exclude_ids:
+            vals = list(exclude_ids)
+            where.append(f"id NOT IN ({', '.join('?' for _ in vals)})")
+            args += vals
+        cond = (" WHERE " + " AND ".join(where)) if where else ""
         with self._sread:
             rows = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind, lead_person_id, scope, icon FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind, lead_person_id, scope, icon FROM usecases" + cond
+                + " ORDER BY created_at", args).fetchall()
         return [self._project_row(r) for r in rows]
 
     # Licence-independent by design (TR-915): never consult licence or team here.
@@ -2720,6 +2809,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
                 for r in rows]
 
+    def members_by_project(self, uids: list[str]) -> dict[str, list[dict]]:
+        """{project: its members as list_project_members gives them} for `uids`, in one query."""
+        ids = sorted({u for u in uids if u})
+        if not ids:
+            return {}
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT project, person_id, added_by, added_at, reason FROM project_members "
+                f"WHERE project IN ({', '.join('?' for _ in ids)}) ORDER BY added_at, person_id",
+                ids).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r[0], []).append({"person_id": r[1], "added_by": r[2],
+                                             "added_at": r[3], "reason": r[4]})
+        return out
+
     # Licence-independent by design (TR-915): never consult licence or team here.
     def is_project_member(self, uid: str, person_id: str | None) -> bool:
         """The project's lead, or a person on its member list."""
@@ -2758,6 +2863,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def delete_project(self, uid: str) -> None:
         with self._swrite:
+            # the state rows first: a delete that stops half way leaves session rows with no
+            # project, which every reader ignores
             # its keys stop working and nothing is delivered for it any more (TR-335)
             self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
                              "AND revoked_at IS NULL", [now_utc(), uid])
@@ -2771,14 +2878,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                             "(SELECT id FROM tickets WHERE project = ?)", [uid])
             self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self._factory_forget_project(uid)
-            self._usage_forget_project(uid)
-            self.sc.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
-            # a crew station's session serves every project: its state stays
-            self.sc.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
-                             "FROM project_sessions) AND session NOT IN (SELECT session FROM "
-                             "session_stations)")
             self.sc.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.sc.execute("DELETE FROM usecases WHERE id = ?", [uid])
+        self._usage_forget_project(uid)
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
+            # a crew station's session serves every project: its state stays
+            conn.execute(delete(session_states).where(
+                session_states.c.session.not_in(select(project_sessions.c.session)),
+                session_states.c.session.not_in(select(session_stations.c.session))))
 
     def get_project_setup(self, uid: str) -> dict | None:
         """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was
@@ -3218,6 +3326,65 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             out[r[1]].append(self._ticket_row(r))
         return out
 
+    def done_ticket_facts(self, project_ids: list[str]) -> dict[str, dict]:
+        """{project: {merged, closed, queued, stuck, total, repos, repo_from_pr, assignees, exact}}
+        from two grouped queries, so a finished project's row needs no ticket rows. merged, closed,
+        queued, stuck and total are what factory.progress gives for the same keys; repos are the full repo
+        names of the tickets in the order the ticket list shows them; repo_from_pr counts the
+        tickets with no repo whose pull request may name one. exact is False when groups cannot
+        give progress: a ticket that would read "to do" but lists dependencies (whether it is
+        queued depends on those tickets), or one still open that has a pull request (it counts as
+        merged when that pull request is), so the caller loads that project's tickets. assignees is
+        {person id or None: how many tickets that are not canceled}, what a team cell's "tickets
+        yours" line reads."""
+        if not project_ids:
+            return {}
+        marks = ", ".join("?" for _ in project_ids)
+        args = list(project_ids)
+        out = {p: {"merged": 0, "closed": 0, "queued": 0, "stuck": 0, "total": 0, "repos": [],
+                   "repo_from_pr": 0, "assignees": {}, "exact": True} for p in project_ids}
+        with self._sread:
+            groups = self.sc.execute(
+                "SELECT project, stage, status, "
+                "CASE WHEN depends_on IS NULL OR CAST(depends_on AS VARCHAR) IN ('', 'null', '[]') "
+                "THEN 0 ELSE 1 END, "
+                "CASE WHEN (repo IS NULL OR repo = '') AND pr IS NOT NULL "
+                "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, "
+                "CASE WHEN pr IS NOT NULL AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') "
+                "THEN 1 ELSE 0 END, "
+                "assignee_person_id, COUNT(*) "
+                f"FROM tickets WHERE project IN ({marks}) "
+                "GROUP BY project, stage, status, 4, 5, 6, assignee_person_id", args).fetchall()
+            first = self.sc.execute(
+                "SELECT project, repo FROM (SELECT project, repo, position, created_at, "
+                "ROW_NUMBER() OVER (PARTITION BY project, repo ORDER BY position, created_at) AS rn "
+                f"FROM tickets WHERE project IN ({marks}) AND repo IS NOT NULL AND repo <> '') f "
+                "WHERE rn = 1 ORDER BY project, position, created_at", args).fetchall()
+        for project, stage, status, has_deps, from_pr, has_pr, who, n in groups:
+            facts = out[project]
+            if status != "canceled":
+                facts["assignees"][who] = facts["assignees"].get(who, 0) + n
+            state = state_of({"stage": stage, "status": status})
+            merged = stage in ("merged", "shipped")
+            if state == "to do" and has_deps:
+                facts["exact"] = False
+            if has_pr and not merged and state not in ("merged", "canceled"):
+                facts["exact"] = False      # its pull request may be merged: factory.turn_of
+            if from_pr:
+                facts["repo_from_pr"] += n
+            if state == "canceled":
+                continue
+            facts["total"] += n
+            if merged:                      # factory.turn_of: merged only for a merge
+                facts["merged"] += n
+            elif state == "merged":
+                facts["closed"] += n        # a done status with no merge
+            elif state == "blocked":
+                facts["stuck"] += n
+        for project, repo in first:
+            out[project]["repos"].append(repo)
+        return out
+
     def get_ticket(self, project: str, ref: str) -> dict | None:
         """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
         issue id, or number (T3, or 3)."""
@@ -3273,34 +3440,66 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
         """The Claude Code session works in the project. True when it was not linked before."""
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM project_sessions WHERE project = ? AND "
-                                   "session = ?", [project, session]).fetchone()
-            if not had:
-                self.sc.execute("INSERT INTO project_sessions (project, session, repo, linked_at) "
-                                 "VALUES (?, ?, ?, ?)", [project, session, repo, now_utc()])
-        return not had
+        stmt = self.sessions_db.upsert(project_sessions).values(
+            project=project, session=session, repo=repo, linked_at=now_utc()
+        ).on_conflict_do_nothing(index_elements=["project", "session"])
+        with self.sessions_db.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def sessions_of_projects(self, projects: list[str]) -> list[str]:
+        """The sessions linked to any of the projects."""
+        out: set[str] = set()
+        for i in range(0, len(projects), 500):
+            with self.sessions_db.begin() as conn:
+                out.update(r[0] for r in conn.execute(
+                    select(project_sessions.c.session).where(
+                        project_sessions.c.project.in_(projects[i:i + 500]))))
+        return sorted(out)
+
+    def projects_of_sessions(self, sessions: list[str]) -> set[str]:
+        """The projects any of the sessions is linked to."""
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.begin() as conn:
+                out.update(r[0] for r in conn.execute(
+                    select(project_sessions.c.project).where(
+                        project_sessions.c.session.in_(sessions[i:i + 500]))))
+        return out
 
     def project_sessions(self, project: str) -> list[dict]:
         """The sessions that worked in the project, newest activity first, with when they started
         and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at, "
-                "x.station FROM project_sessions s "
-                "LEFT JOIN session_stations x ON x.session = s.session "
-                "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
-                # the crew's own stations serve every project: they show on the Crew page and
-                # never count as the project's build session (a pick-up must not replace them)
-                "AND s.session NOT IN (SELECT session FROM session_stations WHERE role IN "
-                "('orchestrator', 'reviewer', 'releaser', 'comms'))", [project]).fetchall()
+        ps, ss, st, sx = project_sessions, session_stations, session_states, sessions_table
+        # once the sessions table has caught up (TR-1520) the lines come from it in the same read
+        # (TR-1499); before, from a scan of events below
+        table = session_ingest.caught_up(self)
+        lines = ((sx.c.started_at, sx.c.last_line_at, sx.c.line_count) if table
+                 else (null(), null(), null()))
+        j = (ps.outerjoin(ss, ss.c.session == ps.c.session)
+             .outerjoin(st, st.c.session == ps.c.session))
+        if table:
+            j = j.outerjoin(sx, and_(sx.c.session == ps.c.session,
+                                     sx.c.source == "claude_code", sx.c.line_count > 0))
+        q = (select(ps.c.session, ps.c.repo, ps.c.linked_at, st.c.state, st.c.reason,
+                    st.c.state_at, ss.c.station, *lines)
+             .select_from(j)
+             .where(ps.c.project == project,
+                    # the crew's own stations serve every project: they show on the Crew page and
+                    # never count as the project's build session (a pick-up must not replace them)
+                    ps.c.session.not_in(select(ss.c.session).where(
+                        ss.c.role.in_(("orchestrator", "reviewer", "releaser", "comms"))))))
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q).all()
         seen, uniq = set(), []
         for r in rows:
             if r[0] not in seen:
                 seen.add(r[0])
                 uniq.append(r)
-        act = self.session_activity("claude_code", [r[0] for r in uniq])
+        if table:
+            act = {r[0]: (r[7], r[8], int(r[9] or 0)) for r in uniq}
+        else:
+            act = self._session_activity_scan("claude_code", [r[0] for r in uniq])
         out = [{"session": r[0], "repo": r[1], "linked_at": r[2],
                 "started_at": act.get(r[0], (None,))[0], "last_at": act.get(r[0], (None, None))[1],
                 "lines": act.get(r[0], (None, None, 0))[2], "state": r[3], "state_reason": r[4],
@@ -3311,8 +3510,26 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return out
 
     def session_activity(self, source: str, sessions: list[str]) -> dict:
-        """{session: (first event time, last event time, event count)} for the sessions that have
-        events on `source`."""
+        """{session: (first line time, last line time, line count)} for the sessions that have
+        lines on `source`. Read from the sessions table (TR-1471 keeps it) once it has caught up
+        (TR-1520), from a scan of events before."""
+        if not session_ingest.caught_up(self):
+            return self._session_activity_scan(source, sessions)
+        out = {}
+        t = sessions_table
+        for i in range(0, len(sessions), 500):
+            chunk = sessions[i:i + 500]
+            if not chunk:
+                continue
+            q = select(t.c.session, t.c.started_at, t.c.last_line_at, t.c.line_count).where(
+                t.c.source == source, t.c.session.in_(chunk), t.c.line_count > 0)
+            with self.sessions_db.begin() as conn:
+                for sid, first, last, n in conn.execute(q):
+                    out[sid] = (first, last, int(n))
+        return out
+
+    def _session_activity_scan(self, source: str, sessions: list[str]) -> dict:
+        """`session_activity` from the events table: what a cell not yet caught up has to use."""
         out = {}
         for i in range(0, len(sessions), 500):
             chunk = sessions[i:i + 500]
@@ -3330,82 +3547,55 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                           force: bool = False) -> None:
         """The session's state now; an older line than the one stored does not win, unless
         `force` (a take-over is a decision, not a report)."""
-        when = "" if force else " WHERE excluded.state_at >= session_states.state_at"
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO session_states (session, state, reason, state_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (session) DO UPDATE SET state = excluded.state, "
-                "reason = excluded.reason, state_at = excluded.state_at" + when,
-                [session, state, reason or None, at])
+        stmt = self.sessions_db.upsert(session_states).values(
+            session=session, state=state, reason=reason or None, state_at=at)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["session"],
+            set_={"state": stmt.excluded.state, "reason": stmt.excluded.reason,
+                  "state_at": stmt.excluded.state_at},
+            where=None if force else stmt.excluded.state_at >= session_states.c.state_at)
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt)
 
     def session_state(self, session: str) -> dict | None:
         """The session's stored state {state, reason, state_at}, as reported (not as shown), or
         None when it never reported one."""
-        with self._sread:
-            row = self.sc.execute("SELECT state, reason, state_at FROM session_states "
-                                   "WHERE session = ?", [session]).fetchone()
+        with self.sessions_db.begin() as conn:
+            row = conn.execute(select(session_states.c.state, session_states.c.reason,
+                                      session_states.c.state_at).where(
+                session_states.c.session == session)).first()
         return {"state": row[0], "reason": row[1], "state_at": row[2]} if row else None
 
     def said_lately(self, source: str, session: str, n: int = 3) -> list[dict]:
-        """The session's last `n` assistant messages (not tool calls), oldest first."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT text, event_time FROM events WHERE source = ? AND key_value = ? AND "
-                "event_type = 'assistant' ORDER BY event_time DESC LIMIT 60",
-                [source, session]).fetchall()
-        out = []
-        for t, at in rows:
-            t = (t or "").strip()
-            if t and not t.startswith("→"):
-                out.append({"text": t, "at": at})
-            if len(out) >= n:
-                break
-        return list(reversed(out))
+        """The session's last `n` assistant messages (not tool calls, not empty), oldest first.
+        Read from `session_said`, which keeps the last three of each session (session_ingest,
+        TR-1505), so `n` above 3 gives 3."""
+        t = session_said.c
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(select(t.text, t.at).where(
+                t.source == source, t.session == session).order_by(
+                t.at.desc(), t.line_key.desc()).limit(max(n, 0))).fetchall()
+        return [{"text": r[0], "at": r[1]} for r in reversed(rows)]
 
     def files_touched(self, source: str, session: str, limit: int = 20) -> list[str]:
-        """The files the session last edited or wrote (its Edit / Write / NotebookEdit calls),
-        most recent first, each once."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = "
-                "'tool_use' ORDER BY event_time DESC LIMIT 400", [source, session]).fetchall()
-        seen: list[str] = []
-        for (pj,) in rows:
-            try:
-                o = json.loads(pj) if pj else {}
-            except (TypeError, ValueError):
-                continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if not isinstance(b, dict) or b.get("type") != "tool_use":
-                    continue
-                if str(b.get("name") or "") not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-                    continue
-                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                path = str(inp.get("file_path") or inp.get("notebook_path") or "")
-                if path and path not in seen:
-                    seen.append(path)
-            if len(seen) >= limit:
-                break
-        return seen
+        """The files the session last edited or wrote (its Edit / Write / MultiEdit / NotebookEdit
+        calls), most recent first, each once. Read from `session_files` (session_ingest, TR-1505)."""
+        t = session_files.c
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(t.path).where(
+                t.source == source, t.session == session).order_by(
+                t.last_at.desc(), t.path).limit(max(limit, 0)))]
 
     def last_said(self, source: str, session: str) -> str | None:
         """The last thing the session's assistant wrote (not a tool call), for a waiting
         session: what it stopped on."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT text FROM events WHERE source = ? AND key_value = ? AND event_type = "
-                "'assistant' ORDER BY event_time DESC LIMIT 20", [source, session]).fetchall()
-        for (t,) in rows:
-            t = (t or "").strip()
-            if t and not t.startswith("→"):
-                return t
-        return None
+        said = self.said_lately(source, session, 1)
+        return said[0]["text"] if said else None
 
     def session_projects(self, session: str) -> list[str]:
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT project FROM project_sessions WHERE session = ?", [session]).fetchall()]
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(project_sessions.c.project).where(
+                project_sessions.c.session == session))]
 
     def get_project_linear(self, uid: str) -> dict | None:
         """The Linear project a project's tickets live in, with the last sync's state, or None."""
@@ -4219,26 +4409,57 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def key_events(self, source: str, key: str, limit: int = 200,
                    offset: int = 0) -> list[dict]:
         """One entity's events on one source, oldest first (a session read top to bottom)."""
+        return self.key_events_from(source, key, limit, offset)[0]
+
+    def key_events_from(self, source: str, key: str, limit: int = 200,
+                        offset: int = 0) -> tuple[list[dict], str]:
+        """`key_events` and where the lines came from: `table`, `archive`, `both` (the session's
+        own tables and archive, TR-1507) or `events` (DuckDB, for a session they do not hold in
+        full)."""
+        got = session_read.lines(self, source, key, limit, offset)
+        if got is not None:
+            rows, where = got
+            return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
+                     "labels": r["labels"]} for r in rows], where
         with self._lock:
             rows = self.con.execute(
                 "SELECT event_type, text, event_time, labels FROM events WHERE source = ? AND "
                 "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
                 [source, key, int(limit), int(offset)]).fetchall()
         return [{"event_type": r[0], "text": r[1], "event_time": r[2],
-                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows]
+                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows], "events"
 
     def key_payload_rows(self, source: str, key: str, limit: int = 200, offset: int = 0) -> list[dict]:
         """One entity's events with their lossless payload, oldest first (TR-1177: a session as a
         conversation). The payload is the transcript line as it came in."""
+        return self.key_payload_rows_from(source, key, limit, offset)[0]
+
+    def key_payload_rows_from(self, source: str, key: str, limit: int = 200,
+                              offset: int = 0) -> tuple[list[dict], str]:
+        """`key_payload_rows` and where the lines came from (see `key_events_from`)."""
+        got = session_read.lines(self, source, key, limit, offset)
+        if got is not None:
+            rows, where = got
+            return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
+                     "payload": r["payload"]} for r in rows], where
         with self._lock:
             rows = self.con.execute(
                 "SELECT event_type, text, event_time, payload FROM events WHERE source = ? AND "
                 "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
                 [source, key, int(limit), int(offset)]).fetchall()
-        return [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]} for r in rows]
+        return [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]}
+                for r in rows], "events"
 
     def key_tool_result(self, source: str, key: str, tool_use_id: str) -> dict | None:
         """The stored line that holds one tool call's result in this entity's events, or None."""
+        return self.key_tool_result_from(source, key, tool_use_id)[0]
+
+    def key_tool_result_from(self, source: str, key: str,
+                             tool_use_id: str) -> tuple[dict | None, str]:
+        """`key_tool_result` and where the lines came from (see `key_events_from`)."""
+        got = session_read.tool_result(self, source, key, tool_use_id)
+        if got is not None:
+            return got
         with self._lock:
             rows = self.con.execute(
                 "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = 'tool_result' "
@@ -4252,8 +4473,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             msg = o.get("message") if isinstance(o.get("message"), dict) else {}
             for b in msg.get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_result" and str(b.get("tool_use_id")) == tool_use_id:
-                    return b
-        return None
+                    return b, "events"
+        return None, "events"
 
     def last_finding(self, source: str, agent: str, key: str) -> str | None:
         """The newest delivered finding this agent wrote for this key, or None. Feeds the next
@@ -4435,21 +4656,42 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return int(n)
 
     def purge_events(self, source: str) -> int:
-        with self._lock:
-            n = self.con.execute(
-                "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
-            self.con.execute("BEGIN TRANSACTION")
-            try:
-                self.con.execute("DELETE FROM events WHERE source = ?", [source])
-                self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
-                # Drop the maintained counters for this source (the only decrement path).
-                self.con.execute("DELETE FROM source_stats WHERE source = ?", [source])
-                self.con.execute("DELETE FROM entity_counts WHERE source = ?", [source])
-                self.con.execute("DELETE FROM entity_label_state WHERE source = ?", [source])
-                self.con.execute("COMMIT")
-            except Exception:
-                self.con.execute("ROLLBACK")
-                raise
+        # _sess_lock first, as append and the reconcile take it, so no line is counted into the
+        # sessions table between the purge and the delete of its rows.
+        with self._sess_lock:
+            with self._lock:
+                n = self.con.execute(
+                    "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
+                self.con.execute("BEGIN TRANSACTION")
+                try:
+                    self.con.execute("DELETE FROM events WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
+                    # Drop the maintained counters for this source (the only decrement path).
+                    self.con.execute("DELETE FROM source_stats WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM entity_counts WHERE source = ?", [source])
+                    self.con.execute("DELETE FROM entity_label_state WHERE source = ?", [source])
+                    self.con.execute("COMMIT")
+                except Exception:
+                    self.con.execute("ROLLBACK")
+                    raise
+            # the sessions table counts those lines too: a re-ship of them would count them twice
+            with self.sessions_db.begin() as conn:
+                # the stored lines go first, through the sessions that name the source (TR-1478):
+                # a row of the session left behind would collide with the numbers of a re-ship
+                conn.execute(delete(session_lines).where(session_lines.c.session.in_(
+                    select(sessions_table.c.session).where(sessions_table.c.source == source))))
+                # and the parts the archive holds of them (TR-1506): their files stay in the archive,
+                # but a count of them left behind would be added to the numbers of a re-ship
+                conn.execute(delete(session_archive_parts).where(session_archive_parts.c.session.in_(
+                    select(sessions_table.c.session).where(sessions_table.c.source == source))))
+                conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
+                # and so do the facts read from them (TR-1477); a call's results live on its row
+                conn.execute(delete(session_commands).where(session_commands.c.source == source))
+                conn.execute(delete(session_messages).where(session_messages.c.source == source))
+                # and the turns, last words and touched files (TR-1505)
+                conn.execute(delete(session_turns).where(session_turns.c.source == source))
+                conn.execute(delete(session_said).where(session_said.c.source == source))
+                conn.execute(delete(session_files).where(session_files.c.source == source))
         return n
 
     # ── subscriptions ─────────────────────────────────────────────────────────

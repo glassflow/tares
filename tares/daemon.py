@@ -59,6 +59,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
 from . import licence
+from . import session_archive
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -647,6 +648,10 @@ def make_app() -> FastAPI:
               f"({counts['sources']} sources, {counts['triggers']} triggers"
               f"{', ' + str(counts['projects']) + ' projects' if counts.get('projects') else ''})")
 
+    # The sessions table catches up with the events in the background (TR-1471); the lines stored
+    # from here on are counted as they arrive.
+    store.start_session_reconcile()
+
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)
     # poll connectors hold off while ingest is paused for storage (see storage_state)
@@ -728,6 +733,8 @@ def make_app() -> FastAPI:
         # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
         licence_task = asyncio.create_task(licence.run(store, loop_stop))
         waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
+        # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
+        archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -751,6 +758,7 @@ def make_app() -> FastAPI:
         morning_task.cancel()
         licence_task.cancel()
         waiting_task.cancel()
+        archive_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -5483,8 +5491,9 @@ def make_app() -> FastAPI:
         sync's time and error), or the GitHub repo and issue label when it uses GitHub Issues
         (`github`, the same)."""
         await asyncio.to_thread(_project_or_404, uid)
-        await factory_api.refresh_prs(store, uid)
-        # the store work runs in a thread, so other requests are served meanwhile
+        # no GitHub call (TR-1474): the pull request state kept so far, which the background sync
+        # and a ticket's own read keep current; the store work runs in a thread, so other
+        # requests are served meanwhile
         return await asyncio.to_thread(lambda: {
             "tickets": _tickets_out(uid), "linear": store.get_project_linear(uid),
             "github": store.get_project_github(uid)})
@@ -5577,8 +5586,10 @@ def make_app() -> FastAPI:
         """One ticket by its id, number or Linear identifier, with its working doc's body and
         its history (who moved it, when)."""
         _project_or_404(uid)
-        await factory_api.refresh_prs(store, uid)
-        return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
+        t = _ticket_or_404(uid, ref)
+        if await factory_api.refresh_pr(store, uid, t):   # its own pull request only (TR-1474)
+            t = _ticket_or_404(uid, ref)
+        return _ticket_out(uid, t, with_doc=True)
 
     @app.put("/api/projects/{uid}/tickets/link")
     async def link_project_tickets(uid: str, body: dict = Body(...)):
@@ -5968,9 +5979,9 @@ def make_app() -> FastAPI:
             _err(KeyError(f"session {sid!r} did not work in this project"), 404)
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
-        return {"session": sid,
-                "lines": store.key_events(src, sid, limit=min(max(limit, 1), 1000),
-                                          offset=max(offset, 0))}
+        lines, where = store.key_events_from(src, sid, limit=min(max(limit, 1), 1000),
+                                             offset=max(offset, 0))
+        return {"session": sid, "lines": lines, "lines_from": where}
 
     # ── picking up a build where a session stopped: what a fresh session needs to carry on the
     # ticket in progress, from what Tares recorded (works after a crash too) ────────────────

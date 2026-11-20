@@ -31,6 +31,7 @@ from . import factory_waiting as waiting_mod
 from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
+from . import metrics
 from . import team as team_mod
 from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
@@ -66,27 +67,23 @@ def crew_name_of(request: Request, said: str | None = None) -> str:
 
 
 _REFRESHING: dict[str, asyncio.Task] = {}
-REFRESH_WAIT = 2.5     # seconds a ticket read waits for GitHub before serving what it has
+REFRESH_WAIT = 2.5     # seconds a ticket read waits for its pull request before serving what it has
 _READS_AT_ONCE = 4
 
 
-async def refresh_prs(store, uid: str) -> None:
-    """Bring a project's pull requests up to date before its tickets are read (TR-410), without
-    making the read wait on GitHub: one refresh per project at a time, shared by every read that
-    asks meanwhile; a read waits at most REFRESH_WAIT seconds, then gets the cached state while
-    the refresh finishes in the background."""
-    task = _shared(store, uid)
-    try:
-        await asyncio.wait_for(asyncio.shield(task), REFRESH_WAIT)
-    except asyncio.TimeoutError:
-        pass                     # the refresh carries on; this read serves what is cached
-    except Exception as e:       # a refresh must never fail a read, but say why it did not run
-        print(f"[tares] pull request refresh for {uid} failed: {type(e).__name__}: {e}",
-              flush=True)
+def lines_from(read: list[str]) -> str:
+    """Where a response's lines came from (TR-1507): `table`, `archive`, `both`, or `events` (DuckDB).
+    One read says so itself; several say `events` when any of them fell back, `both` when they
+    differ, and `events` when nothing was read."""
+    kinds = set(read)
+    if not kinds or "events" in kinds:
+        return "events"
+    return kinds.pop() if len(kinds) == 1 else "both"
 
 
 def _shared(store, uid: str) -> "asyncio.Task":
-    """The one refresh of a project that is running, or a new one."""
+    """The one refresh of a project that is running, or a new one. Only the background sync
+    (`sync_prs`) runs it: no read waits on a whole project's pull requests (TR-1474)."""
     task = _REFRESHING.get(uid)
     if task is None or task.done():
         task = asyncio.create_task(_refresh(store, uid))
@@ -94,27 +91,93 @@ def _shared(store, uid: str) -> "asyncio.Task":
     return task
 
 
+_REFRESHING_PR: dict[tuple, asyncio.Task] = {}
+
+
+async def refresh_pr(store, uid: str, ticket: dict | None) -> bool:
+    """Bring one ticket's own pull request up to date before the ticket is read (TR-1474), and
+    no other: a ticket read has no business waiting on GitHub for the project's other pull
+    requests. One refresh per pull request at a time, shared by every read that asks meanwhile;
+    a read waits at most REFRESH_WAIT seconds, then gets the cached state while the refresh
+    finishes in the background. A ticket with no pull request linked, or one that is not stale
+    and has nothing to follow, makes no GitHub call and does not wait. Answers whether the read
+    finished, so the caller reads the ticket again to see what it wrote; never raises."""
+    t = ticket or {}
+    pr = t.get("pr") or {}
+    task = None
+    try:
+        if not (isinstance(pr, dict) and pr.get("repo") and pr.get("number") and t.get("id")):
+            return False
+        if not (factory_github.stale(pr) or merged_fields(t, pr)
+                or (t.get("stage") == "changes" and pr.get("head"))):
+            return False
+        key = (t["id"], pr["repo"], str(pr["number"]))
+        task = _REFRESHING_PR.get(key)
+        if task is None or task.done():
+            task = asyncio.create_task(_refresh_ticket_pr(store, uid, t))
+            _REFRESHING_PR[key] = task
+
+            def _done(done: "asyncio.Task") -> None:
+                if _REFRESHING_PR.get(key) is done:
+                    del _REFRESHING_PR[key]
+                if not done.cancelled() and done.exception() is not None:
+                    e = done.exception()
+                    print(f"[tares] pull request refresh for {key[0]} failed: "
+                          f"{type(e).__name__}: {e}", flush=True)
+            task.add_done_callback(_done)
+        await asyncio.wait_for(asyncio.shield(task), REFRESH_WAIT)
+        return True
+    except asyncio.TimeoutError:
+        return False             # the refresh carries on; this read serves what is cached
+    except Exception as e:       # a refresh must never fail a read, but say why it did not run
+        if task is None or not task.done() or task.exception() is not e:   # `_done` said it already
+            print(f"[tares] pull request refresh for {t.get('id')} failed: "
+                  f"{type(e).__name__}: {e}", flush=True)
+        return False
+
+
+async def _refresh_ticket_pr(store, uid: str, t: dict) -> None:
+    """The refresh of one ticket's pull request: what `_refresh` does for each linked one, for
+    this ticket alone. The review gate and the last verdict are looked up only when the rules in
+    `_refresh_one` can use them."""
+    pr = t["pr"]
+    last = None
+    if t.get("stage") == "changes":
+        last = (await asyncio.to_thread(store.last_reviews, [t["id"]])).get(t["id"])
+    gate = None
+    if t.get("stage") == "review" and factory_github.stale(pr):
+        gate = await asyncio.to_thread(outside_gate, store, uid)
+    await _refresh_one(store, uid, t, asyncio.Semaphore(1), gate, last)
+
+
 def projects_with_open_prs(store) -> list[str]:
     """The factory projects with a ticket still open whose pull request is linked and neither
-    merged nor closed: the ones the background sync keeps current (TR-1010)."""
+    merged nor closed: the ones the background sync keeps current (TR-1010). Also a project that
+    has a ticket in the work with no pull request linked yet and a repo to look in, since only
+    the sync links a `factory/<ref>` branch now (a ticket read no longer does, TR-1474)."""
     out = []
-    ids = [p["id"] for p in store.list_projects() if p.get("kind") == "software_factory"]
+    ids = [p["id"] for p in store.list_projects(kind="software_factory")]
     for uid, tickets in store.tickets_by_project(ids).items():
+        has_repo = any((t.get("pr") or {}).get("repo") for t in tickets)
         for t in tickets:
             pr = t.get("pr") or {}
             if (pr.get("repo") and not pr.get("merged") and pr.get("state") != "closed"
                     and factory_mod.state_of(t) not in ("merged", "canceled")):
                 out.append(uid)
                 break
+            if has_repo and not pr and t.get("stage") in ("doing", "review", "changes", "blocked"):
+                out.append(uid)
+                break
     return out
 
 
 async def sync_prs(store, stop: asyncio.Event) -> None:
-    """The daemon's pull request sync (TR-1010): every TARES_PR_SYNC_SECONDS (120), the same
-    refresh a ticket read runs, for every project with an open pull request, one project at a
-    time and only for the pull requests whose last read is stale (factory_github.stale). So the
-    Reviews and home pages, which never refresh, show what GitHub shows without anyone opening
-    the project. It shares a refresh already running for a read, and never stops on an error.
+    """The daemon's pull request sync (TR-1010): every TARES_PR_SYNC_SECONDS (120), the refresh
+    of every pull request of a project (a ticket read refreshes only its own, TR-1474), for every
+    project with an open pull request, one project at a time and only for the pull requests
+    whose last read is stale (factory_github.stale). So the ticket lists, the Reviews and home
+    pages, which never refresh, show what GitHub shows without anyone opening the project. It
+    never stops on an error.
     The first pass waits one interval, so a daemon's start does not read GitHub at once; "off"
     turns it off."""
     every = os.getenv("TARES_PR_SYNC_SECONDS", "120").strip().lower()
@@ -361,6 +424,22 @@ def outside_gate(store, uid: str, cache: dict | None = None) -> tuple[str, str] 
     return found
 
 
+def warm_gates(store, uids, cache: dict) -> None:
+    """Resolve the review gate of every project in `uids` into `cache` (the one outside_gate
+    reads) with one query for the projects that hold their own choice. The rest share the
+    factory's answer, which is the same for each (the review slot carries nothing from a
+    project), so it is read once; a project with its own choice resolves alone, as before."""
+    todo = [u for u in dict.fromkeys(uids) if u not in cache]
+    if not todo:
+        return
+    own = store.projects_with_choice("review", todo)
+    shared = [u for u in todo if u not in own]
+    if shared:
+        found = outside_gate(store, None)
+        for u in shared:
+            cache[u] = found
+
+
 async def _outside_verdict(store, uid: str, t: dict, pr: dict, gate: tuple[str, str]) -> None:
     """A ticket in review whose project's gate is an outside tool: ask the gate for its verdict on
     the pull request's current head and keep it as a review record, once per head and verdict
@@ -442,50 +521,55 @@ async def _refresh(store, uid: str) -> None:
     linked = [t for t in tickets if t["pr"] and t["pr"].get("repo")]
     lasts = store.last_reviews([t["id"] for t in linked])
     gate = outside_gate(store, uid)    # an outside review tool: its verdict is read (TR-857)
+    await asyncio.gather(*(_refresh_one(store, uid, t, sem, gate, lasts.get(t["id"]))
+                           for t in linked), return_exceptions=True)
 
-    async def one(t: dict) -> None:
-        pr = t["pr"]
-        watch = bool(gate) and t["stage"] == "review"
-        reread = False
-        if factory_github.stale(pr):
-            async with sem:
-                pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
-                if t["stage"] == "review" and pr.get("state") == "open" and not pr.get("merged"):
-                    # how many commits the base has that the branch lacks, for the merge a person
-                    # is asked for (TR-1449): one compare per read, only for a PR in review
-                    cmp = await factory_github.compare(store, pr["repo"], pr.get("base") or "",
-                                                       pr.get("head") or "")
-                    pr["behind_by"] = cmp["behind_by"] if cmp["ok"] else None
-            reread = True
-        elif not _follows(t, pr, lasts.get(t["id"])):
-            return               # not read again and nothing to write: skip the re-read below
-        cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
-        if cur is None or not cur["pr"] or (cur["pr"].get("repo"), cur["pr"].get("number")) != (
-                pr.get("repo"), pr.get("number")):
-            return
-        fields: dict = {"pr": pr} if pr is not t["pr"] else {}
-        fields.update(merged_fields(cur, pr))
-        # new commits after the reviewer asked for changes: it is back in review (TR-444)
-        last = store.ticket_reviews(cur["id"])[-1:]
-        if (not fields.get("stage") and cur["stage"] == "changes" and last and pr.get("head")
-                and not verdict_now({"pr": pr}, last[0])["current"]):
-            fields["stage"] = "review"
-            store.add_ticket_history(cur["id"], uid, "stage", "review",
-                                     "new commits pushed after the verdict", "github", "github",
-                                     now_utc())
-        if fields:
-            store.update_ticket(cur["id"], touch=not _reread_only(cur, fields), **fields)
-        if fields.get("stage") == "merged":
-            store.add_ticket_history(cur["id"], uid, "stage", "merged",
-                                     "GitHub shows the pull request merged", "github", "github",
-                                     now_utc())
-            await write_status(store, uid, cur, "merged")
-        elif (watch and reread and (fields.get("stage") or cur["stage"]) == "review"
-              and pr.get("state") == "open"):
-            async with sem:      # the gate is asked when the PR was read again, as many at once
-                await _outside_verdict(store, uid, cur, pr, gate)
 
-    await asyncio.gather(*(one(t) for t in linked), return_exceptions=True)
+async def _refresh_one(store, uid: str, t: dict, sem: "asyncio.Semaphore",
+                       gate: tuple[str, str] | None, last: dict | None) -> None:
+    """One linked pull request read again when its last read is stale, and what that changes on
+    its ticket: shared by the project's refresh (`_refresh`) and a single ticket's (`refresh_pr`).
+    `last` is the ticket's last review, `gate` the project's outside review tool, if any."""
+    pr = t["pr"]
+    watch = bool(gate) and t["stage"] == "review"
+    reread = False
+    if factory_github.stale(pr):
+        async with sem:
+            pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+            if t["stage"] == "review" and pr.get("state") == "open" and not pr.get("merged"):
+                # how many commits the base has that the branch lacks, for the merge a person
+                # is asked for (TR-1449): one compare per read, only for a PR in review
+                cmp = await factory_github.compare(store, pr["repo"], pr.get("base") or "",
+                                                   pr.get("head") or "")
+                pr["behind_by"] = cmp["behind_by"] if cmp["ok"] else None
+        reread = True
+    elif not _follows(t, pr, last):
+        return               # not read again and nothing to write: skip the re-read below
+    cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
+    if cur is None or not cur["pr"] or (cur["pr"].get("repo"), cur["pr"].get("number")) != (
+            pr.get("repo"), pr.get("number")):
+        return
+    fields: dict = {"pr": pr} if pr is not t["pr"] else {}
+    fields.update(merged_fields(cur, pr))
+    # new commits after the reviewer asked for changes: it is back in review (TR-444)
+    newest = store.ticket_reviews(cur["id"])[-1:]
+    if (not fields.get("stage") and cur["stage"] == "changes" and newest and pr.get("head")
+            and not verdict_now({"pr": pr}, newest[0])["current"]):
+        fields["stage"] = "review"
+        store.add_ticket_history(cur["id"], uid, "stage", "review",
+                                 "new commits pushed after the verdict", "github", "github",
+                                 now_utc())
+    if fields:
+        store.update_ticket(cur["id"], touch=not _reread_only(cur, fields), **fields)
+    if fields.get("stage") == "merged":
+        store.add_ticket_history(cur["id"], uid, "stage", "merged",
+                                 "GitHub shows the pull request merged", "github", "github",
+                                 now_utc())
+        await write_status(store, uid, cur, "merged")
+    elif (watch and reread and (fields.get("stage") or cur["stage"]) == "review"
+          and pr.get("state") == "open"):
+        async with sem:      # the gate is asked when the PR was read again, as many at once
+            await _outside_verdict(store, uid, cur, pr, gate)
 
 
 def _follows(t: dict, pr: dict, last: dict | None) -> bool:
@@ -520,7 +604,8 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     holder = t.get("holder")
     sessions = (store.station_session_ids(holder) if holder
                 else [s["session"] for s in store.project_sessions(uid)])
-    commands = store.recorded_commands(source, sessions) if sessions else None
+    with metrics.step("recorded_commands"):
+        commands = store.recorded_commands(source, sessions) if sessions else None
     # only what ran since the ticket went into the work counts for its checks
     since = next((x["at"] for x in store.ticket_history(t["id"])
                   if x["field"] == "stage" and x["value"] == "doing"), None)
@@ -542,8 +627,9 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
                                if commands is not None else (None, None))
             checks.append({**c, "match": state, "recorded": recorded})
     reviews = store.ticket_reviews(t["id"])
-    layer = factory_mod.challenger_layer(
-        store.challenge_events(source, uid, factory_mod.label(t)))
+    with metrics.step("challenger"):
+        layer = factory_mod.challenger_layer(
+            store.challenge_events(source, uid, factory_mod.label(t)))
     return {"checks": checks, "reviews": reviews, "challenger": layer,
             "verdict": verdict_now(t, reviews[-1] if reviews else None)}
 
@@ -1057,28 +1143,25 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def stations(project: str | None = None) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
         never merge. Each row names its crew, machine and person."""
-        rows = store.station_sessions(h.cc_source())
+        # one row per station with its newest session, the few before it and the totals over all of
+        # them, so a station that has had many sessions costs no more than one that has had few
+        # (TR-1500); the earlier ones are read a page at a time (GET /api/factory/crew/.../sessions)
+        rollup = store.station_rollup(h.cc_source())
         names = {p["id"]: p["name"] for p in store.list_projects()}
         crews = {c["id"]: c for c in store.list_crews()}
         now = now_utc()
-        by: dict[tuple, list[dict]] = {}
-        for s in rows:
-            by.setdefault((s["crew_id"], s["station"]), []).append(s)
         out = []
-        for (cid, name), ss in by.items():
-            # the newest session plays the station now; an older one that never reported its
-            # end (killed) does not outrank it
-            ss.sort(key=lambda s: _ts(s["last_at"]), reverse=True)
-            cur = ss[0]
+        for g in rollup:
+            cid, name, cur = g["crew_id"], g["station"], g["cur"]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
             state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
             if state == "replaced":
                 state = "ended"
-            # the sessions that played the station before the current one: replaced by it
+            # the most recent sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],
                         "last_at": s["last_at"], "lines": s["lines"], "state": "replaced"}
-                       for s in ss if s is not cur]
+                       for s in g["earlier"]]
             crew = crews.get(cid) or {}
             out.append({"name": name, "role": cur["role"], "parent": cur["parent"],
                         "project": cur["project"], "project_name": names.get(cur["project"]),
@@ -1086,9 +1169,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "state_at": cur["state_at"], "quiet_minutes": quiet,
                         "session": cur["session"], "started_at": cur["started_at"],
                         "last_at": cur["last_at"], "lines": cur["lines"], "earlier": earlier,
+                        "earlier_count": g["earlier_count"],
                         "crew_id": cid, "crew": crew.get("name"),
                         "machine": crew.get("machine") or "", "person": crew.get("person"),
-                        "projects": sorted({s["project"] for s in ss if s["project"]})})
+                        "projects": g["projects"], "usage": g["usage"],
+                        "coordination_calls": g["coordination_calls"]})
         hidden = h.hidden_ids()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
             kept = []
@@ -1106,9 +1191,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 kept.append(st)
             out = kept
         meters = store.session_meters([st["session"] for st in out])
-        spent = store.usage_by_session([s["session"] for s in rows])
         retry = claude_retry()
-        coord = store.coordination_calls(h.cc_source(), [s["session"] for s in rows])
         for st in out:
             # the stations this one started: in its own crew, whose names may repeat in another
             st["children"] = sorted(x["name"] for x in out
@@ -1121,11 +1204,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
             pid = (crews.get(st["crew_id"]) or {}).get("person_id")
             st["claude_retry"] = (retry.get(retry_key(pid, st["crew"]), {}).get(st["name"])
                                   or retry.get(retry_key(pid, None), {}).get(st["name"]))
-            mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
-                    if s in spent]
-            st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
-            st["coordination_calls"] = sum(coord.get(s, 0) for s in
-                                           [st["session"], *(e["session"] for e in st["earlier"])])
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
@@ -1240,8 +1318,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
     @app.get("/api/crew")
     def get_crew(request: Request, mine: bool = False):
         """The crews (TR-628): one per person, crew name and machine, each with its stations (the
-        current session and state, the earlier sessions that played it, the stations it
-        started), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
+        current session and state, `earlier_count` and the 5 most recent earlier sessions that
+        played it as `earlier`, the stations it started; `usage`, `coordination_calls` and
+        `projects` cover every session; the rest of the earlier ones are paged by GET
+        /api/factory/crew/{crew_id}/{station}/sessions), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
         crews. `stations` is the same rows flat, for a client that does not group by crew yet. `pace`
         is the crew's pace as GET /api/crew/pace gives it. `claude_retry` maps each station the
         caller's person's crews are retrying onto a newer Claude Code to {target, fails, next_at};
@@ -1537,8 +1617,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                  "stage": t["stage"], "repo": t.get("repo"),
                                  "pr": (t["pr"] or {}).get("url")})
         n = min(max(recent, 0), 200)
-        lines = store.key_events(h.cc_source(), st["session"], limit=n,
-                                 offset=max((st["lines"] or 0) - n, 0)) if n else []
+        read = []       # where each read of the session's lines came from (TR-1507)
+        lines = []
+        if n:
+            lines, where = store.key_events_from(h.cc_source(), st["session"], limit=n,
+                                                 offset=max((st["lines"] or 0) - n, 0))
+            read.append(where)
         m = store.session_meters([st["session"]]).get(st["session"]) or {}
         convo = {}
         c = min(max(conversation, 0), 500)
@@ -1547,9 +1631,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
             start = max(end - c, 0)
             if since is not None and before is None:
                 start = max(min(since, end), end - SINCE_MAX, 0)
-            rows = store.key_payload_rows(h.cc_source(), st["session"], limit=end - start, offset=start)
+            rows, where = store.key_payload_rows_from(h.cc_source(), st["session"],
+                                                      limit=end - start, offset=start)
+            read.append(where)
             convo = {"conversation": crew_conversation.build(rows)[0], "conversation_from": start}
-        return {**st, "tickets": held, **convo,
+        return {**st, "tickets": held, **convo, "lines_from": lines_from(read),
                 "context_detail": m.get("context"), "context_at": m.get("context_at"),
                 "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
@@ -1561,11 +1647,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """One tool call's whole result in the station's current session (TR-1177): what a card on
         the Crew page loads when it is opened and the list held only the start of it."""
         st = pick_station(name, request, crew)
-        b = store.key_tool_result(h.cc_source(), st["session"], tool_id) if st["session"] else None
+        b, where = (store.key_tool_result_from(h.cc_source(), st["session"], tool_id)
+                    if st["session"] else (None, "events"))
         if b is None:
             raise HTTPException(404, f"no tool call {tool_id} in {name}'s session")
         return {"id": tool_id, "output": crew_conversation._result_text(b.get("content")),
-                "failed": bool(b.get("is_error"))}
+                "failed": bool(b.get("is_error")), "lines_from": where}
 
     @app.post("/api/crew/{name}/end")
     def end_station(name: str, request: Request, body: dict | None = Body(None),
@@ -2058,10 +2145,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # for it too; its row then names the gate in `outside_gate`.
         hidden = h.hidden_ids()
         gates: dict = {}
-        waiting = [(n, t) for n, t in store.review_tickets()
-                   if t["project"] not in hidden and (keep is None or keep(t))
-                   and (outside or outside_gate(store, t["project"], gates) is None)]
+        reviewing = [(n, t) for n, t in store.review_tickets()
+                     if t["project"] not in hidden and (keep is None or keep(t))]
+        warm_gates(store, [t["project"] for _, t in reviewing], gates)
+        waiting = [(n, t) for n, t in reviewing
+                   if outside or outside_gate(store, t["project"], gates) is None]
         ids = [t["id"] for _, t in waiting]
+        events = store.challenge_events_many(
+            h.cc_source(), [(t["project"], factory_mod.label(t)) for _, t in waiting])
         siblings = store.milestone_statuses(sorted({t["milestone"] for _, t in waiting
                                                     if t["milestone"]}))
         entered = store.entered_stage(ids, "review")
@@ -2075,8 +2166,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             blocks = bool(t["milestone"]) and all(
                 x["status"] in factory_mod.DONE_STATUSES for x in others)
             since = entered.get(t["id"], t["updated_at"])
-            layer = factory_mod.challenger_layer(
-                store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
+            layer = factory_mod.challenger_layer(events[(uid, factory_mod.label(t))])
             v = verdict_now(t, lasts.get(t["id"]))
             out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
                         "title": t["title"], "holder": t["holder"],
@@ -2277,12 +2367,17 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """Everything the reviewer needs for one review, as markdown (TR-445). `known_map` is the
         repo map version the reviewer already read: an unchanged map comes as one line."""
         p = h.project_or_404(uid)
-        await refresh_prs(store, uid)
         t = ticket_or_404(uid, ref)
-        return {"brief": brief_md(p, t, head.strip(), known_map.strip())}
+        with metrics.bind_route("brief"):
+            with metrics.step("pr_refresh"):
+                if await refresh_pr(store, uid, t):    # this ticket's pull request only (TR-1474)
+                    t = ticket_or_404(uid, ref)
+            with metrics.step("render"):    # what the phases inside brief_md leave over
+                return {"brief": brief_md(p, t, head.strip(), known_map.strip())}
 
     def brief_md(p: dict, t: dict, head: str, known_map: str = "") -> str:
-        full = h.ticket_out(p["id"], t, with_doc=True)
+        with metrics.step("ticket_read"):
+            full = h.ticket_out(p["id"], t, with_doc=True)
         pr = t["pr"] or {}
         lab = factory_mod.label(t)
         L = [f"# Review brief: {lab} {t['title']} ({p['name']})", ""]
@@ -2352,8 +2447,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
             L += ["## Assumptions made on this ticket"]
             L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
                   for a in full["assumptions"]] + [""]
-        ds = [d for d in store.list_decisions(p["id"], all_=True)
-              if lab in (d.get("tickets") or []) or not d.get("tickets")][:10]
+        with metrics.step("decisions"):
+            ds = [d for d in store.list_decisions(p["id"], all_=True)
+                  if lab in (d.get("tickets") or []) or not d.get("tickets")][:10]
         if ds:
             L += ["## Decisions the person made on this project"]
             for d in ds:   # the answer chosen, then the person's words when they add something
@@ -2363,13 +2459,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
             L += [""]
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
-            rec = recurring(pr["repo"])
+            with metrics.step("recurring"):
+                rec = recurring(pr["repo"])
             if rec:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
                 L.append("")
         # 8. the repo map: read it instead of exploring the repo
-        L += repo_map_md(repo_of(p["id"], t), builder=False, known=known_map)
+        with metrics.step("repo_map"):
+            L += repo_map_md(repo_of(p["id"], t), builder=False, known=known_map)
         # 8. links, not inlined
         L += ["## Read as needed",
               "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "
@@ -2383,20 +2481,25 @@ def register(app, store, h: Host) -> SimpleNamespace:
         moves a ticket that has not been started (no stage, or todo, and not done or canceled) to doing; a ticket already
         past that (review, changes, blocked, merged) keeps its stage."""
         p = h.project_or_404(uid)
-        await refresh_prs(store, uid)
         t = ticket_or_404(uid, ref)
-        note = ""
-        if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
-            try:
-                await set_stage(uid, ref, request, {"stage": "doing"})
-            except HTTPException as e:
-                note = f"Could not move the ticket to doing: {e.detail}\n\n"
-            t = ticket_or_404(uid, ref)
-        return {"brief": note + builder_brief_md(p, t)}
+        with metrics.bind_route("builder_brief"):
+            with metrics.step("pr_refresh"):
+                if await refresh_pr(store, uid, t):    # this ticket's pull request only (TR-1474)
+                    t = ticket_or_404(uid, ref)
+            note = ""
+            if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
+                try:
+                    await set_stage(uid, ref, request, {"stage": "doing"})
+                except HTTPException as e:
+                    note = f"Could not move the ticket to doing: {e.detail}\n\n"
+                t = ticket_or_404(uid, ref)
+            with metrics.step("render"):    # what the phases inside builder_brief_md leave over
+                return {"brief": note + builder_brief_md(p, t)}
 
     def builder_brief_md(p: dict, t: dict) -> str:
         uid, lab = p["id"], factory_mod.label(t)
-        full = h.ticket_out(uid, t, with_doc=True)
+        with metrics.step("ticket_read"):
+            full = h.ticket_out(uid, t, with_doc=True)
         pr = t["pr"] or {}
         repo = repo_of(uid, t)
         L = [f"# Builder brief: {lab} {t['title']} ({p['name']})", ""]
@@ -2418,7 +2521,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         L += ["## The ticket and its working doc",
               (full.get("working_doc_body") or "(no working doc)").strip(), ""]
         # 3. the milestone it belongs to and the checks that close it
-        ms = store.get_milestone(uid, t["milestone"]) if t.get("milestone") else None
+        with metrics.step("milestone"):
+            ms = store.get_milestone(uid, t["milestone"]) if t.get("milestone") else None
         L += [f"## Milestone: {ms['name']}" if ms else "## Milestone", ]
         if ms:
             L += ([ms["goal"]] if ms["goal"] else [])
@@ -2428,8 +2532,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
             L += ["The ticket is in no milestone."]
         L.append("")
         # 4. what it depends on
-        by_id = {x["id"]: x for x in store.list_tickets(uid)}
-        deps = [by_id[d] for d in t["depends_on"] if d in by_id]
+        with metrics.step("dependencies"):
+            by_id = {x["id"]: x for x in store.list_tickets(uid)}
+            deps = [by_id[d] for d in t["depends_on"] if d in by_id]
         L += ["## Dependencies"]
         if not deps:
             L += ["None."]
@@ -2442,24 +2547,27 @@ def register(app, store, h: Host) -> SimpleNamespace:
                      if d["status"] == "canceled" else " (NOT DONE: it blocks this ticket)")]
         L.append("")
         # 5. the rules: the project's AGENTS.md wins over the generic flow, then the shared one
-        gids = h.global_ids(False) or {}
-        agents = store.list_docs(uid, "agents")
-        mine = [d for d in agents if d["id"] not in gids.values()]
-        shared = [d for d in agents if d["id"] == gids.get("agents")]
-        for title, docs in (("AGENTS.md of this project (wins over the generic flow)", mine),
-                            ("AGENTS.md shared by every project", shared)):
-            for d in docs:
-                L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
+        with metrics.step("agents_docs"):
+            gids = h.global_ids(False) or {}
+            agents = store.list_docs(uid, "agents")
+            mine = [d for d in agents if d["id"] not in gids.values()]
+            shared = [d for d in agents if d["id"] == gids.get("agents")]
+            for title, docs in (("AGENTS.md of this project (wins over the generic flow)", mine),
+                                ("AGENTS.md shared by every project", shared)):
+                for d in docs:
+                    L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
         if not (mine or shared):
             L += ["## AGENTS.md", "This project has none.", ""]
-        L += repo_map_md(repo, builder=True)
+        with metrics.step("repo_map"):
+            L += repo_map_md(repo, builder=True)
         # 6. what is open on it: assumptions to honour, questions waiting for the person
         asm = [a for a in full.get("assumptions") or [] if a["state"] != "kept"]
         if asm:
             L += ["## Assumptions on this ticket (open, or overturned: follow the person's words)"]
             L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
                   + (f". The person: \"{a['words']}\"" if a.get("words") else "") for a in asm] + [""]
-        desk = [d for d in store.list_desk("open", uid) if lab in (d.get("tickets") or [])]
+        with metrics.step("desk"):
+            desk = [d for d in store.list_desk("open", uid) if lab in (d.get("tickets") or [])]
         if desk:
             L += ["## Questions on the desk about this ticket"]
             L += [f"- {d['label']}{' (blocking)' if d['blocking'] else ''}: {d['question']}. "
@@ -2480,7 +2588,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 L += [f"  - {f['label']} [{f['severity']}] {f['state']}: {f['text']}"
                       for f in r["findings"] if f["state"] == "open"]
             L.append("")
-        msgs = messages_for(p, t)[-5:]
+        with metrics.step("protocol_messages"):
+            msgs = messages_for(p, t)[-5:]
         if msgs:
             L += ["## The crew's latest messages about it"]
             L += [f"- {m['from'] or '?'} -> {m['to']}: [TF:{m['type']}] {m['first_line']}" for m in msgs]
