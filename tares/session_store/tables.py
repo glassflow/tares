@@ -131,6 +131,48 @@ session_commands = Table(
 )
 Index("session_commands_session_at", session_commands.c.session, session_commands.c.at)
 
+# What a person typed, what a session said last, and the files it touched (session_ingest.py,
+# TR-1505): written as each line is stored and filled from DuckDB at start, so the factory's
+# readers do not scan events.
+# A turn the person typed: a `user` line that passes `turn_fact`'s filters. The key is (session,
+# line_key) on purpose: a resumed session copies its old lines under a new session id, and the
+# events table keeps both copies, so a read that asks for both sessions lists both. `person` is
+# the recording's `tares_person` label (null when it carries none).
+session_turns = Table(
+    "session_turns", metadata,
+    Column("session", Text, primary_key=True),
+    Column("line_key", Text, primary_key=True),
+    Column("source", Text),
+    Column("at", UTCDateTime),
+    Column("person", Text),
+    Column("text", Text),
+)
+Index("session_turns_session_at", session_turns.c.session, session_turns.c.at)
+Index("session_turns_at", session_turns.c.at)
+
+# The last three things a session said (assistant text that is not a tool call, not empty), by
+# line; older rows are deleted in the transaction that adds a newer one.
+session_said = Table(
+    "session_said", metadata,
+    Column("session", Text, primary_key=True),
+    Column("line_key", Text, primary_key=True),
+    Column("source", Text),
+    Column("at", UTCDateTime),
+    Column("text", Text),
+)
+Index("session_said_session_at", session_said.c.session, session_said.c.at)
+
+# A file a session edited or wrote, once, with when it last did. `source` is here so a purge of a
+# source can delete its rows.
+session_files = Table(
+    "session_files", metadata,
+    Column("session", Text, primary_key=True),
+    Column("path", Text, primary_key=True),
+    Column("source", Text),
+    Column("last_at", UTCDateTime),
+)
+Index("session_files_session_last_at", session_files.c.session, session_files.c.last_at)
+
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
     "session_ingest_marks", metadata,

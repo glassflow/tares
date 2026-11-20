@@ -11,13 +11,13 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import and_, func, null, select, update
+from sqlalchemy import and_, func, null, or_, select, update
 
 from . import session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
 from .session_store.tables import (project_sessions, session_commands, session_messages,
-                                   session_states, session_stations, session_usage)
+                                   session_states, session_stations, session_turns, session_usage)
 from .session_store.tables import sessions as sessions_table
 
 log = logging.getLogger("tares.factory_store")
@@ -2082,28 +2082,20 @@ class FactoryStore:
         `sessions` (every session when None) since `since`, newest first (TR-450). With `person`,
         only turns whose recording carries that `tares_person` (TR-620), in any session; the
         person `local` also owns the recordings that carry none (the system credential's)
-        (TR-634)."""
-        q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
-             "event_type = 'user' AND event_time >= ? AND "
-             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
-        # Claude Code also writes other sessions' messages, scheduled prompts, task notifications
-        # and compaction summaries as user lines; none of them is the person typing (TR-634)
-        q += (" AND coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'"
-              " AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
-              " AND coalesce(json_extract_string(payload, '$.isCompactSummary'), 'false') <> 'true'"
-              " AND coalesce(json_extract_string(payload, '$.origin.kind'), 'human') = 'human'")
-        vals: list = [source, since]
+        (TR-634). Read from `session_turns`, where each turn was written once as its line was
+        stored (session_ingest, TR-1505)."""
+        t = session_turns.c
+        q = select(t.session, t.at, t.text).where(t.source == source, t.at >= since)
         if person:
-            who = "json_extract_string(labels, '$.tares_person')"
-            q += f" AND ({who} = ?" + (f" OR {who} IS NULL" if person == "local" else "") + ")"
-            vals.append(person)
+            q = q.where(or_(t.person == person, t.person.is_(None)) if person == "local"
+                        else t.person == person)
         if sessions is not None:
             if not sessions:
                 return []
-            q += f" AND key_value IN ({', '.join('?' for _ in sessions)})"
-            vals += sessions
-        with self._lock:
-            rows = self.con.execute(q + " ORDER BY event_time DESC LIMIT 2000", vals).fetchall()
+            q = q.where(t.session.in_(list(sessions)))
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q.order_by(t.at.desc(), t.session.desc(), t.line_key.desc())
+                                .limit(2000)).fetchall()
         return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
 
     def role_sessions(self, role: str) -> list[str]:

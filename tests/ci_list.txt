@@ -245,6 +245,7 @@ test_session_facts
 test_session_flow
 test_session_project
 test_session_store
+test_session_turns
 test_sessions_caught_up
 test_sessions_table
 test_setup_flow

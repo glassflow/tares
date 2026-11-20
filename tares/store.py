@@ -31,6 +31,7 @@ from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
 from .session_store.tables import session_commands, session_messages
+from .session_store.tables import session_files, session_said, session_turns
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
@@ -3555,60 +3556,30 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return {"state": row[0], "reason": row[1], "state_at": row[2]} if row else None
 
     def said_lately(self, source: str, session: str, n: int = 3) -> list[dict]:
-        """The session's last `n` assistant messages (not tool calls), oldest first."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT text, event_time FROM events WHERE source = ? AND key_value = ? AND "
-                "event_type = 'assistant' ORDER BY event_time DESC LIMIT 60",
-                [source, session]).fetchall()
-        out = []
-        for t, at in rows:
-            t = (t or "").strip()
-            if t and not t.startswith("→"):
-                out.append({"text": t, "at": at})
-            if len(out) >= n:
-                break
-        return list(reversed(out))
+        """The session's last `n` assistant messages (not tool calls, not empty), oldest first.
+        Read from `session_said`, which keeps the last three of each session (session_ingest,
+        TR-1505), so `n` above 3 gives 3."""
+        t = session_said.c
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(select(t.text, t.at).where(
+                t.source == source, t.session == session).order_by(
+                t.at.desc(), t.line_key.desc()).limit(max(n, 0))).fetchall()
+        return [{"text": r[0], "at": r[1]} for r in reversed(rows)]
 
     def files_touched(self, source: str, session: str, limit: int = 20) -> list[str]:
-        """The files the session last edited or wrote (its Edit / Write / NotebookEdit calls),
-        most recent first, each once."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = "
-                "'tool_use' ORDER BY event_time DESC LIMIT 400", [source, session]).fetchall()
-        seen: list[str] = []
-        for (pj,) in rows:
-            try:
-                o = json.loads(pj) if pj else {}
-            except (TypeError, ValueError):
-                continue
-            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
-            for b in msg.get("content") or []:
-                if not isinstance(b, dict) or b.get("type") != "tool_use":
-                    continue
-                if str(b.get("name") or "") not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-                    continue
-                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                path = str(inp.get("file_path") or inp.get("notebook_path") or "")
-                if path and path not in seen:
-                    seen.append(path)
-            if len(seen) >= limit:
-                break
-        return seen
+        """The files the session last edited or wrote (its Edit / Write / MultiEdit / NotebookEdit
+        calls), most recent first, each once. Read from `session_files` (session_ingest, TR-1505)."""
+        t = session_files.c
+        with self.sessions_db.begin() as conn:
+            return [r[0] for r in conn.execute(select(t.path).where(
+                t.source == source, t.session == session).order_by(
+                t.last_at.desc(), t.path).limit(max(limit, 0)))]
 
     def last_said(self, source: str, session: str) -> str | None:
         """The last thing the session's assistant wrote (not a tool call), for a waiting
         session: what it stopped on."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT text FROM events WHERE source = ? AND key_value = ? AND event_type = "
-                "'assistant' ORDER BY event_time DESC LIMIT 20", [source, session]).fetchall()
-        for (t,) in rows:
-            t = (t or "").strip()
-            if t and not t.startswith("→"):
-                return t
-        return None
+        said = self.said_lately(source, session, 1)
+        return said[0]["text"] if said else None
 
     def session_projects(self, session: str) -> list[str]:
         with self.sessions_db.begin() as conn:
@@ -4667,6 +4638,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 # and so do the facts read from them (TR-1477); a call's results live on its row
                 conn.execute(delete(session_commands).where(session_commands.c.source == source))
                 conn.execute(delete(session_messages).where(session_messages.c.source == source))
+                # and the turns, last words and touched files (TR-1505)
+                conn.execute(delete(session_turns).where(session_turns.c.source == source))
+                conn.execute(delete(session_said).where(session_said.c.source == source))
+                conn.execute(delete(session_files).where(session_files.c.source == source))
         return n
 
     # ── subscriptions ─────────────────────────────────────────────────────────
