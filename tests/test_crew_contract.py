@@ -91,7 +91,8 @@ WORLD = {"desk": [], "projects": [], "settings": {"autonomy": "L4-ship"},
 def _field(name, label, kind="text", required=False, help="", placeholder="", options=(), rows=(), value="",
            saved=False, picker=""):
     """A field of a setup form with the keys the cell sends for one (tares/screens/factory_setup.py field_of):
-    a secret has no `value`, only `saved`; a bool has a boolean; a mapping has `rows`; a select has `options`."""
+    a secret has no `value`, only `saved`; a bool has a boolean; a mapping has `rows` (its keys are `rows[].key`, its
+    `options` are [] and its `value` is null); a select has `options`."""
     out = {"name": name, "label": label, "kind": kind, "required": required,
            "requirement": "Required" if required else "Optional", "placeholder": placeholder, "help": help,
            "error": "" if kind == "bool" else f"Enter {label.lower()}.", "options": list(options),
@@ -99,6 +100,8 @@ def _field(name, label, kind="text", required=False, help="", placeholder="", op
            "picker": picker, "picker_help": "", "picker_placeholder": "", "picker_loading": "", "picker_more": ""}
     if kind == "secret":
         del out["value"]
+    if kind == "mapping":
+        out["options"], out["value"] = [], None
     return out
 
 
@@ -177,7 +180,7 @@ def sample_setup():
                        "allowed": True, "button": "Connect", "reason": None, "app": None,
                        "form": _form("connect", "Connect Orders board", [
                            _field("site", "Site address", required=True, placeholder="https://orders.example.test"),
-                           _field("status", "Status mapping", "mapping", options=["todo", "in_progress", "in_review", "done"], rows=mapping,
+                           _field("status", "Status mapping", "mapping", rows=mapping,
                                   help="Match each Tares stage to the status that means it.")])}],
         "footer": {"hint": "", "next": "Finish setup"}}
     return {"title": "Set up your factory", "exit_label": "Exit setup",
@@ -981,10 +984,10 @@ ck("setup --progress: the cell's progress under `progress`, and nothing else", s
    and progress_doc.get("progress") == WORLD["setup_progress"], progress_doc)
 ck("setup --progress: it asked GET /api/factory/setup/progress", SETUP_SEEN[-1:] == ["/api/factory/setup/progress"], SETUP_SEEN)
 fixture("setup_progress.json", pretty(progress_doc))
-repos_doc = one_document("setup --repos", *tares(env, ["setup", "--repos", "--credential", "acme app", "--via", "app", "--json"]), "setup")
+repos_doc = one_document("setup --repos", *tares(env, ["setup", "--repos", "--credential", "acme&app#1", "--via", "app", "--json"]), "setup")
 ck("setup --repos: the `repos` list only", set(repos_doc) == {"schema_version", "repos"}
    and repos_doc.get("repos") == ["northwind/orders-api", "northwind/web-shop"], repos_doc)
-ck("setup --repos: the credential and via go in the query, encoded", SETUP_SEEN[-1:] == ["/api/factory/setup/github/repos?credential=acme%20app&via=app"], SETUP_SEEN)
+ck("setup --repos: the credential and via go in the query, encoded", SETUP_SEEN[-1:] == ["/api/factory/setup/github/repos?credential=acme%26app%231&via=app"], SETUP_SEEN)
 fixture("setup_repos.json", pretty(repos_doc))
 one_document("setup --repos, = form", *tares(env, ["setup", "--repos", "--credential=main", "--json"]), "setup")
 ck("setup --repos --credential=<name>: the same query without via", SETUP_SEEN[-1:] == ["/api/factory/setup/github/repos?credential=main"], SETUP_SEEN)

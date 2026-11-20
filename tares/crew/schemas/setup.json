@@ -84,11 +84,11 @@
       "properties": {
         "name": {"type": "string"},
         "label": {"type": "string"},
-        "kind": {"description": "text, secret, bool, select or mapping today; a caller shows another kind as text.", "type": "string"},
+        "kind": {"description": "text, secret, url, bool, select or mapping today; a caller shows another kind as text.", "type": "string"},
         "required": {"type": "boolean"},
-        "value": {"description": "Absent for a secret: a secret never travels, only `saved` says one is kept. A string, or a boolean for a bool field.", "type": ["string", "boolean", "null"]},
+        "value": {"description": "Absent for a secret: a secret never travels, only `saved` says one is kept. A string, a boolean for a bool field, null for a mapping field (its values are in `rows`).", "type": ["string", "boolean", "null"]},
         "saved": {"description": "A secret field: whether the cell holds a value.", "type": "boolean"},
-        "options": {"description": "The choices of a select field, the keys of a mapping field.", "type": "array", "items": {"type": "string"}},
+        "options": {"description": "The choices of a select field; empty for every other kind, a mapping field included (its keys are `rows[].key`).", "type": "array", "items": {"type": "string"}},
         "rows": {"description": "A mapping field: one row per key, with its `key`, `label` and `value`.", "type": "array", "items": {"type": "object", "additionalProperties": true}},
         "help": {"type": ["string", "null"]},
         "placeholder": {"type": ["string", "null"]}

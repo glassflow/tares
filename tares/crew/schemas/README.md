@@ -86,7 +86,8 @@ know. A secret field never has a `value`: `saved` says whether the cell holds on
   how far setup is, and how many factory projects the cell has.
 - `setup --repos [--credential <name>] [--via app] --json` prints `{"repos": ["owner/name", ...]}`, the repositories
   GitHub lets the cell see (GET `/api/factory/setup/github/repos`, which the GitHub Issues form's repository picker
-  reads). `repos` is a list of strings, sorted. `--credential` names a GitHub credential stored on the cell; without
+  reads). `--via` is `app` by default; any other value makes the cell list every github.com credential instead of
+  its GitHub App connections, and the command passes it on as given. `repos` is a list of strings, sorted. `--credential` names a GitHub credential stored on the cell; without
   it the cell uses its GitHub App connections, else every github.com credential. An empty list can mean GitHub is
   still listing: ask again in a minute. When GitHub refuses the listing, the command fails with `tares_error` and
   GitHub's reason in `message`, never an empty list.

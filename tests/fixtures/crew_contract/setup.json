@@ -487,12 +487,7 @@
                   "placeholder": "",
                   "help": "Match each Tares stage to the status that means it.",
                   "error": "Enter status mapping.",
-                  "options": [
-                    "todo",
-                    "in_progress",
-                    "in_review",
-                    "done"
-                  ],
+                  "options": [],
                   "rows": [
                     {
                       "key": "todo",
@@ -519,7 +514,7 @@
                       "value": "Closed"
                     }
                   ],
-                  "value": "",
+                  "value": null,
                   "saved": false,
                   "saved_note": "",
                   "picker": "",
