@@ -7,7 +7,7 @@ const Tabs = TabsPrimitive.Root;
 
 // The underline slides to the tab chosen (TR-1436). One line for the list, placed under the active tab
 // and moved when the active tab, the tabs or the list's size change. It is placed once without moving,
-// then data-line="on" turns its transition on and hides the tabs' own borders (styles.css, motion-tabs).
+// then data-line="on" turns its transition on and hides the tabs' own borders (paper-motion.css, motion-tabs).
 // Until script places it, or without script, each tab's own border shows the choice as before.
 function useTabLine(list: React.RefObject<HTMLDivElement>) {
   React.useLayoutEffect(() => {

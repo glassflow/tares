@@ -2,7 +2,7 @@
 // Adapted from arche-ui seed/ci/eslint-token-contract.config.mjs and argus-ui's copy of it.
 //
 // Colour comes from a token, never from a literal. In TSX that means a CSS variable
-// (`var(--accent)`, `bg-[var(--code-dark-bg)]`) or a utility mapped to one in src/styles.css
+// (`var(--accent)`, `bg-[var(--code-dark-bg)]`) or a utility mapped to one in src/paper/paper-theme.css
 // (`bg-panel`, `text-muted-foreground`). Three things fail, in a string or a template:
 //
 //   hex       #e3c777, #fff, #1e0f00cc
@@ -10,10 +10,10 @@
 //   palette   a stock Tailwind palette utility: bg-amber-200, text-slate-500, ring-red-600/40
 //   utility   an arbitrary value naming a token that has a utility: text-[color:var(--err)] is
 //             text-err, bg-[var(--row-hover)] is bg-row-hover (TR-1263). The list of such tokens
-//             is read from `@theme inline` in src/styles.css, so a role added there is guarded
+//             is read from `@theme inline` in src/paper/paper-theme.css, so a role added there is guarded
 //             the moment it exists. Tokens with no utility (the code palette) still pass.
 //
-// CSS is exempt: src/styles.css holds the definitions, and it is outside a TSX gate anyway.
+// CSS is exempt: src/styles.css and the vendored paper files hold the definitions, and they are outside a TSX gate anyway.
 // Raw palette variables (`var(--green-300)`) are tokens and pass; choosing a semantic one
 // over a raw one is a review call, not a lint. A `var()` in an inline style passes too: only the
 // Tailwind arbitrary-value form has a utility to use instead.
@@ -43,7 +43,7 @@ const REGISTER = [
 ]
 // -----------------------------------------------------------------------------
 
-const DOC = 'Use a CSS variable (var(--token)) or a utility mapped to one in src/styles.css. See .impeccable.md.'
+const DOC = 'Use a CSS variable (var(--token)) or a utility mapped to one in src/paper/paper-theme.css. See .impeccable.md.'
 // A hex colour is # and 3, 4, 6 or 8 hex digits, not glued to a word on either side (so an HTML
 // entity like &#9662; or an anchor like #section-2 passes). A pull request number such as #595 is
 // also three hex digits and fails; the register below holds the one file of sample prose with them.
@@ -56,12 +56,15 @@ const PALETTE =
   '(?:red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|gray|grey|zinc|neutral|stone|slate)-\\d{2,3}\\b'
 
 // The tokens `@theme inline` maps to a utility (`--color-err: var(--err)` makes `--err` one).
-// `--ink-soft` is listed by hand: it is the same role as muted-foreground and has no other name.
-const CSS = readFileSync(new URL('./src/styles.css', import.meta.url), 'utf8')
-const THEMED = [...CSS.slice(CSS.indexOf('@theme inline')).matchAll(/--color-[a-z0-9-]+:\s*var\(--([a-z0-9-]+)\)/g)]
-  .map((m) => m[1])
-  .concat('ink-soft')
-if (THEMED.length < 20) throw new Error('token-contract: could not read @theme inline from src/styles.css')
+// The map lives in the vendored src/paper/paper-theme.css (TR-1565); a block left in src/styles.css
+// counts too. `--ink-soft` is listed by hand: it is the same role as muted-foreground and has no
+// other name.
+const THEME_FILES = ['./src/paper/paper-theme.css', './src/styles.css']
+const BLOCKS = THEME_FILES.flatMap((f) =>
+  [...readFileSync(new URL(f, import.meta.url), 'utf8').matchAll(/@theme inline\s*\{[^}]*\}/g)].map((m) => m[0]),
+)
+const THEMED = BLOCKS.flatMap((b) => [...b.matchAll(/--color-[a-z0-9-]+:\s*var\(--([a-z0-9-]+)\)/g)].map((m) => m[1])).concat('ink-soft')
+if (THEMED.length < 20) throw new Error('token-contract: could not read @theme inline from src/paper/paper-theme.css')
 const UTILITY = `-\\[(?:color:)?var\\(--(?:${[...new Set(THEMED)].join('|')})\\)\\]`
 
 const strings = (re) => `Literal[value=/${re}/], TemplateElement[value.raw=/${re}/]`
@@ -75,7 +78,7 @@ const SELECTORS = {
   },
   utility: {
     selector: strings(UTILITY),
-    message: `An arbitrary value for a token that has a utility: write text-err, not text-[color:var(--err)]. The roles and their names are in @theme inline in src/styles.css and in .impeccable.md. (token-contract: utility)`,
+    message: `An arbitrary value for a token that has a utility: write text-err, not text-[color:var(--err)]. The roles and their names are in @theme inline in src/paper/paper-theme.css and in .impeccable.md. (token-contract: utility)`,
   },
 }
 
