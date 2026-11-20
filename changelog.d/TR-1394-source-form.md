@@ -1,2 +1,0 @@
-Changed
-The form for connecting Tares to a system (when adding a connection, and on its Configuration tab) has a new look: every field has a label in words and a hint, a missing field is named under it as a sentence, header and label rows have their own name and value fields, and secrets already stored say so and can be kept or removed. On a Postgres table, Discover's proposed columns now show, with "Apply to form"; before, they never appeared (TR-1394).

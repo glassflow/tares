@@ -1,2 +1,0 @@
-Changed
-The access key settings (Factory Settings > Access keys, and Settings > Access on the platform page) have a new look: each key says in words what it can do ("Can read and send data."), when it was last used and whose it is, a project key names its project, a new key is made in a form that explains each choice and says a missing name under the field, and revoking a key asks in a dialog (TR-1392).
