@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/setup.json",
+  "title": "tares factory setup --json: the cell's factory setup (also --progress and --repos)",
+  "description": "One document, with `schema_version` and exactly one of `setup`, `progress` or `repos`. The cell owns the shape of what is inside (tares/screens/factory_setup.py): the crew passes it on as it came, and a caller ignores the keys it does not know. Only the keys the cell always sends are required below; the rest are named so a client can type them, and none of them is closed.",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "setup": {
+      "description": "`setup --json`: GET /api/factory/setup as the cell answered it. Besides the keys named here it holds `exit_label`, `edition`, `licence`, `onboarding`, `terminal` and `tools`.",
+      "type": "object",
+      "required": ["title", "progress", "steps"],
+      "properties": {
+        "title": {"type": "string"},
+        "progress": {"$ref": "#/$defs/progress"},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/step"}}
+      },
+      "additionalProperties": true
+    },
+    "progress": {
+      "description": "`setup --progress --json`: GET /api/factory/setup/progress. `projects` is how many factory projects the cell has.",
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/progress"}],
+      "properties": {"projects": {"type": "integer", "minimum": 0}}
+    },
+    "repos": {
+      "description": "`setup --repos --json`: the `repos` list of GET /api/factory/setup/github/repos, owner/name sorted. Empty when GitHub listed none, or is still listing: ask again. A listing GitHub refused is an error (`tares_error`), never an empty list.",
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "oneOf": [
+    {"required": ["setup"]},
+    {"required": ["progress"]},
+    {"required": ["repos"]}
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "progress": {
+      "type": "object",
+      "required": ["set", "total"],
+      "properties": {
+        "set": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 0},
+        "text": {"description": "For a person: `N of M done`.", "type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "step": {
+      "type": "object",
+      "required": ["slot", "name", "state", "connected", "available"],
+      "properties": {
+        "slot": {"description": "The id the cell's routes use for the step (tickets, review, ci, ...).", "type": "string"},
+        "name": {"type": "string"},
+        "why": {"type": "string"},
+        "state": {"description": "`set` or `not_set` today; a caller treats another value as not set.", "type": "string"},
+        "connected": {"type": "array", "items": {"$ref": "#/$defs/integration"}},
+        "available": {"type": "array", "items": {"$ref": "#/$defs/integration"}}
+      },
+      "additionalProperties": true
+    },
+    "integration": {
+      "description": "A connected integration or one that could be connected; the two lists share the keys named here.",
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "form": {"description": "The settings form, null when there is nothing to fill in or the integration is not licensed.", "oneOf": [{"type": "null"}, {"$ref": "#/$defs/form"}]},
+        "app": {"description": "An `available` integration only: the Tares Cloud app block (url, service, button, steps, ...), null where the cell has no app for it.", "oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": true}]}
+      },
+      "additionalProperties": true
+    },
+    "form": {
+      "type": "object",
+      "required": ["fields"],
+      "properties": {"fields": {"type": "array", "items": {"$ref": "#/$defs/field"}}},
+      "additionalProperties": true
+    },
+    "field": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string"},
+        "label": {"type": "string"},
+        "kind": {"description": "text, secret, bool, select or mapping today; a caller shows another kind as text.", "type": "string"},
+        "required": {"type": "boolean"},
+        "value": {"description": "Absent for a secret: a secret never travels, only `saved` says one is kept. A string, or a boolean for a bool field.", "type": ["string", "boolean", "null"]},
+        "saved": {"description": "A secret field: whether the cell holds a value.", "type": "boolean"},
+        "options": {"description": "The choices of a select field, the keys of a mapping field.", "type": "array", "items": {"type": "string"}},
+        "rows": {"description": "A mapping field: one row per key, with its `key`, `label` and `value`.", "type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "help": {"type": ["string", "null"]},
+        "placeholder": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    }
+  }
+}
