@@ -156,7 +156,7 @@ async def main():
        (api["added"], api["removed"]))
     p47, p44, p43 = api["prs"][0], api["prs"][1], api["prs"][3]
     ck("an open PR: its ticket, CI, review, size and who opened it",
-       p47["ticket"] == "T3" and p47["ticket_href"] == f"/projects/{g}/tickets/T3" and p47["ci"] == "CI green"
+       p47["ticket"] == "T3" and p47["ticket_href"] == f"/projects/{g}/tickets/T3" and p47["ci"] == "Checks passed"
        and p47["review"] == "round 1: passed" and p47["size"]["files"] == 2
        and p47["when"] == "opened 3 hours ago by crew-bot" and p47["state_label"] == "Open", p47)
     ck("a merged PR says who merged it and has no CI", p44["when"] == "merged 5 hours ago by alex"

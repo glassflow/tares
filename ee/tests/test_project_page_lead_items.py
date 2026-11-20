@@ -2,7 +2,7 @@
 """On a team cell, what a project asks of its lead waits for the lead only, on every screen.
 
 Seen on the factory cell: Kiran leads tares-desktop. Ashish (the cell's owner) is not on it, yet its
-page showed him four "Milestone to check" items and "calls to confirm" under "Waiting for you", and
+page showed him four "Milestone to check" items and "crew answers to confirm" under "Waiting for you", and
 the project as "Waiting on you". His home showed none of them. The project page read the
 single-person list, which asks nobody who an item is for. Now every screen reads the team home's
 rule:
@@ -122,7 +122,7 @@ async def main():
         ck("the milestone waits for Kiran, nothing to press",
            "Milestone to check for Kiran" in others and others["Milestone to check for Kiran"]["actions"] == []
            and others["Milestone to check for Kiran"]["for_person"]["id"] == pid["kiran"], list(others))
-        ck("the call waits for Kiran", "1 call to confirm for Kiran" in others, list(others))
+        ck("the call waits for Kiran", "1 crew answer to confirm for Kiran" in others, list(others))
         ck("no item is named for anyone but Kiran", all(w["label"].endswith("for Kiran") for w in a["waiting_others"]),
            list(others))
         h = await get("ashish", "/api/home")
@@ -209,7 +209,7 @@ async def main():
         a, k = await page("ashish", done), await page("kiran", done)
         ck("Ashish cannot close Kiran's project and has no Ready to close of his own",
            a["can_close"] is False and not any(w["kind"] == "signoff" for w in a["waiting"])
-           and any(w["label"] == "Ready to close for Kiran" for w in a["waiting_others"]), (a["can_close"], a["waiting"], a["waiting_others"]))
+           and any(w["label"] == "Kiran can close it" for w in a["waiting_others"]), (a["can_close"], a["waiting"], a["waiting_others"]))
         ck("Kiran can", k["can_close"] is True and any(w["kind"] == "signoff" for w in k["waiting"]), k["can_close"])
         ps = {p["id"]: p for p in (await get("ashish", "/api/factory/projects"))["projects"]}
         ck("the Projects row offers Close to Kiran only", ps[done]["can_close"] is False
@@ -271,7 +271,7 @@ async def main():
            == ["calls_to_confirm", "milestone_to_check"])
         k = await page("kiran", gone)
         ck("for Kiran they wait for Ashish", k["waiting"] == []
-           and sorted(w["label"] for w in k["waiting_others"]) == ["1 call to confirm for Ashish", "Milestone to check for Ashish"],
+           and sorted(w["label"] for w in k["waiting_others"]) == ["1 crew answer to confirm for Ashish", "Milestone to check for Ashish"],
            [w["label"] for w in k["waiting_others"]])
 
         print("== no admin on the cell: an orphan waits for no one, never for everyone ==")

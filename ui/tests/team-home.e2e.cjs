@@ -550,29 +550,34 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await checkWords(kim.page, ck, t("kim after the answer"));
       await kim.ctx.close();
 
-      // TR-1451: the same answer from the feed says it came from there, and the feed lists it
+      // TR-1527: a link to one waiting item opens Home at it (the feed page is Home now, TR-1527), and the answer
+      // given there is recorded from the console. The record names a desk item question:<D>, the team row desk:<D>.
       const banner = await api("POST", "/api/desk", { question: "Which colour for the shop banner?", options: ["red", "blue"],
         recommendation: "blue", why: "it matches the logo", project: ids.project, to: ids.people.alex });
       ck(t("TR-1451: a question for the feed is put on the desk"), banner.status < 300, JSON.stringify(banner));
-      await page.goto(`${BASE}/feed`, { waitUntil: "load" });
-      const card = page.getByTestId("feed-card").filter({ hasText: "Which colour for the shop banner" });
-      await card.waitFor();
+      await new Promise((r) => setTimeout(r, 5600));   // the daemon keeps /api/home for 5 seconds per credential
+      await page.goto(`${BASE}/?item=${encodeURIComponent(`question:${banner.body.label}`)}`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      const card = page.getByTestId("waiting-row").first();
+      await page.locator("[data-focus]").waitFor({ timeout: 5000 }).catch(() => {});
+      ck(t("team item link: a waiting item comes first and is marked"),
+         (await card.getAttribute("data-focus")) === "1" && (await card.innerText()).includes("Which colour for the shop banner")
+         && (await page.locator("[data-focus]").count()) === 1 && (await card.getByTestId("home-focus-label").innerText()).toLowerCase() === "from your link"
+         && (await rows.count()) === 5, `${await card.innerText()} | ${await rows.count()} rows`);
+      await checkWords(page, ck, t("team item link"));
       ctl.posts.length = 0;
-      await card.getByTestId("feed-yes").click();
-      await card.waitFor({ state: "detached" });
+      await card.getByTestId("question-choices").getByRole("button", { name: "blue", exact: true }).click();
+      await row(page, "Which colour for the shop banner").waitFor({ state: "detached" });
       const colourPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
-      ck(t("TR-1451: the feed's reply carries X-Tares-Via: feed"), !!colourPost && colourPost.via === "feed"
+      ck(t("TR-1451: the answer on Home carries no feed header, and the choice"), !!colourPost && colourPost.via !== "feed"
          && JSON.parse(colourPost.body || "{}").choice === "blue", JSON.stringify(colourPost));
       const colourRec = (await answered()).find((a) => /Which colour for the shop banner/.test(a.ask));
-      ck(t("TR-1451: the daemon records it from the feed"), !!colourRec && colourRec.via === "feed" && colourRec.said === "blue"
+      ck(t("TR-1451: the daemon records it from the console"), !!colourRec && colourRec.via === "console" && colourRec.said === "blue"
          && colourRec.id === `question:${banner.body.label}`, JSON.stringify(colourRec));
-      await page.reload({ waitUntil: "load" });
-      const done = page.getByTestId("feed-answered").filter({ hasText: "Which colour for the shop banner" });
-      await done.waitFor();
-      ck(t("TR-1451: Answered today lists it from the cell's record, from the feed"),
-         /blue/.test(await done.innerText()) && /by you, from the feed/.test(await done.innerText()), await done.innerText());
-      await checkWords(page, ck, t("feed after an answer"));
-      ctl.posts.length = 0;
+      const said = page.getByTestId("home-focus-answered");
+      await said.waitFor();
+      ck(t("team item link: once answered on Home, its line says by you, on Home"),
+         /Already answered: Which colour for the shop banner\?.*, by you, on Home, /.test((await said.innerText()).replace(/\s+/g, " ")), await said.innerText());
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
 

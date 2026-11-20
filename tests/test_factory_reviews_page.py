@@ -56,7 +56,7 @@ def units():
         {"verdict": "pass", "round": 2, "current": True}, {"verdict": "pass", "round": 1, "current": False},
         {"verdict": "changes", "round": 1, "current": True}, {"verdict": "block", "round": 3}, None)] == [
         "Passed, round 2", "Passed on an older commit", "Changes asked, round 1",
-        "Blocked by the reviewer, round 3", "Not reviewed yet"], "")
+        "Reviewer stopped it, round 3", "Not reviewed yet"], "")
     ms = [{"id": "a", "name": "1. Foundations"}, {"id": "b", "name": "Faster lists"},
           {"id": "c", "name": "M3: Search"}, {"id": "d", "name": "4) Wrap up"}]
     ck("a milestone already numbered keeps its own number", [fr.milestone_words(ms, i) for i in "acd"] == [
@@ -169,21 +169,31 @@ async def main():
             print("== the split under L3-review (the default) ==")
             a = await agree(cx, "L3")
             wait, crew = a["waiting_for_you"], a["with_the_crew"]
-            ck("waiting for you: the passed ones, longest waiting first", refs(wait) == [
+            # a pass with CI failing is not the person's yet: the builder fixes the CI first
+            ck("waiting for you: the passed ones CI does not hold, longest waiting first", refs(wait) == [
                 ("project-x", "Add the footer"), ("project-y", "Batch the lists"),
-                ("project-x", "Add the sitemap"), ("project-x", "Add the search box")], refs(wait))
+                ("project-x", "Add the search box")], refs(wait))
             ck("with the crew: the rest, longest waiting first", refs(crew) == [
                 ("project-x", "Add the news page"), ("project-x", "Add the header"),
-                ("project-x", "Add the archive"), ("project-y", "Tidy the lists")], refs(crew))
+                ("project-x", "Add the sitemap"), ("project-x", "Add the archive"),
+                ("project-y", "Tidy the lists")], refs(crew))
             ck("with the crew: each names who has it next", {r["ticket"]["title"]: r["why"] for r in crew} == {
                 "Add the news page": "The reviewer reviews it",
                 "Add the header": "The builder works on the changes the reviewer asked for",
+                "Add the sitemap": "The builder fixes the failing CI",
                 "Add the archive": "The reviewer reviews it", "Tidy the lists": "The reviewer reviews it"},
                {r["ticket"]["title"]: r["why"] for r in crew})
             ck("waiting for you carries no why", all(r["why"] is None for r in wait))
+            ck("waiting for you reads Ready for you, every row", all(
+                (r.get("turn"), r.get("turn_label"), r.get("whose")) == ("ready_for_you", "Ready for you", "person")
+                for r in wait), [r.get("turn_label") for r in wait])
+            ck("with the crew: each row's turn", {r["ticket"]["title"]: r.get("turn_label") for r in crew} == {
+                "Add the news page": "Reviewing", "Add the header": "Changes asked",
+                "Add the sitemap": "Checks failing", "Add the archive": "Reviewing", "Tidy the lists": "Reviewing"},
+               {r["ticket"]["title"]: r.get("turn_label") for r in crew})
             ck("nobody is on none of them", a["nobody_on_it"] == [], refs(a["nobody_on_it"]))
             ck("the autonomy sentence for L3", a["autonomy_text"] == "You merge every pull request after the crew's review.")
-            ck("waited is in words, never abbreviated", [r["waited"] for r in wait] == ["6 days", "2 days", "3 hours", "10 minutes"]
+            ck("waited is in words, never abbreviated", [r["waited"] for r in wait] == ["6 days", "2 days", "10 minutes"]
                and not any("min " in r["waited"] + " " or r["waited"].endswith("min") for r in wait + crew),
                [r["waited"] for r in wait])
             ck("since is a time", all(r["since"] and r["since"].startswith("20") for r in wait + crew))
@@ -193,7 +203,8 @@ async def main():
                and r0["pr"] == {"number": 11, "url": "https://github.com/example-org/service-a/pull/11",
                                 "title": "PR: Add the footer", "repo": "example-org/service-a"}, r0)
             ck("a row's own keys", all(set(r) == {"project", "ticket", "pr", "waited", "since", "review", "ci",
-                                                  "ci_state", "holds_up", "codex_open", "why"} for r in wait + crew))
+                                                  "ci_state", "holds_up", "codex_open", "why", "turn", "turn_label",
+                                                  "whose"} for r in wait + crew))
             by = {r["ticket"]["title"]: r for r in wait + crew}
             ck("review words", {t: by[t]["review"] for t in by} == {
                 "Add the footer": "Passed, round 2", "Add the sitemap": "Passed, round 1",
@@ -201,10 +212,10 @@ async def main():
                 "Add the header": "Changes asked, round 1", "Add the archive": "Not reviewed yet",
                 "Batch the lists": "Passed, round 1", "Tidy the lists": "Not reviewed yet"}, {t: by[t]["review"] for t in by})
             ck("CI words and dots", {t: (by[t]["ci"], by[t]["ci_state"]) for t in by} == {
-                "Add the footer": ("CI passed", "ok"), "Add the sitemap": ("CI failing", "bad"),
-                "Add the search box": ("No CI", "none"), "Add the news page": ("CI passed", "ok"),
-                "Add the header": ("CI passed", "ok"), "Add the archive": ("CI in progress", "go"),
-                "Batch the lists": ("CI passed", "ok"), "Tidy the lists": ("CI passed", "ok")}, {t: (by[t]["ci"], by[t]["ci_state"]) for t in by})
+                "Add the footer": ("Checks passed", "ok"), "Add the sitemap": ("Checks failing", "bad"),
+                "Add the search box": ("No checks", "none"), "Add the news page": ("Checks passed", "ok"),
+                "Add the header": ("Checks passed", "ok"), "Add the archive": ("Checks running", "go"),
+                "Batch the lists": ("Checks passed", "ok"), "Tidy the lists": ("Checks passed", "ok")}, {t: (by[t]["ci"], by[t]["ci_state"]) for t in by})
             ck("holds up: a numbered milestone keeps its name, an unnumbered one gets M and its place",
                by["Add the footer"]["holds_up"] == "Holds up 1. Foundations"
                and by["Batch the lists"]["holds_up"] == "Holds up M2: Faster lists"
@@ -215,8 +226,8 @@ async def main():
             print("== the project filter ==")
             f = await reviews(cx, f"?project={px}")
             ck("one project: its own rows only, the filter named", refs(f["waiting_for_you"]) == [
-                ("project-x", "Add the footer"), ("project-x", "Add the sitemap"), ("project-x", "Add the search box")]
-               and len(f["with_the_crew"]) == 3 and f["project"] == {"id": px, "name": "project-x"}, f)
+                ("project-x", "Add the footer"), ("project-x", "Add the search box")]
+               and len(f["with_the_crew"]) == 4 and f["project"] == {"id": px, "name": "project-x"}, f)
             f = await reviews(cx, f"?project={pu}")
             ck("a project with nothing in review: empty lists, still named", f["waiting_for_you"] == []
                and f["with_the_crew"] == [] and f["project"] == {"id": pu, "name": "project-u"}, f)
@@ -259,7 +270,29 @@ async def main():
                and any(r[0] == "project-x" for r in refs(a["waiting_for_you"])), refs(a["waiting_for_you"]))
             store.set_handover(px, [{"path": "/w/a", "name": "example-org/service-a"}], None, None, now_utc())
             a = await agree(cx, "crew default again")
-            ck("a project with no autonomy follows the crew again", len(a["waiting_for_you"]) == 4, len(a["waiting_for_you"]))
+            ck("a project with no autonomy follows the crew again", len(a["waiting_for_you"]) == 3, len(a["waiting_for_you"]))
+
+            print("== CI and the merge queue decide the turn ==")
+            footer = store.get_ticket(px, x_old)
+            store.update_ticket(x_old, pr={**footer["pr"], "ci": "pending"})
+            a = await agree(cx, "a pass with CI still running")
+            row = next((r for r in a["with_the_crew"] if r["ticket"]["title"] == "Add the footer"), {})
+            ck("a pass with CI running is not yours yet: Checks running, your merge once it passes",
+               ("project-x", "Add the footer") not in refs(a["waiting_for_you"])
+               and (row.get("turn"), row.get("whose")) == ("checks_running", "github")
+               and row.get("why") == "CI is still running; it waits for your merge when CI passes", row)
+            store.update_ticket(x_old, pr={**footer["pr"], "ci": "success"})
+            store.merge_queue_add("example-org/service-a", "main", 11, "aaaaaaa1111", x_old, px, state="merging")
+            a = await agree(cx, "the merge queue merges it")
+            row = next((r for r in a["with_the_crew"] if r["ticket"]["title"] == "Add the footer"), {})
+            ck("one the merge queue is merging is the crew's: Merging",
+               ("project-x", "Add the footer") not in refs(a["waiting_for_you"])
+               and (row.get("turn"), row.get("why")) == ("merging", "The crew merges it"), row)
+            for m in store.merge_queue_open():
+                store.merge_queue_delete(m["id"])
+            a = await agree(cx, "queue row gone")
+            ck("with the queue row gone it waits for you again",
+               ("project-x", "Add the footer") in refs(a["waiting_for_you"]), refs(a["waiting_for_you"]))
 
             print("== a merged pull request ==")
             store.update_ticket(x_new, stage="merged")
@@ -298,7 +331,7 @@ async def main():
             a = await agree(cx, "blocked by the reviewer")
             ck("a pull request the reviewer blocked is nobody's, and needs the person",
                {r["ticket"]["title"]: r["why"] for r in a["nobody_on_it"]}.get("Add the blocker")
-               == "The reviewer blocked it; it needs your decision", refs(a["nobody_on_it"]))
+               == "The reviewer stopped it; it needs your decision", refs(a["nobody_on_it"]))
 
             print("== a ticket closed in its home leaves review (TR-1008) ==")
             store.update_ticket(x_none, status="done", why="Linear marked it Done")

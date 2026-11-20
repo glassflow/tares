@@ -106,7 +106,7 @@ async function waitFor(url, tries = 100) {
     await one(ck, "project-y");
     ck("the project sidebar names the project", (await T("project-name").innerText()).trim() === "project-y");
     ck("the page's heading is Overview", (await txt(T("page-title"))) === "Overview");
-    ck("the chip says Waiting on you", (await raw(T("project-chip"))) === "Waiting on you");
+    ck("the chip says Waiting for you", (await raw(T("project-chip"))) === "Waiting for you");
     ck("the goal is shown", (await txt(T("project-goal"))).startsWith("Publish 1,000 answers"));
     // the project's pages hide the main menu, as Settings does; Back is the way out (Projects on a fresh load)
     ck("the main menu is hidden and Back leads to Projects", (await page.getByTestId("edition-menu").count()) === 0
@@ -157,14 +157,14 @@ async function waitFor(url, tries = 100) {
 
     // moving now: at most three on Overview, a link to all
     ck("three tickets are moving here, never more", (await T("moving-row").count()) === 3, String(await T("moving-row").count()));
-    ck("the caption says how many are merged", (await txt(T("moving-caption"))) === "2 of 11 tickets merged", await txt(T("moving-caption")));
+    ck("the caption is the count line: merged, then queued apart from stuck", (await txt(T("moving-caption"))) === "2 merged, 1 queued, 1 stuck of 11", await txt(T("moving-caption")));
     ck("the rest is counted, with a link to all tickets",
        (await txt(T("moving-more"))).startsWith("5 more tickets are moving.") && (await T("all-tickets-more").getAttribute("href")) === `/projects/${y}/tickets`
        && (await txt(T("all-tickets-more"))) === "All 11 tickets ›", await txt(T("moving-more")));
     ck("the header of the section links to all tickets too", (await T("all-tickets-moving").getAttribute("href")) === `/projects/${y}/tickets`);
     const t5 = T("moving-row").and(page.locator("[data-ref=T5]"));
     ck("a ticket row opens the ticket, in words", (await t5.getAttribute("href")) === `/projects/${y}/tickets/T5`
-       && (await txt(t5)).includes("Changes asked") && (await txt(t5)).includes("Builder for M2") && (await txt(t5)).includes("open, CI failing"), await txt(t5));
+       && (await txt(t5)).includes("Changes asked") && (await txt(t5)).includes("Builder for M2") && (await txt(t5)).includes("open, checks failing"), await txt(t5));
     ck("the next ticket is a row of its own: the first ready one, not one Moving now lists",
        (await txt(T("next-up"))).startsWith("T10") && (await T("moving-row").and(page.locator("[data-ref=T10]")).count()) === 0, await txt(T("next-up")));
     ck("and it opens that ticket", (await T("next-up").getAttribute("href")) === `/projects/${y}/tickets/T10`, await T("next-up").getAttribute("href"));
@@ -172,9 +172,9 @@ async function waitFor(url, tries = 100) {
     // three cards open the pull requests, the milestones and the decisions
     const card = async (k) => [await txt(T(`summary-${k}`).getByTestId("summary-big")), await txt(T(`summary-${k}`).getByTestId("summary-line")), await T(`summary-${k}`).getAttribute("href")];
     ck("the pull requests card: how many are open, the newest one, and it opens Pull requests",
-       JSON.stringify(await card("prs")) === JSON.stringify(["3 open", "#15 Add the search box, CI failing", `/projects/${y}/github`]), JSON.stringify(await card("prs")));
+       JSON.stringify(await card("prs")) === JSON.stringify(["3 open", "#15 Add the search box, Checks failing", `/projects/${y}/github`]), JSON.stringify(await card("prs")));
     ck("the milestones card: the milestone under way, and it opens Milestones",
-       JSON.stringify(await card("milestones")) === JSON.stringify(["2 of 3 merged", "M1: The first articles", `/projects/${y}/milestones`]), JSON.stringify(await card("milestones")));
+       JSON.stringify(await card("milestones")) === JSON.stringify(["2 merged of 3", "M1: The first articles", `/projects/${y}/milestones`]), JSON.stringify(await card("milestones")));
     ck("the decisions card: the calls to confirm come first, and it opens them",
        JSON.stringify(await card("decisions")) === JSON.stringify(["2 to confirm", "Which date format?", `/projects/${y}/calls`]), JSON.stringify(await card("decisions")));
     ck("Overview has no milestone rows, decisions, docs or people", (await T("milestone-row").count()) === 0 && (await T("decision-row").count()) === 0
@@ -193,8 +193,9 @@ async function waitFor(url, tries = 100) {
     ck("a milestone has no ticket list", (await T("milestones").locator("[data-testid=moving-row], [data-ref]").count()) === 0
        && (await T("milestones").locator("a[href*='/tickets/']").count()) === 0);
     const count0 = mrows.nth(0).getByTestId("milestone-count");
-    ck("its count links to its tickets, on the project's Tickets page", (await txt(count0)) === "2 of 3 merged" && /^\/projects\/uc_projecty\/tickets\?milestone=ms_/.test(await count0.getAttribute("href")), await count0.getAttribute("href"));
-    ck("the other milestones count too", (await txt(mrows.nth(1).getByTestId("milestone-count"))) === "0 of 5 merged");
+    ck("its count links to its tickets, on the project's Tickets page", (await txt(count0)) === "2 merged of 3" && /^\/projects\/uc_projecty\/tickets\?milestone=ms_/.test(await count0.getAttribute("href")), await count0.getAttribute("href"));
+    ck("the other milestones count too", (await txt(mrows.nth(1).getByTestId("milestone-count"))) === "0 merged of 5",
+       await txt(mrows.nth(1).getByTestId("milestone-count")));
     const checks = mrows.nth(0).getByTestId("milestone-checks");
     ck("the checks are folded away, with their number", (await txt(checks)).includes("2 checks to pass") && !(await checks.evaluate((e) => e.open)));
     await checks.locator("summary").click();
@@ -427,8 +428,8 @@ async function waitFor(url, tries = 100) {
        (await raw(T("project-chip"))) === "Ready to close" && (await T("project-close").count()) === 1);
     ck("every stage is at Done", (await steps.nth(3).getAttribute("aria-current")) === "step");
     const ready = T("waiting-row").and(page.locator("[data-kind=signoff]"));
-    ck("the Waiting list has a Ready to close row with its own words",
-       (await raw(ready)).includes("Ready to close") && (await txt(ready)).includes("All 3 tickets are merged") && (await txt(ready)).includes("Close the project when you have checked the result."), await txt(ready));
+    ck("the Waiting list asks to close the project, in its own words",
+       (await raw(ready)).includes("Close the project?") && (await txt(ready)).includes("All 3 tickets are merged") && (await txt(ready)).includes("Close the project when you have checked the result."), await txt(ready));
     // the cell's own row (a Close button and an Open project link to this very page): one Close, no self link
     ck("the Ready to close row has one Close button and no link to this page",
        (await ready.count()) === 1 && (await ready.getByTestId("waiting-close").count()) === 1
@@ -466,8 +467,8 @@ async function waitFor(url, tries = 100) {
     await page.getByText("project-z is closed. It moved to Done.").first().waitFor();
     await settle(page);
     ck("Close sends one finish, with words", finishPosts.length === 1 && JSON.parse(finishPosts[0]).words === "Closed from the project page", JSON.stringify(finishPosts));
-    ck("the page now says Finished, with no Close and an empty Waiting list",
-       (await raw(T("project-chip"))) === "Finished" && (await T("project-close").count()) === 0 && (await txt(T("waiting-empty"))) === "Nothing waits for you in this project.");
+    ck("the page now says Done, with no Close and an empty Waiting list",
+       (await raw(T("project-chip"))) === "Done" && (await T("project-close").count()) === 0 && (await txt(T("waiting-empty"))) === "Nothing waits for you in this project.");
     ck("a finished project has every stage done", (await steps.evaluateAll((l) => l.every((x) => x.textContent.trim().startsWith("✓")))));
     await checkWords(page, ck, "project-z finished");
     await shot(page, "live-finished-1440.png");
@@ -489,7 +490,7 @@ async function waitFor(url, tries = 100) {
     await open(page, ids["project-p"], "", "milestones");
     ck("a project with no milestones has no filter for them", (await txt(T("milestones-empty"))).startsWith("No milestones yet.") && (await page.locator("select, [role=combobox]").count()) === 0);
     await open(page, ids["project-d"]);
-    ck("a finished project (closed before) says Finished and has no Close", (await raw(T("project-chip"))) === "Finished" && (await T("project-close").count()) === 0);
+    ck("a finished project (closed before) says Done and has no Close", (await raw(T("project-chip"))) === "Done" && (await T("project-close").count()) === 0);
     ck("and says nothing is moving, all tickets merged", (await txt(T("moving-empty"))) === "Nothing is moving. All 2 tickets are merged.", await txt(T("moving-empty")));
 
     // an old ticket or doc link, a project that is not a factory project and an address with no
@@ -607,12 +608,12 @@ async function waitFor(url, tries = 100) {
             ck("spec: Not started at the Spec stage, with no tickets", (await raw(q("project-chip"))) === "Not started" && (await q("moving-empty").count()) === 1 && (await q("terminal-open").count()) === 0);
           } else if (name === "ready" || name === "dialog" || name === "fail") {
             ck(`${name}: Ready to close, with the Close button`, (await raw(q("project-chip"))) === "Ready to close" && (await q("project-close").count()) === 1
-               && (await raw(q("waiting-row").and(p.locator("[data-kind=signoff]")))).includes("Ready to close"));
+               && (await raw(q("waiting-row").and(p.locator("[data-kind=signoff]")))).includes("Close the project?"));
             if (name === "ready") {
               await q("project-close").click();
               await q("close-confirm").click();
               await p.getByText("project-z is closed. It moved to Done.").first().waitFor();
-              ck("ready: Close moves the sample to Finished", (await raw(q("project-chip"))) === "Finished" && (await q("project-close").count()) === 0);
+              ck("ready: Close moves the sample to Done", (await raw(q("project-chip"))) === "Done" && (await q("project-close").count()) === 0);
             } else if (name === "dialog") {
               ck("dialog: asks to close project-z", (await p.getByRole("dialog").innerText()).includes("Close project-z?"));
             } else {
@@ -623,7 +624,7 @@ async function waitFor(url, tries = 100) {
               ck("fail: Close answers with the same sentence", (await txt(q("close-error"))) === `The project was not closed. ${SERVER_WORDS}` && (await q("project-close").count()) === 1);
             }
           } else if (name === "finished") {
-            ck("finished: Finished, no Close, nothing waiting", (await raw(q("project-chip"))) === "Finished" && (await q("project-close").count()) === 0 && (await q("waiting-empty").count()) === 1);
+            ck("finished: Done, no Close, nothing waiting", (await raw(q("project-chip"))) === "Done" && (await q("project-close").count()) === 0 && (await q("waiting-empty").count()) === 1);
           } else if (name === "empty") {
             const bigs = await p.getByTestId("summary-big").allInnerTexts();
             ck("empty: every section has its sentence, and every card says None yet", (await q("waiting-empty").count()) === 1 && (await q("moving-empty").count()) === 1

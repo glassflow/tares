@@ -278,7 +278,7 @@ def status_table():
     pn = check("status, a running crew", ["status"], lambda: world(crew_of(), sessions(v_old="2.1.100")), expect_rc=0)
     out = pn[1]
     ck("status: header", out.startswith("STATION"), out[:80])
-    ck("status: a gone builder", re.search(r"shop-build-m2\s+builder\s+opus/high\s+gone", out) is not None, out)
+    ck("status: a gone builder has ended", re.search(r"shop-build-m2\s+builder\s+opus/high\s+Ended ", out) is not None, out)
     ck("status: claude code behind", "claude code: 1 station(s) run an older Claude Code than 2.1.310" in out, out)
     ck("status: watch not running", "watch: not running;" in out, out)
     ck("status: empty desk", "desk: nothing waits for you" in out, out)
@@ -313,6 +313,72 @@ def status_desk_and_projects():
     ck("status: a finished project", "project docs: 2/2 tickets done, all done" in pn[1], pn[1])
     ck("status: a project without tickets", "project new: 0/0 tickets done, no tickets yet" in pn[1], pn[1])
     WORLD["desk"], WORLD["projects"] = [], []
+
+
+def _with_job(sid, job, setup):
+    """The setup, plus Claude Code's job file for session `sid`."""
+    def go():
+        env, tmp = setup()
+        f = Path(env["HOME"]) / ".claude" / "jobs" / sid / "state.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(job), encoding="utf-8")
+        return env, tmp
+    return go
+
+
+def _state_of(out, station):
+    """The STATE column of a station's row in `status`."""
+    for ln in out.splitlines():
+        if ln.startswith(station + " "):
+            return ln[59:89].strip()
+    return None
+
+
+@case
+def status_station_words():
+    """The status-words spec, decisions 3 to 5: a station's words, and its NEEDS from the item that names it."""
+    WORLD["desk"], WORLD["projects"] = [], []
+    pn = check("status, nothing asked", ["status"], lambda: world(crew_of(), sessions()), expect_rc=0)
+    out = pn[1]
+    ck("status: a working station reads Working", _state_of(out, "crew-orchestrator") == "Working", out)
+    ck("status: an idle one with nothing running reads Idle", _state_of(out, "crew-reviewer") == "Idle", out)
+    ck("status: a waiting one with no item is not waiting for you",
+       _state_of(out, "shop-build-m1") == "Waiting, nothing asked yet", out)
+    ck("status: no raw turn word is left", not re.search(r"\s(done|blocked|gone)\s", out), out)
+
+    WORLD["desk"] = [{"id": "d7", "label": "D7", "question": "Allow  git push\nto origin?", "station": "shop-build-m1",
+                      "command": "git push", "created_at": "2020-01-01T00:00:00+00:00"},
+                     {"id": "d8", "label": "D8", "question": "ship it?", "created_at": "2020-01-01T00:00:00+00:00"}]
+    job = {"needs": "a push to origin", "inFlight": {"tasks": 0, "kinds": []}}
+    pn = check("status, an item names the waiting station", ["status"],
+               _with_job(BID, job, lambda: world(crew_of(), sessions())), expect_rc=0)
+    out = pn[1]
+    row = next((ln for ln in out.splitlines() if ln.startswith("shop-build-m1 ")), "")
+    ck("status: the station an item names is waiting for you", _state_of(out, "shop-build-m1") == "Waiting for you", out)
+    ck("status: its NEEDS is the item, its label and when it was asked",
+       re.search(r"D7: Allow git push to origin\?, asked \d+ weeks ago$", row) is not None, row)
+    ck("status: an item that names no station makes no station wait", _state_of(out, "crew-reviewer") == "Idle", out)
+    WORLD["desk"] = [WORLD["desk"][1]]
+    pn = check("status --json, its own note", ["status", "--json"],
+               _with_job(BID, job, lambda: world(crew_of(), sessions())), expect_rc=0)
+    doc = json.loads(pn[1])
+    m1 = next(x for x in doc["stations"] if x["station"] == "shop-build-m1")
+    ck("status --json: the raw state stays, the words come beside it",
+       m1["state"] == "blocked" and m1["shown"] == "Waiting, nothing asked yet" and m1["asked"] is None, m1)
+    ck("status --json: the station's own note is its note, not a need", m1["detail"] == "Its note: a push to origin", m1)
+    m2 = next(x for x in doc["stations"] if x["station"] == "shop-build-m2")
+    ck("status --json: a gone station keeps gone and reads Ended", m2["state"] == "gone" and m2["shown"] == "Ended", m2)
+
+    WORLD["desk"] = []
+    bg = {"inFlight": {"tasks": 2, "kinds": ["session_cron", "local_agent", "artifact_watch"]}}
+    pn = check("status, background work", ["status"], _with_job(RID, bg, lambda: world(crew_of(), sessions())),
+               expect_rc=0)
+    ck("status: between turns with background tasks is not idle",
+       _state_of(pn[1], "crew-reviewer") == "Waiting on 2 background tasks", pn[1])
+    cron = {"inFlight": {"tasks": 1, "kinds": ["session_cron"]}}
+    pn = check("status, only its schedule", ["status"], _with_job(RID, cron, lambda: world(crew_of(), sessions())),
+               expect_rc=0)
+    ck("status: its own schedule is not background work", _state_of(pn[1], "crew-reviewer") == "Idle", pn[1])
 
 
 # ---------- desk ----------

@@ -123,12 +123,13 @@ def progress_rules():
         t("t1", "in_progress", "merged", owner="linear"),   # merged, Linear not moved yet
         t("t2", "in_progress", "blocked", owner="linear"),  # a station's blocked beats in progress
         t("t3", "todo", "doing", owner="linear"),           # a station works it, Linear not moved
-        t("t4", "todo", None, ["t5"]),                      # waits on a canceled one: blocked
+        t("t4", "todo", None, ["t5"]),                      # waits on a canceled one: queued
         t("t5", "canceled"),
         t("t6", "todo", None, ["t1"]),                      # its dependency merged: to do
     ])
-    ck("stage beats a Linear status; a canceled dependency still blocks",
-       got == {"done": 1, "doing": 1, "blocked": 2, "todo": 1, "canceled": 1, "total": 5}, got)
+    ck("stage beats a Linear status; a station's stop is stuck, a canceled dependency still queues",
+       got == {"merged": 1, "closed": 0, "doing": 1, "stuck": 1, "queued": 1, "todo": 1, "canceled": 1,
+               "total": 5}, got)
     ck("no tickets, all zero", factory_mod.progress([])["total"] == 0)
 
 
@@ -386,13 +387,11 @@ async def main():
             ck("a station can say a ticket is blocked", r.status_code == 200, r.text)
             ps = {p["name"]: p for p in (await cx.get("/api/projects")).json()["projects"]}
             crew = {p["name"]: p for p in (await cx.get("/api/crew/projects")).json()["projects"]}
-        ck("merged and the Linear one merged are done, review is doing, a station's blocked and a "
-           "ticket waiting on it are blocked, canceled stays out of the total",
-           ps["Shop"].get("progress") == {"done": 2, "doing": 1, "blocked": 2, "todo": 1,
-                                          "canceled": 1, "total": 6}, ps["Shop"].get("progress"))
+        ck("merged and the Linear one merged are merged, review is doing, a station's blocked is "
+           "stuck and a ticket waiting on it queued, canceled stays out of the total",
+           ps["Shop"].get("progress") == {"merged": 2, "closed": 0, "doing": 1, "stuck": 1, "queued": 1, "todo": 1, "canceled": 1, "total": 6}, ps["Shop"].get("progress"))
         ck("a factory project with no tickets has an empty count",
-           ps["Notes"].get("progress") == {"done": 0, "doing": 0, "blocked": 0, "todo": 0,
-                                           "canceled": 0, "total": 0}, ps["Notes"].get("progress"))
+           ps["Notes"].get("progress") == {"merged": 0, "closed": 0, "doing": 0, "stuck": 0, "queued": 0, "todo": 0, "canceled": 0, "total": 0}, ps["Notes"].get("progress"))
         ck("an ordinary project carries none", "progress" not in ps["Empty"], ps["Empty"])
         row = crew["Shop"]
         ck("the crew's list keeps its fields",
@@ -401,12 +400,10 @@ async def main():
                         "handed_over_person"},
            sorted(row))
         ck("and the ring's count, the same as the projects list's",
-           row["progress"] == ps["Shop"]["progress"] == {"done": 2, "doing": 1, "blocked": 2,
-                                                         "todo": 1, "canceled": 1, "total": 6},
+           row["progress"] == ps["Shop"]["progress"] == {"merged": 2, "closed": 0, "doing": 1, "stuck": 1, "queued": 1, "todo": 1, "canceled": 1, "total": 6},
            row.get("progress"))
         ck("a project with no tickets has an empty one",
-           crew["Notes"].get("progress") == {"done": 0, "doing": 0, "blocked": 0, "todo": 0,
-                                             "canceled": 0, "total": 0}, crew["Notes"].get("progress"))
+           crew["Notes"].get("progress") == {"merged": 0, "closed": 0, "doing": 0, "stuck": 0, "queued": 0, "todo": 0, "canceled": 0, "total": 0}, crew["Notes"].get("progress"))
         ck("and its counts: canceled counts as done there, in a total of every ticket",
            (row["tickets_done"], row["tickets_total"]) == (3, 7)
            and row["stages"] == {"merged": 2, "review": 1, "todo": 2, "done": 1, "blocked": 1}

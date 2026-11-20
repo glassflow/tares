@@ -197,14 +197,15 @@ async def main():
                 "project-y": "not_started", "project-v": "not_started", "project-z": "ready_to_close",
                 "project-d": "done", "project-e": "done"}, states)
             ck("the state in words", {n: p["state_label"] for n, p in by.items()} == {
-                "project-w": "Waiting on you", "project-b1": "Building", "project-b2": "Building",
+                "project-w": "Waiting for you", "project-b1": "Building", "project-b2": "Building",
                 "project-y": "Not started", "project-v": "Not started", "project-z": "Ready to close",
                 "project-d": "Done", "project-e": "Done"}, {n: p["state_label"] for n, p in by.items()})
             ck("the counts are by state and add up", a["counts"] == {
                 "all": 8, "building": 2, "waiting_on_you": 1, "not_started": 2, "ready_to_close": 1,
                 "later": 0, "done": 2}, a["counts"])
-            ck("tickets merged and total", by["project-b1"]["tickets"] == {"merged": 1, "blocked": 0, "total": 4}
-               and by["project-z"]["tickets"] == {"merged": 2, "blocked": 0, "total": 2}, by["project-b1"])
+            ck("tickets merged and total", by["project-b1"]["tickets"]["merged"] == 1
+               and by["project-b1"]["tickets"]["total"] == 4 and by["project-z"]["tickets"]["merged"] == 2
+               and by["project-z"]["tickets"]["total"] == 2, by["project-b1"])
 
             print("== close ==")
             ck("only the fully merged project can be closed",
@@ -218,7 +219,7 @@ async def main():
             today = datetime.now(timezone.utc)
             when = fp.plain_date(today, today)
             ck("a finished project says when, from the day it was finished",
-               d["milestone"] == "Finished " + when and e["milestone"] == "Finished " + when
+               d["milestone"] == "Done " + when and e["milestone"] == "Done " + when
                and d["meta"] == "" and d["repo_names"] == ["example-org/service-a"], (d, e))
             b1 = by["project-b1"]
             ck("a building row: repo kept apart, no builders working, how long ago",
@@ -253,7 +254,7 @@ async def main():
             by2 = {p["name"]: p for p in a2["projects"]}
             ck("project-z is done now, last in its state's place",
                by2["project-z"]["state"] == "done" and by2["project-z"]["can_close"] is False
-               and by2["project-z"]["milestone"] == "Finished " + when, by2["project-z"])
+               and by2["project-z"]["milestone"] == "Done " + when, by2["project-z"])
             ck("the counts follow", a2["counts"]["ready_to_close"] == 0 and a2["counts"]["done"] == 3
                and a2["counts"]["all"] == 8, a2["counts"])
             r = await cx.post(f"/api/projects/{pready}/finish", json={"words": "again"})

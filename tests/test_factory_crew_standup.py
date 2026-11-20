@@ -84,7 +84,7 @@ async def main():
             await stage(3, "doing", "blocked")
             await stage(5, "doing", "merged")
             await stage(8, "doing")
-            backdate(["T1", "T3", "T5", "T8"])
+            backdate(["T1", "T3", "T5", "T8"], ["T3 is stuck. Waiting for the key. What should happen?"])
             for q in ("An old question?", "A new question?"):
                 r = await cx.post("/api/desk", json={"question": q, "recommendation": "Yes", "why": "ok",
                                                      "project": px, "blocking": False})
@@ -99,11 +99,12 @@ async def main():
             s = await standup(cx)
             ck("old and new in each group: only the new ones are counted",
                s is not None and s["text"] == "In the last day: 1 ticket done, 1 started, 1 sent to review, "
-               "1 blocked, 1 question for you. Projects that moved: project-x.", s)
+               "1 blocked, 2 questions for you. Projects that moved: project-x.", s)
             ck("the window is named", s is not None and s["when"] == "The last 24 hours", s)
 
             print("== a project where only old things stand ==")
-            backdate(["T2", "T4", "T6", "T7"], ["A new question?"])
+            backdate(["T2", "T4", "T6", "T7"],
+                     ["A new question?", "T4 is stuck. Waiting for the key. What should happen?"])
             s = await standup(cx)
             ck("nothing happened in the last day, so there is no standup line", s is None, s)
 

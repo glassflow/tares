@@ -17,7 +17,7 @@ import { Input } from "../components/ui/input";
 import { reducedMotion } from "../lib/motion";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
-import { BrainReadContext, type BrainRead } from "./brainRead";
+import { BrainReadContext, normalizeBrain, type BrainRead } from "./brainRead";
 import { useEdition } from "./edition";
 import { useSample } from "./sample";
 import { askBrainRepos } from "./factory/BrainAsk.api";
@@ -275,18 +275,27 @@ export default function EditionShell() {
   // each read has a number; an answer that is not the latest read's is dropped, so a slow first read
   // cannot overwrite the page's Retry
   const brainSeq = useRef(0);
-  const readBrain = useCallback(() => {
+  // A quiet read (the Repos page's poll) keeps what is shown while it runs; if it fails, the last answer
+  // stays beside the error and the menu keeps its Second Brain group.
+  const readBrain = useCallback((quiet = false) => {
     const mine = ++brainSeq.current;
-    setBrainRead({ state: "loading" });
+    if (!quiet) setBrainRead({ state: "loading" });
+    const lastOf = (r: BrainRead) => (r.state === "ok" ? r.data : r.state === "error" ? r.last : undefined);
+    const failed = () => {
+      if (!brainLive.current || mine !== brainSeq.current) return;
+      if (quiet) { setBrainRead((r) => ({ state: "error", last: lastOf(r) })); return; }
+      setBrain(false); setBrainRead({ state: "error" });
+    };
     askBrainRepos().then(
-      (data) => {
+      (raw) => {
         if (!brainLive.current || mine !== brainSeq.current) return;
-        // a body that is not an object (null, a string) is a failed read, not a page to draw
-        if (data == null || typeof data !== "object") { setBrain(false); setBrainRead({ state: "error" }); return; }
-        setBrain(data.configured === true);
+        // a body that is not an object (null, a string) is a failed read, not a page to draw (TR-1438)
+        const data = normalizeBrain(raw);
+        if (!data) return failed();
+        setBrain(data.configured);
         setBrainRead({ state: "ok", data });
       },
-      () => { if (brainLive.current && mine === brainSeq.current) { setBrain(false); setBrainRead({ state: "error" }); } },
+      failed,
     );
   }, []);
   useEffect(() => {

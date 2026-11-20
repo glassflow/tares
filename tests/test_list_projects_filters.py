@@ -155,6 +155,10 @@ set_created(tb, now - timedelta(hours=3))
 set_created(tc, now - timedelta(hours=9))
 set_created(td, now - timedelta(hours=2))
 
+project("p_open_pr")        # in review with a pull request: GitHub may show it merged
+ticket("p_open_pr", "t1", "in_review", "review", "o/a", 1, pr={"repo": "o/a", "number": 7})
+ticket("p_open_pr", "t2", "done", "merged", "o/a", 2)
+
 project("p_empty")
 
 facts = store.done_ticket_facts(list(CASES))
@@ -168,26 +172,30 @@ def real_repos(tickets):
 
 
 tickets_of = store.tickets_by_project(list(CASES))
+KEYS = ("merged", "closed", "queued", "stuck", "total")     # what factory.progress gives
 for uid, tickets in tickets_of.items():
     f = facts[uid]
     prog = factory_mod.progress(tickets)
     if f["exact"]:
         ck(f"{uid}: counts equal progress",
-           (f["merged"], f["blocked"], f["total"]) == (prog["done"], prog["blocked"], prog["total"]),
+           tuple(f[k] for k in KEYS) == tuple(prog[k] for k in KEYS),
            (f, prog))
         if not f["repo_from_pr"]:
             ck(f"{uid}: repos equal the tickets' repos", f["repos"] == real_repos(tickets),
                (f["repos"], real_repos(tickets)))
 ck("a to-do ticket with dependencies is not exact", facts["p_todo_dep"]["exact"] is False)
 ck("a merged ticket with dependencies is exact", facts["p_merged_dep"]["exact"] is True)
+ck("an open ticket with a pull request is not exact (it may be merged)",
+   facts["p_open_pr"]["exact"] is False)
 ck("every other case is exact",
-   all(f["exact"] for u, f in facts.items() if u != "p_todo_dep"), facts)
+   all(f["exact"] for u, f in facts.items() if u not in ("p_todo_dep", "p_open_pr")), facts)
 ck("a ticket with no repo and a pull request is counted", facts["p_pr_only"]["repo_from_pr"] == 1)
 ck("a ticket with no repo and no pull request is not counted", facts["p_pr_empty"]["repo_from_pr"] == 0)
 ck("repos by first ticket", facts["p_order"]["repos"] == ["o/c", "o/b", "o/a"],
    facts["p_order"]["repos"])
-ck("an empty project", facts["p_empty"] == {"merged": 0, "blocked": 0, "total": 0, "repos": [],
-                                            "repo_from_pr": 0, "assignees": {}, "exact": True})
+ck("an empty project", facts["p_empty"] == {"merged": 0, "closed": 0, "queued": 0, "stuck": 0,
+                                            "total": 0, "repos": [], "repo_from_pr": 0,
+                                            "assignees": {}, "exact": True})
 # the per-assignee counts are what a team cell's "tickets yours" line reads: every ticket that is
 # not canceled, by assignee (None for no one), whatever its stage
 for uid, tickets in tickets_of.items():
@@ -202,7 +210,9 @@ ck("canceled tickets are left out of assignees, no one is None",
    and facts["p_merged"]["assignees"] == {"per_sam": 2, "per_kim": 1}
    and facts["p_mixed"]["assignees"] == {"per_sam": 1, "per_kim": 1, None: 4}, facts["p_mixed"]["assignees"])
 ck("progress of the mixed project is what the groups give",
-   (facts["p_mixed"]["merged"], facts["p_mixed"]["blocked"], facts["p_mixed"]["total"]) == (1, 1, 6))
+   tuple(facts["p_mixed"][k] for k in KEYS) == (1, 0, 0, 1, 6), facts["p_mixed"])
+ck("a done status with no merge counts as closed, not merged",
+   (facts["p_merged"]["merged"], facts["p_merged"]["closed"]) == (2, 1), facts["p_merged"])
 
 # ── the done row from the facts equals row_for on the real tickets ──
 store.set_handover("p_merged", [{"path": "/x/a", "name": "org/alpha"}], None, "t", now)
@@ -222,7 +232,7 @@ for uid in CASES:
     got = done_row_for(p, facts[uid], h, now)
     if got is None:
         ck(f"{uid}: no summary row only when the facts cannot give one",
-           uid in ("p_todo_dep", "p_empty") or (uid == "p_pr_only" and not h), uid)
+           uid in ("p_todo_dep", "p_empty", "p_open_pr") or (uid == "p_pr_only" and not h), uid)
         continue
     ck(f"{uid}: the done row equals row_for", got == expect, (got, expect))
     ck(f"{uid}: the done row has the same key order", json.dumps(got) == json.dumps(expect),

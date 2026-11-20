@@ -911,7 +911,7 @@ async def main():
                                    "crew-orchestrator", [c3], ago(hours=2), to_person_id=pid["lee"])
         k = by_kind(await home("kim"))
         row = next(i for i in k["desk"] if i["id"] == f"desk:{kims['label']}")
-        ck("the row says how many and names them", row["label"] == "2 calls to confirm" and row["lines"] == ["8080", "eu"], row)
+        ck("the row says how many and names them", row["label"] == "2 crew answers to confirm" and row["lines"] == ["8080", "eu"], row)
         ck("it keeps them in one step, or opens the calls page, and offers no free answer", row["actions"] == [
             {"label": "Change some", "primary": False, "href": f"/projects/{orbit}/calls"},
             {"label": "Keep both", "primary": True, "do": "keep_batch", "desk": kims["label"], "kept": [c1, c2]}], row["actions"])
@@ -925,7 +925,7 @@ async def main():
         r = await call("kim", "POST", f"/api/projects/{orbit}/assumptions/{c1}/state", {"state": "kept"})
         ck("one is kept on the calls page", r.status_code < 300, r.text[:200])
         row = next(i for i in by_kind(await home("kim"))["desk"] if i["id"] == f"desk:{kims['label']}")
-        ck("the row now asks only about the one left", row["label"] == "1 call to confirm" and row["actions"][-1]["kept"] == [c2] and row["actions"][-1]["label"] == "Keep it", row)
+        ck("the row now asks only about the one left", row["label"] == "1 crew answer to confirm" and row["actions"][-1]["kept"] == [c2] and row["actions"][-1]["label"] == "Keep it", row)
         r = await call("kim", "POST", f"/api/desk/{kims['label']}/reply", {"words": "Keep it", "choice": "Keep it", "standing": False, "kept": [c2]})
         ck("and keeping it closes the item", r.status_code < 300 and r.json()["desk_item"]["state"] != "open", r.text[:200])
         ck("every call reads kept", all(store.get_assumption(orbit, x)["state"] == "kept" for x in (c1, c2)))

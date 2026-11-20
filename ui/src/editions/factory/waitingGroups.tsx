@@ -6,7 +6,7 @@ import type { HomeAction, HomeItem } from "./home.types";
 
 // What every "Waiting for you" list shares (TR-1021): the cell sends the items in order (what
 // holds the crew up first, the rest, then what waited more than a week and holds nothing up);
-// the page shows the first under "The crew is waiting on you", folds the older ones, and lets a
+// the page shows the first under "The crew is waiting for you", folds the older ones, and lets a
 // desk question be answered with one of its own options.
 
 export interface WaitingGroups { now: HomeItem[]; rest: HomeItem[]; older: HomeItem[] }

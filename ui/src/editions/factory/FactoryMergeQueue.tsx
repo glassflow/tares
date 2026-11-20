@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import { request } from "../../api";
-import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
+import { Banner, Button, Collapse, Skeleton, StatusDot, toneOf } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import {
   NO, YES, answerRow,
@@ -70,13 +70,13 @@ function Check({ label, text, tone }: { label: string; text: string; tone: Tone 
 // start of the sentence.
 function reviewTone(t: string): Tone {
   if (t.startsWith("Approved") && !t.includes("older")) return "ok";
-  if (t.includes("blocked") || t.includes("asked for changes")) return "err";
+  if (t.includes("stopped it") || t.includes("asked for changes")) return "err";
   return "warn";
 }
 function ciTone(t: string): Tone {
-  if (t === "Passed") return "ok";
-  if (t.startsWith("Failing")) return "err";
-  if (t.startsWith("Pending")) return "warn";
+  if (t === "Checks passed") return "ok";
+  if (t.startsWith("Checks failing")) return "err";
+  if (t.startsWith("Checks running")) return "warn";
   return "none";
 }
 function railTone(t: string): Tone {
@@ -152,7 +152,7 @@ function Row({ row, pid, sample, onChanged }: {
       bar === "bad" && "shadow-[inset_3px_0_0_var(--err)]",
     )}
         data-testid="mq-row" data-state={row.state} data-answer={a?.kind ?? ""} data-attn={row.needs_you ? "yes" : ""}
-        data-bar={bar} data-phase={phase} data-ticket={row.ticket.ref}>
+        data-bar={bar} data-phase={phase} data-ticket={row.ticket.ref} data-turn={row.turn ?? ""}>
       <span className={cn(
         "col-start-1 row-start-1 grid h-[26px] w-[26px] place-items-center border border-border font-mono text-xs font-semibold",
         sentBack ? "bg-transparent text-muted-foreground" : "bg-[var(--chip-bg)]",
@@ -178,6 +178,10 @@ function Row({ row, pid, sample, onChanged }: {
         <div className="flex min-w-0 flex-wrap gap-x-2 text-[13px] text-muted-foreground" data-testid="mq-facts">
           <a href={row.pr.url} target="_blank" rel="noopener noreferrer" className={LINK} data-testid="mq-pr"
              aria-label={`Pull request ${row.pr.number} on GitHub, opens in a new tab`}>#{row.pr.number} <span aria-hidden>{"↗"}</span></a>
+          {row.turn && <><span aria-hidden>{"·"}</span>
+            <span data-testid="mq-turn" className={cn(row.whose === "person" && "font-medium text-foreground")}>
+              <StatusDot tone={toneOf("turn", row.turn)} className="mr-1.5 rounded-full" />{row.turn_label}
+            </span></>}
           {row.builder && <><span aria-hidden>{"·"}</span><span data-user-text>{row.builder.text}</span></>}
           {row.branch && <><span aria-hidden>{"·"}</span><code className="font-mono text-[0.92em] [overflow-wrap:anywhere]" data-user-text>{row.branch}</code></>}
         </div>

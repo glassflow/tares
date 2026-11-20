@@ -41,10 +41,10 @@ crew-releaser	releaser		working	1.1.0 (older than 1.2.1, retrying in 10 min)
 == step: crew status ==
 exit: 0
 -- stdout --
-STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
-crew-orchestrator              orchestrator opus/high      done     -        
-crew-reviewer                  reviewer     opus/high      done     -        
-crew-releaser                  releaser     opus/high      working  -        
+STATION                        ROLE         MODEL          STATE                          TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      Idle                           -        
+crew-reviewer                  reviewer     opus/high      Idle                           -        
+crew-releaser                  releaser     opus/high      Working                        -        
 claude code: 2 station(s) run an older Claude Code than 1.2.1; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version); 1 retrying after coming back on an old spare
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you

@@ -118,7 +118,7 @@ function cleanEnv(extra) {
          /^project-x · T14 · #250 on example-org\/service-a$/.test((await texts(rows.first().getByTestId("review-meta")))[0])
          && (await rows.first().getByTestId("review-waited").innerText()) === "10 days"
          && (await rows.first().getByTestId("review-verdict").innerText()) === "Passed, round 1"
-         && (await rows.first().getByTestId("review-ci").innerText()).trim() === "CI passed"
+         && (await rows.first().getByTestId("review-ci").innerText()).trim() === "Checks passed"
          && (await rows.first().getByTestId("review-holds").innerText()) === "Holds up M2: Faster lists");
       await page.getByTestId("crew-fold").click();
       const nobody = page.getByTestId("reviews-nobody");
@@ -131,7 +131,7 @@ function cleanEnv(extra) {
       ck(`l3 @${width}: with the reviewer's words and a CI dot per state`,
          (await texts(crew.getByTestId("review-verdict"))).join("|") === "Not reviewed yet|Changes asked, round 1|Passed on an older commit"
          && (await crew.getByTestId("review-row").evaluateAll((r) => r.map((x) => x.dataset.ci))).join(",") === "go,ok,ok"
-         && (await texts(crew.getByTestId("review-ci"))).join("|") === "CI in progress|CI passed|CI passed");
+         && (await texts(crew.getByTestId("review-ci"))).join("|") === "Checks running|Checks passed|Checks passed");
       ck(`l3 @${width}: each crew row names who has it next`, (await texts(crew.getByTestId("review-why"))).join("|")
          === "The reviewer reviews it|The builder works on the changes the reviewer asked for|The reviewer reviews it");
       await page.getByTestId("crew-fold").click();
@@ -183,35 +183,44 @@ function cleanEnv(extra) {
       await checkWords(page, ck, tag("lists"));
       ck(`${tag("lists")}: no horizontal scroll`, (await overflow(page)) <= 0 && (await inside(page)));
       ck(`${tag("lists")}: the autonomy sentence is the crew's default, L3`, (await page.getByTestId("reviews-autonomy").innerText()) === "You merge every pull request after the crew's review.");
-      ck(`${tag("lists")}: 5 wait for you, oldest first`, (await texts(waiting.getByTestId("review-title"))).join("|")
-         === "Add the footer|Batch the lists|Add the sitemap|Tidy the nav|Add the search box", (await texts(waiting.getByTestId("review-title"))).join("|"));
-      ck(`${tag("lists")}: their waits`, (await texts(waiting.getByTestId("review-waited"))).join("|") === "6 days|2 days|3 hours|1 hour|10 minutes",
+      // a pass with CI failing is the builder's, not yours: Add the sitemap is with the crew
+      ck(`${tag("lists")}: 4 wait for you, oldest first`, (await texts(waiting.getByTestId("review-title"))).join("|")
+         === "Add the footer|Batch the lists|Tidy the nav|Add the search box", (await texts(waiting.getByTestId("review-title"))).join("|"));
+      ck(`${tag("lists")}: their waits`, (await texts(waiting.getByTestId("review-waited"))).join("|") === "6 days|2 days|1 hour|10 minutes",
          (await texts(waiting.getByTestId("review-waited"))).join("|"));
       ck(`${tag("lists")}: the reviewer's words, round 2 for the first`, (await texts(waiting.getByTestId("review-verdict"))).join("|")
-         === "Passed, round 2|Passed, round 1|Passed, round 1|Passed, round 1|Passed, round 1");
-      ck(`${tag("lists")}: CI words and dots: passed, failing, none`, (await texts(waiting.getByTestId("review-ci"))).join("|")
-         === "CI passed|CI passed|CI failing|CI passed|No CI"
-         && (await waiting.evaluateAll((r) => r.map((x) => x.dataset.ci))).join(",") === "ok,ok,bad,ok,none");
+         === "Passed, round 2|Passed, round 1|Passed, round 1|Passed, round 1");
+      ck(`${tag("lists")}: each reads Ready for you`, (await texts(waiting.getByTestId("review-turn"))).join("|")
+         === "Ready for you|Ready for you|Ready for you|Ready for you"
+         && (await waiting.evaluateAll((r) => r.map((x) => x.dataset.turn))).every((t) => t === "ready_for_you"),
+         (await texts(waiting.getByTestId("review-turn"))).join("|"));
+      ck(`${tag("lists")}: CI words and dots: passed, none`, (await texts(waiting.getByTestId("review-ci"))).join("|")
+         === "Checks passed|Checks passed|Checks passed|No checks"
+         && (await waiting.evaluateAll((r) => r.map((x) => x.dataset.ci))).join(",") === "ok,ok,ok,none");
       const holds = await texts(waiting.getByTestId("review-holds"));
       ck(`${tag("lists")}: the milestone line shows only where the ticket holds one up`, holds.join("|") === "Holds up 1. Foundations|Holds up M2: Faster lists", holds.join("|"));
       ck(`${tag("lists")}: a ticket whose milestone has other open tickets, or none, shows no line`,
          (await waiting.nth(2).getByTestId("review-holds").count()) === 0);
       const dots = await waiting.getByTestId("review-ci").evaluateAll((e) => e.map((x) => getComputedStyle(x.querySelector("span, i")).backgroundColor));
-      ck(`${tag("lists")}: a failing CI dot differs from a passing one`, dots[2] !== dots[0] && dots[4] !== dots[0], dots.join(" | "));
-      ck(`${tag("lists")}: the crew's list is folded, with 3`, (await page.getByTestId("crew-count").innerText()) === "3 +");
+      ck(`${tag("lists")}: no CI has its own dot`, dots[3] !== dots[0], dots.join(" | "));
+      ck(`${tag("lists")}: the crew's list is folded, with 4`, (await page.getByTestId("crew-count").innerText()) === "4 +");
       await page.getByTestId("crew-fold").click();
       const crew = page.getByTestId("crew-list").getByTestId("review-row");
       ck(`${tag("crew")}: oldest first`, (await texts(crew.getByTestId("review-title"))).join("|").startsWith("Add the news page|Fix ")
          && (await texts(crew.getByTestId("review-title"))).join("|").endsWith("|Add the archive"));
       ck(`${tag("crew")}: passed on an older commit, changes asked, not reviewed`, (await texts(crew.getByTestId("review-verdict"))).join("|")
-         === "Passed on an older commit|Changes asked, round 1|Not reviewed yet");
+         === "Passed on an older commit|Changes asked, round 1|Passed, round 1|Not reviewed yet");
+      ck(`${tag("crew")}: each row's turn`, (await texts(crew.getByTestId("review-turn"))).join("|")
+         === "Reviewing|Changes asked|Checks failing|Reviewing", (await texts(crew.getByTestId("review-turn"))).join("|"));
+      const crewDots = await crew.getByTestId("review-ci").evaluateAll((e) => e.map((x) => getComputedStyle(x.querySelector("span, i")).backgroundColor));
+      ck(`${tag("crew")}: a failing CI dot differs from a passing one`, crewDots[2] !== crewDots[0], crewDots.join(" | "));
       ck(`${tag("crew")}: each names who has it next`, (await texts(crew.getByTestId("review-why"))).join("|")
-         === "The reviewer reviews it|The builder works on the changes the reviewer asked for|The reviewer reviews it",
+         === "The reviewer reviews it|The builder works on the changes the reviewer asked for|The builder fixes the failing CI|The reviewer reviews it",
          (await texts(crew.getByTestId("review-why"))).join("|"));
       ck(`${tag("nobody")}: the finished project's pull request is nobody's, with the reason`,
          (await texts(page.getByTestId("reviews-nobody").getByTestId("review-title"))).join("|") === "Old bench script"
          && (await texts(page.getByTestId("reviews-nobody").getByTestId("review-why"))).join("|") === "The project is finished, so the crew no longer works on it");
-      ck(`${tag("crew")}: a pull request still going says so`, (await texts(crew.last().getByTestId("review-ci")))[0] === "CI in progress");
+      ck(`${tag("crew")}: a pull request still going says so`, (await texts(crew.last().getByTestId("review-ci")))[0] === "Checks running");
       ck(`${tag("crew")}: a lone ticket in its milestone holds it up, named with its place`,
          (await texts(crew.getByTestId("review-holds"))).join("|") === "Holds up M2: <u>Speed</u>");
 
@@ -226,15 +235,15 @@ function cleanEnv(extra) {
 
       // the filter
       await openLive(`?project=${ids["project-x"]}`);
-      ck(`${tag("filter")}: only project-x, 3 wait for you and 3 are with the crew`, (await waiting.count()) === 3
-         && (await rows.evaluateAll((r, id) => r.every((x) => x.dataset.project === id), ids["project-x"])) && (await page.getByTestId("crew-count").innerText()) === "3 +",
+      ck(`${tag("filter")}: only project-x, 2 wait for you and 4 are with the crew`, (await waiting.count()) === 2
+         && (await rows.evaluateAll((r, id) => r.every((x) => x.dataset.project === id), ids["project-x"])) && (await page.getByTestId("crew-count").innerText()) === "4 +",
          `${await waiting.count()}`);
       ck(`${tag("filter")}: the line names it and Show all goes back`, /^Showing project-x\.\s*Show all$/.test((await texts(page.getByTestId("reviews-filter")))[0])
          && (await page.getByTestId("reviews-filter").getByRole("link", { name: "Show all" }).getAttribute("href")) === "/reviews");
       await shot(page, "live-filtered", width);
       await page.getByTestId("reviews-filter").getByRole("link", { name: "Show all" }).click();
-      await page.waitForFunction(() => document.querySelectorAll('[data-testid="review-row"]').length === 6);
-      ck(`${tag("filter")}: Show all lists every project again`, (await waiting.count()) === 5 && new URL(page.url()).search === "");
+      await page.waitForFunction(() => document.querySelectorAll('[data-testid="review-row"]').length === 5);
+      ck(`${tag("filter")}: Show all lists every project again`, (await waiting.count()) === 4 && new URL(page.url()).search === "");
       await openLive(`?project=${ids["project-u"]}`);
       ck(`${tag("filter")}: a project with nothing in review shows empty lists`, (await rows.count()) === 0
          && (await page.getByTestId("reviews-waiting-none").count()) === 1 && (await page.getByTestId("reviews-filter").count()) === 1);
@@ -269,7 +278,7 @@ function cleanEnv(extra) {
       await page.goto(`${BASE}/reviews?sample=l4`, { waitUntil: "load" });
       await page.getByTestId("reviews-autonomy").waitFor();
       await page.waitForLoadState("networkidle");
-      ck("no flag: ?sample=l4 shows the live lists", (await page.getByTestId("reviews-waiting").getByTestId("review-row").count()) === 5
+      ck("no flag: ?sample=l4 shows the live lists", (await page.getByTestId("reviews-waiting").getByTestId("review-row").count()) === 4
          && (await page.getByTestId("reviews-autonomy").innerText()).startsWith("You merge"));
       await ctx.close();
     }

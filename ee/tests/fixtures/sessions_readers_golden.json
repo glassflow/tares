@@ -1072,12 +1072,15 @@
   "can_edit_icon": true,
   "can_later": false,
   "counts": {
-   "blocked": 0,
    "canceled": 0,
    "changes_asked": 1,
+   "closed": 0,
    "in_progress": 1,
    "in_review": 1,
+   "label": "0 merged of 4",
    "merged": 0,
+   "queued": 0,
+   "stuck": 0,
    "to_do": 1,
    "total": 4
   },
@@ -1109,6 +1112,8 @@
     ],
     "checks_for": [],
     "counts": {
+     "closed": 0,
+     "label": "0 merged of 4",
      "merged": 0,
      "total": 4
     },
@@ -1131,7 +1136,10 @@
     "review": null,
     "state": "changes asked",
     "title": "Ticket 2 of project 00",
-    "who": "Builder for M1"
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "blocked_by": [],
@@ -1141,7 +1149,10 @@
     "review": null,
     "state": "in review",
     "title": "Ticket 1 of project 00",
-    "who": null
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": null,
+    "whose": "crew"
    },
    {
     "blocked_by": [],
@@ -1151,7 +1162,10 @@
     "review": null,
     "state": "in progress",
     "title": "Ticket 0 of project 00",
-    "who": "Builder for M1"
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
    }
   ],
   "moving_total": 3,
@@ -1463,8 +1477,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 0,
+     "closed": 0,
+     "label": "0 merged of 4",
      "merged": 0,
+     "queued": 0,
+     "stuck": 0,
      "total": 4
     },
     "yours": 0,
@@ -1494,8 +1511,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 0,
+     "closed": 0,
+     "label": "0 merged of 4",
      "merged": 0,
+     "queued": 0,
+     "stuck": 0,
      "total": 4
     },
     "yours": 0,
@@ -1525,8 +1545,11 @@
     "state": "building",
     "state_label": "Building",
     "tickets": {
-     "blocked": 0,
+     "closed": 0,
+     "label": "0 merged of 4",
      "merged": 0,
+     "queued": 0,
+     "stuck": 0,
      "total": 4
     },
     "yours": 0,
@@ -1657,7 +1680,10 @@
     "state": "in progress",
     "state_key": "in_progress",
     "title": "Ticket 0 of project 00",
-    "who": "Builder for M1"
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1681,7 +1707,10 @@
     "state": "in review",
     "state_key": "in_review",
     "title": "Ticket 1 of project 00",
-    "who": "Not picked up yet"
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": "Not picked up yet",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1705,7 +1734,10 @@
     "state": "changes asked",
     "state_key": "changes_asked",
     "title": "Ticket 2 of project 00",
-    "who": "Builder for M1"
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1729,7 +1761,10 @@
     "state": "to do",
     "state_key": "to_do",
     "title": "Ticket 3 of project 00",
-    "who": "Not picked up yet"
+    "turn": "to_do",
+    "turn_label": "To do",
+    "who": "Not picked up yet",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1753,7 +1788,10 @@
     "state": "in progress",
     "state_key": "in_progress",
     "title": "Ticket 0 of project 01",
-    "who": "Builder for M1"
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1777,7 +1815,10 @@
     "state": "in review",
     "state_key": "in_review",
     "title": "Ticket 1 of project 01",
-    "who": "Not picked up yet"
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": "Not picked up yet",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1801,7 +1842,10 @@
     "state": "changes asked",
     "state_key": "changes_asked",
     "title": "Ticket 2 of project 01",
-    "who": "Builder for M1"
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1825,7 +1869,10 @@
     "state": "to do",
     "state_key": "to_do",
     "title": "Ticket 3 of project 01",
-    "who": "Not picked up yet"
+    "turn": "to_do",
+    "turn_label": "To do",
+    "who": "Not picked up yet",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1849,7 +1896,10 @@
     "state": "in progress",
     "state_key": "in_progress",
     "title": "Ticket 0 of project 02",
-    "who": "Builder for M1"
+    "turn": "building",
+    "turn_label": "Building",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1873,7 +1923,10 @@
     "state": "in review",
     "state_key": "in_review",
     "title": "Ticket 1 of project 02",
-    "who": "Not picked up yet"
+    "turn": "reviewing",
+    "turn_label": "Reviewing",
+    "who": "Not picked up yet",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1897,7 +1950,10 @@
     "state": "changes asked",
     "state_key": "changes_asked",
     "title": "Ticket 2 of project 02",
-    "who": "Builder for M1"
+    "turn": "changes_asked",
+    "turn_label": "Changes asked",
+    "who": "Builder for M1",
+    "whose": "crew"
    },
    {
     "assignee": null,
@@ -1921,7 +1977,10 @@
     "state": "to do",
     "state_key": "to_do",
     "title": "Ticket 3 of project 02",
-    "who": "Not picked up yet"
+    "turn": "to_do",
+    "turn_label": "To do",
+    "who": "Not picked up yet",
+    "whose": "crew"
    }
   ],
   "total": 12

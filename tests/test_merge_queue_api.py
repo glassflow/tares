@@ -41,6 +41,7 @@ os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx
 
+from tares import status_words as sw
 from tares import factory as factory_mod
 from tares import factory_github, merge_queue, merge_ready, words
 from tares.integrations import registry
@@ -191,8 +192,15 @@ async def main():
 
         BODIES = []          # every answer, for the scans
 
+        TURNS = []           # (project, ticket ref, state, chip key, turn, turn_label, whose) of every row
+
         def expect(label, got, want):
             BODIES.append(got)
+            # the turn words are the ticket's (factory.turn_of), pinned in their own checks at the end
+            for g in got.get("groups") or []:
+                for r in g["rows"]:
+                    TURNS.append((got["project"]["name"], r["ticket"]["ref"], r["state"], r["chip"]["key"],
+                                  r.pop("turn"), r.pop("turn_label"), r.pop("whose")))
             ck(label, got == want, "\n    got : " + repr(got) + "\n    want: " + repr(want))
 
         def me(person, line):
@@ -203,7 +211,7 @@ async def main():
         DANA_B = me(dana, "Dana’s builder")
 
         def X(r, p, pos_, ident, title, n, repo, branch, builder, chip, status, review="Approved by the crew reviewer",
-              ci="Passed", rail="Allowed", answer=None, bounce=None, needs=False):
+              ci="Checks passed", rail="Allowed", answer=None, bounce=None, needs=False):
             return {"id": r["id"], "position": pos_, "state": r["state"] if p is None else p,
                     "chip": chip, "ticket": {"ref": ident, "title": title},
                     "pr": {"number": n, "url": url(repo, n)}, "branch": branch, "builder": builder,
@@ -278,7 +286,7 @@ async def main():
                 X(r1, None, 1, "ORD-41", "Round prices to the order currency", 217, API,
                   "ord-41-price-rounding", LEE_B, {"key": "ci", "text": "Waiting for CI"},
                   S("Branch updated to main 3 minutes ago, waiting for CI on the new commit."),
-                  ci="Pending, checks restarted on the new commit"),
+                  ci="Checks running, restarted on the new commit"),
                 X(r2, None, 2, "ORD-43", "Add currency to the order export", 219, API,
                   "ord-43-export-currency", MARCUS_B, {"key": "next", "text": "Next"},
                   S("Next in this project."), review="Approved by Dana Whitfield")],
@@ -422,7 +430,7 @@ async def main():
                 X(r1, None, 1, "ORD-53", "Backport the carrier code to 2.4", 232, API,
                   "ord-53-backport-carrier-code", DANA_B, {"key": "moved", "text": "Commit changed"},
                   S(text_, lead_, note_), review="Approved by the crew reviewer for an older commit",
-                  ci="Pending, waiting for unit", answer=moved)],
+                  ci="Checks running, waiting for unit", answer=moved)],
               level=ASK_TEXT)],
             aside="1 in line", line=1, note="1 pull request is in the merge queue.")
         expect("the commit changed: out of date, cannot be answered, the new commit named",
@@ -436,6 +444,7 @@ async def main():
                       short="71be5d4")
         d1 = ask(r1, question(uid, t1, lee["id"], 21))
         answer(d1, t1, uid, "Yes, merge", "Yes, merge", "console", lee["id"], 2)
+        yes_uid, yes_row = uid, r1      # moved on by the queue in "whose turn"
         ck("answered yes: the row is still waiting_approval in the store",
            store.merge_queue_get(r1["id"])["state"] == "waiting_approval")
         done = {"kind": "done",
@@ -593,7 +602,7 @@ async def main():
               sent=2, extra=["2 sent back"]),
             G(WEB, "main", [
                 sb(r4, "ORD-60", "Show saved addresses at checkout", 91, WEB, "ord-60-saved-addresses",
-                   LEE_B, "CI is failing on 7ab31c0: web-unit-tests", 1, L0, ci="Failing: web-unit-tests"),
+                   LEE_B, "CI is failing on 7ab31c0: web-unit-tests", 1, L0, ci="Checks failing: web-unit-tests"),
                 sb(r5, "ORD-62", "Keep the cart after sign in", 93, WEB, "ord-62-cart-after-signin",
                    MARCUS_B, "conflicts with PR 90 in src/cart/store.ts", 5, L3)],
               sent=2, extra=["2 sent back"])],
@@ -760,17 +769,56 @@ async def main():
            (await page(uid))["groups"][0]["rows"][0]["ci"] == "Not checked yet")
         store.update_ticket(t1, pr={**pr, "ci": "none"})
         ck("a repo with no CI says so",
-           (await page(uid))["groups"][0]["rows"][0]["ci"] == "No CI checks on this repo")
+           (await page(uid))["groups"][0]["rows"][0]["ci"] == "No checks on this repo")
         store.update_ticket(t1, pr={**pr, "ci": "pending",
                                     "ci_checks": [{"name": "unit", "state": "pending"},
                                                   {"name": "lint", "state": "success"}]})
         ck("a pending check names what it waits for",
-           (await page(uid))["groups"][0]["rows"][0]["ci"] == "Pending, waiting for unit")
+           (await page(uid))["groups"][0]["rows"][0]["ci"] == "Checks running, waiting for unit")
         store.add_review(uid, t1, url(API, 350), pr["head"], "changes", "", "", "crew-reviewer",
                          [], {}, factory_mod.finding_kind, now_utc())
         ck("a review that asked for changes says so",
            (await page(uid))["groups"][0]["rows"][0]["review"] == "The crew reviewer asked for changes")
+        store.add_review(uid, t1, url(API, 350), pr["head"], "block", "", "", "crew-reviewer",
+                         [{"severity": "minor", "file": None, "line": None, "blocking": False,
+                           "text": "Rename the helper."},
+                          {"severity": "major", "file": "db/m.sql", "line": 3, "blocking": True,
+                           "text": "The migration drops the email column.\nIt has live data."}],
+                         {}, factory_mod.finding_kind, now_utc())
+        ck("a reviewer's block says who stopped it and why, from the first blocking finding",
+           (await page(uid))["groups"][0]["rows"][0]["review"]
+           == "The crew reviewer stopped it: The migration drops the email column. It has live data",
+           (await page(uid))["groups"][0]["rows"][0]["review"])
 
+        # ── whose turn: the ticket's words, read with the queue row ─────────────────────────────
+        print("== whose turn ==")
+        tw = {(pj, ref, st): (turn, label, whose) for pj, ref, st, _c, turn, label, whose in TURNS}
+        ck("every row carries the shared turn words", all(
+            label.startswith(sw.TURN[turn]) and whose == sw.TURN_WHOSE[turn]
+            for _p, _r, _s, _c, turn, label, whose in TURNS), TURNS)
+        for (pj, ref, st), want in {
+            ("Waiting for approval", "ORD-47", "waiting_approval"): ("ready_for_you", "Ready for you", "person"),
+            ("Waiting for approval", "ORD-50", "queued"): ("queued", "Queued after ORD-47", "nobody"),
+            ("Waiting for CI", "ORD-41", "waiting_ci"): ("checks_running", "Checks running", "github"),
+            ("Answered yes", "ORD-51", "waiting_approval"): ("next_to_merge", "Next to merge", "crew"),
+            ("Answered no", "ORD-52", "waiting_approval"): ("stuck", "Stuck", "person"),
+            ("Moved", "ORD-53", "waiting_approval"): ("reviewing", "Reviewing", "crew"),
+            ("Blocked", "ORD-55", "blocked"): ("stuck", "Stuck", "person"),
+            ("Sent back", "ORD-60", "sent_back"): ("changes_asked", "Changes asked", "crew"),
+            ("Sent back", "ORD-61", "sent_back"): ("changes_asked", "Changes asked", "crew"),
+        }.items():
+            ck(f"turn: {pj}, {ref} ({st}) reads {want[1]}", tw.get((pj, ref, st)) == want, tw.get((pj, ref, st)))
+        # the queue takes the yes: the row goes back in line, approved for its head, desk item closed
+        async def turn_after(**fields):
+            store.merge_queue_update(yes_row["id"], **fields)
+            rows_ = [r for g in ((await page(yes_uid)).get("groups") or []) for r in g["rows"]]
+            r = next((r for r in rows_ if r["ticket"]["ref"] == "ORD-51"), {})
+            return r.get("turn"), r.get("turn_label")
+        got = await turn_after(state="queued", desk_item=None, approved_head=yes_row["head"])
+        ck("approved for its head, back in line: next to merge, not ready for you",
+           got == ("next_to_merge", "Next to merge"), got)
+        got = await turn_after(approved_head="0000000")
+        ck("approved for an older head: the merge is yours again", got == ("ready_for_you", "Ready for you"), got)
         # ── the sentences ───────────────────────────────────────────────────────────────────────
         print("== the sentences ==")
         FORBIDDEN = ("waiting_approval", "waiting_ci", "sent_back", "merge_ready", "merge_queue",

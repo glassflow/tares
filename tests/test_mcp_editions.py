@@ -171,6 +171,34 @@ async def factory():
         ck("how_is_project returns the project's row", row.get("name") == "alpha" and "tickets" in row, str(row))
         byid = json.loads(await call("how_is_project", {"project": row.get("id", "x")}))
         ck("how_is_project finds a project by id", byid.get("name") == "alpha" and row.get("id"), str(byid))
+        # whose turn each open ticket is: the person's first, a closed one left out
+        async with httpx.AsyncClient(base_url=D, headers=ROOT, timeout=10) as cx:
+            tk = f"/api/projects/{row['id']}/tickets"
+            refs = []
+            for body in ({"title": "Build the page"}, {"title": "Wire the API"},
+                         {"title": "Pick the font"}, {"title": "Old idea", "status": "done"}):
+                r = await cx.post(tk, json=body)
+                refs.append(r.json().get("ref") or r.json().get("label"))
+            ck("four tickets made", all(refs), str(refs))
+            # the stuck one is moved first, so newest first alone would list it last
+            r = await cx.post(f"{tk}/{refs[2]}/stage", json={"stage": "blocked", "reason": "no licence for the font"})
+            ck("the font is stuck", r.status_code == 200, r.text)
+            r = await cx.put(f"{tk}/{refs[1]}", json={"depends_on": [refs[0]]})
+            ck("the API waits on the page", r.status_code == 200, r.text)
+            r = await cx.put(f"{tk}/{refs[0]}", json={"title": "Build the page, first cut"})
+            ck("the page is touched last", r.status_code == 200, r.text)
+        row = json.loads(await call("how_is_project", {"project": "alpha"}))
+        open_ = row.get("open_tickets") or []
+        turns = [(t["ref"], t["turn"], t["whose"]) for t in open_]
+        ck("how_is_project lists the open tickets, yours first, the closed one left out",
+           [x[0] for x in turns][:1] == [refs[2]] and sorted(x[0] for x in turns) == sorted(refs[:3]), str(turns))
+        by = {t["ref"]: t for t in open_}
+        ck("each reads its turn in the console's words",
+           by.get(refs[2], {}).get("turn_label") == "Stuck"
+           and by.get(refs[0], {}).get("turn_label") == "To do"
+           and by.get(refs[1], {}).get("turn_label") == f"Queued after {refs[0]}", str(open_))
+        ck("and how many are with each", row.get("whose_turn") == {"you": 1, "crew": 1, "checks": 0, "waiting": 1}
+           and row.get("open_tickets_cut") is False, str(row.get("whose_turn")))
         miss = await call("how_is_project", {"project": "nope"})
         ck("an unknown project names the ones there are", miss == "No project called nope. Projects: alpha.", miss)
         sent = await call("hand_project_to_crew", {"project": "alpha", "repos": [

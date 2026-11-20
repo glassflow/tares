@@ -1,0 +1,1486 @@
+{
+ "tickets": [
+  {
+   "stage": null,
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "todo"
+  },
+  {
+   "stage": null,
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "queued"
+  },
+  {
+   "stage": null,
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": null,
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": null,
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "todo"
+  },
+  {
+   "stage": null,
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "queued"
+  },
+  {
+   "stage": null,
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": null,
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": null,
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": null,
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": null,
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": null,
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "todo"
+  },
+  {
+   "stage": "todo",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "queued"
+  },
+  {
+   "stage": "todo",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "todo",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "todo",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "todo"
+  },
+  {
+   "stage": "todo",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "queued"
+  },
+  {
+   "stage": "todo",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "todo",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "todo",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "todo",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "todo",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "todo",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "doing",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "doing",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "doing",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "doing",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "doing",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "doing",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "doing",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "doing",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "doing",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "doing",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "doing",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "review",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "review",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "review",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "review",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "review",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "review",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "review",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "review",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "review",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "review",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "review",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "changes",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "changes",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "changes",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "changes",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "changes",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "doing"
+  },
+  {
+   "stage": "changes",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "changes",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "changes",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "changes",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "changes",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "changes",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "merged",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "merged"
+  },
+  {
+   "stage": "shipped",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": null,
+   "count": "stuck"
+  },
+  {
+   "stage": "blocked",
+   "status": "todo",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "stuck"
+  },
+  {
+   "stage": "blocked",
+   "status": "todo",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": null,
+   "count": "stuck"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_progress",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "stuck"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_progress",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": null,
+   "count": "stuck"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_review",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "stuck"
+  },
+  {
+   "stage": "blocked",
+   "status": "in_review",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "done",
+   "blocked_by": [],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "blocked",
+   "status": "done",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "closed"
+  },
+  {
+   "stage": "blocked",
+   "status": "done",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "blocked",
+   "status": "canceled",
+   "blocked_by": [],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  },
+  {
+   "stage": "blocked",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": null,
+   "count": "canceled"
+  },
+  {
+   "stage": "blocked",
+   "status": "canceled",
+   "blocked_by": [
+    "T1"
+   ],
+   "pr": {
+    "merged": true
+   },
+   "count": "merged"
+  }
+ ],
+ "lines": [
+  {
+   "counts": {
+    "merged": 0,
+    "total": 0
+   },
+   "line": "No tickets yet"
+  },
+  {
+   "counts": {
+    "merged": 2,
+    "total": 3
+   },
+   "line": "2 merged of 3"
+  },
+  {
+   "counts": {
+    "merged": 5,
+    "closed": 1,
+    "queued": 2,
+    "stuck": 1,
+    "total": 9
+   },
+   "line": "5 merged, 1 closed, 2 queued, 1 stuck of 9"
+  },
+  {
+   "counts": {
+    "merged": 0,
+    "stuck": 2,
+    "total": 7
+   },
+   "line": "0 merged, 2 stuck of 7"
+  },
+  {
+   "counts": {
+    "merged": 1,
+    "closed": 1,
+    "total": 2
+   },
+   "line": "1 merged, 1 closed of 2"
+  }
+ ]
+}

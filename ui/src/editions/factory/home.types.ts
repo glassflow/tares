@@ -72,7 +72,7 @@ export interface HomeItem {
   actions: HomeAction[];
   /** The tickets the item is about (the pull requests to review); empty for an item about no ticket. */
   tickets?: string[];
-  /** Short lines shown one under the other below the detail (the calls in a "calls to confirm" item). */
+  /** Short lines shown one under the other below the detail (the calls in a "crew answers to confirm" item). */
   lines?: string[];
   /** The decision in one line, verb first ("Merge PR 336"); a question's is the question (TR-1447).
    *  Absent on a cell from before it. */
@@ -100,7 +100,10 @@ export interface HomeProject {
   state: HomeProjectState;
   state_label: string;
   milestone: string | null; // "Now on M2: search", "3 milestones", "Ready to close"
-  tickets: { merged: number; blocked: number; total: number };
+  /** Tickets by count group (tares/factory.py `progress`): merged only for a merge, closed for done
+   *  without one, queued waits on another ticket, stuck a station stopped. `label` is the line
+   *  ("5 merged, 2 queued, 1 stuck of 8", status_words.count_line). */
+  tickets: { merged: number; closed: number; queued: number; stuck: number; total: number; label: string };
   repos: string[];
   builders: number;
   last_activity_at: string | null;
@@ -226,6 +229,23 @@ export interface HomeOnboarding {
   };
 }
 
+/** Where an answer was given, as the cell records it (tares/answers.py): Home is `console`; `feed` is
+ *  what rows from the old feed page still say. `message` is a reply by message. */
+export type HomeVia = "feed" | "console" | "session" | "message";
+
+/** The cell's record of one answer (GET /api/answers), read for a link to an item that no longer waits. */
+export interface HomeAnswered {
+  id: string;
+  ask: string;
+  /** Null for an answer that is neither: an option picked or words given to a question. */
+  choice: "yes" | "no" | null;
+  /** What was pressed or said, in its own words ("Postgres", "Later", "Agree"). */
+  said: string;
+  by: string;
+  at: string;
+  via: HomeVia;
+}
+
 export interface HomeData {
   edition: "factory";
   headline: string;
@@ -278,6 +298,9 @@ export interface HomeTeamCrewsProps { crews: HomeTeamCrew[]; quiet: string[] }
 export interface HomeReposProps { areas: HomeArea[] }
 export interface HomeWaitingProps {
   items: HomeItem[];
+  /** The id a link named (`/?item=<id>`, TR-1527): the matching row stands first, marked, outside any fold.
+   *  Only a well-formed id is passed; one that matches no row changes nothing. */
+  focus?: string;
   /** What a button of a row is; the page decides what a click does. */
   renderAction: (a: HomeAction, item: HomeItem) => ReactNode;
   /** A refusal's sentence by row id, shown under that row. */

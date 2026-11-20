@@ -4,11 +4,12 @@
 // person's own text, and the page shows every string as text.
 
 import { request } from "../../api";
+import type { TicketTurnFields } from "./FactoryProject.api";
 
 /** The states a ticket is in, the way the cell counts them. */
 export type StateKey = "to_do" | "in_progress" | "in_review" | "changes_asked" | "blocked" | "merged" | "canceled";
 
-export interface TicketRow {
+export interface TicketRow extends TicketTurnFields {
   /** "DS-21": the ticket's own number, unique inside its project. */
   ref: string;
   title: string;

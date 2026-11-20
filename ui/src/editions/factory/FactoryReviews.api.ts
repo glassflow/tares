@@ -4,11 +4,13 @@
 // a person's own text, and the page shows every string as text.
 
 import { request } from "../../api";
+import type { TicketTurnFields } from "./FactoryProject.api";
 
 /** The dot of a CI sentence: green, red, still going, or no CI at all. */
 export type CiState = "ok" | "bad" | "go" | "none";
 
-export interface ReviewRow {
+/** `turn`, `turn_label`, `whose`: whose turn the ticket is, the words the Tickets page shows. */
+export interface ReviewRow extends TicketTurnFields {
   project: { id: string; name: string };
   ticket: { ref: string; title: string; href: string };
   pr: { number: number | null; url: string | null; title: string | null; repo: string | null };
@@ -17,7 +19,7 @@ export interface ReviewRow {
   since: string | null;
   /** What the reviewer said: "Passed, round 2", "Changes asked, round 1", "Not reviewed yet", "Passed on an older commit". */
   review: string;
-  /** "CI passed", "CI failing", "CI in progress" or "No CI". */
+  /** "Checks passed", "Checks failing", "Checks running" or "No checks" (status_words.CI). */
   ci: string;
   ci_state: CiState;
   /** "Holds up M2: Faster lists" when this is the last pull request its milestone waits for, else null. */

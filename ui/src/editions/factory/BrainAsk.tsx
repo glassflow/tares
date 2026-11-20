@@ -208,7 +208,7 @@ function Asker({ data, reload }: { data: AskBrainData; reload: () => void }) {
                            action={(
                              <div className="flex flex-wrap justify-center gap-2">
                                <Button asChild variant="secondary"><Link to="/brain" data-testid="brain-ask-repos">Repos</Link></Button>
-                               <Button variant="secondary" onClick={reload} data-testid="brain-ask-recheck">Check again</Button>
+                               <Button variant="secondary" onClick={() => reload()} data-testid="brain-ask-recheck">Check again</Button>
                              </div>
                            )}>
           <EmptyWords rows={rows} message={notReady} />
@@ -253,7 +253,7 @@ export default function BrainAsk() {
   if (read.state === "error") {
     return (
       <Head>
-        <Banner tone="error" action={<Button variant="secondary" onClick={reload} data-testid="brain-ask-retry">Retry</Button>} data-testid="brain-ask-read-error">
+        <Banner tone="error" action={<Button variant="secondary" onClick={() => reload()} data-testid="brain-ask-retry">Retry</Button>} data-testid="brain-ask-read-error">
           <b>Ask did not load.</b> <span className="text-foreground">{READ_FAILED_WORDS}</span>
         </Banner>
       </Head>
