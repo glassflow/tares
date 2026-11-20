@@ -1,0 +1,294 @@
+/* vendored from glassflow/arche-design paper-tokens-v2 746e3f7e0863441e4dcf3268c338b966637f9c7e: do not edit, run npm run paper:sync */
+/*
+ * paper-theme.css — the GlassFlow paper role layer, shared by Rius and Tares.
+ *
+ * What it is: the roles the kit components and Tailwind utilities read (--bg, --panel,
+ * --ink, --accent, --ok, ...), the --kit-* hex values and the raw palette they are built
+ * from, the dark-mode overrides, and the `@theme inline` map that turns roles into
+ * utilities (bg-background, text-brand, border-rule-strong, ...). Values are the
+ * console's exactly: nothing here is a new colour.
+ *
+ * It pairs with tokens.css (the --agency-* HSL triplets this file's --kit-* hex values
+ * must match) and paper-motion.css (durations, curves and the motion classes), all three
+ * at the same `paper-tokens-vN` tag. It is the source: an app vendors a tagged copy with
+ * `npm run paper:sync` and never edits it. A change is made here, in a PR, then tagged.
+ * See README.md, "How the paper skill is kept true".
+ *
+ * Import this file, never tokens.css with it. tokens.css is the reference the --kit-*
+ * values are checked against, not a stylesheet to load beside this one: the two define 28
+ * of the same names (--accent, --popover and the `@theme inline` --color-* and --font-*
+ * entries) in incompatible forms, so the later import wins silently.
+ *
+ * What an app brings itself:
+ * - Fonts. Only the family NAMES are here (the `@theme` block below). Each app loads its
+ *   own font files (`@import`, `@font-face`), since where they come from differs.
+ * - The Tailwind import and the `@layer` order, which come before this file is imported.
+ * - Motion: `paper-motion.css`.
+ *
+ * Left out on purpose, because only a console screen reads them (the console keeps these
+ * in its own stylesheet): --starting-bg (the legacy "starting" badge), --code-dark-bg and
+ * --code-dark-ink (the dark tool-call panel on the Crew page), --person-1, --person-2,
+ * --person-3, --on-person-1 and --on-person (the sender mark on Home), and --serif (a
+ * retired alias that nothing reads). The palette keeps --blue-700 and --violet-600, which
+ * only those marks read. Anything a kit component might read stays in.
+ */
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono-jb: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-pixel: "Doto Variable", ui-monospace, monospace;
+}
+
+/* ── Kit variables (HeroUI Kit V3, GlassFlow) ──
+   Values are the kit's "02_Theme (HeroUI)" collection, verbatim hex, both modes; the same
+   layer tokens.css carries as --agency-* HSL triplets. Both products share one palette by
+   construction. Components never reference --kit-*; they consume the semantic tokens. A
+   consumer's parity test fails when a --kit-* value drifts from the shared paper token in
+   tokens.css.
+
+   ADOPTED from the kit: canvas + surface tiers + overlay + border, eclipse ink + muted, the accent
+   (fixed across modes; the kit's Button "Primary" is the accent role), the dark anchors, and
+   Geist Mono for the label/interactive/code role.
+
+   HELD on purpose, matching Rius's logged decisions (RIUS-52):
+   - status colors: kit success/warning/danger (#17c964/#f5a524/#ff383c) are stock HeroUI brights
+     that read neon on cream; the cream-derived tones stay.
+   - dark-mode zinc leftovers (background-secondary #0c0c0e, border #28282c, ...): unfinished in
+     the kit; the warm-brown ramp stays for those roles.
+   - radius + shadow: the kit's 0/12/24 radius language and shadow-drawn borderless fields are not
+     adopted. Square corners, 1px hairlines, no shadows are Tares's identity; the rule is
+     "consistent within Tares".
+
+
+   RULES: no color literal below these token layers; new micro-labels/badges/code use
+   var(--mono), var(--pixel) is for headline numerals only; when the kit changes, change
+   tokens.css first, then the --kit-* values in this file, in one PR; tag it; consumers re-vendor. */
+:root {
+  --kit-background: #f0efe2;          /* background/background */
+  --kit-surface: #faf9ec;             /* surface/surface */
+  --kit-surface-secondary: #f1efdf;   /* surface/surface-secondary */
+  --kit-surface-tertiary: #efeddb;    /* surface/surface-tertiary */
+  --kit-overlay: #ffffff;             /* overlay / field/background / default-hover */
+  --kit-foreground: #1e0f00;          /* foreground/foreground = eclipse */
+  --kit-muted: #6e5b3f;               /* foreground/muted */
+  --kit-border: #d8d5bc;              /* border */
+  --kit-accent: #ffac00;              /* accent/accent (fixed across modes) */
+  --kit-accent-hover: #ffd274;        /* accent/accent-hover (fixed across modes) */
+  --kit-accent-foreground: #1e0f00;   /* accent/accent-foreground = eclipse */
+  --kit-accent-soft: #ffac0026;       /* accent/accent-soft (light) */
+  --kit-snow: #fcfcfc;                /* base colors/snow (dark-mode foreground) */
+
+  /* the kit V2 dark ladder, as argus-ui src/app/theme.css (--agency-dark-*); TR-1271 */
+  --kit-dark-background: #2b1600;     /* background/background (dark), V2: lifted off eclipse */
+  --kit-dark-surface: #492400;        /* surface/surface (dark), all three surface tiers */
+  --kit-dark-field-focus: #582f06;    /* field/background-focus (dark), the rung between surface and default */
+  --kit-dark-default: #663b11;        /* default/default (dark) */
+  --kit-dark-segment: #783e06;        /* segment (dark), the rung above default: what floats */
+  --kit-dark-muted: #c2b197;          /* foreground/muted (dark) */
+  --kit-dark-separator: #895523;      /* separator/separator (dark) */
+  --kit-dark-accent-soft: #ffac001f;  /* accent/accent-soft (dark) */
+}
+
+/* ── raw palette: kit anchors first, cream/brown-derived ramps where the kit is held ── */
+:root {
+  /* the brown ink scale, anchored on eclipse; intermediates keep the deck's warm ramp */
+  --brown-950: var(--kit-foreground);
+  --brown-700: oklch(0.38 0.072 58);
+  --brown-600: var(--kit-muted);
+  --brown-500: oklch(0.51 0.05 64);
+
+  /* the cream ground, anchored on the kit's background/surface tiers */
+  --bone-100: var(--kit-surface);
+  --bone-200: var(--kit-background);
+  --bone-300: var(--kit-surface-tertiary);
+  --bone-400: var(--kit-border);
+
+  --on-brown-100: var(--kit-snow);
+  --on-brown-300: var(--kit-dark-muted);
+  --on-brown-500: oklch(0.69 0.038 78);
+  --on-brown-border: var(--kit-dark-separator);
+
+  /* accent: the kit's Space Sand, verbatim */
+  --sand-500: var(--kit-accent);
+  --sand-400: var(--kit-accent-hover);
+  --sand-300: oklch(0.8857 0.1558 91.49);
+  --sand-700: oklch(0.52 0.148 62);     /* AA ink form for text on cream; the kit has no dark accent */
+  --sand-wash: var(--kit-accent-soft);
+
+  /* status: held from the kit (stock brights); cream-derived tones stay */
+  --green-500: oklch(0.56 0.14 150);
+  --green-300: oklch(0.74 0.15 152);
+  --red-500: oklch(0.552 0.196 28);
+  --red-300: oklch(0.69 0.19 26);
+  --blue-500: oklch(0.56 0.12 250);
+  --blue-300: oklch(0.72 0.11 245);
+  --blue-700: oklch(0.467 0.089 250);   /* a person's mark (Sender) */
+  --violet-600: oklch(0.482 0.097 305); /* a person's mark (Sender) */
+  --white: var(--kit-overlay);
+}
+
+/* ── semantic tokens: light = the cream ground ── */
+:root {
+  color-scheme: light;
+
+  /* surfaces & text — kit tiers: background canvas, surface panels, overlay pops */
+  --bg: var(--kit-background);
+  --panel: var(--kit-surface);
+  --ink: var(--kit-foreground);
+  --ink-soft: var(--kit-muted);
+  --ink-faint: var(--brown-500);
+  --line: var(--kit-border);
+  --input-bg: var(--kit-overlay);      /* field/background */
+  --input-bg-focus: var(--input-bg);   /* field/background-focus */
+  --popover: var(--panel);             /* menus, selects and other floating lists */
+
+  /* accent — Space Sand carries fills; sand-700 is the AA text/ink form */
+  --accent: var(--kit-accent);
+  --accent-soft: var(--kit-accent-soft);
+  --accent-deep: var(--sand-700);
+  --on-accent: var(--kit-accent-foreground);
+
+  /* status */
+  --ok: var(--green-500);
+  --ok-soft: color-mix(in srgb, var(--green-500) 11%, var(--kit-surface));
+  --ok-border: color-mix(in srgb, var(--green-500) 28%, var(--kit-surface));
+  --err: var(--red-500);
+  --err-soft: color-mix(in srgb, var(--red-500) 9%, var(--kit-surface));
+  --danger-border: color-mix(in srgb, var(--red-500) 30%, var(--kit-surface));
+  --warn: var(--sand-700);
+  --warn-soft: color-mix(in srgb, var(--kit-accent) 16%, var(--kit-surface));
+  --warn-border: color-mix(in srgb, var(--kit-accent) 45%, var(--kit-surface));
+
+  /* structural neutrals — kit surface tiers */
+  --hover: var(--kit-surface-secondary);
+  --row-hover: var(--kit-surface-secondary);
+  --th-bg: var(--kit-surface-secondary);
+  --chip-bg: var(--kit-surface-tertiary);
+  --border-strong: var(--kit-border);
+  --wash: color-mix(in srgb, var(--kit-foreground) 6%, transparent);
+  --wash-2: color-mix(in srgb, var(--kit-foreground) 10%, transparent);
+  --track: color-mix(in srgb, var(--ink-faint) 40%, transparent);   /* the unfilled part of a ring or meter: reads on any surface, quieter than its fills */
+  --code-bg: var(--kit-surface-secondary);
+  --slate: var(--blue-500); /* structural tags (push mode, kind) */
+  --slate-soft: color-mix(in srgb, var(--blue-500) 10%, var(--kit-surface));
+
+  /* primary action — the kit's Button "Primary" maps to accent (fixed across modes) */
+  --btn-primary-bg: var(--kit-accent);
+  --btn-primary-ink: var(--kit-accent-foreground);
+  --btn-primary-bg-hover: var(--kit-accent-hover);
+
+  /* overlays: hairline + tone, shadows only where something floats */
+  --overlay: color-mix(in srgb, var(--kit-foreground) 45%, transparent);
+  --sheet-shadow: color-mix(in srgb, var(--kit-foreground) 25%, transparent);
+
+  --mono: var(--font-mono-jb);
+  --pixel: var(--font-pixel);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* kit V2 dark ladder: canvas < panel < field focus < default < segment, snow ink */
+  --bg: var(--kit-dark-background);
+  --panel: var(--kit-dark-surface);
+  --popover: var(--kit-dark-segment);
+  --ink: var(--kit-snow);
+  --ink-soft: var(--kit-dark-muted);
+  --ink-faint: var(--on-brown-500);
+  --line: var(--kit-dark-separator);
+  --input-bg: var(--kit-dark-surface);
+  --input-bg-focus: var(--kit-dark-field-focus);
+
+  --accent: var(--kit-accent);
+  --accent-soft: var(--kit-dark-accent-soft);
+  --accent-deep: var(--sand-300);
+  --on-accent: var(--kit-accent-foreground);
+
+  --ok: var(--green-300);
+  --ok-soft: color-mix(in srgb, var(--green-300) 14%, var(--kit-dark-background));
+  --ok-border: color-mix(in srgb, var(--green-300) 30%, var(--kit-dark-background));
+  --err: var(--red-300);
+  --err-soft: color-mix(in srgb, var(--red-300) 12%, var(--kit-dark-background));
+  --danger-border: color-mix(in srgb, var(--red-300) 32%, var(--kit-dark-background));
+  --warn: var(--sand-300);
+  --warn-soft: color-mix(in srgb, var(--sand-300) 12%, var(--kit-dark-background));
+  --warn-border: color-mix(in srgb, var(--sand-300) 30%, var(--kit-dark-background));
+
+  /* the kit's dark neutrals beyond these are zinc leftovers (held); warm-brown ramp stays */
+  --hover: var(--kit-dark-default);
+  --row-hover: var(--kit-dark-default);
+  --th-bg: var(--kit-dark-field-focus);  /* V2 replaced the old #5a3109 rung with this one */
+  --chip-bg: var(--kit-dark-default);
+  --border-strong: var(--kit-dark-separator);
+  --wash: color-mix(in srgb, var(--kit-snow) 7%, transparent);
+  --wash-2: color-mix(in srgb, var(--kit-snow) 11%, transparent);
+  --track: color-mix(in srgb, var(--ink-faint) 55%, transparent);
+  --code-bg: var(--kit-dark-background);
+  --slate: var(--blue-300);
+  --slate-soft: color-mix(in srgb, var(--blue-300) 14%, var(--kit-dark-background));
+
+  --btn-primary-bg: var(--kit-accent);
+  --btn-primary-ink: var(--kit-accent-foreground);
+  --btn-primary-bg-hover: var(--kit-accent-hover);
+
+  --overlay: oklch(0 0 0 / 0.55);
+  --sheet-shadow: oklch(0 0 0 / 0.5);
+}
+
+/* ── Utilities bridge ──
+   Component libraries read shadcn's token names; they map onto the semantic tokens above, so
+   light and dark follow [data-theme] and there is one palette. Radii are 0 and there are no
+   shadows: square corners and 1px hairlines are the identity. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--btn-primary-bg);
+  --color-primary-hover: var(--btn-primary-bg-hover);
+  --color-primary-foreground: var(--btn-primary-ink);
+  --color-secondary: var(--hover);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--hover);
+  --color-muted-foreground: var(--ink-soft);
+  --color-accent: var(--hover);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--err);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-track: var(--track);
+  /* The roles editions reached through arbitrary values (TR-1263). One utility per role, named for
+     the role, never the hue. `accent` above is shadcn's hover surface, so the amber action colour is
+     `brand`, as in Rius. Raw palette tokens (`--kit-*`, `--green-300`) stay out of here on purpose. */
+  --color-brand: var(--accent);
+  --color-brand-soft: var(--accent-soft);
+  --color-brand-deep: var(--accent-deep);
+  --color-brand-foreground: var(--on-accent);
+  --color-faint: var(--ink-faint);
+  --color-rule-strong: var(--border-strong);
+  --color-field: var(--input-bg);
+  --color-field-focus: var(--input-bg-focus);
+  --color-row-hover: var(--row-hover);
+  --color-wash: var(--wash);
+  --color-wash-strong: var(--wash-2);
+  --color-scrim: var(--overlay);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-border: var(--ok-border);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-border: var(--warn-border);
+  --color-err-soft: var(--err-soft);
+  --color-err-border: var(--danger-border);
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --font-mono: var(--mono);
+}

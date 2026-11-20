@@ -1,7 +1,7 @@
 /*
  * TR-1268: Tares and Rius stay one family. Every `--kit-*` value in src/styles.css must equal the
- * shared paper token it copies (`--agency-*` in tests/paper-tokens.css, a vendored copy of the
- * glassflow-paper-design skill's references/tokens.css; its header names the source commit), unless
+ * shared paper token it copies (`--agency-*` in paper/tokens.css, vendored from glassflow/arche-design by
+ * `npm run paper:sync`; paper/VENDORED.json names the tag and commit), unless
  * tests/tokens.parity.allow.json lists it with the reason Tares differs on purpose.
  *
  * Fails on: a --kit-* value that differs from its shared token; a --kit-* name with no shared token
@@ -10,15 +10,15 @@
  * so a value matches when every RGB channel is within 3 of the triplet's.
  *
  * Run:  npm run test:tokens     (from ui/)
- * To change a shared value: change it in argus-ui, then the skill, then re-vendor
- * tests/paper-tokens.css in a PR. To differ on purpose: add an allowlist entry with its reason.
+ * To change a shared value: change it in arche-design, tag it, then
+ * `npm run paper:sync`. To differ on purpose: add an allowlist entry with its reason.
  */
 const fs = require("fs");
 const path = require("path");
 
 const UI = path.join(__dirname, "..");
 const STYLES = process.env.TOKENS_STYLES || path.join(UI, "src", "styles.css");
-const SHARED = path.join(__dirname, "paper-tokens.css");
+const SHARED = path.join(__dirname, "..", "paper", "tokens.css");
 const ALLOW = path.join(__dirname, "tokens.parity.allow.json");
 const TOLERANCE = 3;
 
@@ -42,7 +42,7 @@ function hex(v) {
   return { rgb: [n >> 16, (n >> 8) & 255, n & 255], alpha: m[2] ? parseInt(m[2], 16) / 255 : 1 };
 }
 function hsl(v) {
-  const m = /^(-?[\d.]+)\s+([\d.]+)%\s+([\d.]+)%$/.exec(v);
+  const m = /^(-?[\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*([\d.]+)%)?$/.exec(v);
   if (!m) return null;
   const h = Number(m[1]) / 360, s = Number(m[2]) / 100, l = Number(m[3]) / 100;
   const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
@@ -51,7 +51,7 @@ function hsl(v) {
     const c = t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
     return Math.round(c * 255);
   };
-  return { rgb: [ch(h + 1 / 3), ch(h), ch(h - 1 / 3)], alpha: 1 };
+  return { rgb: [ch(h + 1 / 3), ch(h), ch(h - 1 / 3)], alpha: m[4] === undefined ? 1 : Number(m[4]) / 100 };
 }
 const toHex = (rgb) => "#" + rgb.map((c) => c.toString(16).padStart(2, "0")).join("");
 
@@ -74,7 +74,7 @@ for (const [name, value] of kit) {
     const theirs = hsl(shared.get(twin));
     if (!theirs) { problems.push(`--${twin}: "${shared.get(twin)}" is not an HSL triplet`); continue; }
     const off = Math.max(...mine.rgb.map((c, i) => Math.abs(c - theirs.rgb[i])));
-    if (off > TOLERANCE || mine.alpha !== 1) differs = `is ${value}, the shared --${twin} is ${shared.get(twin)} (${toHex(theirs.rgb)})`;
+    if (off > TOLERANCE || Math.abs(mine.alpha - theirs.alpha) > 0.01) differs = `is ${value}, the shared --${twin} is ${shared.get(twin)} (${toHex(theirs.rgb)})`;
   }
   if (!differs) matched++;
   if (entry) {
