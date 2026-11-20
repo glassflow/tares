@@ -275,8 +275,9 @@ def archive_pass(store, backend: Backend | None = None, now: datetime | None = N
     db = store.sessions_db
     if backend is None:
         try:
-            backend = backend_for(os.environ.get("TARES_ARCHIVE_URL"), os.path.dirname(
-                os.path.abspath(store.path)), db.dialect == "postgresql")
+            # a store with no file (":memory:") has no data directory to default to
+            data_dir = "" if str(store.path) == ":memory:" else os.path.dirname(os.path.abspath(store.path))
+            backend = backend_for(os.environ.get("TARES_ARCHIVE_URL"), data_dir, db.dialect == "postgresql")
         except Exception as e:
             metrics.archive_failed()
             print(f"taresd: session archive off ({type(e).__name__}: {e})", flush=True)

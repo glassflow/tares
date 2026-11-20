@@ -154,6 +154,11 @@ class Flaky(session_archive.Backend):
         return self.inner.head(key)
 
 
+def on_pg(s):
+    """Whether this Store keeps its session state in Postgres (CI sets TARES_TEST_PG for every suite)."""
+    return s.sessions_db.dialect == "postgresql"
+
+
 def revision():
     print("== revision 0007_session_archive ==")
     d = tempfile.mkdtemp()
@@ -594,7 +599,7 @@ def defaults_and_loop():
     print("== where the archive goes when no URL is set ==")
     s = open_store()
     ready(s, "dflt", n=2)
-    if PG:
+    if on_pg(s):
         ck("on Postgres with no URL the job does nothing", session_archive.archive_pass(s, None, NOW) == 0
            and len(rows_of(s, "dflt")) == 2 and not os.path.exists(os.path.join(
                os.path.dirname(s.path), "archive")))
@@ -602,6 +607,20 @@ def defaults_and_loop():
         ck("on SQLite the folder is <data dir>/archive", session_archive.archive_pass(s, None, NOW) == 1
            and os.path.exists(os.path.join(os.path.dirname(s.path), "archive", "dflt", "1.jsonl.gz")))
     s.close()
+
+    print("== a store with no file has no default folder ==")
+    cwd = tempfile.mkdtemp()
+    old_cwd = os.getcwd()
+    os.chdir(cwd)
+    try:
+        m = Store(":memory:")
+        ready(m, "mem", n=2)
+        moved = session_archive.archive_pass(m, None, NOW)
+        ck("a :memory: store archives nothing and writes no ./archive", moved == 0 and len(rows_of(
+            m, "mem")) == 2 and not os.path.exists(os.path.join(cwd, "archive")), (moved, os.listdir(cwd)))
+        m.close()
+    finally:
+        os.chdir(old_cwd)
 
     print("== TARES_ARCHIVE_URL is read at each pass ==")
     s = open_store()
@@ -623,6 +642,25 @@ def defaults_and_loop():
     finally:
         os.environ.pop("TARES_ARCHIVE_URL", None)
     s.close()
+
+    print("== the loop waits `first` once, then `every` ==")
+
+    async def ticks():
+        calls = []
+        real = session_archive.archive_pass
+        session_archive.archive_pass = lambda *a, **k: calls.append(time.time()) or 0
+        try:
+            stop = asyncio.Event()
+            task = asyncio.create_task(session_archive.run(None, stop, every=0.05, first=0.6))
+            await asyncio.sleep(1.1)
+            stop.set()
+            await asyncio.wait_for(task, 5)
+        finally:
+            session_archive.archive_pass = real
+        return calls
+    calls = asyncio.run(ticks())
+    ck("the first pass waits `first`, the next ones `every`", len(calls) >= 4 and calls[1] - calls[0] < 0.4,
+       calls)
 
     print("== the loop ==")
     s = open_store()
@@ -659,11 +697,11 @@ def defaults_and_loop():
 
 
 def pg_lock():
-    if not PG:
+    s = open_store()
+    if not on_pg(s):
+        s.close()
         return
     print("== on Postgres a session held by another transaction is skipped ==")
-    import psycopg
-    s = open_store()
     b = FileBackend(tempfile.mkdtemp())
     ready(s, "held", "free", n=2)
     with s.sessions_db.begin() as other:
