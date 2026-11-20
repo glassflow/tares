@@ -31,7 +31,7 @@ from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import COPIED, project_sessions, session_stations, session_states
 from .session_store.tables import session_commands, session_messages
-from .session_store.tables import session_files, session_said, session_turns
+from .session_store.tables import session_files, session_lines, session_said, session_turns
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
@@ -889,6 +889,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def close(self) -> None:
         """Let go of the session store's connections. The DuckDB and Postgres state connections are
         left to the process, as before."""
+        stop = getattr(self, "_reconcile_stop", None)
+        if stop is not None:
+            stop.set()          # the ten minute reconcile (session_ingest._cycle) ends
         sessions_db = getattr(self, "sessions_db", None)
         if sessions_db is not None:
             sessions_db.close()
@@ -4634,6 +4637,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                     raise
             # the sessions table counts those lines too: a re-ship of them would count them twice
             with self.sessions_db.begin() as conn:
+                # the stored lines go first, through the sessions that name the source (TR-1478):
+                # a row of the session left behind would collide with the numbers of a re-ship
+                conn.execute(delete(session_lines).where(session_lines.c.session.in_(
+                    select(sessions_table.c.session).where(sessions_table.c.source == source))))
                 conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
                 # and so do the facts read from them (TR-1477); a call's results live on its row
                 conn.execute(delete(session_commands).where(session_commands.c.source == source))
