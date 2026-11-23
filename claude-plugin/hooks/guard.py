@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -67,8 +68,15 @@ PR_REVIEW = _re(r"gh\s+pr\s+review")
 PR_MERGE = _re(r"gh\s+pr\s+merge|gh\s+api[^;&|]*pulls/[0-9]+/merge")
 STATUSES = _re(r"statuses/")
 GH_API = _re(r"gh\s+api")
+# A tag made, changed or deleted, or a push that names one. `git tag -l` and the other listing forms stay open; a
+# flag that writes (-d, -f, -a, -s, -u, -m, -F, -e and the long forms) is a tag command too. A push names a tag
+# when it says --tags, --follow-tags, --mirror, refs/tags, or a ref like v1.2 or paper-tokens-v3 (also as `:name`,
+# which deletes it). A branch such as `vladimir/tr-1-slug` has a slash and is not one, nor is `docs-v2-notes`: a name
+# ending in `-v<digits>` is.
 TAGS = _re(
-    r"(git\s+tag\s+[^-]|git\s+push[^;&|]*[\s:](--tags|refs/tags|v[0-9]))|gh\s+release\s+(create|edit|delete)")
+    r"(git\s+tag\s+[^-]|git\s+tag\b[^;&|]*\s(-[a-zA-Z0-9]*[dfasumFe][a-zA-Z0-9]*|--(delete|force|annotate|sign|local-user|message|file|edit))(\s|=|$)"
+    r"|git\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9][0-9.]*(?:-?(?:rc|alpha|beta|pre|dev)[0-9.]*|[a-z])?(?![\w-])))"
+    r"|gh\s+release\s+(create|edit|delete)")
 DEPLOY = _re("(" + KUBECTL + "|" + HELM + ")")
 CLAUDE_STATIONS = _re(r"(^|[;&|\s])claude\s+(--bg|--background|stop|kill|rm|respawn)(\s|$)")
 STATION_VERBS = _re(
@@ -139,6 +147,16 @@ def parse(raw: str):
     inp = data.get("tool_input")
     cmd = jq_text(inp.get("command")) if isinstance(inp, dict) else ""
     return tool.rstrip("\n"), cmd.rstrip("\n")
+
+
+def payload_cwd(raw: str) -> str:
+    """The folder the tool call runs in, as the payload says; "" when it does not say."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return ""
+    cwd = data.get("cwd") if isinstance(data, dict) else None
+    return cwd if isinstance(cwd, str) else ""
 
 
 def station_role(env) -> str:
@@ -234,7 +252,134 @@ def granted(env, role: str, cmd: str) -> bool:
     return any(want in line and (station in line or f"the {role}" in line.lower()) for line in lines)
 
 
-def decide(env, tool: str, cmd: str) -> None:
+# A grant that names a tag (TR-1574): a backticked clause `tag: <owner>/<repo> <pattern>` in a line of the grants the
+# station started with. The pattern is a tag name, or a name with <N> for a number (`paper-tokens-v<N>`). Prose in a
+# grant that only mentions a tag lifts nothing.
+TAG_GRANT = _re(r"`tag: ([A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*) ([A-Za-z0-9][\w.-]*(?:<N>[\w.-]*)*)`")
+# A GitHub remote URL as git spells it (https, scp-like ssh, ssh://), matched from its first character so a path or
+# a host that only contains `github.com` is not one.
+GITHUB_REMOTE = _re(
+    r"(?:https://(?:[\w.~%-]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
+# What a tag command may be made of: words, `/`, `.`, `@`, `~`, `-`, spaces and `&&`. No quote, `$`, `;`, `|`,
+# redirect, newline, `:` (a refspec) or `=`: what is not plain is refused, never guessed at.
+PLAIN_COMMAND = _re(r"[\w./@~ &-]+")
+SHA = _re(r"[0-9a-f]{7,40}")
+# The longest `&&` chain a tag command may be: cd, fetch, tag, push and ls-remote twice over still fit.
+MAX_TAG_SEGMENTS = 8
+# Seconds after which no further folder is looked up (each lookup is two git calls of 1.5 s at most): the hook's own
+# 5 s limit fails open, so the guard must answer before it.
+TAG_GIT_BUDGET = 1.5
+
+
+def crew_has_releaser(env) -> bool:
+    """Whether the crew has a releaser station (a role `releaser` in the roster on disk). A roster that can't be
+    read counts as one: the tag rule stays shut when it can't be sure."""
+    home = env.get("FACTORY_HOME", "")
+    try:
+        with open(os.path.join(home, "stations.json"), encoding="utf-8", errors="replace") as f:
+            roster = json.load(f)
+    except (OSError, ValueError):
+        return True
+    if not isinstance(roster, dict):
+        return True
+    return any(isinstance(s, dict) and s.get("role") == "releaser" for s in roster.values())
+
+
+def tag_grants(env) -> list:
+    """(owner/repo, compiled pattern of the tag name) of each clause in the station's grants (see TAG_GRANT)."""
+    home, station = env.get("FACTORY_HOME", ""), env.get("FACTORY_STATION", "")
+    if not home or not station:
+        return []
+    try:
+        with open(os.path.join(home, "stations", station + ".grants"), encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    return [(repo.lower(), re.compile(r"[1-9][0-9]*".join(re.escape(x) for x in name.split("<N>")), re.ASCII))
+            for repo, name in TAG_GRANT.findall(text)]
+
+
+def origin_repo(folder: str) -> str:
+    """owner/repo of the GitHub remote `origin` of the repository at folder, read from its config (no network);
+    "" when there is none. Every URL origin has counts, the ones it fetches from and the ones it pushes to (a
+    `pushurl` can name another repo than `url`, and `url` can be set twice): they must all be GitHub URLs of one
+    repo, or there is no answer."""
+    repos = set()
+    for flags in ([], ["--push"]):
+        try:
+            out = subprocess.run(["git", "-C", folder, "remote", "get-url", "--all"] + flags + ["origin"],
+                                 capture_output=True, text=True, timeout=1.5, check=False).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        for url in out.split("\n"):
+            if not url:
+                continue
+            m = GITHUB_REMOTE.fullmatch(url.strip())
+            if not m:
+                return ""
+            repos.add((m.group(1) + "/" + m.group(2)).lower())
+    return repos.pop() if len(repos) == 1 else ""
+
+
+def tag_granted(env, role: str, cmd: str, cwd: str) -> bool:
+    """A builder of a crew without a releaser may tag what a grant of its project names (TR-1574): the command is
+    only `git tag <name> <sha>`, `git push origin <name>`, `git fetch origin`, `git ls-remote --tags origin <name>`
+    and `cd <folder>`, joined with &&, every name is one a grant names for the repo `origin` of the folder it runs
+    in (each call of the usual two-step flow is decided on its own). A flag, a refspec, `--tags` or a second remote
+    is never in that list, so deleting, moving and bulk pushes stay refused."""
+    if role != "builder" or crew_has_releaser(env) or not PLAIN_COMMAND.fullmatch(cmd):
+        return False
+    grants = tag_grants(env)
+    if not grants:
+        return False
+    segments = cmd.split("&&")
+    if len(segments) > MAX_TAG_SEGMENTS:
+        return False
+    folder = cwd or os.getcwd()
+    asked = []  # (folder, tag name) of each call that has to be granted
+    # First the shape of every segment, with no git call: a long chain that ends in a refused one is refused at once,
+    # not after one `git remote` call per segment (a hook gets 5 s, and a timeout lets the command through).
+    for seg in segments:
+        words = seg.split()
+        if not words or "&" in seg:
+            return False
+        if words[0] == "cd" and len(words) == 2:
+            # `..` is refused: the shell's cd follows it in the path as typed, git -C in the real folder, so after a
+            # link the two name different repos.
+            # A word that starts with `-` is an option or `cd -` (OLDPWD) to the shell, never a folder named so.
+            # A word that starts with `~` is the home folder only as `~` or `~/...`: the shell reads `~+` and `~-` as
+            # PWD and OLDPWD and Python's expanduser leaves them as names, so the two would look at different folders.
+            if ".." in words[1].split("/") or words[1].startswith("-"):
+                return False
+            if words[1].startswith("~") and words[1] != "~" and not words[1].startswith("~/"):
+                return False
+            folder = os.path.join(folder, os.path.expanduser(words[1]))
+            continue
+        if words == ["git", "fetch", "origin"]:
+            continue
+        if len(words) == 4 and words[:2] == ["git", "tag"] and SHA.fullmatch(words[3]):
+            name = words[2]
+        elif len(words) == 4 and words[:3] == ["git", "push", "origin"]:
+            name = words[3]
+        elif len(words) == 5 and words[:4] == ["git", "ls-remote", "--tags", "origin"]:
+            name = words[4]
+        else:
+            return False
+        asked.append((folder, name))
+    # One answer per folder, and a deadline for all of them: a hook gets 5 s and a timeout lets the command through.
+    deadline = time.monotonic() + TAG_GIT_BUDGET
+    repos = {}
+    for folder, name in asked:
+        if folder not in repos:
+            if time.monotonic() > deadline:
+                return False
+            repos[folder] = origin_repo(folder)
+        if not any(repos[folder] == r and p.fullmatch(name) for r, p in grants):
+            return False
+    return bool(asked)
+
+
+def decide(env, tool: str, cmd: str, cwd: str = "") -> None:
     """Raise Deny with the reason when the station may not run this tool call; return when it may."""
     role = station_role(env)
 
@@ -275,7 +420,7 @@ def decide(env, tool: str, cmd: str) -> None:
         owner_only("builder", "merge pull requests")
     if grep(STATUSES, scan) and grep(GH_API, scan):
         owner_only("reviewer", "set commit statuses")
-    if grep(TAGS, scan):
+    if grep(TAGS, scan) and not tag_granted(env, role, cmd, cwd):
         owner_only("releaser", "create tags or releases")
     if grep(DEPLOY, scan):
         owner_only("releaser", "deploy, roll out or roll back")
@@ -312,7 +457,7 @@ def main() -> int:
     raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
     tool, cmd = parse(raw)
     try:
-        decide(env, tool, cmd)
+        decide(env, tool, cmd, payload_cwd(raw))
     except Deny as d:
         reason = str(d)
         sys.stdout.buffer.write(deny_output(reason))
