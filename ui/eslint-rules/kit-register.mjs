@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import kitOnly from './kit-only.mjs'
+import { kitOnlyConfig as paperKitOnlyConfig } from '../paper-kit/eslint/design-contract.mjs'
 
 export const EDITION = ['src/editions/', 'src/components/edition/', 'src/ee/']
 
@@ -70,26 +70,17 @@ export const KIT_REGISTER = {
   'src/ee/settings/AreasPanel.tsx': LEGACY_PANEL,
 }
 
-// The flat-config block both `npm run lint` and `npm run design-contract` use. Lint gives the
-// feedback while writing; design-contract runs it again with inline config off, so an
+// The flat-config block `npm run lint` uses. The rule is the shared paper kit's (ui/paper-kit/, vendored),
+// and `npm run design-contract` runs it again from its own config with inline config off, so an
 // `eslint-disable` comment cannot switch it off in CI. The kit's own primitives (components/ui) and
 // the dev gallery are out of scope.
-export function kitOnlyConfig(extra = {}) {
-  return {
-    ...extra,
+export function kitOnlyConfig() {
+  return paperKitOnlyConfig({
     files: ['src/**/*.tsx'],
     ignores: ['src/components/ui/**', 'src/pages/dev/**'],
-    plugins: { kit: { rules: { 'kit-only': kitOnly } } },
-    rules: {
-      'kit/kit-only': [
-        'error',
-        {
-          baseline: JSON.parse(readFileSync(new URL('../kit-contract.baseline.json', import.meta.url), 'utf8')),
-          register: KIT_REGISTER,
-          edition: EDITION,
-          root: fileURLToPath(new URL('..', import.meta.url)),
-        },
-      ],
-    },
-  }
+    baseline: JSON.parse(readFileSync(new URL('../kit-contract.baseline.json', import.meta.url), 'utf8')),
+    register: KIT_REGISTER,
+    edition: EDITION,
+    root: fileURLToPath(new URL('..', import.meta.url)),
+  })
 }
