@@ -347,7 +347,11 @@ def tag_granted(env, role: str, cmd: str, cwd: str) -> bool:
             # `..` is refused: the shell's cd follows it in the path as typed, git -C in the real folder, so after a
             # link the two name different repos.
             # A word that starts with `-` is an option or `cd -` (OLDPWD) to the shell, never a folder named so.
+            # A word that starts with `~` is the home folder only as `~` or `~/...`: the shell reads `~+` and `~-` as
+            # PWD and OLDPWD and Python's expanduser leaves them as names, so the two would look at different folders.
             if ".." in words[1].split("/") or words[1].startswith("-"):
+                return False
+            if words[1].startswith("~") and words[1] != "~" and not words[1].startswith("~/"):
                 return False
             folder = os.path.join(folder, os.path.expanduser(words[1]))
             continue

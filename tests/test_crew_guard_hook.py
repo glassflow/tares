@@ -229,6 +229,13 @@ for odd in ("-", "-P", "--"):
     for args in (["init", "-q"], ["remote", "add", "origin", AR]):
         subprocess.run(["git", "-C", str(tares_repo / odd)] + args, check=True, env=BASE, capture_output=True)
     ck(f"`cd {odd}` into a folder of that name: refused", tag_call(f"cd {odd} && git push origin paper-kit-v3", folder=tares_repo) == "deny")
+# `cd ~-` is OLDPWD and `cd ~+` is PWD to the shell; a folder of that name is what expanduser would leave
+for odd in ("~-", "~+", "~nobody"):
+    (tares_repo / odd).mkdir()
+    for args in (["init", "-q"], ["remote", "add", "origin", AR]):
+        subprocess.run(["git", "-C", str(tares_repo / odd)] + args, check=True, env=BASE, capture_output=True)
+    ck(f"`cd {odd}` into a folder of that name: refused", tag_call(f"cd {odd} && git push origin paper-kit-v3", folder=tares_repo) == "deny")
+ck("`cd ./~-`, which the shell reads as a folder: allowed", tag_call("cd ./~- && git push origin paper-kit-v3", folder=tares_repo) == "allow")
 ck("`cd ./-P`, which the shell reads as a folder too: allowed", tag_call("cd ./-P && git push origin paper-kit-v3", folder=tares_repo) == "allow")
 try:
     (arche / "sub").mkdir()
