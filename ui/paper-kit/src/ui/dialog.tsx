@@ -1,8 +1,9 @@
+/* vendored from glassflow/arche-design paper-kit-v2 b0f2a89c9b746ebbc4a4bd6968c128ccd414afb2: do not edit, run npm run paper:sync */
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 
-import { Close } from "@/components/icons";
-import { cn } from "@/lib/utils";
+import { cn } from "../lib/cn";
+import { Close } from "./icons";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
