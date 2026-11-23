@@ -3,7 +3,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Tares config env var NAMES that the generic-api-key heuristic mistakes for secrets"
 # generic-api-key fires on `NAME="value"` when NAME sits near a keyword like AUTH. These are
 # non-secret sizing/behaviour knobs, matched by name only — anything holding an actual credential
@@ -12,9 +12,14 @@ regexes = [
   '''TARES_MAX_DB_SIZE=''',
   '''TARES_TRIGGER_DEBOUNCE_SECONDS=''',
 ]
+
 # ui/paper/VENDORED.json lists the sha256 of each vendored paper file (TR-1539), next to a path that
-# says "tokens"; generic-api-key reads that pair as a key. The file holds only paths and hashes, so
-# it is skipped by path, and nothing else under ui/paper is.
+# says "tokens"; generic-api-key reads that pair as a key. Only that one rule is allowed on that file
+# (TR-1575), so a real token pasted into it (a ghp_ key, a private key) still fires its own rule.
+# Paths match absolute paths under --no-git, so the pattern is anchored with (^|/).
+[[allowlists]]
+description = "generic-api-key reads the sha256 list in ui/paper/VENDORED.json as a key"
+targetRules = ["generic-api-key"]
 paths = [
   '''(^|/)ui/paper/VENDORED\.json$''',
 ]

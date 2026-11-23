@@ -72,8 +72,8 @@ predate the kit.
   shared components outside the kit) are frozen at their count in `ui/kit-contract.baseline.json`.
   A file that gets cleaner lowers its count in the same PR with `npm run kit-baseline`, which never
   raises one without `--raise` and a reason in the PR.
-- **Colour from the semantic utilities**, which `@theme inline` in `styles.css` maps from the
-  tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
+- **Colour from the semantic utilities**, which `@theme inline` in `ui/src/paper/paper-theme.css` (vendored from arche-design by
+  `npm run paper:sync`, never edited by hand) maps from the tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
   `bg-primary`, `text-ok`, `text-warn`, `text-err`, and the rest of the roles listed under Colour
   budget in `.impeccable.md` (`bg-field`, `bg-row-hover`, `bg-wash`, `text-faint`, `border-brand`,
   `bg-err-soft`, …). No hex, no `rgb()`, no Tailwind palette colours (`text-red-500`), and no
@@ -96,8 +96,8 @@ predate the kit.
   number is `formatCount` from `ui/src/lib/number.ts`. No `toLocale*String` and no
   `Intl.DateTimeFormat` anywhere else; the legacy pages keep theirs at the count in
   `ui/time-contract.baseline.json`, lowered with `npm run time-baseline`. Tests: `npm run test:time`.
-- **Motion** comes from the tokens and classes in the Motion part of `ui/src/styles.css` (rule in
-  `.impeccable.md`). Overlays, banners (`Collapse`), lists (`ListSection`), statuses and tabs in the
+- **Motion** comes from the tokens and classes in `ui/src/paper/paper-motion.css` (vendored from arche-design by
+  `npm run paper:sync`, never edited by hand; rule in `.impeccable.md`). Overlays, banners (`Collapse`), lists (`ListSection`), statuses and tabs in the
   kit already move; a screen adds none of its own. No `duration-150`, `delay-*`, `ease-[..]` or
   `animate-[..]`: `duration-(--dur-2)`, `ease-out`, or a `motion-*` class. Script-driven motion
   reads `ui/src/lib/motion.ts`. Every e2e suite takes Chromium from `ui/tests/browser.cjs`, which asks
