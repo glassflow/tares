@@ -1,0 +1,253 @@
+{
+ "socket_basics": {
+  "pass": true,
+  "socket_mode": "srw-------",
+  "alive_with_no_controller": true,
+  "exit_on_sigterm": 0,
+  "socket_removed": true,
+  "seconds": 1.3,
+  "what": "The socket is private (owner only), two controllers can be connected at once, and the app-server outlives them both."
+ },
+ "controller_disconnect_mid_turn": {
+  "pass": true,
+  "turn_went_on_without_a_controller": true,
+  "thread_still_loaded": true,
+  "thread_status_on_resume": "active",
+  "new_controller_saw_turn_completed_live": true,
+  "stored_turns": [
+   {
+    "status": "completed",
+    "commands": [
+     [
+      "/bin/zsh -lc 'exec </dev/null\nsleep 11.3131'",
+      "completed",
+      0
+     ],
+     [
+      "/bin/zsh -lc 'exec </dev/null\necho two > step2.txt'",
+      "completed",
+      0
+     ],
+     [
+      "/bin/zsh -lc 'exec </dev/null\necho three'",
+      "completed",
+      0
+     ]
+    ]
+   }
+  ],
+  "live_methods_after_reconnect": [
+   "account/rateLimits/updated",
+   "account/updated",
+   "deprecationNotice",
+   "hook/completed",
+   "hook/started",
+   "item/agentMessage/delta",
+   "item/completed",
+   "item/started",
+   "remoteControl/status/changed",
+   "thread/goal/cleared",
+   "thread/readState/changed",
+   "thread/status/changed",
+   "thread/tokenUsage/updated",
+   "turn/completed",
+   "turn/moderationMetadata"
+  ],
+  "seconds": 21.4,
+  "what": "The controller hangs up while a command of the turn is running. Does the turn go on with nobody listening, and can a new controller get back what it missed?"
+ },
+ "pending_approval_across_disconnect": {
+  "pass": true,
+  "turn_status_after_the_decline": "completed",
+  "approval_was_requested": true,
+  "request": {
+   "command": "/bin/zsh -lc 'exec </dev/null\ntouch approval-probe.txt'",
+   "kind": "command",
+   "reason": null
+  },
+  "ran_while_nobody_answered": false,
+  "thread_status_on_resume": {
+   "type": "active",
+   "activeFlags": [
+    "waitingOnApproval"
+   ]
+  },
+  "after_reconnect": "asked again (same item)",
+  "file_exists_at_end": false,
+  "resolved_notifications_seen_by_B": 2,
+  "stored_turns": [
+   {
+    "status": "completed"
+   }
+  ],
+  "seconds": 12.3,
+  "what": "A command waits for approval; the controller that was asked hangs up without answering. Nothing may run on its own. Is the question put again to the next controller?"
+ },
+ "two_controllers": {
+  "pass": true,
+  "resume_before_the_first_turn": "thread/resume: {\"code\": -32600, \"message\": \"no rollout found for thread id 01a208bd-a80c-7b51-bcda-5f89ac8dbdf0\"}",
+  "both_were_asked": true,
+  "first_answer_decline_then_late_accept": "sent",
+  "file_created_despite_first_decline": false,
+  "second_turn_start_while_running": {
+   "accepted": true,
+   "same_as_running": true
+  },
+  "B_received": [
+   "item/commandExecution/requestApproval",
+   "item/completed",
+   "item/started",
+   "serverRequest/resolved",
+   "turn/moderationMetadata"
+  ],
+  "stored_turns": [
+   {
+    "status": "inProgress",
+    "commands": []
+   }
+  ],
+  "seconds": 101.6,
+  "what": "Two controllers on one thread. Do both get the events and the approval question, whose answer counts, and what does a second turn/start do while a turn is running? (Codex does not fence controllers: if this shows both can act, the station must allow one.)"
+ },
+ "runtime_killed_mid_command": {
+  "pass": true,
+  "runtime_exit": -9,
+  "seconds_to_exit": 0.0,
+  "command_pids_before": [
+   32605,
+   32606
+  ],
+  "command_left_running": [
+   32605,
+   32606
+  ],
+  "runtime_process": {
+   "pid": 32445,
+   "pgid": 32445,
+   "sid": 32445
+  },
+  "command_processes": [
+   {
+    "pid": 32605,
+    "pgid": 32605,
+    "sid": 32605
+   },
+   {
+    "pid": 32606,
+    "pgid": 32605,
+    "sid": 32605
+   }
+  ],
+  "commands_share_the_runtime_session": false,
+  "pid_in_the_item_started_event": "30592",
+  "that_pid_is_one_of_the_orphans": false,
+  "socket_file_left_behind": true,
+  "late_side_effect_happened": false,
+  "resume_after_restart": true,
+  "thread_status": {
+   "type": "idle"
+  },
+  "stored_turns": [
+   {
+    "status": "interrupted",
+    "commands": []
+   }
+  ],
+  "follow_up_turn": {
+   "status": "completed",
+   "answer": "Before this message, I ran `sleep 37.5151 && echo late > late.txt` (aborted)."
+  },
+  "seconds": 14.6,
+  "what": "SIGKILL to the app-server while a command runs (a crash). Is the command left running, what does the stored thread say about the turn, and can a new app-server resume the conversation?"
+ },
+ "runtime_terminated_mid_command": {
+  "pass": true,
+  "runtime_exit": "killed after 20s",
+  "seconds_to_exit": 20.0,
+  "command_pids_before": [
+   29984,
+   29985
+  ],
+  "command_left_running": [
+   29984,
+   29985
+  ],
+  "socket_file_left_behind": true,
+  "late_side_effect_happened": false,
+  "resume_after_restart": true,
+  "thread_status": {
+   "type": "idle"
+  },
+  "stored_turns": [
+   {
+    "status": "interrupted",
+    "commands": []
+   }
+  ],
+  "follow_up_turn": {
+   "status": "completed",
+   "answer": "Ran before this message: `sleep 37.6161 && echo late > late.txt` (aborted)."
+  },
+  "seconds": 36.5,
+  "what": "SIGTERM to the app-server while a command runs (a `crew down` that does not interrupt first)."
+ },
+ "down_during_a_turn": {
+  "pass": true,
+  "note": "the interrupt ends the turn but not the command; stopping the app-server afterwards does",
+  "turn_status": "interrupted",
+  "seconds_to_interrupt": 0.0,
+  "command_alive_right_after_interrupt": [
+   33134,
+   33135
+  ],
+  "command_gone": false,
+  "seconds_until_command_gone": 15.3,
+  "command_left_after_interrupt": [
+   33134,
+   33135
+  ],
+  "runtime_exit": 0,
+  "command_left_after_stop": [],
+  "stored_turns": [
+   {
+    "status": "interrupted",
+    "commands": []
+   }
+  ],
+  "seconds": 22.9,
+  "what": "The orderly `crew down`: interrupt the turn, wait for its end, read what is left, then stop the app-server. The command must be gone, the turn must say interrupted, nothing may be left running."
+ },
+ "stdio_owner_dies": {
+  "pass": true,
+  "app_server_exited_when_pipes_closed": true,
+  "seconds_to_exit": 0.0,
+  "command_left_running": [],
+  "late_side_effect_happened": false,
+  "resume_in_a_new_app_server": true,
+  "thread_status": {
+   "type": "idle"
+  },
+  "stored_turns": [
+   {
+    "status": "interrupted",
+    "commands": [
+     [
+      "/bin/zsh -lc 'exec </dev/null\nsleep 39.8181 && echo late > late.txt'",
+      "failed",
+      -1
+     ]
+    ]
+   }
+  ],
+  "seconds": 8.6,
+  "what": "The stdio alternative: the app-server is the child of its controller. The controller dies (its pipes close) in the middle of a command. What happens to the app-server and to the command?"
+ },
+ "interrupt_leaves_the_command_running": {
+  "pass": true,
+  "turn_status": "interrupted",
+  "the_command_finished_its_work_after_the_interrupt": true,
+  "note": "true means an interrupted turn is not a stopped command: a halt or a steer that only interrupts must also end the app-server, or wait for the command",
+  "seconds": 18.4,
+  "what": "An interrupt without a stop: the turn says interrupted, the app-server stays up. Does the command the turn started still finish and do its work afterwards?"
+ }
+}

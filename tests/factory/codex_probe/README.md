@@ -1,0 +1,43 @@
+# Codex probes (TR-1576)
+
+By-hand checks of what a Factory station on Codex would rest on. They are not in CI: most need a signed-in
+`codex` CLI and spend a little of that account's quota (the whole set, with reruns, moved a Plus plan's 5-hour
+window from 6% to 8%). Results and what they mean are in `RESULTS.md` here, with the numbers of each run in `results/`.
+
+Nothing here touches a real repository or service. Each scenario builds a throwaway crew home, a git
+repository with a local bare remote, and fake `gh` and `trivy` commands that only write a line to a file
+(`fixture.py`). A denied action is one that left no line and no commit.
+
+```bash
+uv venv && uv pip install -e .
+export TARES_PROBE_CODEX=/path/to/codex        # the version under test; 0.171.0 when this was written
+export PATH="$PWD/.venv/bin:$PATH"             # so `tares factory heavy` is this checkout's
+python tests/factory/codex_probe/probe_guard.py     --out /tmp/codex-probe/guard
+python tests/factory/codex_probe/probe_transport.py --out /tmp/codex-probe/transport
+python tests/factory/codex_probe/probe_hooks.py     --out /tmp/codex-probe/hooks
+python tests/factory/codex_probe/probe_pace.py      --out /tmp/codex-probe/pace
+python tests/factory/codex_probe/probe_mcp.py       --out /tmp/codex-probe/mcp
+python tests/factory/codex_probe/probe_evidence.py  --out /tmp/codex-probe/evidence   # offline, no codex
+```
+
+`--only NAME ...` runs some scenarios of the first two. Each run writes `results.json` (or `hooks.json`,
+`pace.json`, `mcp.json`, `evidence.json`) and one wire transcript per scenario: every JSON-RPC message in both
+directions, so the evidence is the wire itself. The transcripts hold local paths and are not committed;
+`fixtures/commands.wire.jsonl` is a small one with the paths replaced.
+
+| File | What it is |
+|---|---|
+| `appserver.py` | a client for `codex app-server` over stdio or a Unix socket (WebSocket frames), standard library only |
+| `fixture.py` | the throwaway world, and the hook table that runs the guard |
+| `codex_guard.py` | the guard as a Codex PreToolUse hook: `claude-plugin/hooks/guard.py` unchanged, plus closing a command's standard input |
+| `slack_probe_server.py` | a local MCP server with a Slack-like write tool and read tool |
+| `probe_guard.py` | halt in the middle of a turn, wrong role, heavy commands, MCP tools, helpers, typed input, broken hooks |
+| `probe_transport.py` | Unix socket against stdio: controller loss, pending approvals, two controllers, crashes, `crew down` |
+| `probe_hooks.py` | which hook events fire, their payloads, and the challenger's two answers |
+| `probe_pace.py` | a Codex quota reading through the crew's own `pace_now` |
+| `probe_mcp.py` | a station's token and identity headers on an HTTP MCP endpoint |
+| `probe_evidence.py` | Codex command records through the crew's own `match_check` |
+
+The model and effort default to `gpt-5.6-luna` and `low` (`TARES_PROBE_MODEL`, `TARES_PROBE_EFFORT`). The
+scenarios depend on the model doing the steps it is asked for; a scenario that fails because the model did
+something else says so in its `commands` and `final_answer`, and is worth one more run before it is believed.

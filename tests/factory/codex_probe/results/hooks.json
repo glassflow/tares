@@ -1,0 +1,148 @@
+{
+ "events_configured": [
+  "SessionStart",
+  "UserPromptSubmit",
+  "PreToolUse",
+  "PermissionRequest",
+  "PostToolUse",
+  "Stop",
+  "SubagentStart",
+  "SubagentStop",
+  "PreCompact",
+  "PostCompact",
+  "SessionEnd",
+  "Interrupt",
+  "Notification"
+ ],
+ "events_codex_accepted": [
+  "interrupt",
+  "permissionRequest",
+  "postCompact",
+  "postToolUse",
+  "preCompact",
+  "preToolUse",
+  "sessionEnd",
+  "sessionStart",
+  "stop",
+  "subagentStart",
+  "subagentStop",
+  "userPromptSubmit"
+ ],
+ "config_warnings": [],
+ "events_fired": {
+  "SessionStart": {
+   "count": 1,
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "model",
+    "permission_mode",
+    "session_id",
+    "source",
+    "transcript_path"
+   ],
+   "transcript_path_names_a_file": true
+  },
+  "UserPromptSubmit": {
+   "count": 1,
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "model",
+    "permission_mode",
+    "prompt",
+    "session_id",
+    "transcript_path",
+    "turn_id"
+   ],
+   "transcript_path_names_a_file": true
+  },
+  "PreToolUse": {
+   "count": 3,
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "model",
+    "permission_mode",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "tool_use_id",
+    "transcript_path",
+    "turn_id"
+   ],
+   "transcript_path_names_a_file": true
+  },
+  "PostToolUse": {
+   "count": 3,
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "model",
+    "permission_mode",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "tool_response",
+    "tool_use_id",
+    "transcript_path",
+    "turn_id"
+   ],
+   "transcript_path_names_a_file": true
+  },
+  "Stop": {
+   "count": 2,
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "last_assistant_message",
+    "model",
+    "permission_mode",
+    "session_id",
+    "stop_hook_active",
+    "transcript_path",
+    "turn_id"
+   ],
+   "transcript_path_names_a_file": true
+  },
+  "SessionEnd": {
+   "count": 1,
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "reason",
+    "session_id",
+    "transcript_path"
+   ],
+   "transcript_path_names_a_file": true
+  }
+ },
+ "events_never_fired": [
+  "PermissionRequest",
+  "SubagentStart",
+  "SubagentStop",
+  "PreCompact",
+  "PostCompact",
+  "Interrupt",
+  "Notification"
+ ],
+ "post_tool_use_response_shape": "str",
+ "turn": "completed",
+ "commands": [
+  "/bin/zsh -lc 'git commit --allow-empty -m probe'",
+  "/bin/zsh -lc 'echo done'",
+  "/bin/zsh -lc 'echo fix-loop'"
+ ],
+ "final_answers": [
+  "Step 1: refused  \nStep 2: ran\n\nCHALLENGER-FINDING-P1",
+  "Step 1: ran"
+ ],
+ "model_repeated_the_finding": true,
+ "checks": {
+  "PostToolUse block was taken (Codex reports the hook run as blocked, with the finding as feedback)": true,
+  "Stop block sent the model back once (echo fix-loop ran)": true,
+  "the recorder's events fired (SessionStart, UserPromptSubmit, PostToolUse, Stop)": true,
+  "payloads carry session_id and cwd": true
+ },
+ "pass": true
+}
