@@ -1353,6 +1353,12 @@ def main():
     # HTTP transports: identity per request, gated by the bearer token when the server has one,
     # run under uvicorn.
     _HTTP = True
+    # Stateless: no session is kept between requests. Every Claude Code process opens a session
+    # and none closes it, so a stateful server grows until its container is killed, and every
+    # connected client then sees "connection closed". Who is calling comes from each request's
+    # headers, so nothing here needs a session. Set here, because the FastMCP constructor's
+    # default wins over FASTMCP_STATELESS_HTTP.
+    mcp.settings.stateless_http = True
     app = mcp.streamable_http_app() if transport == "streamable-http" else mcp.sse_app()
     app = _CallerHeaders(_BearerGate(app) if AUTH_TOKEN else app)
     import uvicorn
