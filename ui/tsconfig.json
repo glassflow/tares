@@ -12,7 +12,7 @@
     "resolveJsonModule": true,
     "useDefineForClassFields": true,
     "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] }
+    "paths": { "@/*": ["./src/*"], "@paper-kit/*": ["./paper-kit/src/*"], "@paper-kit": ["./paper-kit/src/index.ts"] }
   },
-  "include": ["src"]
+  "include": ["src", "paper-kit/src"]
 }

@@ -1,4 +1,4 @@
-// vendored from glassflow/arche-design paper-kit-v1 91909425f0335427fe60ca6d879ca56ca2fcce52: do not edit, run npm run paper:sync
+// vendored from glassflow/arche-design paper-kit-v2 b0f2a89c9b746ebbc4a4bd6968c128ccd414afb2: do not edit, run npm run paper:sync
 // one-time: an app says time one way, through one module (paper direction, "one time grammar"). What fails:
 //
 //   locale   a toLocaleString, toLocaleDateString or toLocaleTimeString call. A date comes out in
@@ -81,8 +81,8 @@ export default {
       number: modules[1] ?? MODULES[1],
       app: opts.app ?? 'app',
       doc: opts.doc ?? 'See the Time line in .impeccable.md.',
-      baselineFile: opts.baselineFile ?? 'time-contract.baseline.json',
-      baselineCommand: opts.baselineCommand ?? 'npm run time-baseline',
+      baselineFile: opts.baselineFile ?? "the app's time baseline file",
+      baselineCommand: opts.baselineCommand ?? "run the app's time baseline script",
     }
     const allowed = legacy ? (opts.baseline?.[file] ?? 0) : 0
     const hits = []

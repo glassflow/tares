@@ -20,7 +20,12 @@ export default defineConfig({
       },
     },
   },
-  resolve: { alias: { "@": path.resolve(__dirname, "src") } },
+  resolve: {
+    alias: {
+      "@paper-kit": path.resolve(__dirname, "paper-kit/src"),
+      "@": path.resolve(__dirname, "src"),
+    },
+  },
   server: {
     proxy: Object.fromEntries(
       ["/api", "/query", "/read", "/catalog", "/health", "/ingest", "/subscribe", "/unsubscribe"].map(

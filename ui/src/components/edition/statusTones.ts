@@ -6,8 +6,14 @@
 //
 // The tones (.impeccable.md, States): working is live work and the only amber; waiting is a person's
 // turn or a pause; ready is jade; done is plain; bad is rose; quiet is not started, stale or out of play.
+//
+// Where a key here is also a key of the shared STATUS table (paper-kit) and STATUS gives the tone this
+// console already showed, the entry reads it from STATUS, so the console and the desktop cannot drift on
+// it. Where STATUS would change a tone (source.starting, resource.waiting), the console's own stays and
+// is marked below: moving a tone is not part of sharing the table.
+const shared = (key: StatusKey): Tone => STATUS[key].tone;
 
-import type { Tone } from "./StatusLabel";
+import { STATUS, type StatusKey, type Tone } from "@paper-kit";
 import type { ProjectState } from "../../editions/factory/FactoryProjects.api";
 import type { ProjectPageState, PrState, TicketState, TicketTurn } from "../../editions/factory/FactoryProject.api";
 import type { StateKey } from "../../editions/factory/FactoryTickets.api";
@@ -31,12 +37,12 @@ export type CallState = "waiting for you" | "confirmed" | "you changed it";
 type Keyed<S extends string> = S extends `${infer A} ${infer B}` ? Keyed<`${A}_${B}`> : S;
 
 const project = {
-  building: "working",
+  building: shared("building"),
   waiting_on_you: "waiting",
-  not_started: "quiet",
+  not_started: shared("not_started"),
   ready_to_close: "ready",
   later: "quiet",
-  done: "done",
+  done: shared("done"),
   finished: "done",
 } satisfies Record<ProjectState | ProjectPageState, Tone>;
 
@@ -47,7 +53,7 @@ const ticket = {
   in_progress: "working",
   in_review: "waiting",
   changes_asked: "waiting",
-  blocked: "bad",
+  blocked: shared("blocked"),
   merged: "ready",
   canceled: "quiet",
 } satisfies Record<StateKey | TicketStateKey | Keyed<TicketState>, Tone>;
@@ -57,7 +63,7 @@ const ticket = {
 const turn = {
   to_do: "quiet",
   queued: "quiet",
-  building: "working",
+  building: shared("building"),
   reviewing: "working",
   changes_asked: "working",
   checks_running: "working",
@@ -90,8 +96,8 @@ const ci = {
 const crew = {
   working: "working",
   idle: "ready",
-  waiting: "waiting",
-  waiting_for_you: "waiting",
+  waiting: shared("waiting"),
+  waiting_for_you: shared("waiting_for_you"),
   not_heard: "quiet",
   quiet: "quiet",
   replaced: "done",
@@ -102,7 +108,7 @@ const crew = {
 const verdict = {
   passed: "ready",
   asked_for_changes: "waiting",
-  blocked: "bad",
+  blocked: shared("blocked"),
 } satisfies Record<Keyed<ReviewVerdict>, Tone>;
 
 const finding = {
@@ -111,7 +117,7 @@ const finding = {
 } satisfies Record<FindingState, Tone>;
 
 const call = {
-  waiting_for_you: "waiting",
+  waiting_for_you: shared("waiting_for_you"),
   confirmed: "ready",
   you_changed_it: "done",
 } satisfies Record<Keyed<CallState>, Tone>;
@@ -133,7 +139,8 @@ const service = {
   normal: "ready",
 } satisfies Record<SreServiceState, Tone>;
 
-// A push source has no poll loop, so its health is not measured: quiet, not jade.
+// A push source has no poll loop, so its health is not measured: quiet, not jade. A source that is
+// starting reads quiet here, where STATUS.starting is working: the console keeps its own.
 const source = {
   starting: "quiet",
   ok: "ready",
@@ -153,7 +160,7 @@ const resource = {
   silent: "waiting",
   error: "bad",
   paused: "waiting",
-  waiting: "quiet",
+  waiting: "quiet", // STATUS.waiting is waiting; a part that waits on a source reads quiet here today
   active: "ready",
   on: "ready",
   on_handoff: "quiet",
@@ -171,14 +178,14 @@ const projectRun = {
   paused: "waiting",
   error: "bad",
   draft: "quiet",
-  done: "done",
+  done: shared("done"),
 } satisfies Record<Project["status"], Tone>;
 
 // The legacy project docs' ticket status.
 const docTicket = {
   todo: "quiet",
   in_progress: "working",
-  done: "done",
+  done: shared("done"),
   canceled: "quiet",
 } satisfies Record<TicketStatus, Tone>;
 

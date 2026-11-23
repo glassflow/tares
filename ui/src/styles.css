@@ -22,6 +22,7 @@
 
 @import "./paper/paper-theme.css";
 @import "./paper/paper-motion.css";
+@source "../paper-kit/src";
 
 /* Console-only tokens. Only a console screen reads these, so the shared paper-theme.css leaves
    them out (its header names them) and they stay here: the legacy "starting" badge, the dark
