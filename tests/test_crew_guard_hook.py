@@ -151,6 +151,138 @@ ck("a grant does not lift the heavy-command rule", decision(guard(bash("docker b
 ck("nor a halted crew", decision(guard(bash("gh pr merge 426 -R o/r --squash"), **G)) == "deny")
 (g_home / "HALT").unlink()
 
+print("a builder of a crew without a releaser may push the tags a project grant names (TR-1574)")
+# Nothing here runs a tag command: the hook only decides, and the folders are local repositories whose `origin` is a
+# URL that is never contacted (guard.py reads it from the config with `git remote get-url`).
+t_home = TMP / "tagged"
+(t_home / "stations").mkdir(parents=True)
+ROSTER = {"crew-orchestrator": {"role": "orchestrator"}, "crew-reviewer": {"role": "reviewer"},
+          "shop-build-ui": {"role": "builder", "project": "shop"}}
+(t_home / "stations.json").write_text(json.dumps(ROSTER), encoding="utf-8")
+(t_home / "stations" / "shop-build-ui.grants").write_text(
+    '@project - "The crew may push the design tags in arche-design: `tag: glassflow/arche-design paper-tokens-v<N>`'
+    ' and `tag: glassflow/arche-design paper-kit-v<N>`, on the merge commit" (2026-11-23)\n'
+    '- "The crew may push paper-tokens-v7 in tares" (2026-11-23)\n', encoding="utf-8")
+
+
+def make_repo(name, url, *more):
+    """A repository whose origin is url (none when url is empty) and then the git calls in more, each a list of arguments."""
+    d = TMP / name
+    d.mkdir()
+    for args in ((["init", "-q"], ["remote", "add", "origin", url]) if url else (["init", "-q"],)) + more:
+        subprocess.run(["git", "-C", str(d)] + args, check=True, env=BASE, capture_output=True)
+    return d
+
+
+arche = make_repo("arche-design", "https://github.com/glassflow/arche-design.git")
+arche_ssh = make_repo("arche-design-ssh", "git@github.com:GlassFlow/Arche-Design")
+tares_repo = make_repo("tares-clone", "git@github.com:glassflow/tares.git")
+loose = make_repo("no-origin", None)
+AR = "https://github.com/glassflow/arche-design.git"
+arche_pushes_elsewhere = make_repo("push-elsewhere", AR, ["config", "remote.origin.pushurl", "https://github.com/glassflow/tares.git"])
+arche_pushes_same = make_repo("push-same", AR, ["config", "remote.origin.pushurl", "git@github.com:glassflow/arche-design.git"])
+arche_two_urls = make_repo("two-urls", AR, ["remote", "set-url", "--add", "origin", "https://github.com/glassflow/tares.git"])
+arche_fake_host = make_repo("fake-host", "https://evil.example/github.com/glassflow/arche-design.git")
+arche_fake_host2 = make_repo("fake-host2", "https://github.com.evil.example/glassflow/arche-design.git")
+arche_local = make_repo("local-path", "/srv/github.com/glassflow/arche-design.git")
+SHA = "0123456789abcdef0123456789abcdef01234567"
+T = dict(FACTORY_HOME=str(t_home), FACTORY_STATION="shop-build-ui", FACTORY_ROLE="builder")
+
+
+def tag_call(cmd, folder=arche, **env):
+    e = dict(T)
+    e.update(env)
+    return decision(guard({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(folder)}, **e))
+
+
+ck("the usual two-step flow in one command: allowed",
+   tag_call(f"git tag paper-tokens-v3 {SHA} && git push origin paper-tokens-v3") == "allow")
+ck("the other named tag: allowed", tag_call(f"git tag paper-kit-v12 {SHA} && git push origin paper-kit-v12") == "allow")
+ck("a short sha: allowed", tag_call("git tag paper-kit-v2 0123abc && git push origin paper-kit-v2") == "allow")
+ck("the tag step on its own: allowed", tag_call(f"git tag paper-tokens-v4 {SHA}") == "allow")
+ck("the push step on its own: allowed", tag_call("git push origin paper-tokens-v4") == "allow")
+ck("after a fetch and a cd to the repo, from another folder: allowed",
+   tag_call(f"cd ../{arche.name} && git fetch origin && git tag paper-kit-v5 {SHA} && git push origin paper-kit-v5", folder=tares_repo) == "allow")
+ck("an ssh origin, with the case of the names changed: allowed",
+   tag_call(f"git tag paper-kit-v6 {SHA} && git push origin paper-kit-v6", folder=arche_ssh) == "allow")
+ck("checking the tag on the remote with ls-remote: allowed", tag_call("git ls-remote --tags origin paper-tokens-v3") == "allow")
+
+# every case below runs with the grant in place, so each one tests the rule and not a missing grant
+ck("another tag name: refused", tag_call(f"git tag v1.2.0 {SHA} && git push origin v1.2.0") == "deny")
+ck("a name that only starts like the pattern: refused", tag_call(f"git tag paper-tokens-v3-rc1 {SHA}") == "deny")
+ck("a name that only ends like the pattern: refused", tag_call(f"git tag old-paper-tokens-v3 {SHA}") == "deny")
+ck("a version with a leading zero: refused", tag_call(f"git tag paper-kit-v03 {SHA}") == "deny")
+ck("a name that names no number: refused", tag_call(f"git tag paper-kit-v {SHA}") == "deny")
+ck("a tag the prose of a grant mentions: refused", tag_call(f"git tag paper-tokens-v7 {SHA}", folder=tares_repo) == "deny")
+ck("the granted tag in another repo: refused", tag_call(f"git tag paper-tokens-v3 {SHA} && git push origin paper-tokens-v3", folder=tares_repo) == "deny")
+ck("a folder with no origin: refused", tag_call(f"git tag paper-tokens-v3 {SHA}", folder=loose) == "deny")
+ck("the push half of the flow in another repo: refused", tag_call("git push origin paper-tokens-v3", folder=tares_repo) == "deny")
+ck("a cd to another repo moves the check there: refused",
+   tag_call(f"cd ../{tares_repo.name} && git tag paper-tokens-v3 {SHA}") == "deny")
+ck("git push --tags: refused", tag_call("git push --tags") == "deny")
+ck("git push origin --tags: refused", tag_call("git push origin --tags") == "deny")
+ck("--follow-tags: refused", tag_call("git push --follow-tags origin") == "deny")
+ck("a tag with the push of every tag: refused", tag_call(f"git tag paper-kit-v8 {SHA} && git push origin paper-kit-v8 --tags") == "deny")
+ck("deleting a local tag: refused", tag_call("git tag -d paper-tokens-v3") == "deny")
+ck("deleting a local tag, long form: refused", tag_call("git tag --delete paper-tokens-v3") == "deny")
+ck("deleting a remote tag with --delete: refused", tag_call("git push origin --delete paper-tokens-v3") == "deny")
+ck("deleting a remote tag with a colon: refused", tag_call("git push origin :paper-tokens-v3") == "deny")
+ck("moving a tag with -f: refused", tag_call(f"git tag -f paper-tokens-v3 {SHA}") == "deny")
+ck("moving a tag with --force: refused", tag_call(f"git tag --force paper-tokens-v3 {SHA}") == "deny")
+ck("a force push of a tag: refused", tag_call("git push -f origin paper-tokens-v3") == "deny")
+ck("a force push of a tag with a plus: refused", tag_call("git push origin +paper-tokens-v3") == "deny")
+ck("an annotated tag: refused", tag_call("git tag -a paper-tokens-v3 -m release") == "deny")
+ck("a tag on a branch name instead of a sha: refused", tag_call("git tag paper-tokens-v3 main") == "deny")
+ck("a push to a remote that is not origin: refused", tag_call("git push upstream paper-tokens-v3") == "deny")
+ck("a refspec that makes the tag from a branch: refused", tag_call("git push origin HEAD:refs/tags/paper-tokens-v3") == "deny")
+ck("the tag as a full ref: refused", tag_call("git push origin refs/tags/paper-tokens-v3") == "deny")
+ck("gh release create: refused", tag_call("gh release create paper-tokens-v3") == "deny")
+ck("the allowed flow chained to another command: refused",
+   tag_call(f"git tag paper-tokens-v3 {SHA} && git push origin paper-tokens-v3 && gh pr merge 1") == "deny")
+ck("the allowed flow, then a second command after a semicolon: refused",
+   tag_call(f"git tag paper-tokens-v3 {SHA}; gh pr merge 1") == "deny")
+ck("a command substitution in the flow: refused", tag_call(f"git tag paper-tokens-v3 {SHA} && git push origin $(echo paper-tokens-v3)") == "deny")
+ck("a trailing cd with a command substitution: refused", tag_call(f"git tag paper-tokens-v3 {SHA} && cd $(pwd)") == "deny")
+ck("a trailing cd with backticks: refused", tag_call(f"git tag paper-tokens-v3 {SHA} && cd `pwd`") == "deny")
+FLOW_TAG = f"git tag paper-tokens-v3 {SHA} && git push origin paper-tokens-v3"
+ck("a repo that pushes to another repo than it fetches from: refused", tag_call(FLOW_TAG, folder=arche_pushes_elsewhere) == "deny")
+ck("a repo whose push url is the same repo in another spelling: allowed", tag_call(FLOW_TAG, folder=arche_pushes_same) == "allow")
+ck("a repo with a second url for another repo: refused", tag_call(FLOW_TAG, folder=arche_two_urls) == "deny")
+ck("a url that only has github.com in its path: refused", tag_call(FLOW_TAG, folder=arche_fake_host) == "deny")
+ck("a url on a host that only starts with github.com: refused", tag_call(FLOW_TAG, folder=arche_fake_host2) == "deny")
+ck("a local path with github.com in it: refused", tag_call(FLOW_TAG, folder=arche_local) == "deny")
+ck("a quoted name: refused", tag_call(f"git tag 'paper-tokens-v3' {SHA}") == "deny")
+ck("a line break in the flow: refused", tag_call(f"git tag paper-tokens-v3 {SHA}\ngit push --tags") == "deny")
+ck("a backgrounded half: refused", tag_call(f"git tag paper-tokens-v3 {SHA} & git push --tags") == "deny")
+ck("listing tags stays open", tag_call("git tag -l 'paper-*'") == "allow")
+ck("listing tags with a sort stays open", tag_call("git tag --sort=-creatordate") == "allow")
+
+print("the same flow stays refused when the rule's other conditions fail (TR-1574)")
+(t_home / "stations.json").write_text(json.dumps(dict(ROSTER, **{"crew-releaser": {"role": "releaser"}})), encoding="utf-8")
+FLOW = f"git tag paper-tokens-v3 {SHA} && git push origin paper-tokens-v3"
+ck("a crew with a releaser: refused", tag_call(FLOW) == "deny")
+(t_home / "stations.json").write_text(json.dumps(ROSTER), encoding="utf-8")
+ck("with the releaser gone again: allowed", tag_call(FLOW) == "allow")
+(t_home / "stations.json").write_text("not json", encoding="utf-8")
+ck("a roster that cannot be read: refused", tag_call(FLOW) == "deny")
+(t_home / "stations.json").unlink()
+ck("no roster: refused", tag_call(FLOW) == "deny")
+(t_home / "stations.json").write_text(json.dumps(ROSTER), encoding="utf-8")
+ck("the roster restored: allowed", tag_call(FLOW) == "allow")
+ck("an orchestrator holding the same grant: refused", tag_call(FLOW, FACTORY_ROLE="orchestrator") == "deny")
+ck("a reviewer holding the same grant: refused", tag_call(FLOW, FACTORY_ROLE="reviewer") == "deny")
+ck("a helper of a builder, which has no grants of its own: refused",
+   tag_call(FLOW, FACTORY_ROLE="helper", FACTORY_PARENT="shop-build-ui", FACTORY_STATION="shop-build-ui-h1") == "deny")
+ck("a builder with no grants file: refused", tag_call(FLOW, FACTORY_STATION="shop-build-other") == "deny")
+(t_home / "stations" / "shop-build-prose.grants").write_text(
+    '- "The crew may push tag: glassflow/arche-design paper-tokens-v3 and paper-kit-v1" (2026-11-23)\n', encoding="utf-8")
+ck("a grant that says it in prose only: refused", tag_call(FLOW, FACTORY_STATION="shop-build-prose") == "deny")
+(t_home / "HALT").write_bytes(b'{"reason":"test"}')
+ck("a halted crew: refused", tag_call(FLOW) == "deny")
+(t_home / "HALT").unlink()
+r = guard({"tool_name": "Bash", "tool_input": {"command": FLOW}}, **T)
+ck("a payload with no cwd is judged from the hook's own folder, which has no origin: refused", decision(r) == "deny")
+
 print("the deny output")
 home = TMP / "crewhome"
 home.mkdir()
