@@ -33,9 +33,11 @@ const MANIFEST = "paper/VENDORED.json";
 const BLOCK = new Set([".css", ".ts", ".tsx", ".js"]);
 const LINE = new Set([".mjs"]);
 
+// fail() throws instead of exiting: process.exit skips `finally`, which would leave the temp clone behind.
+// The one catch at the bottom prints the message and exits, after every finally has run.
+class SyncFailure extends Error {}
 const fail = (msg) => {
-  console.error(`paper:sync: ${msg}`);
-  process.exit(1);
+  throw new SyncFailure(msg);
 };
 
 function parseArgs(argv) {
@@ -92,77 +94,95 @@ function clone(tag) {
   return { dir, commit };
 }
 
-const args = parseArgs(process.argv.slice(2));
+function main() {
+  const args = parseArgs(process.argv.slice(2));
 
-const status = git(["-C", UI, "status", "--porcelain"]);
-if (status.status !== 0) fail("git status failed: is ui/ inside a git checkout?");
-if (status.stdout.trim()) fail(`the working tree is not clean, commit or stash first:\n${status.stdout.trimEnd()}`);
+  const status = git(["-C", UI, "status", "--porcelain"]);
+  if (status.status !== 0) fail("git status failed: is ui/ inside a git checkout?");
+  if (status.stdout.trim()) fail(`the working tree is not clean, commit or stash first:\n${status.stdout.trimEnd()}`);
 
-const manifestPath = path.join(UI, MANIFEST);
-const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : {};
-const before = new Map();
-for (const root of ["paper", "src/paper", "paper-kit"]) {
-  for (const f of walk(path.join(UI, root))) {
-    const rel = path.relative(UI, f).split(path.sep).join("/");
-    if (rel !== MANIFEST) before.set(rel, sha256(fs.readFileSync(f)));
-  }
-}
-const files = { ...(manifest.files || {}) };
-const touched = new Set();
-
-function vendor(srcDir, from, to, tag, commit) {
-  const src = path.join(srcDir, from);
-  if (!fs.existsSync(src)) fail(`${from} is not in ${REPO} at ${tag}`);
-  const dest = path.join(UI, to);
-  const ext = path.extname(src);
-  const body = fs.readFileSync(src);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, Buffer.concat([Buffer.from(header(ext, tag, commit)), body]));
-  files[to] = sha256(fs.readFileSync(dest));
-  touched.add(to);
-}
-
-if (args.tokens) {
-  const { dir, commit } = clone(args.tokens);
-  try {
-    for (const f of TOKEN_FILES) vendor(dir, f.from, f.to, args.tokens, commit);
-    manifest.tokens = { tag: args.tokens, commit };
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-if (args.paperKit) {
-  const { dir, commit } = clone(args.paperKit);
-  try {
-    const root = path.join(dir, KIT_FROM);
-    if (!fs.existsSync(root)) fail(`${KIT_FROM} is not in ${REPO} at ${args.paperKit}`);
-    fs.rmSync(path.join(UI, KIT_TO), { recursive: true, force: true });
-    for (const k of Object.keys(files)) if (k.startsWith(`${KIT_TO}/`)) delete files[k];
-    for (const f of walk(root)) {
-      const rel = path.relative(root, f).split(path.sep).join("/");
-      vendor(root, rel, `${KIT_TO}/${rel}`, args.paperKit, commit);
+  const manifestPath = path.join(UI, MANIFEST);
+  const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : {};
+  const before = new Map();
+  for (const root of ["paper", "src/paper", "paper-kit"]) {
+    for (const f of walk(path.join(UI, root))) {
+      const rel = path.relative(UI, f).split(path.sep).join("/");
+      if (rel !== MANIFEST) before.set(rel, sha256(fs.readFileSync(f)));
     }
-    manifest.paperKit = { tag: args.paperKit, commit };
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
   }
+  const files = { ...(manifest.files || {}) };
+  const touched = new Set();
+  // Nothing is written to ui/ until every source was found: vendor() only stages the bytes here.
+  const staged = new Map();
+  let clearKit = false;
+
+  function vendor(srcDir, from, to, tag, commit) {
+    const src = path.join(srcDir, from);
+    if (!fs.existsSync(src)) fail(`${from} is not in ${REPO} at ${tag}`);
+    const bytes = Buffer.concat([Buffer.from(header(path.extname(src), tag, commit)), fs.readFileSync(src)]);
+    staged.set(to, bytes);
+    files[to] = sha256(bytes);
+    touched.add(to);
+  }
+
+  if (args.tokens) {
+    const { dir, commit } = clone(args.tokens);
+    try {
+      for (const f of TOKEN_FILES) vendor(dir, f.from, f.to, args.tokens, commit);
+      manifest.tokens = { tag: args.tokens, commit };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  if (args.paperKit) {
+    const { dir, commit } = clone(args.paperKit);
+    try {
+      const root = path.join(dir, KIT_FROM);
+      if (!fs.existsSync(root)) fail(`${KIT_FROM} is not in ${REPO} at ${args.paperKit}`);
+      clearKit = true;
+      for (const k of Object.keys(files)) if (k.startsWith(`${KIT_TO}/`)) delete files[k];
+      for (const f of walk(root)) {
+        const rel = path.relative(root, f).split(path.sep).join("/");
+        vendor(root, rel, `${KIT_TO}/${rel}`, args.paperKit, commit);
+      }
+      manifest.paperKit = { tag: args.paperKit, commit };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // Every source is staged: now write. A kit sync clears ui/paper-kit/ first so a deleted file goes away.
+  if (clearKit) fs.rmSync(path.join(UI, KIT_TO), { recursive: true, force: true });
+  for (const [to, bytes] of staged) {
+    const dest = path.join(UI, to);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, bytes);
+  }
+
+  const added = [], changed = [], removed = [];
+  for (const rel of touched) {
+    if (!before.has(rel)) added.push(rel);
+    else if (before.get(rel) !== files[rel]) changed.push(rel);
+  }
+  for (const rel of before.keys()) if (!fs.existsSync(path.join(UI, rel))) removed.push(rel);
+
+  manifest.repo = REPO;
+  manifest.files = files;
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(sortKeys(manifest), null, 2) + "\n");
+
+  const show = (label, list) => list.sort().forEach((f) => console.log(`${label} ${f}`));
+  show("added  ", added);
+  show("changed", changed);
+  show("removed", removed);
+  console.log(`${added.length} added, ${changed.length} changed, ${removed.length} removed`);
 }
 
-const added = [], changed = [], removed = [];
-for (const rel of touched) {
-  if (!before.has(rel)) added.push(rel);
-  else if (before.get(rel) !== files[rel]) changed.push(rel);
+try {
+  main();
+} catch (e) {
+  if (!(e instanceof SyncFailure)) throw e;
+  console.error(`paper:sync: ${e.message}`);
+  process.exit(1);
 }
-for (const rel of before.keys()) if (!fs.existsSync(path.join(UI, rel))) removed.push(rel);
-
-manifest.repo = REPO;
-manifest.files = files;
-fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-fs.writeFileSync(manifestPath, JSON.stringify(sortKeys(manifest), null, 2) + "\n");
-
-const show = (label, list) => list.sort().forEach((f) => console.log(`${label} ${f}`));
-show("added  ", added);
-show("changed", changed);
-show("removed", removed);
-console.log(`${added.length} added, ${changed.length} changed, ${removed.length} removed`);

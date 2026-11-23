@@ -44,8 +44,8 @@
   --starting-bg: var(--kit-dark-default);
 }
 
-/* Legacy global rules: element selectors and the classes the platform pages use. Everything up to
-   the shadcn bridge sits in this layer; no rule here may move out of it (TR-1262). */
+/* Legacy global rules: element selectors and the classes the platform pages use. Everything below
+   sits in this layer; no rule here may move out of it (TR-1262). */
 @layer legacy {
 
 * { box-sizing: border-box; }
