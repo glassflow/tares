@@ -36,7 +36,7 @@ You are one station in the **tares-factory crew**: Claude Code sessions on this 
    | merging a PR | Tares's merge queue (review gate, CI, guardrails); no crew station merges |
    | who holds a ticket (`assign_ticket`) | orchestrator |
    | a ticket's stage (`set_stage`), except shipped | the station holding it, and its helpers |
-   | stage `shipped`, tags, releases, deploys, rollbacks | releaser, when the crew has one; otherwise nobody, and tickets end at `merged` |
+   | stage `shipped`, tags, releases, deploys, rollbacks | releaser, when the crew has one; otherwise nobody, and tickets end at `merged`. One exception: with no releaser, a builder may tag a name a standing project grant names (a `tag: <owner>/<repo> <name>` clause), in that repo, with `git tag <name> <sha> && git push origin <name>` |
    | starting, stopping or reviving stations | orchestrator |
    | the desk, decisions, shared docs (`add_to_global`), confirming assumptions, finishing a project | orchestrator |
    | talking to your person | orchestrator, in its own session |

@@ -14,6 +14,7 @@ Run: python tests/test_crew_guard_hook.py
 """
 import json
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -202,7 +203,7 @@ ck("a short sha: allowed", tag_call("git tag paper-kit-v2 0123abc && git push or
 ck("the tag step on its own: allowed", tag_call(f"git tag paper-tokens-v4 {SHA}") == "allow")
 ck("the push step on its own: allowed", tag_call("git push origin paper-tokens-v4") == "allow")
 ck("after a fetch and a cd to the repo, from another folder: allowed",
-   tag_call(f"cd ../{arche.name} && git fetch origin && git tag paper-kit-v5 {SHA} && git push origin paper-kit-v5", folder=tares_repo) == "allow")
+   tag_call(f"cd {arche.name} && git fetch origin && git tag paper-kit-v5 {SHA} && git push origin paper-kit-v5", folder=TMP) == "allow")
 ck("an ssh origin, with the case of the names changed: allowed",
    tag_call(f"git tag paper-kit-v6 {SHA} && git push origin paper-kit-v6", folder=arche_ssh) == "allow")
 ck("checking the tag on the remote with ls-remote: allowed", tag_call("git ls-remote --tags origin paper-tokens-v3") == "allow")
@@ -218,7 +219,52 @@ ck("the granted tag in another repo: refused", tag_call(f"git tag paper-tokens-v
 ck("a folder with no origin: refused", tag_call(f"git tag paper-tokens-v3 {SHA}", folder=loose) == "deny")
 ck("the push half of the flow in another repo: refused", tag_call("git push origin paper-tokens-v3", folder=tares_repo) == "deny")
 ck("a cd to another repo moves the check there: refused",
-   tag_call(f"cd ../{tares_repo.name} && git tag paper-tokens-v3 {SHA}") == "deny")
+   tag_call(f"cd {tares_repo.name} && git tag paper-tokens-v3 {SHA}", folder=TMP) == "deny")
+ck("a cd with .. in it: refused", tag_call(f"cd ../{arche.name} && git tag paper-tokens-v3 {SHA}", folder=tares_repo) == "deny")
+ck("a cd to a parent folder: refused", tag_call(f"cd .. && git tag paper-tokens-v3 {SHA}", folder=arche) == "deny")
+try:
+    (arche / "sub").mkdir()
+    (tares_repo / "link").symlink_to(arche / "sub", target_is_directory=True)
+except OSError:
+    print("  (no symlinks here: the cd through a link is not run)")
+else:
+    # the shell's `cd link/..` ends in tares_repo (the path as typed), `git -C link/..` in arche (the real folder)
+    ck("a cd through a link and up again, where git and the shell disagree: refused",
+       tag_call("cd link/.. && git push origin paper-kit-v3", folder=tares_repo) == "deny")
+    ck("a cd into a link, with no .. : allowed (git and the shell agree on the folder)",
+       tag_call("cd link && git push origin paper-kit-v3", folder=tares_repo) == "allow")
+# a long chain is shaped before any git call is made: a granted push 200 times and then a refused one must not
+# cost 200 `git remote` calls (a hook gets 5 s, and a timeout lets the command through)
+LONG = " && ".join(["git push origin paper-kit-v3"] * 200)
+t0 = time.perf_counter()
+ck("a long chain ending in a refused push: refused", tag_call(LONG + " && git push --tags") == "deny")
+ck("...in under a second, not after one git call per segment", time.perf_counter() - t0 < 1.0, f"{time.perf_counter() - t0:.2f} s")
+t0 = time.perf_counter()
+ck("a long chain of granted pushes: refused (more than 8 segments)", tag_call(LONG) == "deny")
+ck("...in under a second", time.perf_counter() - t0 < 1.0, f"{time.perf_counter() - t0:.2f} s")
+if os.name != "nt":
+    # a `git` on PATH that counts its calls: a chain with a refused segment at its end makes none
+    spy = TMP / "spy-bin"
+    spy.mkdir()
+    counter = TMP / "git-calls"
+    real_git = shutil.which("git")
+    (spy / "git").write_text(f'#!/bin/sh\necho x >> "{counter}"\nexec "{real_git}" "$@"\n', encoding="utf-8")
+    (spy / "git").chmod(0o755)
+    spy_path = str(spy) + os.pathsep + BASE.get("PATH", os.environ.get("PATH", ""))
+    ck("a chain of granted pushes ending in a refused one: refused",
+       tag_call(" && ".join(["git push origin paper-kit-v3"] * 7 + ["git push --tags"]), PATH=spy_path) == "deny")
+    ck("...with no git call made for it", not counter.exists(), counter.read_text() if counter.exists() else "")
+    ck("a granted push: allowed, with git asked for the remote's urls",
+       tag_call("git push origin paper-kit-v3", PATH=spy_path) == "allow" and counter.exists())
+ck("eight segments, the most: allowed",
+   tag_call(" && ".join(["git fetch origin"] * 4 + ["git push origin paper-kit-v3"] * 4)) == "allow")
+ck("nine segments: refused", tag_call(" && ".join(["git fetch origin"] * 5 + ["git push origin paper-kit-v3"] * 4)) == "deny")
+ck("a fetch of something else than origin: refused", tag_call(f"git fetch origin --tags && git tag paper-tokens-v3 {SHA}") == "deny")
+ck("a fetch of every remote: refused", tag_call(f"git fetch --all && git tag paper-tokens-v3 {SHA}") == "deny")
+ck("a fetch of another remote: refused", tag_call(f"git fetch upstream && git tag paper-tokens-v3 {SHA}") == "deny")
+ck("git push --mirror: refused", tag_call("git push --mirror origin") == "deny")
+ck("a branch that only has -v2 in the middle is not a tag push", tag_call("git push origin docs-v2-notes") == "allow")
+ck("...and one that ends in -v2 is", tag_call("git push origin docs-v2") == "deny")
 ck("git push --tags: refused", tag_call("git push --tags") == "deny")
 ck("git push origin --tags: refused", tag_call("git push origin --tags") == "deny")
 ck("--follow-tags: refused", tag_call("git push --follow-tags origin") == "deny")

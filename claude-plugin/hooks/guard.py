@@ -71,10 +71,11 @@ GH_API = _re(r"gh\s+api")
 # A tag made, changed or deleted, or a push that names one. `git tag -l` and the other listing forms stay open; a
 # flag that writes (-d, -f, -a, -s, -u, -m, -F, -e and the long forms) is a tag command too. A push names a tag
 # when it says --tags, --follow-tags, --mirror, refs/tags, or a ref like v1.2 or paper-tokens-v3 (also as `:name`,
-# which deletes it). A branch such as `vladimir/tr-1-slug` has a slash and is not one.
+# which deletes it). A branch such as `vladimir/tr-1-slug` has a slash and is not one, nor is `docs-v2-notes`: a name
+# ending in `-v<digits>` is.
 TAGS = _re(
     r"(git\s+tag\s+[^-]|git\s+tag\b[^;&|]*\s(-[a-zA-Z0-9]*[dfasumFe][a-zA-Z0-9]*|--(delete|force|annotate|sign|local-user|message|file|edit))(\s|=|$)"
-    r"|git\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9]))"
+    r"|git\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9][0-9.]*(?![\w-])))"
     r"|gh\s+release\s+(create|edit|delete)")
 DEPLOY = _re("(" + KUBECTL + "|" + HELM + ")")
 CLAUDE_STATIONS = _re(r"(^|[;&|\s])claude\s+(--bg|--background|stop|kill|rm|respawn)(\s|$)")
@@ -263,6 +264,8 @@ GITHUB_REMOTE = _re(
 # redirect, newline, `:` (a refspec) or `=`: what is not plain is refused, never guessed at.
 PLAIN_COMMAND = _re(r"[\w./@~ &-]+")
 SHA = _re(r"[0-9a-f]{7,40}")
+# The longest `&&` chain a tag command may be: cd, fetch, tag, push and ls-remote twice over still fit.
+MAX_TAG_SEGMENTS = 8
 
 
 def crew_has_releaser(env) -> bool:
@@ -326,12 +329,22 @@ def tag_granted(env, role: str, cmd: str, cwd: str) -> bool:
     grants = tag_grants(env)
     if not grants:
         return False
+    segments = cmd.split("&&")
+    if len(segments) > MAX_TAG_SEGMENTS:
+        return False
     folder = cwd or os.getcwd()
-    for seg in cmd.split("&&"):
+    asked = []  # (folder, tag name) of each call that has to be granted
+    # First the shape of every segment, with no git call: a long chain that ends in a refused one is refused at once,
+    # not after one `git remote` call per segment (a hook gets 5 s, and a timeout lets the command through).
+    for seg in segments:
         words = seg.split()
         if not words or "&" in seg:
             return False
         if words[0] == "cd" and len(words) == 2:
+            # `..` is refused: the shell's cd follows it in the path as typed, git -C in the real folder, so after a
+            # link the two name different repos.
+            if ".." in words[1].split("/"):
+                return False
             folder = os.path.join(folder, os.path.expanduser(words[1]))
             continue
         if words == ["git", "fetch", "origin"]:
@@ -344,10 +357,12 @@ def tag_granted(env, role: str, cmd: str, cwd: str) -> bool:
             name = words[4]
         else:
             return False
+        asked.append((folder, name))
+    for folder, name in asked:
         repo = origin_repo(folder)
         if not any(repo == r and p.fullmatch(name) for r, p in grants):
             return False
-    return True
+    return bool(asked)
 
 
 def decide(env, tool: str, cmd: str, cwd: str = "") -> None:
