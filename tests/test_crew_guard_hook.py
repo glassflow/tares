@@ -222,6 +222,14 @@ ck("a cd to another repo moves the check there: refused",
    tag_call(f"cd {tares_repo.name} && git tag paper-tokens-v3 {SHA}", folder=TMP) == "deny")
 ck("a cd with .. in it: refused", tag_call(f"cd ../{arche.name} && git tag paper-tokens-v3 {SHA}", folder=tares_repo) == "deny")
 ck("a cd to a parent folder: refused", tag_call(f"cd .. && git tag paper-tokens-v3 {SHA}", folder=arche) == "deny")
+# cd with a word that starts with - : to the shell `cd -` is OLDPWD and `cd -P` an option, never a folder of that name,
+# yet a folder of that name is what the guard would join (here each holds a clone of the granted repo)
+for odd in ("-", "-P", "--"):
+    (tares_repo / odd).mkdir()
+    for args in (["init", "-q"], ["remote", "add", "origin", AR]):
+        subprocess.run(["git", "-C", str(tares_repo / odd)] + args, check=True, env=BASE, capture_output=True)
+    ck(f"`cd {odd}` into a folder of that name: refused", tag_call(f"cd {odd} && git push origin paper-kit-v3", folder=tares_repo) == "deny")
+ck("`cd ./-P`, which the shell reads as a folder too: allowed", tag_call("cd ./-P && git push origin paper-kit-v3", folder=tares_repo) == "allow")
 try:
     (arche / "sub").mkdir()
     (tares_repo / "link").symlink_to(arche / "sub", target_is_directory=True)
@@ -256,6 +264,25 @@ if os.name != "nt":
     ck("...with no git call made for it", not counter.exists(), counter.read_text() if counter.exists() else "")
     ck("a granted push: allowed, with git asked for the remote's urls",
        tag_call("git push origin paper-kit-v3", PATH=spy_path) == "allow" and counter.exists())
+    counter.unlink()
+    ck("four granted pushes in one folder: allowed",
+       tag_call(" && ".join(["git push origin paper-kit-v3"] * 4), PATH=spy_path) == "allow")
+    ck("...with the folder looked up once (fetch url and push url), not once per segment",
+       len(counter.read_text().split()) == 2, str(len(counter.read_text().split())))
+    # a slow git (1 s a call, under the 1.5 s limit of each): every `cd .` is a new folder name, so 4 folders would
+    # take 8 s; the guard stops looking after its budget and refuses, before the hook's own 5 s
+    slow = TMP / "slow-bin"
+    slow.mkdir()
+    (slow / "git").write_text(f'#!/bin/sh\nsleep 1\nexec "{real_git}" "$@"\n', encoding="utf-8")
+    (slow / "git").chmod(0o755)
+    slow_path = str(slow) + os.pathsep + BASE.get("PATH", os.environ.get("PATH", ""))
+    t0 = time.perf_counter()
+    ck("a chain that sends the guard through four folders with a slow git: refused",
+       tag_call(" && ".join(["cd . && git push origin paper-kit-v3"] * 4), PATH=slow_path) == "deny")
+    ck("...before the hook's own 5 s", time.perf_counter() - t0 < 4.5, f"{time.perf_counter() - t0:.2f} s")
+ck("a version with -rc after it is a tag name too: refused", tag_call("git push origin x-v3-rc1") == "deny")
+ck("a version with a letter after it: refused", tag_call("git push origin x-v3a") == "deny")
+ck("a version with beta and dots: refused", tag_call("git push origin x-v3.1-beta2") == "deny")
 ck("eight segments, the most: allowed",
    tag_call(" && ".join(["git fetch origin"] * 4 + ["git push origin paper-kit-v3"] * 4)) == "allow")
 ck("nine segments: refused", tag_call(" && ".join(["git fetch origin"] * 5 + ["git push origin paper-kit-v3"] * 4)) == "deny")

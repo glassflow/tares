@@ -75,7 +75,7 @@ GH_API = _re(r"gh\s+api")
 # ending in `-v<digits>` is.
 TAGS = _re(
     r"(git\s+tag\s+[^-]|git\s+tag\b[^;&|]*\s(-[a-zA-Z0-9]*[dfasumFe][a-zA-Z0-9]*|--(delete|force|annotate|sign|local-user|message|file|edit))(\s|=|$)"
-    r"|git\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9][0-9.]*(?![\w-])))"
+    r"|git\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9][0-9.]*(?:-?(?:rc|alpha|beta|pre|dev)[0-9.]*|[a-z])?(?![\w-])))"
     r"|gh\s+release\s+(create|edit|delete)")
 DEPLOY = _re("(" + KUBECTL + "|" + HELM + ")")
 CLAUDE_STATIONS = _re(r"(^|[;&|\s])claude\s+(--bg|--background|stop|kill|rm|respawn)(\s|$)")
@@ -266,6 +266,9 @@ PLAIN_COMMAND = _re(r"[\w./@~ &-]+")
 SHA = _re(r"[0-9a-f]{7,40}")
 # The longest `&&` chain a tag command may be: cd, fetch, tag, push and ls-remote twice over still fit.
 MAX_TAG_SEGMENTS = 8
+# Seconds after which no further folder is looked up (each lookup is two git calls of 1.5 s at most): the hook's own
+# 5 s limit fails open, so the guard must answer before it.
+TAG_GIT_BUDGET = 1.5
 
 
 def crew_has_releaser(env) -> bool:
@@ -305,7 +308,7 @@ def origin_repo(folder: str) -> str:
     for flags in ([], ["--push"]):
         try:
             out = subprocess.run(["git", "-C", folder, "remote", "get-url", "--all"] + flags + ["origin"],
-                                 capture_output=True, text=True, timeout=3, check=False).stdout
+                                 capture_output=True, text=True, timeout=1.5, check=False).stdout
         except (OSError, subprocess.SubprocessError):
             return ""
         for url in out.split("\n"):
@@ -343,7 +346,8 @@ def tag_granted(env, role: str, cmd: str, cwd: str) -> bool:
         if words[0] == "cd" and len(words) == 2:
             # `..` is refused: the shell's cd follows it in the path as typed, git -C in the real folder, so after a
             # link the two name different repos.
-            if ".." in words[1].split("/"):
+            # A word that starts with `-` is an option or `cd -` (OLDPWD) to the shell, never a folder named so.
+            if ".." in words[1].split("/") or words[1].startswith("-"):
                 return False
             folder = os.path.join(folder, os.path.expanduser(words[1]))
             continue
@@ -358,9 +362,15 @@ def tag_granted(env, role: str, cmd: str, cwd: str) -> bool:
         else:
             return False
         asked.append((folder, name))
+    # One answer per folder, and a deadline for all of them: a hook gets 5 s and a timeout lets the command through.
+    deadline = time.monotonic() + TAG_GIT_BUDGET
+    repos = {}
     for folder, name in asked:
-        repo = origin_repo(folder)
-        if not any(repo == r and p.fullmatch(name) for r, p in grants):
+        if folder not in repos:
+            if time.monotonic() > deadline:
+                return False
+            repos[folder] = origin_repo(folder)
+        if not any(repos[folder] == r and p.fullmatch(name) for r, p in grants):
             return False
     return bool(asked)
 
