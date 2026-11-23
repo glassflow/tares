@@ -68,6 +68,20 @@ async def main():
 
                 cat = await session.call_tool("catalog_list", {})
                 ck("catalog_list reachable remotely", cat.content[0].text.strip().startswith(("{", "[")), cat.content[0].text[:60])
+
+        # Stateless: the server hands out no session id, and a request with no session works.
+        # A kept session per client grew the cell's MCP sidecar until it was killed.
+        hdr = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}}}
+        async with httpx.AsyncClient() as cx:
+            r = await cx.post(f"http://127.0.0.1:{MPORT}/mcp", json=init, headers=hdr)
+            ck("initialize hands out no session id (stateless)",
+               r.status_code == 200 and "mcp-session-id" not in r.headers, f"{r.status_code} {dict(r.headers)}")
+            r = await cx.post(f"http://127.0.0.1:{MPORT}/mcp", headers=hdr,
+                              json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            ck("tools/list works with no session", r.status_code == 200 and "list_connectors" in r.text, f"{r.status_code} {r.text[:80]}")
     finally:
         for proc in (mcpsrv, daemon):
             proc.send_signal(signal.SIGTERM)
