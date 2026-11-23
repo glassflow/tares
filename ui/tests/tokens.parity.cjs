@@ -1,8 +1,12 @@
 /*
- * TR-1268: Tares and Rius stay one family. Every `--kit-*` value in src/paper/paper-theme.css (vendored, the role layer the console imports) must equal the
- * shared paper token it copies (`--agency-*` in paper/tokens.css, vendored from glassflow/arche-design by
- * `npm run paper:sync`; paper/VENDORED.json names the tag and commit), unless
- * tests/tokens.parity.allow.json lists it with the reason Tares differs on purpose.
+ * TR-1268: Tares and Rius stay one family. Every `--kit-*` value in src/paper/paper-theme.css (vendored,
+ * the role layer the console imports) must equal the shared paper token it copies (`--agency-*` in
+ * paper/tokens.css, vendored from glassflow/arche-design by `npm run paper:sync`; paper/VENDORED.json
+ * names the tag and commit), unless tests/tokens.parity.allow.json lists it with the reason Tares
+ * differs on purpose.
+ *
+ * The two files come from one tag, so this test also catches a half-applied sync: paper-theme.css
+ * from one tag and tokens.css from another fails here whenever a shared value differs between the two tags.
  *
  * Fails on: a --kit-* value that differs from its shared token; a --kit-* name with no shared token
  * and no allowlist entry; an allowlist entry that no longer differs or no longer exists (so the list
