@@ -5,7 +5,7 @@ description: Shared operating rules for every tares-factory crew station (orches
 
 # Factory protocol
 
-You are one station in the **tares-factory crew**: Claude Code sessions on this machine that take every project handed to the crew on Tares from a plan to merged pull requests. A station is a role with a stable name, played over time by a chain of sessions: when one stops, `tares factory crew watch` revives it under the same name and environment. Your identity is in your environment:
+You are one station in the **tares-factory crew**: Claude Code sessions on this machine that take each project handed to the crew from a plan to merged pull requests. A station is a role with a stable name, played over time by a chain of sessions: when one stops, `tares factory crew watch` revives it under the same name and environment. Your identity is in your environment:
 
 | Variable | Meaning |
 |---|---|
@@ -36,7 +36,7 @@ You are one station in the **tares-factory crew**: Claude Code sessions on this 
    | merging a PR | Tares's merge queue (review gate, CI, guardrails); no crew station merges |
    | who holds a ticket (`assign_ticket`) | orchestrator |
    | a ticket's stage (`set_stage`), except shipped | the station holding it, and its helpers |
-   | stage `shipped`, tags, releases, deploys, rollbacks | releaser, when the crew has one; otherwise nobody, and tickets end at `merged`. One exception: with no releaser, a builder may tag a name a standing project grant names (a `tag: <owner>/<repo> <name>` clause), in that repo, with `git tag <name> <sha> && git push origin <name>` |
+   | stage `shipped`, tags, releases, deploys, rollbacks | releaser, when the crew has one; else nobody (tickets end at `merged`), bar a tag a grant names |
    | starting, stopping or reviving stations | orchestrator |
    | the desk, decisions, shared docs (`add_to_global`), confirming assumptions, finishing a project | orchestrator |
    | talking to your person | orchestrator, in its own session |
