@@ -65,7 +65,7 @@ predate the kit.
   wraps; screens do not import them.
 - **No raw controls, no inline styles** in edition code (`ui/src/editions`, `components/edition`,
   `ui/src/ee`): no `<button>`, `<input>`, `<select>` or `<textarea>`, and no `style={{}}`.
-  `npm run lint` enforces it (`ui/eslint-rules/kit-only.mjs`). An edition file may break the rule
+  `npm run lint` enforces it (`ui/paper-kit/eslint/rules/kit-only.mjs`, vendored from the shared paper kit). An edition file may break the rule
   only while it is in the register (`ui/eslint-rules/kit-register.mjs`) with its reason: a value
   computed at run time (a bar's width), a control the kit has no primitive for yet, a native picker
   kept on purpose, or a legacy panel waiting for its move. The legacy pages (`ui/src/pages` and the

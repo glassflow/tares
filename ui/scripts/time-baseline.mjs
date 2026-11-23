@@ -1,5 +1,5 @@
 // Rewrites time-contract.baseline.json: per legacy file, how many one-time violations (locale and
-// Intl calls outside src/lib/time.ts and src/lib/number.ts, eslint-rules/one-time.mjs) it may still
+// Intl calls outside src/lib/time.ts and src/lib/number.ts, paper-kit/eslint/rules/one-time.mjs) it may still
 // carry. Same ratchet as scripts/kit-baseline.mjs: counts only go down; a higher count, or a new
 // file, is refused unless --raise is passed, and a raise is a reviewed change with its reason in
 // the PR. Edition code is never written: there the fix is the module, not a number.

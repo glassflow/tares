@@ -1,5 +1,5 @@
 // Rewrites kit-contract.baseline.json: per file, how many kit-only violations (inline styles and raw
-// form controls, eslint-rules/kit-only.mjs) it may still carry. The baseline only goes down. A file
+// form controls, paper-kit/eslint/rules/kit-only.mjs) it may still carry. The baseline only goes down. A file
 // whose count rose, or a new file with a violation, is refused unless --raise is passed, and a raise
 // is a reviewed change with its reason in the PR. An edition file is never written unless it is in
 // the register (eslint-rules/kit-register.mjs): there the fix is the kit, not a number.
