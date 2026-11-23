@@ -349,39 +349,61 @@ def runtime_terminated_mid_command(out):
     return _crash(out, "runtime_terminated", "socket_sigterm")
 
 
+def forget_later(out: str, name: str, w: World, thread: str) -> list[dict]:
+    """Read a thread's stored turns and delete it through a fresh stdio app-server: for a scenario that must
+    not touch the thread before it has measured how its own app-server stopped."""
+    app = AppServer.spawn(codex_bin(), args=QUIET, cwd=w.work, env=w.env("builder"),
+                          transcript_path=os.path.join(out, f"{name}.cleanup.wire.jsonl"))
+    try:
+        app.initialize()
+        try:
+            hist = history(app, thread)
+        except AppServerError:
+            hist = []
+        forget(app, thread)
+    finally:
+        app.close()
+    return hist
+
+
 @scenario
 def down_during_a_turn(out):
-    """The orderly `crew down`: interrupt the turn, wait for its end, read what is left, then stop the
-    app-server. The command must be gone, the turn must say interrupted, nothing may be left running."""
+    """The orderly `crew down`, and nothing else: `turn/interrupt`, wait for the turn's end, then SIGTERM to
+    the app-server. Between the interrupt and the stop the thread is left alone (it is read and deleted only
+    afterwards, through another app-server). The turn must say interrupted, the app-server must exit 0, and
+    the command must be gone once it has."""
     w = World()
     rt = Runtime(out, "down_during_a_turn", w)
     a = rt.controller("A")
     thread = start_thread(a, w)
     turn = begin(a, thread, "Step 1: run `sleep 38.7171 && echo late > late.txt`. Step 2: run `echo two`.")
     started = saw_command(a, "sleep 38.7171")
+    before = pids_of("sleep 38.7171")
     t0 = time.time()
     a.request("turn/interrupt", {"threadId": thread, "turnId": turn})
     done = a.wait_for(lambda e: e.get("method") == "turn/completed", timeout=30)
     status = ((((done or {}).get("params") or {}).get("turn")) or {}).get("status")
     interrupted_in = round(time.time() - t0, 1)
-    left_at_once = pids_of("sleep 38.7171")
-    gone = wait_until(lambda: not pids_of("sleep 38.7171"), 15)
-    gone_in = round(time.time() - t0, 1)
-    left = pids_of("sleep 38.7171")
-    hist = history(a, thread)
-    forget(a, thread)
+    alive_after_interrupt = pids_of("sleep 38.7171")
+    sent = [e["msg"].get("method") for e in a.log if e["dir"] == "out" and "method" in e["msg"]]
     a.close()
-    code = rt.stop()
-    time.sleep(1)
+    t1 = time.time()
+    code = rt.stop()                              # SIGTERM; killed by the probe after 15 s if it does not go
+    stop_seconds = round(time.time() - t1, 1)
+    gone = wait_until(lambda: not pids_of("sleep 38.7171"), 10)
+    gone_seconds = round(time.time() - t1, 1)
     after = pids_of("sleep 38.7171")
     for pid in after:
         os.kill(pid, signal.SIGKILL)
-    return {"pass": bool(started) and status == "interrupted" and not after and code == 0
-            and not os.path.exists(os.path.join(w.work, "late.txt")),
-            "note": "the interrupt ends the turn but not the command; stopping the app-server afterwards does",
-            "turn_status": status, "seconds_to_interrupt": interrupted_in, "command_alive_right_after_interrupt": left_at_once,
-            "command_gone": gone, "seconds_until_command_gone": gone_in, "command_left_after_interrupt": left,
-            "runtime_exit": code, "command_left_after_stop": after,
+    late = os.path.exists(os.path.join(w.work, "late.txt"))
+    hist = forget_later(out, "down_during_a_turn", w, thread)   # only now is the thread read and deleted
+    return {"pass": bool(started) and bool(before) and status == "interrupted" and code == 0 and gone and not late,
+            "requests_sent_before_the_stop": sent,
+            "turn_status": status, "seconds_to_interrupt": interrupted_in,
+            "command_pids_before": before, "command_alive_right_after_interrupt": alive_after_interrupt,
+            "runtime_exit": code, "seconds_for_the_app_server_to_exit": stop_seconds,
+            "command_gone_after_the_stop": gone, "seconds_until_command_gone": gone_seconds,
+            "late_side_effect_happened": late,
             "stored_turns": [{"status": t["status"], "commands": [(i["command"], i["status"], i["exit"]) for i in t["items"] if i["type"] == "commandExecution"]} for t in hist]}
 
 
@@ -480,7 +502,7 @@ def main() -> int:
         for k, v in res.items():
             if k not in ("what", "seconds", "pass"):
                 print(f"      {k}: {json.dumps(v, ensure_ascii=False)[:420]}")
-    return 0
+    return 0 if all(results[name].get("pass") for name, _ in todo) else 1
 
 
 if __name__ == "__main__":

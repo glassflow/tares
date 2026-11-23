@@ -193,29 +193,42 @@
  },
  "down_during_a_turn": {
   "pass": true,
-  "note": "the interrupt ends the turn but not the command; stopping the app-server afterwards does",
+  "requests_sent_before_the_stop": [
+   "initialize",
+   "initialized",
+   "thread/start",
+   "turn/start",
+   "turn/interrupt"
+  ],
   "turn_status": "interrupted",
   "seconds_to_interrupt": 0.0,
-  "command_alive_right_after_interrupt": [
-   33134,
-   33135
+  "command_pids_before": [
+   36692,
+   36693
   ],
-  "command_gone": false,
-  "seconds_until_command_gone": 15.3,
-  "command_left_after_interrupt": [
-   33134,
-   33135
+  "command_alive_right_after_interrupt": [
+   36692,
+   36693
   ],
   "runtime_exit": 0,
-  "command_left_after_stop": [],
+  "seconds_for_the_app_server_to_exit": 0.0,
+  "command_gone_after_the_stop": true,
+  "seconds_until_command_gone": 0.0,
+  "late_side_effect_happened": false,
   "stored_turns": [
    {
     "status": "interrupted",
-    "commands": []
+    "commands": [
+     [
+      "/bin/zsh -lc 'exec </dev/null\nsleep 38.7171 && echo late > late.txt'",
+      "failed",
+      -1
+     ]
+    ]
    }
   ],
-  "seconds": 22.9,
-  "what": "The orderly `crew down`: interrupt the turn, wait for its end, read what is left, then stop the app-server. The command must be gone, the turn must say interrupted, nothing may be left running."
+  "seconds": 9.0,
+  "what": "The orderly `crew down`, and nothing else: `turn/interrupt`, wait for the turn's end, then SIGTERM to the app-server. Between the interrupt and the stop the thread is left alone (it is read and deleted only afterwards, through another app-server). The turn must say interrupted, the app-server must exit 0, and the command must be gone once it has."
  },
  "stdio_owner_dies": {
   "pass": true,
