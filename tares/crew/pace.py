@@ -38,7 +38,7 @@ import os
 import sys
 import time
 
-from . import claude, locks, state, watch_revive
+from . import claude, locks, proc, state, watch_revive
 from .client import TaresClient, TaresHTTPError
 from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -387,7 +387,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, reading: Reading, *, cla
         return None
     if state.halted(paths) or not state.stations_get(s, "sessionId", paths=paths):
         return None
-    if claude.attached(s, paths) or not claude.at_rest(s, claude_bin, paths):
+    if proc.attached(s, paths) or not proc.at_rest(s, claude_bin, paths):
         return None
 
     note = reading.note
@@ -424,8 +424,8 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
             return
         if idle_wake_state(fresh) != "off":
             return   # the setting changed since the round began
-        if (state.halted(paths) or claude.attached(s, paths)
-                or not claude.at_rest(s, claude_bin, paths)):
+        if (state.halted(paths) or proc.attached(s, paths)
+                or not proc.at_rest(s, claude_bin, paths)):
             return   # it started something since the first check, or it waits on a prompt
         client.say(f"pacing: telling {s} ({want}) in the same conversation")
         try:
@@ -518,7 +518,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
         if not names or reading.state == "unknown":
             return
         if claude_bin is None:
-            claude_bin = claude.claude_bin(env)
+            claude_bin = proc.binary(env, paths)
         for s in names:
             role = state.stations_get(s, "role", paths=paths)
             if role == "helper":
@@ -526,7 +526,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             if role == "builder" and paths.station_file(s, "done").is_file():
                 continue
             try:
-                if not claude.is_alive(s, "", claude_bin, paths):
+                if not proc.is_alive(s, "", claude_bin, paths):
                     continue
                 p = plan(client, paths, s, reading, claude_bin=claude_bin)
                 if p is not None:

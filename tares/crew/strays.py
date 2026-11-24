@@ -457,7 +457,7 @@ def _int(v) -> int:
 def _deliver(paths: CrewPaths, env: dict, prompt: str) -> bool:
     """Tell the orchestrator, in its own conversation, between its turns; the same delivery the pace uses.
     True only when the message was sent."""
-    from . import claude, lifecycle, locks
+    from . import lifecycle, locks, proc
     from .client import TaresClient
     from .errors import CrewError
 
@@ -467,10 +467,10 @@ def _deliver(paths: CrewPaths, env: dict, prompt: str) -> bool:
         row = state.stations_load(paths).get(orch)
         if not isinstance(row, dict) or row.get("status") != "active" or not row.get("sessionId"):
             return False
-        claude_bin = claude.claude_bin(env)
-        if state.halted(paths) or claude.attached(orch, paths):
+        claude_bin = proc.binary(env, paths)
+        if state.halted(paths) or proc.attached(orch, paths):
             return False
-        if not claude.is_alive(orch, "", claude_bin, paths) or not claude.at_rest(orch, claude_bin, paths):
+        if not proc.is_alive(orch, "", claude_bin, paths) or not proc.at_rest(orch, claude_bin, paths):
             return False
         with TaresClient(paths, env) as fresh:
             if not fresh.tares_on():

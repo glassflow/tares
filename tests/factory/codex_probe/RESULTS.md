@@ -148,6 +148,31 @@ Not covered by this probe: the cell is not in the loop (the placeholders are fil
 login`, which kept the link and wrote its target; a real renewal was not forced, since it would have rotated the
 person's own login.
 
+## 5. A station after its start (TR-1593, first part)
+
+With the product's station code (`tares/crew/codex_station.py`) and `probe_station.py`. Numbers in
+`results/station.json`. Nothing of the crew stays connected to a station: each question is a short visit.
+
+| Scenario | Result |
+|---|---|
+| Turns by visits | The start handed over the first prompt and left. The turn ran with nobody connected; visits read `working` during it and `done` after (11 s). A second prompt was one more turn on the same conversation, and its answer used what the first had said. At rest, the station ended when asked. |
+| No prompt into a turn | In the middle of a `sleep`, a prompt was refused and never sent. Stopping the station there took 0.1 s: the turn was interrupted, the app-server exited when asked, and no command was left running. |
+| Carried on after a stop | Stopped and started again as another process, the station loaded its conversation (`thread/resume`) and answered with a word from before the stop. |
+| Blocked on an approval | A turn that asked for an approval read `blocked` after 4 s. Nothing ran. The station was not between turns, took no prompt, and could be stopped. |
+
+What `thread/read` answers, which the station code rests on:
+
+- For an instant after `turn/start` it fails ("failed to read thread: thread-store ..."), then says `active`. The
+  first version of the station code took that failure for a station at rest; found by this probe, not by the
+  fake, which now fails the same way. An unreadable conversation is looked at again and then taken for one at work.
+- `includeTurns` before any turn: "list_turns is not supported yet". An id it does not know: "thread not loaded".
+- After the app-server was started again: `notLoaded`, with the stored turns. `thread/resume` makes it `idle`;
+  for an id with no stored turn it fails with "no rollout found".
+- A visitor that never joined the conversation reads its state and can start its next turn while it is loaded.
+
+Not in this part: answering an approval (a blocked station stays blocked), commands a kill leaves behind,
+`crew status` and `crew up` for a Codex crew.
+
 ## What was not verified
 
 - Keeping the person's own Codex setup out of a station: not verified in the spike, where a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. Done since, in section 4.

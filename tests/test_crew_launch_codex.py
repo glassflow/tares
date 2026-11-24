@@ -8,8 +8,8 @@ tests/factory/codex_probe/probe_launch.py.
  a. the version rule: the tested version and newer ones start, an older one, a pre-release of the tested one
     and a text with no version are refused with the reason;
  b. a start with no `claude` anywhere: the app-server runs in a session of its own, its socket is the owner's
-    alone and answers `initialize`; what it was given (arguments, folder, environment) and what is left on
-    disk (the station's record, its settings, its first prompt, the launch copy, the event);
+    alone and answers `initialize`; what it was given (arguments, folder, environment), its first prompt handed
+    over as a turn, and what is left on disk (the station's record, its settings, the launch copy, the event);
  c. the person's own Codex setup stays out: the station's Codex folder holds a link to their login and nothing
     else of theirs, a config left there is removed, and a station that comes up with something the launch did
     not name (an MCP server, a notify program, another Codex folder, an open socket) is stopped;
@@ -20,7 +20,8 @@ tests/factory/codex_probe/probe_launch.py.
     belongs; and an app-server that ends at once or never opens its socket;
  f. a crew stays on its runtime: a Claude Code crew refuses a Codex launch and a Codex crew a Claude Code one,
     with Tares up and from the kept copy, and the kept copy is not replaced by the refused launch;
- g. Tares down: a Codex station starts again from the kept launch, with the model asked for;
+ g. Tares down: a Codex station starts again from the kept launch, with the model asked for, in the
+    conversation it had; one that cannot be loaded is replaced by a new one, and said;
  h. the plan holds nothing of Claude Code's, and an unreadable ~/.claude/settings.json does not stop it; a
     Claude Code plan is as it was;
  i. through the command: `tares factory spawn helper` in a Codex crew starts the helper on Codex. The commands
@@ -51,6 +52,8 @@ if sys.platform == "win32":
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
 
 # A short folder: a socket's path holds about a hundred bytes, and the system's temp folder can be half of that.
 SCRATCH = Path(tempfile.mkdtemp(prefix="tcx-", dir="/tmp"))
@@ -70,6 +73,7 @@ LOGIN.write_text('{"auth_mode": "chatgpt", "tokens": "fake"}\n')
 (HOME / ".codex" / "skills").mkdir()
 (BIN / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{HERE / "factory" / "fake_codex.py"}" "$@"\n')
 (BIN / "codex").chmod(0o755)
+_crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
 
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE / "factory"))
@@ -124,11 +128,25 @@ def crew(world=None, stations=None, home_name="crew"):
     return tares, paths, said, make_client
 
 
+CALLS = SCRATCH / "codex-calls.jsonl"   # every conversation request the fake codex took, from any station
+
+
 def fake(**switches):
     """Set the fake codex's switches for the next start (and clear the last ones)."""
     for k in [k for k in os.environ if k.startswith("FAKE_CODEX_")]:
         del os.environ[k]
     os.environ.update({f"FAKE_CODEX_{k.upper()}": str(v) for k, v in switches.items()})
+    os.environ["FAKE_CODEX_LOG"] = str(CALLS)
+    os.environ["FAKE_CODEX_DAEMON"] = str(SCRATCH / "d")   # where the fake keeps its sockets: gone with the scratch folder
+
+
+def calls(pid=None, method=None) -> list:
+    """The conversation requests an app-server took: [(method, params)], in order."""
+    try:
+        rows = [json.loads(x) for x in CALLS.read_text().splitlines()]
+    except OSError:
+        return []
+    return [(r["method"], r["params"]) for r in rows if (pid is None or r["pid"] == pid) and (method is None or r["method"] == method)]
 
 
 def start(client, station="crew-reviewer", role="reviewer", cwd=None, model=MODEL, prompt=PROMPT, resume="", **kw):
@@ -248,7 +266,7 @@ ck("no key travels: the token variable is blank and the person's key source is n
    and FAKE_TOKEN not in json.dumps(rec), sorted(env))
 ck("the record: runtime codex, the process and when it was born, the version, active",
    r.get("runtime") == "codex" and r.get("status") == "active" and r.get("role") == "reviewer"
-   and r.get("model") == MODEL and r.get("effort") == EFFORT and r.get("id") == "" and r.get("sessionId") == ""
+   and r.get("model") == MODEL and r.get("effort") == EFFORT and r.get("id") == "" and info.get("launched")
    and info.get("version") == "0.171.0" and alive(info.get("pid", 0))
    and abs((info.get("born") or 0) - psutil.Process(info["pid"]).create_time()) < 0.01
    and info.get("home") == str(home) and r.get("startedAt") and r.get("kit") and r.get("plugin"), r)
@@ -261,11 +279,14 @@ ck("the settings file holds the thread's settings, every placeholder filled, rea
    and hook.startswith("tares hook guard --plugin-root ") and not UNFILLED.search(json.dumps(doc)) and doc["env"]["FACTORY_STATION"] == "crew-reviewer"
    and stat.S_IMODE(settings_file.stat().st_mode) == 0o600 and r.get("settings", "").endswith("crew-reviewer.settings.json"),
    json.dumps(doc)[:500])
-prompt_file = paths.station_file("crew-reviewer", "prompt")
-ck("the first prompt is kept for the controller, readable by the owner alone",
-   prompt_file.read_text() == PROMPT + "\n" and stat.S_IMODE(prompt_file.stat().st_mode) == 0o600)
-ck("the start says what it did and what it did not",
-   "started crew-reviewer on Codex 0.171.0 (gpt-5.6-luna, low)" in out and "has no conversation yet" in out, out)
+took = calls(info.get("pid"))
+ck("the first prompt is handed over as a turn on a new conversation, with the thread's settings and the turn's effort",
+   [m for m, _ in took] == ["thread/start", "turn/start"] and took[0][1] == {**doc["thread"], "cwd": str(paths.home)}
+   and took[1][1]["input"] == [{"type": "text", "text": PROMPT + "\n"}] and took[1][1]["effort"] == EFFORT
+   and r.get("sessionId", "").startswith("thr-") and took[1][1]["threadId"] == r["sessionId"]
+   and info.get("turn", "").startswith("turn-"), (took, r.get("sessionId")))
+ck("the start says what it did", "started crew-reviewer on Codex 0.171.0 (gpt-5.6-luna, low)" in out
+   and "note:" not in out, out)
 kept = json.loads(paths.launch_file("crew-reviewer").read_text())
 ck("the launch is kept as the cell gave it, and names its runtime", kept.get("runtime") == "codex"
    and kept["command"][2] == "unix://{STATION_SOCKET}" and kept["env"]["CODEX_HOME"] == "{CODEX_HOME}", kept.get("command"))
@@ -279,7 +300,7 @@ ck("the app-server's output goes to a log of the owner's", log.exists() and stat
 print("c. the person's own Codex setup stays out")
 ck("the station's Codex folder is the owner's alone", stat.S_IMODE(home.stat().st_mode) == 0o700, oct(home.stat().st_mode))
 ck("of the person's it holds a link to their login, and nothing else",
-   sorted(os.listdir(home)) == ["auth.json"] and (home / "auth.json").is_symlink()
+   sorted(e for e in os.listdir(home) if e != "fake-threads.json") == ["auth.json"] and (home / "auth.json").is_symlink()
    and os.path.realpath(home / "auth.json") == os.path.realpath(LOGIN), sorted(os.listdir(home)))
 ck("the person's own files are as they were", LOGIN.read_text().startswith('{"auth_mode"')
    and "notify" in (HOME / ".codex" / "config.toml").read_text() and not LOGIN.is_symlink())
@@ -476,6 +497,12 @@ err, _ = start(mk())
 cx.READY_TIMEOUT = 30
 ck("one that never listens is stopped after the wait",
    refused(err, "did not answer as one") and gone(json.loads(record.read_text())["pid"]) and not row(paths), err)
+record = SCRATCH / "record-e-refuse.json"
+fake(refuse="model is not available", record=record)
+err, _ = start(mk())
+ck("a station that will not take its first prompt is stopped, said with the reason, and not recorded",
+   refused(err, "could not hand crew-reviewer its prompt", "model is not available")
+   and gone(json.loads(record.read_text())["pid"]) and not row(paths), (err, row(paths)))
 fake()
 err, _ = start(mk(), cwd=str(SCRATCH / "no-such-folder"))
 ck("a folder that does not exist stops the start", refused(err, "could not start crew-reviewer") and not row(paths), err)
@@ -519,15 +546,28 @@ tares, paths, said, mk = crew()
 fake()
 err, _ = start(mk())
 first = row(paths)["codex"]["pid"]
+thread = row(paths)["sessionId"]
+time.sleep(0.4)   # the first turn ends
 end(first)
 tares.world["health"] = False
 down = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=said.append)
-err, _ = start(down, model="gpt-5.6", resume="thread-123")
+err, _ = start(down, model="gpt-5.6", resume=thread)
 r = row(paths)
 doc = json.loads(paths.station_file("crew-reviewer", "settings.json").read_text())
 ck("it starts from the copy, and says so", err is None and any("from the launch kept from its last start" in s for s in said), (err, said))
 ck("with the model this start asks for, in the thread's settings", doc["thread"]["model"] == "gpt-5.6" and r["model"] == "gpt-5.6", doc["thread"])
-ck("the conversation to carry on is recorded for the controller", r.get("sessionId") == "thread-123" and r["codex"]["pid"] != first, r)
+took = calls(r["codex"]["pid"])
+ck("the conversation it had is loaded again and carried on, not replaced",
+   r.get("sessionId") == thread and r["codex"]["pid"] != first and [m for m, _ in took] == ["thread/resume", "turn/start"]
+   and took[0][1]["threadId"] == thread and took[0][1]["model"] == "gpt-5.6", (r.get("sessionId"), took))
+end(r["codex"]["pid"])
+err, out = start(down, resume="thr-unknown")
+r = row(paths)
+took = calls(r["codex"]["pid"])
+ck("a conversation that cannot be loaded is given up for a new one, with a line and an event",
+   err is None and [m for m, _ in took] == ["thread/resume", "thread/start", "turn/start"] and r["sessionId"] not in ("thr-unknown", thread)
+   and "could not be carried on; it starts a new one" in out
+   and any(json.loads(x)["event"] == "conversation-replaced" for x in paths.events.read_text().splitlines()), (err, took, out))
 end(r["codex"]["pid"])
 
 # ---------------------------------------------------------------------------------------------
@@ -564,7 +604,7 @@ env_i = parity.crew_env(tmp_i)   # a throwaway crew of its own, with the fake Cl
 (tmp_i / "home" / ".codex").mkdir(parents=True)
 (tmp_i / "home" / ".codex" / "auth.json").write_text('{"auth_mode": "chatgpt", "tokens": "fake"}\n')
 record = tmp_i / "record.json"
-env_i.update(CODEX_BIN=str(BIN / "codex"), FAKE_CODEX_RECORD=str(record), LAUNCH_WORLD=json.dumps({"runtime": "codex"}),
+env_i.update(CODEX_BIN=str(BIN / "codex"), FAKE_CODEX_RECORD=str(record), FAKE_CODEX_LOG=str(CALLS), FAKE_CODEX_DAEMON=str(SCRATCH / "d"), LAUNCH_WORLD=json.dumps({"runtime": "codex"}),
              LAUNCH_SETUP=json.dumps({"token": FAKE_TOKEN, "stations": {"crew-reviewer": {
                  "role": "reviewer", "runtime": "codex", "cwd": str(tmp_i / "crew"), "model": MODEL, "effort": EFFORT,
                  "status": "active"}}}))
@@ -583,8 +623,8 @@ ck("the helper is recorded on Codex, under its parent, and its app-server runs",
 ck("it was given the helper's identity and its parent in the environment",
    (rec.get("env") or {}).get("FACTORY_ROLE") == "helper" and (rec.get("env") or {}).get("FACTORY_PARENT") == "crew-reviewer"
    and (rec.get("env") or {}).get("CODEX_HOME") == str(paths_i.station_file("crew-reviewer-look", "codex")), rec.get("env"))
-ck("its first prompt, the task, is kept for the controller",
-   "Read the diff of the open pull request." in paths_i.station_file("crew-reviewer-look", "prompt").read_text())
+ck("its first prompt, the task, is handed over as a turn",
+   any("Read the diff of the open pull request." in p["input"][0]["text"] for _, p in calls(pid_i, "turn/start")), calls(pid_i))
 end(pid_i)
 
 # ---------------------------------------------------------------------------------------------

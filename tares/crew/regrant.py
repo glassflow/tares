@@ -36,7 +36,7 @@ import os
 import re
 import sys
 
-from . import claude, launch, locks, state, watch_revive
+from . import claude, launch, locks, proc, state, watch_revive
 from . import rules as rules_mod
 from .client import TaresClient, grants_sum
 from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
@@ -70,7 +70,7 @@ def regranted(paths: CrewPaths, client: TaresClient, station: str) -> bool:
 def regrant_due(paths: CrewPaths, client: TaresClient, station: str) -> bool:
     """True when the watch is to restart the station with new grants, once it is between turns."""
     return (bool(state.stations_get(station, "sessionId", paths=paths))
-            and not claude.attached(station, paths=paths)
+            and not proc.attached(station, paths=paths)
             and regranted(paths, client, station)
             and (not paths.done_file(station).exists() or _done_regrant_due(paths, client, station)))
 
@@ -109,13 +109,13 @@ def prompt_wait(paths: CrewPaths, station: str, now: str):
 def _may_restart(paths: CrewPaths, client: TaresClient, station: str, binary: str) -> bool:
     """True when the station is between turns, has new grants due, and its prompt (if it waits on one) allows
     the restart now (`prompt_wait`)."""
-    if not claude.between_turns(station, binary, paths) or not regrant_due(paths, client, station):
+    if not proc.between_turns(station, binary, paths) or not regrant_due(paths, client, station):
         return False
     try:
         now = client.grants_read(state.stations_get(station, "project", paths=paths)).rstrip("\n")
     except CrewError:
         return False
-    return claude.between_turns(station, binary, paths, wait=prompt_wait(paths, station, now))
+    return proc.between_turns(station, binary, paths, wait=prompt_wait(paths, station, now))
 
 
 def _lines(text: str) -> list:
@@ -184,7 +184,7 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
                 return
             now = now.rstrip("\n")
             wait = prompt_wait(paths, station, now)
-            if not claude.between_turns(station, claude_bin, paths, wait=wait):
+            if not proc.between_turns(station, claude_bin, paths, wait=wait):
                 return   # it started something since the first check, or waits on a prompt this change does not answer
             total = str(grants_sum(now + "\n"))
             human = launch._ccfg_or("the user", "human", "name", paths=paths) or "the user"
@@ -221,9 +221,9 @@ def step(paths: CrewPaths, env=None) -> None:
     env = dict(os.environ if env is None else env)
     if watch_revive.last.unread:
         return   # the revive step could not read the session list and said so; nothing is restarted this round
-    binary = claude.claude_bin(env)
+    binary = proc.binary(env, paths)
     try:
-        claude.active_json(binary)
+        proc.sessions_readable(binary, paths)
     except SessionListUnreadableError:
         return   # the revive step says so; nothing is restarted this round
     client = TaresClient(paths, env)
@@ -242,7 +242,10 @@ def step(paths: CrewPaths, env=None) -> None:
                     watch_revive.last.handled.add(station)
                     regrant_station(paths, station, claude_bin=binary, env=env)
                 continue
-            if role != "helper":
+            if role != "helper" and proc.on_codex(station, paths):
+                if not proc.is_alive(station, "", binary, paths):
+                    continue   # stopped: the revive step starts it with fresh settings
+            elif role != "helper":
                 # is_alive and the stuck check on one read of the session list (bash reads it once here too)
                 try:
                     agents = claude.active_json(binary)

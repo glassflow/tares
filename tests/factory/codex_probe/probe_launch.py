@@ -103,11 +103,16 @@ class Crew:
             plan["args"] = [a for a in plan["args"] if a not in LEAN_FLAGS]
         return plan
 
-    def start(self, plan: dict | None = None, codex: str | None = None):
-        """(error text or None, the station's record)."""
+    def start(self, plan: dict | None = None, codex: str | None = None, prompt: str = "", resume: str = ""):
+        """(error text or None, the station's record). With no prompt the station gets no turn: the scenarios
+        here are about the start itself, and probe_station.py is about what follows."""
+        plan = plan or self.plan()
+        with open(os.path.join(self.home, "stations", f"{STATION}.settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"env": plan["env"], **plan["settings"]}, f)   # as launch.write_settings leaves it
         try:
-            cx.start(self.client, STATION, plan or self.plan(), self.work, "Boot as the reviewer station.",
-                     {"role": "reviewer", "model": MODEL, "effort": EFFORT, "cwd": self.work}, codex=codex or codex_bin())
+            cx.start(self.client, STATION, plan, self.work, prompt,
+                     {"role": "reviewer", "model": MODEL, "effort": EFFORT, "cwd": self.work, "sessionId": resume},
+                     codex=codex or codex_bin())
             err = None
         except CrewError as e:
             err = str(e)

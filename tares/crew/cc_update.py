@@ -77,7 +77,7 @@ import time
 
 import psutil
 
-from . import claude, jsonrun, launch, lifecycle, locks, state, watch_revive
+from . import claude, jsonrun, launch, lifecycle, locks, proc, state, watch_revive
 from .client import TaresClient, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -569,6 +569,8 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None, kit_upgraded: bool = Fa
     Claude Code move: bash's `if <kit upgrade> elif <this>`."""
     global _cc_seen
     env = os.environ if env is None else env
+    if proc.crew_on_codex(paths):
+        return   # Claude Code's own releases: a crew on Codex runs none of it
     if claude_bin is None:
         claude_bin = claude.claude_bin(env)
     if _cc_seen is None:

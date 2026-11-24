@@ -63,7 +63,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn
 
-from . import claude, locks, state, tidy
+from . import claude, locks, proc, state, tidy
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -465,7 +465,7 @@ def reset() -> None:
 def movable(paths: CrewPaths, station: str, kit: str, frozen: Frozen, binary: str) -> bool:
     """It runs another version, has a conversation to resume, and is quiet."""
     return (stale_kit(paths, station, kit, frozen) and bool(state.stations_get(station, "sessionId", paths=paths))
-            and claude.quiet(station, None, binary, paths))
+            and proc.quiet(station, None, binary, paths))
 
 
 @locks.scoped   # the station's lock goes when its upgrade ends, as with bash's per-station subshell (TR-1171)
@@ -483,7 +483,7 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
                 fresh.crew_settings()
                 if Frozen(paths, fresh).on:
                     rc = 4   # frozen since the round began
-                elif not claude.quiet(station, None, claude_bin, paths):
+                elif not proc.quiet(station, None, claude_bin, paths):
                     rc = 4   # it started something since the first check
                 else:
                     client.say(f"{station} runs an older version of the plugin; restarting it on this one now that it's "
@@ -563,7 +563,7 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
         if last.unread:
             return False   # the revive step said so; nothing is moved this round
         try:
-            binary = claude_bin or claude.claude_bin(env)
+            binary = claude_bin or proc.binary(env, paths)
             candidate = "" if frozen.on else pick(paths, kit, frozen, binary, last.started)
         except CrewError:
             return False
