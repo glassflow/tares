@@ -27,7 +27,7 @@ import os
 import re
 import sys
 
-from . import claude, locks, proc, state
+from . import claude, codex_station, locks, proc, state
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
@@ -179,6 +179,8 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
             this.handled.add(s)
             continue
         if up:
+            if proc.on_codex(s, paths):   # what runs under it now, for the day it dies with a command running
+                codex_station.note_children(paths, s)
             if paths.pace_file.exists():
                 pace.revived(paths, s)
             if stuck_on_context(paths, binary, s):

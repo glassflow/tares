@@ -26,7 +26,10 @@ running turn is never sent: Codex takes it as a steer of that turn, not as a mes
 Stopping (`stop`): an interrupt for a running turn, a wait for the turn to end, then SIGTERM and, after a
 grace period, SIGKILL. TR-1576 measured that an interrupt alone ends the turn and not its command, that
 SIGTERM in the middle of a command did not end the app-server in 20 s, and that interrupt then SIGTERM did,
-with the command gone. A command a kill leaves behind is not looked for yet.
+with the command gone. A kill leaves a running command behind, in a session of its own; `leftovers` finds
+what a station started (by the station's name in its environment, and by what `note_children` wrote down
+while the app-server ran), and a stop, and a revive of a station that died, end it (`end_leftovers`). The
+revived station is told, since what such a command did is not known.
 
 psutil and the standard library.
 """
@@ -271,17 +274,140 @@ def _gone(pid: int, wait: float, sleep) -> bool:
         sleep(0.1)
 
 
+def _marked(env: dict, paths: CrewPaths, station: str) -> bool:
+    """Does a process's environment say it was started by this station of this crew?"""
+    if env.get("FACTORY_STATION") != station:
+        return False
+    home = env.get("FACTORY_CREW_HOME") or env.get("FACTORY_HOME") or ""
+    return bool(home) and os.path.realpath(home) == os.path.realpath(paths.raw)
+
+
+def _children_file(paths: CrewPaths, station: str):
+    return paths.station_file(station, "codex.children")
+
+
+def note_children(paths: CrewPaths, station: str) -> None:
+    """Write down what runs under the station's app-server now: each process's id and start time. The watch
+    does this every round for a station that runs, and a stop does it right before it ends the app-server, so
+    that what outlives the app-server can be told from any other process afterwards. Never fails."""
+    rec = info(paths, station)
+    if not _same_process(rec):
+        return
+    rows = []
+    try:
+        for p in psutil.Process(rec["pid"]).children(recursive=True):
+            try:
+                rows.append([p.pid, p.create_time()])
+            except (psutil.Error, OSError):
+                continue
+    except (psutil.Error, OSError):
+        return
+    file = _children_file(paths, station)
+    try:
+        if state.read_json(file, None) != rows:
+            state.write_json(file, rows, compact=True)
+    except (OSError, ValueError, CrewError):
+        pass
+
+
+def _noted(paths: CrewPaths, station: str) -> list:
+    """The processes written down by `note_children` that still run (same id, same start time)."""
+    rows = state.read_json(_children_file(paths, station), None)
+    found = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            pid, born = row
+            p = psutil.Process(pid)
+            if p.status() != psutil.STATUS_ZOMBIE and abs(p.create_time() - born) <= BORN_SLACK:
+                found.append(p)
+        except (psutil.Error, OSError, TypeError, ValueError):
+            continue
+    return found
+
+
+def leftovers(paths: CrewPaths, station: str) -> list:
+    """The processes a station started that still run, apart from its app-server: [psutil.Process].
+
+    A station's commands run in sessions of their own, so nothing that ends the app-server reaches them when
+    it is killed (TR-1576). Two things tell them from any other process:
+      * the station's environment, which the app-server hands to every command it runs (FACTORY_STATION and
+        the crew's home). Always readable on Linux. On macOS the environment of the system's own programs
+        (sh, git, sleep) cannot be read by anyone, so this alone finds little there;
+      * what `note_children` wrote down while the app-server ran, and what runs under those processes now.
+    What neither finds: on macOS, a system program started after the last note (the watch's last round) of a
+    station that then died by itself. This process and the ones above it are never among the leftovers (a
+    station may run this very command), nor is the station's app-server while it runs."""
+    rec = info(paths, station)
+    mine = {os.getpid()}
+    try:
+        mine.update(p.pid for p in psutil.Process().parents())
+    except (psutil.Error, OSError):
+        pass
+    if _same_process(rec):
+        mine.add(rec["pid"])
+    found = {}
+    for p in _noted(paths, station):
+        found[p.pid] = p
+        try:
+            found.update({c.pid: c for c in p.children(recursive=True)})
+        except (psutil.Error, OSError):
+            pass
+    for p in psutil.process_iter():
+        if p.pid in mine or p.pid in found:
+            continue
+        try:
+            if p.status() != psutil.STATUS_ZOMBIE and _marked(p.environ(), paths, station):
+                found[p.pid] = p
+        except (psutil.Error, OSError):   # not ours to read, or gone meanwhile
+            continue
+    return [p for pid, p in sorted(found.items()) if pid not in mine]
+
+
+def _name(p) -> str:
+    """A process's program, without its arguments: an argument can hold a secret, a program's name does not."""
+    try:
+        line = p.cmdline()
+        return os.path.basename(line[0]) if line else p.name()
+    except (psutil.Error, OSError, IndexError):
+        return "?"
+
+
+def end_leftovers(paths: CrewPaths, station: str, *, grace: float = cx.STOP_GRACE, sleep=time.sleep) -> list:
+    """End what `leftovers` finds: SIGTERM, then SIGKILL for what is still there after `grace` seconds. Call it
+    only when the station's app-server is not running. Returns the programs' names, and records an event when
+    there were any."""
+    found = leftovers(paths, station)
+    if not found:
+        return []
+    names = sorted({_name(p) for p in found})
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for p in found:
+            try:
+                p.send_signal(sig)
+            except (psutil.Error, OSError):
+                pass
+        _, found = psutil.wait_procs(found, timeout=grace)
+        if not found:
+            break
+    _children_file(paths, station).unlink(missing_ok=True)
+    state.event("left-behind", station, f"{len(names)} program(s) ended: {', '.join(names)}"[:200], paths=paths)
+    return names
+
+
 def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, grace: float = cx.STOP_GRACE,
          sleep=time.sleep) -> str:
     """End the station's app-server (see the module's note for the order). Returns what it took: "not running",
-    "stopped" (it ended when asked) or "killed". The socket's path in the crew home goes with it."""
+    "stopped" (it ended when asked) or "killed". The socket's path in the crew home goes with it, and so does
+    whatever the station had started that still runs (`end_leftovers`): after a stop nothing of it is left."""
     rec = info(paths, station)
     sock = rec.get("socket") or str(cx.socket_path(paths, station))
     if not _same_process(rec):
         cx.remove_socket(sock)
+        end_leftovers(paths, station, grace=grace, sleep=sleep)
         return "not running"
     pid = rec["pid"]
     _interrupt(paths, station, turn_wait, sleep)
+    note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:
         os.kill(pid, signal.SIGTERM)
@@ -295,4 +421,5 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
             pass
         _gone(pid, grace, sleep)
     cx.remove_socket(sock)
+    end_leftovers(paths, station, grace=grace, sleep=sleep)
     return how

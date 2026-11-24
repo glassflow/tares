@@ -22,7 +22,14 @@ by hand: tests/factory/codex_probe/probe_station.py.
     `restart --fresh`, `revive`, `retire` and `crew down`; none of them looks for `claude`;
  e. the watch's steps on a Codex crew, with no `claude`: a station that died is revived in its conversation,
     the idle wake, pace, regrant and Claude Code update steps run and leave a working station alone;
- f. the seam for Claude Code: each question goes to `claude.py` as it was asked, and a Claude Code crew
+ f. a wake held back: the idle wake's own round, with a pull request waiting for the reviewer, sends nothing
+    while the station is in a turn, hands the wake over the round after the turn ends, and never again;
+ g. what a killed station leaves running: a command of the station is found by the station's name and crew in
+    its environment; a revive ends it and tells the station, by program name only; a stop leaves nothing; a
+    command of another station or of another crew is never touched;
+ h. `crew status` on a Codex crew, with no `claude`: each station with where it is (at work, waiting, idle,
+    gone), in text and as JSON of the same shape as for Claude Code;
+ i. the seam for Claude Code: each question goes to `claude.py` as it was asked, and a Claude Code crew
     without `claude` is still told so.
 
 Unix only: on Windows the test says so and passes.
@@ -34,6 +41,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -71,7 +79,8 @@ sys.path.insert(0, str(HERE / "factory"))
 
 import psutil  # noqa: E402
 
-from tares.crew import claude, cc_update, idle_wake, lifecycle, pace, proc, regrant, state, watch_revive  # noqa: E402
+from tares import status_words  # noqa: E402
+from tares.crew import claude, cc_update, idle_wake, lifecycle, pace, proc, regrant, state, views, watch_revive  # noqa: E402
 from tares.crew import codex_station as cs  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
@@ -449,7 +458,160 @@ for p_ in (new, other):
     end(p_)
 
 # ---------------------------------------------------------------------------------------------
-print("f. the seam for Claude Code")
+print("f. a wake that finds the station in a turn is held, and arrives after the turn, once")
+queue = {"queue": [{"project": "p1", "project_name": "Shop", "ticket": "T-7", "head": "abcdef1234567"}]}
+tares, paths, said, mk = crew(world={"settings": {**LS.DEFAULT_WORLD["settings"], "idle_wake": True},
+                                     "routes": {"/api/review-queue?mine=1": [200, queue]}})
+fake(turn=1.5)
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url}
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+
+
+def wake_round():
+    watch_revive.last = watch_revive.Round()   # a round whose revive step had nothing to do
+    out = io.StringIO()
+    with redirect_stderr(out), redirect_stdout(out):
+        idle_wake.step(paths, env=env)
+    return out.getvalue()
+
+
+def wakes():
+    return [p_["input"][0]["text"] for _, p_ in calls(pid, "turn/start") if "T-7" in p_["input"][0]["text"]]
+
+
+said_1 = wake_round()
+ck("while the station is in its first turn, a round with work for it sends nothing",
+   err is None and cs.turn_state(paths, S) == "working" and wakes() == [] and len(calls(pid, "turn/start")) == 1, (err, said_1, calls(pid)))
+until(lambda: cs.turn_state(paths, S) == "done")
+said_2 = wake_round()
+ck("the next round, with the turn over, hands the wake over as the next turn of the same conversation",
+   len(wakes()) == 1 and calls(pid, "turn/start")[-1][1]["threadId"] == thread and pid_of(paths) == pid and alive(pid)
+   and len(events(paths, "idle_wake")) == 1, (said_2, calls(pid)))
+until(lambda: cs.turn_state(paths, S) == "done")
+said_3 = wake_round()
+said_4 = wake_round()
+ck("and it is not sent again: the same work wakes a station once",
+   len(wakes()) == 1 and len(calls(pid, "turn/start")) == 2 and len(events(paths, "idle_wake")) == 1, (said_3, said_4, calls(pid)))
+end(pid)
+
+# ---------------------------------------------------------------------------------------------
+print("g. what a killed station leaves running")
+
+
+def command_of(paths_, station, seconds="300"):
+    """A command as a station's app-server starts one: in a session of its own, with the station's environment."""
+    p_ = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({seconds})"], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                          env={**os.environ, "FACTORY_STATION": station, "FACTORY_HOME": str(paths_.home),
+                               "FACTORY_CREW_HOME": str(paths_.home)})
+    STARTED.append(p_.pid)
+    return p_
+
+
+tares, paths, said, mk = crew()
+other_tares, other_paths, _, _ = crew()
+fake()
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+until(lambda: cs.turn_state(paths, S) == "done")
+mine, sibling, elsewhere = command_of(paths, S), command_of(paths, "crew-releaser"), command_of(other_paths, S)
+time.sleep(0.3)
+found = cs.leftovers(paths, S)
+ck("what a station started is found by the station's name and crew in its environment, and nothing else is",
+   [p_.pid for p_ in found] == [mine.pid], [p_.pid for p_ in found])
+ck("its app-server is not among them while it runs, nor is this process", pid not in [p_.pid for p_ in found]
+   and os.getpid() not in [p_.pid for p_ in found])
+end(pid, signal.SIGKILL)   # the app-server dies; its command goes on, as TR-1576 measured
+ck("killed, the app-server leaves its command running", alive(mine.pid))
+err, _, _ = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+note(paths)
+new = pid_of(paths)
+took = calls(new, "turn/start")
+ck("a revive ends what the dead station left, and only that",
+   err is None and gone(mine.pid) and alive(sibling.pid) and alive(elsewhere.pid), err)
+ck("and tells the station first, by program name, that what those did is not known",
+   took and took[0][1]["input"][0]["text"].startswith("Before anything else: when your process ended, 1 program(s) you had started")
+   and "What they did is not known" in took[0][1]["input"][0]["text"]
+   and "revived by the factory under the same name" in took[0][1]["input"][0]["text"]
+   and "time.sleep" not in took[0][1]["input"][0]["text"], took[:1])
+ck("the event names the programs, never their arguments",
+   [e["detail"] for e in events(paths, "left-behind")] == [f"1 program(s) ended: {os.path.basename(sys.executable)}"],
+   events(paths, "left-behind"))
+# A command whose environment says nothing (on macOS that of every system program cannot be read): it is known
+# only by what was written down of the app-server's children while it ran.
+silent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                          env={k: v for k, v in os.environ.items() if not k.startswith("FACTORY")})
+STARTED.append(silent.pid)
+time.sleep(0.3)
+ck("a command with no mark in its environment is not found by the environment", silent.pid not in [p_.pid for p_ in cs.leftovers(paths, S)])
+state.write_json(cs._children_file(paths, S), [[silent.pid, psutil.Process(silent.pid).create_time()], [silent.pid + 1, 1.0]], compact=True)
+ck("it is found once it was written down as running under the app-server, with its start time; another process with a noted id is not",
+   [p_.pid for p_ in cs._noted(paths, S)] == [silent.pid] and silent.pid in [p_.pid for p_ in cs.leftovers(paths, S)])
+cs._children_file(paths, S).unlink()
+cs.note_children(paths, S)
+ck("the note of a station whose app-server has no children is empty, and a station that is not running leaves none",
+   state.read_json(cs._children_file(paths, S), None) == [] and cs.note_children(other_paths, S) is None
+   and not cs._children_file(other_paths, S).exists())
+state.write_json(cs._children_file(paths, S), [[silent.pid, psutil.Process(silent.pid).create_time()]], compact=True)
+again = command_of(paths, S)
+time.sleep(0.3)
+real_note = cs.note_children
+cs.note_children = lambda *a: None   # the note stays as written above: the fake app-server starts no commands
+how = cs.stop(paths, S)
+cs.note_children = real_note
+ck("a stop ends what was noted too, and clears the note", gone(silent.pid) and not cs._children_file(paths, S).exists())
+ck("a stop leaves nothing of the station running", how == "stopped" and gone(new) and gone(again.pid) and alive(sibling.pid), how)
+ck("a station with nothing left behind is told nothing and leaves no event",
+   cs.end_leftovers(paths, S) == [] and len(events(paths, "left-behind")) == 2
+   and lifecycle._with_cut_off("Carry on.", []) == "Carry on.")
+for p_ in (sibling, elsewhere):
+    end(p_.pid, signal.SIGKILL)
+
+# ---------------------------------------------------------------------------------------------
+print("h. crew status on a Codex crew")
+tares, paths, said, mk = crew(world={"routes": {"/api/desk": [200, {"items": []}], "/api/desk?mine=1": [200, {"items": []}]}})
+fake(turn="hang")
+start(mk())
+fake(approval=1)
+start(mk(), station="crew-releaser", role="releaser")
+fake()
+start(mk(), station="crew-orchestrator", role="orchestrator")
+dead = pid_of(paths, "crew-orchestrator")
+until(lambda: cs.turn_state(paths, "crew-orchestrator") == "done")
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+out, errs = io.StringIO(), io.StringIO()
+with redirect_stdout(out), redirect_stderr(errs):
+    code = views.cmd_status(["crew", "status"], dict(os.environ))
+text = out.getvalue()
+lines = {line.split()[0]: line for line in text.splitlines() if line.startswith("crew-")}
+ck("`crew status` runs with no claude on the machine and lists the Codex stations",
+   code == 0 and set(lines) == {S, "crew-releaser", "crew-orchestrator"} and "claude not found" not in errs.getvalue(),
+   (code, text, errs.getvalue()))
+ck("each with where it is, in the words of any station: at work, waiting, idle",
+   status_words.STATION["working"] in lines.get(S, "") and status_words.STATION["waiting_unasked"] in lines.get("crew-releaser", "")
+   and status_words.STATION["idle"] in lines.get("crew-orchestrator", ""), lines)
+ck("and no line about an older Claude Code", "claude code:" not in text and "TWO SESSIONS" not in text, text)
+end(dead, signal.SIGKILL)
+out = io.StringIO()
+with redirect_stdout(out), redirect_stderr(io.StringIO()):
+    code = views.cmd_status(["crew", "status", "--json"], dict(os.environ))
+try:
+    doc = json.loads(out.getvalue())
+except ValueError:
+    doc = {}
+by = {r["station"]: r for r in doc.get("stations", [])}
+ck("as JSON, the same document shape as for Claude Code, with a station that died shown as gone",
+   code == 0 and by.get(S, {}).get("state") == "working" and by.get("crew-releaser", {}).get("state") == "blocked"
+   and by.get("crew-orchestrator", {}).get("state") == "gone" and doc.get("claude_code") == {"target": "", "older": 0, "retrying": 0}
+   and doc.get("two_sessions") == [], out.getvalue()[:600])
+for name in (S, "crew-releaser"):
+    end(pid_of(paths, name))
+
+# ---------------------------------------------------------------------------------------------
+print("i. the seam for Claude Code")
 tares, paths, said, mk = crew(world={"runtime": "claude_code"},
                               stations={"crew-orchestrator": {"role": "orchestrator", "id": "abcd1234", "status": "active"}})
 asked = []

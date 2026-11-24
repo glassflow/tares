@@ -159,6 +159,7 @@ With the product's station code (`tares/crew/codex_station.py`) and `probe_stati
 | No prompt into a turn | In the middle of a `sleep`, a prompt was refused and never sent. Stopping the station there took 0.1 s: the turn was interrupted, the app-server exited when asked, and no command was left running. |
 | Carried on after a stop | Stopped and started again as another process, the station loaded its conversation (`thread/resume`) and answered with a word from before the stop. |
 | Blocked on an approval | A turn that asked for an approval read `blocked` after 4 s. Nothing ran. The station was not between turns, took no prompt, and could be stopped. |
+| Killed in the middle of a command | The app-server was killed while a `sleep` ran. The command went on. It was found among what ran under the app-server at the watch's last look, and ended; nothing of the station was left. The environment alone found nothing (next list). |
 
 What `thread/read` answers, which the station code rests on:
 
@@ -170,8 +171,18 @@ What `thread/read` answers, which the station code rests on:
   for an id with no stored turn it fails with "no rollout found".
 - A visitor that never joined the conversation reads its state and can start its next turn while it is loaded.
 
-Not in this part: answering an approval (a blocked station stays blocked), commands a kill leaves behind,
-`crew status` and `crew up` for a Codex crew.
+Telling a station's leftover commands from other processes:
+
+- The app-server hands its environment (the station's name, the crew's home) to every command, and on Linux a
+  process's environment can always be read. On macOS the environment of the system's own programs (`sh`, `git`,
+  `sleep`) cannot be read by anyone, the owner included: a marked `/bin/sleep` showed no variables at all.
+- So the crew also writes down what runs under an app-server (process id and start time), every watch round
+  and right before it ends one. After a kill, those that still run are the station's.
+- Not found on macOS: a system program started after the watch's last round, by a station that then died by
+  itself. Having the guard's adapter write down each command's process id would close that; it belongs to TR-1594.
+
+Not in this part: answering an approval (a blocked station stays blocked; how approvals and recording are
+done is not decided), `roster`, `doctor` and `crew up` for a Codex crew.
 
 ## What was not verified
 

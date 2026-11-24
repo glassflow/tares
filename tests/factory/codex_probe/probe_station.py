@@ -1,5 +1,5 @@
 """Does a Codex station behave, after its start, the way the crew's station code takes it to (TR-1593)? A
-by-hand probe, not in CI: it needs a signed-in `codex` and spends five small turns.
+by-hand probe, not in CI: it needs a signed-in `codex` and spends six small turns.
 
     TARES_PROBE_CODEX=/path/to/codex python tests/factory/codex_probe/probe_station.py [--out DIR] [--only NAME ...]
 
@@ -19,6 +19,9 @@ Scenarios:
                          what was said before
   blocked_on_approval    a turn that stops on an approval reads "blocked" and is not between turns; nothing ran;
                          the station can still be stopped
+  killed_mid_command     the app-server is killed in the middle of a command: the command goes on, is found
+                         among what ran under the app-server at the watch's last look, and is ended. What the
+                         environment alone would have found is written down too (on macOS: not a system program)
 """
 from __future__ import annotations
 
@@ -201,6 +204,46 @@ def blocked_on_approval(out):
             "it can still be stopped": how in ("stopped", "killed") and not cs.is_alive(c.paths, STATION),
         }, states_seen=seen, seconds_until_blocked=took, stop=how)
     finally:
+        c.end(wait=3)
+        c.remove()
+
+
+@scenario
+def killed_mid_command(out):
+    c = Crew()
+    try:
+        err, _ = c.start(prompt="Run the shell command `sleep 43.4343` once, then answer with: slept")
+        if err:
+            return finish({"the start succeeded": False}, error=err)
+        for _ in range(60):
+            if running("sleep 43.4343"):
+                break
+            time.sleep(1)
+        pid = (c.row().get("codex") or {}).get("pid")
+        cs.note_children(c.paths, STATION)   # the watch's look at a station that runs, once a round
+        os.kill(pid, 9)
+        time.sleep(2)
+        still = running("sleep 43.4343")
+        note = cs._children_file(c.paths, STATION)
+        kept = note.read_text() if note.exists() else ""
+        note.unlink(missing_ok=True)
+        by_environment = sorted({cs._name(p) for p in cs.leftovers(c.paths, STATION)})   # with no note to go by
+        note.write_text(kept)
+        found = cs.leftovers(c.paths, STATION)
+        names = sorted({cs._name(p) for p in found})
+        ended = cs.end_leftovers(c.paths, STATION, grace=5)
+        time.sleep(1)
+        return finish({
+            "killed, the app-server left its command running": bool(still) and not cs.is_alive(c.paths, STATION),
+            "the command is found among what ran under the app-server at the watch's last look":
+                any("sleep" in n for n in names),
+            "ended, nothing of the station is left running": bool(ended) and running("sleep 43.4343") == []
+                and cs.leftovers(c.paths, STATION) == [],
+        }, programs_found=names, programs_ended=ended, found_by_the_environment_alone=by_environment)
+    finally:
+        for left in running("sleep 43.4343"):
+            subprocess.run(["kill", left])
+        c.left_behind.append(os.path.realpath((c.row().get("codex") or {}).get("socket", "") or "/nonexistent"))
         c.end(wait=3)
         c.remove()
 

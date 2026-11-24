@@ -135,6 +135,9 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
         raise CrewError(f"{station} was retired; tares factory spawn starts it again")
     if proc.is_alive(station, "", claude_bin, paths):
         raise CrewError(f"{station} is running; message it instead")
+    if _codex_station(paths, station):
+        # what it had started and left running when it died: ended, so nothing runs twice, and said
+        prompt = _with_cut_off(prompt, codex_station.end_leftovers(paths, station))
     launch.launch(client, station, role, parent, project, repo, cwd, model, effort, prompt,
                   "" if fresh else session, claude=claude_bin)
     # Resuming starts a copy under a new id; drop the stopped original so the agent view shows one row,
@@ -144,6 +147,17 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
         _remove_session(old_id, claude_bin)
         _keep_earlier(paths, station, old_id, session)
     state.event("restarted-fresh" if fresh else "revived", station, new_id, paths=paths)
+
+
+def _with_cut_off(prompt: str, names: list) -> str:
+    """`prompt` with a first paragraph that names the programs the station had left running, when there were
+    any: they were ended, and what they did is not known."""
+    if not names:
+        return prompt
+    return (f"Before anything else: when your process ended, {len(names)} program(s) you had started were still "
+            f"running ({', '.join(names)}), and the factory ended them. What they did is not known. Look at the "
+            "state they may have changed (the working tree, the remote, your pull request, Tares) before you run "
+            f"any of it again.\n\n{prompt}")
 
 
 def _keep_earlier(paths: CrewPaths, station: str, old_id: str, session: str) -> None:
