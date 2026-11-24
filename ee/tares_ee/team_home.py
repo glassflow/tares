@@ -545,12 +545,16 @@ def summary(waiting: list[dict], counts: list[tuple[str, int]] | None = None) ->
     return first + " You are waiting on " + fw._and([f"{name} for {k}" for name, k in counts]) + "."
 
 
-def team_home(c, request, now) -> dict:
+def team_home(c, request, now, stations=None) -> dict:
     """The team keys of the home body for the caller, or {} for a caller the single-person home
-    answers: a cell of one, or a key with no person."""
+    answers: a cell of one, or a key with no person. `stations` is the roll-up the caller already
+    read (TR-1629): it is the one the build uses, so the request reads it once; without it the
+    build reads its own."""
     if not _for_team(c, request):
         return {}
     t = _home_read(c, request, now)
+    if stations is not None:
+        t._reads.setdefault("stations", stations)
     return t._read("team_home", lambda: _team_home(t))
 
 
