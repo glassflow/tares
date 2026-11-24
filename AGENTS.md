@@ -85,8 +85,9 @@ from `ui/src/pages`, whose inline styles predate the kit.
 - **Colour.** The roles are listed under Colour budget in `.impeccable.md`, and the utilities come
   from `ui/src/paper/paper-theme.css` (vendored, never edited by hand). A colour or motion token
   is added in arche-design and synced; a value only the console reads goes in the console-only
-  `:root` block of `ui/src/styles.css`. `npm run token-contract` runs through
-  `ui/eslint-token-contract.config.mjs`.
+  `:root` block of `ui/src/styles.css`. No `--kit-*` outside the token block.
+  `npm run token-contract` runs through `ui/eslint-token-contract.config.mjs`; it scans every string
+  in `ui/src` (CSS holds the definitions and is exempt).
 - **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`. The platform pages are
   checked too, each held at its count in `ui/words-contract.baseline.json`: add none, and when you
   remove some, `npm run words-baseline` lowers the count in the same PR.

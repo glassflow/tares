@@ -13,7 +13,7 @@ import {
 } from "../components/icons";
 import { Button, ProgressBar, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
-import { Input } from "../components/ui/input";
+import { Input } from "@paper-kit/ui/input";
 import { embedded } from "../embed";
 import { reducedMotion } from "../lib/motion";
 import { applyTheme, currentTheme, type Theme } from "../theme";

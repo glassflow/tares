@@ -7,7 +7,7 @@ import {
 } from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@paper-kit/ui/select";
 import { cn } from "../../lib/utils";
 import {
   type ProjectPeople, type ProjectPerson,
