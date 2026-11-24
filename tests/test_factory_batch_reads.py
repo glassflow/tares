@@ -136,6 +136,30 @@ def main():
        store.projects_with_choice("review", ["uc_a", "uc_b", "uc_c"]) == {"uc_b"})
     ck("projects_with_choice of nothing is empty", store.projects_with_choice("review", []) == set())
 
+    # project_choice_names (TR-1628): the name of each project's own choice, what get_project_choice
+    # says for each one alone; a project without a choice is left out, and nothing asked makes no query
+    store.set_project_choice("uc_a", "tickets", "linear", {}, "t")
+    store.set_project_choice("uc_b", "tickets", "linear", {}, "t")
+    for slot in ("tickets", "review", "ci"):
+        ids = ["uc_a", "uc_b", "uc_c", "uc_nope", ""]
+        one_by_one = {u: store.get_project_choice(u, slot)["name"] for u in ids
+                      if u and store.get_project_choice(u, slot)}
+        ck(f"project_choice_names gives the {slot} names get_project_choice gives, one project at a time",
+           store.project_choice_names(slot, ids) == one_by_one, str(store.project_choice_names(slot, ids)))
+    ck("project_choice_names names the project that keeps its own review choice",
+       store.project_choice_names("review", ["uc_a", "uc_b", "uc_c"]) == {"uc_b": "tares"})
+    ck("project_choice_names of nothing is empty", store.project_choice_names("tickets", []) == {})
+    ck("a duplicate uid is asked once", store.project_choice_names("tickets", ["uc_a", "uc_a"]) == {"uc_a": "linear"})
+    try:
+        store.project_choice_names("memory", ["uc_a"])
+        refused = False
+    except ValueError:
+        refused = True
+    ck("a slot a project cannot choose for is refused", refused)
+    many = [f"uc_none{i}" for i in range(1200)] + ["uc_a", "uc_b"]
+    ck("more projects than one query holds read in chunks, the same answer",
+       store.project_choice_names("tickets", many) == {"uc_a": "linear", "uc_b": "linear"})
+
     # warm_gates fills the cache with what outside_gate gives for each project alone
     projects = ["uc_a", "uc_b", "uc_c"]
     alone = {u: factory_api.outside_gate(store, u) for u in projects}
