@@ -24,7 +24,15 @@ import _people
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-licence-api-")
-os.environ["TARES_DB"] = os.path.join(TMP, "inproc.duckdb")
+
+
+def cell_db(name):
+    """A folder of its own for each cell: the settings live in tares.sqlite beside the database."""
+    os.makedirs(os.path.join(TMP, name), exist_ok=True)
+    return os.path.join(TMP, name, name + ".duckdb")
+
+
+os.environ["TARES_DB"] = cell_db("inproc")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
@@ -78,7 +86,7 @@ def H(tok):
 def start(name, **env):
     port = free_port()
     log = open(os.path.join(TMP, name + ".log"), "w")
-    e = {**clean_env(), "TARES_DB": os.path.join(TMP, name + ".duckdb"), "TARES_PORT": port,
+    e = {**clean_env(), "TARES_DB": cell_db(name), "TARES_PORT": port,
          "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": AUTH,
          "TARES_CATALOG": os.path.join(TMP, "none.yaml")}
     e.update(env)
@@ -415,7 +423,7 @@ def in_process():
 async def main():
     ps = {}
     # Ada is on cell A before it starts: a new person over HTTP needs ee, and this test runs without it
-    _people.seed(os.path.join(TMP, "a.duckdb"), [("Ada", "ada@example.com")])
+    _people.seed(cell_db("a"), [("Ada", "ada@example.com")])
     for name, env in (("a", {}), ("b", {"TARES_LICENSE": BAD}), ("c", {"TARES_LICENSE": LIC_B})):
         ps[name] = start(name, **env)
     bodies = {"a": [], "b": [], "c": []}

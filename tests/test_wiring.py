@@ -349,7 +349,7 @@ async def main():
     st.sc.execute("UPDATE catalog_agents SET owned_by = ? WHERE name = 'old_agent'", [uid])
     st.sc.execute("DELETE FROM project_wiring")
     st.add_subscription("sub_old", "t1", "tares://agent/old_agent", created_by="tares")
-    st.sc.execute("DELETE FROM settings WHERE key = 'wiring_moved'")
+    st.set_setting("wiring_moved", None)
     st.con.close()
     st = Store(path)
     eq("its trigger and on/off became the project's wake-up",
@@ -370,7 +370,7 @@ async def main():
                              (uid, "runbook", "restart it"), (p2, "runbook", "page someone")):
         st.sc.execute("INSERT INTO skills (project, name, description, body, created_at, "
                        "updated_at) VALUES (?, ?, 'd', ?, now(), now())", [proj, name, body])
-    st.sc.execute("DELETE FROM settings WHERE key = 'skills_shared'")
+    st.set_setting("skills_shared", None)
     st.con.close()
     st = Store(path)
     eq("the same skill in two projects is one, used by both",

@@ -388,7 +388,7 @@ async def main():
         con.execute(f"ALTER TABLE agent_runs DROP COLUMN {col}")
     for col in ("project", "parent_run_id", "practice"):
         con.execute(f"ALTER TABLE dispatch_log DROP COLUMN {col}")
-    con.execute("DELETE FROM settings WHERE key = 'lineage_backfilled'")   # set by a release with lineage
+    old.set_setting("lineage_backfilled", None)   # set by a release with lineage (the session store holds it)
     con.execute("INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "
                 "started_at) VALUES ('r_old', 'ag', 't', 'd_old', 'x', 'ok', now()), "
                 "('r_gone', 'deleted-agent', 't', '', 'x', 'ok', now())")

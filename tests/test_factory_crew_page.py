@@ -371,7 +371,7 @@ async def main():
 async def holes():
     """A cell of its own: a lead gone quiet, and values the crew did not report."""
     import tares.daemon as daemon_mod
-    # a folder of its own: the session store (sessions.sqlite) sits next to the database, and a
+    # a folder of its own: the session store (tares.sqlite) sits next to the database, and a
     # shared one would carry the first cell's sessions and their times over (TR-1499)
     holes_dir = os.path.join(_TMP, "holes")
     os.makedirs(holes_dir, exist_ok=True)

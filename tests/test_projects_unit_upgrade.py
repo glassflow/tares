@@ -161,8 +161,13 @@ SNAPSHOT = {
 
 
 def snapshot(store) -> dict:
-    return {t: sorted(store.sc.execute(f"SELECT {cols} FROM {t}").fetchall(), key=str)
-            for t, cols in SNAPSHOT.items()}
+    out = {t: sorted(store.sc.execute(f"SELECT {cols} FROM {t}").fetchall(), key=str)
+           for t, cols in SNAPSHOT.items() if t != "settings"}
+    from sqlalchemy import text      # settings moved to the session store (TR-1480)
+    with store.sessions_db.begin() as c:
+        out["settings"] = sorted((tuple(r) for r in c.execute(text("SELECT key, value FROM settings")).all()),
+                                 key=str)
+    return out
 
 
 def check_invariants(store, where: str) -> None:
