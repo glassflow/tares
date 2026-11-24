@@ -739,6 +739,23 @@ def origin():
        and len(s.key_events(SRC, "o")) == 3)
     s.append([line("o", "assistant", {"uuid": "4"})])
     ck("a later batch keeps it complete", row(s, "o") == (4, True) and origin_of(s, "o") == "table")
+    session_ingest.reconcile_sessions(s)     # DuckDB now holds 1 of its 4 lines: a table-born session ignores that
+    ck("a reconcile that sees 1 of 4 lines in DuckDB leaves it complete", row(s, "o") == (4, True), row(s, "o"))
+
+    print("== a session whose earlier lines are only in DuckDB heals at the first reconcile ==")
+    real = session_ingest.record
+    session_ingest.record = lambda *a, **k: None
+    try:
+        s.append([line("h", "user", {"uuid": "h1"}), line("h", "assistant", {"uuid": "h2"}),
+                  line("h", "assistant", {"uuid": "h3"})])
+    finally:
+        session_ingest.record = real
+    s.append([line("h", "assistant", {"uuid": "h4"})])
+    ck("it is born in the table and true with its one line before any reconcile",
+       row(s, "h") == (1, True) and origin_of(s, "h") == "table", (row(s, "h"), origin_of(s, "h")))
+    session_ingest.reconcile_sessions(s)
+    ck("the first reconcile counts the 4 lines DuckDB holds and marks it incomplete, the table has 1",
+       row(s, "h") == (4, False), row(s, "h"))
     s.close()
 
     print("== a failed write leaves the session incomplete ==")
@@ -748,11 +765,16 @@ def origin():
     def boom(*a, **k):
         raise RuntimeError("lines refused")
     session_ingest._line_rows = boom
+    real_incomplete = session_ingest._lines_incomplete
+    session_ingest._lines_incomplete = lambda *a, **k: None     # the birth alone: nothing fixes the flag after
     try:
         with printed():
             s.append([line("bad", "user", {"uuid": "b1"})])
     finally:
         session_ingest._line_rows = real
+        session_ingest._lines_incomplete = real_incomplete
+    ck("a session whose first batch failed is born incomplete, with no help from _lines_incomplete",
+       row(s, "bad") == (1, False), row(s, "bad"))
     ck("a session whose first batch failed has its counts and is incomplete", row(s, "bad") == (1, False)
        and origin_of(s, "bad") == "table", (row(s, "bad"), origin_of(s, "bad")))
     s.append([line("ok", "user", {"uuid": "k1"})])
