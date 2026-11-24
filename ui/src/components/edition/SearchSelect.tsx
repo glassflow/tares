@@ -4,7 +4,7 @@ import { Check, ChevronDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/edition/Button";
 import { ERROR_BORDER, StackedField, useFieldIds, type FieldProps } from "@/components/edition/Field";
-import { Input as BaseInput } from "@/components/ui/input";
+import { Input as BaseInput } from "@paper-kit/ui/input";
 import type { SelectOption } from "@/components/edition/Select";
 
 export interface SearchSelectProps extends FieldProps {

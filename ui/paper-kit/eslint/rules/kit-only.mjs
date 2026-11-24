@@ -1,4 +1,4 @@
-// vendored from glassflow/arche-design paper-kit-v1 91909425f0335427fe60ca6d879ca56ca2fcce52: do not edit, run npm run paper:sync
+// vendored from glassflow/arche-design paper-kit-v2 b0f2a89c9b746ebbc4a4bd6968c128ccd414afb2: do not edit, run npm run paper:sync
 // kit-only: app UI is built from the kit. Two things fail:
 //
 //   style    a `style` attribute, on an element or a component. Space, size and colour come from
@@ -21,7 +21,8 @@
 // script). A register entry for a file that is now clean is reported too, so neither list
 // outlives its reason.
 //
-// Words for the messages: `app`, `doc`, `registerFile`, `baselineFile`, `baselineCommand`, `kitDir`.
+// Words for the messages: `doc`, `registerFile`, `baselineFile`, `baselineCommand`, `kitDir`. The
+// defaults name no app: an app that wants its own file names passes them.
 //
 // no-restricted-syntax cannot do this: it has no notion of a per-file allowance.
 
@@ -75,11 +76,11 @@ export default {
     const registered = Object.hasOwn(opts.register ?? {}, file)
     const allowed = opts.baseline?.[file] ?? 0
     const words = {
-      doc: opts.doc ?? 'See the Console design section of AGENTS.md.',
-      registerFile: opts.registerFile ?? 'eslint-rules/kit-register.mjs',
-      baselineFile: opts.baselineFile ?? 'kit-contract.baseline.json',
-      baselineCommand: opts.baselineCommand ?? 'npm run kit-baseline',
-      kitDir: opts.kitDir ?? 'components/edition',
+      doc: opts.doc ?? 'See .impeccable.md.',
+      registerFile: opts.registerFile ?? "the app's register file",
+      baselineFile: opts.baselineFile ?? "the app's kit baseline file",
+      baselineCommand: opts.baselineCommand ?? "run the app's kit baseline script",
+      kitDir: opts.kitDir ?? 'paper-kit',
     }
     const hits = []
 
