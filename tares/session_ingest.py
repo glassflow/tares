@@ -50,9 +50,12 @@ within its session by `seq`. `record` takes `seq` from the `line_count` the `ses
 and inserts the lines in that transaction, so `seq` is dense and unique per session on SQLite and
 Postgres. DuckDB does not deduplicate a line, so `session_lines` does not either, and the two counts
 can be compared: `sessions.lines_complete` is true when a session has as many rows in
-`session_lines` as lines in DuckDB. A new row starts false; the reconcile sets it for the sessions
-it reads (every 10 minutes, and at start), and a `record` that could not write a session's lines
-sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
+`session_lines` as lines in DuckDB. A row `record` makes is born in the table (`lines_origin =
+'table'`, TR-1606) and starts true: its lines go in with its counts, and it is complete when the
+table and the archive hold `line_count` lines, with no DuckDB read; the start-up pass
+`repair_table_sessions` recomputes that for every such session. A row the reconcile makes has a null
+origin, starts false, and is set by comparing with DuckDB (every 10 minutes, and at start). A
+`record` that could not write a session's lines sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
 a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
 is the rows of `session_lines` plus the `lines` of the parts. `session_read.py` (TR-1507) reads a
 complete session from the table and the parts instead of DuckDB; nothing fills the table from old events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
@@ -97,6 +100,7 @@ FILES_READ = 400                     # the newest file-editing tool_use lines pe
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 OUTPUT_TAIL = 20000                  # characters of a command's output kept: a test run's summary is at the end
 MESSAGE_TEXT = 4000                  # characters of a protocol message kept
+TABLE = "table"                      # `sessions.lines_origin` of a session born in session_lines (TR-1606)
 CYCLE = 600.0                        # seconds between the reconcile passes after the first (TR-1478)
 
 # the rendered text names each tool as "→ name(": a cheap filter before the payload is parsed
@@ -488,8 +492,11 @@ def _add(store, folded: dict, lines: dict | None = None) -> None:
               "started_at": db.least(sessions.c.started_at, stmt.excluded.started_at),
               "last_line_at": db.greatest(sessions.c.last_line_at, stmt.excluded.last_line_at),
               "updated_at": stmt.excluded.updated_at})
+    # a session with no row yet is born in the table (TR-1606): complete when its lines go in with
+    # its counts, short when they do not
     rows = [{"session": sid, "source": r[0], "started_at": r[1], "last_line_at": r[2],
-             "line_count": r[3], "tool_calls": r[4], "coordination_calls": r[5], "updated_at": now}
+             "line_count": r[3], "tool_calls": r[4], "coordination_calls": r[5], "updated_at": now,
+             "lines_origin": "table", "lines_complete": bool(lines)}
             for sid, r in sorted(folded.items())]
     with db.begin() as conn:
         if not lines:
@@ -737,26 +744,54 @@ def _reconcile_chunk(store, sources: list, sids: list) -> None:
             _set_lines_complete(conn, {sid: c[3] for sid, c in computed.items()})
 
 
-def _set_lines_complete(conn, wanted: dict) -> None:
-    """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}): true when
-    `session_lines` holds as many rows, archived parts included (TR-1506), else false. DuckDB's
-    count was read under the lock that `Store.append` holds from its commit to the end of
-    `record`, so neither side moves meanwhile."""
-    sids = sorted(wanted)
-    have: dict = {}
-    # one statement, so one snapshot on Postgres: a session the archive moves between two queries
-    # (rows deleted, part inserted, one transaction) would be counted twice or not at all
+def _held_lines():
+    """The count of the lines `session_lines` and the archive hold for `sessions.session`: rows of
+    the table plus the `lines` of the archived parts (TR-1506). One statement with the session row,
+    so one snapshot on Postgres: a session the archive moves between two queries (rows deleted, part
+    inserted, one transaction) would be counted twice or not at all."""
     kept = select(func.count()).where(session_lines.c.session == sessions.c.session).scalar_subquery()
     archived = select(func.coalesce(func.sum(session_archive_parts.c.lines), 0)).where(
         session_archive_parts.c.session == sessions.c.session).scalar_subquery()
+    return kept + archived
+
+
+def _set_lines_complete(conn, wanted: dict) -> None:
+    """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}). A session born
+    in the table (`lines_origin = 'table'`, TR-1606) is complete when the table and the archive hold
+    `sessions.line_count` lines, and DuckDB's count is not looked at. Any other session is complete
+    when they hold as many lines as DuckDB does. DuckDB's count was read under the lock that
+    `Store.append` holds from its commit to the end of `record`, so neither side moves meanwhile."""
+    sids = sorted(wanted)
+    have: dict = {}
+    held = _held_lines()
     for i in range(0, len(sids), 500):
-        have.update(conn.execute(select(sessions.c.session, kept + archived).where(
-            sessions.c.session.in_(sids[i:i + 500]))).all())
-    for flag in (True, False):
-        mine = [sid for sid in sids if (have.get(sid, 0) == wanted[sid]) is flag]
+        have.update({r[0]: r[1:] for r in conn.execute(select(
+            sessions.c.session, sessions.c.lines_origin, sessions.c.line_count, held).where(
+            sessions.c.session.in_(sids[i:i + 500]))).all()})
+    flags: dict = {True: [], False: []}
+    for sid in sids:
+        origin, count, n = have.get(sid, (None, 0, 0))
+        flags[n == (count if origin == TABLE else wanted[sid])].append(sid)
+    for flag, mine in flags.items():
         for i in range(0, len(mine), 500):
             conn.execute(update(sessions).where(sessions.c.session.in_(mine[i:i + 500]))
                          .values(lines_complete=flag))
+
+
+def repair_table_sessions(store) -> int:
+    """Recompute `lines_complete` of every session born in the table (TR-1606): complete when the
+    table and the archive hold `line_count` lines. Run at start: it puts right a session that 1.61.0
+    marked false against DuckDB's count after a rollback, or that a failed write left false and a
+    later pass filled. Two statements, one per direction, that touch only the rows that change.
+    Returns how many rows changed."""
+    whole = _held_lines() == sessions.c.line_count
+    n = 0
+    with store.sessions_db.begin() as conn:
+        for flag in (True, False):
+            n += conn.execute(update(sessions).where(
+                sessions.c.lines_origin == TABLE, sessions.c.lines_complete.is_(not flag),
+                whole if flag else ~whole).values(lines_complete=flag)).rowcount
+    return n
 
 
 def lines_size(store) -> tuple[int, int]:
@@ -919,6 +954,16 @@ def _fill_turns_chunk(store, sources: list, sids: list, since) -> None:
         _write_turns(conn, db, rows)
 
 
+def _repair_pass(store) -> None:
+    try:
+        n = repair_table_sessions(store)
+        if n:
+            print(f"taresd: lines_complete put right for {n} session(s)", flush=True)
+    except Exception as e:
+        print(f"taresd: lines_complete repair failed ({type(e).__name__}: {e}); "
+              "tried again at the next start", flush=True)
+
+
 def _reconcile_pass(store, t0: float) -> None:
     # one pass at a time: the start-up pass can still be running when the first cycle comes round
     with store.__dict__.setdefault("_reconcile_pass_lock", threading.Lock()):
@@ -952,6 +997,7 @@ def start_reconcile(store) -> threading.Thread:
     (the thread returned), and `reconcile_sessions` again every ten minutes in another. A failure
     prints one line: the next pass tries again, and the tables only undercount until then."""
     def run():
+        _repair_pass(store)
         _reconcile_pass(store, time.perf_counter())
         t1 = time.perf_counter()
         try:

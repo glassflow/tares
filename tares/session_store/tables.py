@@ -84,6 +84,9 @@ session_meters = Table(
 # stored, and caught up from DuckDB at start. Station, role, project and state stay in their own
 # tables and are joined by the readers. `lines_complete` says whether `session_lines` holds every
 # line DuckDB holds for the session (TR-1478): false for a new row, set by the reconcile.
+# `lines_origin` (TR-1606) says how that is judged: null (a row counted from the events) compares
+# with DuckDB's count; 'table' (a session born in `session_lines`) is complete when the table and
+# the archive hold `line_count` lines, with no DuckDB read.
 sessions = Table(
     "sessions", metadata,
     Column("session", Text, primary_key=True),
@@ -95,6 +98,7 @@ sessions = Table(
     Column("coordination_calls", Integer, nullable=False, server_default="0"),
     Column("lines_complete", Boolean, nullable=False, server_default=false()),
     Column("updated_at", UTCDateTime),
+    Column("lines_origin", Text),
 )
 Index("sessions_last_line_at", sessions.c.last_line_at)
 
