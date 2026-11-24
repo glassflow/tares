@@ -36,6 +36,7 @@ test_factory_project_controls
 test_factory_query_budget
 test_factory_seed
 test_factory_team_home
+test_factory_usage_keep
 test_grant_decline_sticks
 test_grants_teams
 test_licence_cloud

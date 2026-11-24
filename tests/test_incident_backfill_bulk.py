@@ -29,6 +29,16 @@ time.tzset()
 os.environ["PGTZ"] = os.environ["TZ"]
 
 TMP = tempfile.mkdtemp()
+
+
+def _db(name):
+    """A DuckDB file in a folder of its own: the settings live in tares.sqlite beside it, and a
+    shared folder would share one store's flags with the next."""
+    d = os.path.join(TMP, name)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, name + ".duckdb")
+
+
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 
@@ -178,8 +188,8 @@ class Counting:
 
 def main():
     print("== the bulk backfill files what the one-note-at-a-time rule files ==")
-    new_store = Store(os.path.join(TMP, "new.duckdb"))
-    old_store = Store(os.path.join(TMP, "old.duckdb"))
+    new_store = Store(_db("new"))
+    old_store = Store(_db("old"))
     seed(new_store)
     seed(old_store)
     for st in (new_store, old_store):
@@ -225,9 +235,9 @@ def main():
     old_store.con.close()
 
     print("== runs that started together page in a fixed order (BACKFILL_PAGE small) ==")
-    big = Store(os.path.join(TMP, "big.duckdb"))
-    small = Store(os.path.join(TMP, "small.duckdb"))
-    dup = Store(os.path.join(TMP, "dup.duckdb"))
+    big = Store(_db("big"))
+    small = Store(_db("small"))
+    dup = Store(_db("dup"))
     for st in (big, small, dup):
         uid = build(st, NOW, watcher=True, investigator=True)["project"]
         for i in range(60):
@@ -269,7 +279,7 @@ def main():
        == incidents.BACKFILL_VERSION)
 
     print("== a note joins a kept incident and moves its last note ==")
-    kst = Store(os.path.join(TMP, "kept.duckdb"))
+    kst = Store(_db("kept"))
     uid = build(kst, NOW, watcher=True, investigator=True)["project"]
     opened = NOW - timedelta(hours=3)
     kept = kst.create_incident("svc-9", uid, opened)

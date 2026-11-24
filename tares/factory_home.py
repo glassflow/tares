@@ -417,8 +417,11 @@ def _plan_title(store, owner: str | None, fx, request) -> str:
     return f"{name}'s Claude plan" if name else "Claude plan"
 
 
-def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
+def _plan(store, now: datetime, names: dict, fx=None, request=None, week: list | None = None) -> dict:
+    """`week` is the 7-day usage by project when the caller already has it (Crew shows it twice)."""
     plan = claude_usage.plan(store)
+    if week is None:
+        week = claude_usage.week_by_project(store, now)
     limits = []
     shown = [x for x in (plan or {}).get("limits") or [] if x["kind"] in _LIMITS]
     for x in shown:
@@ -429,7 +432,7 @@ def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
                        "resets_at": _iso(at),
                        "text": f"{pct}% used" + (f" · resets {resets}" if resets else "")})
     shares = [f"{names[r['project']]} {round(r['share'] * 100)}%"
-              for r in claude_usage.by_project(store, now - timedelta(days=7))
+              for r in week
               if r["kind"] == "project" and r["project"] in names and (r["share"] or 0) >= 0.05]
     return {"known": plan is not None, "limits": limits,
             "share_text": "This week: " + ", ".join(shares) if shares else None,

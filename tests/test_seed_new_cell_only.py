@@ -88,7 +88,10 @@ async def projects(cx):
 
 
 def fresh():
-    for p in (DB, DB + ".wal"):
+    # the cell's settings live in tares.sqlite beside the DuckDB file (TR-1480), and /tmp is shared with
+    # other tests: a seed marker left there by an earlier run would make this cell look old
+    side = os.path.join(os.path.dirname(DB), "tares.sqlite")
+    for p in (DB, DB + ".wal", side, side + "-wal", side + "-shm"):
         os.path.exists(p) and os.remove(p)
 
 

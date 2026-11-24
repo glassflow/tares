@@ -3342,6 +3342,22 @@ class FactoryStore:
                 f"({', '.join('?' for _ in ids)})", [slot, *ids]).fetchall()
         return {r[0] for r in rows}
 
+    def project_choice_names(self, slot: str, uids: list[str]) -> dict[str, str]:
+        """{project uid: name of its own choice} for the projects among `uids` that hold one for the
+        slot, in one query per 500 projects. It is get_project_choice's name for each project, with
+        no settings read, and never falls back to the factory's default."""
+        self._integration_slot(slot, PROJECT_SLOTS)
+        ids = sorted({u for u in uids if u})
+        out: dict[str, str] = {}
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            with self._sread:
+                rows = self.sc.execute(
+                    "SELECT project_uid, name FROM project_integrations WHERE slot = ? AND project_uid IN "
+                    f"({', '.join('?' for _ in chunk)})", [slot, *chunk]).fetchall()
+            out.update({r[0]: r[1] for r in rows})
+        return out
+
     @classmethod
     def project_field_refusal(cls, slot: str, name: str, key: str) -> str | None:
         """Why a project may not hold field `key` of integration `name`, or None when it may: a

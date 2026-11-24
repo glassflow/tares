@@ -1,6 +1,6 @@
 """The session store's tables, as SQLAlchemy Core declares them (P-TR-295).
 
-These are the five session tables exactly as they are today in DuckDB and in the state Postgres:
+These are the five session tables, and `settings`, exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -226,5 +226,19 @@ session_store_copies = Table(
     Column("copied_at", UTCDateTime),
 )
 
-# The tables copy_from_duckdb moves, in the order it moves them
-COPIED = (session_stations, session_states, project_sessions, session_usage, session_meters)
+# The instance's settings (store.py get_setting / set_setting), the first table of the move out of
+# DuckDB (TR-1480). `value` is the text the caller stored (often JSON it parses itself).
+settings = Table(
+    "settings", metadata,
+    Column("key", Text, primary_key=True),
+    Column("value", Text),
+    Column("updated_at", UTCDateTime),
+)
+
+# The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
+# moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
+# copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
+# `state_db.move`. Moving a table means adding it here and a revision that takes it over.
+MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
+                settings)
+MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

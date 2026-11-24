@@ -303,7 +303,11 @@ def moved(pg: PgState) -> bool:
 def move(duck, pg: PgState, tables: list[str]) -> dict:
     """Copy every state table from the DuckDB connection into Postgres, in one transaction: the
     tables are emptied, filled, counted against DuckDB, and the move is recorded. Anything going
-    wrong rolls it all back, and the cell keeps its state in DuckDB. Returns {table: rows}."""
+    wrong rolls it all back, and the cell keeps its state in DuckDB. A table in MOVED_TABLES lives
+    in the session store (copied there by `session_store.copy`) and is left out. Returns
+    {table: rows}."""
+    from .session_store.tables import MOVED_TABLE_NAMES
+    tables = [t for t in tables if t not in MOVED_TABLE_NAMES]
     counts = {}
     c = pg.conn()
     with c.transaction():

@@ -63,7 +63,7 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 
-from tares import factory_home as fh
+from tares import claude_usage, factory_home as fh
 from tares.envelope import Envelope
 
 NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
@@ -88,7 +88,8 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # settings once more (home and ticket keep their counts): projects 81 to 82, project 80 to 85 on
 # Postgres, 85 to 88 on DuckDB. Reading each of them once per request is a saving for a later ticket.
 # TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
-# home 105 to 98 on Postgres, 115 to 102 on DuckDB (its counts are 100 and 96, plus 2 percent).
+# home 105 to 98 on Postgres, 127 to 117 on DuckDB (its counts are 96 and 115, plus 2 percent; the 127 is
+# TR-1480's, which the base brought in).
 _TODAY = {"home": 98, "projects": 82, "project": 85, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
@@ -98,7 +99,10 @@ DONE_EXTRA = 4
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 102, "projects": 89, "project": 88}
+# TR-1480 (the settings table is read and written through the session store): on DuckDB each settings
+# read is now a SQLite transaction, so it costs its BEGIN IMMEDIATE too: home 115 to 127, projects 89 to
+# 95, project 88 to 94. Postgres state counts a settings read once, as before, so its counts stay.
+_DUCKDB = {**_TODAY, "home": 117, "projects": 95, "project": 94}
 BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -310,6 +314,7 @@ async def done_projects(store, sam, call, base):
 
     async def measure():
         fh.clear_cache()
+        claude_usage.clear_week_by_project()    # the kept week (TR-1627) must not hide the counts
         counter = [0]
         rows[0] = 0
         token = _COUNTER.set(counter)
@@ -400,6 +405,7 @@ async def main():
         for name, tmpl in ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
+            claude_usage.clear_week_by_project()
             counter = [0]
             builds["read"] = builds["home"] = builds["rollup"] = 0
             token = _COUNTER.set(counter)
