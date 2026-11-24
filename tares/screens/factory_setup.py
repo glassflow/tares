@@ -290,10 +290,12 @@ def register(app, store, h, ctx):
         if slot not in PROJECT_SLOTS:
             return picks, follow
         hidden = h.hidden_ids()
-        for p in safe(lambda: store.list_projects(exclude_ids=hidden), []) or []:
-            row = safe(lambda: store.get_project_choice(p["id"], slot), None)
-            if row:
-                picks.setdefault(row["name"], []).append({"uid": p["id"], "name": p.get("name") or p["id"]})
+        projects = safe(lambda: store.list_projects(exclude_ids=hidden), []) or []
+        chosen = safe(lambda: store.project_choice_names(slot, [p["id"] for p in projects]), {}) or {}
+        for p in projects:
+            name = chosen.get(p["id"])
+            if name:
+                picks.setdefault(name, []).append({"uid": p["id"], "name": p.get("name") or p["id"]})
             elif p.get("kind") == "software_factory":
                 follow += 1
         return picks, follow
