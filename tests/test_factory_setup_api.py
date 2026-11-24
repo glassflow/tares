@@ -50,6 +50,7 @@ for _k in ("TARES_WORKSPACE_API_URL", "TARES_LINEAR_CONNECT_URL", "TARES_GITHUB_
 import httpx
 
 from tares import licence, linear
+from tares.factory_store import PROJECT_SLOTS
 from tares.screens import factory_setup as fs
 from tares.integrations import registry
 from tares.integrations.guardrails import Guardrail
@@ -653,6 +654,37 @@ async def main():
                + (f"; {sum(len(c['picked_by']) for c in step(r.json(), 'tickets')['connected'] if c['id'] != 'linear')} picked another."
                   if any(c["picked_by"] for c in step(r.json(), "tickets")["connected"] if c["id"] != "linear") else "."),
                lin["use"])
+
+            # TR-1628: who picks what is read once per slot for every project, not once per project
+            reads = {"one": 0, "batch": 0, "asked": 0}
+            real_one, real_batch = store.get_project_choice, store.project_choice_names
+
+            def counted_one(*a, **kw):
+                reads["one"] += 1
+                return real_one(*a, **kw)
+
+            def counted_batch(slot, uids):
+                reads["batch"] += 1
+                reads["asked"] = max(reads["asked"], len(uids))
+                return real_batch(slot, uids)
+            store.get_project_choice, store.project_choice_names = counted_one, counted_batch
+            try:
+                r = await get()
+            finally:
+                store.get_project_choice, store.project_choice_names = real_one, real_batch
+            ck("setup reads no project's choice on its own", r.status_code == 200 and reads["one"] == 0, reads)
+            ck("setup reads the choices once per project slot, for all the projects",
+               0 < reads["batch"] <= len(PROJECT_SLOTS) and reads["asked"] >= 40, reads)
+            for slot in PROJECT_SLOTS:
+                got = {c['id']: {x['uid'] for x in c['picked_by']}
+                       for c in step(r.json(), slot)['connected'] if c['picked_by']}
+                want = {}
+                for p in store.list_projects():
+                    row = real_one(p["id"], slot)
+                    if row:
+                        want.setdefault(row["name"], set()).add(p["id"])
+                ck(f"the {slot} step lists the same projects under each choice as one read per project",
+                   got == want, (got, want))
 
             print("== keeping the default ==")
             b = (await get()).json()

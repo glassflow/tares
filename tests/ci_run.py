@@ -35,7 +35,7 @@ WEIGHT = {
     "test_parity": 900, "test_watch_escalate": 70, "test_slack": 65,
     "test_project_keys": 19, "test_agents": 15, "test_plugin_challenger": 11, "test_tracing": 11,
     "test_seed": 10, "test_login": 9, "test_usage": 9,
-    "test_slack_ask": 9, "test_github_tickets": 8, "test_degraded": 8,
+    "test_slack_ask": 9, "test_github_tickets": 8, "test_degraded": 8, "test_factory_seed": 45,
 }
 
 
