@@ -85,7 +85,7 @@ class FakeEeTeam(SingleTeam):
     def handover_blockers(self, c, project): return ["a sign-off is missing"]
     def open_questions_for(self, c, person_id, hidden, want): return [{"id": "q"}]
     def resolve_crew(self, name, person_id, machine): return (f"{name}@{machine}", machine or "")
-    def team_home(self, c, request, now): return {"team": True}
+    def team_home(self, c, request, now, stations=None): return {"team": True}
     def project_waiting(self, c, request, now, project): return {"mine": [], "others": []}
     def waiting_for_person(self, c, person, hidden, now): return []
     def own_stations(self, c, request, rows): return rows[:1]

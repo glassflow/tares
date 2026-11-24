@@ -1496,10 +1496,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     h.team_reader = team_reader
 
-    def team_home(request: Request, now=None) -> dict:
+    def team_home(request: Request, now=None, stations=None) -> dict:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
         one person: see the team interface. It reads what this module holds; the route stays in daemon.py."""
-        return team_mod.get().team_home(team_reader(), request, now or now_utc())
+        return team_mod.get().team_home(team_reader(), request, now or now_utc(), stations)
 
     def project_waiting(request: Request, uid: str, now=None) -> dict | None:
         """What waits in one project on a team cell: {mine, others} (see the team interface), or
