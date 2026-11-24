@@ -8,6 +8,7 @@ import { EditionProvider, useEdition } from "./editions/edition";
 import FeedRedirect from "./editions/FeedRedirect";
 import { ByEdition } from "./editions/routes";
 import { EeLoader } from "./eeSlots";
+import { applyEmbedTheme } from "./lib/embed";
 import { LicenceProvider } from "./licence";
 import ReadsPage from "./pages/Reads";
 import { ConnectPage } from "./pages/Connect";
@@ -183,6 +184,9 @@ const router = createBrowserRouter([
     ),
   },
 ]);
+
+// the desktop's theme, painted before the first render (index.html already did it before first paint)
+applyEmbedTheme();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

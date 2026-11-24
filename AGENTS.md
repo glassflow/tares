@@ -85,8 +85,9 @@ from `ui/src/pages`, whose inline styles predate the kit.
 - **Colour.** The roles are listed under Colour budget in `.impeccable.md`, and the utilities come
   from `ui/src/paper/paper-theme.css` (vendored, never edited by hand). A colour or motion token
   is added in arche-design and synced; a value only the console reads goes in the console-only
-  `:root` block of `ui/src/styles.css`. `npm run token-contract` runs through
-  `ui/eslint-token-contract.config.mjs`.
+  `:root` block of `ui/src/styles.css`. No `--kit-*` outside the token block.
+  `npm run token-contract` runs through `ui/eslint-token-contract.config.mjs`; it scans every string
+  in `ui/src` (CSS holds the definitions and is exempt).
 - **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`. The platform pages are
   checked too, each held at its count in `ui/words-contract.baseline.json`: add none, and when you
   remove some, `npm run words-baseline` lowers the count in the same PR.
@@ -110,6 +111,23 @@ from `ui/src/pages`, whose inline styles predate the kit.
   an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
   enforces it when there is one.
+
+## Embedded in the desktop
+
+The Tares desktop app hosts the console in a window and draws its own rail, so the console drops
+its own chrome when it is told to (TR-1553). The contract, in `ui/src/lib/embed.ts`:
+
+- `?embed=desktop` turns the mode on. Any other value of `embed` is ignored. `&theme=light|dark`
+  sets the theme; anything else leaves the saved or system theme.
+- The mode is kept in `sessionStorage` under `tares.embed` (`{"embed":"desktop","theme":"dark"}`), so
+  it lasts for the tab and survives navigations that drop the query. A new query wins over the
+  stored one; a tab without storage keeps the mode for the page load only.
+- Embedded, `EditionShell` renders no header (brand, cell name, workspace switcher, search, account
+  menu), no main menu and no drawer. The page, the licence banner, the toasts and the command
+  palette stay, and the routes are the same, so the desktop's rail links straight to them.
+- The embed theme wins over the saved one and is never saved: `index.html` sets it before the first
+  paint, and `tares-theme` in `localStorage` is not written.
+- Not covered: sign-in. The console's own sign-in is not touched by the mode.
 
 ## Environment contract
 

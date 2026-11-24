@@ -7,12 +7,20 @@
     <link rel="alternate icon" type="image/png" href="/favicon.png" />
     <title>Tares Console</title>
     <script>
-      // Set the theme before first paint to avoid a flash of the wrong palette.
+      // Set the theme before first paint to avoid a flash of the wrong palette. The desktop's theme
+      // (?embed=desktop&theme=, or what an earlier page of the tab stored) wins over the saved one and is
+      // never saved; src/lib/embed.ts holds the same rule for the app.
       (function () {
         try {
+          var q = new URLSearchParams(location.search);
+          var e = null;
+          try { e = JSON.parse(sessionStorage.getItem("tares.embed")); } catch (x) {}
+          var qt = q.get("theme");
+          if (qt !== "light" && qt !== "dark") qt = null;
+          var et = q.get("embed") === "desktop" ? qt || (e && e.theme) : e && e.embed === "desktop" ? e.theme : null;
           var s = localStorage.getItem("tares-theme");
-          var t = (s === "light" || s === "dark")
-            ? s
+          var t = (et === "light" || et === "dark") ? et
+            : (s === "light" || s === "dark") ? s
             : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
           document.documentElement.setAttribute("data-theme", t);
         } catch (e) {}

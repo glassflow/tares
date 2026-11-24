@@ -19,6 +19,7 @@
     "test:factory-team": "vite build && node tests/factory-team.e2e.cjs",
     "test:project-idle": "vite build && node tests/project-idle.e2e.cjs",
     "test:edition-shell": "vite build && node tests/edition-shell.e2e.cjs",
+    "test:embedded": "vite build && node tests/embedded.e2e.cjs",
     "test:factory-projects": "vite build && node tests/factory-projects.e2e.cjs",
     "test:factory-project": "vite build && node tests/factory-project.e2e.cjs",
     "test:factory-github": "vite build && node tests/factory-github.e2e.cjs",

@@ -13,8 +13,9 @@ import {
 } from "../components/icons";
 import { Button, ProgressBar, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
-import { Input } from "../components/ui/input";
+import { Input } from "@paper-kit/ui/input";
 import { reducedMotion } from "../lib/motion";
+import { isEmbedded } from "../lib/embed";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
 import { BrainReadContext, normalizeBrain, type BrainRead } from "./brainRead";
@@ -258,6 +259,10 @@ export function useHeaderSlots(): HeaderSlots {
 export default function EditionShell() {
   const { edition, name, credentialName, open: openCell, personPicture } = useEdition();
   const narrow = useNarrow();
+  // Hosted in the desktop's window (?embed=desktop, TR-1553): the desktop draws the rail and the top bar,
+  // so the console draws neither its header, its menu nor its drawer. The page, the licence banner and the
+  // command palette stay. Every hook below still runs, so the order never changes with the mode.
+  const embedded = isEmbedded();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
   const { pathname: here, search } = useLocation();
@@ -366,7 +371,7 @@ export default function EditionShell() {
 
   return (
     <div className="flex min-h-screen w-full min-w-0 flex-col">
-      <header data-testid="edition-header"
+      {!embedded && <header data-testid="edition-header"
               className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border bg-card px-3 py-2.5 md:px-6 md:py-3.5">
         <div className="flex min-w-0 items-center gap-2.5">
           {narrow && !noMenu && (
@@ -418,16 +423,16 @@ export default function EditionShell() {
           <span ref={setActionsEl} className="contents" />
           <AccountMenu who={who} small={small} workspaceUrl={workspaceUrl} logoutUrl={logoutUrl} picture={personPicture} />
         </div>
-      </header>
+      </header>}
 
       <div className="flex min-h-0 flex-1">
-        {!narrow && !noMenu && (
+        {!embedded && !narrow && !noMenu && (
           <nav aria-label="Main" data-testid="edition-menu"
                className="sticky top-[65px] flex h-[calc(100vh-65px)] w-[232px] shrink-0 flex-col gap-0.5 self-start overflow-y-auto border-r border-border px-3 py-5">
             <MenuLinks entries={entries} narrow={false} setup={setup} />
           </nav>
         )}
-        <main className="main min-w-0 flex-1">
+        <main className="main min-w-0 flex-1" data-embedded={embedded ? "" : undefined}>
           <LicenceBanner />
           <OwnMenu.Provider value={setFrame}>
             <HeaderSlotsContext.Provider value={slots}>
@@ -442,7 +447,7 @@ export default function EditionShell() {
 
       {/* the phone menu slides in over a fading scrim, and back out (TR-1432); while it leaves it no
           longer counts as the menu, so a check or a screen reader sees it gone at once */}
-      {drawerShown.mounted && (
+      {!embedded && drawerShown.mounted && (
         <div ref={drawerShown.ref} data-state={drawerShown.state} className="contents">
           <div data-testid={drawer ? "edition-scrim" : undefined} data-state={drawerShown.state}
                className="motion-scrim fixed inset-x-0 bottom-0 top-[57px] z-40 bg-scrim" onClick={() => setDrawer(false)} />

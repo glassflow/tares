@@ -279,6 +279,8 @@ button.side-toggle:focus-visible { outline: 2px solid var(--accent); outline-off
 
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .main { flex: 1; padding: 24px 36px 64px; max-width: 1600px; }
+/* embedded in the desktop (TR-1553): its window is the width, so the console does not cap it */
+.main[data-embedded] { max-width: none; }
 
 /* ── breadcrumb top bar ── */
 .topbar {
