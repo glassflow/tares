@@ -154,9 +154,6 @@ async def main():
             return rows[0] if rows else None
 
         # ── one station with 6 sessions, another with 6, one in two projects ─────────────────
-        # the lines also go to DuckDB, as on a cell that took them before the upgrade: the part below
-        # that reads before the first catch-up scans the events (TR-1479 holds them out otherwise)
-        store._archive_on = False
         lines = []
         for k in range(6):
             lines += session_lines(BIG, "builder", "crew-orchestrator", k, "big", atlas)

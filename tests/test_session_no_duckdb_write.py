@@ -6,6 +6,9 @@ cell needs TARES_ARCHIVE_URL). The lines are still counted in `source_stats`, a 
 still kept in `challenges`, and `entity_counts` is left alone for them. Every other case writes to
 DuckDB as before, and a factory cell on Postgres with no archive says so once and keeps writing there.
 
+In the code the gate is shut (`store.HOLD_LINES_BACK = False`) until TR-1647 moves the readers of
+`events`; this test opens it, and checks that shut it writes to DuckDB.
+
 Plain:                python tests/test_session_no_duckdb_write.py
 With the Postgres harness (every Store keeps its state in Postgres):
     TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres PYTHONPATH=tests/pg_harness:. \\
@@ -25,9 +28,11 @@ from sqlalchemy import func, select  # noqa: E402
 from tares import metrics  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store.tables import session_lines, sessions  # noqa: E402
+from tares import store as store_mod  # noqa: E402
 from tares.store import Store  # noqa: E402
 
-PG = os.environ.get("TARES_TEST_PG")
+store_mod.HOLD_LINES_BACK = True        # shut in code until TR-1647; this test is about what it does open
+
 FAILS = []
 T0 = datetime(2026, 11, 24, 8, 0, 0, tzinfo=timezone.utc)
 SRC = "claude_code"
@@ -96,6 +101,14 @@ def counter():
 
 
 def main():
+    print("== the gate is shut in the code ==")
+    store_mod.HOLD_LINES_BACK = False
+    s = open_store("factory")
+    s.append([line("g1") for _ in range(3)])
+    ck("shut, a factory cell writes the lines to DuckDB", duck_count(s) == 3, duck_count(s))
+    ck("and to session_lines", table_count(s) == 3, table_count(s))
+    store_mod.HOLD_LINES_BACK = True
+
     print("== the factory edition, with an archive ==")
     s = open_store("factory")
     batch = [line("s1") for _ in range(49)] + [line("s1", "challenge_commit", labels={"branch": "b1"})]
@@ -144,6 +157,34 @@ def main():
     s.append([line("c1")])
     ck("once caught up, a line is held back again", duck_count(s) == 4, duck_count(s))
 
+    print("== a session from before lines_origin keeps its lines in DuckDB (F1) ==")
+    from tares import session_ingest as si
+    s = open_store("factory")
+    s._archive_on = False                    # the old lines were written to both stores
+    s.append([line("old") for _ in range(5)])
+    s.append([line("old2") for _ in range(3)])
+    s._archive_on = None
+    with s.sessions_db.begin() as c:        # what 0009 left on every existing row
+        c.execute(sessions.update().values(lines_origin=None))
+    s.append([line("old") for _ in range(3)] + [line("new") for _ in range(2)])
+    ck("the old session's new lines are in DuckDB too", duck_count(s) == 8 + 3, duck_count(s))
+    ck("the new session's lines are held back", duck_count(s) == 11 and table_count(s) == 13, (duck_count(s), table_count(s)))
+    si.reconcile_sessions(s)
+    with s.sessions_db.begin() as c:
+        rows = {r[0]: tuple(r[1:]) for r in c.execute(select(
+            sessions.c.session, sessions.c.line_count, sessions.c.lines_complete))}
+    ck("the old session is still complete after the reconcile", rows["old"] == (8, True), rows["old"])
+    ck("so is the one the gate never touched", rows["old2"] == (3, True), rows["old2"])
+    ck("and the new one", rows["new"] == (2, True), rows["new"])
+
+    print("== a session a failed write left incomplete keeps its lines in DuckDB ==")
+    s = open_store("factory")
+    s.append([line("f1") for _ in range(2)])
+    with s.sessions_db.begin() as c:
+        c.execute(sessions.update().where(sessions.c.session == "f1").values(lines_complete=False))
+    s.append([line("f1") for _ in range(2)])
+    ck("its new lines are written to DuckDB", duck_count(s) == 2, duck_count(s))
+
     print("== when the session store cannot take the lines, DuckDB keeps them ==")
     s = open_store("factory")
     real = s.sessions_db.begin
@@ -173,7 +214,9 @@ def main():
     s.append([line("p2")])
     ck("a cell with no edition set writes to DuckDB", duck_count(s) == 1, duck_count(s))
 
-    if PG:
+    # the store's own backend decides, not the env: CI's duckdb shard sets TARES_TEST_PG without the
+    # harness on the path, so its session store is SQLite
+    if s.sessions_db.dialect == "postgresql":
         print("== the factory edition on Postgres with no archive ==")
         s = open_store("factory", archive=False)
         out = io.StringIO()

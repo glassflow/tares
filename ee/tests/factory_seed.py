@@ -1019,10 +1019,7 @@ class _Gen:
                 key = f"{sid}:{i}"
                 envs.append(Envelope("claude_code", "claude_code", sid, kind, _text(kind, i), at,
                                      json.loads(_payload(kind, sid, i, key)), {"tares_project": p0["uid"]}, at))
-        # the real cell took its lines into DuckDB before TR-1479, and SHAPE counts them: write these there too
-        st._archive_on = False
         st.append(envs)
-        st._archive_on = None
         from sqlalchemy import update
         from tares.session_store import tables as T
         with st.sessions_db.begin() as c:        # these lines are the session's whole story

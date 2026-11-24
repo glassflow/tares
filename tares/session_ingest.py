@@ -151,6 +151,25 @@ def claude_code_lines(store, envelopes) -> list:
     return [e for e in cands if e.source in ours]
 
 
+def holdable(store, lines: list) -> list:
+    """The claude_code `lines` the session store may hold alone, without a copy in DuckDB
+    (TR-1479): those of a session with no row yet, or whose row was born in the table and is
+    complete. A session from before `lines_origin` (null), one the reconcile made, or one a failed
+    write left incomplete keeps getting its lines in DuckDB too: it is judged against DuckDB's
+    count, and a read of it falls back to DuckDB, so a line held back would be missing there.
+    Called under `Store._sess_lock`, so no `record` changes a row meanwhile."""
+    sids = sorted({e.key_value for e in lines})
+    ok = set(sids)
+    c = sessions.c
+    with store.sessions_db.begin() as conn:
+        for i in range(0, len(sids), 500):
+            for sid, origin, done in conn.execute(select(c.session, c.lines_origin, c.lines_complete)
+                                                   .where(c.session.in_(sids[i:i + 500]))).all():
+                if not (origin == TABLE and done):
+                    ok.discard(sid)
+    return [e for e in lines if e.key_value in ok]
+
+
 def _utc(t: datetime) -> datetime:
     return t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
 

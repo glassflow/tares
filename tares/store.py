@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -562,6 +563,12 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_raw TEXT",
 ]
 
+# The gate of TR-1479: whether the factory edition keeps claude_code lines out of DuckDB `events`.
+# Shut, because readers of `events` (triggers' aggregate, read_window, recent_sessions, stats,
+# recent_events and the rest) still scan those lines; TR-1647 moves them and removes this constant.
+# The tests open it themselves (`store.HOLD_LINES_BACK = True`).
+HOLD_LINES_BACK = False
+
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
 _FILTER_OPS = {"eq": "=", "neq": "!=", "gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
 _FIELD_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -817,6 +824,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
         self._sess_lock = threading.Lock()
         self._archive_on = None            # whether an archive backend exists (settled at first use)
+        self._factory_mode = None          # (is the edition factory, until when), see _lines_skip_duckdb
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -1529,42 +1537,59 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         cc = session_ingest.claude_code_lines(self, envelopes)
         if not cc:
             return self._append(envelopes)
-        # In the factory edition with an archive, the claude_code lines of the batch go only to the
-        # session store (TR-1479); anywhere else they are written to DuckDB as before. They are
-        # counted into `sessions` after the commit. The reconcile at start holds the same lock, so a
-        # line is never counted by both.
-        held = cc if self._lines_skip_duckdb() else []
+        # In the factory edition with an archive, the claude_code lines of a session the session
+        # store answers for alone go only there (TR-1479); anywhere else they are written to DuckDB
+        # as before. They are counted into `sessions` after the commit. The reconcile at start holds
+        # the same lock, so a line is never counted by both.
+        gate = self._lines_skip_duckdb()
         with self._sess_lock:
+            try:
+                held = session_ingest.holdable(self, cc) if gate else []
+            except Exception:                # no answer from the session store: DuckDB keeps them
+                held = []
             self._append(envelopes, held)
             if not session_ingest.record(self, cc) and held:
                 # the session store could not take them: DuckDB keeps them (no counters: the
                 # batch's source_stats already counted them)
                 self._append_events(held)
-        if not held:
-            metrics.session_lines_to_duckdb(len(cc))
+        if len(cc) > len(held):
+            metrics.session_lines_to_duckdb(len(cc) - len(held))
+
+    _HELD_MODE_TTL = 30.0                  # seconds the edition answer of `_lines_skip_duckdb` is kept
 
     def _lines_skip_duckdb(self) -> bool:
-        """True when claude_code lines go only to the session store: the factory edition with an
-        archive backend (the folder archive always exists on SQLite; a Postgres cell needs
-        TARES_ARCHIVE_URL). A factory cell on Postgres with none keeps writing to DuckDB and says so
+        """True when claude_code lines may go only to the session store: `HOLD_LINES_BACK` is on (it
+        is shut until TR-1647 moves the readers of `events`), and the edition is factory with
+        an archive backend (the folder archive always exists on SQLite; a Postgres cell needs
+        TARES_ARCHIVE_URL; the answer is settled once per process, so a cell restarts after the URL
+        is set or fixed). A factory cell on Postgres with none keeps writing to DuckDB and says so
         once. Until the `sessions` table has caught up with the events already in DuckDB, the lines
-        go to both: the readers scan events until then, and a line held back would be missing."""
-        try:
-            if edition.edition(self)[0] != "factory":
+        go to both: the readers scan events until then, and a line held back would be missing. Which
+        sessions are held is `session_ingest.holdable`'s call. The edition is read at most every
+        `_HELD_MODE_TTL` seconds: a switch applies within that time, not on the next batch."""
+        if not HOLD_LINES_BACK:
+            return False
+        now = time.monotonic()
+        cached = self._factory_mode
+        if cached is None or now >= cached[1]:
+            try:
+                is_factory = edition.edition(self)[0] == "factory"
+            except Exception:
                 return False
-        except Exception:
+            cached = self._factory_mode = (is_factory, now + self._HELD_MODE_TTL)
+        if not cached[0]:
             return False
         if self._archive_on is None:
             try:
                 self._archive_on = session_archive.backend_of(self) is not None
             except Exception as e:           # an unusable URL: the archive pass fails too
                 print(f"taresd: transcript lines are still written to DuckDB: the archive is not "
-                      f"usable ({e})", flush=True)
+                      f"usable ({e}); restart after fixing TARES_ARCHIVE_URL", flush=True)
                 self._archive_on = False
             else:
                 if not self._archive_on:
                     print("taresd: transcript lines are still written to DuckDB: no archive "
-                          "configured (TARES_ARCHIVE_URL)", flush=True)
+                          "configured (TARES_ARCHIVE_URL; restart after setting it)", flush=True)
         if not self._archive_on:
             return False
         try:
