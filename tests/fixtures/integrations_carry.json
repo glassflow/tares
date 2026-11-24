@@ -252,6 +252,13 @@
           "name": "claude_code",
           "settings_schema": [],
           "title": "Claude Code"
+        },
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "codex",
+          "settings_schema": [],
+          "title": "Codex"
         }
       ],
       "choice": null,
