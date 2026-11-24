@@ -474,11 +474,12 @@ def _caller(store, fx, request) -> dict:
             "orphans": False}
 
 
-def team_of(fx, request, now) -> dict:
+def team_of(fx, request, now, stations=None) -> dict:
     """The team home for the caller (`fx.team_home`), or {} on a cell of one person and for a call
-    with no request. A route reads it once and hands it to caller_waiting and the team parts."""
+    with no request. A route reads it once and hands it to caller_waiting and the team parts.
+    `stations` is the roll-up the route already read, which the team home then does not read again."""
     if fx is not None and request is not None and hasattr(fx, "team_home"):
-        return fx.team_home(request, now)
+        return fx.team_home(request, now, stations=stations)
     return {}
 
 
@@ -536,7 +537,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
-    team = team_of(fx, request, now)
+    team = team_of(fx, request, now, stations)
     # a private project the caller is not on is left out of every count and name
     hidden = fx.hidden_ids() if fx else set()
     projects = store.list_projects(kind="software_factory", exclude_ids=hidden)
