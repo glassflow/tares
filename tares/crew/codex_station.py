@@ -491,19 +491,33 @@ def _children_file(paths: CrewPaths, station: str):
 def note_children(paths: CrewPaths, station: str) -> None:
     """Write down what runs under the station's app-server now: each process's id and start time. The watch
     does this every round for a station that runs, and a stop does it right before it ends the app-server, so
-    that what outlives the app-server can be told from any other process afterwards. Never fails."""
+    that what outlives the app-server can be told from any other process afterwards. Never fails.
+
+    A process written down before stays written down while it runs (same id, same start time), with what
+    runs under it. A command that outlives the shell that started it is handed to the system's first process:
+    the next look under the app-server no longer finds it, and on macOS its environment may not say whose
+    it is either, so forgetting it here would leave it running after a stop."""
     rec = info(paths, station)
     if not _same_process(rec):
         return
-    rows = []
     try:
-        for p in psutil.Process(rec["pid"]).children(recursive=True):
-            try:
-                rows.append([p.pid, p.create_time()])
-            except (psutil.Error, OSError):
-                continue
+        seen = psutil.Process(rec["pid"]).children(recursive=True)
     except (psutil.Error, OSError):
         return
+    for p in _noted(paths, station):
+        seen.append(p)
+        try:
+            seen.extend(p.children(recursive=True))
+        except (psutil.Error, OSError):
+            pass
+    born = {}
+    for p in seen:
+        try:
+            if p.pid != rec["pid"]:
+                born[p.pid] = p.create_time()
+        except (psutil.Error, OSError):
+            continue
+    rows = [[pid, born[pid]] for pid in sorted(born)]
     file = _children_file(paths, station)
     try:
         if state.read_json(file, None) != rows:
