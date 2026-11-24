@@ -462,6 +462,20 @@ err, _ = start(mk())
 cx.READY_TIMEOUT = 30
 ck("one that never opens its socket is stopped after the wait",
    refused(err, "did not open", "in 1 s") and gone(json.loads(record.read_text())["pid"]) and not row(paths), err)
+fake(late=1.5)
+err, _ = start(mk())
+ck("a path that is there before the app-server listens on it is waited for, not taken for a failure",
+   err is None and alive(row(paths).get("codex", {}).get("pid", 0)), err)
+end(row(paths).get("codex", {}).get("pid", 0))
+paths.stations.write_text("{}\n")
+fake(late=30)
+cx.READY_TIMEOUT = 1
+record = SCRATCH / "record-e-late.json"
+os.environ["FAKE_CODEX_RECORD"] = str(record)
+err, _ = start(mk())
+cx.READY_TIMEOUT = 30
+ck("one that never listens is stopped after the wait",
+   refused(err, "did not answer as one") and gone(json.loads(record.read_text())["pid"]) and not row(paths), err)
 fake()
 err, _ = start(mk(), cwd=str(SCRATCH / "no-such-folder"))
 ck("a folder that does not exist stops the start", refused(err, "could not start crew-reviewer") and not row(paths), err)

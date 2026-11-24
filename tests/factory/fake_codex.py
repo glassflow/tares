@@ -20,6 +20,7 @@ $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_NOTIFY    when set, `config/read` shows a notify program
   FAKE_CODEX_MODE      the socket's mode in octal (600 when unset)
   FAKE_CODEX_PLAIN     when set, the socket is made at the path itself, with no link
+  FAKE_CODEX_LATE      seconds between the path appearing and the app-server listening on it
   FAKE_CODEX_DIE       when set, the app-server prints a line and exits 3 at once
   FAKE_CODEX_SILENT    when set, the app-server never opens its socket
 
@@ -159,6 +160,7 @@ def main(argv):
     os.chmod(real, int(os.environ.get("FAKE_CODEX_MODE", "600"), 8))
     if real != path:
         os.symlink(real, path)
+    time.sleep(float(os.environ.get("FAKE_CODEX_LATE") or 0))
     server.listen(8)
 
     def end(*_a):

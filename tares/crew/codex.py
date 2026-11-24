@@ -269,18 +269,29 @@ def _mcp_names(wire: Wire) -> list:
     return names
 
 
-def verify(station: str, sock: Path, home: Path, allowed_mcp) -> None:
+def _connect(sock: Path, deadline: float) -> Wire:
+    """A connection to the app-server on `sock`, tried again until `deadline`: the path can be there a moment
+    before the app-server listens on it."""
+    while True:
+        try:
+            return Wire(str(sock))
+        except WireError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
+def verify(station: str, sock: Path, home: Path, allowed_mcp, deadline: float | None = None) -> None:
     """Check the app-server that came up on `sock` is the station the launch asked for. Dies with what is
-    wrong: a socket others can reach, no answer to `initialize`, a Codex folder that is not the station's
-    own, an MCP server the launch did not name, a notify program."""
-    found = os.stat(sock)   # through the link, when the path is one
-    mode = stat.S_IMODE(found.st_mode)
-    if not stat.S_ISSOCK(found.st_mode):
-        raise CrewError(f"what came up at {sock} is not a socket")
-    if found.st_uid != os.getuid() or mode & 0o077:
-        raise CrewError(f"the socket of {station} is open to others (mode {mode:o}); it must be the owner's alone")
+    wrong: no answer to `initialize` (by `deadline`, a time.monotonic() value; now when none is given), a
+    socket others can reach, a Codex folder that is not the station's own, an MCP server the launch did not
+    name, a notify program."""
     try:
-        with Wire(str(sock)) as wire:
+        with _connect(sock, time.monotonic() if deadline is None else deadline) as wire:
+            found = os.stat(sock)   # through the link, when the path is one
+            mode = stat.S_IMODE(found.st_mode)
+            if found.st_uid != os.getuid() or mode & 0o077:
+                raise CrewError(f"the socket of {station} is open to others (mode {mode:o}); it must be the owner's alone")
             hello = wire.initialize()
             runs_on = str(hello.get("codexHome") or "")
             if not runs_on or os.path.realpath(runs_on) != os.path.realpath(home):
@@ -294,7 +305,7 @@ def verify(station: str, sock: Path, home: Path, allowed_mcp) -> None:
             if isinstance(config, dict) and config.get("notify"):
                 raise CrewError(f"{station} has a notify program configured: Codex would start it at the end of "
                                 "each turn and hand it the prompt")
-    except WireError as e:
+    except (WireError, OSError) as e:
         raise CrewError(f"the app-server of {station} did not answer as one: {e}") from None
 
 
@@ -344,7 +355,7 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
         os.close(fd)
 
     deadline = time.monotonic() + READY_TIMEOUT
-    while not os.path.exists(sock):
+    while not os.path.lexists(sock):
         code = proc.poll()
         if code is not None:
             print(_tail(log), file=sys.stderr)
@@ -355,7 +366,7 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
                             f"see {log}")
         sleep(0.1)
     try:
-        verify(station, sock, home, (plan["settings"].get("mcp_servers") or {}).keys())
+        verify(station, sock, home, (plan["settings"].get("mcp_servers") or {}).keys(), deadline)
     except CrewError:
         stop(proc, sock)
         raise
