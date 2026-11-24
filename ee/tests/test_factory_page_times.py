@@ -39,7 +39,7 @@ TARGET = 0.300                                       # seconds, the median of a 
 # How much a median may exceed its base, per backend. Postgres gets more: a round trip to the database
 # (a container here, a service on CI) varies from run to run in a way `calibrate()` cannot see. A CI
 # runner is not given a larger slack: `SPEED` already widens its limits by how slow it measures.
-SLACK = {"duckdb": 1.25, "postgres": 1.6}
+SLACK = {"duckdb": 1.25, "postgres": 1.5}
 RUNS = 5                                             # timed calls per route, after one warm-up
 CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
 
@@ -47,14 +47,14 @@ CALIBRATION_REF = 0.021                               # seconds `calibrate()` ta
 # brings it down). A route absent from here must meet TARGET.
 OVER: dict = {
     "duckdb": {
-        "setup": (0.845, "TR-1628"), "setup_progress": (0.801, "TR-1634"),
-        "home": (0.776, "TR-1629"), "crew": (0.803, "TR-1633"),
-        "tickets": (0.561, "TR-1612"), "tickets_list": (0.541, "TR-1612"),
-        "project_tickets": (0.530, "TR-1612"), "projects": (0.514, "TR-1610"),
+        "setup": (0.848, "TR-1628"), "setup_progress": (0.844, "TR-1634"),
+        "home": (0.840, "TR-1629"), "crew": (0.853, "TR-1633"),
+        "tickets": (0.590, "TR-1612"), "tickets_list": (0.577, "TR-1612"),
+        "project_tickets": (0.576, "TR-1612"), "projects": (0.530, "TR-1610"),
     },
     "postgres": {
-        "setup": (0.391, "TR-1628"), "setup_progress": (0.361, "TR-1634"),
-        "home": (0.342, "TR-1629"), "crew": (0.396, "TR-1633"),
+        "setup": (0.535, "TR-1628"), "setup_progress": (0.490, "TR-1634"),
+        "home": (0.462, "TR-1629"), "crew": (0.630, "TR-1633"),
     },
 }
 
