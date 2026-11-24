@@ -38,7 +38,7 @@ from tares.store import Store  # noqa: E402
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
-HEAD = "0008_core_settings"
+HEAD = "0009_session_origin"
 SRC = "claude_code"
 _N = [0]
 
@@ -205,9 +205,9 @@ def complete_flag():
     print("== lines_complete ==")
     s = open_store()
     s.append([line("n", "user", {"uuid": "1"}), line("n", "assistant", {"uuid": "2"})])
-    ck("a new row starts false", row(s, "n") == (2, False), row(s, "n"))
-    ck("one reconcile sets it, the table holds every line", (session_ingest.reconcile_sessions(s),
-                                                              row(s, "n"))[1] == (2, True), row(s, "n"))
+    ck("a new row is born in the table: true at once", row(s, "n") == (2, True), row(s, "n"))
+    ck("one reconcile leaves it true, the table holds every line", (session_ingest.reconcile_sessions(s),
+                                                                     row(s, "n"))[1] == (2, True), row(s, "n"))
     s.append([line("n", "assistant", {"uuid": "3"})])
     ck("a later batch leaves it as it was (the next reconcile reads it again)", row(s, "n") == (3, True),
        row(s, "n"))
@@ -570,7 +570,12 @@ def reads():
     print("== a session the table does not hold in full reads DuckDB ==")
     s.append(envelopes(SRC, [raw("gap", "user", 1), raw("gap", "assistant", 2)]))
     ev, where = s.key_events_from(SRC, "gap")
-    ck("before the reconcile the flag is false: lines_from is events, the lines are all there",
+    ck("a session born in the table reads the table at once, with no reconcile",
+       row(s, "gap") == (2, True) and where == "table" and len(ev) == 2, (row(s, "gap"), where))
+    with s.sessions_db.begin() as c:
+        c.execute(sessions.update().where(sessions.c.session == "gap").values(lines_complete=False))
+    ev, where = s.key_events_from(SRC, "gap")
+    ck("with the flag false lines_from is events, the lines are all there",
        row(s, "gap") == (2, False) and where == "events" and len(ev) == 2 and same(ev, duck_read(s, SRC, "gap")[0]), row(s, "gap"))
     with s.sessions_db.begin() as c:
         c.execute(session_lines.delete().where(session_lines.c.session == "t2", session_lines.c.seq == 2))
@@ -709,8 +714,210 @@ def broken_archive():
     s.close()
 
 
+def origin():
+    print("== lines_origin: a session born in the table is complete without DuckDB (TR-1606) ==")
+
+    def origin_of(s, session):
+        with s.sessions_db.begin() as c:
+            return c.execute(select(sessions.c.lines_origin).where(sessions.c.session == session)).scalar()
+
+    def empty_duck(s):
+        """What a cell after TR-1479 looks like: DuckDB holds none of the session's lines."""
+        with s._lock:
+            s.con.execute("DELETE FROM events")
+
+    s = open_store()
+    s.append([line("o", "user", {"uuid": "1"}), line("o", "assistant", {"uuid": "2"}),
+              line("o", "assistant", {"uuid": "3"})])
+    empty_duck(s)
+    ck("a session recorded fresh is born in the table and complete", row(s, "o") == (3, True)
+       and origin_of(s, "o") == "table", (row(s, "o"), origin_of(s, "o")))
+    session_ingest.reconcile_sessions(s)
+    session_ingest.repair_table_sessions(s)
+    ck("it stays complete with no DuckDB rows, after a reconcile and a repair", row(s, "o") == (3, True), row(s, "o"))
+    ck("and the table is what a reader gets", s.key_events_from(SRC, "o")[1] == "table"
+       and len(s.key_events(SRC, "o")) == 3)
+    s.append([line("o", "assistant", {"uuid": "4"})])
+    ck("a later batch keeps it complete", row(s, "o") == (4, True) and origin_of(s, "o") == "table")
+    session_ingest.reconcile_sessions(s)     # DuckDB now holds 1 of its 4 lines: a table-born session ignores that
+    ck("a reconcile that sees 1 of 4 lines in DuckDB leaves it complete", row(s, "o") == (4, True), row(s, "o"))
+
+    print("== a session whose earlier lines are only in DuckDB heals at the first reconcile ==")
+    real = session_ingest.record
+    session_ingest.record = lambda *a, **k: None
+    try:
+        s.append([line("h", "user", {"uuid": "h1"}), line("h", "assistant", {"uuid": "h2"}),
+                  line("h", "assistant", {"uuid": "h3"})])
+    finally:
+        session_ingest.record = real
+    s.append([line("h", "assistant", {"uuid": "h4"})])
+    ck("it is born in the table and true with its one line before any reconcile",
+       row(s, "h") == (1, True) and origin_of(s, "h") == "table", (row(s, "h"), origin_of(s, "h")))
+    session_ingest.reconcile_sessions(s)
+    ck("the first reconcile counts the 4 lines DuckDB holds and marks it incomplete, the table has 1",
+       row(s, "h") == (4, False), row(s, "h"))
+    s.close()
+
+    print("== a failed write leaves the session incomplete ==")
+    s = open_store()
+    real = session_ingest._line_rows
+
+    def boom(*a, **k):
+        raise RuntimeError("lines refused")
+    session_ingest._line_rows = boom
+    real_incomplete = session_ingest._lines_incomplete
+    session_ingest._lines_incomplete = lambda *a, **k: None     # the birth alone: nothing fixes the flag after
+    try:
+        with printed():
+            s.append([line("bad", "user", {"uuid": "b1"})])
+    finally:
+        session_ingest._line_rows = real
+        session_ingest._lines_incomplete = real_incomplete
+    ck("a session whose first batch failed is born incomplete, with no help from _lines_incomplete",
+       row(s, "bad") == (1, False), row(s, "bad"))
+    ck("a session whose first batch failed has its counts and is incomplete", row(s, "bad") == (1, False)
+       and origin_of(s, "bad") == "table", (row(s, "bad"), origin_of(s, "bad")))
+    s.append([line("ok", "user", {"uuid": "k1"})])
+    session_ingest._line_rows = boom
+    try:
+        with printed():
+            s.append([line("ok", "assistant", {"uuid": "k2"})])
+    finally:
+        session_ingest._line_rows = real
+    ck("a complete session whose later batch failed turns incomplete", row(s, "ok") == (2, False), row(s, "ok"))
+    session_ingest.repair_table_sessions(s)
+    session_ingest.reconcile_sessions(s)
+    ck("a repair and a reconcile keep both incomplete: the table is short", row(s, "bad") == (1, False)
+       and row(s, "ok") == (2, False), (row(s, "bad"), row(s, "ok")))
+    s.close()
+
+    print("== a session with no origin still compares with DuckDB ==")
+    s = open_store()
+    real = session_ingest.record
+    session_ingest.record = lambda *a, **k: None
+    try:
+        s.append([line("legacy", "user", {"uuid": "l1"}), line("legacy", "assistant", {"uuid": "l2"})])
+    finally:
+        session_ingest.record = real
+    session_ingest.reconcile_sessions(s)          # counts it from DuckDB: a row with a null origin
+    ck("a session counted from the events has a null origin and no table rows", origin_of(s, "legacy") is None
+       and row(s, "legacy") == (2, False) and stored(s, "legacy") == [], (row(s, "legacy"), origin_of(s, "legacy")))
+    with s.sessions_db.begin() as c:
+        for i in (1, 2):
+            c.execute(session_lines.insert().values(session="legacy", seq=i, line_key=f"l{i}", type="user",
+                                                    labels="{}", render="{}", payload="{}"))
+    session_ingest.reconcile_sessions(s)
+    ck("it is complete when the table holds as many lines as DuckDB", row(s, "legacy") == (2, True), row(s, "legacy"))
+    session_ingest.repair_table_sessions(s)
+    ck("the start-up repair does not look at it", row(s, "legacy") == (2, True))
+    with s.sessions_db.begin() as c:     # line_count says 5, DuckDB and the table say 2: only DuckDB's count counts
+        c.execute(sessions.update().where(sessions.c.session == "legacy").values(line_count=5, lines_complete=False))
+    session_ingest.reconcile_sessions(s)
+    ck("a null-origin session is judged by DuckDB's count, not by line_count", row(s, "legacy") == (5, True),
+       row(s, "legacy"))
+    with s._lock:
+        s.con.execute("DELETE FROM events WHERE key_value = 'legacy'")
+    session_ingest.reconcile_sessions(s)     # DuckDB no longer holds it: a null-origin row is not recomputed
+    ck("and with no DuckDB rows it is not recomputed from line_count", row(s, "legacy")[1] is True, row(s, "legacy"))
+    s.close()
+
+    print("== a table session set false by hand is repaired on the next start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    s = Store(path)
+    s.append([line("r", "user", {"uuid": "r1"}), line("r", "assistant", {"uuid": "r2"})])
+    s.append([line("short", "user", {"uuid": "s1"}), line("short", "assistant", {"uuid": "s2"})])
+    with s.sessions_db.begin() as c:
+        c.execute(session_lines.delete().where(session_lines.c.session == "short", session_lines.c.seq == 2))
+        c.execute(sessions.update().where(sessions.c.session.in_(["r", "short"])).values(lines_complete=False))
+        c.execute(sessions.update().where(sessions.c.session == "short").values(lines_complete=True))
+        c.execute(sessions.update().where(sessions.c.session == "r").values(lines_complete=False))
+    ck("set by hand: r false though whole, short true though missing a line", row(s, "r") == (2, False)
+       and row(s, "short") == (2, True))
+    empty_duck(s)
+    s.close()
+    s = Store(path)
+    s.start_session_reconcile().join()
+    ck("the next start puts r right", row(s, "r") == (2, True), row(s, "r"))
+    ck("and the one whose table is short false", row(s, "short") == (2, False), row(s, "short"))
+    s.close()
+
+
+def upgrade_keeps_flags():
+    print("== existing rows keep their lines_complete through the upgrade (TR-1606) ==")
+    d = tempfile.mkdtemp()
+    schema = dsn = None
+    if PG:
+        import psycopg
+        schema = "so_" + uuid.uuid4().hex[:12]
+        dsn = f"{PG}?options=-csearch_path%3D{schema}"
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {schema}")
+    try:
+        sdb = SessionStore(d, dsn)
+        sdb.upgrade()
+        with sdb.begin() as c:
+            cfg = sdb._config()
+            cfg.attributes["connection"] = c
+            command.downgrade(cfg, "0007_session_archive")
+        ck("a downgrade drops the column and only that", "lines_origin" not in [
+            x["name"] for x in inspect(sdb.engine).get_columns("sessions")]
+           and "session_archive_parts" in inspect(sdb.engine).get_table_names())
+        with sdb.begin() as c:
+            c.execute(text("INSERT INTO sessions (session, line_count, lines_complete) VALUES ('t', 4, true)"))
+            c.execute(text("INSERT INTO sessions (session, line_count, lines_complete) VALUES ('f', 4, false)"))
+        sdb.upgrade()
+        with sdb.begin() as c:
+            got = {r[0]: (bool(r[1]), r[2]) for r in c.execute(text(
+                "SELECT session, lines_complete, lines_origin FROM sessions")).all()}
+        ck("the old rows keep their flag and have a null origin", got == {"t": (True, None), "f": (False, None)}, got)
+        col = [x for x in inspect(sdb.engine).get_columns("sessions") if x["name"] == "lines_origin"][0]
+        ck("the column is nullable text with no default", col["nullable"] and col["default"] is None
+           and "TEXT" in str(col["type"]).upper(), col)
+        sdb.close()
+    finally:
+        if PG:
+            import psycopg
+            with psycopg.connect(PG, autocommit=True) as c:
+                c.execute(f"DROP SCHEMA {schema} CASCADE")
+
+
+def old_ddl_database():
+    print("== Postgres: a database the old DDL made upgrades to the head, with the new column (TR-1606) ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import re
+    import psycopg
+    from tares import state_db
+    sch = "od_" + uuid.uuid4().hex[:12]
+    dsn = f"{PG}?options=-csearch_path%3D{sch}"
+    names = ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters"]
+    pat = re.compile(r"\b(" + "|".join(names) + r")\b")
+    try:
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {sch}")
+        pg = state_db.PgState(dsn)
+        for stmt in [x for x in state_db.state_ddl(Store._ddl()) if pat.search(x)]:
+            pg.execute(stmt)
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        with sdb.begin() as c:
+            v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
+            c.execute(text("INSERT INTO sessions (session, line_count) VALUES ('x', 1)"))
+            got = c.execute(text("SELECT lines_complete, lines_origin FROM sessions")).all()
+        ck("the old database is at the head and sessions has lines_origin", v == [HEAD] and "lines_origin" in [
+            x["name"] for x in inspect(sdb.engine).get_columns("sessions")], v)
+        ck("a row made with only its key has a null origin and is not complete", [tuple(r) for r in got] == [
+            (False, None)], got)
+        sdb.close()
+    finally:
+        with psycopg.connect(PG, autocommit=True) as c:
+            c.execute(f"DROP SCHEMA {sch} CASCADE")
+
+
 def main():
-    for fn in (revision, lines_in_both, complete_flag, concurrent_appends, purge_and_gauges, cycle,
+    for fn in (revision, lines_in_both, complete_flag, origin, upgrade_keeps_flags, old_ddl_database, concurrent_appends, purge_and_gauges, cycle,
                reads, archived, broken_archive):
         fn()
     print()
