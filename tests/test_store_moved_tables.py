@@ -9,6 +9,10 @@ Cases:
   settings_copy      a cell from before the move: DuckDB's settings rows arrive in SQLite, counts
                      verified, one ledger row per moved table, DuckDB untouched
   legacy_file        sessions.sqlite becomes tares.sqlite on start, with its -wal and -shm files
+  cli_edition        tares up reads the edition from tares.sqlite beside the data file, not from
+                     DuckDB's copy; a changed edition is the one it sees
+  copy_units         _from_duckdb parses a JSONText column, _duckdb_columns skips a column DuckDB
+                     lacks, and a rename that stops half way is finished by the next start
   takeover_unit      takeover(): create, add a column, error on an extra column, types ignored,
                      twice is the same as once
   json_text          JSONText round trip, None is NULL
@@ -32,6 +36,7 @@ import test_session_store as ts  # noqa: E402  (its helpers; its checks share it
 from old_ddl import OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
 from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
+from tares.session_store import copy as copy_mod  # noqa: E402
 from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.session_store.tables import settings as settings_table  # noqa: E402
@@ -327,6 +332,21 @@ def methods():
     ck("a JSON text is returned as the same text", s.get_setting("json") == '{"a": [1, 2]}')
     s.set_setting("empty", "")
     ck("an empty string is a value, not a missing one", s.get_setting("empty") == "")
+    if s.sessions_db.dialect == "sqlite":
+        # a reader does not queue behind a writer that holds the write lock (WAL, deferred BEGIN)
+        import threading
+        got = []
+        with s.sessions_db.begin() as c:
+            c.execute(text("UPDATE settings SET value = 'v3' WHERE key = 'json'"))   # the lock is held
+            t = threading.Thread(target=lambda: got.append(s.get_setting("k")))
+            t.start()
+            t.join(2)
+            waited = t.is_alive()
+        t.join(10)
+        ck("a get_setting answers while a writer holds the lock (the last committed value)",
+           not waited and got == ["v2"], (waited, got))
+        ck("and the writer's change is there once it commits", s.get_setting("json") == "v3")
+        s.set_setting("json", '{"a": [1, 2]}')
     s.set_setting("k", None)
     ck("None removes the key", s.get_setting("k") is None and s.get_setting("json") == '{"a": [1, 2]}')
     s._set_setting_once("once", "first")
@@ -424,6 +444,102 @@ def postgres_takeover():
         _drop_schema(sch)
 
 
+def cli_edition():
+    print("== tares up reads the edition from tares.sqlite ==")
+    from tares import cli
+    keep = os.environ.pop("TARES_STATE_DSN", None)
+    try:
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "t.duckdb")
+        s = Store(path, state_dsn="")
+        s.set_setting("edition", "factory")
+        s.close()
+        ck("the edition saved in the session store is the one the CLI reads", cli._stored_edition(path) == "factory",
+           cli._stored_edition(path))
+        s = Store(path, state_dsn="")
+        s.set_setting("edition", "sre")
+        s.close()
+        ck("and a changed one is read as changed (DuckDB's copy is not what it sees)",
+           cli._stored_edition(path) == "sre", cli._stored_edition(path))
+        # DuckDB's own copy says something else: the session store wins
+        con = duckdb.connect(path)
+        con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP)")
+        con.execute("INSERT INTO settings (key, value, updated_at) VALUES ('edition', 'platform', now())")
+        con.close()
+        ck("DuckDB's older copy does not win over the session store", cli._stored_edition(path) == "sre",
+           cli._stored_edition(path))
+        # no session store file at all: DuckDB's copy is the fallback (a cell that has not moved yet)
+        d2, path2, _ = _legacy_cell()
+        ck("a cell that has not moved yet answers from DuckDB", cli._stored_edition(path2) == "factory",
+           cli._stored_edition(path2))
+    finally:
+        if keep is not None:
+            os.environ["TARES_STATE_DSN"] = keep
+
+
+def copy_units():
+    print("== the copy's helpers ==")
+    md = MetaData()
+    t = Table("tmp_copy", md, Column("id", Integer, primary_key=True), Column("doc", JSONText),
+              Column("note", Text), Column("later", Text))
+    row = _from_duckdb_row(t, (1, '{"a": [1, null]}', "n"), ["id", "doc", "note"])
+    ck("a JSONText column's text is parsed, so the insert writes it once", row["doc"] == {"a": [1, None]}, row)
+    row = _from_duckdb_row(t, (2, None, "n"), ["id", "doc", "note"])
+    ck("a NULL JSONText stays None", row["doc"] is None, row)
+    row = _from_duckdb_row(t, (3, '"plain"', "text that is not json"), ["id", "doc", "note"])
+    ck("only the JSONText column is parsed", row["note"] == "text that is not json" and row["doc"] == "plain", row)
+
+    con = duckdb.connect()
+    con.execute("CREATE TABLE tmp_copy (id INTEGER, doc TEXT, note TEXT)")      # no 'later' column
+
+    class _Store:
+        pass
+    fake = _Store()
+    fake.con = con
+    ck("a column DuckDB lacks is left out, in the table's order",
+       copy_mod._duckdb_columns(fake, t) == ["id", "doc", "note"], copy_mod._duckdb_columns(fake, t))
+    ck("a table DuckDB lacks gives no columns", copy_mod._duckdb_columns(
+        fake, Table("tmp_absent", MetaData(), Column("id", Integer))) == [])
+    con.close()
+
+    # the rename order: side files first, the main file last, so a stop part way is finished next start
+    d = tempfile.mkdtemp()
+    for suffix, body in (("", b"main"), ("-wal", b"wal frames"), ("-shm", b"shm index")):
+        with open(os.path.join(d, LEGACY_SQLITE_FILE + suffix), "wb") as f:
+            f.write(body)
+    moves, real = [], os.replace
+
+    class _Stop(Exception):
+        pass
+
+    def stopping(a, b):
+        moves.append(os.path.basename(a))
+        if a.endswith(LEGACY_SQLITE_FILE):
+            raise _Stop()          # the start dies on the rename of the main file
+        real(a, b)
+    os.replace = stopping
+    try:
+        adopt_legacy_file(d)
+    except _Stop:
+        pass
+    finally:
+        os.replace = real
+    ck("the -wal and -shm are renamed before the main file", moves[-1] == LEGACY_SQLITE_FILE
+       and set(moves[:-1]) == {LEGACY_SQLITE_FILE + "-wal", LEGACY_SQLITE_FILE + "-shm"}, moves)
+    ck("a stop before the main file leaves sessions.sqlite in place, with no tares.sqlite",
+       os.path.exists(os.path.join(d, LEGACY_SQLITE_FILE)) and not os.path.exists(os.path.join(d, SQLITE_FILE)),
+       sorted(os.listdir(d)))
+    adopt_legacy_file(d)
+    ck("the next start finishes the move: all three files under the new name, none under the old",
+       sorted(os.listdir(d)) == [SQLITE_FILE, SQLITE_FILE + "-shm", SQLITE_FILE + "-wal"], sorted(os.listdir(d)))
+    ck("and the bytes are as they were", [open(os.path.join(d, SQLITE_FILE + s_), "rb").read()
+                                          for s_ in ("", "-wal", "-shm")] == [b"main", b"wal frames", b"shm index"])
+
+
+def _from_duckdb_row(table, row, cols):
+    return copy_mod._from_duckdb(table, row, cols)
+
+
 def sqlite_and_pg_units():
     sdb = SessionStore(":memory:")
     takeover_unit(sdb, "SQLite")
@@ -446,6 +562,9 @@ if __name__ == "__main__":
     if not HARNESS:
         settings_copy()
     legacy_file()
+    if not HARNESS:
+        cli_edition()
+    copy_units()
     sqlite_and_pg_units()
     ddl_skips()
     methods()

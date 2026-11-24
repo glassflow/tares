@@ -360,6 +360,17 @@ async def main():
        [("investigate", "other")])
     ck("the old subscription is gone",
        not any("tares://agent/" in s["url"] for s in st.list_all_subscriptions()))
+    # a start that stopped after the commit but before the marker: the move runs again, finds no
+    # on/off record, and must not switch the carried-over wake off
+    st.set_setting("wiring_moved", None)
+    st.con.close()
+    st = Store(path)
+    eq("a repeat of the move keeps the wake on",
+       st.list_wakes(agent="old_agent"),
+       [{"project": uid, "trigger": "t1", "agent": "old_agent", "enabled": True}])
+    eq("and adds no second handoff", [(h["verdict"], h["agent"])
+                                      for h in st.list_handoffs(from_agent="old_agent")],
+       [("investigate", "other")])
 
     print("== the upgrade: each project's skills become skills of the cell ==")
     p2 = "uc_other00001"

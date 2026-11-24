@@ -47,6 +47,17 @@ class SessionStore:
                 yield conn
 
     @contextlib.contextmanager
+    def read(self) -> Iterator[Connection]:
+        """One read-only transaction for a single query. On SQLite it does not take the write lock,
+        so it does not queue behind a writer (WAL gives it the last committed state); Postgres has
+        no such lock. For a read that joins several queries use `snapshot()`; never write in it."""
+        with self._turns or contextlib.nullcontext():
+            with self.engine.connect() as conn:
+                conn = conn.execution_options(deferred=True)
+                with conn.begin():
+                    yield conn
+
+    @contextlib.contextmanager
     def snapshot(self) -> Iterator[Connection]:
         """One transaction whose statements all see the same data, for a read that joins the answers
         of several queries. SQLite already gives that (every transaction takes the write lock, so

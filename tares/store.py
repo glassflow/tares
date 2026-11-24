@@ -1164,7 +1164,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self.sc.execute("ROLLBACK")
             raise
         # the marker is in the session store, outside the transaction above: it is written once
-        # the move has committed, so a crash before it only repeats the (idempotent) move
+        # the move has committed, so a crash before it repeats the move, which finds the wiring in
+        # place and the on/off record gone, and changes nothing the first run set
         self._set_setting_once("wiring_moved", "1")
 
     def _skills_upgrade(self) -> None:
@@ -1212,15 +1213,18 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         for name, trig, owner, raw in self.sc.execute(
                 "SELECT name, trigger, owned_by, handoffs FROM catalog_agents").fetchall():
             project = owner if owner in projects else default()
-            # the store's placement pass may have wired it already (off): keep that row, carry
-            # on/off over
+            # the store's placement pass may have wired it already (off): keep that row, and turn
+            # it on when the agent was on. Never turn one off here: a repeat of this move after
+            # the commit finds no on/off record left (it went with the commit) and must not
+            # switch off what the first run carried over
             if trig:
                 if self.sc.execute("SELECT 1 FROM project_wiring WHERE kind = 'wake' AND "
                                     "project = ? AND trigger = ? AND agent = ?",
                                     [project, trig, name]).fetchone():
-                    self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
-                                     "AND project = ? AND trigger = ? AND agent = ?",
-                                     [name in on, project, trig, name])
+                    if name in on:
+                        self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
+                                         "AND project = ? AND trigger = ? AND agent = ?",
+                                         [True, project, trig, name])
                 else:
                     self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
@@ -2571,7 +2575,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # `settings` lives in the session store (TR-1480): SQLite beside the DuckDB file, or the state
     # Postgres. These methods take no DuckDB or state lock, so they are safe from inside one.
     def get_setting(self, key: str) -> str | None:
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return conn.execute(select(settings_table.c.value).where(
                 settings_table.c.key == key)).scalar_one_or_none()
 
