@@ -60,12 +60,14 @@ const flat = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
       await ready(page);
       ck("head: the title from its settings", (await page.getByTestId("connection-title").innerText()) === "orders");
       ck("head: its internal name under the title", (await page.getByTestId("connection-page").innerText()).includes("pg_orders"));
-      // Project names resolve after the page draws; wait for them, not a fixed time.
-      await page.getByTestId("connection-kind").getByRole("link", { name: "Billing" }).waitFor();
+      // Project names resolve after the page draws; wait for them, not a fixed time. A link name matches
+      // as a substring without `exact`, so "Billing" also matched the id "p-billing" shown before the name.
+      await page.getByTestId("connection-kind").getByRole("link", { name: "Shop", exact: true }).waitFor();
+      await page.getByTestId("connection-kind").getByRole("link", { name: "Billing", exact: true }).waitFor();
       const kind = await flat(page.getByTestId("connection-kind"));
       ck("head: kind, how often and its projects", /^Postgres table, checked every 5m, in Shop, Billing$/.test(kind), kind);
       ck("head: each project links to its page",
-         (await page.getByTestId("connection-kind").getByRole("link", { name: "Billing" }).getAttribute("href")) === "/projects/p-billing");
+         (await page.getByTestId("connection-kind").getByRole("link", { name: "Billing", exact: true }).getAttribute("href")) === "/projects/p-billing");
       ck("head: the state in words", /^failing$/i.test(await page.getByTestId("connection-state").innerText()), await page.getByTestId("connection-state").innerText());
       ck("head: when it last received something", (await page.getByTestId("connection-last").innerText()) === "last received 10 hours ago",
          await page.getByTestId("connection-last").innerText());
