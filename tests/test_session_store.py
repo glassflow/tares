@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0008_core_settings"              # the newest revision: tests that count revisions move with it
-REVISIONS = 8
+HEAD = "0009_session_origin"              # the newest revision: tests that count revisions move with it
+REVISIONS = 9
 FAILS = []
 
 
