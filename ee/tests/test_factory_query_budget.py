@@ -63,7 +63,7 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 
-from tares import factory_home as fh
+from tares import claude_usage, factory_home as fh
 from tares.envelope import Envelope
 
 NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
@@ -308,6 +308,7 @@ async def done_projects(store, sam, call, base):
 
     async def measure():
         fh.clear_cache()
+        claude_usage.clear_week_by_project()    # the kept week (TR-1627) must not hide the counts
         counter = [0]
         rows[0] = 0
         token = _COUNTER.set(counter)
@@ -390,6 +391,7 @@ async def main():
         for name, tmpl in ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
+            claude_usage.clear_week_by_project()
             counter = [0]
             builds["read"] = builds["home"] = 0
             token = _COUNTER.set(counter)
