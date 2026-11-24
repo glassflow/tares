@@ -6,10 +6,11 @@ Run: .venv/bin/python tests/test_model_providers.py   (in-process daemon, no ext
 import asyncio
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DB = "/tmp/model_providers.duckdb"
+DB = os.path.join(tempfile.mkdtemp(), "model_providers.duckdb")   # its own folder: settings live beside the file
 for pth in (DB, DB + ".wal"):
     if os.path.exists(pth):
         os.remove(pth)

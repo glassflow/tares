@@ -29,7 +29,9 @@ from sqlalchemy import and_, delete, null, select
 from . import session_ingest, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
-from .session_store.tables import COPIED, project_sessions, session_stations, session_states
+from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, session_stations,
+                                   session_states)
+from .session_store.tables import settings as settings_table
 from .session_store.tables import session_commands, session_messages
 from .session_store.tables import (session_archive_parts, session_files, session_lines, session_said,
                                     session_turns)
@@ -777,8 +779,21 @@ def day_month_words(when) -> str:
     return f"{when.day} {_MONTHS[when.month - 1][:3]}"
 
 
-# the five tables the session store holds (a state move leaves them out: copy_from_duckdb moved them)
-SESSION_TABLES = frozenset(t.name for t in COPIED)
+# The tables a CREATE, ALTER or CREATE INDEX statement names, for `Store._ddl()` to leave out the
+# tables that have moved to the session store (their revisions make them)
+_DDL_TARGET = re.compile(
+    r"^\s*(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE(?:\s+IF\s+EXISTS)?|"
+    r"CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+\S+\s+ON)\s+\"?(\w+)", re.I)
+
+
+def _unmoved(statements) -> list[str]:
+    """`statements` without the ones that make, change or index a table in MOVED_TABLES."""
+    out = []
+    for stmt in statements:
+        m = _DDL_TARGET.match(state_db._strip_comments(stmt))
+        if not (m and m.group(1).lower() in MOVED_TABLE_NAMES):
+            out.append(stmt)
+    return out
 
 
 class StoreUnavailable(RuntimeError):
@@ -817,13 +832,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             for stmt in self._ddl():
                 self.con.execute(stmt)
             pg = None
-            moved_at = self.con.execute(
-                "SELECT value FROM settings WHERE key = 'state_moved_to_postgres'").fetchone()
+            moved_at = self._moved_mark()
             if moved_at and not state_dsn:
                 # the DuckDB copy stopped at the move; serving it would quietly lose everything
                 # written since, so say what is missing instead
                 raise StoreUnavailable(
-                    f"this cell's state moved to Postgres on {moved_at[0]}; TARES_STATE_DSN is not "
+                    f"this cell's state moved to Postgres on {moved_at}; TARES_STATE_DSN is not "
                     "set, so it cannot be read. Set it again and restart.", path)
             if state_dsn:
                 pg = state_db.PgState(state_dsn)
@@ -838,15 +852,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                     if not moved_at:
                         # the move committed but the start stopped before marking DuckDB: mark
                         # it now, so a later start without the DSN still refuses
-                        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                                         "('state_moved_to_postgres', ?, now())",
-                                         [now_utc().isoformat()])
+                        self._mark_moved(now_utc().isoformat())
                 elif moved_at:
                     # this cell moved before, yet this database holds none of it (recreated,
                     # restored from before the move, or the wrong DSN): moving again would put
                     # the DuckDB copy from the day of the move in place of everything since
                     raise StoreUnavailable(
-                        f"this cell's state moved to Postgres on {moved_at[0]}, but the database "
+                        f"this cell's state moved to Postgres on {moved_at}, but the database "
                         "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
                         "state database and restart.", path)
             # The session store: SQLite beside the DuckDB file, or the state Postgres. Built here,
@@ -859,9 +871,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # The five session tables are copied in before the data upgrades, so the fills in
             # _upgrade() write into a table that already holds its rows. On SQLite that is a copy
             # from DuckDB (once; the ledger skips a table already copied). On the first start with
-            # a state database the same copy fills the new Postgres tables (from sessions.sqlite
+            # a state database the same copy fills the new Postgres tables (from tares.sqlite
             # when the cell ran locally first, else from DuckDB), and the one-time move below
-            # leaves them out. DuckDB's own copies and sessions.sqlite are never changed.
+            # leaves them out. DuckDB's own copies and tares.sqlite are never changed.
             first_pg_start = pg is not None and self.sc is self.con
             copy_from_duckdb(
                 self, self.sessions_db, state_move=first_pg_start,
@@ -873,11 +885,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if first_pg_start:
                 # first start with a state database: the state moves over once, then is read
                 # from Postgres only; the DuckDB copy is left as it was, as a fallback
-                state_db.move(self.con, pg, [t for t in self._state_tables()
-                                             if t not in SESSION_TABLES])
-                self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                                 "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
-                                 "UPDATE SET value = excluded.value", [now_utc().isoformat()])
+                state_db.move(self.con, pg, self._state_tables())
+                self._mark_moved(now_utc().isoformat())
                 self._use_pg_state(pg)
                 self._merge_split_crews()         # the bare crews the first merge kept (TR-1517)
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -897,6 +906,25 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         if sessions_db is not None:
             sessions_db.close()
 
+    # The one setting that stays in DuckDB: `state_moved_to_postgres` says that this DuckDB file's
+    # state went to Postgres, so a start without TARES_STATE_DSN refuses to serve the stale copy
+    # (TR-1480: the other settings are in the session store, which a start without the DSN would
+    # not see the Postgres rows of). The table is the old `settings` table, made here only when
+    # the mark is first written; a cell that moved before TR-1480 already has it with the mark.
+    def _moved_mark(self) -> str | None:
+        if "settings" not in self._tables_of(self.con):
+            return None
+        row = self.con.execute(
+            "SELECT value FROM settings WHERE key = 'state_moved_to_postgres'").fetchone()
+        return row[0] if row else None
+
+    def _mark_moved(self, when: str) -> None:
+        self.con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, "
+                         "updated_at TIMESTAMPTZ)")
+        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                         "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
+                         "UPDATE SET value = excluded.value", [when])
+
     def _use_duckdb_state(self) -> None:
         self.sc, self._sread, self._swrite = self.con, self._lock, self._lock
 
@@ -905,11 +933,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     @staticmethod
     def _ddl() -> list[str]:
-        return ([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
-                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
+        # a table that has moved to the session store (MOVED_TABLES) is made by its revision there,
+        # not here: its CREATE and ALTER statements below stay as the record of the old schema
+        # (tests/old_ddl.py keeps them as text) and are left out of what runs
+        return _unmoved([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
+                        + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
 
     def _state_tables(self) -> list[str]:
-        return sorted(t for t in self._tables_of(self.con) if t not in state_db.EVENT_TABLES)
+        return sorted(t for t in self._tables_of(self.con)
+                      if t not in state_db.EVENT_TABLES and t not in MOVED_TABLE_NAMES)
 
     def _upgrade(self) -> None:
         """The data upgrades every open runs; each is idempotent."""
@@ -1090,8 +1122,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         trigger's owner when that still exists (a run of a deleted agent stays unplaced). Then the
         indexes the project timeline reads through. Idempotent: only NULL rows are touched, and
         the backfill runs once per database (a settings marker), not on every start."""
-        done = self.sc.execute("SELECT 1 FROM settings WHERE key = 'lineage_backfilled'").fetchone()
-        if not done:
+        if self.get_setting("lineage_backfilled") is None:
             self._lineage_backfill()
         for stmt in ("CREATE INDEX IF NOT EXISTS ix_agent_runs_dispatch ON agent_runs(dispatch_id)",
                      "CREATE INDEX IF NOT EXISTS ix_agent_runs_parent ON agent_runs(parent_run_id)",
@@ -1114,15 +1145,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                          "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
         self.sc.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
                          "project FROM dispatch_log WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
-        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('lineage_backfilled', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
+        self._set_setting_once("lineage_backfilled", "1")
 
     def _wiring_upgrade(self) -> None:
         """Once per database (P-TR-216): the wiring an agent carried itself (its trigger, its
         handoffs, and on/off as a tares://agent/ subscription) becomes the wiring of the project
         that made it; those subscriptions go. Runs and firings get their project rows. Called
         with no lock needed (the store is being opened)."""
-        if self.sc.execute("SELECT 1 FROM settings WHERE key = 'wiring_moved'").fetchone():
+        if self.get_setting("wiring_moved") is not None:
             return
         # one transaction: a crash part-way leaves the subscriptions (the on/off record) as they
         # were, and the next start does the whole upgrade again
@@ -1133,12 +1163,16 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         except Exception:
             self.sc.execute("ROLLBACK")
             raise
+        # the marker is in the session store, outside the transaction above: it is written once
+        # the move has committed, so a crash before it repeats the move, which finds the wiring in
+        # place and the on/off record gone, and changes nothing the first run set
+        self._set_setting_once("wiring_moved", "1")
 
     def _skills_upgrade(self) -> None:
         """Once per database: the skills each project kept become skills of the cell that those
         projects use. Two projects' skills of the same name and text are one skill; the same name
         with different text keeps both, the second named name-2 (and so on)."""
-        if self.sc.execute("SELECT 1 FROM settings WHERE key = 'skills_shared'").fetchone():
+        if self.get_setting("skills_shared") is not None:
             return
         self.sc.execute("BEGIN TRANSACTION")
         try:
@@ -1164,12 +1198,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                     "created_at) SELECT ?, 'skill', ?, ?, FALSE, ? WHERE NOT EXISTS (SELECT 1 FROM "
                     "usecase_objects WHERE usecase_id = ? AND kind = 'skill' AND name = ?)",
                     [project, f"skill:{use}", use, c or now_utc(), project, use])
-            self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                             "('skills_shared', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
             self.sc.execute("COMMIT")
         except Exception:
             self.sc.execute("ROLLBACK")
             raise
+        self._set_setting_once("skills_shared", "1")      # after the commit: see _wiring_upgrade
 
     def _wiring_move(self) -> None:
         default = self._lazy_default_project()
@@ -1180,15 +1213,18 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         for name, trig, owner, raw in self.sc.execute(
                 "SELECT name, trigger, owned_by, handoffs FROM catalog_agents").fetchall():
             project = owner if owner in projects else default()
-            # the store's placement pass may have wired it already (off): keep that row, carry
-            # on/off over
+            # the store's placement pass may have wired it already (off): keep that row, and turn
+            # it on when the agent was on. Never turn one off here: a repeat of this move after
+            # the commit finds no on/off record left (it went with the commit) and must not
+            # switch off what the first run carried over
             if trig:
                 if self.sc.execute("SELECT 1 FROM project_wiring WHERE kind = 'wake' AND "
                                     "project = ? AND trigger = ? AND agent = ?",
                                     [project, trig, name]).fetchone():
-                    self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
-                                     "AND project = ? AND trigger = ? AND agent = ?",
-                                     [name in on, project, trig, name])
+                    if name in on:
+                        self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
+                                         "AND project = ? AND trigger = ? AND agent = ?",
+                                         [True, project, trig, name])
                 else:
                     self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
@@ -1213,9 +1249,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                      "CREATE INDEX IF NOT EXISTS ix_run_projects_project ON run_projects(project)",
                      "CREATE INDEX IF NOT EXISTS ix_dispatch_projects_project ON dispatch_projects(project)"):
             self.sc.execute(stmt)
-        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('wiring_moved', '1', ?) ON CONFLICT (key) DO NOTHING", [ts])
-        # last: the old on/off record goes only with the marker that says it was carried over
+        # last: the old on/off record goes with the commit that carried it over
         self.sc.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
 
     # ── wiring: what each project wakes, and who digs in on whose verdict (P-TR-216) ──
@@ -2538,20 +2572,30 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return n
 
     # ── settings (instance config set from the console) ───────────────────────
+    # `settings` lives in the session store (TR-1480): SQLite beside the DuckDB file, or the state
+    # Postgres. These methods take no DuckDB or state lock, so they are safe from inside one.
     def get_setting(self, key: str) -> str | None:
-        with self._sread:
-            row = self.sc.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
-        return row[0] if row else None
+        with self.sessions_db.read() as conn:
+            return conn.execute(select(settings_table.c.value).where(
+                settings_table.c.key == key)).scalar_one_or_none()
 
     def set_setting(self, key: str, value: str | None) -> None:
-        with self._swrite:
+        with self.sessions_db.begin() as conn:
             if value is None:
-                self.sc.execute("DELETE FROM settings WHERE key = ?", [key])
-            else:
-                self.sc.execute(
-                    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
-                    "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
-                    "updated_at = excluded.updated_at", [key, value, now_utc()])
+                conn.execute(delete(settings_table).where(settings_table.c.key == key))
+                return
+            stmt = self.sessions_db.upsert(settings_table).values(
+                key=key, value=value, updated_at=now_utc())
+            conn.execute(stmt.on_conflict_do_update(
+                index_elements=["key"],
+                set_={"value": stmt.excluded.value, "updated_at": stmt.excluded.updated_at}))
+
+    def _set_setting_once(self, key: str, value: str) -> None:
+        """Set `key` unless it already has a value: the marker of a one-time upgrade."""
+        with self.sessions_db.begin() as conn:
+            conn.execute(self.sessions_db.upsert(settings_table).values(
+                key=key, value=value, updated_at=now_utc()).on_conflict_do_nothing(
+                index_elements=["key"]))
 
     # ── MCP connections (external tool servers a Tares agent may opt into) ─────
     # `auth_value` is a secret (an API key or full header value); redaction is the API layer's
@@ -2852,17 +2896,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _factory_kind_upgrade(self) -> None:
         """Once: a project from before project kinds that holds docs and tickets and no agent was
         made by a spec session; it is a software factory project. Lock not needed (init)."""
-        if self.sc.execute("SELECT value FROM settings WHERE key = 'factory_kind_filled'"
-                            ).fetchone():
+        if self.get_setting("factory_kind_filled") is not None:
             return
         self.sc.execute(
             "UPDATE usecases SET kind = 'software_factory' WHERE kind IS NULL AND recipe = 'custom' "
             "AND id IN (SELECT project FROM tickets) "
             "AND id IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'doc') "
             "AND id NOT IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'agent')")
-        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('factory_kind_filled', '1', ?) ON CONFLICT (key) DO NOTHING",
-                         [now_utc()])
+        self._set_setting_once("factory_kind_filled", "1")
 
     def get_project_by_name(self, name: str) -> dict | None:
         return next((u for u in self.list_projects() if u["name"] == name), None)
@@ -3706,9 +3747,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _default_project_if_any(self) -> str | None:
         """The default project's id when the cell has one, never creating it. Called with the
         lock held."""
-        row = self.sc.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
-        if row and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
-            return row[0]
+        saved = self.get_setting("default_project")
+        if saved and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [saved]).fetchone():
+            return saved
         found = self.sc.execute("SELECT id FROM usecases WHERE recipe = 'default' "
                                  "ORDER BY created_at LIMIT 1").fetchone()
         return found[0] if found else None
@@ -3728,9 +3769,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _ensure_default_project(self) -> str:
         """The default project's id, creating the project if the cell has none yet. Called with
         the lock held."""
-        row = self.sc.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
-        if row and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
-            return row[0]
+        saved = self.get_setting("default_project")
+        if saved and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [saved]).fetchone():
+            return saved
         found = self.sc.execute("SELECT id FROM usecases WHERE recipe = 'default' "
                                  "ORDER BY created_at LIMIT 1").fetchone()
         if found:
@@ -3745,10 +3786,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
                 "last_error) VALUES (?, 'default', ?, '{}', 'active', ?, ?, NULL)",
                 [uid, name, ts, ts])
-        self.sc.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('default_project', ?, ?) "
-            "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
-            "updated_at = excluded.updated_at", [uid, now_utc()])
+        self.set_setting("default_project", uid)
         return uid
 
     def _recipes(self) -> dict:

@@ -349,7 +349,7 @@ async def main():
     st.sc.execute("UPDATE catalog_agents SET owned_by = ? WHERE name = 'old_agent'", [uid])
     st.sc.execute("DELETE FROM project_wiring")
     st.add_subscription("sub_old", "t1", "tares://agent/old_agent", created_by="tares")
-    st.sc.execute("DELETE FROM settings WHERE key = 'wiring_moved'")
+    st.set_setting("wiring_moved", None)
     st.con.close()
     st = Store(path)
     eq("its trigger and on/off became the project's wake-up",
@@ -360,6 +360,17 @@ async def main():
        [("investigate", "other")])
     ck("the old subscription is gone",
        not any("tares://agent/" in s["url"] for s in st.list_all_subscriptions()))
+    # a start that stopped after the commit but before the marker: the move runs again, finds no
+    # on/off record, and must not switch the carried-over wake off
+    st.set_setting("wiring_moved", None)
+    st.con.close()
+    st = Store(path)
+    eq("a repeat of the move keeps the wake on",
+       st.list_wakes(agent="old_agent"),
+       [{"project": uid, "trigger": "t1", "agent": "old_agent", "enabled": True}])
+    eq("and adds no second handoff", [(h["verdict"], h["agent"])
+                                      for h in st.list_handoffs(from_agent="old_agent")],
+       [("investigate", "other")])
 
     print("== the upgrade: each project's skills become skills of the cell ==")
     p2 = "uc_other00001"
@@ -370,7 +381,7 @@ async def main():
                              (uid, "runbook", "restart it"), (p2, "runbook", "page someone")):
         st.sc.execute("INSERT INTO skills (project, name, description, body, created_at, "
                        "updated_at) VALUES (?, ?, 'd', ?, now(), now())", [proj, name, body])
-    st.sc.execute("DELETE FROM settings WHERE key = 'skills_shared'")
+    st.set_setting("skills_shared", None)
     st.con.close()
     st = Store(path)
     eq("the same skill in two projects is one, used by both",

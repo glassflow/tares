@@ -29,7 +29,9 @@ def wal_bytes():
 
 
 print("== an old database, upgraded on open ==")
-Store(DB).con.close()
+first = Store(DB)
+first.set_setting("lineage_backfilled", None)       # the marker is in the session store, not DuckDB
+first.con.close()
 con = duckdb.connect(DB)
 # as the release before lineage left it: no lineage columns or indexes, runs already there
 for ix in ("ix_agent_runs_dispatch", "ix_agent_runs_parent", "ix_agent_runs_project",
@@ -41,7 +43,6 @@ for col in ("woken_by", "parent_run_id", "project", "skills"):
 for col in ("project", "parent_run_id"):
     con.execute(f"ALTER TABLE dispatch_log DROP COLUMN IF EXISTS {col}")
 con.execute("CREATE INDEX ix_agent_runs_agent ON agent_runs(agent)")
-con.execute("DELETE FROM settings WHERE key = 'lineage_backfilled'")
 for i in range(20):
     con.execute("INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "
                 "started_at) VALUES (?, 'a', 't', '', 'k', 'ok', now())", [f"old_{i}"])
