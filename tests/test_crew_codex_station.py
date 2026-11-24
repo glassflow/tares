@@ -26,7 +26,8 @@ by hand: tests/factory/codex_probe/probe_station.py.
     while the station is in a turn, hands the wake over the round after the turn ends, and never again;
  g. what a killed station leaves running: a command of the station is found by the station's name and crew in
     its environment; a revive ends it and tells the station, by program name only; a stop leaves nothing; a
-    command of another station or of another crew is never touched;
+    command of another station or of another crew is never touched; a command seen under the app-server
+    stays known after it left it (its shell ended), so a stop ends it too;
  h. `crew status` on a Codex crew, with no `claude`: each station with where it is (at work, waiting, idle,
     gone), in text and as JSON of the same shape as for Claude Code;
  i. the seam for Claude Code: each question goes to `claude.py` as it was asked, and a Claude Code crew
@@ -555,14 +556,29 @@ cs.note_children(paths, S)
 ck("the note of a station whose app-server has no children is empty, and a station that is not running leaves none",
    state.read_json(cs._children_file(paths, S), None) == [] and cs.note_children(other_paths, S) is None
    and not cs._children_file(other_paths, S).exists())
-state.write_json(cs._children_file(paths, S), [[silent.pid, psutil.Process(silent.pid).create_time()]], compact=True)
+# A command that outlived the shell that started it: written down while it ran under the app-server, and under
+# the system's first process at the next look. `silent` and `tree` stand for such commands (the fake app-server
+# starts none, so neither is under it), and `tree` has started a program of its own since.
+tree = subprocess.Popen([sys.executable, "-c", "import subprocess, sys, time\n"
+                         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\ntime.sleep(300)"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True, env={k: v for k, v in os.environ.items() if not k.startswith("FACTORY")})
+STARTED.append(tree.pid)
+until(lambda: psutil.Process(tree.pid).children())
+kid = psutil.Process(tree.pid).children()[0].pid
+STARTED.append(kid)
+state.write_json(cs._children_file(paths, S), [[p_, psutil.Process(p_).create_time()] for p_ in (silent.pid, tree.pid)]
+                 + [[max(silent.pid, tree.pid, kid) + 1000, 1.0]], compact=True)
+cs.note_children(paths, S)   # the next look: none of them is under the app-server
+ck("a noted process that still runs stays noted when it is no longer under the app-server, with what it started; one that is gone is dropped",
+   [r_[0] for r_ in state.read_json(cs._children_file(paths, S), None)] == sorted([silent.pid, tree.pid, kid])
+   and sorted(p_.pid for p_ in cs._noted(paths, S)) == sorted([silent.pid, tree.pid, kid]),
+   state.read_json(cs._children_file(paths, S), None))
 again = command_of(paths, S)
 time.sleep(0.3)
-real_note = cs.note_children
-cs.note_children = lambda *a: None   # the note stays as written above: the fake app-server starts no commands
-how = cs.stop(paths, S)
-cs.note_children = real_note
-ck("a stop ends what was noted too, and clears the note", gone(silent.pid) and not cs._children_file(paths, S).exists())
+how = cs.stop(paths, S)   # it notes once more, right before it ends the app-server
+ck("a stop ends what was noted too, and clears the note",
+   gone(silent.pid) and gone(tree.pid) and gone(kid) and not cs._children_file(paths, S).exists())
 ck("a stop leaves nothing of the station running", how == "stopped" and gone(new) and gone(again.pid) and alive(sibling.pid), how)
 ck("a station with nothing left behind is told nothing and leaves no event",
    cs.end_leftovers(paths, S) == [] and len(events(paths, "left-behind")) == 2
