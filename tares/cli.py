@@ -116,6 +116,28 @@ def _ask_edition(read=input, write=print) -> str:
     return "factory"
 
 
+def _sqlite_setting(db_path: str, key: str) -> str | None:
+    """A setting from the session store's SQLite file next to `db_path`, read-only; None when there
+    is no file, no settings table yet, or no such key."""
+    import sqlite3
+    from .session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE
+    here = Path(db_path).resolve().parent
+    for name in (SQLITE_FILE, LEGACY_SQLITE_FILE):
+        f = here / name
+        if not f.is_file():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{f}?mode=ro", uri=True, timeout=1)
+            try:
+                row = con.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            continue
+        return row[0] if row else None
+    return None
+
+
 def _stored_edition(db_path: str) -> str | None:
     """The edition saved in an existing cell, read without taking the data file's lock for writes.
     A cell that keeps its state in Postgres (TARES_STATE_DSN) holds it there, so that is read first;
@@ -137,6 +159,12 @@ def _stored_edition(db_path: str) -> str | None:
             row = None
         if row and _valid(row[0]):
             return _valid(row[0])
+    # a cell whose settings moved to the session store keeps them in tares.sqlite next to the data
+    # file (sessions.sqlite until TR-1480), where the daemon's own writes land; the DuckDB file's
+    # copy is only what they were at the move
+    row = _sqlite_setting(db_path, EDITION_SETTING)
+    if row and _valid(row):
+        return _valid(row)
     if not Path(db_path).is_file():
         return None
     try:
