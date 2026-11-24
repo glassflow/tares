@@ -102,6 +102,17 @@ from `ui/src/pages`, whose inline styles predate the kit.
   Every e2e suite takes Chromium from `ui/tests/browser.cjs`, which asks for reduced motion, so a
   check never reads something halfway in. `npm run motion-contract` also fails on a raw time in CSS,
   on `motion.ts` drifting from the tokens and on a suite that loads playwright itself.
+- **Embedded in the Tares desktop.** The desktop opens the console with `?embed=desktop&theme=light|dark`
+  (`ui/src/embed.ts`, and the boot script in `ui/index.html` before first paint). Embedded, the console
+  draws no header of its own (brand, cell name, workspace switcher, search box, account menu) and no
+  theme switch or sign out anywhere: the desktop shows the cell, owns the sign-in and sets the theme.
+  The menu stays, with search at its top; a page's header actions (`useHeaderSlots().actions`) sit in a
+  row above the page, and below 768px a slim bar keeps Menu and search. `theme` wins over a choice saved
+  in a browser visit and is never saved; without it the console follows the OS. Both values are kept in
+  `sessionStorage` for the tab, so a move inside the console keeps the mode; `?embed=` with another
+  value leaves it. No user-agent sniffing. A browser visit without the params is unchanged.
+  `ui/tests/embedded.e2e.cjs` checks both. A screen that adds chrome of its own to the header checks
+  it in embedded mode too.
 - **Before you push** a console change:
   `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
   npm run test:time && npm run design-contract && npm run motion-contract && npm run build`,
