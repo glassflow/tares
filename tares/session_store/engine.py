@@ -1,6 +1,7 @@
 """The session store's engine: SQLite beside the DuckDB file, or the cell's state Postgres.
 
-Locally (no TARES_STATE_DSN) the store is `sessions.sqlite` in the data directory, in WAL mode. Each
+Locally (no TARES_STATE_DSN) the store is `tares.sqlite` in the data directory, in WAL mode (it was
+`sessions.sqlite` before TR-1480, and a start renames the old file, with its -wal and -shm files). Each
 write transaction starts with BEGIN IMMEDIATE, so two writers queue on the busy timeout instead of
 one failing with SQLITE_BUSY halfway through a read-then-write step. This is the pysqlite recipe in
 the SQLAlchemy docs ("Serializable isolation / Savepoints / Transactional DDL"): pysqlite's own
@@ -20,7 +21,24 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.pool import StaticPool
 
 MEMORY = ":memory:"      # the data_dir that means an in-memory SQLite (a Store on ":memory:")
-SQLITE_FILE = "sessions.sqlite"
+SQLITE_FILE = "tares.sqlite"
+LEGACY_SQLITE_FILE = "sessions.sqlite"       # the name until TR-1480
+
+
+def adopt_legacy_file(data_dir: str) -> None:
+    """Rename `sessions.sqlite` to `tares.sqlite` when only the old name exists, with its -wal and
+    -shm files. The side files go first and the main file last: a start that stops half way leaves
+    `sessions.sqlite` in place, so the next start renames again and finds the side files already
+    under their new names (the other order would leave a `tares.sqlite` without its WAL, whose
+    committed writes would be lost)."""
+    old = os.path.join(data_dir, LEGACY_SQLITE_FILE)
+    new = os.path.join(data_dir, SQLITE_FILE)
+    if not os.path.exists(old) or os.path.exists(new):
+        return
+    for suffix in ("-wal", "-shm"):
+        if os.path.exists(old + suffix):
+            os.replace(old + suffix, new + suffix)
+    os.replace(old, new)
 
 
 def pg_url(dsn: str) -> str:
@@ -48,6 +66,7 @@ def make_engine(data_dir: str, state_dsn: str | None = None) -> Engine:
         engine = create_engine("sqlite://", poolclass=StaticPool,
                                connect_args={"check_same_thread": False})
     else:
+        adopt_legacy_file(data_dir)
         engine = create_engine("sqlite:///" + os.path.join(data_dir, SQLITE_FILE),
                                connect_args={"check_same_thread": False})
     _sqlite_events(engine)
@@ -55,9 +74,9 @@ def make_engine(data_dir: str, state_dsn: str | None = None) -> Engine:
 
 
 def _sqlite_events(engine: Engine) -> None:
-    # Every transaction starts with BEGIN IMMEDIATE, reads included, so a read waits behind a
-    # writer. Fine while the store holds little; a read path that must not queue (DEFERRED) is for
-    # the ticket that moves the busy reads here.
+    # Every transaction starts with BEGIN IMMEDIATE, so a writer waits for the one before it. A
+    # plain read (`SessionStore.read()`) starts with a deferred BEGIN instead: in WAL mode it sees
+    # the last committed state and never waits for a writer.
     @event.listens_for(engine, "connect")
     def _connect(dbapi_connection, _record):
         # pysqlite's own BEGIN handling is off: SQLAlchemy's begin event below emits it
@@ -70,4 +89,4 @@ def _sqlite_events(engine: Engine) -> None:
 
     @event.listens_for(engine, "begin")
     def _begin(conn):
-        conn.exec_driver_sql("BEGIN IMMEDIATE")
+        conn.exec_driver_sql("BEGIN" if conn.get_execution_options().get("deferred") else "BEGIN IMMEDIATE")

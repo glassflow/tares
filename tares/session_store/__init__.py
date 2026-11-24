@@ -1,8 +1,8 @@
 """The session store: a second store, beside DuckDB, for session data (P-TR-295).
 
-SQLAlchemy Core (no ORM) and Alembic. SQLite (`sessions.sqlite` next to the DuckDB file) locally,
+SQLAlchemy Core (no ORM) and Alembic. SQLite (`tares.sqlite` next to the DuckDB file) locally,
 the cell's state Postgres when TARES_STATE_DSN is set. Later tickets add the tables, one Alembic
-revision each; nothing lives here yet beyond the revision table.
+revision each; a table that has moved out of DuckDB is listed in `tables.MOVED_TABLES`.
 """
 from __future__ import annotations
 
@@ -45,6 +45,17 @@ class SessionStore:
         with self._turns or contextlib.nullcontext():
             with self.engine.begin() as conn:
                 yield conn
+
+    @contextlib.contextmanager
+    def read(self) -> Iterator[Connection]:
+        """One read-only transaction for a single query. On SQLite it does not take the write lock,
+        so it does not queue behind a writer (WAL gives it the last committed state); Postgres has
+        no such lock. For a read that joins several queries use `snapshot()`; never write in it."""
+        with self._turns or contextlib.nullcontext():
+            with self.engine.connect() as conn:
+                conn = conn.execution_options(deferred=True)
+                with conn.begin():
+                    yield conn
 
     @contextlib.contextmanager
     def snapshot(self) -> Iterator[Connection]:

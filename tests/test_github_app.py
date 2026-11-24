@@ -21,7 +21,8 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-os.environ["TARES_DB"] = "/tmp/tares-ghapp-test.duckdb"
+import tempfile
+os.environ["TARES_DB"] = os.path.join(tempfile.mkdtemp(), "tares-ghapp-test.duckdb")   # its own folder: settings live beside the file
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
 os.environ["TARES_AUTH_TOKEN"] = "root-secret"
 os.environ["TARES_PUBLIC_URL"] = "https://cell.example.com"

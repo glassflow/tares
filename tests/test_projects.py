@@ -10,9 +10,10 @@ is in exactly one project, a source in any number.
 import asyncio
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB = "/tmp/tares-projects-test.duckdb"
+DB = os.path.join(tempfile.mkdtemp(prefix="tares-projects-test-"), "t.duckdb")   # a folder of its own: tares.sqlite sits beside it
 CATALOG = "/tmp/tares-projects-test.catalog.yaml"
 os.environ["TARES_DB"] = DB
 os.environ["TARES_CATALOG"] = CATALOG

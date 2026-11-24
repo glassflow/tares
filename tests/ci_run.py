@@ -13,9 +13,11 @@ WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
 failure. The environment is passed on as it is."""
 import argparse
+import glob
 import os
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY_LIST = os.path.join(HERE, "ci_list.txt")
@@ -64,7 +66,19 @@ def shard(all_items, n, of):
     return sorted(bins[n - 1][1], key=order.get)
 
 
+def forget_settings_file():
+    """A cell's settings live in tares.sqlite beside its DuckDB file (TR-1480), and 31 tests keep that
+    file at a fixed place in the temp folder, so every one of them shares one tares.sqlite there. Each
+    test starts without what the one before it saved (a seed marker, a provider, an edition)."""
+    for f in glob.glob(os.path.join(tempfile.gettempdir(), "tares.sqlite*")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+
 def run(t, suite="duckdb"):
+    forget_settings_file()
     base = EE_DIR if suite in ("ee", "ee-postgres") else HERE
     print(f"== {t} ==", flush=True)
     return subprocess.call([sys.executable, os.path.join(base, f"{t}.py")])
