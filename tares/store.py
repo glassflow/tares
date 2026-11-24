@@ -902,6 +902,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         stop = getattr(self, "_reconcile_stop", None)
         if stop is not None:
             stop.set()          # the ten minute reconcile (session_ingest._cycle) ends
+        # The start-up pass reads `con` and `sessions_db` from its own thread: let it finish, or a
+        # close that follows (`con.close()`) meets a busy connection (TR-1638)
+        th = getattr(self, "_reconcile_thread", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(60)
         sessions_db = getattr(self, "sessions_db", None)
         if sessions_db is not None:
             sessions_db.close()
