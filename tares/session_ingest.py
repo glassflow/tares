@@ -568,18 +568,22 @@ def _add_facts(store, facts: dict) -> None:
         _write_facts(conn, db, facts)
 
 
-def record(store, envelopes) -> None:
-    """Count a batch of claude_code lines (already committed to DuckDB) into `sessions`. A failure
-    logs one line and counts in tares_session_ingest_failures_total; it never reaches the caller,
-    because the lines are stored and the next start's reconcile counts them."""
+def record(store, envelopes) -> bool:
+    """Count a batch of claude_code lines (already committed to DuckDB, or held back from it, see
+    `Store.append`) into `sessions`. A failure logs one line and counts in
+    tares_session_ingest_failures_total; it never reaches the caller, because the lines are stored
+    and the next start's reconcile counts them. Returns whether the lines went into
+    `session_lines`: a caller that kept them out of DuckDB writes them there when it did not."""
     if not envelopes:
-        return
+        return True
     t0 = time.perf_counter()
     ok = True
+    lines_ok = False
     folded: dict = {}
     try:
         folded = _fold(envelopes)
         _add(store, folded, _line_rows(store, envelopes))
+        lines_ok = True
     except Exception as e:
         ok = False
         print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
@@ -611,6 +615,7 @@ def record(store, envelopes) -> None:
         print(f"taresd: writing the turns of {len(envelopes)} claude_code line(s) failed "
               f"({type(e).__name__}: {e}); written at the next start", flush=True)
     metrics.session_ingest(time.perf_counter() - t0, ok)
+    return lines_ok
 
 
 # ── catching up from DuckDB ──────────────────────────────────────────────────────────────────

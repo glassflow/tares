@@ -26,7 +26,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import and_, delete, null, select
 
-from . import session_ingest, session_read, state_db
+from . import edition, metrics, session_archive, session_ingest, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, session_stations,
@@ -816,6 +816,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._lock = threading.Lock()
         # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
         self._sess_lock = threading.Lock()
+        self._archive_on = None            # whether an archive backend exists (settled at first use)
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -1528,26 +1529,86 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         cc = session_ingest.claude_code_lines(self, envelopes)
         if not cc:
             return self._append(envelopes)
-        # The claude_code lines of the batch are counted into `sessions` after the commit. The
-        # reconcile at start holds the same lock, so a line is never counted by both.
+        # In the factory edition with an archive, the claude_code lines of the batch go only to the
+        # session store (TR-1479); anywhere else they are written to DuckDB as before. They are
+        # counted into `sessions` after the commit. The reconcile at start holds the same lock, so a
+        # line is never counted by both.
+        held = cc if self._lines_skip_duckdb() else []
         with self._sess_lock:
-            self._append(envelopes)
-            session_ingest.record(self, cc)
+            self._append(envelopes, held)
+            if not session_ingest.record(self, cc) and held:
+                # the session store could not take them: DuckDB keeps them (no counters: the
+                # batch's source_stats already counted them)
+                self._append_events(held)
+        if not held:
+            metrics.session_lines_to_duckdb(len(cc))
+
+    def _lines_skip_duckdb(self) -> bool:
+        """True when claude_code lines go only to the session store: the factory edition with an
+        archive backend (the folder archive always exists on SQLite; a Postgres cell needs
+        TARES_ARCHIVE_URL). A factory cell on Postgres with none keeps writing to DuckDB and says so
+        once. Until the `sessions` table has caught up with the events already in DuckDB, the lines
+        go to both: the readers scan events until then, and a line held back would be missing."""
+        try:
+            if edition.edition(self)[0] != "factory":
+                return False
+        except Exception:
+            return False
+        if self._archive_on is None:
+            try:
+                self._archive_on = session_archive.backend_of(self) is not None
+            except Exception as e:           # an unusable URL: the archive pass fails too
+                print(f"taresd: transcript lines are still written to DuckDB: the archive is not "
+                      f"usable ({e})", flush=True)
+                self._archive_on = False
+            else:
+                if not self._archive_on:
+                    print("taresd: transcript lines are still written to DuckDB: no archive "
+                          "configured (TARES_ARCHIVE_URL)", flush=True)
+        if not self._archive_on:
+            return False
+        try:
+            return session_ingest.caught_up(self)
+        except Exception:
+            return False
 
     def start_session_reconcile(self):
         """Catch the `sessions` table up with the events in a background thread (TR-1471). The four
         session readers scan events until this has finished once, and read the table after (TR-1520);
         a failed pass leaves them on the scan and the next start tries again."""
+        self._lines_skip_duckdb()          # says once, at start, when the lines still go to DuckDB
         return session_ingest.start_reconcile(self)
 
-    def _append(self, envelopes: list[Envelope]) -> None:
+    def _append_events(self, envelopes: list[Envelope]) -> None:
+        """Only the rows of the events table, in one transaction (no counters)."""
+        rows = [(e.source, e.source_type, e.key_value, e.event_type, e.text, json.dumps(e.payload),
+                 json.dumps(e.labels), e.event_time, e.ingest_time) for e in envelopes]
+        with self._lock:
+            self.con.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, len(rows), 2000):
+                    self.con.executemany(
+                        "INSERT INTO events (source, source_type, key_value, event_type, text, "
+                        "payload, labels, event_time, ingest_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows[i:i + 2000])
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
+        metrics.session_lines_to_duckdb(len(envelopes))
+
+    def _append(self, envelopes: list[Envelope], held=()) -> None:
+        """`held`: lines of the batch that do not go to the events table (their session store write
+        follows): they still count in source_stats, but not in entity_counts. Challenges are
+        recorded for them as for any line."""
         # Explicit column list: the `labels` column was added by migration after first release,
         # so positional INSERT order is no longer guaranteed.
+        skip = {id(e) for e in held}
         rows = [
             (e.source, e.source_type, e.key_value, e.event_type, e.text,
              json.dumps(e.payload), json.dumps(e.labels),
              e.event_time, e.ingest_time)
-            for e in envelopes
+            for e in envelopes if id(e) not in skip
         ]
         # Per-source deltas for the maintained counter (see event_stats): how many rows this batch
         # adds per source and the latest ingest_time among them. Plus per-(source, label, value)
@@ -1562,6 +1623,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 d[0] += 1
                 if e.ingest_time > d[1]:
                     d[1] = e.ingest_time
+            if id(e) in skip:
+                continue
             _accum_entity(ent, e.source, "key_value", e.key_value, e.ingest_time)
             for lname, lval in (e.labels or {}).items():
                 if e.event_type == "finding" and lname in _PROVENANCE_LABELS:
