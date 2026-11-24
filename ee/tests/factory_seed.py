@@ -125,10 +125,6 @@ SHAPE = {
     },
 }
 
-SESSION_TABLES = ("session_stations", "session_states", "project_sessions", "session_usage",
-                  "session_meters", "sessions", "session_messages", "session_commands",
-                  "session_turns", "session_said", "session_files", "session_lines",
-                  "session_ingest_marks")
 ANCHOR_SESSIONS = 3          # the sessions whose lines go through Store.append
 ANCHOR_LINES = 100           # lines each: 300 in all
 
@@ -248,14 +244,23 @@ def _words(rng: random.Random, size: int) -> str:
     return "\n\n".join(out)[:size]
 
 
+def session_table(name: str):
+    """The session store's table of that name, or None when the table lives elsewhere. Read from the
+    store's own table list, so a table moved there later (TR-1480 moves `settings`) is found with
+    no edit here. `session_store_copies` is the store's ledger of the move and stays counted where
+    it was."""
+    from tares.session_store import tables as T
+    return None if name == "session_store_copies" else T.metadata.tables.get(name)
+
+
 def _have(store, table: str) -> int:
     """Rows in `table` now, wherever the table lives."""
     from tares.state_db import EVENT_TABLES
-    if table in SESSION_TABLES:
+    t = session_table(table)
+    if t is not None:
         from sqlalchemy import func, select
-        from tares.session_store import tables as T
         with store.sessions_db.begin() as c:
-            return c.execute(select(func.count()).select_from(getattr(T, table))).scalar_one()
+            return c.execute(select(func.count()).select_from(t)).scalar_one()
     if table in EVENT_TABLES:
         with store._lock:
             return store.con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -383,7 +388,11 @@ class _Gen:
                              "project, person_id", rows)
         # settings: harmless keys of their own
         rows = [[f"seed.note_{i:02d}", str(i), NOW - timedelta(days=i)] for i in range(self.need("settings"))]
-        self.put("settings", "key, value, updated_at", rows)
+        t = session_table("settings")
+        if t is not None:           # once settings has moved to the session store
+            self.put_s(t, [dict(zip(("key", "value", "updated_at"), r)) for r in rows])
+        else:
+            self.put("settings", "key, value, updated_at", rows)
 
     # ── projects: one through the Store API, the rest as rows ─────────────────────────────────
     def projects_group(self):

@@ -48,7 +48,9 @@ def H(tok):
 
 
 def start(name, auth):
-    db, port = os.path.join(TMP, name + ".duckdb"), free_port()
+    # a folder of its own: the settings live in a tares.sqlite beside the DuckDB file (TR-1480)
+    os.makedirs(os.path.join(TMP, name), exist_ok=True)
+    db, port = os.path.join(TMP, name, "tares.duckdb"), free_port()
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:
@@ -66,7 +68,8 @@ def unit():
     print("== the store helper ==")
     from tares_ee import areas
     from tares.store import Store
-    s = Store(os.path.join(TMP, "unit.duckdb"))
+    os.makedirs(os.path.join(TMP, "unit"), exist_ok=True)
+    s = Store(os.path.join(TMP, "unit", "tares.duckdb"))
     kiran = s.create_person("Kiran", "kiran@x.dev")
     ck("no areas: nobody owns a repo", areas.owner(s, "glassflow/tares") is None)
     areas.save(s, [{"repo": "GlassFlow/Tares-Cloud", "person_id": kiran["id"], "note": "infra"}])

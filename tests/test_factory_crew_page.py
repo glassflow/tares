@@ -29,7 +29,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
-from tares import words
+from tares import claude_usage, words
 from tares.screens import factory_crew as fc
 
 P = F = 0
@@ -138,6 +138,7 @@ async def main():
         r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n",
                           headers={"Content-Type": "application/x-ndjson"})
         assert r.status_code < 300, r.text
+        claude_usage.clear_week_by_project()   # the week is kept 60 s (TR-1627): a read after an ingest sees it
 
     async def page(cx):
         r = await cx.get("/api/factory/crew")
@@ -371,7 +372,7 @@ async def main():
 async def holes():
     """A cell of its own: a lead gone quiet, and values the crew did not report."""
     import tares.daemon as daemon_mod
-    # a folder of its own: the session store (sessions.sqlite) sits next to the database, and a
+    # a folder of its own: the session store (tares.sqlite) sits next to the database, and a
     # shared one would carry the first cell's sessions and their times over (TR-1499)
     holes_dir = os.path.join(_TMP, "holes")
     os.makedirs(holes_dir, exist_ok=True)

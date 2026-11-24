@@ -11,6 +11,9 @@ the parts of each report the console shows, and answers /api/claude-code/usage.
 from __future__ import annotations
 
 import json
+import threading
+import time
+import weakref
 from datetime import datetime, timedelta, timezone
 
 from .claude_usage_store import PLAN_SETTING
@@ -240,6 +243,36 @@ def by_project(store, since=None) -> list[dict]:
     for r in out:
         r["share"] = (r["cost_usd"] / total) if total else None
     return out
+
+
+WEEK_KEEP_SECONDS = 60
+_week: dict = {}        # id(store) -> (monotonic time, weakref to the store, rows)
+_week_lock = threading.Lock()
+
+
+def week_by_project(store, now) -> list[dict]:
+    """`by_project` over the 7 days up to `now`, kept in this process for 60 seconds per store
+    (TR-1627). Home, Crew and Setup each show it; the query behind it costs about 150 ms on a
+    factory-sized cell, and a share of the week does not change in a minute. The rows do not depend
+    on who asks: the caller keeps the projects it may show. Losing the entry changes no answer,
+    only the time the next read takes. A read within the minute shows the week as of the first one."""
+    key, at = id(store), time.monotonic()
+    with _week_lock:
+        hit = _week.get(key)
+        if hit and hit[1]() is store and at - hit[0] < WEEK_KEEP_SECONDS:
+            return [dict(r) for r in hit[2]]
+    rows = by_project(store, now - timedelta(days=7))
+    with _week_lock:
+        for k in [k for k, v in _week.items() if v[1]() is None]:
+            del _week[k]            # a store that is gone leaves nothing behind
+        _week[key] = (at, weakref.ref(store), rows)
+    return [dict(r) for r in rows]
+
+
+def clear_week_by_project() -> None:
+    """Forget the kept week, so the next read asks the store."""
+    with _week_lock:
+        _week.clear()
 
 
 def usage(store, days: int = 7) -> dict:

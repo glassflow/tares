@@ -24,6 +24,8 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 DB, PORT = "/tmp/tares-seed-test.duckdb", "8811"
+# the cell's settings (the seed marker) live in tares.sqlite beside the DuckDB file (TR-1480)
+SIDE = os.path.join(os.path.dirname(DB), "tares.sqlite")
 B = f"http://127.0.0.1:{PORT}"
 
 
@@ -84,7 +86,7 @@ async def projects(cx):
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
+    for p in (DB, DB + ".wal", SIDE, SIDE + "-wal", SIDE + "-shm"):
         if os.path.exists(p):
             os.remove(p)
     stack = HTTPServer(("127.0.0.1", 0), FakeStack)
@@ -121,7 +123,7 @@ async def main():
         stop(proc)
 
     # ── unknown template: warns, no marker, so fixing the config still seeds ───
-    for p in (DB, DB + ".wal"):
+    for p in (DB, DB + ".wal", SIDE, SIDE + "-wal", SIDE + "-shm"):
         os.path.exists(p) and os.remove(p)
     proc, up = await boot(daemon_env(stack.server_port, "no_such_template"))
     try:
@@ -141,7 +143,7 @@ async def main():
         stop(proc)
 
     # ── var unset: nothing happens ───────────────────────────────────────────
-    for p in (DB, DB + ".wal"):
+    for p in (DB, DB + ".wal", SIDE, SIDE + "-wal", SIDE + "-shm"):
         os.path.exists(p) and os.remove(p)
     proc, up = await boot(daemon_env(stack.server_port, None))
     try:

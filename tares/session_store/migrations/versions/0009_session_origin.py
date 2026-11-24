@@ -11,14 +11,14 @@ run against a database that stopped half way) is taken over as it is. Existing r
 
 Downgrade: drops the column and nothing else.
 
-Revision ID: 0008_session_origin
-Revises: 0007_session_archive
+Revision ID: 0009_session_origin
+Revises: 0008_core_settings
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0008_session_origin"
-down_revision = "0007_session_archive"
+revision = "0009_session_origin"
+down_revision = "0008_core_settings"
 branch_labels = None
 depends_on = None
 
