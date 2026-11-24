@@ -255,7 +255,7 @@ def week_by_project(store, now) -> list[dict]:
     (TR-1627). Home, Crew and Setup each show it; the query behind it costs about 150 ms on a
     factory-sized cell, and a share of the week does not change in a minute. The rows do not depend
     on who asks: the caller keeps the projects it may show. Losing the entry changes no answer,
-    only the time the next read takes."""
+    only the time the next read takes. A read within the minute shows the week as of the first one."""
     key, at = id(store), time.monotonic()
     with _week_lock:
         hit = _week.get(key)
@@ -263,6 +263,8 @@ def week_by_project(store, now) -> list[dict]:
             return [dict(r) for r in hit[2]]
     rows = by_project(store, now - timedelta(days=7))
     with _week_lock:
+        for k in [k for k, v in _week.items() if v[1]() is None]:
+            del _week[k]            # a store that is gone leaves nothing behind
         _week[key] = (at, weakref.ref(store), rows)
     return [dict(r) for r in rows]
 

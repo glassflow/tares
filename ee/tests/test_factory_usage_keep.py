@@ -13,6 +13,8 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
+import weakref
 from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -133,6 +135,20 @@ async def main():
         other.list_projects = lambda *a, **kw: []
         ck("another store does not read this store's answer",
            claude_usage.week_by_project(other, now_utc()) == [])
+        # a store that is gone can leave its id to a new one: that entry must not be served
+        class Gone:
+            pass
+        g = Gone()
+        gone_ref = weakref.ref(g)
+        del g
+        fresh = type(store).__new__(type(store))
+        fresh.usage_by_project = lambda since=None: []
+        fresh.list_projects = lambda *a, **kw: []
+        claude_usage._week[id(fresh)] = (time.monotonic(), gone_ref, [{"project": "stale", "share": 1.0}])
+        claude_usage._week[1] = (time.monotonic(), gone_ref, [])
+        ck("an entry of a store that is gone, kept under a reused id, is not served",
+           claude_usage.week_by_project(fresh, now_utc()) == [])
+        ck("and entries of gone stores are dropped", 1 not in claude_usage._week, list(claude_usage._week))
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
