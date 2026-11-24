@@ -151,7 +151,8 @@ const flat = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
     {
       const { ctx, page, calls } = await open({ project: true, query: `?project=${SHOP.id}` });
       await ready(page);
-      await page.getByTestId("add-connection-project").getByRole("link", { name: SHOP.name }).waitFor();
+      // Without `exact` the link of the id shown before the name resolves meets the wait too.
+      await page.getByTestId("add-connection-project").getByRole("link", { name: SHOP.name, exact: true }).waitFor();
       ck("project: says which project it joins", (await flat(page.getByTestId("add-connection-project"))) === `It joins ${SHOP.name}.`);
       ck("project: links to the project", (await page.getByTestId("add-connection-project").getByRole("link").getAttribute("href")) === `/projects/${SHOP.id}`);
       ck("project: the kind links keep it", (await kindButton(page, "webhook").getAttribute("href")) === `/sources/new?project=${SHOP.id}&kind=webhook`);
