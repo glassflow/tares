@@ -2605,12 +2605,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
         from datetime import timedelta
         rows = [f for f in store.repo_findings(repo, now_utc() - timedelta(days=factory_mod.RECUR_DAYS))
                 if f["project"] not in hidden]
-        names = {p["id"]: p["name"] for p in store.list_projects()}
+        names = store.project_names()
         by: dict[str, dict] = {}
         for f in rows:
             k = by.setdefault(f["kind"], {"kind": f["kind"], "refs": set(), "examples": []})
-            t = store.get_ticket(f["project"], f["ticket"])
-            k["refs"].add((f["project"], factory_mod.label(t) if t else "?"))
+            # the ticket's label comes with the finding (one read, not one per finding); a finding
+            # whose ticket sits in another project names no ticket, as get_ticket(project, id) did
+            lab = (factory_mod.label({"id": f["ticket"], "identifier": f["ticket_identifier"],
+                                      "number": f["ticket_number"]})
+                   if f["ticket_project"] == f["project"] else "?")
+            k["refs"].add((f["project"], lab))
             if len(k["examples"]) < 3:
                 k["examples"].append(f["text"][:200])
         out = [{"kind": k["kind"], "count": len(k["refs"]),

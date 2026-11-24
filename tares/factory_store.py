@@ -1637,15 +1637,18 @@ class FactoryStore:
 
     def repo_findings(self, repo: str, since) -> list[dict]:
         """Every reviewer finding on tickets whose PR lives in `repo` since `since`, with the
-        ticket and project (TR-443)."""
+        ticket and project (TR-443). Each row also carries the ticket's own project, identifier and
+        number (what factory.label needs), so a caller names the tickets without reading each."""
         with self._sread:
             rows = self.sc.execute(
-                "SELECT f.ticket, f.project, f.kind, f.text, f.severity, f.found_at FROM "
+                "SELECT f.ticket, f.project, f.kind, f.text, f.severity, f.found_at, t.project, "
+                "t.identifier, t.number FROM "
                 "review_findings f JOIN tickets t ON t.id = f.ticket WHERE "
                 "json_extract_string(t.pr, '$.repo') = ? AND f.found_at >= ?",
                 [repo, since]).fetchall()
         return [{"ticket": r[0], "project": r[1], "kind": r[2], "text": r[3], "severity": r[4],
-                 "at": r[5]} for r in rows]
+                 "at": r[5], "ticket_project": r[6], "ticket_identifier": r[7],
+                 "ticket_number": r[8]} for r in rows]
 
     # ── what the recording says (TR-440, TR-442) ──────────────────────────────
     CHALLENGE_TYPES = ("challenge_commit", "challenge_waived", "challenge_plan")
