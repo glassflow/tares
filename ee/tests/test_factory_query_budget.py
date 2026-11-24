@@ -87,7 +87,9 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # queue once more, and the project page reads it twice more, plus its hand-over twice more and two
 # settings once more (home and ticket keep their counts): projects 81 to 82, project 80 to 85 on
 # Postgres, 85 to 88 on DuckDB. Reading each of them once per request is a saving for a later ticket.
-_TODAY = {"home": 105, "projects": 82, "project": 85, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
+# home 105 to 98 on Postgres, 115 to 102 on DuckDB (its counts are 100 and 96, plus 2 percent).
+_TODAY = {"home": 98, "projects": 82, "project": 85, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
@@ -96,7 +98,7 @@ DONE_EXTRA = 4
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 88}
+_DUCKDB = {**_TODAY, "home": 102, "projects": 89, "project": 88}
 BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -386,12 +388,20 @@ async def main():
             builds["home"] += 1
             return real_home(t)
         th.HomeRead.__init__, th._team_home = counted_init, counted_home
+        # how often a request reads the stations roll-up (TR-1629: Home reads it once)
+        real_rollup = store.station_rollup
+
+        def counted_rollup(*a, **kw):
+            builds["rollup"] += 1
+            return real_rollup(*a, **kw)
+        store.station_rollup = counted_rollup
+        builds["rollup"] = 0
         built = {}
         for name, tmpl in ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
             counter = [0]
-            builds["read"] = builds["home"] = 0
+            builds["read"] = builds["home"] = builds["rollup"] = 0
             token = _COUNTER.set(counter)
             try:
                 resp = await call(sam, path)
@@ -402,11 +412,22 @@ async def main():
             counts[name] = counter[0]
             bodies[name] = steady(resp.json())
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
+        # Setup builds the home for its "steps around the integrations": it too reads the roll-up once
+        # (TR-1629). It has no BUDGET entry, only this count.
+        fh.clear_cache()
+        builds["rollup"] = 0
+        resp = await call(sam, "/api/factory/setup")
+        setup_rollups = builds["rollup"]
+        ck("GET /api/factory/setup answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
         print("== finished projects on a team cell (TR-1503) ==")
         await done_projects(store, sam, call, counts["projects"])
 
     print("== the team home is built once per request ==")
     th.HomeRead.__init__, th._team_home = real_init, real_home
+    store.station_rollup = real_rollup
+    ck("Home reads the stations roll-up once (TR-1629)", built["home"]["rollup"] == 1, str(built["home"]))
+    ck("Setup reads the stations roll-up once (TR-1629)", setup_rollups == 1, setup_rollups)
+    print("  roll-up reads per route:", {n: b["rollup"] for n, b in built.items()})
     for name, _ in ROUTES:
         ck(f"{name}: the team home is read once at most ({built[name]['read']} reads, "
            f"{built[name]['home']} builds)", built[name]["read"] <= 1 and built[name]["home"] <= 1,

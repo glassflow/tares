@@ -80,8 +80,8 @@ class Team(SingleTeam):
     def resolve_crew(self, name, person_id, machine):
         return crews.resolve_crew(name, person_id, machine)
 
-    def team_home(self, c, request, now):
-        return home.team_home(c, request, now)
+    def team_home(self, c, request, now, stations=None):
+        return home.team_home(c, request, now, stations)
 
     def project_waiting(self, c, request, now, project):
         return home.project_waiting(c, request, now, project)
