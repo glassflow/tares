@@ -30,7 +30,7 @@ from sqlalchemy import text  # noqa: E402
 
 from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import MOVED_TABLES  # noqa: E402
+from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
@@ -140,8 +140,8 @@ def failed_first_start():
             finally:
                 setattr(target, name, orig)
             gc.collect()
-            ck(f"{what} raised after the copy committed: the five tables are in Postgres",
-               [n for n, _ in pg_ledger(dsn)] == sorted(SESSION_TABLES)
+            ck(f"{what} raised after the copy committed: every moved table is in Postgres",
+               [n for n, _ in pg_ledger(dsn)] == sorted(MOVED_TABLE_NAMES)
                and pg_count(dsn, "project_sessions") == 2, pg_ledger(dsn))
             # the cell is brought back up without the state database, and works
             s = Store(path, state_dsn="")
@@ -165,7 +165,8 @@ def failed_first_start():
             ck(f"{what}: and no row is there twice", ts._count(s.sessions_db, "project_sessions") == 3)
             same_rows(s, want, what)
             ck(f"{what}: the ledger holds the local counts",
-               sorted(ts._ledger(s)) == sorted((t, len(want[t])) for t in SESSION_TABLES), ts._ledger(s))
+               sorted(x for x in ts._ledger(s) if x[0] != "settings") == sorted((t, len(want[t])) for t in SESSION_TABLES)
+               and "settings" in dict(ts._ledger(s)), ts._ledger(s))
             ck(f"{what}: DuckDB's copies are untouched",
                {t: ts._duck_rows(s, t)[1] for t in SESSION_TABLES} == duck)
             close(s)
