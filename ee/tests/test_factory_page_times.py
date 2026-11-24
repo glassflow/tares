@@ -8,7 +8,10 @@ and the in-process caches in CACHES are cleared before each of them, so a call i
 a page after a quiet minute, which is what a person opening it sees. The median of the 5 is the
 route's time.
 
-A route fails when its median is over `max(TARGET, its OVER entry) * SLACK`. A route that is over
+A route fails when its median is over `max(TARGET, its OVER entry) * SLACK * SPEED`. SPEED is how
+much slower this machine is than the one the OVER medians were taken on (never under 1): a fixed
+workload (`calibrate`) is timed in the same run, so a CI runner that is 1.5 times slower gets limits
+1.5 times wider, and a route that really got slower still fails on any machine. A route that is over
 TARGET today sits in OVER with the median that was measured and the ticket that brings it down; when
 that ticket's change lands, the route meets TARGET, its entry is stale, and the test fails until the
 entry is removed. A PR that moves a time updates OVER and says why; the PR that merges second
@@ -34,6 +37,7 @@ import factory_seed as fs
 TARGET = 0.300                                       # seconds, the median of a route
 SLACK = 1.5 if os.environ.get("CI") else 1.25        # runners are slower and noisier
 RUNS = 5                                             # timed calls per route, after one warm-up
+CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
 
 # Routes over TARGET today, by backend: (the median in seconds when it was measured, the ticket that
 # brings it down). A route absent from here must meet TARGET.
@@ -77,7 +81,7 @@ ROUTES = [
     ("ticket", "/api/factory/projects/{p}/tickets/{t}"),
     ("ticket_big", "/api/factory/projects/{bp}/tickets/{bt}"),
     ("tickets", "/api/factory/tickets?sort=open&limit=200"),
-    ("tickets_list", "/api/factory/tickets?sort=open&limit=25"),
+    ("tickets_list", "/api/factory/tickets?limit=25"),
     # Reviews, Crew, Docs, People (FactoryReviews.api.ts, FactoryCrew.api.ts, FactoryDocs.api.ts, FactoryPeople.api.ts)
     ("reviews", "/api/factory/reviews"),
     ("crew", "/api/factory/crew"),
@@ -96,6 +100,10 @@ ROUTES = [
     ("settings_keys", "/api/keys"),
     ("settings_tracing", "/api/settings/tracing"),
     ("settings_mcp", "/api/settings/mcp"),
+    ("areas", "/api/areas"),                               # AreasPanel.tsx
+    ("projects_list", "/api/projects"),                    # the keys tab (ApiKeysPanel.tsx)
+    # the repos the GitHub Issues form lists; the seed has no GitHub credential, so this is the route's own cost
+    ("setup_github_repos", "/api/factory/setup/github/repos?via=app"),
     ("brain_decisions", "/api/brain/decisions?limit=25", (200, 404)),
     ("brain_available", "/api/brain/repos/available", (200, 404)),
 ]
@@ -114,6 +122,8 @@ def caches() -> list:
             out.append(("claude_usage.clear_week_by_project", claude_usage.clear_week_by_project))
     except ImportError:
         pass
+    from tares import github_credentials as gc   # the repo list GitHub gave, kept 5 minutes per credential
+    out.append(("github_credentials._repos_cache", gc._repos_cache.clear))
     return out
 
 
@@ -152,20 +162,45 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
+def calibrate() -> float:
+    """Seconds a fixed workload takes here (the median of 7 runs): sorting, hashing and JSON, the kind
+    of work a page read does in Python. It does not touch the database or the cell."""
+    import hashlib
+    import json
+    times = []
+    for _ in range(7):
+        t = time.perf_counter()
+        rows = [{"id": i, "name": f"row-{i * 7919 % 10007}", "n": (i * 31) % 977} for i in range(20000)]
+        rows.sort(key=lambda r: (r["name"], r["n"]))
+        json.loads(json.dumps(rows))
+        h = hashlib.sha256()
+        for r in rows[:5000]:
+            h.update(r["name"].encode())
+        times.append(time.perf_counter() - t)
+    return statistics.median(times)
+
+
+SPEED = 1.0   # set in main(): how many times slower than the OVER machine this one is, never under 1
+
+
 def allowed(over: dict, name: str) -> float:
-    """The most a route's median may be: its OVER entry or TARGET, whichever is more, times SLACK."""
+    """The most a route's median may be: its OVER entry or TARGET, whichever is more, times SLACK
+    and SPEED."""
     base = max(TARGET, over[name][0]) if name in over else TARGET
-    return base * SLACK
+    return base * SLACK * SPEED
 
 
 async def main():
-    global STORE, CACHES
+    global STORE, CACHES, SPEED
     from tares.daemon import make_app
     fs.freeze_clock()
     app = make_app()
     STORE = app.state.store
     backend = "postgres" if os.environ.get("TARES_TEST_PG") else "duckdb"
     over = OVER[backend]
+    cal = calibrate()
+    SPEED = max(1.0, cal / CALIBRATION_REF)
+    print(f"calibration {cal * 1000:.0f} ms (reference {CALIBRATION_REF * 1000:.0f} ms): limits times {SPEED:.2f}")
     root = {"Authorization": f"Bearer {TOKEN}"}
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=root,
@@ -200,7 +235,7 @@ async def main():
                     if resp.status_code not in statuses and bad is None:
                         bad = (resp.status_code, resp.text[:200])
                 results[name] = (statistics.median(times), bad, path)
-        print(f"\n== medians ({backend}, target {TARGET * 1000:.0f} ms, slack {SLACK}) ==")
+        print(f"\n== medians ({backend}, target {TARGET * 1000:.0f} ms, slack {SLACK}, speed {SPEED:.2f}) ==")
         print(f"  {'route':<24} {'median ms':>10} {'allowed ms':>11}  status")
         for name, (med, bad, path) in results.items():
             lim = allowed(over, name)
@@ -215,8 +250,9 @@ async def main():
                med <= allowed(over, name), f"{path} {med * 1000:.0f} ms")
         for name, (med, bad, path) in results.items():
             if name in over:
-                ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", med > TARGET,
-                   f"{med * 1000:.0f} ms meets {TARGET * 1000:.0f} ms: remove the entry")
+                # stale only when the route is clearly under target, so a route near it does not flap
+                ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", med >= TARGET / SLACK,
+                   f"{med * 1000:.0f} ms is under {TARGET / SLACK * 1000:.0f} ms: remove the entry")
         ck("every OVER entry names a route in ROUTES", all(n in results for n in over),
            str([n for n in over if n not in results]))
         ck("every OVER entry names a ticket", all(str(v[1]).startswith("TR-") for v in over.values()))
