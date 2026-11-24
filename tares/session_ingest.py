@@ -1043,6 +1043,7 @@ def start_reconcile(store) -> threading.Thread:
                   "tried again at the next start", flush=True)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
+    store._reconcile_thread = th    # `Store.close` waits for it before the connections go
     stop = getattr(store, "_reconcile_stop", None)
     if stop is None:
         stop = store._reconcile_stop = threading.Event()

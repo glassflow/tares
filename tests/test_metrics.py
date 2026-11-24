@@ -197,6 +197,8 @@ async def main():
            and "# HELP tares_" in r.text, str(r.status_code))
         r = await cx.get("/health")
         ck("/health stays public", r.status_code == 200, str(r.status_code))
+    # make_app started the session reconcile on this store: close() waits for it, then the connection goes
+    tapp.state.store.close()
     tapp.state.store.con.close()
 
     print(f"\n{PASS} passed, {FAIL} failed")
