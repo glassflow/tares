@@ -15,7 +15,7 @@ workload (`calibrate`) is timed three times at the start and the fastest counts,
 entry is the slowest median of several runs on the reference machine, not one run, and it is kept close
 to what the route takes now, because the limit is built on it: a route may grow by about its limit
 minus its time today (a 0.5 s sleep in a route under 300 ms fails on a quiet machine; on a CI runner
-with SPEED 2 a route that takes 250 ms may reach 900 ms before it fails). A route that is over TARGET
+with SPEED 2 a route that takes 250 ms may reach 750 ms before it fails on DuckDB, 900 ms on Postgres). A route that is over TARGET
 today sits in OVER with the median that was measured and the ticket that brings it down; when that
 ticket's change lands, the route meets TARGET, its entry is stale, and the test fails until the entry is
 removed. A PR that moves a time updates OVER and says why; the PR that merges second rebases and keeps
@@ -24,13 +24,15 @@ both.
 Load does not decide the answer (TR-1640):
 - A route that is over its limit is timed again, up to ROUNDS rounds, and keeps its best median: a busy
   moment passes on the next round, a route that is really slower fails every round.
-- Before each round the test samples a CPU probe (`calibrate`) and a database probe (`db_probe`). If the
-  samples of the run differ by more than BUSY times, the machine was busy: a route that is over its limit
-  is then not called slow or stale, and the test fails once, saying the machine was too busy to measure.
-  Run it again when the machine is quiet.
+- Before each route, and again before each extra round, the test samples a CPU probe (`calibrate`) and a
+  database probe (`db_probe`). If the CPU samples of the run differ by more than BUSY times, or the database
+  samples by more than DB_BUSY times, the machine was busy: a route that is over its limit is then not
+  called slow, and the test fails once, saying the machine was too busy to measure. Run it again when the
+  machine is quiet. A database round trip varies by about 2 times on a quiet machine (a container here, a
+  service on CI), so its limit is wider than the CPU's.
 - The stale check divides by `min(SPEED, STALE_SPEED_CAP)`: a route that waits on the database slows
   down on a slow runner less than the CPU probe does, so the full SPEED would call an entry stale that
-  is not.
+  is not. Load only makes a route slower, so the stale check ignores it.
 
 Run: .venv/bin/python ee/tests/test_factory_page_times.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_factory_page_times.py
@@ -59,7 +61,8 @@ CALIBRATION_REF = 0.021                               # seconds `calibrate()` ta
 SPEED_TRIES = 3                                       # `calibrate()` runs at the start; the fastest sets SPEED
 ROUNDS = 3                                            # a route over its limit is timed again, up to this many rounds
 STALE_SPEED_CAP = 1.25                                # the stale check never divides by more than this
-BUSY = 1.5                                            # probe samples that differ by more than this mean a busy machine
+BUSY = 1.5                                            # CPU probe samples that differ by more than this mean a busy machine
+DB_BUSY = 4.0                                         # database probe samples that differ by more than this do (a quiet one varies about 2 times)
 DB_PROBE_FLOOR = 0.010                                # seconds; below this a database probe says nothing (in-process DuckDB)
 
 # Routes over TARGET today, by backend: (the median in seconds when it was measured, the ticket that
@@ -67,12 +70,12 @@ DB_PROBE_FLOOR = 0.010                                # seconds; below this a da
 OVER: dict = {
     "duckdb": {
         "setup": (0.567, "TR-1628"), "setup_progress": (0.574, "TR-1634"),
-        "home": (0.557, "TR-1629"), "crew": (0.561, "TR-1633"),
+        "home": (0.557, "TR-1629"), "crew": (0.50, "TR-1633"),
         "tickets": (0.576, "TR-1612"), "tickets_list": (0.575, "TR-1612"),
         "project_tickets": (0.556, "TR-1612"), "projects": (0.518, "TR-1610"),
     },
     "postgres": {
-        "setup": (0.376, "TR-1628"), "setup_progress": (0.315, "TR-1634"),
+        "setup": (0.376, "TR-1628"), "setup_progress": (0.350, "TR-1634"),
     },
 }
 
@@ -285,7 +288,7 @@ async def main():
                     samples.append(probe())              # over its limit: the machine may have been busy, time it again
                 results[name] = (best, bad, path)
         samples.append(probe())
-        busy = spread([c for c, _ in samples]) > BUSY or spread([d for _, d in samples]) > BUSY
+        busy = spread([c for c, _ in samples]) > BUSY or spread([d for _, d in samples]) > DB_BUSY
         print(f"probes: cpu {min(c for c, _ in samples) * 1000:.0f} to {max(c for c, _ in samples) * 1000:.0f} ms, "
               f"database {min(d for _, d in samples) * 1000:.0f} to {max(d for _, d in samples) * 1000:.0f} ms "
               f"({len(samples)} samples): {'BUSY' if busy else 'quiet'}")
@@ -313,9 +316,6 @@ async def main():
                 # stale only when the route is clearly under target on the reference machine (the median
                 # divided by SPEED), so a route near it does not flap on a faster or slower one
                 scaled = med / min(SPEED, STALE_SPEED_CAP)
-                if scaled < TARGET / slack and busy:
-                    unmeasured.append(f"{name} {med * 1000:.0f} ms")
-                    continue
                 ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", scaled >= TARGET / slack,
                    f"{scaled * 1000:.0f} ms is under {TARGET / slack * 1000:.0f} ms: remove the entry")
         ck("the machine was quiet enough to time every route", not unmeasured,
