@@ -2741,6 +2741,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 + " ORDER BY created_at", args).fetchall()
         return [self._project_row(r) for r in rows]
 
+    def project_names(self) -> dict[str, str]:
+        """{project id: name} for every project, in one query."""
+        with self._sread:
+            rows = self.sc.execute("SELECT id, name FROM usecases").fetchall()
+        return {r[0]: r[1] for r in rows}
+
     # Licence-independent by design (TR-915): never consult licence or team here.
     def private_projects(self) -> list[dict]:
         """The private projects, as {id, name, scope}: the one small query every cell-wide read
