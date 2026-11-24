@@ -69,7 +69,8 @@ from `ui/src/pages`, whose inline styles predate the kit.
   `/dev/components` (`ui/src/pages/dev/Components.tsx`) before writing a component. A new shared
   component goes in `components/edition`, with a gallery section and a check in
   `ui/tests/component-gallery.e2e.cjs` in the same PR. `components/ui` holds the primitives the kit
-  wraps; screens do not import them.
+  wraps; screens do not import them. The field controls (`Checkbox`, `Input`, `Select`, `Switch`,
+  `Tabs`, `Textarea`) have no copy there: import them from `@paper-kit/ui/*`.
 - **The edition primitives are re-exports.** `Button`, `Checkbox`, `Dialog`, `Field`, `Input`,
   `Select`, `StatusLabel`, `Switch`, `Tabs` and `Textarea` in `ui/src/components/edition` are one-line
   `export * from "@paper-kit/<Name>"` over the shared kit vendored in `ui/paper-kit/`. A change to one
