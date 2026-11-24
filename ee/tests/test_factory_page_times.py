@@ -8,10 +8,11 @@ and the in-process caches in CACHES are cleared before each of them, so a call i
 a page after a quiet minute, which is what a person opening it sees. The median of the 5 is the
 route's time.
 
-A route fails when its median is over `max(TARGET, its OVER entry) * SLACK * SPEED`. SPEED is how
-much slower this machine is than the one the OVER medians were taken on (never under 1): a fixed
+A route fails when its median is over `max(TARGET, its OVER entry) * SLACK[backend] * SPEED`. SPEED is
+how much slower this machine is than the one the OVER medians were taken on (never under 1): a fixed
 workload (`calibrate`) is timed in the same run, so a CI runner that is 1.5 times slower gets limits
-1.5 times wider, and a route that really got slower still fails on any machine. A route that is over
+1.5 times wider, and a route that really got slower still fails on any machine. An OVER entry is the
+slowest median of several runs on that machine, not one run. A route that is over
 TARGET today sits in OVER with the median that was measured and the ticket that brings it down; when
 that ticket's change lands, the route meets TARGET, its entry is stale, and the test fails until the
 entry is removed. A PR that moves a time updates OVER and says why; the PR that merges second
@@ -35,7 +36,10 @@ sys.path.insert(0, licensed.REPO)
 import factory_seed as fs
 
 TARGET = 0.300                                       # seconds, the median of a route
-SLACK = 1.5 if os.environ.get("CI") else 1.25        # runners are slower and noisier
+# How much a median may exceed its base, per backend. Postgres gets more: a round trip to the database
+# (a container here, a service on CI) varies from run to run in a way `calibrate()` cannot see. A CI
+# runner is not given a larger slack: `SPEED` already widens its limits by how slow it measures.
+SLACK = {"duckdb": 1.25, "postgres": 1.6}
 RUNS = 5                                             # timed calls per route, after one warm-up
 CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
 
@@ -183,11 +187,11 @@ def calibrate() -> float:
 SPEED = 1.0   # set in main(): how many times slower than the OVER machine this one is, never under 1
 
 
-def allowed(over: dict, name: str) -> float:
-    """The most a route's median may be: its OVER entry or TARGET, whichever is more, times SLACK
-    and SPEED."""
+def allowed(over: dict, name: str, slack: float) -> float:
+    """The most a route's median may be: its OVER entry or TARGET, whichever is more, times the
+    backend's slack and SPEED."""
     base = max(TARGET, over[name][0]) if name in over else TARGET
-    return base * SLACK * SPEED
+    return base * slack * SPEED
 
 
 async def main():
@@ -198,6 +202,7 @@ async def main():
     STORE = app.state.store
     backend = "postgres" if os.environ.get("TARES_TEST_PG") else "duckdb"
     over = OVER[backend]
+    slack = SLACK[backend]
     cal = calibrate()
     SPEED = max(1.0, cal / CALIBRATION_REF)
     print(f"calibration {cal * 1000:.0f} ms (reference {CALIBRATION_REF * 1000:.0f} ms): limits times {SPEED:.2f}")
@@ -235,10 +240,10 @@ async def main():
                     if resp.status_code not in statuses and bad is None:
                         bad = (resp.status_code, resp.text[:200])
                 results[name] = (statistics.median(times), bad, path)
-        print(f"\n== medians ({backend}, target {TARGET * 1000:.0f} ms, slack {SLACK}, speed {SPEED:.2f}) ==")
+        print(f"\n== medians ({backend}, target {TARGET * 1000:.0f} ms, slack {slack}, speed {SPEED:.2f}) ==")
         print(f"  {'route':<24} {'median ms':>10} {'allowed ms':>11}  status")
         for name, (med, bad, path) in results.items():
-            lim = allowed(over, name)
+            lim = allowed(over, name, slack)
             status = "ok" if med <= lim and not bad else "FAIL"
             if name in over:
                 status += f" (over target, {over[name][1]})"
@@ -246,13 +251,14 @@ async def main():
         print()
         for name, (med, bad, path) in results.items():
             ck(f"{name} answers as the page expects", bad is None, f"{path} {bad}")
-            ck(f"{name} median {med * 1000:.0f} ms is within {allowed(over, name) * 1000:.0f} ms",
-               med <= allowed(over, name), f"{path} {med * 1000:.0f} ms")
+            ck(f"{name} median {med * 1000:.0f} ms is within {allowed(over, name, slack) * 1000:.0f} ms",
+               med <= allowed(over, name, slack), f"{path} {med * 1000:.0f} ms")
         for name, (med, bad, path) in results.items():
             if name in over:
-                # stale only when the route is clearly under target, so a route near it does not flap
-                ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", med >= TARGET / SLACK,
-                   f"{med * 1000:.0f} ms is under {TARGET / SLACK * 1000:.0f} ms: remove the entry")
+                # stale only when the route is clearly under target on the reference machine (the median
+                # divided by SPEED), so a route near it does not flap on a faster or slower one
+                ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", med / SPEED >= TARGET / slack,
+                   f"{med / SPEED * 1000:.0f} ms is under {TARGET / slack * 1000:.0f} ms: remove the entry")
         ck("every OVER entry names a route in ROUTES", all(n in results for n in over),
            str([n for n in over if n not in results]))
         ck("every OVER entry names a ticket", all(str(v[1]).startswith("TR-") for v in over.values()))
