@@ -69,9 +69,14 @@ def scenario(fn):
 
 
 def path_without_claude() -> str:
-    """This PATH without every folder that holds a `claude`, and with the folder of the codex under test."""
+    """This PATH without every folder that holds a `claude`, with the folder of the codex under test, and with
+    this interpreter's folder first when it holds a `tares` (the checkout's virtual environment): a station's
+    guard is `tares hook codex-guard`, found on the station's PATH, and a station that cannot run it is
+    stopped at its first turn (TR-1594)."""
     keep = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and not os.path.exists(os.path.join(d, "claude"))]
-    return os.pathsep.join([os.path.dirname(codex_bin()), *keep])
+    mine = os.path.dirname(sys.executable)
+    first = [mine] if os.access(os.path.join(mine, "tares"), os.X_OK) and not os.path.exists(os.path.join(mine, "claude")) else []
+    return os.pathsep.join([*first, os.path.dirname(codex_bin()), *keep])
 
 
 class Crew:
@@ -356,8 +361,8 @@ def personal_setup_stays_out(out):
             "no MCP server is loaded": servers == [],
             "no plugin is installed": plugins == [],
             "no notify program is configured": not config.get("notify"),
-            "the guard's hook is the thread's only hook, and it ran before the command":
-                res["hooks_listed"] == ["preToolUse"] and "completed" in res["pre_tool_hook_runs"],
+            "the guard is the thread's only hook (every tool call, the start of every turn), and it ran before the command":
+                sorted(res["hooks_listed"]) == ["preToolUse", "userPromptSubmit"] and "completed" in res["pre_tool_hook_runs"],
             "the command ran": any("launch-probe" in (x["command"] or "") and x["exit"] == 0 for x in res["commands"]),
             "no program was started that carries the prompt": res["programs_that_carried_the_prompt"] == [],
             "the conversation is kept in the station's own folder": os.path.realpath(rollout).startswith(os.path.realpath(home) + os.sep),

@@ -52,8 +52,8 @@ did not pass.
 
 Hooks reach a thread through `thread/start` `config.hooks` (source `sessionFlags`), with no file written in
 the repository or in `~/.codex`. They run only with `config.bypass_hook_trust: true` on the same call.
-`hooks/list` keeps saying `untrusted` even then, so a launch cannot prove the guard is on by listing it. The
-controller can prove it from the events: every `commandExecution` or `mcpToolCall` `item/started` must come
+`hooks/list` keeps saying `untrusted` even then, so a launch cannot prove the guard is on by listing it (how
+the product proves it is section 6). A controller that stays connected can prove it from the events: every `commandExecution` or `mcpToolCall` `item/started` must come
 after a `hook/started` whose run id ends in that item's id. Across the transcripts of these probes that held
 for 55 of 56 items; the one without is the command of the untrusted scenario. Two things do not work in the app-server and are ignored
 with a warning: `-c bypass_hook_trust=true` and `-c hooks.state...trusted_hash=...`.
@@ -179,16 +179,116 @@ Telling a station's leftover commands from other processes:
 - So the crew also writes down what runs under an app-server (process id and start time), every watch round
   and right before it ends one. After a kill, those that still run are the station's.
 - Not found on macOS: a system program started after the watch's last round, by a station that then died by
-  itself. Having the guard's adapter write down each command's process id would close that; it belongs to TR-1594.
+  itself. Having the guard's adapter write down each command's process id would close that; TR-1594 decided
+  against it (section 6).
 
 Not in this part: answering an approval (a blocked station stays blocked; how approvals and recording are
 done is not decided), `roster`, `doctor` and `crew up` for a Codex crew.
+
+## 6. The guard, proven on (TR-1594)
+
+The adapter of section 1 is now the product's: `tares hook codex-guard` (`tares/crew/codex_guard.py`), the
+plugin's `guard.py` asked from inside the package. `probe_guard.py` runs it in every scenario but the two
+controls of the typed-input gap, and `probe_guard_on.py` runs the crew's own check through the product's
+start. Numbers in `results/guard.json` and `results/guard_on.json`.
+
+### How the crew knows the guard runs
+
+Codex skips a hook it was not told to trust and reports nothing, and `hooks/list` says `untrusted` either way
+(section 1). The design of this project keeps no process connected to a station (section 5), so the proof
+cannot be a listener that watches every event. It is made of what a short visit can see:
+
+- **The guard writes down every run**: one line in `stations/<station>.codex.guard` in the crew home (the
+  turn, the call's id, let through or refused; no command text). The hook's `tool_use_id` is the id of the
+  `commandExecution` or `mcpToolCall` item the call becomes, and its `turn_id` is the turn's id, so the two
+  can be compared afterwards.
+- **At the start of every turn.** The same command is registered for `UserPromptSubmit`. Codex runs it after
+  `turn/start` and before it asks the model: on the wire `hook/started` and `hook/completed` come before the
+  turn's first `item/started` (the `userMessage`). The visit that hands over the prompt stays until it has
+  seen the guard's line for that turn. If the first item comes with no line, the conversation does not run
+  its hooks: the turn is interrupted, the station is stopped, and nothing has run, because the model has not
+  answered yet. Measured: the line was there 1.7 s after `turn/start` on a first turn; a station without
+  trust was refused 2.3 s after its start began, and the command it was asked for never ran.
+- **For every command and MCP call.** A visitor reads the newest turn with `thread/turns/list` (`itemsView`
+  `full`); each command and MCP call must have its line saying it was let through, and each command must
+  carry the line that closes its input. The watch does this every round and the crew does it before the
+  next prompt. An app-server lists a command only once it has ended (measured: a command in the middle of
+  its `sleep` was not in the list), so this is seen after the fact: a station that ran something the guard
+  has no line for is stopped at the next look, not before the command.
+- A station stopped this way is marked, and the watch does not start it again; `tares factory revive` does.
+
+What a visit needs for the second point, measured: a connection that only reads a conversation is told
+nothing of its turns (it sees `thread/status/changed` and no item). `thread/resume` on a conversation the
+app-server still has open joins it; the turn's events then arrive. So a prompt is always handed over after a
+`thread/resume`, also when the app-server never stopped.
+
+### A repository's own Codex setup
+
+Found by this ticket, not by the spike. A conversation started in a folder nobody marked makes Codex record
+the folder as trusted by itself (it writes `projects."<folder>".trust_level = "trusted"` into the Codex
+folder's `config.toml`; for a worktree, under the main checkout). It then reads the repository's own
+`.codex/config.toml`:
+
+- its MCP servers are started for the conversation (`mcpServer/startupStatus/updated` said `ready` for a
+  server only the repository named). `mcpServerStatus/list` without a conversation does not list them, so
+  the check at a station's start (section 4) did not see them;
+- its hooks run, although `hooks/list` calls them `untrusted`: `bypass_hook_trust`, which the guard needs,
+  covers every hook of the conversation. A repository's `PreToolUse` hook runs next to the guard and may
+  answer with a changed command after the guard read the original.
+
+Closed by marking the folder not trusted, twice: in the station's own `config.toml`, written anew at every
+start and holding nothing else, and in the `config` of every `thread/start` and `thread/resume`. With
+either mark alone the repository's setup was not read in any of the cases tried (the repository's top, a
+worktree marked itself or by its main checkout, a subfolder, a path with a link in it), Codex wrote nothing
+to the file, and its own warning said so ("Project-local config, hooks, and exec policies are disabled ...
+but skills still load"). The mark in the file also covers a helper conversation Codex starts by itself.
+Then the crew asks, before every turn: `hooks/list` for the folder must show no hook from outside the
+conversation, and `config/read` no MCP server the station was not started with; either stops the station.
+A repository's skills and `AGENTS.md` are still read. They are text for the model, as `CLAUDE.md` is.
+
+### `probe_guard_on.py`
+
+| Scenario | Result |
+|---|---|
+| Guarded turn | The start handed over the prompt and returned with the guard's line for the turn already written. The turn left one line per call: two let through, the reviewer's `gh pr merge` refused. The refused one left no command. `cat`, which waits for input, ended by itself. Compared with the record nothing was missing, the station stayed up, and its next prompt, on the conversation still open, left its line too. |
+| No trust, no command | The same station with `bypass_hook_trust` taken out of its settings. The start was refused 2.3 s after it began ("the turn began (userMessage) with no run of the guard before it"), the `touch` the model was asked for never ran, the guard left no line, and the app-server and its socket were gone. |
+| A repository's setup stays out | Control, no mark: Codex started the repository's MCP server, listed its hook and recorded the folder as trusted. A station in the same folder: the repository's hook never ran, the app-server had no hook and no MCP server of the repository's, and Codex left the station's `config.toml` as the start wrote it. |
+
+`probe_guard.py`, run again with the product's adapter, compares every scenario's turn with the guard's
+record the way the crew does. All scenarios pass. In `untrusted_hook_is_skipped` the comparison shows the
+command as run with no guard and the record is empty, which is what stops a station in the product. In
+`helper_subagent` the helper's commands have their lines too.
+
+### What the guard does not stop
+
+On Codex as on Claude Code the guard reads the text of a command, for a station that cooperates:
+
+- a script file that holds a guarded command (`sh deploy.sh` with a push inside) is not read, on either runtime;
+- on Codex, a command that opens the terminal for itself (`bash </dev/tty`) gets around the closed input. A
+  station's app-server is started with no terminal, so there is none to open; a Codex run by hand in a
+  terminal would have one;
+- a hook that takes longer than its 5 s lets the call through, on both. On Codex the adapter turns its own
+  failures (a kit without its guard, a record that cannot be written) into a block (exit 2), where the
+  Claude Code hook line lets the call through;
+- between two looks, a Codex station whose `PreToolUse` hook stopped running while its `UserPromptSubmit` hook
+  still runs would run commands unseen until the watch's next round. No case of that was found; the two are
+  one command under one trust setting.
+
+### Decided
+
+- **No process id written by the adapter** (the question left by section 5). The adapter would have to put a
+  second line in front of every command, writing `$$` to a file the sandbox lets a command write, and the
+  crew would have to tell a reused process id from the command's. What it would close is narrow: on macOS
+  only, a system program started within one watch round before its station died by itself. A station that is
+  stopped, killed by the crew or revived is already covered (section 5).
+- Still open, not tried: a managed `requirements.toml` with `unified_exec = false`, for people who can
+  install one.
 
 ## What was not verified
 
 - Keeping the person's own Codex setup out of a station: not verified in the spike, where a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. Done since, in section 4.
 - A login kept in the system keyring or given as an API key: a station links the login file, and refuses to start without one.
-- A trusted project's own `.codex/config.toml` (section 4).
+- A trusted project's own `.codex/config.toml`: verified since, and closed, in section 6.
 - A real Tares cell and crew: launch through `tares factory`, the Tares MCP, the desk, the merge queue.
 - Orphan cleanup after a crash. The crew's `strays` scan is the candidate; it was not run against Codex commands.
 - Hook trust by any route other than `bypass_hook_trust`, and managed `requirements.toml`.

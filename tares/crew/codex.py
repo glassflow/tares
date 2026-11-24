@@ -50,7 +50,7 @@ import psutil
 
 from . import state
 from .codex_wire import Wire, WireError
-from .errors import CrewError
+from .errors import CrewError, GuardOffError
 from .paths import CrewPaths, home_dir
 
 RUNTIME = "codex"
@@ -151,8 +151,50 @@ def person_login(env=None) -> Path:
     return Path(os.path.realpath(os.path.join(base, "auth.json")))
 
 
-def prepare_home(paths: CrewPaths, station: str, env=None) -> Path:
-    """Make the station's own Codex folder and link the person's login into it. Dies when the person has no
+def _git_folder(cwd: str, *args: str) -> str:
+    try:
+        out = subprocess.run(["git", "-C", cwd, "rev-parse", *args], capture_output=True, text=True, timeout=5,
+                             check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def not_trusted(cwd: str) -> dict:
+    """The `projects` table that marks the folder a station works in as not trusted: the folder as given and
+    as it resolves, its repository's top, and the main checkout when the folder is a worktree (Codex keeps a
+    worktree's trust under the main checkout). One mark is enough on 0.171.0; all are given.
+
+    Why (TR-1594, measured on 0.171.0): a conversation started in a folder nobody marked makes Codex record
+    the folder as trusted by itself. It then reads the repository's own `.codex/config.toml`: its MCP servers
+    are started for the conversation, and its hooks run next to the guard (the conversation's trust for hooks
+    covers them too), where one could change a command after the guard read it. With the mark, in the
+    station's own `config.toml` or in the conversation's start, none of that is read and Codex leaves the
+    record alone. A repository's skills and AGENTS.md are still read; they are text."""
+    if not cwd:
+        return {}
+    folders = {cwd, os.path.realpath(cwd), _git_folder(cwd, "--show-toplevel")}
+    common = _git_folder(cwd, "--path-format=absolute", "--git-common-dir")
+    if os.path.basename(common) == ".git":
+        folders.add(os.path.dirname(common))
+    return {f: {"trust_level": "untrusted"} for f in sorted(folders) if f}
+
+
+def _toml_text(value: str) -> str:
+    """A TOML basic string."""
+    out = value.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + "".join(c if c >= " " and c != "\x7f" else f"\\u{ord(c):04x}" for c in out) + '"'
+
+
+def home_config(cwd: str) -> str:
+    """The station's own `config.toml`: the marks of `not_trusted`, and nothing else."""
+    return "".join(f"[projects.{_toml_text(folder)}]\ntrust_level = {_toml_text(mark['trust_level'])}\n\n"
+                   for folder, mark in not_trusted(cwd).items())
+
+
+def prepare_home(paths: CrewPaths, station: str, env=None, cwd: str = "") -> Path:
+    """Make the station's own Codex folder, link the person's login into it and write its `config.toml` anew:
+    the folder the station works in (`cwd`) marked not trusted, nothing else. Dies when the person has no
     login file, or when the folder holds a login of its own where the link belongs."""
     login = person_login(env)
     if not login.is_file():
@@ -162,7 +204,13 @@ def prepare_home(paths: CrewPaths, station: str, env=None) -> Path:
     home = station_home(paths, station)
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(home, 0o700)
-    (home / "config.toml").unlink(missing_ok=True)
+    config = home / "config.toml"
+    config.unlink(missing_ok=True)   # whatever a last run left: the folder never grows a setup of its own
+    text = home_config(cwd)
+    if text:
+        fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
     link = home / "auth.json"
     if link.is_symlink():
         if os.path.realpath(link) != str(login):
@@ -372,7 +420,7 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
     check_socket_path(station, sock)
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
     clear_socket(station, sock)
-    home = prepare_home(paths, station, client.env)
+    home = prepare_home(paths, station, client.env, cwd or paths.raw)   # the folder its conversations start in
 
     env = {k: v for k, v in os.environ.items() if k not in drop_env}
     env.update({k: str(v) for k, v in plan["env"].items()})
@@ -411,6 +459,11 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
     if prompt:
         try:
             got = codex_station.hand(paths, station, prompt, fresh=not row.get("sessionId"))
+        except GuardOffError as e:   # already stopped; the row as it was, marked, so the watch leaves it down
+            stop(proc, sock)
+            _put_back(paths, station, before)
+            codex_station.mark_off(paths, station, e.why)
+            raise
         except CrewError:
             stop(proc, sock)
             _put_back(paths, station, before)

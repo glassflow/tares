@@ -52,6 +52,17 @@ class NotBetweenTurnsError(CrewError):
     code = "not_between_turns"
 
 
+class GuardOffError(CrewError):
+    """A Codex station's guard was found not to run, or not alone (TR-1594): the station was stopped. `why`
+    is what was seen."""
+
+    code = "guard_off"
+
+    def __init__(self, station: str, why: str):
+        self.station, self.why = station, why
+        super().__init__(f"{station} was stopped, since its guard cannot be relied on: {why}")
+
+
 class ClaudeNotFoundError(CrewError):
     """No usable `claude` binary: none on PATH or in the known install folders, and CLAUDE_BIN is not set."""
 

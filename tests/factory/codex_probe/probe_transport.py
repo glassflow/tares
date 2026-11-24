@@ -24,10 +24,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from appserver import AppServer, AppServerError, codex_bin, items, notifications  # noqa: E402
-from fixture import HERE, World, guard_hooks  # noqa: E402
+from fixture import World, adapter_hooks  # noqa: E402
 from probe_guard import EFFORT, MODEL, QUIET, RULES  # noqa: E402
 
-GUARD_HOOKS = guard_hooks(f"{sys.executable} {os.path.join(HERE, 'codex_guard.py')}")
+GUARD_HOOKS = adapter_hooks()   # the guard as a Codex station runs it
 
 
 def pids_of(marker: str) -> list[int]:

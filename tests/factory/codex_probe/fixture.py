@@ -103,14 +103,39 @@ class World:
         """The environment a station of this role runs in: the FACTORY_* names the Claude runtime sets
         (tares/integrations/builtin/runtime_claude_code.py), and the fakes first on PATH."""
         env = dict(os.environ)
+        # `tares factory heavy` must be this checkout's: the interpreter's folder goes before the person's PATH
+        # when it holds a `tares` (a virtual environment of the checkout)
+        mine = os.path.dirname(sys.executable)
+        ours = [mine] if os.access(os.path.join(mine, "tares"), os.X_OK) else []
         env.update({
             "FACTORY_ROLE": role, "FACTORY_STATION": station or f"crew-{role}", "FACTORY_CREW": "crew",
             "FACTORY_HOME": self.crew, "FACTORY_PARENT": parent,
-            "PATH": self.bin + os.pathsep + env.get("PATH", ""),
+            "PATH": os.pathsep.join([self.bin, *ours, env.get("PATH", "")]),
             "PROBE_SIDE_EFFECTS": self.log,
         })
         env.update(extra or {})
         return env
+
+
+def adapter_command() -> str:
+    """The guard as a Codex station runs it (TR-1594): `tares hook codex-guard`, the product's own, from this
+    checkout. The `tares` next to the interpreter when there is one (a virtual environment of the checkout),
+    else the package run by this interpreter."""
+    import shlex
+    tares = os.path.join(os.path.dirname(sys.executable), "tares")
+    if os.access(tares, os.X_OK):
+        run = shlex.quote(tares)
+    else:
+        shim = "import sys; sys.argv[0] = 'tares'; from tares.cli import main; main()"
+        run = f"PYTHONPATH={shlex.quote(REPO)} {shlex.quote(sys.executable)} -c {shlex.quote(shim)}"
+    return f"{run} hook codex-guard --plugin-root {shlex.quote(os.path.join(REPO, 'claude-plugin'))}"
+
+
+def adapter_hooks(timeout: int = 5) -> dict:
+    """The `hooks` table a Codex station is started with: the adapter before every tool call and at the start
+    of every turn (tares/integrations/builtin/runtime_codex.py)."""
+    guard = {"type": "command", "command": adapter_command(), "timeout": timeout}
+    return {"PreToolUse": [{"matcher": "", "hooks": [dict(guard)]}], "UserPromptSubmit": [{"hooks": [dict(guard)]}]}
 
 
 def guard_hooks(command: str | None = None, timeout: int = 5, matcher: str = "") -> dict:

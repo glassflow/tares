@@ -13,7 +13,8 @@ machine knows, checks the Codex version, and starts the process (`tares.crew.cod
   settings  what the station's conversation is started with. Codex takes these per thread (`thread/start`),
             so nothing is written to the repository or to the person's `~/.codex`:
               thread       the `thread/start` parameters: model, approval policy, sandbox, the identity
-                           text, and `config` (the guard's hook and the thread's trust for it);
+                           text, and `config` (the guard's hook, for every tool call and for the start
+                           of every turn, and the thread's trust for it);
               effort       the reasoning effort of a turn;
               mcp_servers  the MCP servers the station may load, by name. A station that loads another is
                            stopped at its start;
@@ -27,11 +28,17 @@ else of theirs. The account brings connectors and remote plugins into any Codex 
 features are off. In TR-1576 a notify program of a personal plugin was started at the end of each turn and
 was handed the prompt; with this spec nothing of the kind is configured.
 
-Not here yet: the controller that starts the thread and its turns (TR-1593), the guard's adapter that closes
-a command's standard input (TR-1594; the hook below is the guard as the Claude plugin runs it), recording
-(TR-1595), the token of the MCP server (TR-1596), the role instructions (TR-1598) and monitoring. The
-approval policy and the sandbox are the tightest pair TR-1576 ran a guarded command under; whether a builder
-can work in them is for TR-1598 to find.
+The guard (TR-1594) is `tares hook codex-guard`: the Claude plugin's guard.py asked by
+`tares.crew.codex_guard`, which also closes a command's standard input and leaves a record of every run.
+It is registered twice, for `PreToolUse` (every tool call) and for `UserPromptSubmit` (the start of every
+turn, where its record is the proof, before the model is asked, that the thread runs its hooks). The crew
+adds one thing to `config` when it starts the conversation, since only its machine knows the folder: the
+station's folder is marked not trusted for the thread, so the repository's own `.codex/config.toml` cannot
+add a hook or an MCP server to the station (`tares.crew.codex_station.hand`).
+
+Not here yet: recording (TR-1595), the token of the MCP server (TR-1596), the role instructions (TR-1598)
+and monitoring. The approval policy and the sandbox are the tightest pair TR-1576 ran a guarded command
+under; whether a builder can work in them is for TR-1598 to find.
 
 No secret is in a spec.
 """
@@ -51,7 +58,7 @@ from .runtime_claude_code import ROLES, RuntimeClaudeCode, _text, rule_values
 # tools and 8 plugins with the features on, none with them off.
 LEAN_FLAGS = ("--disable", "apps", "--disable", "plugins", "--disable", "remote_plugin")
 
-GUARD_HOOK = "tares hook guard --plugin-root {PLUGIN_DIR_SHELL}"
+GUARD_HOOK = "tares hook codex-guard --plugin-root {PLUGIN_DIR_SHELL}"
 GUARD_TIMEOUT = 5  # seconds, as claude-plugin/hooks/hooks.json gives the guard
 
 # The identity headers a station's MCP calls carry, and the variable of its environment each is read from.
@@ -123,14 +130,18 @@ class RuntimeCodex(Runtime):
         env.pop("FACTORY_AUTOCOMPACT", None)   # Claude Code's --autocompact; Codex compacts by itself
         env["CODEX_HOME"] = "{CODEX_HOME}"
 
+        guard = {"type": "command", "command": GUARD_HOOK, "timeout": GUARD_TIMEOUT}
         thread = {
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
             "developerInstructions": identity(role, station, parent, project, repo, work_role),
             "config": {
-                # an empty matcher is every tool; the guard ignores what it has no rule for
-                "hooks": {"PreToolUse": [{"matcher": "", "hooks": [
-                    {"type": "command", "command": GUARD_HOOK, "timeout": GUARD_TIMEOUT}]}]},
+                "hooks": {
+                    # an empty matcher is every tool; the guard ignores what it has no rule for
+                    "PreToolUse": [{"matcher": "", "hooks": [dict(guard)]}],
+                    # the start of every turn: the guard's record of it is the proof that it is on
+                    "UserPromptSubmit": [{"hooks": [dict(guard)]}],
+                },
                 # a hook Codex was not told to trust is skipped without an error (TR-1576)
                 "bypass_hook_trust": True,
             },
