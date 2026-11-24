@@ -37,8 +37,11 @@ by hand: tests/factory/codex_probe/probe_station.py.
     station whose conversation does not run its hooks is stopped at its first turn, before the model ran
     anything, marked, left down by the watch and started again by `revive`; a command or an MCP call with no
     run of the guard before it, one that ran though it was refused, and one whose input was not closed stop
-    the station at the watch's next round or before its next prompt; a repository that brings a Codex setup
-    of its own adds nothing to a station, and a Codex that would read it all the same stops the start.
+    the station at the watch's next round or before its next prompt; a last turn that cannot be listed with
+    its items is not taken for one in order, and the next prompt waits for it; the watch's look is made under
+    the station's lock, and a station started again since the look is not stopped for the old one; a
+    repository that brings a Codex setup of its own adds nothing to a station, and a Codex that would read it
+    all the same stops the start.
 
 Unix only: on Windows the test says so and passes.
 
@@ -98,7 +101,7 @@ from tares.crew import codex_station as cs  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew import codex_guard as cg  # noqa: E402
-from tares.crew.codex_wire import WireError  # noqa: E402
+from tares.crew.codex_wire import Wire, WireError  # noqa: E402
 from tares.crew.errors import ClaudeNotFoundError, CrewError, GuardOffError, NotBetweenTurnsError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 import launch_support as LS  # noqa: E402
@@ -816,6 +819,89 @@ for label, commands, switch, why in (
     until(lambda: cs.turn_state(paths, S) == "done")
     got = cs.check_guard(paths, S)
     ck(f"{label} stops the station", err is None and got.startswith(why) and gone(pid) and cs.guard_off(paths, S) == got, (err, got))
+
+# A turn that cannot be listed with its items is not a turn that was compared (the review of PR 929).
+real_request = Wire.request
+LISTING = {"as": ""}   # how `thread/turns/list` answers: "" as the app-server does, "fail", or "bare" (no items)
+
+
+def listed(self, method, params=None):
+    if method == "thread/turns/list" and LISTING["as"] == "fail":
+        raise WireError("thread-store internal error")
+    got = real_request(self, method, params)
+    if method == "thread/turns/list" and LISTING["as"] == "bare":
+        got = {**got, "data": [{**t_, "itemsView": "notLoaded", "items": []} for t_ in got.get("data") or []]}
+    return got
+
+
+Wire.request = listed
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true", nopre=1)   # a command with no run of the guard before it, as above
+err, _ = start(mk())
+pid = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+for how, shown in (("fail", "its turns could not be listed (thread-store internal error)"),
+                   ("bare", "its newest turn came without its items (notLoaded)")):
+    LISTING["as"] = how
+    got = cs.check_guard(paths, S)
+    err, kind, _ = quietly(cs.hand, paths, S, "The next task.")
+    ck(f"a last turn that cannot be compared ({how}) is not one found in order: the watch stops nothing, and the next "
+       "prompt is not handed over",
+       got == "" and kind is CrewError and shown in (err or "") and "not handing it a prompt" in (err or "")
+       and len(calls(pid, "turn/start")) == 1 and alive(pid) and cs.guard_off(paths, S) == ""
+       and not events(paths, "guard-off"), (got, kind, err, calls(pid)))
+LISTING["as"] = ""
+err, kind, _ = quietly(cs.hand, paths, S, "The next task.")
+ck("once it can be listed again that same turn is compared, before any prompt, and the station is stopped for it",
+   kind is GuardOffError and "a command ran with no run of the guard before it" in err
+   and len(calls(pid, "turn/start")) == 1 and gone(pid) and cs.guard_off(paths, S) != "", (err, kind, calls(pid)))
+Wire.request = real_request
+ck("a conversation with no turn yet has nothing to compare, and that is in order",
+   cs._last_turn(type("W", (), {"request": lambda self, m, p=None: {"data": []}})(), "thr") is None)
+
+# The look and the stop are one step under the station's lock, and only the app-server that was looked at is
+# stopped (the review of PR 929).
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true", nopre=1)
+err, _ = start(mk())
+pid = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+holder = command_of(paths, "crew-releaser")   # another factory command at work on the station: it holds the lock
+paths.lock_dir(S).mkdir()
+(paths.lock_dir(S) / "pid").write_text(f"{holder.pid}\n")
+looks = []
+real_audit = cs._audit
+cs._audit = lambda *a: looks.append(1) or real_audit(*a)
+got = cs.check_guard(paths, S)
+ck("while another command holds the station's lock the watch does not look at it, and leaves the lock alone",
+   got == "" and not looks and alive(pid) and (paths.lock_dir(S) / "pid").read_text() == f"{holder.pid}\n", (got, looks))
+shutil.rmtree(paths.lock_dir(S))
+end(holder.pid, signal.SIGKILL)
+old = dict(row(paths)["codex"])
+newer = command_of(paths, "crew-releaser")   # stands for the app-server a restart started meanwhile
+time.sleep(0.3)
+
+
+def restarted_meanwhile(*a):
+    """The comparison, and right after it the station's record names another app-server: what a restart that got
+    in between leaves, were the look not under the lock."""
+    found = real_audit(*a)
+    state.stations_put(S, {"codex": {**old, "pid": newer.pid, "born": psutil.Process(newer.pid).create_time()}}, paths)
+    return found
+
+
+cs._audit = restarted_meanwhile
+got = cs.check_guard(paths, S)
+ck("a station started again since the look is not stopped or marked for what the old app-server did",
+   got == "" and alive(newer.pid) and pid_of(paths) == newer.pid and cs.guard_off(paths, S) == ""
+   and not events(paths, "guard-off"), (got, row(paths).get("codex")))
+cs._audit = real_audit
+state.stations_put(S, {"codex": old}, paths)
+got = cs.check_guard(paths, S)
+ck("the one that was looked at is, and the lock is let go after the look",
+   "a command ran with no run of the guard before it" in got and gone(pid) and cs.guard_off(paths, S) == got
+   and not paths.lock_dir(S).exists(), got)
+end(newer.pid, signal.SIGKILL)
 
 tares, paths, said, mk = crew()
 fake(project=1)

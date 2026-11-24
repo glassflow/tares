@@ -47,8 +47,15 @@ checks, with what a short visit can see:
     must carry the line that closes its input. An app-server lists a command only once it has ended, so
     this is seen after the fact, at the next look.
 A station that fails one is stopped and marked (`guard_off`); the watch does not start it again by itself,
-`tares factory revive` does. What is not covered: a helper conversation the station starts inside Codex
-runs the same hook (TR-1576), but its commands are not compared.
+`tares factory revive` does. Two things keep that from going wrong:
+  * a turn that cannot be listed with its items is not a turn that was compared. The watch then looks again
+    next round, and `hand` refuses the next prompt until the comparison could be made: only the newest turn
+    is ever compared, so a prompt handed over now would leave this one never looked at;
+  * the comparison and the stop are one step under the station's lock, and the stop ends only the app-server
+    that was looked at. A restart between the two would otherwise have its new app-server stopped, and
+    marked, for what the old one did.
+What is not covered: a helper conversation the station starts inside Codex runs the same hook (TR-1576), but
+its commands are not compared.
 
 psutil and the standard library.
 """
@@ -61,9 +68,9 @@ import time
 import psutil
 
 from . import codex as cx
-from . import codex_guard, state
+from . import codex_guard, locks, state
 from .codex_wire import Wire, WireError
-from .errors import CrewError, GuardOffError, NotBetweenTurnsError
+from .errors import CrewError, GuardOffError, NotBetweenTurnsError, StationLockedError
 from .paths import CrewPaths
 
 TURN_STOP_WAIT = 20   # seconds an interrupted turn may take to end before the app-server is asked to end
@@ -269,17 +276,34 @@ def unguarded(items: list, record: list) -> list:
     return found
 
 
+class NotCompared(Exception):
+    """The conversation's newest turn could not be had with all its items, so what it ran is not known. Never
+    the same as a turn that was compared and found in order."""
+
+
 def _last_turn(wire: Wire, thread: str):
-    """The conversation's newest turn with its items, or None when it has none or cannot be listed."""
+    """The conversation's newest turn with all its items, or None when it has no turn yet. Raises NotCompared
+    when the turns cannot be listed, or the turn comes without its items (Codex says so in `itemsView`, and
+    leaves `items` empty)."""
     try:
         data = wire.request("thread/turns/list", {"threadId": thread, "limit": 1, "itemsView": "full"}).get("data")
-    except WireError:
+    except WireError as e:
+        raise NotCompared(f"its turns could not be listed ({e})"[:300]) from None
+    if not isinstance(data, list):
+        raise NotCompared("the list of its turns was not a list")
+    if not data:
         return None
-    return data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else None
+    turn = data[0]
+    if not isinstance(turn, dict) or not isinstance(turn.get("items"), list):
+        raise NotCompared("its newest turn came without a list of items")
+    if turn.get("itemsView", "full") != "full":
+        raise NotCompared(f"its newest turn came without its items ({str(turn.get('itemsView'))[:40]})")
+    return turn
 
 
 def _audit(wire: Wire, thread: str, paths: CrewPaths, station: str) -> tuple:
-    """(what the newest turn shows the guard did not do, "" when nothing; that turn's id)."""
+    """(what the newest turn shows the guard did not do, "" when nothing; that turn's id). Raises NotCompared
+    when the turn could not be looked at."""
     turn = _last_turn(wire, thread)
     if turn is None:
         return "", ""
@@ -347,28 +371,47 @@ def guard_off(paths: CrewPaths, station: str) -> str:
     return str(mark.get("why") or "its guard was not running") if isinstance(mark, dict) else ""
 
 
-def _stop_unguarded(paths: CrewPaths, station: str, why: str) -> None:
-    """Stop a station whose guard cannot be relied on, mark it and record the event."""
+def _is(rec: dict, now: dict) -> bool:
+    """Do two records name one app-server: the same process id, started at the same time?"""
+    return isinstance(rec.get("pid"), int) and rec.get("pid") == now.get("pid") and rec.get("born") == now.get("born")
+
+
+def _stop_unguarded(paths: CrewPaths, station: str, why: str, rec: dict) -> bool:
+    """Stop a station whose guard cannot be relied on, mark it and record the event. `rec` is the app-server
+    that was looked at (`info`, read before the look): when the station's record names another one by now, it
+    was started again since, and nothing is stopped or marked for what the old one did. Returns whether it
+    was stopped."""
+    if not _is(rec, info(paths, station)):
+        return False
     stop(paths, station)
     mark_off(paths, station, why)
     state.event("guard-off", station, why[:300], paths=paths)
+    return True
 
 
 def check_guard(paths: CrewPaths, station: str) -> str:
     """Compare what the station's newest turn did with the guard's record; a station that ran something the
     guard has no record of is stopped. Returns why it was stopped, "" when nothing was found or nothing could
-    be looked at. The watch calls this every round for a station that runs."""
-    thread = _recorded_thread(paths, station)
-    if not thread or not is_alive(paths, station):
-        return ""
-    try:
-        with visit(paths, station) as wire:
-            why, _ = _audit(wire, thread, paths, station)
-    except CrewError:
-        return ""
-    if why:
-        _stop_unguarded(paths, station, why)
-    return why
+    be looked at. The watch calls this every round for a station that runs.
+
+    The look and the stop are made under the station's lock, which every command that starts or stops a
+    station takes: a station another command holds is left for the next round. The lock is let go at the end
+    (one this process held before stays held)."""
+    with locks.scope():
+        try:
+            locks.station_lock(station, paths)
+        except StationLockedError:
+            return ""
+        rec = info(paths, station)
+        thread = _recorded_thread(paths, station)
+        if not thread or not _same_process(rec):
+            return ""
+        try:
+            with visit(paths, station) as wire:
+                why, _ = _audit(wire, thread, paths, station)
+        except (CrewError, NotCompared):
+            return ""
+        return why if why and _stop_unguarded(paths, station, why, rec) else ""
 
 
 def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) -> dict:
@@ -379,8 +422,12 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
     conversation the app-server no longer knows, starts a new one from the station's settings; `replaced`
     says a recorded one was given up, and an event records it. Dies (NotBetweenTurnsError) when the station is
     in a turn, (GuardOffError) when its guard is found not to run, after stopping it (see the module's
-    note), and (CrewError) when it is not running or refuses."""
+    note), and (CrewError) when it is not running or refuses, or when what its last turn ran cannot be
+    compared with the guard's record now (the prompt is then not handed over; a later try may be).
+
+    The caller holds the station's lock, as every command that starts or stops a station does."""
     doc = settings(paths, station)
+    rec = info(paths, station)
     cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
     start = _thread_start(doc["thread"], cwd)
     allowed = set(doc.get("mcp_servers") or {})
@@ -407,7 +454,11 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                     raise CrewError(f"{station} gave no conversation to start a turn in")
             off = _brought_along(wire, cwd, allowed)
             if not off and thread == recorded:
-                off, last = _audit(wire, thread, paths, station)
+                try:
+                    off, last = _audit(wire, thread, paths, station)
+                except NotCompared as e:   # not known to be in order: the next turn waits until it is
+                    raise CrewError(f"what the last turn of {station} ran cannot be compared with the guard's "
+                                    f"record now ({e}); not handing it a prompt") from None
             if not off:
                 _trim_record(paths, station, last)
                 params = {"threadId": thread, "input": [{"type": "text", "text": prompt}]}
@@ -423,7 +474,8 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
         except WireError as e:
             raise CrewError(f"could not hand {station} its prompt: {e}") from None
     if off:
-        _stop_unguarded(paths, station, off)
+        if not _stop_unguarded(paths, station, off, rec):
+            raise CrewError(f"{station} was started again while it was handed a prompt; try again")
         raise GuardOffError(station, off)
     state.stations_put(station, {"sessionId": thread, "codex": {**info(paths, station), "turn": turn,
                                                               "turn_at": state.utc_stamp()}}, paths)
