@@ -75,6 +75,10 @@ HIDE_WITHOUT_CHOICE = ("memory", "guardrails")
 # Steps left out of setup for now, whatever they offer. Monitoring (Rius, OTLP) is not tested end to
 # end yet: take it out of this tuple once it is. Hiding the step changes nothing about tracing.
 HIDDEN_STEPS = ("monitoring",)
+# Installed, and not offered in setup yet. A crew on Codex cannot do a ticket until its stations have a
+# controller and a guard (TR-1593, TR-1594), so setup shows no button that would switch a factory to it.
+# The integrations API still takes the choice. Take it out of this set once a Codex crew works end to end.
+NOT_OFFERED = {("runtime", "codex")}
 # Fields that only make sense for one project, never for the whole cell: set at the factory, "This
 # repository has no CI" would switch CI off for every repo. A repo with no workflow files is found
 # to have no CI without it (ci_github.py).
@@ -111,6 +115,7 @@ DESCRIPTIONS = {
     ("guardrails", "tares"): "Built-in rules, always on.",
     ("guardrails", "webhook"): "Ask your own policy service before an action.",
     ("runtime", "claude_code"): "Crew members start as Claude Code background sessions.",
+    ("runtime", "codex"): "Crew members start as Codex app-servers.",
 }
 
 # The words the schema does not carry: a label, help, placeholder and the line shown for a blank
@@ -554,7 +559,7 @@ def register(app, store, h, ctx):
         # what is installed and not connected
         available = []
         for cls in registry.available(slot):
-            if cls.name in names:
+            if cls.name in names or (slot, cls.name) in NOT_OFFERED:
                 continue
             ee = bool(cls.ee)
             ok = (not ee) or allowed

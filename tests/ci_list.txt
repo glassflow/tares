@@ -55,6 +55,7 @@ test_crew_import_without_tty
 test_crew_kit
 test_crew_launch
 test_crew_launch_allow
+test_crew_launch_codex
 test_crew_launch_lean
 test_crew_launch_spec
 test_crew_lifecycle
@@ -233,6 +234,7 @@ test_review_gate
 test_review_post
 test_rius_rca
 test_run_results
+test_runtime_codex
 test_runtime_launch
 test_schedule_trigger
 test_schema_compat

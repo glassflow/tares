@@ -61,6 +61,7 @@ DEFAULT_WORLD = {
     "launch_status": 200,    # the status of GET /api/factory/stations/<station>/launch (not 200: that status, {"detail": ...})
     "launch_detail": "launch",   # the "detail" of that answer
     "launch": None,          # its body; None: the real runtime builds the spec (fake_launch.py), from the rules above
+    "runtime": "claude_code",   # the factory's runtime: the spec is built by that one (`codex` for the Codex runtime)
     "routes": {},            # any other GET: "<path>[?query]" -> [status, body] (the full path with its query wins over the path)
 }
 
@@ -124,7 +125,7 @@ class FakeTares:
                     if w["launch"] is not None:
                         return self._send(200, w["launch"])
                     hit = launch_answer(self.path, self.headers, w["projects"], outer.rules_for,
-                                        w["settings"].get("autonomy", "L4-ship"), outer.url)
+                                        w["settings"].get("autonomy", "L4-ship"), outer.url, runtime=w["runtime"])
                     if hit:
                         return self._send(*hit)
                 if u.path == RULES_PATH:

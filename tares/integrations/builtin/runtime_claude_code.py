@@ -38,6 +38,18 @@ def _text(ctx: dict, key: str, default: str = "") -> str:
     return default if value is None else str(value)
 
 
+def rule_values(ctx: dict, project: str, repo: str) -> dict:
+    """What fills the `{name}`s of a rule sentence on the cell. What only the station's machine knows stays
+    a placeholder; the rest is put in here. Every runtime fills its rules with these."""
+    return {
+        "human": _text(ctx, "human", "the user") or "the user",
+        "tares": _text(ctx, "tares_url"), "cluster": _text(ctx, "cluster"),
+        "home": "{CREW_HOME}", "stations_file": "{CREW_HOME}/stations.json",
+        "repos": "{REPOS}", "wt_repos": "{WT_REPOS}",
+        "where": (f"the repository of project {project}, checked out at {repo}" if repo else "{REPOS}"),
+    }
+
+
 class RuntimeClaudeCode(Runtime):
     """Starts a station as a Claude Code background session (`claude --bg`).
 
@@ -163,14 +175,7 @@ class RuntimeClaudeCode(Runtime):
         soft_deny = [s for s in rules.get("soft_deny") or [] if isinstance(s, str) and s.strip()]
         if not allow and not soft_deny:
             raise ValueError(f"no rules for {station}: a station never starts without rules; give rules")
-        # what only this machine knows stays a placeholder; the rest is put in here
-        values = {
-            "human": _text(ctx, "human", "the user") or "the user",
-            "tares": _text(ctx, "tares_url"), "cluster": _text(ctx, "cluster"),
-            "home": "{CREW_HOME}", "stations_file": "{CREW_HOME}/stations.json",
-            "repos": "{REPOS}", "wt_repos": "{WT_REPOS}",
-            "where": (f"the repository of project {project}, checked out at {repo}" if repo else "{REPOS}"),
-        }
+        values = rule_values(ctx, project, repo)
         env_line = crew_launch.environment_sentence(
             role, station, parent, project, repo, _text(ctx, "human", "the user") or "the user",
             _text(ctx, "authorized_at"), level)

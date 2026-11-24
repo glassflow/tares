@@ -86,7 +86,7 @@ added line, so the recorder must take it off (`probe_evidence.py` does).
 | Orderly down: `turn/interrupt`, then SIGTERM, and nothing else sent in between | The turn ends as `interrupted` at once, with the command still alive. On SIGTERM the app-server exits 0 within a second and the command is gone. The stored turn then holds the command as `failed`, exit -1. The thread is read and deleted only after the stop, through another app-server. | - |
 | `turn/interrupt` alone | The turn says `interrupted`, but the command keeps running and did its work 12 s later. | - |
 
-Also: the socket is created `srw-------` (owner only) and removed on a clean exit. `thread/resume` fails for a
+Also: the socket is `srw-------` (owner only) and removed on a clean exit. Corrected by TR-1592: on macOS the path given to `--listen` becomes a link, and the socket itself is kept in `/tmp/codex-daemon-<uid>/` (a folder of the owner's alone); the mode above was read through the link. `thread/resume` fails for a
 thread that has had no turn ("no rollout found"). The `processId` in a `commandExecution` item is not an
 operating-system pid.
 
@@ -118,9 +118,41 @@ operating-system pid.
 | Resume | `probe_transport.py` | After a kill and a new app-server, `thread/resume` restored the conversation and a further turn ran. |
 | Approvals | `probe_transport.py` | Requests reach the controller as `item/commandExecution/requestApproval` with the command and item id; nothing runs unanswered; a resolved request cannot be answered again. |
 
+## 4. Launch (TR-1592)
+
+Added after the spike, with the product's own launch code (`tares/crew/codex.py`, the Codex runtime's spec) and
+`probe_launch.py`. Numbers in `results/launch.json`.
+
+| Scenario | Result |
+|---|---|
+| A start with no `claude` on PATH | The app-server came up in a session of its own, answered `initialize` from the station's own Codex folder, and a second start was refused while it ran. Asked to end, it exited 0 and its socket was gone. |
+| Where the socket is | The path in the crew home is a link. Codex keeps the socket in `/tmp/codex-daemon-<uid>/<hash>`, mode 0600, in a folder of mode 0700, so a path of any length works for Codex. A client must follow the link when the path is longer than a socket's address holds (about a hundred bytes): connecting to a 144-character path failed, to its target worked. |
+| A stale socket | After a kill the link and the socket both stay. The next start was not blocked: the product removes the link nothing listens on, and Codex replaces its own socket. |
+| The person's own Codex setup | With a Codex folder of the station's own that holds only a link to the login, and the features `apps`, `plugins` and `remote_plugin` off: no MCP server, no plugin, no notify program. One turn ran with the spec's thread settings; the guard's hook (`tares hook guard --plugin-root ...`) was the thread's only hook and ran before the command; the conversation was kept in the station's folder; the person's config, login and conversations were byte for byte as before; no program carrying the prompt was seen. The person's own config has a notify program, MCP servers and plugins. |
+| Control: a notify program | In a Codex folder whose config names a notify program (the probe's own), it was started once at the end of the turn and handed the thread id, the turn id, the folder, the prompt and the answer. `config/read` showed it, and the watcher saw it. |
+| The account's extras | A folder with only the login still gets the account's connectors and plugins: measured once, one MCP server (`codex_apps`) with 248 tools, write tools among them, and 8 plugins. Started without the three flags, the product's check named `codex_apps` and stopped the station. |
+| An older Codex | The 0.167.0 alpha inside the ChatGPT app was refused before anything started, with the version found. |
+
+Two things this found that the spike had not:
+
+- The spike's probes ran on the person's own `~/.codex`, and Codex wrote one `projects."<folder>".trust_level` entry
+  into the person's `config.toml` for each throwaway folder a probe used. They are still there. A station now
+  writes that entry into its own folder, and the launch removes that folder's `config.toml` at every start.
+- That entry marks the station's working folder as trusted, and Codex reads a trusted project's own
+  `.codex/config.toml`. Whether a repository can add hooks or MCP servers to a station that way was not tried; it
+  belongs with the guard (TR-1594).
+
+Not covered by this probe: the cell is not in the loop (the placeholders are filled by the probe as
+`launch_plan` fills them; the route and the crew's side are in `tests/test_runtime_codex.py` and
+`tests/test_crew_launch_codex.py`, with a fake Codex). How Codex writes a renewed login was read from `codex
+login`, which kept the link and wrote its target; a real renewal was not forced, since it would have rotated the
+person's own login.
+
 ## What was not verified
 
-- Keeping the person's own Codex setup out of a station. A station runs on the person's `~/.codex`: in these probes a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. The probes turn off some plugins and MCP servers by name; a station needs a rule, not a list.
+- Keeping the person's own Codex setup out of a station: not verified in the spike, where a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. Done since, in section 4.
+- A login kept in the system keyring or given as an API key: a station links the login file, and refuses to start without one.
+- A trusted project's own `.codex/config.toml` (section 4).
 - A real Tares cell and crew: launch through `tares factory`, the Tares MCP, the desk, the merge queue.
 - Orphan cleanup after a crash. The crew's `strays` scan is the candidate; it was not run against Codex commands.
 - Hook trust by any route other than `bypass_hook_trust`, and managed `requirements.toml`.

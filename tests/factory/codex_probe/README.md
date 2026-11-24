@@ -18,10 +18,11 @@ python tests/factory/codex_probe/probe_hooks.py     --out /tmp/codex-probe/hooks
 python tests/factory/codex_probe/probe_pace.py      --out /tmp/codex-probe/pace
 python tests/factory/codex_probe/probe_mcp.py       --out /tmp/codex-probe/mcp
 python tests/factory/codex_probe/probe_evidence.py  --out /tmp/codex-probe/evidence   # offline, no codex
+python tests/factory/codex_probe/probe_launch.py    --out /tmp/codex-probe/launch     # TR-1592: the product's own start
 ```
 
-`--only NAME ...` runs some scenarios of the first two. Each run writes `results.json` (or `hooks.json`,
-`pace.json`, `mcp.json`, `evidence.json`) and one wire transcript per scenario: every JSON-RPC message in both
+`--only NAME ...` runs some scenarios of the first two and of `probe_launch.py`. Each run writes `results.json` (or `hooks.json`,
+`pace.json`, `mcp.json`, `evidence.json`, `launch.json`) and one wire transcript per scenario: every JSON-RPC message in both
 directions, so the evidence is the wire itself. The transcripts hold local paths and are not committed;
 `fixtures/commands.wire.jsonl` is a small one with the paths replaced.
 
@@ -37,6 +38,7 @@ directions, so the evidence is the wire itself. The transcripts hold local paths
 | `probe_pace.py` | a Codex quota reading through the crew's own `pace_now` |
 | `probe_mcp.py` | a station's token and identity headers on an HTTP MCP endpoint |
 | `probe_evidence.py` | Codex command records through the crew's own `match_check` |
+| `probe_launch.py` | TR-1592: the crew's own launch code against the real Codex: the socket, a stale one, the person's own setup kept out, an older Codex |
 
 The model and effort default to `gpt-5.6-luna` and `low` (`TARES_PROBE_MODEL`, `TARES_PROBE_EFFORT`). The
 scenarios depend on the model doing the steps it is asked for; a scenario that fails because the model did
