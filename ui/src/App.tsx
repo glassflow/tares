@@ -16,6 +16,7 @@ import {
 import { signOut } from "./editions/account";
 import { useEdition } from "./editions/edition";
 import EditionShell from "./editions/Shell";
+import { embedded } from "./embed";
 import { applyTheme, currentTheme, type Theme } from "./theme";
 
 const link = ({ isActive }: { isActive: boolean }) => "navlink" + (isActive ? " active" : "");
@@ -188,6 +189,7 @@ export default function App() {
 }
 
 function PlatformApp() {
+  const embed = embedded();
   const [version, setVersion] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleCollapsed = () => {
@@ -244,11 +246,15 @@ function PlatformApp() {
   return (
     <>
       <nav className={"sidebar" + (collapsed ? " collapsed" : "")}>
-        <div className={"brand" + (cloud.switcher ? " with-switcher" : "")}>
-          <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
-          <span className="brand-word">tares</span>
-        </div>
-        {cloud.switcher && <WorkspaceSwitcher cloud={cloud} />}
+        {/* embedded in the Tares desktop (embed.ts, TR-1553), the desktop shows the brand, the cell, the
+            sign-in and the theme, so the sidebar keeps only its pages */}
+        {!embed && (
+          <div className={"brand" + (cloud.switcher ? " with-switcher" : "")}>
+            <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
+            <span className="brand-word">tares</span>
+          </div>
+        )}
+        {cloud.switcher && !embed && <WorkspaceSwitcher cloud={cloud} />}
 
         {NAV_GROUPS.map(({ section, items }) => (
           <div className="nav-group" key={section}>
@@ -282,11 +288,11 @@ function PlatformApp() {
             <span className="nav-badge">↗</span>
           </a>
         )}
-        <ThemeToggle />
-        {(person ? who : logoutUrl && email) && (
+        {!embed && <ThemeToggle />}
+        {!embed && (person ? who : logoutUrl && email) && (
           <div className="who" title={`Signed in as ${who}${person?.email ? ` (${person.email})` : ""}`}>{who}</div>
         )}
-        {auth.get() && (
+        {auth.get() && !embed && (
           <button className="navbtn" onClick={() => signOut(logoutUrl)}
                   title={tip(email ? `Sign out (${email})` : "Sign out")}>
             <SignOut className="ico" />
