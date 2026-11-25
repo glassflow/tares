@@ -1,11 +1,12 @@
 # Tares enterprise licence, see ee/LICENSE
 """The 7-day usage by project is read once per request and kept for 60 seconds (TR-1627).
 
-Home, Crew and Setup show "This week" from `usage_by_project`, a query that joins and sorts every
-reply of the week. Crew used to run it twice in one request. A licensed factory cell with replies
-from two projects, then the three pages are read and the statements of that query are counted:
-Crew once (not twice), Home and Setup none while the kept answer is fresh, and again once the kept
-answer is cleared or 60 seconds old. The share each page shows does not change.
+Home and Crew show "This week" from `usage_by_project`, a query that joins and sorts every reply of
+the week. Crew used to run it twice in one request. A licensed factory cell with replies from two
+projects, then the pages are read and the statements of that query are counted: Crew once (not
+twice), Home none while the kept answer is fresh, and again once the kept answer is cleared or 60
+seconds old. The share each page shows does not change. Setup does not build the home (TR-1634),
+so it never runs that query.
 
 Run: .venv/bin/python ee/tests/test_factory_usage_keep.py
 """
@@ -95,7 +96,7 @@ async def main():
         ck("a second Crew read within the minute reads it zero times", runs[0] == 0, runs[0])
         ck("the kept answer is the same answer", again["plan"] == crew["plan"], (again["plan"], crew["plan"]))
 
-        print("== Home and Setup: at most once a minute ==")
+        print("== Home: at most once a minute. Setup: never ==")
         fh.clear_cache()
         runs[0] = 0
         await get("/api/home")
@@ -109,7 +110,7 @@ async def main():
            (home["plan"]["share_text"], crew["plan"]["share_text"]))
         fresh()
         await get("/api/factory/setup/progress")
-        ck("Setup on a cold start reads it once", runs[0] == 1, runs[0])
+        ck("Setup on a cold start reads it zero times (TR-1634)", runs[0] == 0, runs[0])
 
         print("== the kept answer expires ==")
         fresh()

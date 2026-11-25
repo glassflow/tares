@@ -681,12 +681,12 @@ def register(app, store, h, ctx):
 
     # ── the page ─────────────────────────────────────────────────────────────
     def around(request: Request) -> dict:
-        """The steps around the integrations, from the home's own blocks for this caller: the crew's
-        choices and GitHub (`onboarding`) and the four terminal commands (`terminal`)."""
+        """The steps around the integrations, for this caller, from the same functions as the home's
+        blocks: the crew's choices and GitHub (`onboarding`) and the terminal commands
+        (`terminal`). The home itself is not built (TR-1634)."""
         from .. import factory_home
-        home = factory_home.build(store, getattr(ctx, "fx", None), request)
-        o = home.get("onboarding") or {}
-        terminal = [st for st in (home.get("start") or {}).get("steps") or [] if st.get("where") == "terminal"]
+        o, start = factory_home.setup_state(store, getattr(ctx, "fx", None), request)
+        terminal = [st for st in start if st.get("where") == "terminal"]
         return {"onboarding": o, "terminal": terminal,
                 "set": [bool((o.get("choices") or {}).get("chosen")),
                         bool((o.get("github") or {}).get("connected")),
