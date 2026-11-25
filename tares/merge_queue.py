@@ -49,7 +49,7 @@ from .merge_ready import merge_ready
 MILESTONE_BRANCHES = ("factory-modular/*",)
 
 AUTO = "L4-ship"      # any other level is treated as L3-review
-BY = "merge-queue"
+BY = factory_mod.MERGE_QUEUE
 # what the console approval records as the person's words and choice; the merge queue page
 # (TR-1094) reads them back to tell this yes from an answer given elsewhere
 APPROVE_WORDS = "Approved in the console"
@@ -786,7 +786,8 @@ async def _after_update(store, row: dict, t: dict, ans: dict | None) -> None:
     """A `waiting_ci` row, after Tares updated its branch: wait for a new head, then for a check on
     it, then decide whether the update changed what the pull request does. Same changes keep the
     review (the Tares reviewer's pass is written again for the new head; an outside tool's verdict
-    is the tool's to give); different changes send the pull request back to the review gate."""
+    is the tool's to give); different changes send the pull request back to the review gate. So do
+    the same changes when the reviewer's last verdict, on whichever commit, is not a pass."""
     head = str((ans or {}).get("head") or "")
     if not head or head == row["head"]:
         return                                  # GitHub has not made the commit yet
@@ -806,23 +807,34 @@ async def _after_update(store, row: dict, t: dict, ans: dict | None) -> None:
     before_head, before = _load_before(row)
     uid = row["project_uid"]
     if same_changes(before, cmp["files"]):
+        against = None          # the reviewer's verdict that ends the carry
         if await asyncio.to_thread(factory_api.outside_gate, store, uid) is None:
-            def review():
+            def carry():
+                # read now, not before the compare, so a verdict that arrived meanwhile counts; one
+                # landing between this read and the write is caught by the review gate
+                last = factory_mod.reviewer_last(store.ticket_reviews(row["ticket"]))
+                if last is not None and last["verdict"] != "pass":
+                    return last["verdict"]
                 store.add_review(
                     uid, row["ticket"], (t.get("pr") or {}).get("url") or pr.get("url"), head,
                     "pass", f"Same changes against {row['base']} as the reviewed commit "
                     f"{before_head[:7]}; only the base moved", "", BY, [], {},
                     factory_mod.finding_kind, now_utc())
-            await asyncio.to_thread(review)
-        more = {"approved_head": head} if row.get("approved_head") == row["head"] else {}
-        await asyncio.to_thread(_set, store, row, "queued", None, head=head,
-                                **more)       # a yes for the reviewed commit stands for the same changes
-        return
-    await asyncio.to_thread(_withdraw, store, row, "the branch update changed the pull request")
+                return None
+            against = await asyncio.to_thread(carry)
+        if against is None:
+            more = {"approved_head": head} if row.get("approved_head") == row["head"] else {}
+            await asyncio.to_thread(_set, store, row, "queued", None, head=head,
+                                    **more)     # a yes for the reviewed commit stands for the same changes
+            return
+        gone = "the reviewer no longer passes the pull request"
+        why = f"the reviewer's last verdict is {against}; it needs a new review"
+    else:
+        gone = "the branch update changed the pull request"
+        why = "the branch update changed what this pull request does; it needs a new review"
+    await asyncio.to_thread(_withdraw, store, row, gone)
     await asyncio.to_thread(store.add_ticket_history, row["ticket"], uid, "merge_queue",
-                            "needs_review",
-                            "the branch update changed what this pull request does; it needs a "
-                            "new review", BY, BY, now_utc())
+                            "needs_review", why, BY, BY, now_utc())
     await asyncio.to_thread(store.merge_queue_delete, row["id"])
 
 
