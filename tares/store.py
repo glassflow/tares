@@ -1768,7 +1768,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         stmt = self.sessions_db.upsert(t).values(
             name=name, type=type_, connector=connector, poll=poll, config=config,
             paused=paused, created_at=ts, updated_at=ts, ingest_key=ik)
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(stmt.on_conflict_do_update(index_elements=["name"], set_={
                 "type": stmt.excluded.type, "connector": stmt.excluded.connector,
                 "poll": stmt.excluded.poll, "config": stmt.excluded.config,
@@ -1777,7 +1777,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def set_source_ingest_key(self, name: str, ingest_key: str) -> None:
         """Replace a push source's ingest key (a GitHub App recreated for an existing source)."""
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(sources_table).where(sources_table.c.name == name).values(
                 ingest_key=ingest_key))
 
@@ -1804,7 +1804,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self._forget_part("source", name)
 
     def set_source_paused(self, name: str, paused: bool) -> None:
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(sources_table).where(sources_table.c.name == name).values(
                 paused=paused, updated_at=now_utc()))
 
@@ -2333,7 +2333,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                            cost_usd: float | None = None,
                            key_source: str | None = None,
                            provider: str | None = None) -> None:
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(insert(usage_table).values(
                 id="mu_" + uuid.uuid4().hex[:12], ts=now_utc(), surface=surface, agent=agent,
                 run_id=run_id, model=model, calls=calls, input_tokens=input_tokens,
@@ -2686,7 +2686,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                        status: str = "active", goal: str | None = None,
                        lead_person_id: str | None = None, icon: str | None = None) -> None:
         ts = now_utc()
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(insert(projects_table).values(
                 id=uid, recipe=template, name=name, params=params, status=status, created_at=ts,
                 updated_at=ts, last_error=None, goal=goal or None,
@@ -2708,7 +2708,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             vals["name"] = name
         if last_error != "":
             vals["last_error"] = last_error
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(**vals))
 
     @staticmethod
@@ -2775,21 +2775,21 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     # ── who a project belongs to: its lead, its scope and its members (TR-623) ──
     def set_project_lead(self, uid: str, person_id: str | None) -> None:
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 lead_person_id=person_id or None))
 
     def set_project_icon(self, uid: str, icon: str | None) -> None:
         """Set or clear a project's icon. Not `updated_at`: an icon is not activity on the project,
         and the Projects list sorts by activity."""
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 icon=icon or None))
 
     def set_project_scope(self, uid: str, scope: str) -> None:
         if scope not in ("team", "private"):
             raise ValueError("scope is team or private")
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 scope=scope))
 
@@ -2859,7 +2859,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             ).first() is not None
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 kind=kind or None))
 
@@ -2933,13 +2933,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def set_project_setup(self, uid: str, setup: dict | None) -> None:
         # default=str: a value JSON cannot hold (a datetime) is kept as its text, as before
         clean = json.loads(json.dumps(setup, default=str)) if setup is not None else None
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 setup=clean, updated_at=now_utc()))
 
     def upsert_project_object(self, uid: str, kind: str, key: str, name: str) -> None:
         t = objects_table
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(self.sessions_db.upsert(t).values(
                 usecase_id=uid, kind=kind, key=key, name=name, customized=False,
                 created_at=now_utc()).on_conflict_do_update(
@@ -2956,7 +2956,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def delete_project_object(self, uid: str, kind: str, key: str) -> None:
         t = objects_table
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(delete(t).where(t.c.usecase_id == uid, t.c.kind == kind, t.c.key == key))
 
     # ── skills (TR-332): parts of the cell (P-TR-216), used by projects; validated by
@@ -3076,7 +3076,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def mark_skill_customized(self, project: str, name: str) -> None:
         """A skill a template planned was edited by hand: a re-plan keeps the edit."""
         o = objects_table
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(o).where(
                 o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name
             ).values(customized=True))
@@ -3103,7 +3103,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         a project, listed only to them. Returns its id."""
         doc_id = "doc_" + uuid.uuid4().hex[:10]
         ts = now_utc()
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(insert(docs_table).values(
                 id=doc_id, kind=kind, title=title, body=body, made_by=project, updated_by=by or None,
                 created_at=ts, updated_at=ts, owner=owner))
@@ -3117,7 +3117,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         for col, v in (("kind", kind), ("title", title), ("body", body)):
             if v is not None:
                 vals[col] = v
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(docs_table).where(docs_table.c.id == doc_id).values(**vals))
 
     def get_doc(self, project: str | None, doc_id: str) -> dict | None:
@@ -3686,7 +3686,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def set_project_linear(self, uid: str, linear: dict | None) -> None:
         # default=str: a value JSON cannot hold (a datetime) is kept as its text, as before
         clean = json.loads(json.dumps(linear, default=str)) if linear is not None else None
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 linear=clean))
 
@@ -3707,7 +3707,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def set_project_github(self, uid: str, link: dict | None) -> None:
         clean = json.loads(json.dumps(link, default=str)) if link is not None else None
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
                 github_issues=clean))
 
@@ -4087,7 +4087,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 self._drop_rows("source", src, [held])
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(insert(plog_table).values(
                 usecase_id=uid, logged_at=now_utc(), action=action, detail=detail[:2000]))
 
@@ -4151,7 +4151,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 config=json.dumps(config) if config else None, updated_at=now_utc()))
 
     def delete_github_credential(self, name: str) -> None:
-        with self.sessions_db.begin() as conn:
+        with self._swrite, self.sessions_db.begin() as conn:
             conn.execute(delete(github_table).where(github_table.c.name == name))
 
     # ── ask sessions (the in-app agent's chat history) ────────────────────────

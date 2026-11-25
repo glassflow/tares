@@ -1014,6 +1014,32 @@ def projects_methods():
             ("upsert_github_credential", lambda: s.upsert_github_credential("locked", "tok")),
             ("update_github_credential_config", lambda: s.update_github_credential_config("locked", {}))):
         ck(f"{name} waits for the write lock", _waits_for_write_lock(s, call))
+
+    print("== plain writes wait for it too ==")
+    # a write that reads a row and writes it back relies on every other writer of the row waiting here
+    doc = s.create_doc("uc_a", "working", "locked", "b")
+    for name, call in (
+            ("upsert_catalog_source", lambda: s.upsert_catalog_source("src3", "poll", "http_poll", "1m", {})),
+            ("set_source_ingest_key", lambda: s.set_source_ingest_key("src3", "k")),
+            ("set_source_paused", lambda: s.set_source_paused("src3", True)),
+            ("record_model_usage", lambda: s.record_model_usage("ask", "a", "r", "m", 1, 1, 1)),
+            ("create_project", lambda: s.create_project("uc_c", "custom", "C", {})),
+            ("update_project", lambda: s.update_project("uc_a", params={"k": 1})),
+            ("set_project_lead", lambda: s.set_project_lead("uc_a", "local")),
+            ("set_project_icon", lambda: s.set_project_icon("uc_a", "B")),
+            ("set_project_scope", lambda: s.set_project_scope("uc_a", "team")),
+            ("set_project_kind", lambda: s.set_project_kind("uc_a", None)),
+            ("set_project_setup", lambda: s.set_project_setup("uc_a", {})),
+            ("set_project_linear", lambda: s.set_project_linear("uc_a", {})),
+            ("set_project_github", lambda: s.set_project_github("uc_a", {})),
+            ("upsert_project_object", lambda: s.upsert_project_object("uc_a", "doc", "k1", "n1")),
+            ("delete_project_object", lambda: s.delete_project_object("uc_a", "doc", "k1")),
+            ("mark_skill_customized", lambda: s.mark_skill_customized("uc_a", "locked")),
+            ("create_doc", lambda: s.create_doc("uc_a", "working", "t", "b")),
+            ("update_doc", lambda: s.update_doc(doc, title="x")),
+            ("log_project", lambda: s.log_project("uc_a", "x")),
+            ("delete_github_credential", lambda: s.delete_github_credential("locked"))):
+        ck(f"{name} waits for the write lock", _waits_for_write_lock(s, call))
     s.close()
 
 
