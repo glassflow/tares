@@ -109,6 +109,7 @@ test_factory_build
 test_factory_builder
 test_factory_close
 test_factory_crew
+test_factory_crew_cache
 test_factory_crew_page
 test_factory_crew_standup
 test_factory_desk
@@ -132,6 +133,7 @@ test_factory_reviews_page
 test_factory_settings_page
 test_factory_setup
 test_factory_setup_api
+test_factory_setup_progress
 test_factory_start
 test_factory_start_show
 test_factory_takeover
@@ -187,6 +189,8 @@ test_mcp_station_headers
 test_memory_integration
 test_merge_queue
 test_merge_queue_api
+test_merge_queue_ci_rerun
+test_merge_queue_status_carry
 test_merge_ready
 test_metrics
 test_milestone_checks
@@ -251,6 +255,7 @@ test_session_move
 test_session_move_archive
 test_session_no_duckdb_write
 test_session_project
+test_session_readers_no_events
 test_session_store
 test_session_turns
 test_sessions_caught_up
@@ -283,6 +288,7 @@ test_sre_services_order
 test_sre_settings
 test_sre_start
 test_sre_timeline
+test_standing_round
 test_startup_fill
 test_state_postgres
 test_station_rollup_snapshot

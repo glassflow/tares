@@ -24,7 +24,7 @@ from fastapi import Body, HTTPException, Request
 
 from .. import team as team_mod
 from ..envelope import now_utc
-from ..factory_home import plain_ago
+from ..factory_home import clear_cache, plain_ago
 
 
 def _cloud() -> bool:
@@ -126,4 +126,5 @@ def register(app, store, h, ctx):
             if not ok:
                 h.licence_required(why)
             p = store.person_or_create(email, name, via="admin")
+        clear_cache()   # the kept Home and Crew pages name people
         return {"id": p["id"], "name": p["name"] or email, "email": p.get("email")}

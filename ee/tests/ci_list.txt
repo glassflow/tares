@@ -28,6 +28,7 @@ test_crews
 test_desk_person
 test_desk_unaddressed_login
 test_ee_smoke
+test_factory_crew_cache_team
 test_factory_crew_scope
 test_factory_crew_team
 test_factory_page_times
