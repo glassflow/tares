@@ -65,6 +65,12 @@ async def main():
 
     def back(table, key, col, **kw):
         sql = f"UPDATE {table} SET {col} = :at WHERE id = :key"
+        if table == "tickets":                   # in the session store (TR-1612)
+            from sqlalchemy import update
+            from tares.session_store.tables import tickets as tickets_t
+            with store.sessions_db.begin() as conn:
+                conn.execute(update(tickets_t).where(tickets_t.c.id == key).values({col: ago(**kw)}))
+            return
         if table == "docs":                      # in the session store (TR-1610)
             with store.sessions_db.begin() as conn:
                 conn.execute(text(sql), {"at": ago(**kw), "key": key})
@@ -565,6 +571,10 @@ async def main():
         h2 = fh.waiting_items(store, fx, now_utc())
         rest = [i for i in h2 if i["kind"] != "signoff"]
         key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
+        ck("a time written with another offset is given in UTC",
+           fh._iso("2026-11-25T21:28:44+01:00") == "2026-11-25T20:28:44+00:00", fh._iso("2026-11-25T21:28:44+01:00"))
+        ck("every since is in UTC, wherever it was read from",
+           all(i["since"].endswith("+00:00") for i in h2), [i["since"] for i in h2 if not i["since"].endswith("+00:00")][:3])
         ck("the list is still in order: what holds the crew up, the rest, ready-to-close rows last",
            [key(i) for i in h2] == sorted(key(i) for i in h2), [(i["kind"], i["blocking"]) for i in h2])
 
