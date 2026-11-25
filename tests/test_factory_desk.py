@@ -486,6 +486,73 @@ async def main():
            and f'"{cw}" (20' in await mf.read_grants()
            and r.json()["decision"]["scope"] == "all", r.text)
 
+        print("== what is allowed in the console reaches the station's settings (TR-1651) ==")
+
+        async def get(path, **params):
+            async with mk() as cx:
+                return await cx.get(path, params=params)
+
+        async def rules_allow(station, role, project=""):
+            r = await get("/api/factory/guardrails/rules", station=station, role=role, project=project)
+            return r.json()["allow"] if r.status_code == 200 else [r.text]
+
+        def says(sentences, words):
+            return any(f'"{words}"' in s for s in sentences)
+
+        call = 'mcp__plugin_tares_tares__merge_ready(pr="acme/shop#937")'
+        exact = f"sam-crew-reviewer may run `{call}` in every project"
+        as_station("crew-orchestrator", "orchestrator")
+        mcpq = json.loads(await mf.desk_add(
+            "sam-crew-reviewer was refused a tool call. Allow it?", exact, "it merges after a review",
+            project="Shop", station="sam-crew-reviewer", command=call))
+        as_station()
+        r = await allow(mcpq["label"], {"words": exact, "scope": "all"})
+        out = r.json()
+        ck("the tool call is allowed for every project", r.status_code == 200 and out["added"]
+           and out["line"].startswith(f'"{exact}" (20') and out["decision"]["granted"], r.text)
+        rows = [g for g in app.state.store.all_grant_rows() if g["words"] == exact]
+        ck("as one team grant in effect, given by the person who allowed it",
+           [(g["kind"], g["state"], g["project"], g["given_by"]) for g in rows]
+           == [("team", "active", None, "local")], rows)
+        ck("with its line in the grants doc once", (await get("/api/grants")).json()["all"].count(out["line"]) == 1,
+           (await get("/api/grants")).json()["all"])
+        allowed = await rules_allow("sam-crew-reviewer", "reviewer")
+        ck("the station's rules carry the sentence with the exact call", says(allowed, exact), allowed)
+        async with mk() as cx:
+            await cx.put("/api/crew/settings", json={"autonomy": "L3-review"})   # a launch needs a level
+        r = await get("/api/factory/stations/sam-crew-reviewer/launch", role="reviewer", crew="sam-crew")
+        settings = r.json().get("settings", {})
+        ck("and its launch settings have it in autoMode.allow",
+           says(settings.get("autoMode", {}).get("allow", []), exact), r.text)
+        perms = settings.get("permissions", {})
+        ck("with no permissions rule for the tool", perms and not any(
+            "merge_ready" in x for rules in perms.values() for x in rules), perms)
+
+        bash_words = "shop-build-m1 may run `gh pr merge 12 --squash` in Shop"   # allowed above
+        ck("a command allowed for a project is in that project's rules",
+           says(await rules_allow("shop-build-m1", "builder", shop), bash_words))
+        ck("and not in another project's",
+           not says(await rules_allow("blog-build-m1", "builder", blog), bash_words))
+        rows = [g for g in app.state.store.all_grant_rows() if g["words"] == bash_words]
+        ck("as a project grant of that project",
+           [(g["kind"], g["state"], g["project"]) for g in rows] == [("project", "active", shop)], rows)
+
+        prose = "the crew may merge its own PRs once the review passed"
+        async with mk() as cx:
+            r = await cx.post("/api/grants", json={"words": prose, "kind": "team"})
+        ck("a grant added in words still reaches the rules", r.status_code == 201
+           and says(await rules_allow("sam-crew-reviewer", "reviewer"), prose), r.text)
+
+        as_station("crew-orchestrator", "orchestrator")
+        again = json.loads(await mf.desk_add(
+            "sam-crew-reviewer was refused again. Allow it?", exact, "it merges after a review",
+            project="Shop", station="sam-crew-reviewer", command=call))
+        as_station()
+        r = await allow(again["label"], {"words": exact, "scope": "all"})
+        ck("words already granted add no second grant, and the item is answered", r.status_code == 200
+           and r.json()["added"] is False and r.json()["decision"]["granted"]
+           and len([g for g in app.state.store.all_grant_rows() if g["words"] == exact]) == 1, r.text)
+
         print("== a reply typed while the orchestrator's turn runs (TR-522) ==")
         factory.MATCH_WAIT_SECONDS = 0
         as_station("crew-orchestrator", "orchestrator")
@@ -603,10 +670,10 @@ async def main():
                              [to, store.get_desk_item(label)["id"]])
             return label
 
-        async def ann_allows(label, token=key, words="The builder may merge pull request 7"):
+        async def ann_allows(label, token=key, words="The builder may merge pull request 7", scope="project"):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                          headers={"Authorization": f"Bearer {token}"}) as cx:
-                return await cx.post(f"/api/desk/{label}/allow", json={"words": words, "scope": "project"})
+                return await cx.post(f"/api/desk/{label}/allow", json={"words": words, "scope": scope})
 
         async def desk_state(label):
             async with mk() as cx:
@@ -627,8 +694,30 @@ async def main():
         ck("only an unknown key answers 401", r.status_code == 401 and r.json()["detail"] == "authentication required", r.text)
         ck("and that allows nothing", await desk_state(mine) == "open"
            and "merge pull request 7" not in await shop_grants())
+        async def written():
+            """Everything an Allow writes, to show a refused one wrote none of it."""
+            async with mk() as cx:
+                g = (await cx.get("/api/grants", params={"project": shop})).json()
+            return (len(store.all_grant_rows()), g["all"], g["project"],
+                    len(json.loads(await mf.list_decisions(project="Shop"))))
+
+        before = await written()
+        r = await ann_allows(mine, scope="all")
+        ck("a person who is not an admin cannot allow for every project", r.status_code == 403
+           and r.json()["detail"].startswith("a grant for every project needs an admin"), r.text)
+        ck("and nothing is written, the item still open", await written() == before
+           and await desk_state(mine) == "open", await written())
+        r = await ann_allows(mine)
+        ck("nor for a project they do not lead", r.status_code == 403
+           and r.json()["detail"].startswith("a project grant comes from the project's lead"), r.text)
+        ck("and again nothing is written, the item still open", await written() == before
+           and await desk_state(mine) == "open", await written())
+        store.set_project_lead(shop, ann["id"])
         r = await ann_allows(mine)
         ck("the person it is addressed to allows it with their own key", r.status_code == 200 and r.json()["added"], r.text)
+        ck("as the lead's project grant", [(g["kind"], g["state"], g["project"], g["given_by"])
+           for g in store.all_grant_rows() if g["words"] == "The builder may merge pull request 7"]
+           == [("project", "active", shop, ann["id"])], store.all_grant_rows())
         ck("the item is answered and the grant is kept", await desk_state(mine) == "closed"
            and "merge pull request 7" in await shop_grants(), await shop_grants())
 
