@@ -12,6 +12,17 @@ import { kitOnlyConfig as paperKitOnlyConfig } from '../paper-kit/eslint/design-
 
 export const EDITION = ['src/editions/', 'src/components/edition/', 'src/ee/']
 
+// The words of the kit-only messages, the console's own: where the register and the baseline are, the
+// command that lowers a count, the kit's folder and the doc to read. Both `npm run lint` (below) and
+// `npm run design-contract` (eslint-design-contract.config.mjs) pass them, so the message reads the same.
+export const KIT_WORDS = {
+  doc: 'See the Console design section of AGENTS.md.',
+  registerFile: 'eslint-rules/kit-register.mjs',
+  baselineFile: 'kit-contract.baseline.json',
+  baselineCommand: 'npm run kit-baseline',
+  kitDir: 'components/edition',
+}
+
 // A size, position or colour only known at run time: a chart's geometry, a bar's share, a board's
 // column count, a sender's colour. Utilities cannot hold a value computed from data. Permanent.
 const RUNTIME = 'run-time value: computed from data, no utility can hold it'
@@ -82,5 +93,6 @@ export function kitOnlyConfig() {
     register: KIT_REGISTER,
     edition: EDITION,
     root: fileURLToPath(new URL('..', import.meta.url)),
+    ...KIT_WORDS,
   })
 }
