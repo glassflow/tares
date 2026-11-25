@@ -5213,9 +5213,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 api_keys_table.c.person_id == pid, api_keys_table.c.revoked_at.is_(None))).scalars())
         for kid in keys:
             self.revoke_api_key(kid)
-        with self.sessions_db.begin() as conn:
-            conn.execute(update(people_table).where(people_table.c.id == pid).values(
-                removed_at=now_utc()))
         with self._swrite:
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
