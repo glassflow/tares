@@ -13,11 +13,17 @@ machine knows, checks the Codex version, and starts the process (`tares.crew.cod
   settings  what the station's conversation is started with. Codex takes these per thread (`thread/start`),
             so nothing is written to the repository or to the person's `~/.codex`:
               thread       the `thread/start` parameters: model, approval policy, sandbox, the identity
-                           text, and `config` (the guard's hook, for every tool call and for the start
-                           of every turn, and the thread's trust for it);
+                           text with `{ROLE_MANUAL}` after it (the station's operating rules, which the
+                           crew renders from its kit: a Codex station reads no skills), and `config`
+                           (the guard's hook, for every tool call and for the start of every turn, and
+                           the thread's trust for it);
               effort       the reasoning effort of a turn;
-              mcp_servers  the MCP servers the station may load, by name. A station that loads another is
-                           stopped at its start;
+              mcp_servers  the MCP servers the station's conversation is started with, as Codex takes
+                           them (`config.mcp_servers`), and the only ones it may load: a station that loads
+                           another is stopped at its start. The one server is the crew's Tares endpoint
+                           (see "The Tares MCP server" below);
+              mcp_check    one read the crew asks of that server, as the station, before it hands the
+                           station a prompt: {server, tool, arguments};
               rules        {allow, soft_deny}: the rule sentences of the station's work role;
               autonomy     the level the station runs at.
 
@@ -36,8 +42,24 @@ adds one thing to `config` when it starts the conversation, since only its machi
 station's folder is marked not trusted for the thread, so the repository's own `.codex/config.toml` cannot
 add a hook or an MCP server to the station (`tares.crew.codex_station.hand`).
 
-Not here yet: recording (TR-1595), the token of the MCP server (TR-1596), the role instructions (TR-1598)
-and monitoring. The approval policy and the sandbox are the tightest pair TR-1576 ran a guarded command
+The Tares MCP server (TR-1596) is the endpoint a Claude Code station reaches through the plugin's
+`.mcp.json`, with the same five identity headers, each read by Codex from the station's environment
+(`env_http_headers`; one whose variable is empty or unset is left off, measured on 0.171.0). The crew's key
+is added the way the plugin adds it: by the headers helper, `tares hook mcp-headers`, which reads the key
+file and prints the `Authorization` header. Codex runs the helper through a shell with an environment of its
+own (HOME, PATH and a few more; none of the station's variables), so the helper is told the file on its
+command line, as `TARES_FACTORY_CRED_FILE=<file>`. The key is then in no environment, argument list or
+config: the spec and the conversation's settings hold the file's path. `required` makes Codex refuse to
+start or join the conversation when the server does not answer its first request: an endpoint that is
+down, a helper that fails, no key at an endpoint that wants one. It does not catch a wrong key: the Tares
+endpoint takes any bearer at the first request and passes it to the cell with each call, and the cell's
+refusal comes back as a tool's text ("error 401: ..."), not as a failed call. So the crew asks one read
+itself before every prompt (`mcp_check`, see `tares.crew.codex_station`). A crew with no key file (a cell
+with no login) gets no helper. The server's tools are approved as a set (`default_tools_approval_mode`):
+with the conversation's approval policy Codex would stop every call to Tares on a question to the person
+(measured: a first turn that calls `builder_brief` waits for an approval and never ends).
+
+Not here yet: recording (TR-1595), the role instructions (TR-1598) and monitoring. The approval policy and the sandbox are the tightest pair TR-1576 ran a guarded command
 under; whether a builder can work in them is for TR-1598 to find.
 
 No secret is in a spec.
@@ -65,6 +87,10 @@ GUARD_TIMEOUT = 5  # seconds, as claude-plugin/hooks/hooks.json gives the guard
 MCP_IDENTITY = {"X-Tares-Station": "FACTORY_STATION", "X-Tares-Role": "FACTORY_ROLE",
                 "X-Tares-Parent": "FACTORY_PARENT", "X-Tares-Crew": "FACTORY_CREW",
                 "X-Tares-Project": "TARES_PROJECT"}
+MCP_SERVER = "tares"
+# The plugin's headers helper, told the crew's key file on its own command line: Codex gives a helper none
+# of the station's environment.
+MCP_HELPER = "TARES_FACTORY_CRED_FILE={TOKEN_FILE_SHELL} tares hook mcp-headers --plugin-root {PLUGIN_DIR_SHELL}"
 
 _FILLED = re.compile(r"\{([A-Z_]+)\}")
 
@@ -118,6 +144,10 @@ class RuntimeCodex(Runtime):
                 raise ValueError("a helper works under its parent's role: give parent_role "
                                  "(orchestrator, reviewer, releaser or builder)")
         level = RuntimeClaudeCode._level(station, _text(ctx, "autonomy"), _text(ctx, "crew_autonomy"))
+        mcp_url = _text(ctx, "mcp_url")
+        if not mcp_url:
+            raise ValueError(f"no MCP address for {station}: a Codex station does not start without the crew's "
+                             "Tares MCP endpoint; give mcp_url")
 
         rules = ctx.get("rules") or {}
         allow = [s for s in rules.get("allow") or [] if isinstance(s, str) and s.strip()]
@@ -134,7 +164,9 @@ class RuntimeCodex(Runtime):
         thread = {
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
-            "developerInstructions": identity(role, station, parent, project, repo, work_role),
+            # who the station is, then its operating rules: the kit's skills as a Codex station reads them
+            # (tares.crew.role_text), which only the machine that holds the kit can render
+            "developerInstructions": identity(role, station, parent, project, repo, work_role) + "{ROLE_MANUAL}",
             "config": {
                 "hooks": {
                     # an empty matcher is every tool; the guard ignores what it has no rule for
@@ -148,9 +180,17 @@ class RuntimeCodex(Runtime):
         }
         if _text(ctx, "model"):
             thread["model"] = _text(ctx, "model")
+        tares = {"url": mcp_url, "env_http_headers": dict(MCP_IDENTITY), "required": True,
+                 # Codex asks the person before each call of an MCP tool unless told otherwise, and a station
+                 # has nobody to ask. A call to Tares passes the guard, and the cell checks who may do what.
+                 "default_tools_approval_mode": "approve"}
+        if ctx.get("token_file"):
+            tares["http_headers_helper"] = MCP_HELPER
         settings = {
             "thread": thread,
-            "mcp_servers": {"tares": {"url": _text(ctx, "mcp_url"), "env_http_headers": dict(MCP_IDENTITY)}},
+            "mcp_servers": {MCP_SERVER: tares},
+            # a read the cell answers for any key it takes, on a cell with no station yet too
+            "mcp_check": {"server": MCP_SERVER, "tool": "list_crew", "arguments": {"mine": True}},
             "rules": {"allow": [fill(s, values) for s in allow], "soft_deny": [fill(s, values) for s in soft_deny]},
             "autonomy": level,
         }

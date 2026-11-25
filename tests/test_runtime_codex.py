@@ -46,7 +46,7 @@ import httpx  # noqa: E402
 
 from tares.integrations import registry, resolve  # noqa: E402
 from tares.integrations.builtin.runtime_claude_code import ROLES, RuntimeClaudeCode  # noqa: E402
-from tares.integrations.builtin.runtime_codex import GUARD_HOOK, LEAN_FLAGS, MCP_IDENTITY, RuntimeCodex  # noqa: E402
+from tares.integrations.builtin.runtime_codex import GUARD_HOOK, LEAN_FLAGS, MCP_HELPER, MCP_IDENTITY, RuntimeCodex  # noqa: E402
 from tares.integrations.runtime import PLACEHOLDERS, fill_placeholders  # noqa: E402
 from tares.screens import factory_setup  # noqa: E402
 
@@ -105,9 +105,10 @@ thread = spec.settings["thread"]
 ck("the thread starts with the model, approvals on request and the workspace sandbox",
    thread["model"] == "gpt-5.6-luna" and thread["approvalPolicy"] == "on-request" and thread["sandbox"] == "workspace-write", thread)
 ck("the effort is a turn's, next to the thread", spec.settings["effort"] == "low" and "effort" not in thread)
-ck("the identity says who the station is and nothing of Claude Code's",
+ck("the identity says who the station is and nothing of Claude Code's, and its rules follow it: the place the "
+   "crew fills with the kit's rules as a Codex station reads them (TR-1598)",
    thread["developerInstructions"] == "You are a tares-factory station: role builder, session name shop-build-api, "
-   "project alpha, repo /work/alpha. Act only within your role.", thread["developerInstructions"])
+   "project alpha, repo /work/alpha. Act only within your role.{ROLE_MANUAL}", thread["developerInstructions"])
 hooks = thread["config"]["hooks"]
 ck("the guard is registered for every tool call and for the start of every turn, with the thread's trust for it",
    list(hooks) == ["PreToolUse", "UserPromptSubmit"] and hooks["PreToolUse"] == [{"matcher": "", "hooks": [
@@ -116,8 +117,27 @@ ck("the guard is registered for every tool call and for the start of every turn,
    and thread["config"]["bypass_hook_trust"] is True
    and GUARD_HOOK == "tares hook codex-guard --plugin-root {PLUGIN_DIR_SHELL}", thread["config"])
 ck("the MCP server is named, with its address and the identity headers read from the station's variables, and no token",
-   spec.settings["mcp_servers"] == {"tares": {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY}}
+   spec.settings["mcp_servers"]["tares"]["url"] == "http://cell.test/mcp"
+   and spec.settings["mcp_servers"]["tares"]["env_http_headers"] == MCP_IDENTITY
    and all(v in spec.env or v == "TARES_PROJECT" for v in MCP_IDENTITY.values()), spec.settings["mcp_servers"])
+ck("it is required, and the crew's key reaches it through the plugin's headers helper, told the key file by its path (TR-1596)",
+   spec.settings["mcp_servers"] == {"tares": {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY, "required": True,
+                                              "default_tools_approval_mode": "approve", "http_headers_helper": MCP_HELPER}}
+   and MCP_HELPER == "TARES_FACTORY_CRED_FILE={TOKEN_FILE_SHELL} tares hook mcp-headers --plugin-root {PLUGIN_DIR_SHELL}",
+   spec.settings["mcp_servers"])
+ck("the read the crew asks before a prompt is one the cell answers for any key it takes",
+   spec.settings["mcp_check"] == {"server": "tares", "tool": "list_crew", "arguments": {"mine": True}}, spec.settings.get("mcp_check"))
+no_key = RuntimeCodex().launch_spec("builder", "alpha-build-s1", {**proj, "token_file": False})
+ck("a crew with no key file gets no helper, and the server is required all the same",
+   no_key.settings["mcp_servers"]["tares"] == {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY, "required": True,
+                                               "default_tools_approval_mode": "approve"}
+   and "TOKEN_FILE_SHELL" not in no_key.placeholders, no_key.settings["mcp_servers"])
+try:
+    RuntimeCodex().launch_spec("builder", "alpha-build-s1", {**proj, "mcp_url": ""})
+    refused = ""
+except ValueError as e:
+    refused = str(e)
+ck("no MCP address is a ValueError: a Codex station does not start without Tares", "mcp_url" in refused, refused)
 ck("the rules are filled on the cell, with the machine's words left as placeholders, and blank ones dropped",
    spec.settings["rules"] == {
        "allow": ["Pat lets this station work in the repository of project alpha, checked out at /work/alpha and keep notes in {CREW_HOME}"],
@@ -125,7 +145,8 @@ ck("the rules are filled on the cell, with the machine's words left as placehold
 ck("the level is the crew's", spec.settings["autonomy"] == "L3-review")
 used = set(NAME.findall(json.dumps([spec.command, spec.env, spec.settings])))
 ck("the placeholders are the ones the spec uses, each with what it stands for",
-   set(spec.placeholders) == used == {"STATION_SOCKET", "CODEX_HOME", "CREW_HOME", "TOKEN_FILE", "PLUGIN_DIR_SHELL", "WT_REPOS"}
+   set(spec.placeholders) == used == {"STATION_SOCKET", "CODEX_HOME", "CREW_HOME", "TOKEN_FILE", "TOKEN_FILE_SHELL",
+                                      "PLUGIN_DIR_SHELL", "WT_REPOS", "ROLE_MANUAL"}
    and all(spec.placeholders[k] == PLACEHOLDERS[k] for k in used), (sorted(spec.placeholders), sorted(used)))
 filled = fill_placeholders([spec.command, spec.env, spec.settings], {k: f"/fixed/{k.lower()}" for k in PLACEHOLDERS})
 ck("filled, no placeholder is left", not NAME.search(json.dumps(filled)), NAME.findall(json.dumps(filled)))

@@ -1,0 +1,7 @@
+# The page stop.md as a Codex station reads it: edits of ../../../skills/station-builder/stop.md.
+
+[[edit]]
+find = '''`CronDelete` your tick, reply `DONE` to the orchestrator with
+each ticket's branch and pull request, and start nothing new.'''
+with = '''Write each ticket's branch and pull request under `## Now` in your report,
+and start nothing new.'''

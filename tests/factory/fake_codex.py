@@ -37,6 +37,23 @@ conversation starts in it, and from then on a repository that brings its own set
 shows its hook and its MCP server; a folder marked `untrusted`, there or in the conversation's start, shows
 neither and is not recorded.
 
+It answers for the account (TR-1597). $FAKE_CODEX_ACCOUNT names a JSON file that is read anew at every
+request, so a test changes it while the app-server runs: `limits` is the answer to `account/rateLimits/read`
+({"error": text} refuses it, as for an account with no plan), `account` the `account` of `account/read`, and
+`limit_error`, when set, makes every turn end as failed with Codex's `usageLimitExceeded` and that message
+(the turn is kept and listed with its `error`). Without the variable the two account requests are not known.
+
+It connects a conversation's MCP servers (TR-1596), as 0.171.0 was measured to. A server the conversation's
+`config.mcp_servers` gives with a `url` is reached over HTTP when the conversation is started, or joined by an
+app-server that did not have it open: the `http_headers_helper` is run through a shell with a short
+environment of its own (HOME, PATH and a few more, none of the station's variables) and what it prints is
+taken as headers; each header of `env_http_headers` is added from the app-server's own environment, and left
+off when its variable is empty or unset; then `initialize` is posted to the url. A server that does not
+answer 200 is `failed`, and when it is marked `required` the conversation is not started or joined at all
+("required MCP servers failed to initialize: ..."). `mcpServerStatus/list` with a `threadId` gives that
+conversation's servers with their `runtimeStatus`; `mcpServer/tool/call` posts `tools/call` on the same
+connection, with the same headers, and gives the server's answer.
+
 What it took from its start (arguments, folder, the station's variables, its session) is written to
 $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_VERSION   the version `--version` prints
@@ -80,6 +97,66 @@ import threading
 import time
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+# What a headers helper is run with (0.171.0, macOS): none of the station's own variables.
+HELPER_ENV = ("HOME", "LC_CTYPE", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER")
+RUST = "Send message error Transport [fake_rmcp::Worker<fake_rmcp::StreamableHttp<fake_rmcp::Adapter>>] error: "
+
+
+class McpDown(Exception):
+    pass
+
+
+def _mcp_post(server, method, params):
+    """One JSON-RPC request to an MCP server over HTTP; its `result`. McpDown with Codex's words otherwise."""
+    import urllib.error
+    import urllib.request
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    req = urllib.request.Request(server["url"], data=body, method="POST",
+                                 headers={"Content-Type": "application/json", **server["headers"]})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode() or "{}").get("result") or {}
+    except urllib.error.HTTPError as e:
+        text = e.read().decode(errors="replace").strip()[:80]
+        why = f"unexpected server response: HTTP {e.code}: {text}"
+        raise McpDown(f"{RUST}{why}, when send {method} request: {RUST}{why}, when send {method} request") from None
+    except (OSError, ValueError) as e:
+        raise McpDown(f"{RUST}Client error: HTTP request failed: http/request failed: {e}") from None
+
+
+def mcp_connect(config):
+    """({name: connection}, [what failed among the required ones]) for a conversation's `config`."""
+    out, failed = {}, []
+    for name, c in ((config or {}).get("mcp_servers") or {}).items():
+        if not isinstance(c, dict) or not c.get("url"):
+            continue
+        server = {"url": c["url"], "headers": {}, "status": "connected", "error": None}
+        try:
+            if c.get("http_headers_helper"):
+                env = {k: os.environ[k] for k in HELPER_ENV if k in os.environ}
+                done = subprocess.run(["/bin/sh", "-c", c["http_headers_helper"]], env=env, stdin=subprocess.DEVNULL,
+                                      capture_output=True, text=True, timeout=30)
+                if done.returncode != 0:
+                    raise McpDown(f"{RUST}Client error: HTTP request failed: MCP HTTP headers helper exited with "
+                                  f"status {done.returncode}")
+                server["headers"].update({str(k): str(v) for k, v in json.loads(done.stdout or "{}").items()})
+            for header, var in (c.get("env_http_headers") or {}).items():
+                if os.environ.get(var):
+                    server["headers"][header] = os.environ[var]
+            _mcp_post(server, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                             "clientInfo": {"name": "fake-codex", "version": "0"}})
+        except (McpDown, OSError, ValueError, subprocess.SubprocessError) as e:
+            server.update(status="failed", error=f"handshaking with MCP server failed: {e}")
+            if c.get("required"):
+                failed.append(f"{name}: {server['error']}")
+        out[name] = server
+    return out, failed
+
+
+def _required(failed, what):
+    if failed:
+        raise Refused(f"error {what} thread: Fatal error: Failed to initialize session: required MCP servers failed "
+                      f"to initialize: {'; '.join(failed)}")
 
 
 def take(conn, n):
@@ -120,6 +197,7 @@ def send_text(conn, doc):
 
 THREADS = {}            # id -> {"turns": [...], "updatedAt": seconds, "flags": [...], "config": {...}, "cwd": str}
 LOADED = set()          # the conversations this process has open
+MCP = {}                # id -> {server name: {url, headers, status, error}}: its MCP connections
 JOINED = {}             # id -> the connections that started or joined it: they are told of its turns
 LOCK = threading.Lock()
 
@@ -254,8 +332,24 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
         return
     time.sleep(float(took))
     if _still(thread_id, turn_id):
+        limit = _account().get("limit_error")
+        if limit:   # the account's limit ends the turn (TR-1597): it is kept, failed, with its error
+            error = {"message": str(limit), "codexErrorInfo": "usageLimitExceeded", "additionalDetails": None}
+            _end_turn(thread_id, turn_id, "failed", error)
+            _tell(thread_id, "turn/completed", {"turn": {"id": turn_id, "status": "failed", "error": error}})
+            return
         _end_turn(thread_id, turn_id)
         _tell(thread_id, "turn/completed", {"turn": {"id": turn_id, "status": "completed"}})
+
+
+def _account() -> dict:
+    """What $FAKE_CODEX_ACCOUNT holds now; {} when it is unset or cannot be read."""
+    try:
+        with open(os.environ["FAKE_CODEX_ACCOUNT"], encoding="utf-8") as f:
+            doc = json.load(f)
+    except (KeyError, OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def _store() -> str:
@@ -295,12 +389,14 @@ def _running(t):
     return next((turn for turn in t["turns"] if turn["status"] == "inProgress"), None)
 
 
-def _end_turn(thread_id, turn_id, status="completed") -> None:
+def _end_turn(thread_id, turn_id, status="completed", error=None) -> None:
     with LOCK:
         t = THREADS.get(thread_id)
         for turn in (t or {}).get("turns", []):
             if turn["id"] == turn_id and turn["status"] == "inProgress":
                 turn["status"] = status
+                if error:
+                    turn["error"] = error
                 t["flags"] = []
                 t["updatedAt"] = int(time.time())
                 _save()
@@ -332,9 +428,12 @@ def conversation(method, params, conn=None):
         _note(method, params)
     with LOCK:
         if method == "thread/start":
+            servers, failed = mcp_connect(params.get("config"))
+            _required(failed, "creating")
             tid = "thr-" + os.urandom(4).hex()
             THREADS[tid] = {"turns": [], "updatedAt": int(time.time()), "flags": [],
                             "config": params.get("config") or {}, "cwd": params.get("cwd")}
+            MCP[tid] = servers
             LOADED.add(tid)
             JOINED.setdefault(tid, set()).add(conn)
             _settle_trust(params)
@@ -346,7 +445,7 @@ def conversation(method, params, conn=None):
         if method == "thread/turns/list":
             full = params.get("itemsView") == "full"
             turns = [{"id": x["id"], "status": x["status"], "itemsView": "full" if full else "summary",
-                      "items": list(x.get("items") or []) if full else []}
+                      "error": x.get("error"), "items": list(x.get("items") or []) if full else []}
                      for x in reversed(t["turns"])]
             return {"data": turns[:int(params.get("limit") or 50)], "nextCursor": None}
         if method == "thread/read":
@@ -359,6 +458,10 @@ def conversation(method, params, conn=None):
         if method == "thread/resume":
             if not t["turns"]:
                 raise Refused(f"no rollout found for thread id {tid}")
+            if tid not in LOADED:   # one it has open keeps the connections it has
+                servers, failed = mcp_connect(params.get("config") if "config" in params else t.get("config"))
+                _required(failed, "resuming")
+                MCP[tid] = servers
             LOADED.add(tid)
             JOINED.setdefault(tid, set()).add(conn)
             if "config" in params:
@@ -400,6 +503,22 @@ def answer(method, args, params):
     if method == "initialize":
         return {"userAgent": "fake-codex", "codexHome": env.get("FAKE_CODEX_HOME") or env.get("CODEX_HOME", ""),
                 "platformOs": "test"}
+    if method == "mcpServerStatus/list" and params.get("threadId"):
+        rows = [{"name": n, "tools": {}, "authStatus": "unknown", "runtimeStatus": s["status"]}
+                for n, s in MCP.get(params["threadId"], {}).items() if params.get("serverName") in (None, n)]
+        return {"data": rows, "nextCursor": None}
+    if method == "mcpServer/tool/call":
+        server = MCP.get(params.get("threadId"), {}).get(params.get("server"))
+        if server is None:
+            raise Refused(f"unknown MCP server '{params.get('server')}'")
+        if server["status"] != "connected":
+            raise Refused(f"failed to get client: MCP startup failed: {server['error']}")
+        try:
+            got = _mcp_post(server, "tools/call", {"name": params.get("tool"), "arguments": params.get("arguments") or {}})
+        except McpDown as e:
+            raise Refused(f"tool call failed: {e}") from None
+        _note(method, {k: params.get(k) for k in ("server", "tool", "arguments", "threadId")})
+        return {"content": got.get("content") or [], "isError": got.get("isError")}
     if method == "mcpServerStatus/list":
         names = [n for n in env.get("FAKE_CODEX_MCP", "").split(",") if n]
         off = {args[i + 1] for i, a in enumerate(args[:-1]) if a == "--disable"}
@@ -411,6 +530,15 @@ def answer(method, args, params):
         return {"config": {"notify": ["/person/notify-program"] if env.get("FAKE_CODEX_NOTIFY") else None,
                            "mcp_servers": {"repo_server": {"command": "x"}} if brings else {}},
                 "origins": {}}
+    if method in ("account/rateLimits/read", "account/read") and env.get("FAKE_CODEX_ACCOUNT"):
+        doc = _account()
+        _note(method, params)
+        if method == "account/read":
+            return {"account": doc.get("account"), "requiresOpenaiAuth": True}
+        limits = doc.get("limits")
+        if isinstance(limits, dict) and "error" in limits:
+            raise Refused(str(limits["error"]))
+        return limits if isinstance(limits, dict) else {"rateLimits": {}}
     if method == "hooks/list":
         data = []
         for cwd in params.get("cwds") or []:
@@ -448,7 +576,11 @@ def serve(conn, args):
                 send_text(conn, {"id": msg["id"], "error": {"code": -32600, "message": str(e)}})
                 continue
             if result is None:
-                result = answer(msg.get("method"), args, msg.get("params") or {})
+                try:
+                    result = answer(msg.get("method"), args, msg.get("params") or {})
+                except Refused as e:
+                    send_text(conn, {"id": msg["id"], "error": {"code": -32603, "message": str(e)}})
+                    continue
             if result is None:
                 send_text(conn, {"id": msg["id"], "error": {"code": -32601, "message": "no such method"}})
             else:
