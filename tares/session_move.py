@@ -13,10 +13,11 @@ The ledger is `session_moves`, one row per session with its state: `pending`, `v
 - `plan` adds a `pending` row for each session in DuckDB's events, once (the mark
   `session_move_planned` in `session_ingest_marks`). A second call, or a second start, adds nothing.
 - `move_recent` takes pending sessions whose last line is inside the window, oldest first, and moves
-  each in one session-store transaction: every DuckDB line (read in chunks, ordered by `event_time`
-  then `rowid`, with the DuckDB lock let go between chunks), then every line the table or the
-  archive holds that DuckDB does not (written on RC 1 with the gate shut by `HOLD_LINES_BACK`, or
-  late). A line is matched by `(line_key, at)` as a multiset, because `line_key` repeats. The
+  each in one session-store transaction: every DuckDB line (read before the transaction opens, in
+  chunks ordered by `event_time` then `rowid`, with the DuckDB lock let go between chunks), then
+  every line the table or the archive holds that DuckDB does not (written on RC 1 with the gate
+  shut by `HOLD_LINES_BACK`, or late). A line is matched by `(line_key, at)` as a multiset, because
+  `line_key` repeats. The
   session's rows in `session_lines` and its parts in `session_archive_parts` are replaced by the
   full list, numbered from 1; the archive files of the replaced parts stay where they are, unused.
   Those extra lines come after all the DuckDB lines in the numbering, not merged by time.
@@ -52,13 +53,22 @@ busy timeout while one session is rebuilt. The replacing transaction of an older
 `Store._sess_lock` too; on Postgres it also tries the hourly job's lock
 (`tares_session_archive:`), leaving the session `pending` when the job holds it, and locks the
 session's row, where another process's ingest waits.
+
+Nothing reads DuckDB inside either transaction. A store call holds the state lock, which on SQLite is
+DuckDB's lock, while it writes the session store, so a read in there would wait on the call and the
+call on the transaction, until one of them gave up with "database is locked". The lines of a recent
+session read ahead wait in a temporary file beside the database, so a long one is not held in memory.
 """
 from __future__ import annotations
 
 import json
+import os
+import pickle
+import tempfile
 import threading
 import time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -90,6 +100,10 @@ ARCHIVE = "archive"                  # where an older one went
 
 class Mismatch(Exception):
     """The rows a move wrote are not the lines it read; the session is left as it was."""
+
+
+class Changed(Exception):
+    """DuckDB's lines of the session changed while they were read; the move is tried again."""
 
 
 def _utc(t: datetime | None) -> datetime | None:
@@ -239,22 +253,42 @@ def _count_rows(conn, sid: str) -> int:
         session_lines.c.session == sid)).scalar_one()
 
 
-def _rebuild(store, conn, sources: list, sid: str) -> tuple[int, int]:
-    """Replace the session's rows and parts by every DuckDB line followed by the lines only the
-    table or the archive holds, in the open transaction. Returns (DuckDB lines, extra lines).
-    Raises `Mismatch` when the rows written are not those lines."""
+@contextmanager
+def _duck_lines(store, sources: list, sid: str):
+    """The session's DuckDB lines as rows of `session_lines` (without `session` and `seq`), all read
+    before the rebuild's write opens: yields (their count in DuckDB, the rows a chunk at a time).
+    The rows wait in an unnamed file that is gone when the block ends. The caller holds
+    `Store._sess_lock`, so no line is ingested meanwhile; the lines are counted again after the
+    read, and `Changed` is raised if anything else added or removed one."""
+    wanted = _duck_count(store, sources, sid)
+    where = None if str(store.path) == ":memory:" else os.path.dirname(os.path.abspath(store.path))
+    with tempfile.TemporaryFile(dir=where) as spool:
+        chunks = 0
+        for envs in _duck_chunks(store, sources, sid):
+            pickle.dump(session_ingest._line_rows(store, envs).get(sid, []), spool)
+            chunks += 1
+        after = _duck_count(store, sources, sid)
+        if after != wanted:
+            raise Changed(f"DuckDB held {wanted} lines before the read and {after} after")
+        spool.seek(0)
+        yield wanted, (pickle.load(spool) for _ in range(chunks))
+
+
+def _rebuild(store, conn, read: tuple, sid: str) -> tuple[int, int]:
+    """Replace the session's rows and parts by every DuckDB line (`read`, from `_duck_lines`)
+    followed by the lines only the table or the archive holds, in the open transaction. Returns
+    (DuckDB lines, extra lines). Raises `Mismatch` when the rows written are not those lines."""
     if conn.dialect.name == "postgresql":
         conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('tares_session_move:' "
                           "|| CAST(:s AS text)))"), {"s": sid})
-    wanted = _duck_count(store, sources, sid)
+    wanted, chunks = read
     have = _existing(store, conn, sid)
     conn.execute(delete(session_lines).where(session_lines.c.session == sid))
     conn.execute(delete(session_archive_parts).where(session_archive_parts.c.session == sid))
     seq = 0
     seen: Counter = Counter()
     last = None
-    for envs in _duck_chunks(store, sources, sid):
-        rows = session_ingest._line_rows(store, envs).get(sid, [])
+    for rows in chunks:
         for r in rows:
             seen[(r["line_key"], _utc(r["at"]))] += 1
             if last is None or _utc(r["at"]) > last:
@@ -296,9 +330,9 @@ def move_session(store, sid: str, sources: list | None = None) -> tuple[bool, st
     db = store.sessions_db
     started = now_utc()
     try:
-        with store._sess_lock:
+        with store._sess_lock, _duck_lines(store, sources, sid) as read:
             with db.begin() as conn:
-                duck, extra = _rebuild(store, conn, sources, sid)
+                duck, extra = _rebuild(store, conn, read, sid)
                 conn.execute(update(session_moves).where(session_moves.c.session == sid).values(
                     state=VERIFIED, target=TARGET, lines_events=duck, lines_after=duck + extra,
                     started_at=started, verified_at=now_utc(), error=None))
