@@ -229,6 +229,7 @@ session_moves = Table(
     Column("started_at", UTCDateTime),
     Column("verified_at", UTCDateTime),
     Column("error", Text),
+    Column("attempts", Integer),
 )
 Index("session_moves_state", session_moves.c.state)
 

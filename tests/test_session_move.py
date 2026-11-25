@@ -305,8 +305,13 @@ def failures():
     os.remove(os.path.join(ARCHIVE, "gone", "1.jsonl.gz"))
     ok, err = session_move.move_session(s, "gone")
     m = move_of(s, "gone")
-    ck("a part that cannot be read fails the session", ok is False and m["state"] == "failed"
-       and m["error"], (ok, err))
+    ck("a part that cannot be read leaves the session pending, with the error and one attempt",
+       ok is False and m["state"] == "pending" and m["error"] and m["attempts"] == 1, (ok, err, m))
+    for _ in range(session_move.MAX_ATTEMPTS - 1):
+        ok, err = session_move.move_session(s, "gone")
+    m = move_of(s, "gone")
+    ck("after the cap of tries it is failed", ok is False and m["state"] == "failed"
+       and m["attempts"] == session_move.MAX_ATTEMPTS and "gave up after" in m["error"], m)
     ck("its rows, parts and row are as they were", (rows_of(s, "gone"), parts_of(s, "gone"),
                                                     row_of(s, "gone")) == snap["gone"], "")
     ck("a failed session is not taken again", session_move.move_recent(s) == 0)
@@ -317,6 +322,107 @@ def failures():
     ok, _ = session_move.move_session(s, "bad")
     ck("the same session moves once the cause is gone", ok and move_of(s, "bad")["state"] == "verified"
        and len(rows_of(s, "bad")) == 7)
+    s.close()
+
+
+def transient():
+    print("== a transient error is retried, a mismatch is not ==")
+    from sqlalchemy.exc import OperationalError
+    s = open_store()
+    seed(s, "blip", 5, 3000)
+    seed(s, "blip2", 4, 2500)
+    session_ingest.reconcile_sessions(s)
+    session_move.plan(s)
+    real = session_move._rebuild
+    boom = {"n": 1}
+
+    def flaky(store, conn, sources, sid):
+        if sid == "blip" and boom["n"] > 0:
+            boom["n"] -= 1
+            raise OperationalError("SELECT 1", {}, Exception("server closed the connection"))
+        return real(store, conn, sources, sid)
+
+    old = session_move.RETRY_AFTER
+    session_move._rebuild = flaky
+    try:
+        session_move.RETRY_AFTER = 3600.0
+        n = session_move.move_recent(s)
+        m = move_of(s, "blip")
+        ck("a database error leaves the session pending with an attempt", n == 2 and m["state"] == "pending"
+           and m["attempts"] == 1 and "OperationalError" in (m["error"] or ""), (n, m))
+        ck("the other session of the batch moved", move_of(s, "blip2")["state"] == "verified")
+        ck("it is left alone until RETRY_AFTER has passed", session_move.move_recent(s) == 0
+           and session_move.retrying(s) == 1)
+        session_move.RETRY_AFTER = 0.0
+        ck("then it is taken again and verifies", session_move.move_recent(s) == 1
+           and move_of(s, "blip")["state"] == "verified" and states(s) == {"verified": 2}, states(s))
+        ck("its error is cleared and its rows are the lines", move_of(s, "blip")["error"] is None
+           and len(rows_of(s, "blip")) == 5)
+    finally:
+        session_move._rebuild = real
+        session_move.RETRY_AFTER = old
+    # the thread keeps going while a session waits to be tried again
+    seed(s, "blip3", 3, 2000)
+    session_ingest.reconcile_sessions(s)
+    with s.sessions_db.begin() as c:
+        c.execute(session_moves.insert().values(session="blip3", state="pending", target="table",
+                                                lines_events=3))
+    boom["n"] = 0
+
+    def flaky3(store, conn, sources, sid):
+        if sid == "blip3" and boom["n"] < 2:
+            boom["n"] += 1
+            raise OperationalError("SELECT 1", {}, Exception("busy"))
+        return real(store, conn, sources, sid)
+
+    session_move._rebuild = flaky3
+    session_move.RETRY_AFTER = 0.05      # a session that failed is out of the next batch, so the thread waits
+    try:
+        session_move.run(s, threading.Event(), pause=0)
+    finally:
+        session_move._rebuild = real
+        session_move.RETRY_AFTER = old
+    m = move_of(s, "blip3")
+    ck("the thread tried again until it verified", m["state"] == "verified" and m["attempts"] == 2, m)
+    # a failed write of the failure is printed and leaves the row as it was
+    seed(s, "blip4", 3, 1500)
+    session_ingest.reconcile_sessions(s)
+    with s.sessions_db.begin() as c:
+        c.execute(session_moves.insert().values(session="blip4", state="pending", target="table",
+                                                lines_events=3))
+    real_rec = session_move._record_failure
+
+    def bad_rec(*a, **k):
+        raise OperationalError("UPDATE", {}, Exception("down"))
+
+    def bad_rebuild(store, conn, sources, sid):
+        raise OperationalError("SELECT 1", {}, Exception("down"))
+
+    session_move._rebuild, session_move._record_failure = bad_rebuild, bad_rec
+    try:
+        ok, err = session_move.move_session(s, "blip4")
+    finally:
+        session_move._rebuild, session_move._record_failure = real, real_rec
+    ck("a failed record of the failure does not raise and leaves the row pending",
+       ok is False and move_of(s, "blip4")["state"] == "pending" and not move_of(s, "blip4")["attempts"])
+    # a stop during the fill takes no session
+    stop = threading.Event()
+    real_fill = session_ingest._fill_chunk
+    session_ingest._fill_chunk = lambda *a, **k: stop.set()
+    try:
+        n = session_move.move_recent(s, stop=stop)
+    finally:
+        session_ingest._fill_chunk = real_fill
+    ck("a stop set during the fill takes no session", n == 0 and move_of(s, "blip4")["state"] == "pending")
+    # a mismatch is final even with tries left
+    realc = session_move._count_rows
+    session_move._count_rows = lambda conn, sid: realc(conn, sid) + 1
+    try:
+        ok, _ = session_move.move_session(s, "blip4")
+    finally:
+        session_move._count_rows = realc
+    m = move_of(s, "blip4")
+    ck("a count mismatch fails at once", ok is False and m["state"] == "failed" and m["attempts"] == 1, m)
     s.close()
 
 
@@ -390,13 +496,15 @@ def revision():
         insp = inspect(sdb.engine)
         ck("the table exists with its columns", sorted(c["name"] for c in insp.get_columns("session_moves"))
            == sorted(["session", "state", "target", "lines_events", "lines_after", "started_at",
-                      "verified_at", "error"]))
+                      "verified_at", "error", "attempts"]))
         ck("its key is session", insp.get_pk_constraint("session_moves")["constrained_columns"] == ["session"])
         ck("it is not a moved table", "session_moves" not in __import__(
             "tares.session_store.tables", fromlist=["x"]).MOVED_TABLE_NAMES)
         with sdb.begin() as c:
             c.execute(text("INSERT INTO sessions (session, lines_complete) VALUES ('x', true)"))
             c.execute(text("INSERT INTO session_moves (session, state) VALUES ('x', 'pending')"))
+            c.execute(text("INSERT INTO session_ingest_marks (name) VALUES ('session_move_planned')"))
+            c.execute(text("INSERT INTO session_ingest_marks (name) VALUES ('other_mark')"))
         with sdb.begin() as c:
             cfg = sdb._config()
             cfg.attributes["connection"] = c
@@ -406,6 +514,10 @@ def revision():
             kept = c.execute(text("SELECT lines_complete FROM sessions WHERE session = 'x'")).scalar()
         ck("a downgrade drops only the table", "session_moves" not in names and "sessions" in names
            and "session_lines" in names and kept, names)
+        with sdb.begin() as c:
+            marks = sorted(r[0] for r in c.execute(text("SELECT name FROM session_ingest_marks")).all())
+        ck("a downgrade drops the plan's mark, so an upgrade plans again, and no other mark",
+           marks == ["other_mark"], marks)
         sdb.upgrade()
         ck("an upgrade builds it again", "session_moves" in inspect(sdb.engine).get_table_names()
            and version(sdb) == ["0011_session_moves"])
@@ -424,6 +536,7 @@ if __name__ == "__main__":
     main_run()
     repeats()
     failures()
+    transient()
     thread()
     if FAILS:
         print(f"\n{len(FAILS)} FAILED:\n  " + "\n  ".join(FAILS))

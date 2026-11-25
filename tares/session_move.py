@@ -18,9 +18,13 @@ The ledger is `session_moves`, one row per session with its state: `pending`, `v
   late). A line is matched by `(line_key, at)` as a multiset, because `line_key` repeats. The
   session's rows in `session_lines` and its parts in `session_archive_parts` are replaced by the
   full list, numbered from 1; the archive files of the replaced parts stay where they are, unused.
+  Those extra lines come after all the DuckDB lines in the numbering, not merged by time.
   The count of rows written is checked against the lines read. A session that checks out is
   `verified` and `sessions.lines_complete` is set; one that does not is `failed` with the counts in
-  `error`, and its transaction is rolled back, so its rows are as they were.
+  `error`, and its transaction is rolled back, so its rows are as they were. Any other error (the
+  database blipped, a part did not read) also rolls the transaction back, but leaves the session
+  `pending` with the error and an `attempts` count, to be tried again after `RETRY_AFTER`; after
+  `MAX_ATTEMPTS` tries it is `failed`.
 - `run` is the daemon's background thread: it waits for the sessions table to catch up, plans, and
   moves batches of 20 sessions with a pause between them. It resumes from the ledger after a
   restart, and stops between sessions when `stop` is set.
@@ -39,7 +43,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, insert, select, text, update
+from sqlalchemy import delete, func, insert, or_, select, text, update
 
 from . import metrics, session_archive, session_ingest
 from .envelope import Envelope, now_utc
@@ -56,6 +60,8 @@ BATCH = 20                           # sessions taken at a time
 CHUNK = 5000                         # DuckDB lines read under one hold of the lock
 PAUSE = 0.5                          # seconds between batches
 WAIT = 2.0                           # seconds between looks at whether the sessions table caught up
+MAX_ATTEMPTS = 5                     # tries of one session before it is `failed` for good
+RETRY_AFTER = 30.0                   # seconds before a session that failed to move is tried again
 PENDING, VERIFIED, FAILED = "pending", "verified", "failed"
 TARGET = "table"
 
@@ -235,8 +241,13 @@ def _rebuild(store, conn, sources: list, sid: str) -> tuple[int, int]:
 
 
 def move_session(store, sid: str, sources: list | None = None) -> tuple[bool, str | None]:
-    """Move one session. Returns (verified, error). The ledger row is set `verified`, or `failed`
-    with the counts, in a transaction after the rebuild's; a failed rebuild is rolled back."""
+    """Move one session. Returns (verified, error). The ledger row is set `verified` in the rebuild's
+    own transaction. A rebuild that fails is rolled back, and then:
+    - `Mismatch` (the rows are not the lines): the row is `failed` with the counts, for good;
+    - any other error (a database that blipped, a part that did not read): the row stays `pending`
+      with the error and one more attempt, and is tried again after `RETRY_AFTER`; at `MAX_ATTEMPTS`
+      it is `failed`.
+    A failure of the write that records this is printed and leaves the row as it was."""
     sources = sources or sorted(session_ingest.claude_code_sources(store))
     db = store.sessions_db
     started = now_utc()
@@ -249,24 +260,53 @@ def move_session(store, sid: str, sources: list | None = None) -> tuple[bool, st
                     started_at=started, verified_at=now_utc(), error=None))
     except Exception as e:
         err = f"{type(e).__name__}: {e}"[:1000]
-        with db.begin() as conn:
-            conn.execute(update(session_moves).where(session_moves.c.session == sid).values(
-                state=FAILED, started_at=started, verified_at=None, error=err))
+        try:
+            _record_failure(db, sid, started, err, final=isinstance(e, Mismatch))
+        except Exception as e2:
+            print(f"taresd: session move of {sid}: the failure was not recorded "
+                  f"({type(e2).__name__}: {e2}); the row stays as it was", flush=True)
         return False, err
     metrics.session_move_lines(duck + extra)
     return True, None
 
 
+def _record_failure(db, sid: str, started: datetime, err: str, final: bool) -> None:
+    m = session_moves.c
+    with db.begin() as conn:
+        tries = (conn.execute(select(m.attempts).where(m.session == sid)).scalar() or 0) + 1
+        if final or tries >= MAX_ATTEMPTS:
+            state = FAILED
+            if not final:
+                err = f"gave up after {tries} tries: {err}"[:1000]
+        else:
+            state = PENDING
+        conn.execute(update(session_moves).where(m.session == sid, m.state != VERIFIED).values(
+            state=state, started_at=started, verified_at=None, error=err, attempts=tries))
+
+
 # ── a pass ───────────────────────────────────────────────────────────────────────────────────
 def due(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
-    """The pending sessions whose last line is inside the window, the oldest first."""
+    """The pending sessions whose last line is inside the window, the oldest first. One that failed
+    to move is left out until `RETRY_AFTER` has passed since its last try."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
     with store.sessions_db.begin() as conn:
         return [r[0] for r in conn.execute(
             select(m.session).join(sessions, s.session == m.session)
-            .where(m.state == PENDING, s.last_line_at >= cutoff)
+            .where(m.state == PENDING, s.last_line_at >= cutoff,
+                   or_(m.attempts.is_(None), m.attempts == 0,
+                       m.started_at <= now_utc() - timedelta(seconds=RETRY_AFTER)))
             .order_by(s.last_line_at, m.session).limit(limit)).all()]
+
+
+def retrying(store, now: datetime | None = None) -> int:
+    """How many pending sessions with a last line inside the window have failed a try and wait."""
+    cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
+    m, s = session_moves.c, sessions.c
+    with store.sessions_db.begin() as conn:
+        return int(conn.execute(
+            select(func.count()).select_from(session_moves).join(sessions, s.session == m.session)
+            .where(m.state == PENDING, s.last_line_at >= cutoff, m.attempts > 0)).scalar() or 0)
 
 
 def counts(store) -> dict:
@@ -287,8 +327,8 @@ def move_recent(store, limit: int = BATCH, stop: threading.Event | None = None,
                 now: datetime | None = None) -> int:
     """Move up to `limit` pending sessions with a last line inside the window, oldest first.
     The facts and turns of each are filled first (both are idempotent). Returns how many sessions it
-    took, verified or failed; a failed one is not taken again. Stops between sessions when `stop`
-    is set."""
+    took; a session that failed for good is not taken again, one that failed a try waits for
+    `RETRY_AFTER`. Stops between sessions when `stop` is set."""
     sids = due(store, limit, now)
     if not sids:
         return 0
@@ -328,6 +368,8 @@ def run(store, stop: threading.Event, pause: float = PAUSE) -> None:
             print(f"taresd: session move planned for {n} session(s)", flush=True)
         while not stop.is_set():
             if move_recent(store, stop=stop) == 0:
+                if retrying(store) and not stop.wait(RETRY_AFTER):
+                    continue          # sessions that failed a try wait to be tried again
                 break
             if stop.wait(pause):
                 return
