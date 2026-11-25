@@ -148,6 +148,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       ck("frame: what the report cannot see, in full", (await text(page, "report-cannot-see")) === CANNOT_SEE,
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
+      ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
       ck("frame: each section says it is not built yet",
          (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 6);
       ck("frame: the Cost section is labelled API-equivalent",
@@ -241,9 +242,15 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       // ---- nothing merged
       await pick(page, "report-scope", "Team led by Bo");
       await page.getByTestId("report-empty").waitFor();
-      ck("empty: a scope with no merged ticket says so, with no section",
+      ck("empty: a scope with no merged ticket says so",
          (await text(page, "report-empty")).includes("No ticket was merged in these weeks")
-         && (await sections(page)).length === 0 && !(await text(page, "report-summary")).includes("merged."), await text(page, "report-empty"));
+         && !(await text(page, "report-summary")).includes("merged."), await text(page, "report-empty"));
+      ck("empty: the six sections stay under that line", (await sections(page)).join("|") === SECTIONS.join("|")
+         && await page.evaluate(() => {
+           const line = document.querySelector('[data-testid="report-empty"]');
+           const first = document.querySelector('[data-testid^="report-section-"]');
+           return !!(line && first && line.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
+         }), (await sections(page)).join("|"));
       ck("empty: the dates and what it cannot see stay", (await text(page, "report-summary")).includes("in weeks that start on Monday (UTC).")
          && (await text(page, "report-cannot-see")) === CANNOT_SEE);
       await checkWords(page, ck, "empty @1440");

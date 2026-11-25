@@ -22,7 +22,9 @@ const DEFAULT_RANGE = "8w";
 const DEFAULT_SCOPE = "factory";
 
 /** The sections in reading order. A section's ticket gives its entry a `body`, drawn from the page's one
- *  read, and keeps to its own entry: one per line with a blank line between them. */
+ *  read, and keeps to its own entry: one per line with a blank line between them. Sections are drawn also
+ *  when no ticket was merged (cost or waiting can exist without a merge), so a `body` says for itself
+ *  when it has nothing. */
 const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: ReportData) => React.ReactNode }[] = [
   { key: "delivered", title: "Delivered" },
 
@@ -81,14 +83,17 @@ export function ReportView({ data }: { data: ReportData }) {
         <EmptyState title="No project here is yours" data-testid="report-none-mine">
           Mine means the projects you lead or hold a ticket in. Pick the whole factory to see everything.
         </EmptyState>
-      ) : merged === 0 ? (
-        <EmptyState title="No ticket was merged in these weeks" data-testid="report-empty">Pick a longer range or another scope.</EmptyState>
       ) : (
-        SECTIONS.map((s) => (
-          <ListSection paper key={s.key} title={s.title} aside={s.aside} data-testid={`report-section-${s.key}`}>
-            {s.body ? s.body(data) : <EmptyState>This section is not built yet.</EmptyState>}
-          </ListSection>
-        ))
+        <>
+          {merged === 0 && (
+            <EmptyState title="No ticket was merged in these weeks" data-testid="report-empty">Pick a longer range or another scope.</EmptyState>
+          )}
+          {SECTIONS.map((s) => (
+            <ListSection paper key={s.key} title={s.title} aside={s.aside} data-testid={`report-section-${s.key}`}>
+              {s.body ? s.body(data) : <EmptyState>This section is not built yet.</EmptyState>}
+            </ListSection>
+          ))}
+        </>
       )}
     </div>
   );
