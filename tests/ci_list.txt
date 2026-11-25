@@ -188,6 +188,7 @@ test_mcp_station_headers
 test_memory_integration
 test_merge_queue
 test_merge_queue_api
+test_merge_queue_ci_rerun
 test_merge_ready
 test_metrics
 test_milestone_checks
