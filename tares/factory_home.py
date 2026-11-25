@@ -417,7 +417,9 @@ def _plan_title(store, owner: str | None, fx, request) -> str:
     return f"{name}'s Claude plan" if name else "Claude plan"
 
 
-def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
+def _plan(store, now: datetime, names: dict, hidden, fx=None, request=None) -> dict:
+    """The plan's limits and who used it this week. `hidden` is the ids of the projects the caller
+    cannot see: their cost is no part of any share."""
     plan = claude_usage.plan(store)
     limits = []
     shown = [x for x in (plan or {}).get("limits") or [] if x["kind"] in _LIMITS]
@@ -429,7 +431,7 @@ def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
                        "resets_at": _iso(at),
                        "text": f"{pct}% used" + (f" · resets {resets}" if resets else "")})
     shares = [f"{names[r['project']]} {round(r['share'] * 100)}%"
-              for r in claude_usage.by_project(store, now - timedelta(days=7))
+              for r in claude_usage.by_project(store, now - timedelta(days=7), hidden)
               if r["kind"] == "project" and r["project"] in names and (r["share"] or 0) >= 0.05]
     return {"known": plan is not None, "limits": limits,
             "share_text": "This week: " + ", ".join(shares) if shares else None,
@@ -526,16 +528,18 @@ def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dic
     return mine, order_waiting(owners_mod.for_others(owners_mod.Owners(store), rest), now)
 
 
-def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
+def home(store, fx, now, credential_key: str = "open", request=None, hidden=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
-    is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
+    is addressed to the caller's person (TR-739); its keys replace the single-person ones.
+    `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
     team = team_of(fx, request, now)
     # a private project the caller is not on is left out of every count and name
-    hidden = fx.hidden_ids() if fx else set()
+    if hidden is None:
+        hidden = fx.hidden_ids() if fx else set()
     projects = store.list_projects(kind="software_factory", exclude_ids=hidden)
     # a project kept for later is off the home until someone starts it
     open_ps = [p for p in projects if p["status"] not in ("done", "later")]
@@ -584,7 +588,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
-            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
+            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
             "start": start_steps.checklist(
@@ -645,13 +649,16 @@ def build(store, fx=None, request=None, now=None) -> dict:
     caller who passes `now` (a test) gets a fresh read."""
     if now is not None:
         return home(store, fx, now, request=request)
-    key = _cache_key(store, request)
+    # the hidden projects are part of the key: one credential can read with more or less in view
+    # (`x-tares-viewer: public`), and a body is only for callers who see the same projects
+    hidden = fx.hidden_ids() if fx else set()
+    key = (*_cache_key(store, request), frozenset(hidden))
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
         gen = _GEN[0]
-    out = home(store, fx, now_utc(), key[1], request)
+    out = home(store, fx, now_utc(), key[1], request, hidden)
     with _cache_lock:
         # a clear_cache() that landed while this was building means the body may be stale
         if gen == _GEN[0]:

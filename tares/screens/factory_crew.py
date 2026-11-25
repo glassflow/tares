@@ -69,9 +69,9 @@ def _pacing(pace: dict, now) -> str | None:
 def register(app, store, h, ctx):
     fx = ctx.fx
 
-    def by_project(names: dict, now) -> list[dict]:
+    def by_project(names: dict, hidden, now) -> list[dict]:
         out = []
-        for r in claude_usage.by_project(store, now - timedelta(days=7)):
+        for r in claude_usage.by_project(store, now - timedelta(days=7), hidden):
             if r.get("kind") != "project" or r.get("project") not in names or r.get("share") is None:
                 continue
             if round(r["share"] * 100) < 1:
@@ -230,10 +230,10 @@ def register(app, store, h, ctx):
         own = crews[0] if crews else {"summary": "Not started", "talk_to": None, "reviewer": None,
                                       "releaser": None, "builders": []}
 
-        plan = _plan(store, now, names)
+        plan = _plan(store, now, names, hidden)
         for lim in plan["limits"]:
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
-        plan["by_project"] = by_project(names, now)
+        plan["by_project"] = by_project(names, hidden, now)
         # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
         # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
         hidden_names = [p["name"] for p in store.list_projects(ids=hidden)]
