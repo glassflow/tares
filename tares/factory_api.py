@@ -33,6 +33,7 @@ from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
 from . import metrics
+from . import report as report_mod
 from . import team as team_mod
 from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
@@ -3594,6 +3595,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
         ho = store.get_handover(uid) or {}
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
+
+    @app.post("/api/factory/report/rebuild")
+    def report_rebuild():
+        """Work out the report's weekly figures again, every week of every project (they are kept
+        current in the background; this is for after a repair). Answers {rows, changed, removed}.
+        Needs the admin scope, as every write does; a project key is refused."""
+        return report_mod.rebuild_all(store)
 
     fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
                          team_home=team_home, project_waiting=project_waiting,

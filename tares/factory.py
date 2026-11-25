@@ -635,6 +635,15 @@ def add_check_to_doc(body: str, line: str) -> str:
 
 VERDICTS = ("pass", "changes", "block")
 
+MERGE_QUEUE = "merge-queue"   # the name the merge queue writes its records under
+
+
+def automatic_pass(review: dict) -> bool:
+    """Whether a review ({by, verdict}) is the merge queue's own pass for a branch update that
+    moved only the base (merge_queue._after_update, the one review the queue writes). Nobody
+    reviewed anything, so the report does not count it as a round (decided, D50)."""
+    return review.get("by") == MERGE_QUEUE and review.get("verdict") == "pass"
+
 
 def same_commit(a, b) -> bool:
     """Whether two commit hashes name the same commit. A hash may be short, so one that starts

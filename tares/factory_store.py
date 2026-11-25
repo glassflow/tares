@@ -1343,6 +1343,34 @@ class FactoryStore:
                                    "value": r[4], "reason": r[5], "by": r[6], "person_id": r[7]}
                                   for r in rows])
 
+    # ── every project's records, for the weekly figures (report.py, TR-1666) ──
+    def all_stage_changes(self) -> list[dict]:
+        """Every stage change of every ticket, deleted tickets too, each ticket's together and
+        oldest first. `value` None is a stage taken off."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT ticket, project, changed_at, value FROM ticket_history "
+                "WHERE field = 'stage' ORDER BY ticket, changed_at").fetchall()
+        return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
+
+    def all_reviews(self) -> list[dict]:
+        """Every review round of every ticket, each ticket's together and in round order."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT id, project, ticket, round, verdict, by_station, reviewed_at FROM reviews "
+                "ORDER BY ticket, round, reviewed_at").fetchall()
+        return [{"id": r[0], "project": r[1], "ticket": r[2], "round": r[3], "verdict": r[4],
+                 "by": r[5], "at": r[6]} for r in rows]
+
+    def all_review_findings(self) -> list[dict]:
+        """Every finding of every review, with its kind as stored."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT project, severity, blocking, kind, state, fixed_in, found_at "
+                "FROM review_findings").fetchall()
+        return [{"project": r[0], "severity": r[1], "blocking": bool(r[2]), "kind": r[3],
+                 "state": r[4], "fixed_in": r[5], "found_at": r[6]} for r in rows]
+
     def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
         """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources
         saw on a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410)."""

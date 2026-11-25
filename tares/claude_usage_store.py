@@ -13,7 +13,7 @@ SQLAlchemy Core on `self.sessions_db`; the DDL below stays, because on Postgres 
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import bindparam, case, distinct, false, func, select, update
 
@@ -277,22 +277,61 @@ class ClaudeUsageStore:
             out.update({r[0]: self._totals(r[1:]) for r in rows})
         return out
 
+    @staticmethod
+    def _replies_by_project():
+        """(the replies joined to their station and the project their session worked in, the
+        project each reply counts for, whether it is a crew station's). The one definition of
+        which project a reply belongs to: the one it was stamped with, else the station's project,
+        else, for a session that is no crew station, the (lowest) one it worked in, else none."""
+        u, ss, ps = session_usage, session_stations, project_sessions
+        worked = select(ps.c.session, func.min(ps.c.project).label("project")).group_by(
+            ps.c.session).subquery()
+        is_crew = ss.c.role.in_(CREW_ROLES)
+        project = func.coalesce(u.c.project, ss.c.project,
+                                case((is_crew, None), else_=worked.c.project))
+        replies = (u.outerjoin(ss, ss.c.session == u.c.session)
+                   .outerjoin(worked, worked.c.session == u.c.session))
+        return replies, project, is_crew
+
+    def usage_by_week(self, since=None, until=None) -> list[dict]:
+        """Replies in [since, until) (all when None) grouped by the project they count for (as
+        usage_by_project does; None when none), the role of the session's station (None: a
+        person's own session) and the ISO week of the reply in UTC (`week`, its Monday as a date).
+        `cost_usd` adds the priced replies; `unpriced` counts the rest. A reply with no time is
+        in no week."""
+        u, ss = session_usage, session_stations
+        replies, project, _ = self._replies_by_project()
+        if self.sessions_db.dialect == "postgresql":
+            monday = func.to_char(func.date_trunc("week", func.timezone("UTC", u.c.replied_at)),
+                                  "YYYY-MM-DD")
+        else:   # SQLite keeps the UTC wall time: forward to Sunday, back six days
+            monday = func.date(u.c.replied_at, "weekday 0", "-6 days")
+        q = select(project.label("proj"), ss.c.role.label("role"), monday.label("week"),
+                   u.c.cost_usd).select_from(replies).where(u.c.replied_at.is_not(None))
+        if since is not None:
+            q = q.where(u.c.replied_at >= since)
+        if until is not None:
+            q = q.where(u.c.replied_at < until)
+        r = q.cte("w")
+        final = select(r.c.proj, r.c.role, r.c.week, func.count(), func.sum(r.c.cost_usd),
+                       func.count().filter(r.c.cost_usd.is_(None))
+                       ).group_by(r.c.proj, r.c.role, r.c.week)
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(final).all()
+        return [{"project": x[0], "role": x[1], "week": date.fromisoformat(x[2]),
+                 "replies": int(x[3]), "cost_usd": float(x[4] or 0), "unpriced": int(x[5])}
+                for x in rows]
+
     def usage_by_project(self, since=None) -> list[dict]:
         """Replies since `since` (all when None) by the project they count for: the project the
         reply was stamped with, else the station's project (a builder), else the project the
         session worked in. The crew's own stations serve every project, so their unstamped replies
         are the crew's (`kind` crew); anything else unclaimed is `other`."""
-        u, ss, ps = session_usage, session_stations, project_sessions
-        worked = select(ps.c.session, func.min(ps.c.project).label("project")).group_by(
-            ps.c.session).subquery()
-        is_crew = ss.c.role.in_(CREW_ROLES)
-        q = (select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
-                    u.c.cache_read_tokens, u.c.cost_usd,
-                    func.coalesce(u.c.project, ss.c.project,
-                                  case((is_crew, None), else_=worked.c.project)).label("proj"),
-                    is_crew.label("crew"))
-             .select_from(u.outerjoin(ss, ss.c.session == u.c.session)
-                          .outerjoin(worked, worked.c.session == u.c.session)))
+        u = session_usage
+        replies, project, is_crew = self._replies_by_project()
+        q = select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
+                   u.c.cache_read_tokens, u.c.cost_usd, project.label("proj"),
+                   is_crew.label("crew")).select_from(replies)
         if since is not None:
             q = q.where(u.c.replied_at >= since)
         r = q.cte("r")

@@ -234,6 +234,7 @@ test_rca_callback_anchor
 test_recording_person
 test_release_block
 test_release_changelog
+test_report_weeks
 test_resources
 test_review_gate
 test_review_post

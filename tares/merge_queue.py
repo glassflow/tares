@@ -49,7 +49,7 @@ from .merge_ready import merge_ready
 MILESTONE_BRANCHES = ("factory-modular/*",)
 
 AUTO = "L4-ship"      # any other level is treated as L3-review
-BY = "merge-queue"
+BY = factory_mod.MERGE_QUEUE
 # what the console approval records as the person's words and choice; the merge queue page
 # (TR-1094) reads them back to tell this yes from an answer given elsewhere
 APPROVE_WORDS = "Approved in the console"
