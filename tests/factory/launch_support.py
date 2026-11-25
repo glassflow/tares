@@ -59,6 +59,8 @@ DEFAULT_WORLD = {
     "mcp_key": None,         # the key the cell takes from a tool call at /mcp, when it is another than `token`
     "desk": [],              # the desk's items, as POST /api/desk files them (FakeTares.reply answers one as a person)
     "answers": [],           # the cell's record of answers people gave (GET /api/answers)
+    "ingested": [],          # every fact a Codex station's recorder posted to /ingest/codex, in order
+    "ingest_fail": 0,        # how many posts to /ingest/codex to take and then answer 500, as if the answer was lost
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
     "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"],   # what /health lists
@@ -104,6 +106,7 @@ class FakeTares:
                     asked = json.loads(raw.decode() or "{}")
                 except ValueError:
                     asked = {}
+                asked_list = asked if isinstance(asked, list) else [asked]
                 asked = asked if isinstance(asked, dict) else {}
                 params = asked.get("params") if isinstance(asked.get("params"), dict) else {}
                 outer.log.append({"path": self.path, "auth": auth, "post": True, "method": asked.get("method"),
@@ -125,6 +128,12 @@ class FakeTares:
                 u = urlparse(self.path)
                 if w["token"] and auth != f"Bearer {w['token']}":
                     return self._send(401, {"detail": "unauthorized"})
+                if u.path == "/ingest/codex":
+                    w["ingested"].extend(asked_list)
+                    if w["ingest_fail"]:
+                        w["ingest_fail"] -= 1
+                        return self._send(500, {"detail": "the answer was lost"})
+                    return self._send(200, {"ok": True})
                 if u.path == "/api/desk":
                     if self.headers.get("X-Tares-Station") and self.headers.get("X-Tares-Role") != "orchestrator":
                         return self._send(403, {"detail": "only the orchestrator may do this"})

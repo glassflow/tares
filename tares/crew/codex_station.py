@@ -546,13 +546,35 @@ def cmd_outcome(argv: list, env: dict) -> int:
     return 0
 
 
+def _record_now(paths: CrewPaths, station: str, closing: str = "") -> None:
+    """Record the station's session now (TR-1595): one look, or with `closing` (its app-server has ended) the
+    closing of its open starts. Never fails: a recording Tares does not take is sent again later."""
+    from . import codex_record   # here: it imports this module
+    from .client import TaresClient
+    client = TaresClient(paths, dict(os.environ))
+    try:
+        if closing:
+            codex_record.close_station(client, paths, station, closing)
+        else:
+            codex_record.record_station(client, paths, station)
+    except Exception:   # noqa: BLE001 - a stop is never kept from ending a station by its recording
+        pass
+    finally:
+        try:
+            client.close()
+        except Exception:   # noqa: BLE001
+            pass
+
+
 def _trim_record(paths: CrewPaths, station: str, keep_turn: str) -> None:
     """Drop the lines of older turns from a record that grew large, keeping the newest turn's (a look by the
-    watch may still compare it). Only between turns, when no hook of the station writes. Never fails."""
+    watch may still compare it). Only between turns, when no hook of the station writes. Never fails. The
+    session is recorded first: the lines dropped are where the starts of those turns' commands are read."""
     file = paths.station_file(station, codex_guard.RECORD)
     try:
         if file.stat().st_size <= RECORD_MAX:
             return
+        _record_now(paths, station)
         kept = [r for r in codex_guard.read_record(file) if keep_turn and r.get("turn") == keep_turn]
         tmp = file.with_name(file.name + ".tmp")
         tmp.write_text("".join(state.dumps_compact(r) + "\n" for r in kept), encoding="utf-8")
@@ -1163,6 +1185,9 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     "stopped" (it ended when asked) or "killed". The socket's path in the crew home goes with it, and so does
     whatever the station had started that still runs (`end_leftovers`): after a stop nothing of it is left.
 
+    Its session is recorded last (TR-1595): one look while the app-server answers, then, once it has ended,
+    every command that started and has no end is recorded as one whose outcome nobody will know.
+
     Before the app-server is ended its newest turn is compared with the guard's record once more (`compare`),
     since nothing can ask it afterwards: a station that ran something the guard has no record of is marked
     (`guard_off`) and the event recorded, as when the watch finds it. When the comparison cannot be made the
@@ -1172,11 +1197,13 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     if not _same_process(rec):
         cx.remove_socket(sock)
         end_leftovers(paths, station, grace=grace, sleep=sleep)
+        _record_now(paths, station, closing="the station was not running when it was stopped")
         return "not running"
     pid = rec["pid"]
     _interrupt(paths, station, turn_wait, sleep)
     thread = _recorded_thread(paths, station) if compare else ""
     why, shown, unknown = _compared_at_stop(paths, station, thread) if thread else ("", "", "")
+    _record_now(paths, station)   # the last look, while the app-server still answers (TR-1595)
     note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:
@@ -1192,6 +1219,7 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
         _gone(pid, grace, sleep)
     cx.remove_socket(sock)
     end_leftovers(paths, station, grace=grace, sleep=sleep)
+    _record_now(paths, station, closing="the station was stopped while the command ran; how it ended was not recorded")
     if why:
         mark_off(paths, station, why, shown)
         state.event("guard-off", station, why[:300], paths=paths)

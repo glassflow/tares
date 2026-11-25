@@ -488,9 +488,19 @@ showed the run as recorded: the two prompts as the factory's, what the station s
 its answer, and the killed `sleep 61.4949` as a Bash call marked FAILED. The page has two marks for a call,
 failed or not, so a command with an unknown outcome reads as failed there; its output says "outcome unknown".
 
-Not done here: a station recorded by the watch itself (the step is called by hand; it is not in the watch's
-round yet), station to station messages, files a station changed as `session_files` rows (a file change is
-on the session's timeline only), and a long conversation (every look reads the whole of it).
+In the watch since (PR 947): the recorder is the first part of the watch's Codex step, and that step is the
+first of the round, so what a turn did is recorded before any other step can start another turn. Every stop
+records last, once while the app-server answers and once after it has ended (`codex_record.close_station`),
+so a restart, a retire, `crew down` and a station stopped for its guard keep the commands that ended and close
+the ones still running as outcome unknown. Tested against the stand-in Codex and the real cell code
+(`tests/test_crew_codex_station.py`, section o), and once on the real Codex 0.171.0 against a cell of the run's
+own (`probe_record.py`, scenario `through_the_watch`, 5 of 5): a watch round in the middle of a turn put the
+station on the cell at work, with the command that had ended and the one that ran; the stop alone, with no
+round after it, ended the session and recorded the command it cut off (`sleep 61.4949`) as outcome unknown;
+a round after the stop changed nothing.
+
+Not done here: station to station messages, files a station changed as `session_files` rows (a file change
+is on the session's timeline only), and a long conversation (every look reads the whole of it).
 
 ## What was not verified
 

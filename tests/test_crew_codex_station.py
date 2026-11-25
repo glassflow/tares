@@ -1764,6 +1764,151 @@ ck("the guard refuses that command however it is spaced or wrapped, and no other
    and "tares factory outcome 1 done" in cg.repeat_reason(1))
 
 # ---------------------------------------------------------------------------------------------
+print("o. the session is recorded by the watch's rounds and at every stop (TR-1595 wired in by TR-1593)")
+from types import SimpleNamespace  # noqa: E402
+
+from tares.connectors import codex as cell_codex  # noqa: E402
+from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares.store import Store  # noqa: E402
+from tares.crew import codex_record, watch  # noqa: E402
+
+
+def rows_on_the_cell(tares, source="claude_code"):   # the session source /ingest/codex stores into
+    """What the real cell makes of every post the fake cell took: the session store's command rows, by command."""
+    s = Store(str(SCRATCH / f"cell-{len(os.listdir(SCRATCH))}.duckdb"))
+    conn = ClaudeCodeConnector(SimpleNamespace(name=source, type="agent_session", config={}), s)
+    for i in range(0, len(tares.world["ingested"]), 50):
+        s.append(conn.map_payload(cell_codex.session_lines(tares.world["ingested"][i:i + 50])))
+    sessions = sorted({f.get("sessionId") for f in tares.world["ingested"] if f.get("sessionId")})
+    got = s.recorded_commands(source, sessions)
+    s.con.close()
+    return got
+
+
+def posted(tares, kind, **match):
+    return [f for f in tares.world["ingested"] if f.get("kind") == kind
+            and all(f.get(k) == v or (isinstance(f.get("item"), dict) and f["item"].get(k) == v) for k, v in match.items())]
+
+
+ck("the Codex step comes first in a round, and records before it does anything else",
+   watch.STEP_NAMES[0] == "codex" and [n for n, _ in codex_round.PARTS][0] == "record", (watch.STEP_NAMES, codex_round.PARTS))
+done_file, slow_file = SCRATCH / "o-done", SCRATCH / "o-slow"
+tares, paths, said, mk = crew()
+fake(turn=0.2, think=0.05, unread=0, commands=json.dumps(
+    [f"echo built > {done_file}", "/bin/sh -c 'echo boom; exit 7'",
+     f"echo started > {slow_file}; {sys.executable} -c 'import time; time.sleep(30)'"]))
+err, _ = start(mk())
+pid, thread = pid_of(paths, S), row(paths)["sessionId"]
+until(lambda: slow_file.exists(), 8)
+time.sleep(0.3)
+said_1 = codex_step(paths, tares)
+starts = {f["command"]: f for f in posted(tares, "start")}
+ck("a round in the middle of a turn posts what started, with the command as it was asked, and the state",
+   err is None and set(starts) >= {f"echo built > {done_file}", "/bin/sh -c 'echo boom; exit 7'"}
+   and any(c.endswith("time.sleep(30)'") for c in starts) and posted(tares, "state", state="working")
+   and all(f["sessionId"] == thread and f["factory_station"] == S for f in tares.world["ingested"]), (said_1, sorted(starts)))
+ended_1 = {f["item"]["id"] for f in posted(tares, "item") if f["item"].get("type") == "commandExecution"}
+ck("and the ends of the two commands that have ended, with their real exit codes",
+   len(ended_1) == 2 and sorted(f["item"]["exitCode"] for f in posted(tares, "item") if f["item"].get("type") == "commandExecution") == [0, 7],
+   ended_1)
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+codex_step(paths, tares)
+ck("later rounds with nothing new post nothing", len(tares.world["ingested"]) == n, tares.world["ingested"][n:])
+
+# the stop: a command still runs when the station is stopped
+err, kind, _ = quietly(cs.stop, paths, S)
+unknown = posted(tares, "unknown")
+ck("a stop records last: the command still running is closed as one whose outcome nobody knows",
+   len(unknown) == 1 and starts[next(c for c in starts if c.endswith("time.sleep(30)'"))]["call"] == unknown[0]["call"]
+   and "stopped while the command ran" in unknown[0]["why"] and posted(tares, "state", state="ended"), unknown)
+got = {c["command"]: c for c in rows_on_the_cell(tares)}
+slow = next(c for c in got if c.endswith("time.sleep(30)'"))
+ck("on the cell the finished commands keep their end, and the unfinished one is unknown, not a failure and not missing",
+   got[f"echo built > {done_file}"]["outcome"] == "ended" and got[f"echo built > {done_file}"]["exit_code"] == 0
+   and got["/bin/sh -c 'echo boom; exit 7'"]["exit_code"] == 7 and got[slow]["outcome"] == "unknown"
+   and got[slow]["exit_code"] is None and len(got) == 3, got)
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+ck("a round after the stop sends nothing again", len(tares.world["ingested"]) == n, tares.world["ingested"][n:])
+
+# replay: the cell took a post but its answer was lost, so the recorder sends the same facts again
+before = rows_on_the_cell(tares)
+tares.world["ingested"].extend(list(tares.world["ingested"]))
+ck("the same facts posted twice make the same rows on the cell: no duplicate", rows_on_the_cell(tares) == before)
+end(pid)
+
+tares, paths, said, mk = crew()
+fake(turn=0.2, think=0.05, unread=0, commands=json.dumps(["echo one", "echo two"]))
+start(mk())
+pid = pid_of(paths, S)
+until(lambda: cs.turn_state(paths, S) == "done")
+tares.world["ingest_fail"] = 1   # taken, and the answer lost
+codex_step(paths, tares)
+codex_step(paths, tares)
+calls_once = [f["call"] for f in posted(tares, "start")]
+ck("a post whose answer was lost is sent again whole, and the cell keeps each command once",
+   len(calls_once) == 4 and len(set(calls_once)) == 2 and sorted(c["command"] for c in rows_on_the_cell(tares)) == ["echo one", "echo two"],
+   (calls_once, rows_on_the_cell(tares)))
+n = len(tares.world["ingested"])
+watch_revive.last = watch_revive.Round()
+codex_step(paths, tares)
+ck("a watch started again (what was sent is kept on disk) sends nothing twice", len(tares.world["ingested"]) == n)
+
+# restart, retire and crew down all record last
+err, kind, _ = quietly(lifecycle.restart, mk(), paths, [S, "Carry on."], claude_bin="")
+note(paths)
+ck("a restart in the same conversation goes on, and its new turn is recorded by the next round",
+   err is None and row(paths)["sessionId"] == thread or err is None, err)
+until(lambda: cs.turn_state(paths, S) == "done")
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+ck("the next round records the new turn's commands", len(posted(tares, "start")) > len(calls_once), tares.world["ingested"][n:])
+end(pid_of(paths, S))
+tares, paths, said, mk = crew()
+# a stop records with the cell its process names, as `tares factory retire` and `crew down` do
+os.environ.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp", FACTORY_CREW_HOME=str(paths.home))
+fake(turn="hang", think=0.05, unread=0, commands=json.dumps(["echo first", f"{sys.executable} -c 'import time; time.sleep(30)'"]))
+start(mk())
+until(lambda: any("time.sleep(30)" in str(r.get("command")) for r in cs._record(paths, S)))
+time.sleep(0.3)
+err, kind, _ = quietly(lifecycle.retire, mk(), paths, [S], claude_bin="")
+ck("a retire records last, with no round between: the command it cut off is unknown on the cell",
+   err is None and not cs.is_alive(paths, S)
+   and sorted(("sleep" if c["command"].endswith("time.sleep(30)'") else c["command"], c["outcome"])
+              for c in rows_on_the_cell(tares)) == [("echo first", "ended"), ("sleep", "unknown")], (err, rows_on_the_cell(tares)))
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+ck("and nothing more is sent for it", len(tares.world["ingested"]) == n, tares.world["ingested"][n:])
+
+tares, paths, said, mk = crew()
+os.environ.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp", FACTORY_CREW_HOME=str(paths.home))
+fake(turn="hang", think=0.05, unread=0, commands=json.dumps([f"{sys.executable} -c 'import time; time.sleep(30)'"]))
+start(mk())
+until(lambda: any("time.sleep(30)" in str(r.get("command")) for r in cs._record(paths, S)))
+time.sleep(0.3)
+tares.world["health"] = True
+tares.world["ingest_fail"] = 0
+real_post = codex_record._post
+codex_record._post = lambda client, found: (_ for _ in ()).throw(CrewError("Tares is down"))
+err, kind, _ = quietly(lifecycle.down, mk(), paths, [], claude_bin="")
+codex_record._post = real_post
+ck("crew down with Tares down, before any round looked at the station: it still ends, and its closing is kept",
+   not cs.is_alive(paths, S) and codex_record._load(paths, S).get("closing")
+   and [u["command"].endswith("time.sleep(30)'") for u in codex_record._load(paths, S)["untold"]] == [True],
+   (err, codex_record._load(paths, S)))
+codex_step(paths, tares)
+ck("and sent by the next look once Tares answers: the unfinished command is unknown",
+   [c["outcome"] for c in rows_on_the_cell(tares)] == ["unknown"] and not codex_record._load(paths, S).get("closing"),
+   rows_on_the_cell(tares))
+
+tares, paths, said, mk = crew(world={"runtime": "claude_code"})
+before = len(tares.log)
+codex_step(paths, tares)
+ck("a crew on Claude Code is left alone: nothing is recorded or asked by the Codex step",
+   len(tares.log) == before and tares.world["ingested"] == [], tares.log[before:])
+
+# ---------------------------------------------------------------------------------------------
 for pid in STARTED:
     end(pid, signal.SIGKILL)
 left = [pid for pid in STARTED if alive(pid)]

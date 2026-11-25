@@ -71,7 +71,9 @@ RESTART_USAGE = "usage: tares factory crew watch --restart [--if-running] [--onl
 RESTART_FLAGS = ("--restart", "--if-running", "--only-under", "--json")
 
 # What a round does, in this order. A later ticket registers the function for its name.
-STEP_NAMES = ("revive", "codex", "regrant", "idle_wake", "pace", "updates", "docker", "strays")
+# "codex" (a Codex crew's own round, TR-1593) comes first: it records what each station did before any other
+# step can start another turn, and does nothing for a crew on Claude Code.
+STEP_NAMES = ("codex", "revive", "regrant", "idle_wake", "pace", "updates", "docker", "strays")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
 # What a nap also does on each tick: look for a desk answer, so the orchestrator hears it at once.

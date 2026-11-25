@@ -29,8 +29,8 @@ of its first item (`item/started`, a `userMessage`); without it no hook runs and
 The "model" then runs $FAKE_CODEX_COMMANDS, a JSON list: a string is a shell command, {"mcp": "server__tool"}
 an MCP call. Each goes to the `PreToolUse` hooks first (the payload Codex gives: `tool_name`, `tool_input`,
 `tool_use_id`, `turn_id`, `cwd`); a deny leaves no item and nothing runs, an allow with `updatedInput` runs
-the command it gives. What ran is kept as the turn's items, listed by `thread/turns/list` once the command has
-ended.
+the command it gives. What ran is kept as the turn's items, with the real exit code, the folder and what the
+command printed, listed by `thread/turns/list` and by `thread/read` with its turns once the command has ended.
 A connection that only reads is told nothing of a turn. `hooks/list` and `config/read` answer for a folder
 as the real one does: a folder nobody marked is recorded as trusted in $CODEX_HOME/config.toml when a
 conversation starts in it, and from then on a repository that brings its own setup ($FAKE_CODEX_PROJECT)
@@ -348,10 +348,14 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
             item = {"type": "mcpToolCall", "id": call, "server": server, "tool": name, "status": "completed"}
         else:
             _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "commandExecution", "id": call}})
-            subprocess.run(runs, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+            began = int(time.time() * 1000)
+            done = subprocess.run(runs, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, timeout=30)
             item = {"type": "commandExecution", "id": call, "command": "/bin/zsh -lc " + shlex.quote(runs),
                     "commandActions": [{"type": "unknown", "command": runs}], "source": "unifiedExecStartup",
-                    "status": "completed"}
+                    "status": "completed" if done.returncode == 0 else "failed", "cwd": cwd,
+                    "exitCode": done.returncode, "aggregatedOutput": (done.stdout or "") + (done.stderr or ""),
+                    "startedAtMs": began, "completedAtMs": int(time.time() * 1000)}
         with LOCK:
             for turn in t["turns"]:
                 if turn["id"] == turn_id:
@@ -480,7 +484,8 @@ def _view(thread_id, turns=False) -> dict:
     else:
         status = {"type": "idle"}
     return {"id": thread_id, "status": status, "updatedAt": t["updatedAt"],
-            "turns": [{"id": x["id"], "status": x["status"], "error": x.get("error")} for x in t["turns"]] if turns else []}
+            "turns": [{"id": x["id"], "status": x["status"], "error": x.get("error"), "items": list(x.get("items") or [])}
+                      for x in t["turns"]] if turns else []}
 
 
 class Refused(Exception):

@@ -6,12 +6,13 @@ The parts run in the order of PARTS, each with the round's client and the crew's
 it did. A part that fails says so and the next one runs: a cell that is down for one must not stop the
 others. What is here:
 
+  record    what each station did since the last look is sent to Tares (`codex_record`, TR-1595). First, and the
+            step first in the round: nothing else starts another turn before what the last one did is recorded
   asks      what a station asks the person goes to the desk, and their answer goes back (`codex_asks`)
   turns     a turn that failed is said, recorded and put on the desk, once: Codex leaves such a station at
             rest, where it reads like one that finished its work
 
-Recording (TR-1595) and the account's limits (TR-1597) join here, so that there is one such step and no
-second watcher. A crew on Claude Code is left alone: the step does nothing for it.
+The account's limits (TR-1597) join here, so that there is one such step and no second watcher. A crew on Claude Code is left alone: the step does nothing for it.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import os
 import sys
 
 from . import codex as cx
-from . import codex_asks, proc, state
+from . import codex_asks, codex_record, proc, state
 from . import codex_station as cs
 from .client import TaresClient
 from .errors import CrewError
@@ -55,7 +56,16 @@ def failed_turns(client, paths: CrewPaths, say=None) -> list:
     return told
 
 
-PARTS = [("asks", codex_asks.step), ("turns", failed_turns)]   # (name, fn(client, paths, say) -> anything)
+def record(client, paths: CrewPaths, say=None) -> list:
+    """The recording part: `codex_record.step`, with a line for a station whose look did not go through."""
+    done = codex_record.step(client, paths)
+    for row in done if say else []:
+        if row.get("error"):
+            say(f"the session of {row['station']} was not recorded this round: {row['error']}")
+    return done
+
+
+PARTS = [("record", record), ("asks", codex_asks.step), ("turns", failed_turns)]   # (name, fn(client, paths, say))
 
 
 def _say(msg: str) -> None:
