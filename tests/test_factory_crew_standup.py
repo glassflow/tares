@@ -28,6 +28,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
+from tares import factory_home
 
 P = F = 0
 
@@ -59,6 +60,7 @@ async def main():
                                  [long_ago, ids[t]])
             for q in desk_questions:
                 store.sc.execute("UPDATE desk_items SET created_at = ? WHERE question = ?", [long_ago, q])
+        factory_home.clear_cache()   # written to the store directly, past the page's 5 s (TR-1630)
 
     async def standup(cx):
         r = await cx.get("/api/factory/crew")

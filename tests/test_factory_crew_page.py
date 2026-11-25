@@ -29,7 +29,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
-from tares import claude_usage, words
+from tares import claude_usage, factory_home, words
 from tares.screens import factory_crew as fc
 
 P = F = 0
@@ -139,6 +139,7 @@ async def main():
                           headers={"Content-Type": "application/x-ndjson"})
         assert r.status_code < 300, r.text
         claude_usage.clear_week_by_project()   # the week is kept 60 s (TR-1627): a read after an ingest sees it
+        factory_home.clear_cache()   # and the page 5 s (TR-1630)
 
     async def page(cx):
         r = await cx.get("/api/factory/crew")
@@ -315,6 +316,7 @@ async def main():
             store.upsert_rule_proposal("example-org/service-a", "<b>markup</b>", None, "all",
                                        "Never merge <i>on a red check</i>.", ["T9"],
                                        datetime.now(timezone.utc) - timedelta(hours=6))
+            factory_home.clear_cache()   # written to the store directly, past the page's 5 s (TR-1630)
             a = await page(cx)
             props = a["rule_proposals"]
             ck("the open ones, each with who proposed it and when",
