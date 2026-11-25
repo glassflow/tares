@@ -662,8 +662,16 @@ def _fill(store, sources: list, sids: list) -> None:
         session_ingest._fill_chunk(store, sources, sids, None)
         session_ingest._fill_turns_chunk(store, sources, sids, None)
     except Exception as e:
-        print(f"taresd: session move: facts and turns not filled ({type(e).__name__}: {e}); "
-              "the start-up fill covers them", flush=True)
+        why = f"{type(e).__name__}: {e}"
+        # the start-up fill reads no line once the move is complete: the sessions are marked for
+        # the M1 drain, which refills them then (`session_drain`, TR-1665)
+        try:
+            session_ingest.mark_drain_todo(store, sids)
+            then = "marked, so the M1 drain fills them once the move is complete"
+        except Exception as e2:
+            then = f"and not marked ({type(e2).__name__}: {e2}), so they are not filled again"
+        print(f"taresd: session move: facts and turns of {len(sids)} session(s) not filled ({why}); "
+              f"{then}", flush=True)
 
 
 def _old_backend(store):

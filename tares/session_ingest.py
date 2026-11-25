@@ -7,7 +7,8 @@ line. Here each line is counted once, as it is stored, into one row per session.
 `caught_up`), and scan events until then (TR-1520), so a cell just upgraded shows right numbers
 at once. Two writers keep the row right:
 
-- `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB. It
+- `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB (in
+  the factory edition `record_first`, before DuckDB, see below). It
   adds the batch to each session's row in one transaction (`ON CONFLICT ... DO UPDATE`), so
   concurrent batches lose nothing.
 - `reconcile_sessions`, run in a background thread at start. It reads the absolute counts from
@@ -17,6 +18,14 @@ at once. Two writers keep the row right:
   value is the right one, and a second pass changes nothing. When a pass has finished all its
   chunks it sets the `sessions_caught_up` row in `session_ingest_marks`; a pass that raised does
   not, so the readers stay on the scan and the next start tries again.
+
+In the factory edition the session store is written FIRST (TR-1665, `record_first`): counts, lines,
+facts and turns in one transaction. When the store takes no write, `LinesNotStored` goes up,
+DuckDB gets nothing and `/ingest` answers 503, so the sender sends the same lines again. When the
+store is up but will not take a session's lines, the session is counted and marked
+`lines_complete` false, DuckDB keeps the lines, and the M1 drain (`session_drain.py`) copies them
+over later; the request is acknowledged, so one bad line blocks nothing behind it. A DuckDB write
+that fails after the store's takes the store's back (`take_back`).
 
 In the factory edition, once the one-time move out of DuckDB is complete (`session_move.complete`:
 planned, no session `pending`), `reconcile_sessions` reads nothing from DuckDB, nor do `fill_facts`
@@ -117,6 +126,10 @@ OUTPUT_TAIL = 20000                  # characters of a command's output kept: a 
 MESSAGE_TEXT = 4000                  # characters of a protocol message kept
 TABLE = "table"                      # `sessions.lines_origin` of a session born in session_lines (TR-1606)
 CYCLE = 600.0                        # seconds between the reconcile passes after the first (TR-1478)
+# names in session_ingest_marks, each followed by a session id (TR-1665, `session_drain`)
+DRAIN_TODO = "session_drain_todo:"   # a complete session the drain still has to refill
+DRAIN_GAVE_UP = "session_drain_gave_up:"   # the drain could not store all its lines: not tried again
+PROBE_SESSION = "tares:write-probe"  # the row a probe writes and removes in one transaction
 
 # the rendered text names each tool as "→ name(": a cheap filter before the payload is parsed
 # (the same one `Store.coordination_calls` puts in its SQL)
@@ -507,13 +520,14 @@ def _add_turns(store, rows: dict) -> None:
         _write_turns(conn, db, rows)
 
 
-def _add(store, folded: dict, lines: dict | None = None) -> None:
+def _add(store, folded: dict, lines: dict | None = None, also=None) -> dict:
     """Add each session's counts to its row, in one transaction. Rows are written in session order,
     so two writers on Postgres meet their rows in the same order and cannot deadlock. With `lines`
     ({session: [row of session_lines without its seq, ...]}, from `_line_rows`) the same
     transaction numbers each session's lines from the `line_count` the upsert returns, and inserts
     them: a line is counted and stored together or not at all, and two batches of one session never
-    take the same `seq`."""
+    take the same `seq`. `also(conn)` writes what must land in that transaction too. Returns
+    {session: line_count after the write} when `lines` was given, else {}."""
     db = store.sessions_db
     now = now_utc()
     stmt = db.upsert(sessions)
@@ -535,7 +549,9 @@ def _add(store, folded: dict, lines: dict | None = None) -> None:
     with db.begin() as conn:
         if not lines:
             conn.execute(stmt, rows)
-            return
+            if also:
+                also(conn)
+            return {}
         c = sessions.c
         total = dict(conn.execute(stmt.returning(c.session, c.line_count), rows).all())
         out = []
@@ -544,6 +560,9 @@ def _add(store, folded: dict, lines: dict | None = None) -> None:
             first = total[sid] - len(mine) + 1
             out += [{**r, "session": sid, "seq": first + i} for i, r in enumerate(mine)]
         conn.execute(insert(session_lines), out)
+        if also:
+            also(conn)
+    return total
 
 
 def render_flags(store, sources) -> dict:
@@ -646,6 +665,166 @@ def record(store, envelopes) -> bool:
               f"({type(e).__name__}: {e}); written at the next start", flush=True)
     metrics.session_ingest(time.perf_counter() - t0, ok)
     return lines_ok
+
+
+# ── the factory edition writes the session store first (TR-1665) ─────────────────────────────
+# The factory's pages read only the session store, so a claude_code line is not acknowledged until
+# the store has it, or has a durable mark that says it is missing. `Store.append` calls
+# `record_first` before it writes DuckDB. The platform editions keep `record`, after DuckDB.
+class LinesNotStored(RuntimeError):
+    """The sessions database takes no write: the lines are not acknowledged, and nothing of them is
+    stored, so the sender sends them again."""
+
+
+class Written:
+    """What `record_first` wrote for one batch: `counted` is [(session, lines, tool calls,
+    coordination calls, the last seq of its rows or None when no rows were written)], what
+    `take_back` undoes; `refused` the sessions whose lines the store would not take."""
+
+    def __init__(self):
+        self.counted: list = []
+        self.refused: set = set()
+
+    def add(self, folded: dict, totals: dict) -> None:
+        self.counted += [(sid, r[3], r[4], r[5], totals.get(sid)) for sid, r in sorted(folded.items())]
+
+
+def _probe(store) -> None:
+    """Raise `LinesNotStored` unless the store takes a plain write now: a harmless row of
+    `sessions`, written and removed in one transaction. It tells a store that is down from one that
+    refuses a particular line."""
+    now = now_utc()
+    try:
+        with store.sessions_db.begin() as conn:
+            conn.execute(insert(sessions).values(
+                session=PROBE_SESSION, source="tares", started_at=now, last_line_at=now,
+                line_count=0, tool_calls=0, coordination_calls=0, updated_at=now,
+                lines_origin=TABLE, lines_complete=True))
+            conn.execute(delete(sessions).where(sessions.c.session == PROBE_SESSION))
+    except Exception as e:
+        raise LinesNotStored(f"the sessions database does not take writes ({type(e).__name__}: "
+                               f"{e}); send the lines again") from e
+
+
+def _write_whole(store, envelopes, written: Written) -> None:
+    """Counts, lines, facts and turns of `envelopes` in one transaction: all of it or nothing."""
+    db = store.sessions_db
+    folded = _fold(envelopes)
+    lines = _line_rows(store, envelopes)
+    facts = facts_of((e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
+                     for e in envelopes)
+    turns = turns_of((e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload, e.labels)
+                     for e in envelopes)
+
+    def also(conn):
+        _write_facts(conn, db, facts)
+        _write_turns(conn, db, turns)
+    written.add(folded, _add(store, folded, lines, also))
+
+
+def _write_refused(store, sid: str, envelopes, written: Written) -> None:
+    """A session whose lines the store will not take: its counts, with the durable mark that its
+    lines are missing (`lines_complete` false, which `session_drain` reads), in one transaction;
+    then its facts and turns, as far as they go. DuckDB keeps the lines."""
+    folded = _fold(envelopes)
+
+    def mark(conn):
+        conn.execute(update(sessions).where(sessions.c.session == sid).values(lines_complete=False))
+        conn.execute(delete(session_ingest_marks).where(     # a new miss: the drain tries again
+            session_ingest_marks.c.name == DRAIN_GAVE_UP + sid))
+    written.refused.add(sid)
+    for last_try in (False, True):
+        try:
+            _add(store, folded, also=mark)
+            written.add(folded, {})
+            break
+        except Exception as e:
+            _probe(store)          # down: the whole batch is refused and sent again
+            if last_try:           # the store is up and will never take this session's row
+                print(f"taresd: {len(envelopes)} claude_code line(s) can never be stored in the "
+                      f"sessions database ({type(e).__name__}: {e}); they are only in DuckDB",
+                      flush=True)
+    for what, write in (
+            ("facts", lambda: _add_facts(store, facts_of(
+                (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
+                for e in envelopes))),
+            ("turns", lambda: _add_turns(store, turns_of(
+                (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload, e.labels)
+                for e in envelopes)))):
+        try:
+            write()
+        except Exception as e:
+            print(f"taresd: writing the {what} of {len(envelopes)} claude_code line(s) failed "
+                  f"({type(e).__name__}: {e}); the background repair tries again", flush=True)
+
+
+def record_first(store, envelopes) -> Written:
+    """Write a batch of claude_code lines to the session store BEFORE DuckDB has it (factory).
+
+    The batch goes in one transaction. When that fails: a store that takes no write raises
+    `LinesNotStored` and nothing is stored. Otherwise each session is tried again on its own (a
+    passing error succeeds then), and one that still fails is counted, marked incomplete and left to
+    `session_drain`, so a line that can never be stored does not make the sender send it for ever.
+    Called under `Store._sess_lock`."""
+    written = Written()
+    if not envelopes:
+        return written
+    t0 = time.perf_counter()
+    try:
+        _write_whole(store, envelopes, written)
+    except Exception:
+        by_session: dict = {}
+        for e in envelopes:
+            by_session.setdefault(e.key_value, []).append(e)
+        try:
+            _probe(store)
+            for sid, mine in sorted(by_session.items()):
+                try:
+                    _write_whole(store, mine, written)
+                except Exception as e:
+                    _probe(store)
+                    print(f"taresd: the sessions database refused {len(mine)} claude_code line(s) "
+                          f"of session {sid} ({type(e).__name__}: {e}); counted, and copied from "
+                          "DuckDB by the background repair", flush=True)
+                    _write_refused(store, sid, mine, written)
+        except LinesNotStored:
+            take_back(store, written)
+            metrics.session_ingest(time.perf_counter() - t0, False)
+            raise
+    metrics.session_ingest(time.perf_counter() - t0, not written.refused)
+    return written
+
+
+def take_back(store, written: Written) -> None:
+    """Undo the counts and lines `record_first` wrote for a batch that is refused after all, so the
+    batch sent again is not counted twice. Facts and turns need no undoing: a second write of them
+    changes nothing. Called under the same hold of `Store._sess_lock`."""
+    if not written.counted:
+        return
+    c = sessions.c
+    try:
+        with store.sessions_db.begin() as conn:
+            for sid, n, tools, coord, last in sorted(written.counted, key=lambda r: r[0]):
+                if last is not None:
+                    conn.execute(delete(session_lines).where(
+                        session_lines.c.session == sid, session_lines.c.seq > last - n))
+                conn.execute(update(sessions).where(c.session == sid).values(
+                    line_count=c.line_count - n, tool_calls=c.tool_calls - tools,
+                    coordination_calls=c.coordination_calls - coord))
+                conn.execute(delete(sessions).where(c.session == sid, c.line_count <= 0))
+    except Exception as e:
+        print(f"taresd: {sum(r[1] for r in written.counted)} claude_code line(s) stayed in the "
+              f"sessions database after their batch was refused ({type(e).__name__}: {e}); sent "
+              "again, they are stored there twice", flush=True)
+
+
+def mark_drain_todo(store, sids) -> None:
+    """Leave `sids` for `session_drain` to refill, whatever their `lines_complete` says."""
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).on_conflict_do_nothing(index_elements=["name"])
+    now = now_utc()
+    with db.begin() as conn:
+        conn.execute(stmt, [{"name": DRAIN_TODO + sid, "at": now} for sid in sorted(sids)])
 
 
 # ── fills the factory runs once ──────────────────────────────────────────────────────────────
@@ -1058,6 +1237,16 @@ def _reconcile_pass(store, t0: float) -> None:
         refresh_lines_gauges(store)
 
 
+def _drain_pass(store, stop: threading.Event | None = None) -> None:
+    """Repair the factory's marked sessions (`session_drain`, TR-1665)."""
+    from . import session_drain          # it imports this module
+    try:
+        session_drain.drain(store, stop=stop)
+    except Exception as e:
+        print(f"taresd: M1 drain failed ({type(e).__name__}: {e}); tried again at the next pass",
+              flush=True)
+
+
 def _cycle(ref, stop: threading.Event) -> None:
     """After the first pass: `reconcile_sessions` again every `CYCLE` seconds, so a session that
     `record` wrote in full becomes `lines_complete` within minutes, and the gauges of
@@ -1070,6 +1259,7 @@ def _cycle(ref, stop: threading.Event) -> None:
             return
         _reconcile_pass(store, time.perf_counter())
         _usage_hourly_pass(store)       # a no-op once the hourly totals are built (TR-1632)
+        _drain_pass(store, stop)
         del store
 
 
@@ -1114,6 +1304,7 @@ def start_reconcile(store) -> threading.Thread:
             print(f"taresd: session turns fill failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)
         _usage_hourly_pass(store)
+        _drain_pass(store)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
     store._reconcile_thread = th    # `Store.close` waits for it before the connections go
