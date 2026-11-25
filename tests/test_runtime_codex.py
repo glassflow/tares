@@ -105,9 +105,10 @@ thread = spec.settings["thread"]
 ck("the thread starts with the model, approvals on request and the workspace sandbox",
    thread["model"] == "gpt-5.6-luna" and thread["approvalPolicy"] == "on-request" and thread["sandbox"] == "workspace-write", thread)
 ck("the effort is a turn's, next to the thread", spec.settings["effort"] == "low" and "effort" not in thread)
-ck("the identity says who the station is and nothing of Claude Code's",
+ck("the identity says who the station is and nothing of Claude Code's, and its rules follow it: the place the "
+   "crew fills with the kit's rules as a Codex station reads them (TR-1598)",
    thread["developerInstructions"] == "You are a tares-factory station: role builder, session name shop-build-api, "
-   "project alpha, repo /work/alpha. Act only within your role.", thread["developerInstructions"])
+   "project alpha, repo /work/alpha. Act only within your role.{ROLE_MANUAL}", thread["developerInstructions"])
 hooks = thread["config"]["hooks"]
 ck("the guard is registered for every tool call and for the start of every turn, with the thread's trust for it",
    list(hooks) == ["PreToolUse", "UserPromptSubmit"] and hooks["PreToolUse"] == [{"matcher": "", "hooks": [
@@ -125,7 +126,8 @@ ck("the rules are filled on the cell, with the machine's words left as placehold
 ck("the level is the crew's", spec.settings["autonomy"] == "L3-review")
 used = set(NAME.findall(json.dumps([spec.command, spec.env, spec.settings])))
 ck("the placeholders are the ones the spec uses, each with what it stands for",
-   set(spec.placeholders) == used == {"STATION_SOCKET", "CODEX_HOME", "CREW_HOME", "TOKEN_FILE", "PLUGIN_DIR_SHELL", "WT_REPOS"}
+   set(spec.placeholders) == used == {"STATION_SOCKET", "CODEX_HOME", "CREW_HOME", "TOKEN_FILE", "PLUGIN_DIR_SHELL", "WT_REPOS",
+                                              "ROLE_MANUAL"}
    and all(spec.placeholders[k] == PLACEHOLDERS[k] for k in used), (sorted(spec.placeholders), sorted(used)))
 filled = fill_placeholders([spec.command, spec.env, spec.settings], {k: f"/fixed/{k.lower()}" for k in PLACEHOLDERS})
 ck("filled, no placeholder is left", not NAME.search(json.dumps(filled)), NAME.findall(json.dumps(filled)))

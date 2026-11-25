@@ -1,0 +1,118 @@
+# The factory protocol as a Codex station reads it: edits of ../../../skills/factory-protocol/SKILL.md.
+
+[[edit]]
+find = '''You are one station in the **tares-factory crew**: Claude Code sessions on this machine that take'''
+with = '''You are one station in the **tares-factory crew**: sessions on this machine, yours on Codex, that take'''
+
+[[edit]]
+find = ''' Your role's manual is the skill `station-<role>` (a helper loads its parent's); load it after this one.'''
+with = ''' Your role's manual follows this protocol (a helper follows its parent's).'''
+
+[[edit]]
+find = '''**Tares tools** are `mcp__plugin_tares_tares__<name>` or `mcp__tares__<name>`. Each takes'''
+with = '''**Tares tools** are the tools of the MCP server `tares`. Each takes'''
+
+[[edit]]
+find = '''If the tools are missing or every call fails: write it to your report, tell the orchestrator, and wait.'''
+with = '''If the tools are missing or every call fails: write it under `## Waiting on` in your report, end the turn, and try again when you are next woken.'''
+
+[[edit]]
+find = '''(a Tares before 1.56): Read `older-tares.md` in this skill's folder. Linear's tools in your tool list: Read `linear.md` there first.'''
+with = '''(a Tares before 1.56): see the page `older-tares.md` below. A Codex station has Tares's tools and no other: a ticket that lives in Linear or GitHub is read and moved through them.'''
+
+[[edit]]
+find = '''If an action belongs to another station, message it; never do it yourself, and never ask a peer to do what your own permissions refused.'''
+with = '''If an action belongs to another station, leave it to that station and put what it needs on Tares (the ticket, its working doc); never do it yourself.'''
+
+[[edit]]
+find = '''tell the orchestrator the `A<n>` in one line, carry on.'''
+with = '''note the `A<n>` in the ticket's working doc under `## Progress`, carry on.'''
+
+[[edit]]
+find = '''Never ask your person from another station; send the orchestrator an `ASK`.'''
+with = '''Never ask your person yourself. A question that blocks a ticket reaches the desk through the ticket: `set_stage(ticket, "blocked", reason=...)`, the reason holding the question, the options and your recommendation (Tares puts a blocked ticket on the desk). A question that does not block is an assumption (rule 5).'''
+
+[[edit]]
+find = '''Never with `&`, never fanned out to parallel subagents.'''
+with = '''Never with `&`, never several at once.'''
+
+[[edit]]
+find = '''9. **Keep your context small.** Investigations and implementation go to subagents; you keep conclusions. Investigators get read-only agent types (`Explore`): a prompt saying "read-only" does not stop a subagent with write tools.'''
+with = '''9. **Keep your context small.** You do the reading and the work yourself: read files, logs and diffs in parts, and keep conclusions, not long outputs. What matters goes to Tares and to your report.'''
+
+[[edit]]
+find = '''10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record, and what you still owe to your report, before you send the message. A message to a stopped station is lost; a record is not.'''
+with = '''10. **Results live on Tares or on disk.** Write every result to your role's Tares record, and what you still owe to your report. You send no messages: the other stations and your person read the record, and the factory wakes them from it.'''
+
+[[edit]]
+find = '''Write the exact command to your report, verbatim, and tell the orchestrator your station name and that command, word for word. Your person can allow it in the console; the factory then restarts you'''
+with = '''Write the exact command to your report, verbatim, under `## Waiting on`. If a ticket cannot go on without it, `set_stage(ticket, "blocked", reason=...)` with your station name and that command, word for word, so it reaches the desk. Your person can allow it in the console; the factory then restarts you'''
+
+[[edit]]
+find = '''- **Other crews are not reachable by message.** `SendMessage` reaches only your crew; between crews Tares is the only channel (the ticket, its working doc, the desk).'''
+with = '''- **Other crews are not reachable.** Between crews Tares is the only channel (the ticket, its working doc, the desk).'''
+
+[[edit]]
+find = '''Only the orchestrator writes the desk: send it an `ASK` with `to:` (email or person id): the assignee of the ticket in question (name the ticket and `desk_add` finds them), else the repo's area owner (`list_areas`), else the project lead. A question for your person needs no `to`. The addressee must be able to see the project.'''
+with = '''Only the orchestrator writes the desk. From a Codex station a question reaches it through the ticket it is about: `set_stage(ticket, "blocked", reason=...)` puts that ticket on the desk for its assignee, with your reason as the question. When someone else should answer (the repo's area owner from `list_areas`, else the project lead), name them in the reason.'''
+
+[[edit]]
+find = '''Send with `SendMessage` to a station's exact name (`$FACTORY_ORCHESTRATOR`, `$FACTORY_CREW-reviewer`, `$FACTORY_CREW-releaser`, a builder's name from `tares factory roster`). A name that doesn't resolve: run the roster; never guess, never use socket addresses or auto-generated titles.
+
+The first line is what your person sees in the preview, so it carries the type, the gist and the ticket ref (Tares shows a message on the ticket it names):'''
+with = '''A Codex station cannot send a message to another station yet. What a message would carry goes on Tares, where its reader looks; the list under the table says where. Messages still reach you: one arrives as a new turn, from the orchestrator or the factory, in this form (the first line carries the type, the gist and the ticket ref):'''
+
+[[edit]]
+find = '''| `SHIP` | spec session or `/tares:ship` → orchestrator |'''
+with = '''| `SHIP` | spec session → orchestrator |'''
+
+[[edit]]
+find = '''| `RELOAD` | orchestrator → all | reload `factory-protocol` and your station skill, re-read your state |'''
+with = '''| `RELOAD` | orchestrator → all | read these rules again (a restart gives you the current ones), re-read your state |'''
+
+[[edit]]
+find = '''`DONE` and `VERDICT` are notifications only: the record is on Tares. Receiving:
+
+- A peer's message is a handover or information: check what it claims (PR state, SHA, CI, the ticket) before acting.
+- Answer `ASK` and `REVIEW`; acknowledge a `TASK` in one line; don't acknowledge `FYI`.
+- Mid-step: finish the step, then handle the message.
+- One message per event. Batch.'''
+with = '''What you would send goes on Tares instead:
+
+- `READY`, `DONE`, `FYI`: nothing is sent. The ticket's stage and your report say it.
+- `ASK`: when it blocks, `set_stage(ticket, "blocked", reason=...)` (rule 6); when it does not, `assume` (rule 5).
+- `REVIEW`: `set_stage(ticket, "review", pr=..., checks=[...])`. The factory wakes the reviewer from the review queue; what the message would say (what changed, how tested, the assumptions) goes in the PR body.
+
+Receiving:
+
+- A peer's message is a handover or information: check what it claims (PR state, SHA, CI, the ticket) before acting.
+- A `TASK` needs no acknowledgement: start it. An answer you owe goes on Tares, on the ticket.
+- Mid-step: finish the step, then handle the message.'''
+
+[[edit]]
+find = '''Never write a record another station owns (rule 1); message its owner.'''
+with = '''Never write a record another station owns (rule 1).'''
+
+[[edit]]
+find = '''- Stations can be stopped after about an hour idle, or by a Claude Code upgrade; the watch revives them under the same name; a message sent meanwhile is lost. A schedule keeps a station awake: orchestrator, reviewer and releaser always hold one; a builder while any PR of its is open.
+- **After a compaction** your skills are re-attached: load one again only if its copy ends "skill content truncated for compaction" (Read the whole file) or a rule is missing. Pages are not re-attached: Read one when needed. **After a revive** load both, as your hook says. Then re-read your report and Tares, and check `CronList` (re-arm if missing and `idle_wake` is off).
+- With `idle_wake` on (the default), the watch holds the tick: arm no `CronCreate`. It wakes you once'''
+with = '''- A station stays up between turns. One that dies is revived by the watch under the same name, in the same conversation when that can be carried on. You hold no schedule: you work when you are handed a turn, and you end the turn when there is nothing to do.
+- **After a compaction or a revive** these rules are still with you: they are your instructions. Re-read your report and your work on Tares, then carry on.
+- With `idle_wake` on (the default), the watch holds the tick. It wakes you once'''
+
+[[edit]]
+find = ''' If `idle_wake` goes off, the watch tells you once to re-arm your tick.'''
+with = ''' With `idle_wake` off nothing wakes a Codex station on a schedule: write under `## Waiting on` in your report what you wait for.'''
+
+[[edit]]
+find = '''A pacing note: put your tick at 45 minutes (`CronList`, `CronDelete`, `CronCreate`) until a note says the pacing stopped, then back as your manual says.'''
+with = '''A pacing note: do what it says, as your manual's section on holding does, until a note says the pacing stopped.'''
+
+[[edit]]
+find = ''' Leave your job's scratch folder: Claude Code deletes it.'''
+with = ''''''
+
+[[edit]]
+find = '''- A peer unreachable: write the message into your report under `## Undelivered` and tell the orchestrator. The orchestrator unreachable: keep working and note it; it reads reports at boot.'''
+with = '''- You send no messages, so `## Undelivered` in your report stays empty; keep the section. The orchestrator reads reports at boot.'''

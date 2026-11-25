@@ -475,7 +475,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
     except OSError:
         pass
     out.update(keys=keys, baseline=scan.get("baseline"), n=n)
-    note = launch.idle_wake_note()
+    note = launch.idle_wake_note(proc.runtime(s, paths))
     if new:
         texts = "; ".join(p["text"] for p in new)
         out.update(work=True, n=0, reason=f"work: {texts}",

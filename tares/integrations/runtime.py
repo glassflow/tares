@@ -19,6 +19,8 @@ PLACEHOLDERS: dict[str, str] = {
     "SETTINGS_FILE": "the settings file the station is started with (--settings)",
     "STATION_SOCKET": "the private socket the station's own Codex app-server listens on",
     "CODEX_HOME": "the station's own Codex folder; of the person's it holds a link to their login and nothing else",
+    "ROLE_MANUAL": "the station's operating rules, rendered from the kit's skills for a runtime that reads no skills "
+                   "(empty for a role the kit has no rendering for)",
 }
 
 

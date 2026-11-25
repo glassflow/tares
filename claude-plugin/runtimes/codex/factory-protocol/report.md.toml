@@ -1,0 +1,9 @@
+# The page report.md as a Codex station reads it: edits of ../../../skills/factory-protocol/report.md.
+
+[[edit]]
+find = '''Part of the factory-protocol skill. Read when you boot'''
+with = '''Part of the factory protocol. Read when you boot'''
+
+[[edit]]
+find = '''Never open a log, or any file that keeps growing (a table you add to), with Read: Claude Code attaches every file you Read again after each compaction. Such a table belongs in your log.'''
+with = '''Never read a log, or any file that keeps growing (a table you add to), whole: it fills your context. Such a table belongs in your log.'''
