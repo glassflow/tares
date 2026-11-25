@@ -321,6 +321,9 @@ def cmd_plan(argv: list, env: dict) -> int:
 def _plan(env: dict) -> int:
     client = prelude(["plan"], env)
     with client:
+        from . import proc   # here: proc imports the launch
+        if proc.crew_on_codex(client.paths):
+            return _codex_plan(client)
         home = client.paths.raw
         cwd = home if os.path.isdir(home) else os.getcwd()
         if sys.platform != "win32":
@@ -349,6 +352,32 @@ def _plan(env: dict) -> int:
             if isinstance(lim, dict):
                 print(f"{_t(lim.get('kind'))}: {_t(lim.get('percent'))}% used, resets {_t(lim.get('resets_at'))}")
         return 0
+
+
+def _codex_plan(client: TaresClient) -> int:
+    """`plan` for a crew on Codex (TR-1597): the Codex account's limits, read from one of its stations and
+    sent to Tares. No `claude` is asked."""
+    from . import codex_pace
+    reading = codex_pace.take(client.paths)
+    if reading is None:
+        raise CrewError("no station of this crew answers, and a Codex account's limits are read from a running "
+                        "station; start the crew, then run this again")
+    try:
+        client.tares_http("PUT", codex_pace.LIMITS_PATH, {k: reading[k] for k in ("limits", "account", "taken_at")})
+    except TaresHTTPError:
+        raise CrewError("could not send the Codex account's limits to Tares") from None
+    shown = 0
+    for bucket, snap in codex_pace.buckets(reading["limits"]):
+        for w in snap:
+            mins = w.get("windowDurationMins")
+            length = f"{_t(mins)} minutes" if mins is not None else "a window of unknown length"
+            resets = state.utc_stamp(w["resetsAt"]) if isinstance(w.get("resetsAt"), (int, float)) else "unknown"
+            print(f"{bucket + ', ' if bucket else ''}{length}: {_t(w.get('usedPercent'))}% used, resets {resets}")
+            shown += 1
+    if not shown:
+        kind = _t(reading["account"].get("type")) or "this"
+        print(f"Codex reports no limits for this account ({kind}): there is nothing to pace by")
+    return 0
 
 
 # ---------- finish ----------

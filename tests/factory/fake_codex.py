@@ -37,6 +37,12 @@ conversation starts in it, and from then on a repository that brings its own set
 shows its hook and its MCP server; a folder marked `untrusted`, there or in the conversation's start, shows
 neither and is not recorded.
 
+It answers for the account (TR-1597). $FAKE_CODEX_ACCOUNT names a JSON file that is read anew at every
+request, so a test changes it while the app-server runs: `limits` is the answer to `account/rateLimits/read`
+({"error": text} refuses it, as for an account with no plan), `account` the `account` of `account/read`, and
+`limit_error`, when set, makes every turn end as failed with Codex's `usageLimitExceeded` and that message
+(the turn is kept and listed with its `error`). Without the variable the two account requests are not known.
+
 It connects a conversation's MCP servers (TR-1596), as 0.171.0 was measured to. A server the conversation's
 `config.mcp_servers` gives with a `url` is reached over HTTP when the conversation is started, or joined by an
 app-server that did not have it open: the `http_headers_helper` is run through a shell with a short
@@ -326,8 +332,24 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
         return
     time.sleep(float(took))
     if _still(thread_id, turn_id):
+        limit = _account().get("limit_error")
+        if limit:   # the account's limit ends the turn (TR-1597): it is kept, failed, with its error
+            error = {"message": str(limit), "codexErrorInfo": "usageLimitExceeded", "additionalDetails": None}
+            _end_turn(thread_id, turn_id, "failed", error)
+            _tell(thread_id, "turn/completed", {"turn": {"id": turn_id, "status": "failed", "error": error}})
+            return
         _end_turn(thread_id, turn_id)
         _tell(thread_id, "turn/completed", {"turn": {"id": turn_id, "status": "completed"}})
+
+
+def _account() -> dict:
+    """What $FAKE_CODEX_ACCOUNT holds now; {} when it is unset or cannot be read."""
+    try:
+        with open(os.environ["FAKE_CODEX_ACCOUNT"], encoding="utf-8") as f:
+            doc = json.load(f)
+    except (KeyError, OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def _store() -> str:
@@ -367,12 +389,14 @@ def _running(t):
     return next((turn for turn in t["turns"] if turn["status"] == "inProgress"), None)
 
 
-def _end_turn(thread_id, turn_id, status="completed") -> None:
+def _end_turn(thread_id, turn_id, status="completed", error=None) -> None:
     with LOCK:
         t = THREADS.get(thread_id)
         for turn in (t or {}).get("turns", []):
             if turn["id"] == turn_id and turn["status"] == "inProgress":
                 turn["status"] = status
+                if error:
+                    turn["error"] = error
                 t["flags"] = []
                 t["updatedAt"] = int(time.time())
                 _save()
@@ -421,7 +445,7 @@ def conversation(method, params, conn=None):
         if method == "thread/turns/list":
             full = params.get("itemsView") == "full"
             turns = [{"id": x["id"], "status": x["status"], "itemsView": "full" if full else "summary",
-                      "items": list(x.get("items") or []) if full else []}
+                      "error": x.get("error"), "items": list(x.get("items") or []) if full else []}
                      for x in reversed(t["turns"])]
             return {"data": turns[:int(params.get("limit") or 50)], "nextCursor": None}
         if method == "thread/read":
@@ -506,6 +530,15 @@ def answer(method, args, params):
         return {"config": {"notify": ["/person/notify-program"] if env.get("FAKE_CODEX_NOTIFY") else None,
                            "mcp_servers": {"repo_server": {"command": "x"}} if brings else {}},
                 "origins": {}}
+    if method in ("account/rateLimits/read", "account/read") and env.get("FAKE_CODEX_ACCOUNT"):
+        doc = _account()
+        _note(method, params)
+        if method == "account/read":
+            return {"account": doc.get("account"), "requiresOpenaiAuth": True}
+        limits = doc.get("limits")
+        if isinstance(limits, dict) and "error" in limits:
+            raise Refused(str(limits["error"]))
+        return limits if isinstance(limits, dict) else {"rateLimits": {}}
     if method == "hooks/list":
         data = []
         for cwd in params.get("cwds") or []:

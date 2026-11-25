@@ -113,6 +113,28 @@ def newest_tag():
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def newest_of_parents():
+    """The newest release tag reachable from a parent of HEAD, "" when none is.
+
+    A pull request's CI checks out GitHub's merge commit with a depth of one. When main moves while the run
+    goes on, GitHub makes a new merge commit and the old one is no longer on any ref, so the server does not
+    deepen it and HEAD stays cut off from every tag. Its parents (main's tip at the time, and the branch's
+    head) are still on refs: they are fetched by their ids, and the newest tag either reaches is the one HEAD
+    reaches."""
+    raw = git("cat-file", "-p", "HEAD")
+    parents = [ln.split()[1] for ln in raw.stdout.splitlines() if ln.startswith("parent ")] if raw.returncode == 0 else []
+    found = []
+    for parent in parents:
+        git("fetch", "--depth=200", "origin", parent)
+        r = git("describe", "--tags", "--abbrev=0", "--match", "v*", parent)
+        if r.returncode == 0 and r.stdout.strip():
+            found.append(r.stdout.strip())
+    if not found:
+        return ""
+    stamps = {name: git("log", "-1", "--format=%ct", name).stdout.strip() for name in found}
+    return max(found, key=lambda name: (int(stamps[name] or 0), name))
+
+
 def main():
     tag = newest_tag()
     if not tag:
@@ -122,6 +144,8 @@ def main():
             # a shallow checkout of a branch keeps its own depth: fetch more of its history
             git("fetch", "--deepen=200", "origin")
             tag = newest_tag()
+        if not tag:
+            tag = newest_of_parents()
     if not tag:
         print("no release tag reachable")
         return 1 if os.environ.get("CI") else 0

@@ -31,7 +31,7 @@ import time
 
 from . import claude, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
-from .errors import CrewError, GuardOffError, NotBetweenTurnsError, SessionListUnreadableError
+from .errors import CrewError, GuardOffError, LimitHeldError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
@@ -185,19 +185,20 @@ def _keep_earlier(paths: CrewPaths, station: str, old_id: str, session: str) -> 
 
 
 def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str,
-            only_between_turns: bool = False, prompt_wait=0) -> None:
+            only_between_turns: bool = False, prompt_wait=0, past_limit: bool = False) -> None:
     """factory restart <station> [--fresh]: stop it and start it again with freshly generated settings.
     With `only_between_turns` (a wake) the station is looked at again under its lock, right before it is
     stopped, and left running (NotBetweenTurnsError) when it has started a turn or been attached since.
     A station waiting on a person (a question or a permission prompt) is stopped only when it has waited
     `prompt_wait` seconds (`claude.quiet`'s `wait`: 0 at once, None the quiet wait of 30 minutes, `math.inf`
-    never)."""
+    never). On Codex a wake (`only_between_turns`) is also refused (LimitHeldError) for a station the account's
+    limit holds, unless `past_limit`: the pace step's own carrying on after the reset."""
     state.require_crew(paths)
     if not args or not args[0]:
         _usage(RESTART_USAGE)
     station = stations.station_name(args[0], paths)
     if _codex_station(paths, station):
-        return _restart_codex(client, paths, station, list(args[1:]), claude_bin, only_between_turns)
+        return _restart_codex(client, paths, station, list(args[1:]), claude_bin, only_between_turns, past_limit)
     job_id = state.stations_get(station, "id", paths=paths)
     if not job_id:
         raise CrewError(f"{station} is not a recorded station")
@@ -225,7 +226,7 @@ def _codex_station(paths: CrewPaths, station: str) -> bool:
 
 
 def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: list, claude_bin,
-                   only_between_turns: bool) -> None:
+                   only_between_turns: bool, past_limit: bool = False) -> None:
     """restart for a station on Codex. A station that runs, is between turns and would be started with exactly
     what it runs on now is handed the prompt as its next turn, and its app-server is left alone: on Codex a
     prompt needs no restart. Anything else is a real restart: the app-server is stopped (a running turn is
@@ -246,6 +247,13 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
     resting = alive and codex_station.at_rest(paths, station)
     if only_between_turns and alive and not resting:
         raise NotBetweenTurnsError(f"{station} is in a turn; not stopping it")
+    # An explicit off setting releases automatic work. Unknown readings still keep
+    # the hold: only disabling pacing, or the reset path, bypasses it.
+    if only_between_turns and not past_limit and pace.read(client).state != "off":
+        from . import codex_pace
+        why = codex_pace.held(paths, station)
+        if why:
+            raise LimitHeldError(f"{station} is held until the account's limit resets ({why}); not handing it a prompt")
     if resting and prompt and not fresh and _launched_as_now(client, paths, station):
         codex_station.hand(paths, station, prompt)
         state.event("prompted", station, paths=paths)

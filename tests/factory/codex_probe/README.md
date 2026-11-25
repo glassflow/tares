@@ -21,6 +21,7 @@ python tests/factory/codex_probe/probe_evidence.py  --out /tmp/codex-probe/evide
 python tests/factory/codex_probe/probe_launch.py    --out /tmp/codex-probe/launch     # TR-1592: the product's own start
 python tests/factory/codex_probe/probe_station.py   --out /tmp/codex-probe/station    # TR-1593: turn state, the next prompt, the stop
 python tests/factory/codex_probe/probe_guard_on.py  --out /tmp/codex-probe/guard-on   # TR-1594: the guard, proven on
+python tests/factory/codex_probe/probe_pace_station.py --out /tmp/codex-probe/pace-station   # TR-1597: the account's limits through the pace step and a cell; no model
 python tests/factory/codex_probe/probe_mcp_station.py --out /tmp/codex-probe/mcp-station  # TR-1596: Tares over MCP, against a real cell it starts and throws away
 ```
 
@@ -28,7 +29,7 @@ Run them with the checkout's own interpreter (`.venv/bin/python`): a station's g
 and the probes that start a station through the product put that interpreter's folder first on the station's PATH.
 
 `--only NAME ...` runs some scenarios of the first two, of `probe_launch.py`, of `probe_station.py` and of `probe_guard_on.py`. Each run writes `results.json` (or `hooks.json`,
-`pace.json`, `mcp.json`, `evidence.json`, `launch.json`, `station.json`, `guard_on.json`, `mcp_station.json`) and one wire transcript per scenario: every JSON-RPC message in both
+`pace.json`, `mcp.json`, `evidence.json`, `launch.json`, `station.json`, `guard_on.json`, `pace_station.json`, `mcp_station.json`) and one wire transcript per scenario: every JSON-RPC message in both
 directions, so the evidence is the wire itself. The transcripts hold local paths and are not committed;
 `fixtures/commands.wire.jsonl` is a small one with the paths replaced.
 
