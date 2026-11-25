@@ -21,8 +21,10 @@ Where the archive lives (read once per pass, from the environment):
   Postgres does nothing: a cell without a place to put the lines keeps them.
 
 A file is named `<session>/<part>.jsonl.gz` under the prefix (the session is percent-encoded, so no
-id can leave its folder). A failure of any step leaves the rows where they are and prints one line;
-the next pass tries the session again. Deleting archive files is not done here.
+id can leave its folder). The one-time move of older sessions (`session_move.move_old`) writes the
+same files as `<session>/<part>-<md5>.jsonl.gz`: the name holds the content's MD5, so it never
+writes over a file that other content is in. A failure of any step leaves the rows where they
+are and prints one line; the next pass tries the session again. Deleting archive files is not done here.
 
 A read (`session_read.py`, TR-1507) fetches a part, checks its size and MD5 against the part's row
 and its lines against the row's range, and `decode`s it; any step that fails raises `ArchiveError`
@@ -182,13 +184,13 @@ def backend_for(url: str | None, data_dir: str | None, postgres: bool, env=None)
 
 
 # ── one session ─────────────────────────────────────────────────────────────────
-def part_key(session: str, part: int) -> str:
-    """`<session>/<part>.jsonl.gz`, the session percent-encoded (a leading dot too, so `..` is not
-    a folder name)."""
+def part_key(session: str, part: int, md5: str | None = None) -> str:
+    """`<session>/<part>.jsonl.gz`, or `<session>/<part>-<md5>.jsonl.gz` with `md5`; the session
+    percent-encoded (a leading dot too, so `..` is not a folder name)."""
     folder = urllib.parse.quote(session, safe="-_")
     if folder.startswith("."):
         folder = "%2E" + folder[1:]
-    return f"{folder or '%00'}/{part}.jsonl.gz"
+    return f"{folder or '%00'}/{part}{'-' + md5 if md5 else ''}.jsonl.gz"
 
 
 def encode(rows) -> bytes:
@@ -254,6 +256,19 @@ def _check(backend: Backend, key: str, data: bytes, etag: str, md5: str) -> None
                            f"etag {head_etag or '-'} of {md5})")
 
 
+def write_part(backend: Backend, session: str, rows, part_no: int, by_content: bool = False) -> dict:
+    """Write `rows` (lines of `session` in `seq` order, at least one) as part `part_no` and check
+    the stored file. Returns the columns of its `session_archive_parts` row except `written_at`;
+    nothing is recorded. `by_content` puts the file's MD5 in its name. Raises on any failure."""
+    data = encode(rows)
+    md5 = hashlib.md5(data).hexdigest()
+    key = part_key(session, part_no, md5 if by_content else None)
+    etag = backend.put(key, data)
+    _check(backend, key, data, etag, md5)
+    return {"session": session, "part": part_no, "first_seq": rows[0].seq, "last_seq": rows[-1].seq,
+            "lines": len(rows), "bytes": len(data), "md5": md5, "key": key}
+
+
 def _archive_session(db, backend: Backend, session: str, now: datetime) -> int | None:
     """Move one session's rows into a new part. Returns the part's size, or None when there was
     nothing to do (no rows, or another cell holds the session). Raises on any failure, with the
@@ -277,23 +292,17 @@ def _archive_session(db, backend: Backend, session: str, now: datetime) -> int |
                 session_archive_parts.c.session == session)).scalar_one() + 1
         if not rows:
             return None
-        first, last = rows[0].seq, rows[-1].seq
-        data = encode(rows)
-        md5 = hashlib.md5(data).hexdigest()
-        key = part_key(session, part)
-        etag = backend.put(key, data)
-        _check(backend, key, data, etag, md5)
+        meta = write_part(backend, session, rows, part)
         with tx() as c:
             if c.execute(select(sessions.c.session).where(sessions.c.session == session)).first() is None:
                 return None        # purged while the part was written: nothing to record
-            c.execute(insert(session_archive_parts).values(
-                session=session, part=part, first_seq=first, last_seq=last, lines=len(rows),
-                bytes=len(data), md5=md5, key=key, written_at=now))
+            c.execute(insert(session_archive_parts).values(**meta, written_at=now))
             gone = c.execute(delete(session_lines).where(
-                t.session == session, t.seq >= first, t.seq <= last)).rowcount
+                t.session == session, t.seq >= meta["first_seq"],
+                t.seq <= meta["last_seq"])).rowcount
             if gone != len(rows):
                 raise ArchiveError(f"{session}: {gone} rows deleted of {len(rows)} archived")
-        return len(data)
+        return meta["bytes"]
 
 
 # ── one pass ────────────────────────────────────────────────────────────────────
