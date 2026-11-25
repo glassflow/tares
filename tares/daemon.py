@@ -72,6 +72,7 @@ from . import sre as sre_mod
 from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
+from . import report as report_mod
 from . import linear as _linear
 from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
@@ -735,6 +736,8 @@ def make_app() -> FastAPI:
         waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
         # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
         archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
+        # the weekly figures the report reads, built once and then kept current (TR-1666)
+        report_task = asyncio.create_task(report_mod.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -759,6 +762,7 @@ def make_app() -> FastAPI:
         licence_task.cancel()
         waiting_task.cancel()
         archive_task.cancel()
+        report_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
