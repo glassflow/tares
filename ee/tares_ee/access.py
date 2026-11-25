@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import Body, HTTPException, Request
 
-from tares import licence
+from tares import factory_home, licence
 
 __all__ = ["NEEDS_LICENCE", "register_routes"]
 
@@ -62,6 +62,7 @@ def register_routes(app, host) -> None:
                 store.add_project_member(uid, old_lead, person["id"] if person else "system")
         if want_scope:
             store.set_project_scope(uid, body["scope"])
+        factory_home.clear_cache()   # who sees what just changed
         out = host.projects().get(uid)
         return out if host.can_see(store.get_project(uid)) else host.hidden_project(out)
 
@@ -88,6 +89,7 @@ def register_routes(app, host) -> None:
         if pid != p["lead_person_id"]:   # the lead is a member already
             by = host.current_person(request)
             store.add_project_member(uid, pid, by["id"] if by else "system")
+            factory_home.clear_cache()
         return host.projects().get(uid)
 
     @app.delete("/api/projects/{uid}/members/{person_id}")
@@ -99,4 +101,5 @@ def register_routes(app, host) -> None:
         if person_id == p["lead_person_id"]:
             host.err(ValueError("the lead is always a member; make someone else the lead first"), 409)
         store.remove_project_member(uid, person_id)
+        factory_home.clear_cache()
         return host.projects().get(uid)

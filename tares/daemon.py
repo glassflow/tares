@@ -1837,6 +1837,7 @@ def make_app() -> FastAPI:
                 if claimed:
                     if picture:
                         claimed = store.update_person(claimed["id"], picture=picture) or claimed
+                    factory_home.clear_cache()   # the kept pages name people
                     return _person_out(claimed)
             with team_mod.ADD_LOCK:   # the seat check and the insert are one step
                 # a creation of this email that held the lock first has made the row since the
@@ -1857,6 +1858,7 @@ def make_app() -> FastAPI:
                                         bool(body.get("is_admin")), via="admin")
             if picture:
                 p = store.update_person(p["id"], picture=picture) or p
+            factory_home.clear_cache()
         except ValueError as e:
             # this handler runs in the thread pool: two creations of one email can both pass the
             # lookup above, and the loser then meets the winner's row. It gets that person (200).
@@ -1882,6 +1884,7 @@ def make_app() -> FastAPI:
             _err(e, 400)
         if not removed:
             raise HTTPException(status_code=404, detail="no such person")
+        factory_home.clear_cache()
         return {"removed": True}
 
     @app.patch("/api/people/{pid}")
@@ -1916,6 +1919,7 @@ def make_app() -> FastAPI:
             _err(e, 409 if "already belongs" in str(e) else 400)
         if not p:
             _err(KeyError(f"no person {pid!r}"), 404)
+        factory_home.clear_cache()
         return _person_out(p)
 
     @app.get("/api/whoami")
@@ -4190,6 +4194,7 @@ def make_app() -> FastAPI:
                 out = {**projects.get(uid), "report": out["report"]}
             if body.name.strip():
                 store.update_project(uid, name=body.name.strip())
+                factory_home.clear_cache()
                 out = {**projects.get(uid), "report": out["report"]}
             return out
         except Exception as e:
@@ -4211,6 +4216,7 @@ def make_app() -> FastAPI:
         except Exception as e:
             _uc_err(e)
         sre_home.clear_cache()
+        factory_home.clear_cache()
         return out
 
     @app.post("/api/projects/{uid}/sources")
@@ -5389,8 +5395,8 @@ def make_app() -> FastAPI:
         elif "last_review" in ctx:
             out["verdict"] = factory_api.verdict_now(t, ctx["last_review"].get(t["id"]))
         else:
-            last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
-            out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
+            rounds = store.ticket_reviews(t["id"]) if t["stage"] else []
+            out["verdict"] = factory_api.verdict_now(t, factory_mod.standing_round(rounds))
         return out
 
     def _tickets_out(uid: str) -> list[dict]:
