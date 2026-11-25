@@ -1,0 +1,17 @@
+# The page screen-ticket.md as a Codex station reads it: edits of ../../../skills/station-builder/screen-ticket.md.
+
+[[edit]]
+find = '''as one static HTML file in your scratch folder outside the repo'''
+with = '''as one static HTML file in a folder of your own under `$TMPDIR`, outside the repo'''
+
+[[edit]]
+find = '''- Send an `ASK` to the orchestrator, `blocking: yes`, naming the file's path (a message carries text only) and the question "Approve this mock for <screen>?"; the orchestrator puts it on the desk and keeps it as the project doc "Mock: <screen>". Do the ticket's non-UI parts meanwhile.'''
+with = '''- Do the ticket's non-UI parts first. Then keep the mock as the project doc "Mock: <screen>" (`write_doc`, kind `note`, the HTML as its body) and `set_stage(ticket, "blocked", reason=...)` with the question "Approve this mock for <screen>?", the doc's title and the file's path: Tares puts the ticket on the desk with that reason.'''
+
+[[edit]]
+find = '''- The answer comes back as a `RELAY` with D<n>.'''
+with = '''- The answer is the desk item's (`list_decisions` shows it, with its D<n>) and may also reach you as a `RELAY`.'''
+
+[[edit]]
+find = '''While no answer has come, keep to the non-UI parts or take another ticket;'''
+with = '''While no answer has come, take another ticket;'''

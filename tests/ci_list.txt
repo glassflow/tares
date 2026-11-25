@@ -235,6 +235,7 @@ test_resources
 test_review_gate
 test_review_post
 test_rius_rca
+test_role_text
 test_run_results
 test_runtime_codex
 test_runtime_launch

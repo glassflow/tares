@@ -344,3 +344,18 @@ From reading `9bbe76ef`. "Seam" means code that names Claude Code today and need
 | Role prompts | protocol, roles, MCP tool names | `SendMessage`, `Cron*`, subagents, skills, model names | `claude-plugin/skills/*`, `launch.py` |
 | MCP connection | the server, `X-Tares-*` headers, token file | `.mcp.json` and its headers helper | `claude-plugin/.mcp.json`, `scripts/mcp_headers.py` |
 | Doctor | tares, keys, git, gh, a codex-present check | claude binary, version, trust, plugin checks | `tares/crew/doctor.py` |
+
+## The Builder's rules on Codex (TR-1598, first part)
+
+`probe_instructions.py`, Codex 0.171.0, 25 November 2026, one turn. A builder station was started by the product's
+own start with its developer instructions holding the identity and the whole manual the crew renders from the
+kit's skills for Codex (`tares/crew/role_text.py`): 34,053 characters.
+
+- Codex took developer instructions of that size at `thread/start`, and the turn ended in 2 s.
+- Asked which tools its instructions say it lacks, with no tool call allowed, it answered: "It has no schedule, no
+  one to hand work to, no way to send another station a message, and no other tools beyond Tares's tools."
+- Nothing was written into the folder it works in, and the person's own Codex files were as before.
+
+Not checked here: that the rules are still followed after a compaction (they are developer instructions, which
+Codex keeps), a `thread/resume` after a kit update giving the conversation the new text, and a builder doing
+real work under them, which is the acceptance run of TR-1598.
