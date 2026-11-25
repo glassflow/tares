@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Collapse, EmptyState, Loading, Skeleton } from "../../components/edition";
-import { Textarea } from "../../components/ui/textarea";
+import { Textarea } from "@paper-kit/ui/textarea";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";

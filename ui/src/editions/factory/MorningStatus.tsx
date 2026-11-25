@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Button, Checkbox, Select } from "../../components/edition";
 import { Input } from "../../components/edition";
 import { SlackPick } from "../../components/SlackPick";
-import { Switch } from "../../components/ui/switch";
+import { Switch } from "@paper-kit/ui/switch";
 import type { Person } from "../../types";
 import type { MorningResult, MorningStatus } from "./FactorySettings.api";
 import { viewerZone } from "../../lib/time";
