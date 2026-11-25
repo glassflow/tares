@@ -38,7 +38,9 @@ PG = os.environ.get("TARES_TEST_PG")
 # names its own DSN cannot run under it; the duckdb suite has TARES_TEST_PG and no harness
 if Store.__init__.__module__ != "tares.store":
     PG = None
-SESSION_TABLES = [t.name for t in MOVED_TABLES if t.name != "settings"]   # settings has its own tests
+# settings has its own tests; the account tables (people, api_keys, project_members) were never in DuckDB's
+# five session tables, so a copy from DuckDB has nothing of theirs to compare (TR-1608)
+SESSION_TABLES = [t.name for t in MOVED_TABLES if t.name != "settings" and t.name not in ts.ACCOUNT_TABLES]
 ck = ts.ck
 
 
@@ -165,7 +167,7 @@ def failed_first_start():
             ck(f"{what}: and no row is there twice", ts._count(s.sessions_db, "project_sessions") == 3)
             same_rows(s, want, what)
             ck(f"{what}: the ledger holds the local counts",
-               sorted(x for x in ts._ledger(s) if x[0] != "settings") == sorted((t, len(want[t])) for t in SESSION_TABLES)
+               sorted(x for x in ts._ledger(s) if x[0] in SESSION_TABLES) == sorted((t, len(want[t])) for t in SESSION_TABLES)
                and "settings" in dict(ts._ledger(s)), ts._ledger(s))
             ck(f"{what}: DuckDB's copies are untouched",
                {t: ts._duck_rows(s, t)[1] for t in SESSION_TABLES} == duck)

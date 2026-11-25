@@ -48,8 +48,14 @@ def H(tok):
     return {"Authorization": f"Bearer {tok}"}
 
 
+def _db(name):
+    """A DuckDB path in a folder of its own: the people live in tares.sqlite beside the file, and
+    databases that share a folder share them."""
+    return os.path.join(tempfile.mkdtemp(dir=TMP), name + ".duckdb")
+
+
 def start(name, auth):
-    db, port = os.path.join(TMP, name + ".duckdb"), free_port()
+    db, port = _db(name), free_port()
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_LICENSE": licensed.test_licence()}
     if auth:
@@ -310,7 +316,7 @@ def unit():
     """Rows from before: no lead, no scope. And the member functions of the store."""
     print("== projects from before ==")
     from tares.store import Store
-    path = os.path.join(TMP, "old.duckdb")
+    path = _db("old")
     con = duckdb.connect(path)
     con.execute("CREATE TABLE usecases (id TEXT PRIMARY KEY, recipe TEXT, name TEXT, params JSON, "
                 "status TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, last_error TEXT)")

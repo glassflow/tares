@@ -1,6 +1,6 @@
 """The session store's tables, as SQLAlchemy Core declares them (P-TR-295).
 
-These are the five session tables, and `settings`, exactly as they are today in DuckDB and in the state Postgres:
+These are the five session tables, `settings`, and the accounts (`people`, `api_keys`, `project_members`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import (BigInteger, Boolean, Column, Double, Index, Integer, MetaData, Table, Text,
                         false)
 
-from .types import UTCDateTime
+from .types import JSONText, UTCDateTime
 
 metadata = MetaData()
 
@@ -239,10 +239,54 @@ settings = Table(
     Column("updated_at", UTCDateTime),
 )
 
+# Who is on the cell (store.py create_person and the rest, TR-1608). `emails` is the extra
+# addresses as JSON; a person who left keeps the row with `removed_at` set.
+people = Table(
+    "people", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("email", Text),
+    Column("emails", JSONText),
+    Column("github", Text),
+    Column("is_admin", Boolean, server_default=false()),
+    Column("created_at", UTCDateTime),
+    Column("created_via", Text),
+    Column("picture", Text),
+    Column("removed_at", UTCDateTime),
+)
+
+# The cell's scoped credentials (store.py insert_api_key and the rest, TR-1608): only the SHA-256
+# of the secret is kept. `scopes` is a JSON list; `project` makes a project key and `person_id` binds
+# the key to a person.
+api_keys = Table(
+    "api_keys", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text),
+    Column("prefix", Text),
+    Column("hash", Text),
+    Column("scopes", JSONText),
+    Column("created_at", UTCDateTime),
+    Column("last_used_at", UTCDateTime),
+    Column("revoked_at", UTCDateTime),
+    Column("project", Text),
+    Column("person_id", Text),
+)
+
+# Who is on a project besides its lead (store.py add_project_member, TR-1608): reason `manual` or
+# `ticket`. The lead is not a row.
+project_members = Table(
+    "project_members", metadata,
+    Column("project", Text, primary_key=True),
+    Column("person_id", Text, primary_key=True),
+    Column("added_by", Text),
+    Column("added_at", UTCDateTime),
+    Column("reason", Text),
+)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
 # `state_db.move`. Moving a table means adding it here and a revision that takes it over.
 MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
-                settings)
+                settings, people, api_keys, project_members)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)
