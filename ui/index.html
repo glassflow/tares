@@ -7,15 +7,30 @@
     <link rel="alternate icon" type="image/png" href="/favicon.png" />
     <title>Tares Console</title>
     <script>
-      // Set the theme before first paint to avoid a flash of the wrong palette.
+      // Set the theme before first paint to avoid a flash of the wrong palette. The Tares desktop opens
+      // the console with ?embed=desktop&theme=light|dark (TR-1553, src/embed.ts reads the same): the
+      // mode and the theme are kept for the tab, and the desktop's theme wins over a saved choice.
       (function () {
+        var q = new URLSearchParams(window.location.search), t = null, e = false;
         try {
-          var s = localStorage.getItem("tares-theme");
-          var t = (s === "light" || s === "dark")
-            ? s
-            : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-          document.documentElement.setAttribute("data-theme", t);
-        } catch (e) {}
+          if (q.has("embed")) {
+            if (q.get("embed") === "desktop") sessionStorage.setItem("tares-embed", "desktop");
+            else { sessionStorage.removeItem("tares-embed"); sessionStorage.removeItem("tares-embed-theme"); }
+          }
+          var qt = q.get("theme");
+          if (qt === "light" || qt === "dark") sessionStorage.setItem("tares-embed-theme", qt);
+          e = sessionStorage.getItem("tares-embed") === "desktop";
+          if (e) t = sessionStorage.getItem("tares-embed-theme");
+        } catch (x) {
+          e = q.get("embed") === "desktop";
+          if (e) t = q.get("theme");
+        }
+        try {
+          if (t !== "light" && t !== "dark") t = e ? null : localStorage.getItem("tares-theme");
+        } catch (x) { t = null; }
+        if (t !== "light" && t !== "dark") t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", t);
+        if (e) document.documentElement.setAttribute("data-embed", "desktop");
       })();
     </script>
   </head>
