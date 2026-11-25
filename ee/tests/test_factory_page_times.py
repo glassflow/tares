@@ -8,14 +8,16 @@ and the in-process caches in CACHES are cleared before each of them, so a call i
 a page after a quiet minute, which is what a person opening it sees. The median of the 5 is the
 route's time.
 
-A route fails when its median is over `max(TARGET, its OVER entry) * SLACK[backend] * SPEED`. SPEED is
-how much slower this machine is than the one the OVER medians were taken on (never under 1): a fixed
-workload (`calibrate`) is timed three times at the start and the fastest counts, so a CI runner that is
-1.5 times slower gets limits 1.5 times wider and a busy moment at the start does not widen them. An OVER
+A route fails when its median is over
+`max(TARGET, its OVER entry) * SLACK[backend] * min(SPEED, LIMIT_SPEED_CAP[backend])`. SPEED is how much
+slower this machine is than the one the OVER medians were taken on (never under 1): a fixed workload
+(`calibrate`) is timed three times at the start and the fastest counts, so a slower machine gets wider
+limits, up to the cap, and a busy moment at the start does not widen them. The cap is there because a
+limit grows with SPEED and a slowdown does not (TR-1648): it keeps the limit of every route without an
+OVER entry at SLOWDOWN (0.5 s) or less, so a 0.5 s sleep in such a route fails on any machine. An OVER
 entry is the slowest median of several runs on the reference machine, not one run, and it is kept close
 to what the route takes now, because the limit is built on it: a route may grow by about its limit
-minus its time today (a 0.5 s sleep in a route under 300 ms fails on a quiet machine; on a CI runner
-with SPEED 2 a route that takes 250 ms may reach 750 ms before it fails on DuckDB, 900 ms on Postgres). A route that is over TARGET
+minus its time today. A route that is over TARGET
 today sits in OVER with the median that was measured and the ticket that brings it down; when that
 ticket's change lands, the route meets TARGET, its entry is stale, and the test fails until the entry is
 removed. A PR that moves a time updates OVER and says why; the PR that merges second rebases and keeps
@@ -54,8 +56,14 @@ import factory_seed as fs
 TARGET = 0.300                                       # seconds, the median of a route
 # How much a median may exceed its base, per backend. Postgres gets more: a round trip to the database
 # (a container here, a service on CI) varies from run to run in a way `calibrate()` cannot see. A CI
-# runner is not given a larger slack: `SPEED` already widens its limits by how slow it measures.
+# runner is not given a larger slack: `SPEED` already widens its limits by how slow it measures, up to
+# LIMIT_SPEED_CAP.
 SLACK = {"duckdb": 1.25, "postgres": 1.5}
+# The most SPEED widens a limit, by backend: 375 ms x 1.33 and 450 ms x 1.11 are both just under
+# SLOWDOWN. The slowest route medians of 29 CI runs per backend on 25 Nov were 308 ms (DuckDB) and
+# 388 ms (Postgres).
+LIMIT_SPEED_CAP = {"duckdb": 1.33, "postgres": 1.11}
+SLOWDOWN = 0.5                                       # seconds; no route without an OVER entry may gain this and pass
 RUNS = 5                                             # timed calls per route, after one warm-up
 CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
 SPEED_TRIES = 3                                       # `calibrate()` runs at the start; the fastest sets SPEED
@@ -218,11 +226,11 @@ def spread(values) -> float:
 SPEED = 1.0   # set in main(): how many times slower than the OVER machine this one is, never under 1
 
 
-def allowed(over: dict, name: str, slack: float) -> float:
+def allowed(over: dict, name: str, backend: str, speed: float) -> float:
     """The most a route's median may be: its OVER entry or TARGET, whichever is more, times the
-    backend's slack and SPEED."""
+    backend's slack and the machine's speed, which counts up to the backend's cap."""
     base = max(TARGET, over[name][0]) if name in over else TARGET
-    return base * slack * SPEED
+    return base * SLACK[backend] * min(speed, LIMIT_SPEED_CAP[backend])
 
 
 async def main():
@@ -237,7 +245,8 @@ async def main():
     samples: list = []                                 # (cpu, database) probes taken during the run
     cal = min(calibrate() for _ in range(SPEED_TRIES))
     SPEED = max(1.0, cal / CALIBRATION_REF)
-    print(f"calibration {cal * 1000:.0f} ms (reference {CALIBRATION_REF * 1000:.0f} ms): limits times {SPEED:.2f}")
+    print(f"calibration {cal * 1000:.0f} ms (reference {CALIBRATION_REF * 1000:.0f} ms): speed {SPEED:.2f}, "
+          f"limits times {min(SPEED, LIMIT_SPEED_CAP[backend]):.2f}")
     root = {"Authorization": f"Bearer {TOKEN}"}
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=root,
@@ -276,7 +285,7 @@ async def main():
                             bad = (resp.status_code, resp.text[:200])
                     med = statistics.median(times)
                     best = med if best is None else min(best, med)
-                    if bad or best <= allowed(over, name, slack):
+                    if bad or best <= allowed(over, name, backend, SPEED):
                         break
                     samples.append(probe())              # over its limit: the machine may have been busy, time it again
                 results[name] = (best, bad, path)
@@ -288,7 +297,7 @@ async def main():
         print(f"\n== medians ({backend}, target {TARGET * 1000:.0f} ms, slack {slack}, speed {SPEED:.2f}) ==")
         print(f"  {'route':<24} {'median ms':>10} {'allowed ms':>11}  status")
         for name, (med, bad, path) in results.items():
-            lim = allowed(over, name, slack)
+            lim = allowed(over, name, backend, SPEED)
             status = "ok" if med <= lim and not bad else "FAIL"
             if med > lim and busy and not bad:
                 status = "not measured: the machine is busy"
@@ -299,11 +308,11 @@ async def main():
         unmeasured: list = []
         for name, (med, bad, path) in results.items():
             ck(f"{name} answers as the page expects", bad is None, f"{path} {bad}")
-            if med > allowed(over, name, slack) and busy and not bad:
+            if med > allowed(over, name, backend, SPEED) and busy and not bad:
                 unmeasured.append(f"{name} {med * 1000:.0f} ms")
                 continue
-            ck(f"{name} median {med * 1000:.0f} ms is within {allowed(over, name, slack) * 1000:.0f} ms",
-               med <= allowed(over, name, slack), f"{path} {med * 1000:.0f} ms")
+            ck(f"{name} median {med * 1000:.0f} ms is within {allowed(over, name, backend, SPEED) * 1000:.0f} ms",
+               med <= allowed(over, name, backend, SPEED), f"{path} {med * 1000:.0f} ms")
         for name, (med, bad, path) in results.items():
             if name in over:
                 # stale only when the route is clearly under target on the reference machine (the median
@@ -317,6 +326,11 @@ async def main():
            f"{spread([d for _, d in samples]):.2f} times apart during the run; run it again when the machine is quiet")
         ck("every OVER entry names a route in ROUTES", all(n in results for n in over),
            str([n for n in over if n not in results]))
+        # on a machine of any speed: a route that takes no time at all, plus the slowdown, is over its limit
+        for b in SLACK:
+            lim = allowed({}, "", b, speed=1000.0)
+            ck(f"a {SLOWDOWN} s slowdown fails a {b} route with no OVER entry on any machine", lim <= SLOWDOWN,
+               f"the widest limit is {lim * 1000:.0f} ms")
         ck("every OVER entry names a ticket", all(str(v[1]).startswith("TR-") for v in over.values()))
     print(f"\n{P} passed, {F} failed")
     return F
