@@ -128,6 +128,10 @@ session_commands = Table(
     Column("exit_code", Integer),
     Column("output_tail", Text),
     Column("result_at", UTCDateTime),
+    # Set by a Codex station's lines only (TR-1595): the folder the command ran in, and how it ended
+    # (started, ended, failed, declined, unknown). Empty on a row a Claude Code line made.
+    Column("cwd", Text),
+    Column("outcome", Text),
 )
 Index("session_commands_session_at", session_commands.c.session, session_commands.c.at)
 

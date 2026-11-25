@@ -1735,21 +1735,27 @@ class FactoryStore:
         printed and whether it failed, oldest first: what a builder's claimed checks are
         compared with. Read from `session_commands`, where each call was written as its line was
         stored and its result added when that arrived (session_ingest, TR-1477). A command whose
-        result has not arrived shows no output and no failure."""
+        result has not arrived shows no output and no failure. A Codex station's command (TR-1595)
+        also says how it ended (`outcome`), its real exit code and its folder: one that did not
+        end (`started`, `unknown`) is told apart from one that ended, and one Codex failed to run
+        or declined counts as failed."""
         if not sessions:
             return []
         t = session_commands.c
         rows = []
         for i in range(0, len(sessions), 500):
             with self.sessions_db.begin() as conn:
-                rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code)
+                rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code,
+                                            t.outcome, t.cwd)
                                      .where(t.source == source, t.session.in_(sessions[i:i + 500]),
                                             t.command.is_not(None), t.at.is_not(None))
                                      .order_by(t.at.desc(), t.tool_use_id.desc())
                                      .limit(limit // 2)).fetchall()
         rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
         return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
-                 "is_error": bool(code)} for at, sid, command, tail, code in reversed(rows)]
+                 "is_error": bool(code) or outcome in ("failed", "declined"),
+                 **({"outcome": outcome, "exit_code": code, "cwd": cwd} if outcome else {})}
+                for at, sid, command, tail, code, outcome, cwd in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
