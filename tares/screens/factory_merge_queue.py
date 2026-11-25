@@ -152,7 +152,7 @@ def register(app, store, h, ctx):
 
     # ── the lines of a row ──
     def review_text(t: dict, reviews: list[dict], gate) -> str:
-        last = reviews[-1] if reviews else None
+        last = factory_mod.standing_round(reviews)
         who = ((last or {}).get("person") or {}).get("name") or (gate[1] if gate else "the crew reviewer")
         if not last:
             return f"Waiting for {gate[1]}" if gate else "Not reviewed yet"
@@ -401,7 +401,7 @@ def register(app, store, h, ctx):
                 "ci": ci_text(t, row), "guardrail": guardrail_text(row, history),
                 "status": status, "answer": answer, "bounce": bounce,
                 "needs_you": you or blocked, "_you": you, "_blocked": blocked,
-                **(turns.of(uid, t, waits, reviews[-1] if reviews else None, turn_state) if t else
+                **(turns.of(uid, t, waits, factory_mod.standing_round(reviews), turn_state) if t else
                    {"turn": None, "turn_label": "", "whose": None}),
             }
 

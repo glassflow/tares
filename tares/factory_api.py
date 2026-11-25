@@ -552,9 +552,9 @@ async def _refresh_one(store, uid: str, t: dict, sem: "asyncio.Semaphore",
     fields: dict = {"pr": pr} if pr is not t["pr"] else {}
     fields.update(merged_fields(cur, pr))
     # new commits after the reviewer asked for changes: it is back in review (TR-444)
-    newest = store.ticket_reviews(cur["id"])[-1:]
-    if (not fields.get("stage") and cur["stage"] == "changes" and newest and pr.get("head")
-            and not verdict_now({"pr": pr}, newest[0])["current"]):
+    standing = factory_mod.standing_round(store.ticket_reviews(cur["id"]))
+    if (not fields.get("stage") and cur["stage"] == "changes" and standing and pr.get("head")
+            and not verdict_now({"pr": pr}, standing)["current"]):
         fields["stage"] = "review"
         store.add_ticket_history(cur["id"], uid, "stage", "review",
                                  "new commits pushed after the verdict", "github", "github",
@@ -631,7 +631,7 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
         layer = factory_mod.challenger_layer(
             store.challenge_events(source, uid, factory_mod.label(t)))
     return {"checks": checks, "reviews": reviews, "challenger": layer,
-            "verdict": verdict_now(t, reviews[-1] if reviews else None)}
+            "verdict": verdict_now(t, factory_mod.standing_round(reviews))}
 
 
 def pr_note(t: dict) -> str | None:
