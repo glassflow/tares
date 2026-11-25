@@ -40,7 +40,8 @@ The ledger is `session_moves`, one row per session with its state: `pending`, `v
 An older session's parts are written with no lock held, so a line may arrive, or the hourly archive
 job may write a part, before the replacing transaction. That transaction reads the session again
 (its row, parts, table rows and DuckDB count); if any of it differs, nothing is replaced and the
-session stays `pending` for another go (`move_recent` takes it when the new line made it recent).
+session stays `pending` for another go after `RETRY_AFTER`, with no attempt counted (`move_recent`
+takes it when the new line made it recent).
 The parts are named by their content (see `session_archive`), so writing them never changes a file
 a committed row points to. They are numbered after the session's last part, so an hourly pass that
 read the session before the move committed runs into the move's part number and rolls back.
@@ -55,7 +56,10 @@ mode allows nothing longer). On SQLite the transaction is the write lock: other 
 busy timeout while one session is rebuilt. The replacing transaction of an older session runs under
 `Store._sess_lock` too; on Postgres it also tries the hourly job's lock
 (`tares_session_archive:`), leaving the session `pending` when the job holds it, and locks the
-session's row, where another process's ingest waits.
+session's row, where another process's ingest waits. Ingest of this process waits on
+`Store._sess_lock`, so on Postgres neither transaction waits longer than `LOCK_WAIT` for a row or
+advisory lock another holds: it rolls back, and the session is tried again after `RETRY_AFTER`,
+with no attempt counted. On SQLite the wait for the write lock is the store's busy timeout.
 
 Nothing reads DuckDB inside either transaction. A store call holds the state lock, which on SQLite is
 DuckDB's lock, while it writes the session store, so a read in there would wait on the call and the
@@ -95,7 +99,8 @@ OLD_PAUSE = 1.0                      # seconds between batches of older sessions
 PART_LINES = 5000                    # lines in one archive part of an older session, at most
 WAIT = 2.0                           # seconds between looks at whether the sessions table caught up
 MAX_ATTEMPTS = 5                     # tries of one session before it is `failed` for good
-RETRY_AFTER = 30.0                   # seconds before a session that failed to move is tried again
+RETRY_AFTER = 30.0                   # seconds before a session that failed, or was left, is tried again
+LOCK_WAIT = 0.5                      # seconds a transaction under `_sess_lock` waits for a lock
 PENDING, VERIFIED, FAILED = "pending", "verified", "failed"
 TARGET = "table"                     # where a recent session went
 ARCHIVE = "archive"                  # where an older one went
@@ -107,6 +112,18 @@ class Mismatch(Exception):
 
 class Changed(Exception):
     """DuckDB's lines of the session changed while they were read; the move is tried again."""
+
+
+def _bound_lock_waits(conn) -> None:
+    """On Postgres, no row or advisory lock is waited for longer than `LOCK_WAIT` in this
+    transaction. `SET LOCAL` ends with it, as PgBouncer in transaction mode needs."""
+    if conn.dialect.name == "postgresql":
+        conn.execute(text(f"SET LOCAL lock_timeout = {int(LOCK_WAIT * 1000)}"))
+
+
+def _lock_timed_out(e: Exception) -> bool:
+    """Postgres gave up a lock wait at `lock_timeout` (SQLSTATE 55P03)."""
+    return getattr(getattr(e, "orig", None), "sqlstate", None) == "55P03"
 
 
 def _utc(t: datetime | None) -> datetime | None:
@@ -307,6 +324,7 @@ def _rebuild(store, conn, read: tuple, sid: str) -> tuple[int, int]:
     """Replace the session's rows and parts by every DuckDB line (`read`, from `_duck_lines`)
     followed by the lines only the table or the archive holds, in the open transaction. Returns
     (DuckDB lines, extra lines). Raises `Mismatch` when the rows written are not those lines."""
+    _bound_lock_waits(conn)
     if conn.dialect.name == "postgresql":
         conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('tares_session_move:' "
                           "|| CAST(:s AS text)))"), {"s": sid})
@@ -348,8 +366,9 @@ def _rebuild(store, conn, read: tuple, sid: str) -> tuple[int, int]:
 
 
 def move_session(store, sid: str, sources: list | None = None) -> tuple[bool, str | None]:
-    """Move one session. Returns (verified, error). The ledger row is set `verified` in the rebuild's
-    own transaction. A rebuild that fails is rolled back, and then:
+    """Move one session. Returns (verified, error); (False, None) means another held a lock it
+    needs, and it stays `pending` with no attempt counted. The ledger row is set `verified` in the
+    rebuild's own transaction. A rebuild that fails is rolled back, and then:
     - `Mismatch` (the rows are not the lines): the row is `failed` with the counts, for good;
     - any other error (a database that blipped, a part that did not read): the row stays `pending`
       with the error and one more attempt, and is tried again after `RETRY_AFTER`; at `MAX_ATTEMPTS`
@@ -366,6 +385,9 @@ def move_session(store, sid: str, sources: list | None = None) -> tuple[bool, st
                     state=VERIFIED, target=TARGET, lines_events=duck, lines_after=duck + extra,
                     started_at=started, verified_at=now_utc(), error=None))
     except Exception as e:
+        if _lock_timed_out(e):
+            _back_off(db, sid)
+            return False, None
         err = f"{type(e).__name__}: {e}"[:1000]
         try:
             _record_failure(db, sid, started, err, final=isinstance(e, Mismatch))
@@ -389,6 +411,19 @@ def _record_failure(db, sid: str, started: datetime, err: str, final: bool) -> N
             state = PENDING
         conn.execute(update(session_moves).where(m.session == sid, m.state != VERIFIED).values(
             state=state, started_at=started, verified_at=None, error=err, attempts=tries))
+
+
+def _back_off(db, sid: str) -> None:
+    """Leave a `pending` session that was held or changed alone for `RETRY_AFTER`, without counting
+    an attempt."""
+    m = session_moves.c
+    try:
+        with db.begin() as conn:
+            conn.execute(update(session_moves).where(m.session == sid, m.state == PENDING)
+                         .values(started_at=now_utc()))
+    except Exception as e:
+        print(f"taresd: session move of {sid}: the wait was not recorded ({type(e).__name__}: {e})",
+              flush=True)
 
 
 # ── one older session ────────────────────────────────────────────────────────────────────────
@@ -475,6 +510,7 @@ def _replace(store, sid: str, sources: list, before: tuple, wanted: int, built: 
         # waits to write the session store, so that lock is not taken inside this write
         duck_now = _duck_count(store, sources, sid)
         with db.begin() as conn:
+            _bound_lock_waits(conn)
             if conn.dialect.name == "postgresql":
                 conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('tares_session_move:' "
                                   "|| CAST(:s AS text)))"), {"s": sid})
@@ -514,27 +550,36 @@ def _replace(store, sid: str, sources: list, before: tuple, wanted: int, built: 
 
 def move_old_session(store, sid: str, backend, sources: list | None = None) -> tuple[bool, str | None]:
     """Move one older session to the archive. Returns (verified, error); (False, None) means it
-    changed while it was moved and stays `pending`. A failure leaves its rows and parts as they were
-    and is recorded as `move_session` records one."""
+    changed while it was moved, or another held it, and it stays `pending` until `RETRY_AFTER` with
+    no attempt counted. A failure leaves its rows and parts as they were and is recorded as
+    `move_session` records one."""
     sources = sources or sorted(session_ingest.claude_code_sources(store))
     db = store.sessions_db
     started = now_utc()
     try:
-        wanted = _duck_count(store, sources, sid)
-        # one snapshot of the row, the parts and the table rows; on SQLite without the write lock
-        with (db.snapshot() if db.dialect == "postgresql" else db.read()) as conn:
-            before = _state(conn, sid)
-            have = _table_rows(conn, sid)
-            old = _parts(conn, sid)
-        have += _from_parts(backend, old)
-        have.sort(key=lambda r: r["seq"])
-        if before[0] is None and (wanted or have):
-            raise RuntimeError("the session has lines but no row in sessions")
-        first = max((p.part for p in old), default=0) + 1
-        built = _write_list(store, backend, sources, sid, have, first)
-        if not _replace(store, sid, sources, before, wanted, built, started):
+        # the sweep of unused files leaves this session's alone until the parts are committed
+        with session_archive.writing(sid):
+            wanted = _duck_count(store, sources, sid)
+            # one snapshot of the row, the parts and the table rows. On SQLite without the write
+            # lock: a deferred transaction in WAL mode sees one state from its first read to its end
+            with (db.snapshot() if db.dialect == "postgresql" else db.read()) as conn:
+                before = _state(conn, sid)
+                have = _table_rows(conn, sid)
+                old = _parts(conn, sid)
+            have += _from_parts(backend, old)
+            have.sort(key=lambda r: r["seq"])
+            if before[0] is None and (wanted or have):
+                raise RuntimeError("the session has lines but no row in sessions")
+            first = max((p.part for p in old), default=0) + 1
+            built = _write_list(store, backend, sources, sid, have, first)
+            replaced = _replace(store, sid, sources, before, wanted, built, started)
+        if not replaced:
+            _back_off(db, sid)
             return False, None
     except Exception as e:
+        if _lock_timed_out(e):
+            _back_off(db, sid)
+            return False, None
         err = f"{type(e).__name__}: {e}"[:1000]
         try:
             _record_failure(db, sid, started, err, final=isinstance(e, Mismatch))
@@ -550,7 +595,7 @@ def move_old_session(store, sid: str, backend, sources: list | None = None) -> t
 def _ready():
     """A pending session that may be tried now: never tried, or `RETRY_AFTER` since its last try."""
     m = session_moves.c
-    return or_(m.attempts.is_(None), m.attempts == 0,
+    return or_(m.started_at.is_(None),
                m.started_at <= now_utc() - timedelta(seconds=RETRY_AFTER))
 
 
@@ -560,8 +605,8 @@ def _older(cutoff: datetime):
 
 
 def due(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
-    """The pending sessions whose last line is inside the window, the oldest first. One that failed
-    to move is left out until `RETRY_AFTER` has passed since its last try."""
+    """The pending sessions whose last line is inside the window, the oldest first. One that was
+    tried is left out until `RETRY_AFTER` has passed since that try."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
     with store.sessions_db.begin() as conn:
@@ -573,7 +618,7 @@ def due(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
 
 def due_old(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
     """The pending sessions outside the window, the oldest last line first; as `due` for one that
-    failed to move."""
+    was tried."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
     with store.sessions_db.begin() as conn:
@@ -584,8 +629,7 @@ def due_old(store, limit: int = BATCH, now: datetime | None = None) -> list[str]
 
 
 def retrying(store, now: datetime | None = None, old: bool = False) -> int:
-    """How many pending sessions inside the window (outside it with `old`) have failed a try and
-    wait."""
+    """How many pending sessions inside the window (outside it with `old`) were tried and wait."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
     with store.sessions_db.begin() as conn:
@@ -593,7 +637,7 @@ def retrying(store, now: datetime | None = None, old: bool = False) -> int:
             select(func.count()).select_from(session_moves)
             .outerjoin(sessions, s.session == m.session)
             .where(m.state == PENDING, _older(cutoff) if old else s.last_line_at >= cutoff,
-                   m.attempts > 0)).scalar() or 0)
+                   m.started_at.is_not(None))).scalar() or 0)
 
 
 def counts(store) -> dict:
@@ -611,6 +655,8 @@ def refresh_gauges(store) -> None:
 
 
 def _fill(store, sources: list, sids: list) -> None:
+    """The movers pass one session: filling a batch of 20 held all their lines at once, which took
+    the whole move on a large cell over its memory limit (TR-1664)."""
     try:
         # the facts and turns of these sessions, from all their lines (since=None reads every one)
         session_ingest._fill_chunk(store, sources, sids, None)
@@ -654,9 +700,9 @@ def move_old(store, limit: int = BATCH, stop: threading.Event | None = None,
     if backend is None:
         return 0
     sources = sorted(session_ingest.claude_code_sources(store))
-    _fill(store, sources, sids)
     n = 0
     for sid in sids:
+        _fill(store, sources, [sid])         # one session's lines in memory at a time
         if stop is not None and stop.is_set():
             break
         ok, err = move_old_session(store, sid, backend, sources)
@@ -665,8 +711,8 @@ def move_old(store, limit: int = BATCH, stop: threading.Event | None = None,
             print(f"taresd: session move of {sid} to the archive failed ({err}); its lines stay as "
                   "they were", flush=True)
         elif not ok:
-            print(f"taresd: session move of {sid}: it changed while it moved, so it is moved again",
-                  flush=True)
+            print(f"taresd: session move of {sid}: it changed while it moved, or another writer "
+                  "held it, so it is moved again later", flush=True)
     refresh_gauges(store)
     return n
 
@@ -675,22 +721,25 @@ def move_recent(store, limit: int = BATCH, stop: threading.Event | None = None,
                 now: datetime | None = None) -> int:
     """Move up to `limit` pending sessions with a last line inside the window, oldest first.
     The facts and turns of each are filled first (both are idempotent). Returns how many sessions it
-    took; a session that failed for good is not taken again, one that failed a try waits for
+    took; a session that failed for good is not taken again, one that was tried waits for
     `RETRY_AFTER`. Stops between sessions when `stop` is set."""
     sids = due(store, limit, now)
     if not sids:
         return 0
     sources = sorted(session_ingest.claude_code_sources(store))
-    _fill(store, sources, sids)
     n = 0
     for sid in sids:
+        _fill(store, sources, [sid])         # one session's lines in memory at a time
         if stop is not None and stop.is_set():
             break
         ok, err = move_session(store, sid, sources)
         n += 1
-        if not ok:
+        if err:
             print(f"taresd: session move of {sid} failed ({err}); its lines stay as they were",
                   flush=True)
+        elif not ok:
+            print(f"taresd: session move of {sid}: another writer held it, so it is moved again "
+                  "later", flush=True)
     refresh_gauges(store)
     return n
 
@@ -722,7 +771,7 @@ def run(store, stop: threading.Event, pause: float = PAUSE, old_pause: float = O
                 continue
             waiting = retrying(store) or (retrying(store, old=True) and _old_backend(store))
             if waiting and not stop.wait(RETRY_AFTER):
-                continue              # sessions that failed a try wait to be tried again
+                continue              # sessions that were tried wait to be tried again
             break
         done = counts(store)
         if done.get(VERIFIED) or done.get(FAILED):
