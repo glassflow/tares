@@ -142,7 +142,10 @@ async def main():
             lag = sample(body, "tares_event_loop_lag_seconds")
             ck("the loop watcher reports a lag figure", lag is not None and lag < 0.5, str(lag))
             import time
-            time.sleep(1.2)   # block the loop on purpose, longer than the watcher interval so its timer is inside the block
+            # block the loop on purpose. The watcher's one-second timer falls due somewhere in the first second of
+            # the block and runs at its end, so it is late by the block's length less up to one second: a block of
+            # 1.2 s made that 0.2 to 1.2 s, under the half second that counts as a stall about a third of the time
+            time.sleep(2.0)
             await asyncio.sleep(1.2)
             body = (await cx.get("/metrics")).text
             ck("a blocked loop counts as a stall", (sample(body, "tares_event_loop_stalls_total") or 0) >= 1, str(sample(body, "tares_event_loop_stalls_total")))

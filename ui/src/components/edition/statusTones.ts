@@ -11,8 +11,6 @@
 // console already showed, the entry reads it from STATUS, so the console and the desktop cannot drift on
 // it. Where STATUS would change a tone (source.starting, resource.waiting), the console's own stays and
 // is marked below: moving a tone is not part of sharing the table.
-const shared = (key: StatusKey): Tone => STATUS[key].tone;
-
 import { STATUS, type StatusKey, type Tone } from "@paper-kit";
 import type { ProjectState } from "../../editions/factory/FactoryProjects.api";
 import type { ProjectPageState, PrState, TicketState, TicketTurn } from "../../editions/factory/FactoryProject.api";
@@ -24,6 +22,8 @@ import type { CiState } from "../../editions/factory/FactoryReviews.api";
 import type { GroupState } from "../../editions/sre/Incidents.api";
 import type { SreServiceState } from "../../editions/sre/Services.api";
 import type { CrewState, Project, ProjectSession, TicketStatus } from "../../types";
+
+const shared = (key: StatusKey): Tone => STATUS[key].tone;
 
 /** A source's health as tares/runtime.py SourceHealth.status sends it. The API types it as a string. */
 export type SourceHealthState = "starting" | "ok" | "error" | "paused" | "push";
