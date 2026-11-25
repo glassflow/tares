@@ -21,7 +21,9 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -336,11 +338,11 @@ def transient():
     real = session_move._rebuild
     boom = {"n": 1}
 
-    def flaky(store, conn, sources, sid):
+    def flaky(store, conn, read, sid):
         if sid == "blip" and boom["n"] > 0:
             boom["n"] -= 1
             raise OperationalError("SELECT 1", {}, Exception("server closed the connection"))
-        return real(store, conn, sources, sid)
+        return real(store, conn, read, sid)
 
     old = session_move.RETRY_AFTER
     session_move._rebuild = flaky
@@ -369,11 +371,11 @@ def transient():
                                                 lines_events=3))
     boom["n"] = 0
 
-    def flaky3(store, conn, sources, sid):
+    def flaky3(store, conn, read, sid):
         if sid == "blip3" and boom["n"] < 2:
             boom["n"] += 1
             raise OperationalError("SELECT 1", {}, Exception("busy"))
-        return real(store, conn, sources, sid)
+        return real(store, conn, read, sid)
 
     session_move._rebuild = flaky3
     session_move.RETRY_AFTER = 0.05      # a session that failed is out of the next batch, so the thread waits
@@ -395,7 +397,7 @@ def transient():
     def bad_rec(*a, **k):
         raise OperationalError("UPDATE", {}, Exception("down"))
 
-    def bad_rebuild(store, conn, sources, sid):
+    def bad_rebuild(store, conn, read, sid):
         raise OperationalError("SELECT 1", {}, Exception("down"))
 
     session_move._rebuild, session_move._record_failure = bad_rebuild, bad_rec
@@ -423,6 +425,138 @@ def transient():
         session_move._count_rows = realc
     m = move_of(s, "blip4")
     ck("a count mismatch fails at once", ok is False and m["state"] == "failed" and m["attempts"] == 1, m)
+    s.close()
+
+
+def locks():
+    print("== the rebuild and a store call that writes the session store do not shut each other out ==")
+    # a store call holds the state lock, which on SQLite is DuckDB's, while it writes the session
+    # store; a DuckDB read inside the rebuild's write then waits on the call, and the call on the write
+    s = open_store()
+    s.create_project("gone-project", "custom", "Gone", {})
+    s.create_project("uc_a", "software_factory", "A", {})
+    s.upsert_catalog_source("owned", "logs", "webhook", "1m", {})
+    s.set_owned_by("source", "owned", "uc_a")
+    doc = s.create_doc("uc_a", "spec", "Spec", "# hi")
+    s.upsert_catalog_source("loose", "logs", "webhook", "1m", {})
+    # the last three write the session store once the project tables are there (TR-1610)
+    calls = [("create_person", lambda: s.create_person("Rosa")),
+             ("mark_customized", lambda: s.mark_customized("source", "owned")),
+             ("remove_doc", lambda: s.remove_doc("uc_a", doc)),
+             ("put_in_project", lambda: s.put_in_project("source", "loose", "uc_a")),
+             ("update_person", lambda: s.update_person("local", name="Sam")),
+             ("delete_project", lambda: s.delete_project("gone-project"))]
+    for i, (name, _) in enumerate(calls):
+        seed(s, f"busy-{i}", 5, 3000)
+    for sid in ("late", "bare", "quiet"):
+        seed(s, sid, 5, 3000)
+    session_ingest.reconcile_sessions(s)
+    session_move.plan(s)
+    db = s.sessions_db
+    begin = db.begin
+    mover = threading.current_thread()
+    for i, (name, call) in enumerate(calls):
+        out: dict = {}
+
+        def run():
+            try:
+                call()
+            except Exception as e:
+                out["error"] = f"{type(e).__name__}: {e}"
+
+        t = threading.Thread(target=run)
+
+        @contextmanager
+        def pause():
+            with begin() as conn:
+                if threading.current_thread() is mover and t.ident is None:
+                    t.start()       # the rebuild's write has just opened: the call comes now
+                    end = time.time() + 5
+                    while t.is_alive() and not s._lock.locked() and time.time() < end:
+                        time.sleep(0.005)
+                yield conn
+
+        db.begin = pause
+        try:
+            started = time.time()
+            ok, err = session_move.move_session(s, f"busy-{i}")
+        finally:
+            db.begin = begin
+        t.join(30)
+        ck(f"{name} during a rebuild raises nothing", not t.is_alive() and "error" not in out, out)
+        ck(f"the rebuild open during {name} verifies without waiting out a lock",
+           ok and err is None and time.time() - started < 4, (ok, err, time.time() - started))
+
+    # the count is checked again after the read: a line that came or went meanwhile is not a failure
+    chunks = session_move._duck_chunks
+
+    def one_more(store, sources, sid):
+        yield from chunks(store, sources, sid)
+        seed(s, sid, 1, 100)
+
+    before = (rows_of(s, "late"), parts_of(s, "late"), row_of(s, "late"))
+    session_move._duck_chunks = one_more
+    try:
+        ok, err = session_move.move_session(s, "late")
+    finally:
+        session_move._duck_chunks = chunks
+    m = move_of(s, "late")
+    ck("a line added during the read leaves the session pending, to be tried again",
+       ok is False and m["state"] == "pending" and m["attempts"] == 1
+       and "5 lines before the read and 6 after" in (m["error"] or ""), (ok, err, dict(m)))
+    ck("its rows, parts and row are as they were",
+       (rows_of(s, "late"), parts_of(s, "late"), row_of(s, "late")) == before, "")
+    ok, err = session_move.move_session(s, "late")
+    ck("the next try moves all of them", ok and move_of(s, "late")["state"] == "verified"
+       and len(rows_of(s, "late")) == 6, (ok, err, len(rows_of(s, "late"))))
+
+    # a session whose DuckDB lines are gone: nothing to read ahead, its table lines stay
+    session_ingest.record(s, [line("bare", 200), line("bare", 100)])
+    with s._lock:
+        s.con.execute("DELETE FROM events WHERE key_value = 'bare'")
+    ok, err = session_move.move_session(s, "bare")
+    m = move_of(s, "bare")
+    ck("a session with no DuckDB line moves and keeps its table lines",
+       ok and m["state"] == "verified" and m["lines_events"] == 0 and m["lines_after"] == 2
+       and len(rows_of(s, "bare")) == 2, (ok, err, dict(m)))
+
+    # no DuckDB statement at all between the opening of the rebuild's write and its end
+    inside = {"on": False}
+    ran: list = []
+
+    class Watch:
+        def __init__(self, con):
+            self.con = con
+
+        def execute(self, sql, *a, **kw):
+            if inside["on"]:
+                ran.append(sql.split("\n")[0][:80])
+            return self.con.execute(sql, *a, **kw)
+
+        def __getattr__(self, name):
+            return getattr(self.con, name)
+
+    con, sc = s.con, s.sc
+    s.con = Watch(con)
+    if sc is con:
+        s.sc = s.con
+    @contextmanager
+    def watched():
+        with begin() as conn:
+            inside["on"] = True
+            try:
+                yield conn
+            finally:
+                inside["on"] = False
+
+    db.begin = watched
+    try:
+        ok, err = session_move.move_session(s, "quiet")
+    finally:
+        db.begin = begin
+        s.con, s.sc = con, sc
+    ck("the session moved", ok, err)
+    ck("DuckDB runs no statement inside the rebuild's write", ran == [], ran)
     s.close()
 
 
@@ -537,6 +671,7 @@ if __name__ == "__main__":
     repeats()
     failures()
     transient()
+    locks()
     thread()
     if FAILS:
         print(f"\n{len(FAILS)} FAILED:\n  " + "\n  ".join(FAILS))
