@@ -53,7 +53,8 @@ def scan(fn, *a):
 
 
 def spend(s):
-    return {(r["crew_id"], r["station"]): r["cur"] for r in s.station_rollup("claude_code")}
+    """Each station's spend, as the pages read it: the totals over every session it played."""
+    return {(r["crew_id"], r["station"]): r["usage"] for r in s.station_rollup("claude_code")}
 
 
 def reply(s, session, message, at, project=None, model="claude-opus-5-5", i=10, o=20, cw=3, cr=4):
@@ -104,8 +105,9 @@ def the_answers_are_the_scan():
               T0 - timedelta(days=1), T0 + timedelta(days=3)]
     ck("the totals are not built before the fill", not hourly.ready(s))
     before = scan(answers, s, sinces)
-    ck("the scan has something to say", len(before["by_project"][0]) >= 3 and len(before["spend"]) >= 3,
-       before["by_project"][0])
+    spent = [u for u in before["spend"].values() if u]
+    ck("the scan has something to say", len(before["by_project"][0]) >= 3 and len(spent) >= 3,
+       (before["by_project"][0], before["spend"]))
     n = hourly.fill(s)
     ck("the fill rebuilt the six sessions", n == 6, n)
     ck("the mark is set", hourly.ready(s))
