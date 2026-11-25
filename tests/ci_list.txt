@@ -109,6 +109,7 @@ test_factory_build
 test_factory_builder
 test_factory_close
 test_factory_crew
+test_factory_crew_cache
 test_factory_crew_page
 test_factory_crew_standup
 test_factory_desk

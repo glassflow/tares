@@ -612,13 +612,18 @@ def projects_view(request) -> str:
     return "team" if q is not None and q.get("projects") == "team" else "mine"
 
 
-def _cache_key(store, request) -> tuple:
-    """One kept home per cell, credential, person and project view: two keys of one name, or a
-    key rebound to another person, never share a home that is addressed to a person."""
+def _cache_key(store, request, page: str = "home") -> tuple:
+    """One kept body per cell, caller, page and project view. The caller is the credential (its
+    name, its person and its own id), whether it is an admin, and whether it asked to read as the
+    public (x-tares-viewer, which hides every private project from the cell's own credential): two
+    keys of one name, or a key rebound to another person, never share a body that is addressed to
+    one of them. `drop_cache` reads the first three."""
     state = getattr(request, "state", None)
     cred = getattr(state, "credential", None) or {}
+    headers = getattr(request, "headers", None) or {}
     return (id(store), cred.get("name") or "open", (cred.get("person") or {}).get("id"),
-            projects_view(request))
+            cred.get("id"), "admin" in (getattr(state, "scopes", None) or []),
+            headers.get("x-tares-viewer") == "public", page, projects_view(request))
 
 
 def for_caller(fx, request):
@@ -629,38 +634,45 @@ def for_caller(fx, request):
 
 
 def clear_cache() -> None:
-    """Forget every kept home, so the next read shows a change made just now."""
+    """Forget every kept page (Home, Crew), so the next read shows a change made just now."""
     with _cache_lock:
         _GEN[0] += 1
         _cache.clear()
 
 
 def drop_cache(store, request) -> None:
-    """Forget the kept home of the request's credential, so its next read shows a change made
+    """Forget the kept pages of the request's credential, so its next read shows a change made
     just now (the start block's hide and show)."""
     with _cache_lock:
         key = _cache_key(store, request)
-        for k in [k for k in _cache if k[:3] == key[:3]]:   # every project view of it
+        for k in [k for k in _cache if k[:3] == key[:3]]:   # every page and project view of it
             _cache.pop(k, None)
 
 
-def build(store, fx=None, request=None, now=None) -> dict:
-    """GET /api/home: `home()` kept for 5 seconds per credential (the page polls every 15). A
-    caller who passes `now` (a test) gets a fresh read."""
-    if now is not None:
-        return home(store, fx, now, request=request)
-    key = _cache_key(store, request)
+def cached(page: str, store, request, make) -> dict:
+    """`make()`, the body of `page` for this caller, kept for CACHE_SECONDS."""
+    key = _cache_key(store, request, page)
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
         gen = _GEN[0]
-    out = home(store, fx, now_utc(), key[1], request)
+    out = make()
     with _cache_lock:
         # a clear_cache() that landed while this was building means the body may be stale
         if gen == _GEN[0]:
             _cache[key] = (time.monotonic(), out)
     return out
+
+
+def build(store, fx=None, request=None, now=None) -> dict:
+    """GET /api/home: `home()` kept for 5 seconds per caller (the page polls every 15). A
+    caller who passes `now` (a test) gets a fresh read."""
+    if now is not None:
+        return home(store, fx, now, request=request)
+    name = _cache_key(store, request)[1]   # the credential's name: whose Start checklist
+    return cached("home", store, request,
+                  lambda: home(store, fx, now_utc(), name, request))
 
 
 # the builders of the waiting items register themselves on import (TR-769)
