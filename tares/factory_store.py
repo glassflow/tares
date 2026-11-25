@@ -1134,15 +1134,19 @@ class FactoryStore:
                 "last_at": last or r[5], "lines": n, "state": r[6],
                 "state_reason": r[7], "state_at": r[8], "crew_id": r[10]}
 
-    def station_rollup(self, source: str, keep: int = EARLIER_KEPT) -> list[dict]:
+    def station_rollup(self, source: str, keep: int = EARLIER_KEPT, totals: bool = True) -> list[dict]:
         """One row per station (crew id and name), however many sessions played it (TR-1500):
         `cur` the newest session (as station_sessions gives it), `earlier` the `keep` most recent
         before it, `earlier_count` how many there are in all, and the totals over every session:
         `projects` (sorted), `usage` (None when none of them has any) and `coordination_calls`.
         Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
-        stays the size of the stations; before, the same is built from the full list."""
+        stays the size of the stations; before, the same is built from the full list.
+        `totals` False reads only who runs (TR-1634): `crew_id`, `station`, `cur` and `projects`,
+        no earlier session and no total."""
+        if not totals:
+            keep = 0
         if not session_ingest.caught_up(self):
-            return self._rollup_from_rows(source, keep)
+            return self._rollup_from_rows(source, keep, totals)
         ss, sx, u = session_stations, sessions_table, session_usage
         j, named, last = self._station_join(source)
         rank = func.row_number().over(
@@ -1158,7 +1162,9 @@ class FactoryStore:
                        func.sum(func.coalesce(sx.c.coordination_calls, 0)))
                 .select_from(j).group_by(ss.c.crew_id, ss.c.station))
         worked = select(ss.c.crew_id, ss.c.station, func.coalesce(ss.c.project, named)).distinct()
-        if hourly.ready(self):    # the kept hourly totals, not every usage row (TR-1632)
+        if not totals:
+            spent = None
+        elif hourly.ready(self):    # the kept hourly totals, not every usage row (TR-1632)
             h = session_usage_hourly
             spent = (select(ss.c.crew_id, ss.c.station, func.sum(h.c.replies),
                             func.sum(h.c.input_tokens), func.sum(h.c.output_tokens),
@@ -1170,9 +1176,10 @@ class FactoryStore:
             spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
                      .select_from(ss.join(u, u.c.session == ss.c.session))
                      .group_by(ss.c.crew_id, ss.c.station))
-        with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
-            top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
-            worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
+        with self.sessions_db.snapshot() as conn:       # one snapshot: the answers agree on the stations
+            top_rows, worked_rows = conn.execute(top).all(), conn.execute(worked).all()
+            sum_rows = conn.execute(sums).all() if totals else []
+            spent_rows = conn.execute(spent).all() if totals else []
         out: dict[tuple, dict] = {}
         for r in top_rows:
             g = out.setdefault((r[10], r[1]), {"crew_id": r[10], "station": r[1], "sessions": [],
@@ -1216,11 +1223,11 @@ class FactoryStore:
                   reverse=True)
         return rows
 
-    def _rollup_from_rows(self, source: str, keep: int) -> list[dict]:
+    def _rollup_from_rows(self, source: str, keep: int, totals: bool = True) -> list[dict]:
         """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
         rows = self._newest_first(self.station_sessions(source))
-        spent = self.usage_by_session([r["session"] for r in rows])
-        coord = self.coordination_calls(source, [r["session"] for r in rows])
+        spent = self.usage_by_session([r["session"] for r in rows]) if totals else {}
+        coord = self.coordination_calls(source, [r["session"] for r in rows]) if totals else {}
         by: dict[tuple, list[dict]] = {}
         for r in rows:   # newest first
             by.setdefault((r["crew_id"], r["station"]), []).append(r)
@@ -1734,7 +1741,10 @@ class FactoryStore:
 
     def _challenges_fill(self) -> None:
         """Copy challenger lines stored before `challenges` existed, or while a write to it
-        failed. One scan of the events at open, then only the lines `append` records."""
+        failed. One scan of the events at open, then only the lines `append` records. The factory
+        edition scans once and records it (`challenges_filled`, TR-1613)."""
+        if session_ingest.filled_once(self, session_ingest.CHALLENGES_FILLED):
+            return
         rows = self.con.execute(
             "SELECT source, coalesce(key_value, ''), event_time, event_type, "
             "coalesce(json_extract_string(labels, '$.branch'), ''), "
@@ -1743,6 +1753,7 @@ class FactoryStore:
             ).fetchall()
         if rows:
             self._record_challenges(rows)
+        session_ingest.set_filled(self, session_ingest.CHALLENGES_FILLED)
 
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it

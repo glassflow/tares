@@ -1140,6 +1140,36 @@ def register(app, store, h: Host) -> SimpleNamespace:
         out.update(marks.get(prefix, {}))
         return out
 
+    def shown_station_state(cur: dict, now: datetime) -> str:
+        """The state a station shows, from its newest session."""
+        state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
+        return "ended" if state == "replaced" else state
+
+    def in_sight(rows: list[dict], hidden: set) -> list[dict]:
+        """`rows` without the stations that worked only in projects the caller cannot see (TR-629)."""
+        return [st for st in rows if not (st["projects"] and set(st["projects"]) <= hidden)]
+
+    def in_crew_order(rows: list[dict]) -> list[dict]:
+        order = {r: i for i, r in enumerate(factory_mod.ROLES)}
+        return sorted(rows, key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
+
+    def station_states() -> list[dict]:
+        """Who runs, for a reader that needs no more of `stations()` (Setup, TR-1634): name, role,
+        state, last_at, crew_id, person and projects of every station the caller may see, in the
+        same order. Reads no earlier session, no usage and no line count."""
+        crews = {c["id"]: c for c in store.list_crews()}
+        now = now_utc()
+        out = [{"name": g["station"], "role": g["cur"]["role"], "crew_id": g["crew_id"],
+                "state": shown_station_state(g["cur"], now), "last_at": g["cur"]["last_at"],
+                "person": (crews.get(g["crew_id"]) or {}).get("person"), "projects": g["projects"]}
+               for g in store.station_rollup(h.cc_source(), totals=False)]
+        hidden = h.hidden_ids()
+        if hidden:
+            out = in_sight(out, hidden)
+            for st in out:
+                st["projects"] = [u for u in st["projects"] if u not in hidden]
+        return in_crew_order(out)
+
     def stations(project: str | None = None) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
         never merge. Each row names its crew, machine and person."""
@@ -1155,9 +1185,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             cid, name, cur = g["crew_id"], g["station"], g["cur"]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
-            state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
-            if state == "replaced":
-                state = "ended"
+            state = shown_station_state(cur, now)
             # the most recent sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],
                         "last_at": s["last_at"], "lines": s["lines"], "state": "replaced"}
@@ -1176,10 +1204,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "coordination_calls": g["coordination_calls"]})
         hidden = h.hidden_ids()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
-            kept = []
+            out = in_sight(out, hidden)
             for st in out:
-                if st["projects"] and set(st["projects"]) <= hidden:
-                    continue
                 seen = [u for u in st["projects"] if u not in hidden]
                 if len(seen) != len(st["projects"]) or st["project"] in hidden:
                     # the station also works on a project the caller cannot see: its reason
@@ -1188,8 +1214,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
-                kept.append(st)
-            out = kept
         meters = store.session_meters([st["session"] for st in out])
         retry = claude_retry()
         for st in out:
@@ -1206,9 +1230,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                   or retry.get(retry_key(pid, None), {}).get(st["name"]))
         if project:
             out = [s for s in out if project in s["projects"]]
-        order = {r: i for i, r in enumerate(factory_mod.ROLES)}
-        out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
-        return out
+        return in_crew_order(out)
 
     def pace(request: Request | None = None) -> dict:
         """The pace under the caller's settings (a person's own `pace` over the cell's)."""
@@ -3582,7 +3604,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
-    fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
+    fx = SimpleNamespace(stations=stations, station_states=station_states, queue=queue_all, pace=pace,
+                         settings=settings,
                          team_home=team_home, project_waiting=project_waiting,
                          waiting_for_person=waiting_for_person,
                          team_projects=team_projects, own_stations=own_stations,

@@ -452,6 +452,31 @@ def _start_ctx(onboarding: dict) -> start_steps.StartCtx:
         crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "")
 
 
+def _onboarding(store, fx, request, mine: list, settings: dict) -> dict:
+    """The `onboarding` block for the caller: their crew's choices, GitHub, their machine's report
+    and who runs among their own crew's stations (`mine`)."""
+    mk = getattr(fx, "machine_key", None)
+    who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
+    return crew_onboarding.payload(store, mine, settings,
+                                   mk(request) if mk else crew_onboarding.machine_key(), who)
+
+
+def _start_steps(onboarding: dict) -> list:
+    """The Start checklist's steps for an `onboarding` block."""
+    return start_steps.factory_steps(_start_ctx(onboarding))
+
+
+def setup_state(store, fx=None, request=None) -> tuple[dict, list]:
+    """The caller's (`onboarding`, Start steps) without building the home (TR-1634): what Setup
+    reads, and what `home` answers in `onboarding` and `start`, from the same two functions.
+    Never kept between calls."""
+    fx = for_caller(fx, request)
+    stations = fx.station_states() if fx else []
+    settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
+    onboarding = _onboarding(store, fx, request, _cut(fx, "own_stations", request, stations), settings)
+    return onboarding, _start_steps(onboarding)
+
+
 def _cut(fx, name: str, request, rows, *more):
     """`rows` cut to the caller by the team interface's filter `name` (own_stations, own_desk,
     own_tickets). Unchanged on a cell of one person, without a request, or for an `fx` with no
@@ -579,10 +604,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())
-    mk = getattr(fx, "machine_key", None)
-    who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
-    onboarding = crew_onboarding.payload(store, mine, settings,
-                                         mk(request) if mk else crew_onboarding.machine_key(), who)
+    onboarding = _onboarding(store, fx, request, mine, settings)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
@@ -592,7 +614,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
             "start": start_steps.checklist(
-                store, start_steps.factory_steps(_start_ctx(onboarding)),
+                store, _start_steps(onboarding),
                 "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
             "now": now.isoformat()}
