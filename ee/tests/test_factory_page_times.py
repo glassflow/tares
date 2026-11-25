@@ -68,16 +68,8 @@ DB_PROBE_FLOOR = 0.010                                # seconds; below this a da
 # Routes over TARGET today, by backend: (the median in seconds when it was measured, the ticket that
 # brings it down). A route absent from here must meet TARGET.
 OVER: dict = {
-    "duckdb": {
-        "setup": (0.567, "TR-1628"), "setup_progress": (0.574, "TR-1634"),
-        "home": (0.557, "TR-1629"), "crew": (0.50, "TR-1633"),
-        "tickets": (0.576, "TR-1612"), "tickets_list": (0.575, "TR-1612"),
-        "project_tickets": (0.556, "TR-1612"), "projects": (0.518, "TR-1610"),
-    },
-    "postgres": {
-        "setup": (0.376, "TR-1628"), "setup_progress": (0.350, "TR-1634"),
-        "crew": (0.46, "TR-1631"),
-    },
+    "duckdb": {},
+    "postgres": {},
 }
 
 # What each route is, and where the console asks for it. `{p}` and `{t}` are the seed's anchor project

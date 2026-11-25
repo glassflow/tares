@@ -13,11 +13,13 @@ import uuid
 
 from sqlalchemy import and_, func, null, or_, select, update
 
+from . import claude_usage_hourly as hourly
 from . import session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
 from .session_store.tables import (project_sessions, session_commands, session_messages,
-                                   session_states, session_stations, session_turns, session_usage)
+                                   session_states, session_stations, session_turns, session_usage,
+                                   session_usage_hourly)
 from .session_store.tables import sessions as sessions_table
 from .session_store.tables import people as people_table
 
@@ -1156,9 +1158,18 @@ class FactoryStore:
                        func.sum(func.coalesce(sx.c.coordination_calls, 0)))
                 .select_from(j).group_by(ss.c.crew_id, ss.c.station))
         worked = select(ss.c.crew_id, ss.c.station, func.coalesce(ss.c.project, named)).distinct()
-        spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
-                 .select_from(ss.join(u, u.c.session == ss.c.session))
-                 .group_by(ss.c.crew_id, ss.c.station))
+        if hourly.ready(self):    # the kept hourly totals, not every usage row (TR-1632)
+            h = session_usage_hourly
+            spent = (select(ss.c.crew_id, ss.c.station, func.sum(h.c.replies),
+                            func.sum(h.c.input_tokens), func.sum(h.c.output_tokens),
+                            func.sum(h.c.cache_write_tokens), func.sum(h.c.cache_read_tokens),
+                            func.sum(h.c.cost_usd), func.sum(h.c.unpriced))
+                     .select_from(ss.join(h, h.c.session == ss.c.session))
+                     .group_by(ss.c.crew_id, ss.c.station))
+        else:
+            spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
+                     .select_from(ss.join(u, u.c.session == ss.c.session))
+                     .group_by(ss.c.crew_id, ss.c.station))
         with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
             top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
             worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
