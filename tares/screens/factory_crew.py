@@ -85,7 +85,8 @@ def register(app, store, h, ctx):
         """One line from the ledger over the last day; null when nothing moved."""
         try:
             rep = standup_mod.facts(store, now - timedelta(days=1), now,
-                                    lambda uid: project_progress(store, uid), hide=hidden)
+                                    lambda uid, tickets, ms: project_progress(store, uid, tickets, ms),
+                                    hide=hidden)
         except Exception:
             return None
         ps = rep["projects"]

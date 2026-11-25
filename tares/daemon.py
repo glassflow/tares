@@ -6122,9 +6122,10 @@ def make_app() -> FastAPI:
 
     def _standup(since: str | None, until: str | None) -> dict:
         start, end = _standup_range(since, until)
-        return standup_mod.facts(store, start, end,
-                                 lambda uid: factory_api.project_progress(store, uid),
-                                 hide=_hidden_ids())
+        return standup_mod.facts(
+            store, start, end,
+            lambda uid, tickets, ms: factory_api.project_progress(store, uid, tickets, ms),
+            hide=_hidden_ids())
 
     @app.get("/api/crew/standup")
     def crew_standup(since: str | None = None, until: str | None = None):
@@ -6227,7 +6228,8 @@ def make_app() -> FastAPI:
     _morning = morning_mod.MorningStatus(
         store,
         report=lambda since, until: standup_mod.facts(
-            store, since, until, lambda uid: factory_api.project_progress(store, uid),
+            store, since, until,
+            lambda uid, tickets, ms: factory_api.project_progress(store, uid, tickets, ms),
             hide={p["id"] for p in store.private_projects()}),
         summarise=_summarise_standup,
         post_slack=_post_slack,

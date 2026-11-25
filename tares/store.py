@@ -3455,7 +3455,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def list_tickets(self, project: str) -> list[dict]:
         with self._sread:
             rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
-                                    "ORDER BY position, created_at", [project]).fetchall()
+                                    "ORDER BY position, created_at, number, id", [project]).fetchall()
         return [self._ticket_row(r) for r in rows]
 
     def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
@@ -3465,7 +3465,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         marks = ", ".join("?" for _ in projects)
         with self._sread:
             rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project IN "
-                                    f"({marks}) ORDER BY position, created_at",
+                                    f"({marks}) ORDER BY position, created_at, number, id",
                                     list(projects)).fetchall()
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
