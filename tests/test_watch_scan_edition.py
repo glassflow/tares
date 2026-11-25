@@ -64,7 +64,7 @@ def tick(store):
 
 
 def cell(name, edition, **kw):
-    store = Store(os.path.join(TMP, name + ".duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), name + ".duckdb"))
     store.set_setting(edition_mod.EDITION_SETTING, edition)
     build(store, now_utc(), events=40, **kw)
     return store

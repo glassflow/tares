@@ -42,7 +42,7 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 1, 8, 0, 0, tzinfo=timezone.utc)
 NOW = T0 + timedelta(days=30)               # a month on: every session of the test is over a week old
-HEAD = "0012_session_usage_hourly"
+HEAD = "0013_project_tables"
 SRC = "claude_code"
 _N = [0]
 os.environ.pop("TARES_ARCHIVE_URL", None)
@@ -445,9 +445,7 @@ def failures():
     print("== purging a source takes its parts too ==")
     s = open_store()
     b = FileBackend(tempfile.mkdtemp())
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector, config) VALUES "
-                     "('claude_code', 'claude_code', '{}')")
+    s.upsert_catalog_source("claude_code", "claude_code", "claude_code", "", {})
     ready(s, "p", n=2)
     session_archive.archive_pass(s, b, NOW)
     ck("a part exists", len(parts_of(s, "p")) == 1)

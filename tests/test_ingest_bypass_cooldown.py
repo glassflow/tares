@@ -13,11 +13,13 @@ import asyncio
 import importlib
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB = "/tmp/tares-bypass-cooldown-test.duckdb"
-GROUP_DB = "/tmp/tares-bypass-cooldown-group-test.duckdb"
-AUTH_DB = "/tmp/tares-bypass-cooldown-auth-test.duckdb"
+# each a cell of its own, in its own folder: tares.sqlite sits beside the DuckDB file
+GROUP_DB = os.path.join(tempfile.mkdtemp(prefix="tares-bypass-group-"), "group.duckdb")
+AUTH_DB = os.path.join(tempfile.mkdtemp(prefix="tares-bypass-auth-"), "auth.duckdb")
 CATALOG = "/tmp/tares-bypass-cooldown-test.catalog.yaml"
 TOKEN = "bypass-test-token"
 os.environ["TARES_CATALOG"] = CATALOG
