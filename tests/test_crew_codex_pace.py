@@ -543,6 +543,34 @@ err, _ = quietly(lifecycle.restart, mk(), paths, [B, "The person's own prompt."]
 ck("a person's own restart is not held: they decide", err is None and prompts(pid)[-1] == "The person's own prompt.", (err, prompts(pid)))
 end(pid_of(paths, B))
 
+# Turning pace off releases an earlier limit hold, including the idle-wake path that
+# runs before pace.step and would otherwise see the old failed turn forever.
+from tares.crew import idle_wake  # noqa: E402
+
+cell, paths, said, mk, env = crew({"settings": {**LS.DEFAULT_WORLD["settings"], "idle_wake": True}})
+fake()
+account(100, 20, session_reset=60, limit_error="usage limit")
+start(mk(), B, "builder", "shop", prompt="Build before the limit.")
+pid, thread = pid_of(paths, B), row(paths, B)["sessionId"]
+rested(paths, B)
+round_(paths, env)
+ck("a limited station is marked before pacing is disabled", codex_pace.mark_read(paths, B) is not None)
+cell.pace_on = False
+later(minutes=2)
+account(1, 20)
+pace.round_start(paths, env)
+wake = {"station": B, "state": "on", "now": int(CLOCK[0].timestamp()), "reason": "work: next ticket",
+        "prompt": "Continue with the next ticket.", "work": True, "keys": ["ticket:next"], "baseline": None, "n": 0}
+with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+    idle_wake.send(mk(), paths, wake, claude_bin="")
+    pace.step(paths, env=env)
+ck("turning pacing off lets an idle wake reach the formerly limited station in the same conversation",
+   len(prompts(pid)) == 2 and prompts(pid)[-1] == wake["prompt"] and row(paths, B)["sessionId"] == thread,
+   (prompts(pid), said))
+ck("the wake is acknowledged and the old hold is removed when pacing is off",
+   state.wake_read(B, paths)["seen"] == ["ticket:next"] and codex_pace.mark_read(paths, B) is None)
+end(pid_of(paths, B))
+
 print("e. no reset time, and a mark that is no longer true")
 cell, paths, said, mk, env = crew({"settings": {**LS.DEFAULT_WORLD["settings"], "idle_wake": True}})
 fake()

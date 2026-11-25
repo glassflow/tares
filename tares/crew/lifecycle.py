@@ -247,7 +247,9 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
     resting = alive and codex_station.at_rest(paths, station)
     if only_between_turns and alive and not resting:
         raise NotBetweenTurnsError(f"{station} is in a turn; not stopping it")
-    if only_between_turns and not past_limit:   # every automatic prompt (TR-1597): none into a limit
+    # An explicit off setting releases automatic work. Unknown readings still keep
+    # the hold: only disabling pacing, or the reset path, bypasses it.
+    if only_between_turns and not past_limit and pace.read(client).state != "off":
         from . import codex_pace
         why = codex_pace.held(paths, station)
         if why:
