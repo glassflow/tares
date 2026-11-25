@@ -111,12 +111,14 @@ def _key(r: dict):
 
 
 def _fetch(store, source: str, session: str, tool_needle: str | None, limit: int, offset: int,
-           left_out: list | None, seen: dict):
+           left_out: list | None, seen: dict, tail: dict | None = None):
     """The rows the caller wants as `session_lines` rows (dicts with `seq`, `at`, `type`, `labels`,
     `render`, `payload`), and where they came from. Without `left_out`: None for a session with no
     row, an incomplete one or another source, and `Unreadable` when the rows or a part cannot be
     had. With it: what can be had, with what is missing noted in the list. `seen["born"]` is set
-    once the session's row says whether it was born in the table."""
+    once the session's row says whether it was born in the table. `tail` is for a page that is the
+    session's end, its offset worked out from `line_count`: when fewer lines can be had, the page
+    moves back to the newest of them, and `tail["start"]` says where it then starts."""
     db = store.sessions_db
     t = session_lines.c
     cols = [t.seq, t.at, t.type, t.labels, t.render, t.payload]
@@ -144,6 +146,8 @@ def _fetch(store, source: str, session: str, tool_needle: str | None, limit: int
             if left_out is None:
                 raise Unreadable(why)
             left_out.append(why)
+        if tail is not None and left_out is not None and not parts:
+            offset = tail["start"] = min(offset, max(kept - limit, 0))
         q = select(*cols).where(t.session == session)
         if tool_needle is not None:
             find = func.strpos if db.dialect == "postgresql" else func.instr
@@ -174,7 +178,10 @@ def _fetch(store, source: str, session: str, tool_needle: str | None, limit: int
         old = [r for r in old if r["type"] == "tool_result" and tool_needle in (r["payload"] or "")]
         merged = sorted(mine + old, key=_key, reverse=True)[:TOOL_RESULT_ROWS]
     else:
-        merged = sorted(old + mine, key=_key)[offset:offset + limit]
+        merged = sorted(old + mine, key=_key)
+        if tail is not None and left_out is not None:
+            offset = tail["start"] = min(offset, max(len(merged) - limit, 0))
+        merged = merged[offset:offset + limit]
     return merged, where
 
 
@@ -193,11 +200,12 @@ def _line(r: dict) -> dict:
             "text": _text(r), "payload": r["payload"]}
 
 
-def lines(store, source: str, session: str, limit: int, offset: int):
+def lines(store, source: str, session: str, limit: int, offset: int, tail: dict | None = None):
     """`([{type, at, labels (parsed), text, payload (the stored JSON text)}, ...], lines_from)`
-    for a page of the session, oldest first; None when the caller must read DuckDB."""
+    for a page of the session, oldest first; None when the caller must read DuckDB. `tail`: see
+    `_fetch`."""
     def read(left_out, seen):
-        got = _fetch(store, source, session, None, int(limit), int(offset), left_out, seen)
+        got = _fetch(store, source, session, None, int(limit), int(offset), left_out, seen, tail)
         if got is None:
             return None
         rows, where = got
