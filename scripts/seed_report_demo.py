@@ -18,19 +18,24 @@ Run it with the daemon stopped. A second run changes nothing; a run that stopped
 written again from the start. A data dir with other projects is refused without --into-existing.
 On a cell with no other projects it also picks the factory edition and the crew's choices where
 none are stored, and hides the first-run card.
-The pull requests do not exist on GitHub, so start the daemon with TARES_PR_SYNC_SECONDS=off."""
+Home says the sample crew is running for an hour after the seed. To show it as running again,
+stop the daemon and run the seed with --refresh-crew, which adds no rows.
+The pull requests do not exist on GitHub. Each is marked as a sample, so a page shows what the
+seed wrote and does not read GitHub. Start the daemon with TARES_PR_SYNC_SECONDS=off, which
+keeps the merge queue off them too."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import random
+import shlex
 import sys
 from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import delete, update  # noqa: E402
+from sqlalchemy import delete, select, update  # noqa: E402
 
 from tares import factory, factory_waiting, merge_queue, start_steps  # noqa: E402
 from tares.envelope import now_utc  # noqa: E402
@@ -231,13 +236,15 @@ class Seeder:
                                       MODELS[role], p["uid"] if stamped else None, None, usage)
 
     def write_stations(self) -> None:
-        recent = self.now - timedelta(minutes=2)
+        # this week's stations are idle and heard from now: Home then says the crew is running for
+        # an hour. A working station would read "not heard from" after ten silent minutes.
+        recent = self.now
         last_week = WEEKS - 1
         for role in ("orchestrator", "reviewer", "releaser"):
             self.session(role, None, recent, last_week)
         for p in PROJECTS:
             self.session("builder", p, recent, last_week)
-        self.crew_id = self.crew(recent)          # so the crew was last seen now
+        self.crew_id = crew_seen(self.store, recent)   # so the crew was last seen now
         for sid, s in sorted(self.sessions.items()):
             p, role = s["project"], s["role"]
             current = s["week"] == last_week and role != "person"
@@ -251,10 +258,7 @@ class Seeder:
             self.store.set_session_station(
                 sid, s["station"], role, ORCHESTRATOR if role == "builder" else "",
                 p["uid"] if role == "builder" else None, at, self.crew_id)
-            self.store.set_session_state(sid, "working" if current else "ended", None, at)
-
-    def crew(self, at) -> str:
-        return self.store.resolve_crew("demo-crew", ME, "demo-laptop", at)
+            self.store.set_session_state(sid, "idle" if current else "ended", None, at)
 
     # ── the desk ──────────────────────────────────────────────────────────────
     def ask(self, p: dict, labels: list[str], at, question: str, options, recommendation: str,
@@ -404,7 +408,8 @@ class Seeder:
         return {"url": f"https://github.com/{repo}/pull/{number}", "number": number, "repo": repo,
                 "head": head, "base": "main", "branch": f"build/{factory.label(ticket).lower()}",
                 "title": ticket["title"], "state": "open", "merged": False, "ci": "success",
-                "ci_checks": [], "checked_at": at.isoformat()}
+                "ci_checks": [], "checked_at": at.isoformat(),
+                "sample": True}          # not on GitHub, so never read there (factory_github.stale)
 
     def review(self, p: dict, ticket: dict, pr: dict, r: random.Random, verdict: str, at,
                findings: list[dict], resolved: dict) -> None:
@@ -607,7 +612,7 @@ class Seeder:
     def run(self) -> None:
         s = self.store
         self.name = (s.get_person(ME) or {}).get("name") or ME
-        self.crew(self.starts[0])
+        crew_seen(self.store, self.starts[0])
         for index, p in enumerate(PROJECTS):
             milestones = self.project(p)
             titles = [t.format(thing) for t in TITLES for thing in p["things"]]
@@ -648,6 +653,11 @@ def dress(store: Store) -> None:
     start_steps.hide(store, "console")
 
 
+def crew_seen(store: Store, at) -> str:
+    """The sample crew, last seen at `at`. Answers its id."""
+    return store.resolve_crew("demo-crew", ME, "demo-laptop", at)
+
+
 def summary(store: Store) -> None:
     for p in PROJECTS:
         tickets = store.list_tickets(p["uid"])
@@ -656,15 +666,59 @@ def summary(store: Store) -> None:
               f"{len(tickets) - merged} open")
 
 
-def seed(data_dir: str, into_existing: bool = False) -> int:
+def open_store(data_dir: str) -> Store | None:
+    """The data dir's store, or None, with the reason printed, when it cannot be opened."""
     try:
         os.makedirs(data_dir, exist_ok=True)
-        store = Store(os.path.join(data_dir, "tares.duckdb"))
+        return Store(os.path.join(data_dir, "tares.duckdb"))
     except (OSError, StoreUnavailable) as e:
         lines = str(e).splitlines()
         print(f"Could not open the data dir {data_dir}. If a Tares daemon is running on it, stop "
               f"it and run the seed again.\n{lines[0] if lines else type(e).__name__}",
               file=sys.stderr)
+        return None
+
+
+def refresh_command(data_dir: str) -> str:
+    return " ".join(shlex.quote(x) for x in (
+        sys.executable, os.path.abspath(__file__), "--data-dir", os.path.abspath(data_dir),
+        "--refresh-crew"))
+
+
+def refresh_crew(data_dir: str) -> int:
+    """Stamp this week's sample stations as idle and heard from now. Adds no rows."""
+    nothing = (f"{data_dir} holds no sample history to refresh. Run the seed on it first, "
+               "without --refresh-crew.")
+    if not os.path.isdir(data_dir):
+        print(nothing, file=sys.stderr)
+        return 1
+    store = open_store(data_dir)
+    if store is None:
+        return 2
+    try:
+        if json.loads(store.get_setting(MARKER) or "{}").get("state") != "done":
+            print(nothing, file=sys.stderr)
+            return 1
+        now = now_utc()
+        this_week = session_stations.c.session.like(f"{SESSION_PREFIX}%-w{WEEKS - 1}")
+        with store.sessions_db.begin() as conn:
+            sids = conn.execute(select(session_stations.c.session).where(this_week)).scalars().all()
+            # set_session_station keeps the time a session was first seen
+            conn.execute(update(session_stations).where(this_week).values(seen_at=now))
+        for sid in sids:
+            store.set_session_state(sid, "idle", None, now)
+        crew_seen(store, now)
+        print(f"The sample crew in {data_dir} counts as heard from now. Start Tares again: Home "
+              "says the crew is running for an hour from now.")
+        return 0
+    finally:
+        store.close()
+        store.con.close()
+
+
+def seed(data_dir: str, into_existing: bool = False) -> int:
+    store = open_store(data_dir)
+    if store is None:
         return 2
     try:
         done = json.loads(store.get_setting(MARKER) or "{}")
@@ -694,7 +748,10 @@ def seed(data_dir: str, into_existing: bool = False) -> int:
               f"{data_dir}:")
         summary(store)
         print(f"  {seeder.replies} model replies with their cost\n"
-              f"Start it with: TARES_PR_SYNC_SECONDS=off tares up --data-dir {data_dir}")
+              f"Start it with: TARES_PR_SYNC_SECONDS=off tares up --data-dir {data_dir}\n"
+              "Home says the sample crew is running for an hour from now. After that it says the "
+              "crew was not heard from: stop Tares, run this, and start Tares again.\n"
+              f"  {refresh_command(data_dir)}")
         return 0
     finally:
         store.close()
@@ -706,7 +763,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--data-dir", required=True, help="the data dir of a stopped Tares")
     ap.add_argument("--into-existing", action="store_true",
                     help="write the sample projects beside projects that are already there")
+    ap.add_argument("--refresh-crew", action="store_true",
+                    help="on a seeded data dir, show the sample crew as heard from now; adds no rows")
     args = ap.parse_args(argv)
+    if args.refresh_crew:
+        return refresh_crew(args.data_dir)
     return seed(args.data_dir, args.into_existing)
 
 

@@ -5,8 +5,13 @@ holds what the Report reads. The week checks run on today's seed and again as se
 week began and just before one ended. The part that reads the Report is skipped while there is no
 GET /api/factory/report (TR-1667).
 
+What a viewer sees (TR-1691): for the hour the start hint promises, Home and the Crew page say the
+crew is running; after it, the command the seed printed makes them say so again; and a sample pull
+request shows what the seed wrote, with no GitHub error and no GitHub call, credential or not.
+
 Run: .venv/bin/python tests/test_report_demo_seed.py
 """
+import asyncio
 import contextlib
 import glob
 import hashlib
@@ -15,6 +20,8 @@ import io
 import json
 import os
 import re
+import shlex
+import shutil
 import socket
 import statistics
 import subprocess
@@ -34,6 +41,7 @@ from _env import clean_env, scrub_os_environ  # noqa: E402
 
 scrub_os_environ()          # the stores and the seed below also run in this process
 
+from tares import factory_api, factory_github, merge_queue  # noqa: E402
 from tares.session_store import tables as session_tables  # noqa: E402
 from tares.store import Store  # noqa: E402
 
@@ -133,9 +141,11 @@ TABLES = {
     "ticket_checks": "project checked_at",
     "reviews": "id project ticket round head verdict reviewed_at",
     "review_findings": "project ticket severity blocking kind state fixed_in found_at",
-    "desk_items": "id number project blocking asked_by state created_at closed_at to_person_id",
+    "desk_items": "id number project question blocking asked_by state created_at closed_at "
+                  "to_person_id",
     "answers": "item kind project person_id answered_at",
-    "decisions": "project decided_at",
+    "decisions": "project desk_item question words choice standing granted tickets decided_at "
+                 "via person_id",
     "assumptions": "project state made_at decided_at",
     "milestones": "id project created_at updated_at",
     "milestone_check_results": "project result checked_at",
@@ -377,6 +387,30 @@ def shape_checks(db):
     ck("an L3 merge names who approved which sha, an L4 merge has no approval", not bad,
        str(bad[:5]))
 
+    # the decision behind each yes: the row merge_queue.approve writes, which the console reads to
+    # say who said yes, to what, and where
+    l3 = [m for m in rows if m["project_uid"] in (BILLING, "uc_demo_office")]
+    approvals = [d for d in db["decisions"] if d["choice"] == merge_queue.APPROVE_CHOICE]
+    bad = []
+    for m in l3:
+        n, desk = number[m["ticket"]], desks.get(m["desk_item"]) or {}
+        got = [d for d in db["decisions"] if d["desk_item"] == m["desk_item"]]
+        d = got[0] if len(got) == 1 else None
+        if not (d and desk and d["project"] == m["project_uid"]
+                and d["question"] == desk["question"] and m["head"][:7] in d["question"]
+                and d["words"] == merge_queue.APPROVE_WORDS
+                and d["choice"] == merge_queue.APPROVE_CHOICE
+                and d["via"] == "console" and d["person_id"] == "local"
+                and json.loads(d["tickets"]) == [f"T{n}"]
+                and not d["standing"] and not d["granted"]
+                and utc(d["decided_at"]) == utc(desk["closed_at"])
+                and utc(d["decided_at"]) <= utc(m["updated_at"])):
+            bad.append((m["project_uid"], n, len(got), d))
+    ck("each L3 merge has one decision row: the person's yes to that sha, before the merge",
+       l3 and not bad, f"{len(bad)} of {len(l3)}: {bad[:2]}")
+    ck("and no other merge has an approval", len(approvals) == len(l3),
+       f"{len(approvals)} approvals for {len(l3)} L3 merges")
+
     # Home has something to show
     open_stages = {t["stage"] or "todo" for t in db["tickets"]} - {"merged"}
     ck("work is open now: todo, doing, review, changes and blocked",
@@ -409,7 +443,10 @@ def free_port():
         return str(s.getsockname()[1])
 
 
-def daemon_checks(data_dir):
+@contextlib.contextmanager
+def daemon(data_dir):
+    """A daemon on the data dir, started as the seed's start hint says, and stopped afterwards.
+    Yields its URL, or None when it did not come up."""
     port = free_port()
     env = clean_env(TARES_DB=os.path.join(data_dir, "tares.duckdb"), TARES_PORT=port,
                     TARES_PR_SYNC_SECONDS="off", TARES_OTLP_GRPC_PORT="off",
@@ -434,49 +471,7 @@ def daemon_checks(data_dir):
                     pass
                 time.sleep(0.25)
             ck("a daemon starts on the seeded dir", up, open(log).read()[-800:])
-            if not up:
-                return
-            home = httpx.get(f"{base}/api/home", timeout=30).json()
-            shown = {p["name"] for p in home.get("projects") or []}
-            ck("Home is the factory's and lists the five projects",
-               home.get("edition") == "factory" and shown == set(NAMES),
-               f"{home.get('edition')} {shown}")
-            waiting = {w["kind"] for w in home.get("waiting_for_you") or []}
-            ck("Home has things waiting for the person", "question" in waiting, str(waiting))
-            crew = home.get("crew") or {}
-            roles = [m.get("role") for m in crew.get("members") or []]
-            ck("Home shows the crew running, with its five builders",
-               crew.get("running") is True and str(crew.get("summary")).startswith("Running")
-               and roles.count("builder") == 5, f"{crew.get('summary')} {roles}")
-            ck("and how far it goes on its own matches the sample crew",
-               (crew.get("how_far") or {}).get("autonomy") == "L4-ship", str(crew.get("how_far")))
-            split = {}
-            for p in home.get("projects") or []:
-                rows = httpx.get(f"{base}/api/projects/{p['id']}/repos", timeout=30).json()["repos"]
-                if len(rows) != 1 or not rows[0]["tickets"] or not rows[0]["merged_prs"]:
-                    split[p["name"]] = [(r["name"], len(r["tickets"])) for r in rows]
-            ck("each project page lists one repository, with its tickets", not split, str(split))
-            ck("the first-run card is out of the way",
-               (home.get("start") or {}).get("show") is False, str(home.get("start")))
-            answered = httpx.get(f"{base}/api/desk/answered", timeout=30).json()
-            ck("the console counts the answered questions", answered.get("count", 0) > 20,
-               str(answered))
-
-            again = run_seed(data_dir)
-            ck("seeding while the daemon runs fails with a plain message",
-               again.returncode == 2 and "stop it and run the seed again" in again.stderr
-               and "Traceback" not in again.stdout + again.stderr,
-               f"{again.returncode} {again.stderr[:600]}")
-
-            sources = "".join(open(f, encoding="utf-8").read() for f in glob.glob(
-                os.path.join(ROOT, "tares", "**", "*.py"), recursive=True))
-            if '"/api/factory/report"' not in sources:
-                print("  skip the Report read: there is no GET /api/factory/report yet (TR-1667)")
-            else:
-                report = httpx.get(f"{base}/api/factory/report", timeout=60)
-                ck("GET /api/factory/report answers on the seeded cell",
-                   report.status_code == 200 and any(n in report.text for n in NAMES),
-                   f"{report.status_code} {report.text[:300]}")
+            yield base if up else None
         finally:
             proc.terminate()            # only the daemon started here
             try:
@@ -484,6 +479,219 @@ def daemon_checks(data_dir):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=10)
+
+
+def daemon_checks(data_dir):
+    with daemon(data_dir) as base:
+        if not base:
+            return
+        home = httpx.get(f"{base}/api/home", timeout=30).json()
+        shown = {p["name"] for p in home.get("projects") or []}
+        ck("Home is the factory's and lists the five projects",
+           home.get("edition") == "factory" and shown == set(NAMES),
+           f"{home.get('edition')} {shown}")
+        waiting = {w["kind"] for w in home.get("waiting_for_you") or []}
+        ck("Home has things waiting for the person", "question" in waiting, str(waiting))
+        crew = home.get("crew") or {}
+        roles = [m.get("role") for m in crew.get("members") or []]
+        ck("Home shows the crew running, with its five builders",
+           crew.get("running") is True and str(crew.get("summary")).startswith("Running")
+           and roles.count("builder") == 5, f"{crew.get('summary')} {roles}")
+        ck("and how far it goes on its own matches the sample crew",
+           (crew.get("how_far") or {}).get("autonomy") == "L4-ship", str(crew.get("how_far")))
+        split = {}
+        for p in home.get("projects") or []:
+            rows = httpx.get(f"{base}/api/projects/{p['id']}/repos", timeout=30).json()["repos"]
+            if len(rows) != 1 or not rows[0]["tickets"] or not rows[0]["merged_prs"]:
+                split[p["name"]] = [(r["name"], len(r["tickets"])) for r in rows]
+        ck("each project page lists one repository, with its tickets", not split, str(split))
+        ck("the first-run card is out of the way",
+           (home.get("start") or {}).get("show") is False, str(home.get("start")))
+        answered = httpx.get(f"{base}/api/desk/answered", timeout=30).json()
+        ck("the console counts the answered questions", answered.get("count", 0) > 20,
+           str(answered))
+
+        for what, args in (("seeding", ()), ("refreshing", ("--refresh-crew",))):
+            again = run_seed(data_dir, *args)
+            ck(f"{what} while the daemon runs fails with a plain message",
+               again.returncode == 2 and "stop it and run the seed again" in again.stderr
+               and "Traceback" not in again.stdout + again.stderr,
+               f"{again.returncode} {again.stderr[:600]}")
+
+        sources = "".join(open(f, encoding="utf-8").read() for f in glob.glob(
+            os.path.join(ROOT, "tares", "**", "*.py"), recursive=True))
+        if '"/api/factory/report"' not in sources:
+            print("  skip the Report read: there is no GET /api/factory/report yet (TR-1667)")
+        else:
+            report = httpx.get(f"{base}/api/factory/report", timeout=60)
+            ck("GET /api/factory/report answers on the seeded cell",
+               report.status_code == 200 and any(n in report.text for n in NAMES),
+               f"{report.status_code} {report.text[:300]}")
+
+
+def crew_now(base):
+    """What Home and the Crew page say about the crew now: (Home, the Crew page)."""
+    return (httpx.get(f"{base}/api/home", timeout=30).json(),
+            httpx.get(f"{base}/api/factory/crew", timeout=30).json())
+
+
+def alive_checks(base, label):
+    home, page = crew_now(base)
+    crew = home.get("crew") or {}
+    members = crew.get("members") or []
+    said = json.dumps([home.get("headline"), crew, page]).lower()
+    ck(f"{label}: Home and the Crew page say the crew is running, with no station not heard from",
+       str(crew.get("summary")).startswith("Running") and len(members) == 8
+       and "not heard" not in said and "not been heard" not in said,
+       f"{home.get('headline')} | {crew.get('summary')} | {page.get('summary')} | "
+       f"{[m.get('state') for m in members]}")
+    ck(f"{label}: no station has been in its state for an hour",
+       members and not any("hour" in str(m.get("since")) for m in members),
+       str(sorted({str(m.get("since")) for m in members})))
+
+
+def linked_prs(data_dir):
+    """[(project, ticket number, the pull request as stored)] for every ticket that has one."""
+    with opened(data_dir) as s:
+        return [(uid, n, json.loads(pr)) for uid, n, pr in s.sc.execute(
+            "SELECT project, number, pr FROM tickets WHERE pr IS NOT NULL").fetchall()]
+
+
+def pr_page_checks(base, linked):
+    """Every open pull request page and one merged page for each project, read over HTTP."""
+    still_open = [x for x in linked if not x[2]["merged"]]
+    merged = list({x[0]: x for x in linked if x[2]["merged"]}.values())
+    bad = []
+    for uid, n, wrote in still_open + merged:
+        page = httpx.get(f"{base}/api/factory/projects/{uid}/tickets/T{n}", timeout=30)
+        doc = httpx.get(f"{base}/api/projects/{uid}/tickets/T{n}", timeout=30)
+        pr = (doc.json().get("pr") or {}) if doc.status_code == 200 else {}
+        if not (page.status_code == 200 and pr.get("number") == wrote["number"]
+                and not pr.get("error") and pr.get("checked_at") == wrote["checked_at"]):
+            bad.append((uid, n, page.status_code, doc.status_code, pr.get("error")))
+    ck("a sample pull request page shows what the seed wrote, with no GitHub error",
+       still_open and len(merged) == len(NAMES) and not bad,
+       f"{len(bad)} of {len(still_open)} open and {len(merged)} merged: {bad[:3]}")
+    shown = []
+    for uid in sorted({x[0] for x in linked}):
+        for row in httpx.get(f"{base}/api/projects/{uid}/repos", timeout=30).json()["repos"]:
+            if row.get("github_error"):
+                shown.append((uid, row["github_error"]))
+        page = httpx.get(f"{base}/api/factory/projects/{uid}/github", timeout=30).json()
+        errors = [page.get("github_error")] + [c.get("error") for r in page["repos"]
+                                               for c in r["prs"]]
+        shown += [(uid, e) for e in errors if e]
+    ck("nor does any project's repository list or GitHub page", linked and not shown,
+       f"{len(shown)}: {shown[:3]}")
+
+
+def no_github_checks(data_dir):
+    """With a GitHub credential on the cell, reading a sample pull request asks GitHub nothing.
+    Every request goes to a stand-in, so nothing leaves the machine when this fails."""
+    calls = []
+
+    def answer(request):
+        calls.append(str(request.url))
+        return httpx.Response(404, json={})
+
+    def read(s, tickets):
+        async def each():
+            for uid, t in tickets:
+                await factory_api.refresh_pr(s, uid, t)
+        asyncio.run(each())
+
+    factory_github._transport = httpx.MockTransport(answer)
+    try:
+        with opened(data_dir) as s:
+            s.upsert_github_credential("scratch", "not-a-real-token")
+            linked = [(p["id"], t) for p in s.list_projects()
+                      for t in s.list_tickets(p["id"]) if t.get("pr")]
+            before = {t["id"]: t["pr"] for _, t in linked}
+            read(s, linked)
+            after = {t["id"]: s.get_ticket(uid, t["id"])["pr"] for uid, t in linked}
+            ck("with a GitHub credential, no sample pull request is read from GitHub",
+               linked and not calls and after == before,
+               f"{len(calls)} calls of {len(linked)} pull requests: {calls[:3]}")
+            # the control: the same open pull request without the mark is read
+            uid, t = next((u, t) for u, t in linked if not t["pr"]["merged"])
+            old = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+            real = {**{k: v for k, v in t["pr"].items() if k != "sample"}, "checked_at": old}
+            s.update_ticket(t["id"], pr=real)
+            calls.clear()
+            read(s, [(uid, s.get_ticket(uid, t["id"]))])
+            ck("one without the sample mark is read, so the check above would see a call",
+               any(f"/repos/{real['repo']}/pulls/{real['number']}" in c for c in calls),
+               str(calls))
+    finally:
+        factory_github._transport = None
+
+
+def hour_checks(root):
+    print("seeded almost an hour ago")
+    mod = load_script()
+    ago = os.path.join(root, "almost-an-hour")
+    at = datetime.now(timezone.utc) - timedelta(minutes=58)
+    mod.now_utc = lambda: at
+    code, said = seed_here(mod, ago)
+    ck("58 minutes ago: the seed runs", code == 0, said[-800:])
+    if code != 0:
+        return
+    linked = linked_prs(ago)
+    # a copy no daemon has read: a pull request read just now is not due for another read
+    untouched = shutil.copytree(ago, ago + "-with-a-credential")
+    with daemon(ago) as base:
+        if base:
+            alive_checks(base, "58 minutes on")
+            pr_page_checks(base, linked)
+    no_github_checks(untouched)
+
+
+def refresh_checks(root):
+    print("seeded two hours ago, then refreshed with the command the seed printed")
+    mod = load_script()
+    old = os.path.join(root, "two hours ago")     # spaces: the printed command has to quote it
+    at = datetime.now(timezone.utc) - timedelta(hours=2)
+    mod.now_utc = lambda: at
+    code, said = seed_here(mod, old)
+    command = next((x.strip() for x in said.splitlines() if "--refresh-crew" in x), "")
+    ck("the start hint says how long the crew reads as running, and how to refresh it",
+       code == 0 and "for an hour" in said and "not heard from" in said and command, said[-800:])
+    if code != 0 or not command:
+        return
+    with daemon(old) as base:
+        if base:
+            home, _ = crew_now(base)
+            summary = str((home.get("crew") or {}).get("summary"))
+            ck("two hours on, Home says the crew is not heard from",
+               summary.startswith("Not heard from"), summary)
+    before = snapshot(old)
+    ran = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=120,
+                         env=clean_env(), cwd=root)
+    ck("the printed command runs", ran.returncode == 0 and "heard from now" in ran.stdout,
+       f"{command} -> {ran.returncode} {ran.stdout[-400:]} {ran.stderr[-1200:]}")
+    after = snapshot(old)
+    ck("it adds no row", counts(before) == counts(after), str(differing(before, after)))
+    ck("and changes only when the stations and the crew were heard from",
+       set(differing(before, after)) == {"session_stations", "session_states", "crews"},
+       str(sorted(differing(before, after))))
+    with daemon(old) as base:
+        if base:
+            alive_checks(base, "after the refresh")
+    never = os.path.join(root, "never-seeded")
+    no = run_seed(never, "--refresh-crew")
+    ck("a refresh of a data dir that is not there is refused, and creates nothing",
+       no.returncode == 1 and "no sample history" in no.stderr and not os.path.exists(never),
+       f"{no.returncode} {no.stderr[-600:]}")
+    unseeded = os.path.join(root, "unseeded")
+    os.makedirs(unseeded)
+    with opened(unseeded) as s:
+        s.create_project("uc_other", "custom", "Somebody Else", {})
+    before = snapshot(unseeded)
+    no = run_seed(unseeded, "--refresh-crew")
+    after = snapshot(unseeded)
+    ck("so is a refresh of a data dir that was never seeded, with no row written",
+       no.returncode == 1 and "no sample history" in no.stderr and after == before,
+       f"{no.returncode} {no.stderr[-600:]} {differing(before, after)}")
 
 
 def twice_checks(data_dir):
@@ -618,6 +826,8 @@ def main():
     other_projects_checks(root)
     print("a daemon on the seeded dir")
     daemon_checks(fresh)
+    hour_checks(root)
+    refresh_checks(root)
 
 
 if __name__ == "__main__":
