@@ -183,13 +183,16 @@ def crew(world=None, pace_on=True):
     cell = Cell(tares, pace_on)
     paths = CrewPaths.at(tmp / "crew")
     said = []
-    env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url}
-    os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+    # a Codex station does not start without the crew's MCP endpoint (TR-1596): the fake cell's /mcp
+    env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url,
+           "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}
+    os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
     pace.forget()
     codex_pace.forget()
 
     def make_client():
-        c = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=said.append)
+        c = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"},
+                        say=said.append)
         c.prime()
         return c
     return cell, paths, said, make_client, env
@@ -249,6 +252,8 @@ def alive(pid):
 
 
 def end(pid, sig=signal.SIGTERM):
+    if not isinstance(pid, int) or pid <= 0:   # no station was started: 0 would signal this test's own group
+        return True
     try:
         os.kill(pid, sig)
     except OSError:

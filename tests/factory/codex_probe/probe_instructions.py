@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,8 @@ STATION = "probe-build-api"
 probe_launch.STATION = probe_station.STATION = STATION   # the helpers of both ask about this station
 
 from appserver import codex_bin  # noqa: E402
-from probe_launch import EFFORT, MODEL, Crew, path_without_claude, personal_state  # noqa: E402
+from probe_launch import EFFORT, MODEL, TARES_KEY, Crew, path_without_claude, personal_state, tares_mcp  # noqa: E402
+import standin_mcp  # noqa: E402
 
 from tares.crew import codex as cx  # noqa: E402
 from tares.crew import codex_station as cs  # noqa: E402
@@ -48,12 +50,14 @@ ASK = ("This is a check of your instructions, not work: call no tool and read no
 
 class BuilderCrew(Crew):
     def plan(self, lean: bool = True) -> dict:
+        # a station does not start without the crew's MCP endpoint (TR-1596): the probes' stand-in
+        key = standin_mcp.key_file(self.home, TARES_KEY)
         spec = RuntimeCodex().launch_spec("builder", STATION, {
             "crew": "probe", "crew_autonomy": "L3-review", "human": "the person", "model": MODEL, "effort": EFFORT,
-            "tares_url": "http://127.0.0.1:9", "mcp_url": "http://127.0.0.1:9/mcp",
+            "tares_url": "http://127.0.0.1:9", "mcp_url": f"http://127.0.0.1:{tares_mcp()}/mcp", "token_file": True,
             "rules": {"allow": ["Work in {where} is expected work for this station."], "soft_deny": []}})
         manual = role_text.manual(KIT, role_text.CODEX, "builder")
-        values = {"CREW_HOME": self.home, "TOKEN_FILE": os.path.join(self.home, ".tares-token"),
+        values = {"CREW_HOME": self.home, "TOKEN_FILE": key, "TOKEN_FILE_SHELL": shlex.quote(key),
                   "PLUGIN_DIR_SHELL": KIT, "REPOS": "the probe's folder", "WT_REPOS": "the probe's folder",
                   "ROLE_MANUAL": "\n\n" + manual.rstrip(), **cx.machine_values(self.paths, STATION)}
         return cx.plan({"command": spec.command, "env": spec.env, "settings": spec.settings}, values)
