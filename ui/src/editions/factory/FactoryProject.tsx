@@ -10,6 +10,7 @@ import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@paper-kit/ui/select";
 import { cn } from "../../lib/utils";
 import {
+  milestoneSummary, rewriteMilestoneSummary,
   type ProjectPeople, type ProjectPerson,
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
@@ -20,6 +21,8 @@ import { DetailLines } from "./HomeDetail";
 import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { sampleClose } from "./projectSamples";
 import { PageHead, pageHref, ProjectShell, waitingItems, type ProjectCtx, type ProjectPage } from "./ProjectShell";
+import { formatDistance, formatStampUTC } from "../../lib/time";
+import { usePagePolling } from "../usePagePolling";
 
 // A factory project's Overview (/projects/:id, TR-734, TR-1245): only what needs attention. What
 // waits for you, a line for what waits for others, three cards that open the project's pull
@@ -383,8 +386,61 @@ function PersonCheck({ c, onAnswer }: {
   );
 }
 
-export function MilestoneRow({ m, onAnswer, onAccept }: {
+/** How often a summary that is being written is asked for again. */
+const SUMMARY_POLL_MS = 2000;
+
+/** Under an accepted milestone: what it delivered, the decisions taken on the way and what is left,
+ *  written once by the cell (TR-1645). The words are the cell's, from ticket titles and decisions. */
+function MilestoneSummary({ projectId, milestone }: { projectId: string; milestone: string }) {
+  const [every, setEvery] = React.useState(0);
+  const { data, error, reload } = usePagePolling(() => milestoneSummary(projectId, milestone), every);
+  const writing = data?.writing ?? false;
+  React.useEffect(() => { setEvery(writing ? SUMMARY_POLL_MS : 0); }, [writing]);
+  const [asking, setAsking] = React.useState(false);
+  const [refused, setRefused] = React.useState("");
+  const again = async () => {
+    setAsking(true); setRefused("");
+    try { await rewriteMilestoneSummary(projectId, milestone); reload(); }
+    catch (e) { setRefused(e instanceof ApiError ? e.message : NOT_SAVED); }
+    finally { setAsking(false); }
+  };
+  if (!data && !error) return null;
+  const s = data?.summary;
+  const at = s ? Date.parse(s.written_at) : NaN;
+  return (
+    <div className="mt-2 grid max-w-[68ch] justify-items-start gap-1" data-testid="milestone-summary"
+         data-source={s?.source ?? ""} data-writing={writing}>
+      {s && (
+        <div className="whitespace-pre-line text-[13px] text-foreground [overflow-wrap:anywhere]" data-testid="summary-text" data-words-exempt>
+          {s.text}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className={MUTED} role="status" data-testid="summary-state">
+          {s ? (
+            <>
+              Written by Tares from these figures,{" "}
+              <time className="whitespace-nowrap font-mono" dateTime={s.written_at} title={formatDistance(at, Date.now())}>{formatStampUTC(s.written_at)}</time>
+              {writing && ". Writing it again."}
+            </>
+          ) : writing ? "Tares is writing the summary."
+            : error ? "The summary did not load." : "The summary could not be written."}
+        </span>
+        {!writing && (
+          <Button variant="secondary" className="h-7 text-xs" busy={asking} onClick={data ? again : reload} data-testid="summary-again">
+            {data ? "Write again" : "Try again"}
+          </Button>
+        )}
+      </div>
+      {refused && <div role="alert" className="text-[13px] text-err" data-testid="summary-error">{refused}</div>}
+    </div>
+  );
+}
+
+export function MilestoneRow({ m, projectId, onAnswer, onAccept }: {
   m: ProjectMilestone;
+  /** Left out on a sample: there is no cell to ask for the summary. */
+  projectId?: string;
   onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
   onAccept?: (m: ProjectMilestone) => Promise<void>;
 }) {
@@ -443,6 +499,7 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
               {error && <div role="alert" className="mt-1 text-[13px] text-err">{error}</div>}
             </div>
           )}
+          {m.accepted && projectId && <MilestoneSummary projectId={projectId} milestone={m.id} />}
         </div>
         <div className="flex items-center gap-2.5 pt-0.5 text-[13px] md:self-start">
           <ProgressBar value={pct(merged + closed, total)} aria-label={m.counts.label}

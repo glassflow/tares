@@ -65,7 +65,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import memory_route
 from .integrations.builtin import memory_tares
-from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
+from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, milestone_summary, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -916,6 +916,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/tickets$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/milestones$"), "read"),
+        ("GET", re.compile(r"^/milestones/[^/]+/summary$"), "read"),
         ("GET", re.compile(r"^/crew$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
         ("GET", re.compile(r"^/assumptions$"), "read"),
@@ -5846,6 +5847,37 @@ def make_app() -> FastAPI:
         out = next(x for x in _milestones_out(uid) if x["id"] == m["id"])
         return {**out, "opened": factory_mod.label(store.get_ticket(uid, opened)) if opened else None}
 
+    # ── the summary of an accepted milestone (TR-1645, milestone_summary.py) ─────────────
+    summaries = milestone_summary.Summaries(store, _record_ask_usage)
+
+    def _summary_of(uid: str, ref: str) -> tuple[dict, bool]:
+        """(the milestone, whether it is accepted), for a project the caller may see."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        return m, next((x["accepted"] for x in _milestones_out(uid) if x["id"] == m["id"]), False)
+
+    @app.get("/api/projects/{uid}/milestones/{ref}/summary")
+    def read_milestone_summary(uid: str, ref: str):
+        """{milestone, summary: {text, source, figures, written_at} | null, writing}: a few lines
+        on what an accepted milestone delivered, the decisions taken on the way and what is left.
+        Written once, when it is accepted or else on the first read, in the background: `writing`
+        says to ask again shortly. A milestone not accepted has none."""
+        m, accepted = _summary_of(uid, ref)
+        if not accepted:
+            return summaries.answer(m["id"], None, False)
+        return summaries.read(uid, m["id"])
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/summary/rewrite", status_code=202)
+    def rewrite_milestone_summary(uid: str, ref: str, request: Request):
+        """Write an accepted milestone's summary again, from today's figures. Answers at once with
+        the kept text and `writing`."""
+        m, accepted = _summary_of(uid, ref)
+        if factory_api.caller(request)["station"]:
+            _err(ValueError("a person asks for a summary again, not a station"), 403)
+        if not accepted:
+            _err(ValueError(f"{m['name']} is not accepted yet, so it has no summary"), 409)
+        return summaries.rewrite(uid, m["id"])
+
     @app.post("/api/projects/{uid}/milestones/{ref}/accept")
     def accept_milestone(uid: str, ref: str, request: Request, body: dict = Body(default={})):
         """The person accepts a milestone as it is (TR-1017): every ticket merged, whatever checks
@@ -5856,6 +5888,7 @@ def make_app() -> FastAPI:
             _err(ValueError("a person accepts a milestone, not a station"), 403)
         person = _current_person(request)
         store.accept_milestone(uid, m["id"], _by(request, body), (person or {}).get("id"), now_utc())
+        summaries.queue(uid, m["id"])   # written in the background (TR-1645); never raises
         # the answer to the milestone's home item (TR-1450), in the words the item asked
         from . import factory_waiting as _fw
         place = next((i for i, x in enumerate(store.milestones_by_project([uid]).get(uid) or [], 1)

@@ -422,6 +422,9 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
+HEAD = "0009_report_texts"  # the newest session store revision: an upgrade ends there
+
+
 def migration():
     print("== revision 0008_report_weeks ==")
     d = tempfile.mkdtemp()
@@ -459,7 +462,7 @@ def migration():
            and "session_archive_parts" in tables(sdb) and version(sdb) == "0007_session_archive")
         sdb.upgrade()
         ck("an upgrade builds it again", "report_weeks" in tables(sdb)
-           and version(sdb) == "0008_report_weeks", version(sdb))
+           and version(sdb) == HEAD, version(sdb))
         down(sdb)
         with sdb.begin() as c:
             report_weeks.create(c)
@@ -468,7 +471,7 @@ def migration():
         with sdb.begin() as c:
             kept = c.execute(text("SELECT merged FROM report_weeks WHERE project = 'kept'")).scalar()
         ck("a table already there is taken over with its rows",
-           kept == 1 and version(sdb) == "0008_report_weeks", (kept, version(sdb)))
+           kept == 1 and version(sdb) == HEAD, (kept, version(sdb)))
         sdb.close()
     finally:
         if PG:

@@ -236,6 +236,19 @@ report_weeks = Table(
     Column("updated_at", UTCDateTime),
 )
 
+# A short text Tares wrote from its figures, once per kind and key (TR-1645): `milestone` and the
+# milestone's id, later `week`. `source` is where it came from (report_words.py), `figures` the JSON
+# it was written from. Writing it again replaces the row.
+report_texts = Table(
+    "report_texts", metadata,
+    Column("kind", Text, primary_key=True),
+    Column("key", Text, primary_key=True),
+    Column("text", Text),
+    Column("source", Text),
+    Column("figures", Text),
+    Column("written_at", UTCDateTime),
+)
+
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
     "session_ingest_marks", metadata,

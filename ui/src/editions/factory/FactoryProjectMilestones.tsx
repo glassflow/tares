@@ -10,7 +10,7 @@ import { PageHead, ProjectShell } from "./ProjectShell";
 export default function FactoryProjectMilestones() {
   return (
     <ProjectShell page="milestones">
-      {({ d, act, sample }) => (
+      {({ d, id, act, sample }) => (
         <section aria-label="Milestones" className="grid min-w-0 gap-5" data-testid="milestones">
           <PageHead title="Milestones" sub="Each milestone with its checks. Try the checks that are for you, or accept a milestone once its tickets have merged." />
           {d.milestones.length === 0 ? (
@@ -19,7 +19,7 @@ export default function FactoryProjectMilestones() {
             </EmptyState>
           ) : (
             <div className="border-t border-border">
-              {d.milestones.map((m) => <MilestoneRow key={m.id} m={m} onAnswer={sample ? undefined : act.answer} onAccept={sample ? undefined : act.accept} />)}
+              {d.milestones.map((m) => <MilestoneRow key={m.id} m={m} projectId={sample ? undefined : id} onAnswer={sample ? undefined : act.answer} onAccept={sample ? undefined : act.accept} />)}
             </div>
           )}
         </section>
