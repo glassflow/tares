@@ -5,7 +5,7 @@ A licensed factory cell with a team's worth of work: 25 projects of 10 tickets e
 3 of them handed to a crew, 40 crew sessions over 6 stations, and one person who signs in with a key
 (next to the cell's own `local` person, so the team parts of the pages run). That person reads the
 pages the console opens on: Home, the Projects list, one project, one ticket, and the two raw ticket
-routes (and Setup and its progress, counted only). A counting stand-in replaces the store's connections, so every statement a route runs is
+routes (and Setup, its progress and the Crew page, counted only). A counting stand-in replaces the store's connections, so every statement a route runs is
 counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc.execute`; a
 sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
 its BUDGET fails the test.
@@ -122,8 +122,12 @@ _DUCKDB = {**_TODAY, "home": 164, "projects": 133, "project": 135, "ticket": 32,
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
 # DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With
 # TR-1610's reads, each a SQLite transaction on DuckDB: 114 to 126 and 108 to 118, so 129 and 121.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121},
-          "postgres": {**_TODAY, "setup": 88, "setup_progress": 84}}
+# TR-1633 (Crew's standup reads the handed-over projects, their hand-overs, tickets, milestones and
+# open desk items once for all of them, not once each; Crew had no entry before): on this cell, with 3
+# projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
+# 2 percent.
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121, "crew": 77},
+          "postgres": {**_TODAY, "setup": 88, "setup_progress": 84, "crew": 45}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
@@ -139,6 +143,10 @@ ROUTES = [
 SETUP_ROUTES = [
     ("setup", "/api/factory/setup"),
     ("setup_progress", "/api/factory/setup/progress"),
+]
+# counted the same way, with no body in the golden file
+CREW_ROUTES = [
+    ("crew", "/api/factory/crew"),
 ]
 
 P = F = 0
@@ -382,6 +390,69 @@ async def done_projects(store, sam, call, base):
        before_rows - after_rows == DONE_PROJECTS * 5, (after_rows, before_rows))
 
 
+# Crew's standup reads the handed-over projects together (TR-1633): this many more of them, half open
+# and half finished in the last day, add no statement of its own. What each still adds is one: the
+# page's cut of the open desk to the caller (team.own_desk) reads the project of each desk item.
+CREW_MORE = 8
+
+
+async def crew_growth(store, sam, call):
+    sam_id = store.find_person_by_email("sam-budget@example.com")["id"]
+
+    def add(i):
+        """A handed-over project with a ticket merged, in review and blocked, a milestone and an
+        open question for sam; every other one finished an hour ago."""
+        uid = f"uc_budgetcrew{i:02d}"
+        store.create_project(uid, "custom", f"Crew project {i:02d}", {}, goal=f"Goal {i:02d}")
+        store.set_project_kind(uid, "software_factory")
+        mid = store.create_milestone(uid, "M1: the page", "It loads.", [])
+        for stage in ("merged", "review", "blocked"):
+            tid = store.create_ticket(uid, "tares", f"A {stage} ticket of {i:02d}", milestone=mid)
+            store.update_ticket(tid, stage=stage, status="done" if stage == "merged" else "in_progress")
+            store.add_ticket_history(tid, uid, "stage", stage, None, "crew-orchestrator", "builder",
+                                     ago(hours=2))
+        store.set_handover(uid, [{"path": f"/Users/sam/code/crew-{i:02d}", "name": f"example-org/crew-{i:02d}"}],
+                           None, None, ago(days=2), person_id=sam_id)
+        store.add_desk_item(uid, "Which colour?", "", [], "blue", "", "", [], True, "crew", [],
+                            ago(hours=1), to_person_id=sam_id)
+        if i % 2:
+            store.finish_handover(uid, "done", None, "crew", ago(hours=1), person_id=sam_id)
+
+    async def measure():
+        fh.clear_cache()
+        claude_usage.clear_week_by_project()
+        counter = [0]
+        token = _COUNTER.set(counter)
+        try:
+            resp = await call(sam, "/api/factory/crew")
+        finally:
+            _COUNTER.reset(token)
+        return resp, counter[0]
+
+    add(0)
+    add(1)   # one open and one finished already there, so the names of people are read both times
+    before_resp, before = await measure()
+    for i in range(2, 2 + CREW_MORE):
+        add(i)
+    after_resp, after = await measure()
+    ck("the Crew page answers 200 with more handed-over projects",
+       before_resp.status_code == 200 and after_resp.status_code == 200, after_resp.text[:200])
+    was, now = before_resp.json()["standup"], after_resp.json()["standup"]
+    ck(f"its standup counts the added projects ({2 + CREW_MORE} questions asked)",
+       bool(now) and f"{2 + CREW_MORE} questions asked" in now["text"], (was, now))
+    print(f"  crew: {before} statements; with {CREW_MORE} more handed-over projects: {after}")
+    # the one read left for each project is the desk cut's get_project: BEGIN and SELECT on SQLite
+    counter = [0]
+    token = _COUNTER.set(counter)
+    try:
+        store.get_project("uc_budgetcrew00")
+    finally:
+        _COUNTER.reset(token)
+    allowed = before + CREW_MORE * counter[0]
+    ck(f"{CREW_MORE} more handed-over projects add only the desk cut's {CREW_MORE} project reads "
+       f"({after} against {before})", 0 < counter[0] <= 2 and after <= allowed, f"{after} over {allowed}")
+
+
 async def main():
     from tares.daemon import make_app
     freeze_clock()
@@ -431,7 +502,7 @@ async def main():
             return real_rollup(*a, **kw)
         store.station_rollup = counted_rollup
         built = {}
-        for name, tmpl in ROUTES + SETUP_ROUTES:
+        for name, tmpl in ROUTES + SETUP_ROUTES + CREW_ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
             claude_usage.clear_week_by_project()
@@ -450,6 +521,8 @@ async def main():
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
         print("== finished projects on a team cell (TR-1503) ==")
         await done_projects(store, sam, call, counts["projects"])
+        print("== Crew does not grow with the handed-over projects (TR-1633) ==")
+        await crew_growth(store, sam, call)
 
     print("== the team home is built once per request ==")
     th.HomeRead.__init__, th._team_home = real_init, real_home
@@ -471,7 +544,7 @@ async def main():
 
     print("== the budget ==")
     budget = BUDGET[backend]
-    for name, _ in ROUTES + SETUP_ROUTES:
+    for name, _ in ROUTES + SETUP_ROUTES + CREW_ROUTES:
         ck(f"{name} runs statements the counter can see", counts[name] > 0, counts[name])
         ck(f"{name}: {counts[name]} statements, budget {budget.get(name)}",
            name in budget and counts[name] <= budget[name],

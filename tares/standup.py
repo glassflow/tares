@@ -10,6 +10,7 @@ import json
 from datetime import datetime
 
 from . import factory as factory_mod
+from . import factory_owners as owners_mod
 from . import status_words
 
 DONE_STAGES = ("merged", "shipped")
@@ -49,10 +50,13 @@ def _names(names: list[str]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def project_facts(store, uid: str, name: str, tickets: list[dict], history: list[dict],
-                  since: datetime, until: datetime, progress: dict, finished_at=None) -> dict:
+def project_facts(o: owners_mod.Owners, proj: dict, tickets: list[dict], open_desk: list[dict],
+                  history: list[dict], since: datetime, until: datetime, progress: dict,
+                  finished_at=None) -> dict:
     """One project's standup: done, started, blocked, in review and in progress, plus the
-    questions waiting on the person. `history` is this project's changes in the range."""
+    questions waiting on the person. `proj` is its row; `tickets` and `open_desk` are its own, in
+    the order list_tickets and list_desk give them; `history` is its changes in the range.
+    Reads nothing for the project itself: `facts` read them all together."""
     by_id = {t["id"]: t for t in tickets}
     last_stage: dict[str, dict] = {}
     for c in history:
@@ -90,17 +94,14 @@ def project_facts(store, uid: str, name: str, tickets: list[dict], history: list
              and factory_mod.label(t) not in started_ids]
     # the report can go to a shared place: on a cell of several people each item names whom it
     # waits for (factory_owners, the rule the home reads), never "you"
-    from . import factory_owners as owners_mod
-    o = owners_mod.Owners(store)
-    proj = store.get_project(uid) if not o.single else None
     desk = [{"label": d["label"], "question": d["question"], "blocking": d["blocking"],
              "permission": bool(d.get("command")), "asked_at": d["created_at"],
              **({} if o.single else {"for": [w["name"] for w in o.who(o.desk(d, proj))] or ["no one"]})}
-            for d in store.list_desk("open", uid)]
+            for d in open_desk]
     desk.sort(key=lambda d: (not d["blocking"], str(d["asked_at"])))
     moved = bool(history or done or _in(finished_at, since, until)
                  or any(_in(d["asked_at"], since, until) for d in desk))
-    return {"id": uid, "name": name, "moved": moved,
+    return {"id": proj["id"], "name": proj["name"], "moved": moved,
             "finished": _in(finished_at, since, until),
             "progress": {"done": progress["tickets_done"], "total": progress["tickets_total"],
                          "milestone": progress["milestone"],
@@ -112,28 +113,35 @@ def project_facts(store, uid: str, name: str, tickets: list[dict], history: list
 
 def facts(store, since: datetime, until: datetime, progress_of, hide=()) -> dict:
     """Every open handed-over project, and the ones finished in the range. Projects that did
-    not move are listed by name only, after the ones that did."""
-    names = {p["id"]: p["name"] for p in store.list_projects()}
+    not move are listed by name only, after the ones that did. The projects, their hand-overs,
+    tickets, milestones and open desk items are each read once for all of them (TR-1633);
+    `progress_of(uid, tickets, milestones)` gives a project's progress from those."""
+    projects = {p["id"]: p for p in store.list_projects()}
     history: dict[str, list[dict]] = {}
     for c in store.history_between(since, until):
         history.setdefault(c["project"], []).append(c)
     uids = [(u, None) for u in store.handed_over_projects(finished=False, taken=False)]
-    for u in store.handed_over_projects(finished=True):
-        at = ((store.get_handover(u) or {}).get("finished") or {}).get("at")
+    finished = store.handed_over_projects(finished=True)
+    handovers = store.handovers_by_project(finished)
+    for u in finished:
+        at = ((handovers.get(u) or {}).get("finished") or {}).get("at")
         if _in(at, since, until):
             uids.append((u, at))
-    out = []
-    for uid, finished_at in uids:
-        if uid not in names or uid in hide:
-            continue
-        out.append(project_facts(store, uid, names[uid], store.list_tickets(uid),
-                                 history.get(uid, []), since, until, progress_of(uid),
-                                 finished_at))
+    # a hidden project is dropped here, before anything of it is read
+    uids = [(u, at) for u, at in uids if u in projects and u not in hide]
+    ids = [u for u, _ in uids]
+    tickets = store.tickets_by_project(ids)
+    milestones = store.milestones_by_project(ids)
+    desk: dict[str, list[dict]] = {}
+    for d in store.list_desk("open") if ids else []:
+        desk.setdefault(d["project"], []).append(d)
+    o = owners_mod.Owners(store)
+    out = [project_facts(o, projects[u], tickets[u], desk.get(u, []), history.get(u, []),
+                         since, until, progress_of(u, tickets[u], milestones[u]), at)
+           for u, at in uids]
     out.sort(key=lambda p: (not p["moved"], -len(p["done"]), p["name"].lower()))
     # a cell of several people: the report names whom each question is for, never "you"
-    from . import factory_owners as owners_mod
-    team = not owners_mod.Owners(store).single
-    return {"team": team, "since": since, "until": until,
+    return {"team": not o.single, "since": since, "until": until,
             "projects": [p for p in out if p["moved"]],
             "quiet": [{"id": p["id"], "name": p["name"], "progress": p["progress"],
                        "blocked": len(p["blocked"]), "needs_you": len(p["needs_you"])}

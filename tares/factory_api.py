@@ -649,12 +649,14 @@ def pr_note(t: dict) -> str | None:
     return None
 
 
-def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict:
+def project_progress(store, uid: str, tickets: list[dict] | None = None,
+                     milestones: list[dict] | None = None) -> dict:
     """Tickets done of all, by stage, and the first milestone with work left: what the crew's
     project list shows (canceled tickets count as done here), and `progress`, the same tickets
     as the console's ring counts them (canceled kept out, tares/factory.py `progress`). `tickets`
-    is the project's tickets when the caller already read them."""
+    and `milestones` are the project's when the caller already read them."""
     tickets = store.list_tickets(uid) if tickets is None else tickets
+    milestones = store.list_milestones(uid) if milestones is None else milestones
     done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
                                    or t["status"] in factory_mod.DONE_STATUSES)]
     stages: dict[str, int] = {}
@@ -662,7 +664,7 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
         k = t["stage"] or ("done" if t in done else "todo")
         stages[k] = stages.get(k, 0) + 1
     current = None
-    for m in store.list_milestones(uid):
+    for m in milestones:
         mine = [t for t in tickets if t["milestone"] == m["id"]]
         if any(t not in done for t in mine):
             current = {"name": m["name"], "done": sum(t in done for t in mine),

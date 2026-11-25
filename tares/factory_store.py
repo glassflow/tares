@@ -976,7 +976,7 @@ class FactoryStore:
     def list_milestones(self, project: str) -> list[dict]:
         with self._sread:
             rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? "
-                                    "ORDER BY position, created_at", [project]).fetchall()
+                                    "ORDER BY position, created_at, id", [project]).fetchall()
         return [self._ms_row(r) for r in rows]
 
     def milestones_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
@@ -986,7 +986,7 @@ class FactoryStore:
         marks = ", ".join("?" for _ in projects)
         with self._sread:
             rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project IN "
-                                    f"({marks}) ORDER BY position, created_at",
+                                    f"({marks}) ORDER BY position, created_at, id",
                                     list(projects)).fetchall()
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
@@ -1954,7 +1954,7 @@ class FactoryStore:
         if closed_since is not None:
             q += " AND closed_at >= ?"; vals.append(closed_since)
         with self._sread:
-            rows = self.sc.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
+            rows = self.sc.execute(q + " ORDER BY blocking DESC, created_at, number", vals).fetchall()
         return self._dk_people([self._dk_row(r) for r in rows])
 
     def close_desk_item(self, did: str, state: str, reason: str | None, at) -> None:
