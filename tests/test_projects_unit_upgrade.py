@@ -160,13 +160,17 @@ SNAPSHOT = {
 }
 
 
+MOVED = {"catalog_sources", "usecases", "usecase_objects", "settings"}   # in the session store
+
+
 def snapshot(store) -> dict:
     out = {t: sorted(store.sc.execute(f"SELECT {cols} FROM {t}").fetchall(), key=str)
-           for t, cols in SNAPSHOT.items() if t != "settings"}
-    from sqlalchemy import text      # settings moved to the session store (TR-1480)
+           for t, cols in SNAPSHOT.items() if t not in MOVED}
+    from sqlalchemy import text      # these tables live in the session store (TR-1480, TR-1610)
     with store.sessions_db.begin() as c:
-        out["settings"] = sorted((tuple(r) for r in c.execute(text("SELECT key, value FROM settings")).all()),
-                                 key=str)
+        for t in sorted(MOVED):
+            out[t] = sorted((tuple(r) for r in c.execute(text(f"SELECT {SNAPSHOT[t]} FROM {t}")).all()),
+                            key=str)
     return out
 
 
@@ -174,7 +178,9 @@ def check_invariants(store, where: str) -> None:
     """Every trigger, agent and MCP server in exactly one existing project, listed there; every
     source in at least one; every trigger's sources members of its project; no view anywhere."""
     projects = {p["id"] for p in store.list_projects()}
-    rows = store.sc.execute("SELECT usecase_id, kind, name FROM usecase_objects").fetchall()
+    from sqlalchemy import text
+    with store.sessions_db.begin() as c:
+        rows = [tuple(r) for r in c.execute(text("SELECT usecase_id, kind, name FROM usecase_objects")).all()]
     listed = {(u, k, n) for u, k, n in rows}
     bad = []
     for kind, items in (("trigger", store.list_catalog_triggers()), ("agent", store.list_catalog_agents()),
@@ -366,7 +372,7 @@ def legacy_import_checks(label: str, text: str):
           custom and all(o["kind"] != "view" for p in custom for o in p["params"]["objects"])
           and any(o["kind"] == "trigger" for p in custom for o in p["params"]["objects"]), str(custom)[:300])
     blob = json.dumps({"t": store.list_catalog_triggers(), "p": store.list_projects(),
-                       "o": store.sc.execute("SELECT kind FROM usecase_objects").fetchall()}, default=str)
+                       "o": [[o["kind"]] for u in store.list_projects() for o in store.list_project_objects(u["id"])]}, default=str)
     check(f"{label}: nothing references a view", '"view"' not in blob and "attach_view" not in blob,
           blob[:200])
     from tares.config import export_db_to_yaml

@@ -6,6 +6,7 @@ stops it, then writes statuses, tickets and timestamps straight into the databas
 map of project name to id on the last line.
 usage: python seed-projects-list.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.error, urllib.request
+from datetime import datetime, timedelta, timezone
 
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp, "TARES_UI_DIST": dist}
@@ -78,15 +79,20 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
+from sqlalchemy import update  # noqa: E402
+
+from tares.session_store.tables import usecases  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
 con = store.con
 for name, goal, factory, counts, status, days, fresh in SPECS:
     uid = ids[name]
-    con.execute("UPDATE usecases SET status = ?, updated_at = now() - to_days(?) WHERE id = ?", [status, days, uid])
+    values = {"status": status, "updated_at": datetime.now(timezone.utc) - timedelta(days=days)}
     if name in TEMPLATE_OF:
-        con.execute("UPDATE usecases SET recipe = ? WHERE id = ?", [TEMPLATE_OF[name], uid])
+        values["recipe"] = TEMPLATE_OF[name]
+    with store.sessions_db.begin() as c:
+        c.execute(update(usecases).where(usecases.c.id == uid).values(**values))
     if not counts:
         continue
     done, doing, blocked, todo = counts

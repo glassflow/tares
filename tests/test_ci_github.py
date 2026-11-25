@@ -763,7 +763,8 @@ try:
     ck("a server error raises", False)
 except RuntimeError as e:
     ck("a server error raises", True)
-empty = Store(os.path.join(tmp, "empty.duckdb"))
+# a folder of its own: credentials live in the session store (tares.sqlite) beside the DuckDB file
+empty = Store(os.path.join(tempfile.mkdtemp(prefix="tares-ci-github-empty-"), "empty.duckdb"))
 try:
     asyncio.run(GithubCI(empty).state(pr(), []))
     ck("no credential raises", False)

@@ -444,19 +444,21 @@ class _Gen:
         rows = []
         for p in self.projects[1:]:
             rows.append([p["uid"], "custom" if p["kind"] != "challenger_workflow" else "challenger_workflow",
-                         p["name"], "{}", p["status"], p["created"], p["updated"], None,
+                         p["name"], {}, p["status"], p["created"], p["updated"], None,
                          f"Make {p['name']} fast and clear.", None, None, None, p["kind"],
                          p["lead"], "team", ["\U0001f9ed", "\U0001f9e0", "\U0001f3ce️", "\U0001f41e"][p["i"] % 4] if p["i"] in (31, 32, 30, 29) else None])
         self.projects[32]["recipe_default"] = True
-        self.put("usecases", "id, recipe, name, params, status, created_at, updated_at, last_error, goal, "
-                             "setup, linear, github_issues, kind, lead_person_id, scope, icon", rows)
+        self.put_t("usecases", "id, recipe, name, params, status, created_at, updated_at, last_error, goal, "
+                               "setup, linear, github_issues, kind, lead_person_id, scope, icon", rows)
         # the anchor's own row keeps the dates the others have
-        with st._swrite:
-            st.sc.execute("UPDATE usecases SET created_at = ?, updated_at = ?, lead_person_id = ? WHERE id = ?",
-                          [p0["created"], p0["updated"], p0["lead"], p0["uid"]])
-        with st._swrite:      # the project with no kind: the default one
-            st.sc.execute("UPDATE usecases SET recipe = 'default', kind = NULL WHERE id = ?",
-                          [self.projects[total - 1]["uid"]])
+        from sqlalchemy import update
+        from tares.session_store.tables import usecases as projects_t
+        with st.sessions_db.begin() as c:
+            c.execute(update(projects_t).where(projects_t.c.id == p0["uid"]).values(
+                created_at=p0["created"], updated_at=p0["updated"], lead_person_id=p0["lead"]))
+            # the project with no kind: the default one
+            c.execute(update(projects_t).where(projects_t.c.id == self.projects[total - 1]["uid"]).values(
+                recipe="default", kind=None))
         # objects, log
         self.catalog_names = [f"seed-source-{k}" for k in range(self.shape["tables"]["catalog_sources"])]
 
@@ -870,7 +872,7 @@ class _Gen:
                 doc(kind, None, f"Your {kind.replace('_', ' ')}", owner=self.people[i % len(self.people)])
         if len(rows) != self.shape["tables"]["docs"] - _have(st, "docs"):
             raise RuntimeError(f"{len(rows)} docs planned, SHAPE has {self.shape['tables']['docs']}")
-        self.put("docs", "id, kind, title, body, made_by, updated_by, created_at, updated_at, owner", rows)
+        self.put_t("docs", "id, kind, title, body, made_by, updated_by, created_at, updated_at, owner", rows)
         # links: each doc in its project, then the extras in a second one
         want = self.shape["tables"]["usecase_objects"]
         orows = [[uid, "doc", f"doc:{did}", did, False, at] for uid, did, at in links]
@@ -900,7 +902,7 @@ class _Gen:
             if key not in seen and other["uid"] != uid:
                 seen.add(key)
                 uniq.append([other["uid"], "doc", f"doc:{did}", did, False, at])
-        self.put("usecase_objects", "usecase_id, kind, key, name, customized, created_at", uniq[:want])
+        self.put_t("usecase_objects", "usecase_id, kind, key, name, customized, created_at", uniq[:want])
         # the project log: two rows each, and one automatic
         n = self.need("usecase_log")
         rows = []
@@ -908,7 +910,7 @@ class _Gen:
             rows.append([p["uid"], p["created"], "create", None])
             rows.append([p["uid"], p["created"] + timedelta(seconds=1), "created", None])
         rows.append([self.projects[0]["uid"], NOW - timedelta(days=2), "auto", None])
-        self.put("usecase_log", "usecase_id, logged_at, action, detail", rows[:n])
+        self.put_t("usecase_log", "usecase_id, logged_at, action, detail", rows[:n])
         # hand-overs, grants, members, checks, wiring
         n = self.need("handovers")
         rows = []
@@ -951,9 +953,9 @@ class _Gen:
         pr = self.ticket_projects
         repos = sorted({t["repo"] for t in self.tickets})
         n = self.need("catalog_sources")
-        self.put("catalog_sources", "name, type, connector, poll, config, paused, created_at, updated_at, ingest_key, "
-                                    "owned_by, customized",
-                 [[self.catalog_names[k], "poll", "claude_code", "5m", "{}", True, NOW - timedelta(days=40),
+        self.put_t("catalog_sources", "name, type, connector, poll, config, paused, created_at, updated_at, ingest_key, "
+                                      "owned_by, customized",
+                 [[self.catalog_names[k], "poll", "claude_code", "5m", {}, True, NOW - timedelta(days=40),
                    NOW - timedelta(days=40), None, None, False] for k in range(n)])
         self.put("catalog_triggers", "name, sources, filters, key_field, condition, emit, cooldown, created_at, "
                                      "updated_at, paused, owned_by, customized, description",
@@ -967,7 +969,7 @@ class _Gen:
                  [["seed-agent", "seed-trigger", "Say what changed.", None, NOW - timedelta(days=40), NOW - timedelta(days=40),
                    None, None, None, None, "[]", 5, None, None, 50, None, False, None, None, "[]", False, None, "[]"]
                   for _ in range(self.need("catalog_agents"))])
-        self.put("github_credentials", "name, kind, token, api_url, account, created_at, updated_at, config",
+        self.put_t("github_credentials", "name, kind, token, api_url, account, created_at, updated_at, config",
                  [[f"seed-github-{k}", "pat", "not-a-token", "https://api.github.com", "example-org",
                    NOW - timedelta(days=30), NOW - timedelta(days=30), "{}"] for k in range(self.need("github_credentials"))])
         self.put("integration_choices", "slot, name, settings, updated_at, updated_by",
@@ -1005,9 +1007,9 @@ class _Gen:
         rows = [[self.id("mu"), NOW - timedelta(days=k), "ask", None, None, "claude-sonnet-5-5", 1,
                  rng.randint(1000, 9000), rng.randint(100, 900), 0, 0, round(rng.random() * 0.2, 4), "env", "anthropic"]
                 for k in range(self.need("model_usage"))]
-        self.put("model_usage", "id, ts, surface, agent, run_id, model, calls, input_tokens, output_tokens, "
-                                "cache_creation_input_tokens, cache_read_input_tokens, cost_usd, key_source, provider",
-                 rows)
+        self.put_t("model_usage", "id, ts, surface, agent, run_id, model, calls, input_tokens, output_tokens, "
+                                  "cache_creation_input_tokens, cache_read_input_tokens, cost_usd, key_source, provider",
+                   rows)
         rows = [[self.id("ql"), "events", f"key-{k}", "1h", rng.randint(0, 50), "mcp", NOW - timedelta(hours=k * 9), None]
                 for k in range(self.need("query_log"))]
         self.put("query_log", "id, scope, key_value, time_window, rows_returned, client, queried_at, project", rows)

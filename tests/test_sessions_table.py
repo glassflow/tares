@@ -162,8 +162,7 @@ def parity():
 def catalog_source():
     print("== a claude_code source with another name ==")
     s = fresh_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
     s.append([line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"),
               line("b", 0, source="deploys")])
     got = counts(s)
@@ -306,8 +305,7 @@ def json_dumps(o):
 def purge():
     print("== purge_events drops the source's sessions rows ==")
     s = fresh_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
     batch = [line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"), line("a", 2, source="laptop")]
     s.append(batch + [line("keep", 0, tool="Skill")])
     ck("the lines are counted", counts(s)["a"] == (3, 1, 1), counts(s))
@@ -461,7 +459,7 @@ def revision():
             v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
             kept = c.execute(select(sessions.c.line_count).where(sessions.c.session == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0012_session_usage_hourly"] and kept == 3, (v, kept))
+           v == ["0013_project_tables"] and kept == 3, (v, kept))
         sdb.close()
     finally:
         if PG:
