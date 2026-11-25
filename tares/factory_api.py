@@ -1693,6 +1693,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         reason = " ".join(str((body or {}).get("reason") or "").split())[:100] or "marked ended"
         if (store.session_state(st["session"]) or {}).get("state") != "ended":
             store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)
+            factory_home.clear_cache()   # the Crew page shows it ended on the next read
         return next(s for s in stations() if s["session"] == st["session"])
 
     # ── a station's context by category: asked from the console, read on the crew's machine ──
@@ -2688,6 +2689,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(ValueError(f"already {rp['state']}"), 409)
         if decision == "reject":
             store.decide_rule_proposal(pid, "rejected", None, now_utc())
+            factory_home.clear_cache()   # the Crew page reads again right after
             return store.get_rule_proposal(pid)
         if decision != "accept":
             h.err(KeyError("accept or reject"), 404)
@@ -2705,6 +2707,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         new, _ = docs_mod.append_line(cur, text)
         store.update_doc(doc_id, body=new, by="console")
         store.decide_rule_proposal(pid, "accepted", text, now_utc())
+        factory_home.clear_cache()
         return {**store.get_rule_proposal(pid), "doc": doc_id}
 
     # ── the desk: questions for the person, and their answers (TR-449..452) ────
@@ -3400,6 +3403,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                    said="Later", person_id=answerer(request))
         elif p.get("status") == "later":
             store.update_project(uid, status="active")
+            factory_home.clear_cache()
         return {"later": later}
 
     @app.post("/api/projects/{uid}/takeover")
