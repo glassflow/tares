@@ -1,9 +1,12 @@
 """The one-time move of older sessions from DuckDB straight to the archive (TR-1611), with a folder
 archive: every old session ends verified with its full line list in parts and reads from the
 archive; the move resumes after a stop; a session that changes while it moves (a new line, the
-hourly archive job, another process's ingest) is left as it is and moved again; a failed write or
-check loses nothing; a cell with no archive keeps the lines in DuckDB. Runs on SQLite and on the
-Postgres harness. Plain script, exits non-zero on failure."""
+hourly archive job, another process's ingest) is left as it is and moved again after a wait; on
+Postgres a lock another holds is not waited for longer than LOCK_WAIT (TR-1664); the sweep removes
+only old archive files that no part row names; a failed write or check loses nothing; a cell with no
+archive keeps the lines in DuckDB. Runs on SQLite and on the Postgres harness. Plain script, exits
+non-zero on failure."""
+import asyncio
 import contextlib
 import hashlib
 import io
@@ -14,15 +17,15 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 PG = os.environ.get("TARES_TEST_PG", "").strip()
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select, text, update
 
 from tares import metrics, session_archive, session_ingest, session_move, session_read
 from tares.envelope import Envelope, now_utc
-from tares.session_archive import FileBackend
+from tares.session_archive import FileBackend, S3Backend
 from tares.session_store.tables import (session_archive_parts, session_lines, session_moves,
                                         session_turns, sessions)
 from tares.store import Store
@@ -383,7 +386,10 @@ def new_line():
     ck("nothing was replaced", parts_of(s, "live") == [] and [r[2] for r in rows_of(s, "live")]
        == pj([fresh]), held(s, "live"))
     ck("the log says why", "live: it changed while it moved" in out.getvalue(), out.getvalue())
-    ck("move_recent redoes it", session_move.move_recent(s) == 1 and move_of(s, "live")["state"]
+    ck("move_recent leaves it until the wait has passed", session_move.move_recent(s) == 0)
+    with patched(session_move, "RETRY_AFTER", 0.0):
+        again = session_move.move_recent(s)
+    ck("then move_recent redoes it", again == 1 and move_of(s, "live")["state"]
        == "verified" and move_of(s, "live")["target"] == "table")
     ck("with every line", [r[2] for r in rows_of(s, "live")] == duck_payloads(s, "live")
        and len(rows_of(s, "live")) == 5, len(rows_of(s, "live")))
@@ -470,7 +476,8 @@ def new_line():
     ready(s)
     with s.sessions_db.begin() as c:
         c.execute(insert(session_moves).values(session="live2", state="pending", target="table"))
-    with meanwhile(lambda: s.append([line("live2", 5)]), "live2"):
+    with meanwhile(lambda: s.append([line("live2", 5)]), "live2"), \
+            patched(session_move, "RETRY_AFTER", 0.2):
         session_move.run(s, threading.Event(), pause=0, old_pause=0)
     ck("the thread redoes it", move_of(s, "live2")["state"] == "verified"
        and len(rows_of(s, "live2")) == 5, dict(move_of(s, "live2")))
@@ -598,6 +605,426 @@ def other_ingest():
        and head_of(s, "oi")["line_count"] == 6, held(s, "oi"))
     ok, err = session_move.move_old_session(s, "oi", FileBackend(ARCHIVE))
     ck("the next try archives all 6", ok and len(archived_payloads(s, "oi")) == 6, (ok, err))
+    s.close()
+
+
+# ── held or changed: later, not at once (TR-1664) ───────────────────────────────
+def backoff():
+    print("== a session left alone waits RETRY_AFTER, with no attempt counted ==")
+    s = open_store()
+    seed(s, "bo", 4)
+    ready(s)
+    tries = []
+    real = session_move._replace
+
+    def held_once(*a):
+        tries.append(time.monotonic())
+        return False if len(tries) == 1 else real(*a)
+
+    with patched(session_move, "_replace", held_once):
+        with patched(session_move, "RETRY_AFTER", 3600.0):
+            with contextlib.redirect_stdout(io.StringIO()):
+                took = [session_move.move_old(s) for _ in range(3)]
+            m = move_of(s, "bo")
+            ck("taken once, not handed back on the next passes", took == [1, 0, 0] and len(tries) == 1,
+               (took, len(tries)))
+            ck("pending, no attempt, no error, with the time", m["state"] == "pending"
+               and not m["attempts"] and m["error"] is None and m["started_at"] is not None, dict(m))
+            ck("it counts as waiting, so the thread does not end",
+               session_move.retrying(s, old=True) == 1 and session_move.due_old(s) == [])
+        with patched(session_move, "RETRY_AFTER", 0.5), contextlib.redirect_stdout(io.StringIO()):
+            session_move.run(s, threading.Event(), pause=0, old_pause=0)
+    ck("the thread tries it again after the wait", len(tries) == 2 and tries[1] - tries[0] >= 0.5,
+       [t - tries[0] for t in tries])
+    ck("and it is verified", move_of(s, "bo")["state"] == "verified", dict(move_of(s, "bo")))
+    s.close()
+
+
+@contextlib.contextmanager
+def holding(s, statement, params=None):
+    """Another connection runs `statement` and keeps its transaction open until the block ends."""
+    got, release = threading.Event(), threading.Event()
+
+    def go():
+        with s.sessions_db.begin() as c:
+            c.execute(statement, params or {})
+            got.set()
+            release.wait(60)
+
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    if not got.wait(30):
+        raise RuntimeError("the lock was not taken")
+    try:
+        yield
+    finally:
+        release.set()
+        t.join(30)
+
+
+def lock_timeouts():
+    if not POSTGRES:
+        return
+    print("== a lock another holds is not waited for past LOCK_WAIT (Postgres) ==")
+    ck("LOCK_WAIT is under a second", 0 < session_move.LOCK_WAIT < 1)
+
+    def row(sid):
+        return (update(sessions).where(sessions.c.session == sid)
+                .values(line_count=sessions.c.line_count), None)
+
+    def advisory(sid):
+        return (text("SELECT pg_advisory_xact_lock(hashtext('tares_session_move:' "
+                     "|| CAST(:s AS text)))"), {"s": sid})
+
+    for name, age, lock in (("old-row", 20 * DAY, row), ("old-advisory", 20 * DAY, advisory),
+                            ("new-row", 3600, row), ("new-advisory", 3600, advisory)):
+        recent = age < DAY
+        s = open_store()
+        seed(s, name, 4, age)
+        ready(s)
+        before = held(s, name)
+        statement, params = lock(name)
+        out, took, log = [], [], io.StringIO()
+
+        def move():
+            t0 = time.monotonic()
+            with contextlib.redirect_stdout(log):
+                out.append((session_move.move_recent if recent else session_move.move_old)(s))
+            took.append(time.monotonic() - t0)
+
+        with holding(s, statement, params):
+            t = threading.Thread(target=move, daemon=True)
+            t.start()
+            t.join(15)
+            answered = list(out)
+            free = s._sess_lock.acquire(timeout=1)
+            if free:
+                s._sess_lock.release()
+        t.join(30)
+        ck(f"{name}: the move returns while the lock is held", answered == [1] and took[0] < 10,
+           (answered, took))
+        ck(f"{name}: and lets go of the lock ingest waits on", free)
+        m = move_of(s, name)
+        ck(f"{name}: pending, no attempt, no error, waiting", m["state"] == "pending"
+           and not m["attempts"] and m["error"] is None and m["started_at"] is not None
+           and session_move.retrying(s, old=not recent) == 1, dict(m))
+        ck(f"{name}: the log says so", f"{name}: " in log.getvalue() and "held it" in log.getvalue()
+           and "failed" not in log.getvalue(), log.getvalue())
+        ck(f"{name}: nothing changed", held(s, name) == before, held(s, name))
+        with patched(session_move, "RETRY_AFTER", 0.0), contextlib.redirect_stdout(io.StringIO()):
+            n = (session_move.move_recent if recent else session_move.move_old)(s)
+        ck(f"{name}: a later pass verifies", n == 1 and move_of(s, name)["state"] == "verified",
+           dict(move_of(s, name)))
+        lines = [r[2] for r in rows_of(s, name)] if recent else archived_payloads(s, name)
+        ck(f"{name}: with every line", lines == duck_payloads(s, name), len(lines))
+        s.close()
+
+
+def one_snapshot():
+    print("== the first read is one snapshot of the row, the parts and the table rows ==")
+    s = open_store()
+    seed(s, "snap", 4)
+    ready(s)
+    session_ingest.record(s, [line("snap", 15 * DAY)])
+    seen, writers, waited = [], [], []
+    real_state, real_rows = session_move._state, session_move._table_rows
+
+    def state(conn, sid, lock=False):
+        out = real_state(conn, sid, lock)
+        if not lock:
+            seen.append(out[2])
+            # another writer, between the first query and the next ones
+            t = threading.Thread(target=session_ingest.record, args=(s, [line("snap", 14 * DAY)]),
+                                 daemon=True)
+            t.start()
+            writers.append(t)
+            t.join(3)
+            waited.append(t.is_alive())
+        return out
+
+    def rows(conn, sid):
+        out = real_rows(conn, sid)
+        seen.append(len(out))
+        return out
+
+    with patched(session_move, "_state", state), patched(session_move, "_table_rows", rows):
+        ok, err = session_move.move_old_session(s, "snap", FileBackend(ARCHIVE))
+    writers[0].join(30)
+    ck("the rows read are the rows counted", seen[:2] == [1, 1], seen)
+    ck("the read held no other writer up", waited == [False], waited)
+    ck("the replace then sees the new line and leaves the session", (ok, err) == (False, None)
+       and len(rows_of(s, "snap")) == 2 and parts_of(s, "snap") == [], (ok, err))
+    s.close()
+
+
+# ── the sweep of unused files (TR-1664) ─────────────────────────────────────────
+OLD = 8 * DAY
+
+
+def aged(root, key, age=OLD, data=b"x"):
+    """A file `key` under `root`, last written `age` seconds ago; kept as it is when it exists."""
+    path = os.path.join(root, *key.split("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(data)
+    then = time.time() - age
+    os.utime(path, (then, then))
+    return path
+
+
+def tree(root):
+    return sorted(os.path.relpath(os.path.join(d, f), root).replace(os.sep, "/")
+                  for d, _, files in os.walk(root) for f in files)
+
+
+@contextlib.contextmanager
+def own_archive():
+    root = tempfile.mkdtemp()
+    url = os.environ["TARES_ARCHIVE_URL"]
+    os.environ["TARES_ARCHIVE_URL"] = "file://" + root
+    try:
+        yield root
+    finally:
+        os.environ["TARES_ARCHIVE_URL"] = url
+
+
+def part_row(s, session, part, key):
+    with s.sessions_db.begin() as c:
+        c.execute(insert(session_archive_parts).values(
+            session=session, part=part, first_seq=1, last_seq=1, lines=1, bytes=1, md5="m", key=key,
+            written_at=NOW))
+
+
+def sweep_files():
+    print("== the sweep removes old files no part row names, and nothing else ==")
+    with own_archive() as root:
+        s = open_store()
+        seed(s, "sw", 4)
+        session_ingest.reconcile_sessions(s)
+        session_ingest.record(s, [line("sw", 15 * DAY)])
+        session_archive._archive_session(s.sessions_db, FileBackend(root), "sw", NOW)
+        ready(s)
+        session_move.move_old(s)
+        used = parts_of(s, "sw")[0]
+        ck("the move left the replaced file", tree(root) == sorted(["sw/1.jsonl.gz", used.key])
+           and used.part == 2, tree(root))
+        s.set_setting("edition", "factory")
+        ck("a young unused file stays", session_archive.sweep(s) == 0 and len(tree(root)) == 2)
+        orphan_try = "sw/2-" + "a" * 32 + ".jsonl.gz"        # a try of part 2 that did not finish
+        keep = ["sw/3.jsonl.gz",                              # after the last recorded part
+                "sw/3-" + "b" * 32 + ".jsonl.gz",
+                "nobody/1.jsonl.gz",                          # a session with no part here
+                "sw/1.jsonl.gz.tmp-123", "sw/notes.txt", "sw/01.jsonl.gz", "sw/1-abc.jsonl.gz",
+                "sw/deep/1.jsonl.gz", "1.jsonl.gz", "other.txt",
+                "%73w/1.jsonl.gz"]                            # not a name part_key writes
+        young = "sw/2-" + "c" * 32 + ".jsonl.gz"
+        for key in keep + [orphan_try, used.key, "sw/1.jsonl.gz"]:
+            aged(root, key)
+        aged(root, young, 6 * DAY)
+        everything = tree(root)
+
+        for edition in ("platform", "sre"):
+            s.set_setting("edition", edition)
+            ck(f"a {edition} cell removes nothing", session_archive.sweep(s) == 0
+               and tree(root) == everything)
+        s.set_setting("edition", "factory")
+
+        class NoList(FileBackend):
+            def files(self):
+                raise OSError("listing failed")
+
+        try:
+            session_archive.sweep(s, NoList(root))
+            raised = False
+        except OSError:
+            raised = True
+        ck("a listing that fails removes nothing", raised and tree(root) == everything)
+
+        def broken():
+            raise RuntimeError("no rows")
+
+        out = io.StringIO()
+        with patched(s.sessions_db, "read", broken), contextlib.redirect_stdout(out):
+            n = session_archive.sweep_pass(s)
+        ck("rows that cannot be read remove nothing, and one line says so", n == 0
+           and tree(root) == everything and out.getvalue().count("sweep failed") == 1, out.getvalue())
+
+        class Rewritten(FileBackend):          # listed as old, written again since
+            def files(self):
+                return [(k, m - timedelta(days=30)) for k, m in super().files()]
+
+        os.utime(os.path.join(root, "sw", "1.jsonl.gz"))
+        os.utime(os.path.join(root, *orphan_try.split("/")))
+        os.utime(os.path.join(root, *young.split("/")))
+        ck("a file written again after the listing stays",
+           session_archive.sweep(s, Rewritten(root)) == 0 and tree(root) == everything)
+        aged(root, "sw/1.jsonl.gz")
+        aged(root, orphan_try)
+        aged(root, young, 6 * DAY)
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            n = session_archive.sweep_pass(s)
+        ck("the replaced file and the old try are removed", n == 2 and tree(root)
+           == sorted(set(everything) - {"sw/1.jsonl.gz", orphan_try}), (n, tree(root)))
+        ck("one line says how many", "removed 2 unused file(s)" in out.getvalue(), out.getvalue())
+        ck("the session still reads", archived_payloads_in(root, s, "sw") is not None)
+
+        # the hourly loop runs it
+        aged(root, "sw/1.jsonl.gz")
+
+        async def loop():
+            stop = asyncio.Event()
+            task = asyncio.create_task(session_archive.run(s, stop, every=0.05, first=0.05))
+            for _ in range(100):
+                if "sw/1.jsonl.gz" not in tree(root):
+                    break
+                await asyncio.sleep(0.05)
+            stop.set()
+            await asyncio.wait_for(task, 5)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            asyncio.run(loop())
+        ck("the hourly loop removes it", "sw/1.jsonl.gz" not in tree(root), tree(root))
+
+        # two ids that differ in case only share a folder where the file system ignores case
+        part_row(s, "case", 1, "case/1.jsonl.gz")
+        part_row(s, "Case", 2, "Case/2.jsonl.gz")
+
+        class OtherCase(FileBackend):
+            removed = []
+
+            def files(self):
+                return [("Case/1.jsonl.gz", NOW - timedelta(days=30))]
+
+            def modified(self, key):
+                return NOW - timedelta(days=30)
+
+            def delete(self, key):
+                self.removed.append(key)
+
+        ck("a file another case of the id names stays",
+           session_archive.sweep(s, OtherCase(root)) == 0 and OtherCase.removed == [])
+        s.close()
+
+    print("== no archive folder yet, and no archive ==")
+    with own_archive() as root:
+        s = open_store()
+        s.set_setting("edition", "factory")
+        os.environ["TARES_ARCHIVE_URL"] = "file://" + os.path.join(root, "never")
+        ck("a folder that is not there is empty", session_archive.sweep(s) == 0)
+        with patched(session_archive, "backend_of", lambda store: None):
+            ck("with no archive there is nothing to do", session_archive.sweep(s) == 0)
+        s.close()
+
+
+def archived_payloads_in(root, s, session):
+    backend = FileBackend(root)
+    return [r["payload"] for p in parts_of(s, session) for r in session_archive.read_part(backend, p)]
+
+
+def sweep_and_writers():
+    print("== the sweep never runs against a session being written ==")
+    with own_archive() as root:
+        s = open_store()
+        s.set_setting("edition", "factory")
+        seed(s, "wr", 4)
+        session_ingest.reconcile_sessions(s)
+        session_ingest.record(s, [line("wr", 15 * DAY)])
+        session_archive._archive_session(s.sessions_db, FileBackend(root), "wr", NOW)
+        session_ingest.record(s, [line("wr", 14 * DAY)])
+        ready(s)
+        orphan = "wr/1-" + "d" * 32 + ".jsonl.gz"             # unused, numbered within the parts
+        for who in ("hourly", "move"):
+            aged(root, orphan)
+            during = []
+
+            class SweepDuring(FileBackend):
+                def put(self, key, data):
+                    out = super().put(key, data)
+                    t = threading.Thread(target=lambda: during.append(session_archive.sweep(s)),
+                                         daemon=True)
+                    t.start()
+                    t.join(15)
+                    during.append(orphan in tree(root))
+                    return out
+
+            if who == "hourly":
+                session_archive._archive_session(s.sessions_db, SweepDuring(root), "wr", NOW)
+            else:
+                session_move.move_old_session(s, "wr", SweepDuring(root))
+            ck(f"while the {who} writer is at work, the session's files stay", during[:2] == [0, True],
+               during)
+            ck(f"after the {who} writer, the sweep removes the unused one",
+               session_archive.sweep(s) >= 1 and orphan not in tree(root), tree(root))
+        ck("what the rows name is whole", len(archived_payloads_in(root, s, "wr")) == 6)
+
+        # a writer that starts while the sweep is between its check and its delete waits
+        aged(root, orphan)
+        entered, states, threads = threading.Event(), [], []
+
+        def write():
+            with session_archive.writing("another"):
+                entered.set()
+
+        class DuringDelete(FileBackend):
+            def delete(self, key):
+                t = threading.Thread(target=write, daemon=True)
+                t.start()
+                threads.append(t)
+                states.append(entered.wait(0.5))
+                super().delete(key)
+
+        n = session_archive.sweep(s, DuringDelete(root))
+        for t in threads:
+            t.join(10)
+        ck("a writer cannot start between the sweep's check and its delete", n == 1
+           and states == [False] and entered.is_set(), (n, states))
+        ck("nothing is left registered", not session_archive._writing, session_archive._writing)
+        s.close()
+
+
+def sweep_s3():
+    print("== the sweep on S3, against botocore's Stubber ==")
+    import boto3
+    from botocore.stub import Stubber
+    client = boto3.client("s3", region_name="us-east-1", aws_access_key_id="test-id",
+                          aws_secret_access_key="test-secret")
+    s = open_store()
+    s.set_setting("edition", "factory")
+    part_row(s, "c1", 2, "c1/2.jsonl.gz")
+    b = S3Backend("bkt", "pre/fix/", client=client)
+    then = datetime.now(timezone.utc) - timedelta(days=30)
+    obj = lambda k: {"Key": k, "LastModified": then}
+    listing = {"Bucket": "bkt", "Prefix": "pre/fix/"}
+    with Stubber(client) as st:
+        st.add_response("list_objects_v2", {"IsTruncated": True, "NextContinuationToken": "next",
+                                            "Contents": [obj("pre/fix/c1/2.jsonl.gz"),
+                                                         obj("pre/fix/c1/readme")]}, listing)
+        st.add_response("list_objects_v2", {"IsTruncated": False,
+                                            "Contents": [obj("pre/fix/c1/1.jsonl.gz")]},
+                        {**listing, "ContinuationToken": "next"})
+        st.add_response("head_object", {"LastModified": then},
+                        {"Bucket": "bkt", "Key": "pre/fix/c1/1.jsonl.gz"})
+        st.add_response("delete_object", {}, {"Bucket": "bkt", "Key": "pre/fix/c1/1.jsonl.gz"})
+        n = session_archive.sweep(s, b)
+        st.assert_no_pending_responses()
+    ck("both pages are read, and only the unused part is deleted, under the prefix", n == 1, n)
+    with Stubber(client) as st:
+        st.add_response("list_objects_v2", {"IsTruncated": True, "NextContinuationToken": "next",
+                                            "Contents": [obj("pre/fix/c1/1.jsonl.gz")]}, listing)
+        st.add_client_error("list_objects_v2", service_error_code="AccessDenied",
+                            http_status_code=403)
+        out = io.StringIO()
+        with patched(session_archive, "backend_of", lambda store: b), contextlib.redirect_stdout(out):
+            n = session_archive.sweep_pass(s)
+        st.assert_no_pending_responses()          # no delete was asked for
+    ck("a listing that fails on a later page deletes nothing", n == 0
+       and "AccessDenied" in out.getvalue(), out.getvalue())
+    with Stubber(client) as st:
+        st.add_response("list_objects_v2", {"IsTruncated": False}, {"Bucket": "bkt", "Prefix": ""})
+        ck("an empty bucket with no prefix", S3Backend("bkt", "", client=client).files() == [])
     s.close()
 
 
@@ -882,6 +1309,12 @@ def main():
     hourly_between()
     hourly_around()
     other_ingest()
+    backoff()
+    lock_timeouts()
+    one_snapshot()
+    sweep_files()
+    sweep_and_writers()
+    sweep_s3()
     crash()
     failures()
     odd()
