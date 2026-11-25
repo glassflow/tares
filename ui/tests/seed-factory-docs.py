@@ -9,7 +9,7 @@ documents through its API, stops it, then writes the dated memory bodies and the
 the database. Prints a JSON map of names to ids on the last line.
 usage: python seed-factory-docs.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.error, urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
@@ -86,10 +86,12 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
+from sqlalchemy import update  # noqa: E402
+
+from tares.session_store.tables import docs as docs_table, usecases  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
-con = store.con
 today = date.today()
 stamp = lambda days, who: f"({(today - timedelta(days=days)).isoformat()}, {who})"
 
@@ -103,11 +105,14 @@ authors = ["crew-builder-1", "crew-reviewer", "console", "crew-orchestrator"]
 big = [(max(2, (BIG - i) // 4 + 2), authors[i % 4], f"Memory line {i + 1}: a fact kept for the crew.") for i in range(BIG)]
 store.update_doc(ids["project-x-memory"], body=memory_body("project-x", X_MEMORY), by="crew-builder-1")
 store.update_doc(ids["project-y-memory"], body=memory_body("project-y", big), by="crew-reviewer")
-con.execute("UPDATE usecases SET status = 'done' WHERE id = ?", [ids["project-y"]])
+with store.sessions_db.begin() as c:
+    c.execute(update(usecases).where(usecases.c.id == ids["project-y"]).values(status="done"))
 # the whole documents were last changed a while ago, by different people
 for key, days, who in (("project-x-spec", 20, "crew-orchestrator"), ("project-x-plan", 14, "console"),
                        ("project-x-agents", 8, "crew-reviewer"), ("project-x-memory", 1, "crew-builder-1"),
                        ("project-y-memory", 2, "crew-reviewer"), ("project-y-spec", 30, "crew-orchestrator")):
-    con.execute("UPDATE docs SET updated_at = now() - to_days(?), updated_by = ? WHERE id = ?", [days, who, ids[key]])
-con.close()
+    with store.sessions_db.begin() as c:
+        c.execute(update(docs_table).where(docs_table.c.id == ids[key]).values(
+            updated_at=datetime.now(timezone.utc) - timedelta(days=days), updated_by=who))
+store.con.close()
 print(json.dumps(ids))

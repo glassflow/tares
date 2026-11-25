@@ -62,9 +62,8 @@ def ck(label, cond, detail=""):
 def old_challenge_events(store, source, project, ref):
     """What challenge_events ran before TR-1472."""
     linked = store.sessions_of_projects([project])      # the session store's rows
+    name = (store.get_project(project) or {}).get("name") or project
     with store._sread:
-        name = (store.sc.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
-                or [project])[0]
         rows = store.sc.execute(
             "SELECT event_time, event_type, payload, key_value FROM challenges "
             "WHERE source = ? AND (branch = ? OR branch LIKE ?) "

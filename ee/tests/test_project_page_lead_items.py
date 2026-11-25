@@ -290,8 +290,8 @@ async def main():
 
         print("== a private project with no lead: never to an admin who cannot open it ==")
         secret = project("secret", pid["kiran"])
-        with store._swrite:
-            store.sc.execute("UPDATE usecases SET scope = 'private', lead_person_id = NULL WHERE id = ?", [secret])
+        store.set_project_scope(secret, "private")
+        store.set_project_lead(secret, None)
         store.add_project_member(secret, pid["kiran"], added_by=pid["kiran"])
         await lead_items(secret)
         k = await page("kiran", secret)

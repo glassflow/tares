@@ -33,6 +33,7 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy import text
 
 from tares import factory as factory_mod
 from tares import factory_api
@@ -63,8 +64,13 @@ async def main():
         return now_utc() - timedelta(**kw)
 
     def back(table, key, col, **kw):
+        sql = f"UPDATE {table} SET {col} = :at WHERE id = :key"
+        if table == "docs":                      # in the session store (TR-1610)
+            with store.sessions_db.begin() as conn:
+                conn.execute(text(sql), {"at": ago(**kw), "key": key})
+            return
         with store._swrite:
-            store.sc.execute(f"UPDATE {table} SET {col} = ? WHERE id = ?", [ago(**kw), key])
+            store.sc.execute(sql.replace(":at", "?").replace(":key", "?"), [ago(**kw), key])
 
     def project(name, factory=True, goal="A project for the test"):
         uid = f"uc_{name.replace('-', '')}"

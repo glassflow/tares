@@ -21,6 +21,7 @@ from .session_store.tables import (project_sessions, session_commands, session_m
                                    session_states, session_stations, session_turns, session_usage,
                                    session_usage_hourly)
 from .session_store.tables import sessions as sessions_table
+from .session_store.tables import usecases as projects_table
 from .session_store.tables import people as people_table
 
 log = logging.getLogger("tares.factory_store")
@@ -1333,11 +1334,19 @@ class FactoryStore:
         stage review and a status that is not done or canceled (TR-1008)."""
         with self._sread:
             rows = self.sc.execute(
-                f"SELECT {self._TICKET_COLS}, pname FROM (SELECT t.*, u.name AS pname, "
-                "u.created_at AS pcreated FROM tickets t JOIN usecases u ON u.id = t.project "
-                "WHERE t.stage = 'review' AND (t.status IS NULL OR t.status NOT IN ('done', 'canceled'))) "
-                "ORDER BY pcreated, position, created_at").fetchall()
-        return [(r[-1], self._ticket_row(r)) for r in rows]
+                f"SELECT {self._TICKET_COLS} FROM tickets WHERE stage = 'review' AND "
+                "(status IS NULL OR status NOT IN ('done', 'canceled'))").fetchall()
+        # the projects are in the session store, the tickets in DuckDB: the join is made here
+        with self.sessions_db.read() as conn:
+            made = {r[0]: (r[1], r[2]) for r in conn.execute(select(
+                projects_table.c.id, projects_table.c.name, projects_table.c.created_at))}
+        rows = [r for r in rows if r[1] in made]
+
+        def order(r):
+            return tuple((v is None, v) if v is not None else (True, 0) for v in (
+                made[r[1]][1], r[8], r[10]))
+        rows.sort(key=order)
+        return [(made[r[1]][0], self._ticket_row(r)) for r in rows]
 
     def milestone_statuses(self, milestones: list[str]) -> list[dict]:
         """Project, milestone, id and status of every ticket in these milestones (TR-648)."""
@@ -1710,9 +1719,9 @@ class FactoryStore:
             rows = list({(r[0], r[1], r[3], r[4], r[5]): r for r in rows}.values())
             rows.sort(key=lambda r: r[0])
             projects = sorted({p for p, _ in pairs})
-            marks = ", ".join("?" for _ in projects)
-            names = dict(self.sc.execute(
-                f"SELECT id, name FROM usecases WHERE id IN ({marks})", projects).fetchall())
+        with self.sessions_db.read() as conn:
+            names = dict(conn.execute(select(projects_table.c.id, projects_table.c.name).where(
+                projects_table.c.id.in_(projects))).all())
         sessions: dict[str, set] = {}
         with self.sessions_db.begin() as conn:
             for project, session in conn.execute(select(

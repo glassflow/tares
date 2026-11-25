@@ -253,7 +253,10 @@ _n = [0]
 
 def newstore():
     _n[0] += 1
-    return Store(os.path.join(tmp, f"t{_n[0]}.duckdb"))
+    # a folder each: the session store (tares.sqlite) sits beside the DuckDB file, and a store is a cell
+    d = os.path.join(tmp, f"t{_n[0]}")
+    os.makedirs(d)
+    return Store(os.path.join(d, "t.duckdb"))
 
 
 def world(link=None, seed=True):

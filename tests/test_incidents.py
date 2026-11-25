@@ -414,7 +414,7 @@ async def cell():
 # ── notes from before incidents were tracked ─────────────────────────────────
 def backfill_case():
     print("== the backfill files the old notes ==")
-    store = Store(os.path.join(TMP, "old.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "old.duckdb"))
     now = datetime.now(timezone.utc).replace(microsecond=0)
     made = build(store, now, watcher=True, investigator=True)
     uid = made["project"]
@@ -455,7 +455,7 @@ def backfill_case():
 
 def rerun_with_live_incident_case():
     print("== a backfill rerun leaves a live incident its own notes ==")
-    store = Store(os.path.join(TMP, "live.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "live.duckdb"))
     now = datetime.now(timezone.utc).replace(microsecond=0)
     uid = build(store, now, watcher=True, investigator=True)["project"]
     seed_old_note(store, "old1", "edge-proxy", now - timedelta(days=20), uid)
@@ -483,7 +483,7 @@ def rerun_with_live_incident_case():
 
 def sweep_case():
     print("== a reopen lasts ==")
-    store = Store(os.path.join(TMP, "sweep.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "sweep.duckdb"))
     T = datetime.now(timezone.utc).replace(microsecond=0)
     uid = build(store, T, watcher=True, investigator=True)["project"]
     catalog = catalog_from_db(store)

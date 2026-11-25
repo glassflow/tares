@@ -12,6 +12,7 @@ API, stops it, then backdates the projects' times straight in the database so th
 with history. Prints a JSON map of names to ids on the last line.
 usage: python seed-factory-projects.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.error, urllib.request
+from datetime import datetime, timedelta, timezone
 
 home, port, mcp, dist, tares = sys.argv[1:6]
 env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT": port, "TARES_MCP_PORT": mcp,
@@ -121,6 +122,9 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
+from sqlalchemy import update  # noqa: E402
+
+from tares.session_store.tables import usecases  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
@@ -128,7 +132,9 @@ con = store.con
 # how long ago each project last moved (hours): the project and its tickets
 for name, hours in (("project-b1", 0.05), ("project-b2", 2), ("project-w", 26), ("project-y", 120), ("project-q", 72),
                     ("project-z", 240)):
-    con.execute("UPDATE usecases SET updated_at = now() - to_seconds(?) WHERE id = ?", [int(hours * 3600), ids[name]])
+    with store.sessions_db.begin() as c:
+        c.execute(update(usecases).where(usecases.c.id == ids[name]).values(
+            updated_at=datetime.now(timezone.utc) - timedelta(seconds=int(hours * 3600))))
     con.execute("UPDATE tickets SET updated_at = now() - to_seconds(?) WHERE project = ?", [int(hours * 3600), ids[name]])
 con.close()
 print(json.dumps(ids))
