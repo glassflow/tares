@@ -247,7 +247,9 @@ async def main():
 async def one_person_cell():
     """A cell with only `local`: an admin key bound to no one is that person, so it renames them."""
     from tares import daemon
-    daemon.DB_PATH = os.path.join(TMP, "one.duckdb")   # read once at import: point the new cell at its own file
+    # read once at import: point the new cell at its own file, in a folder of its own (the people live in
+    # tares.sqlite beside the DuckDB file, and two cells in one folder would share them)
+    daemon.DB_PATH = os.path.join(tempfile.mkdtemp(dir=TMP), "one.duckdb")
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",

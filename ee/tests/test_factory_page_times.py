@@ -10,13 +10,29 @@ route's time.
 
 A route fails when its median is over `max(TARGET, its OVER entry) * SLACK[backend] * SPEED`. SPEED is
 how much slower this machine is than the one the OVER medians were taken on (never under 1): a fixed
-workload (`calibrate`) is timed in the same run, so a CI runner that is 1.5 times slower gets limits
-1.5 times wider, and a route that really got slower still fails on any machine. An OVER entry is the
-slowest median of several runs on that machine, not one run. A route that is over
-TARGET today sits in OVER with the median that was measured and the ticket that brings it down; when
-that ticket's change lands, the route meets TARGET, its entry is stale, and the test fails until the
-entry is removed. A PR that moves a time updates OVER and says why; the PR that merges second
-rebases and keeps both.
+workload (`calibrate`) is timed three times at the start and the fastest counts, so a CI runner that is
+1.5 times slower gets limits 1.5 times wider and a busy moment at the start does not widen them. An OVER
+entry is the slowest median of several runs on the reference machine, not one run, and it is kept close
+to what the route takes now, because the limit is built on it: a route may grow by about its limit
+minus its time today (a 0.5 s sleep in a route under 300 ms fails on a quiet machine; on a CI runner
+with SPEED 2 a route that takes 250 ms may reach 750 ms before it fails on DuckDB, 900 ms on Postgres). A route that is over TARGET
+today sits in OVER with the median that was measured and the ticket that brings it down; when that
+ticket's change lands, the route meets TARGET, its entry is stale, and the test fails until the entry is
+removed. A PR that moves a time updates OVER and says why; the PR that merges second rebases and keeps
+both.
+
+Load does not decide the answer (TR-1640):
+- A route that is over its limit is timed again, up to ROUNDS rounds, and keeps its best median: a busy
+  moment passes on the next round, a route that is really slower fails every round.
+- Before each route, and again before each extra round, the test samples a CPU probe (`calibrate`) and a
+  database probe (`db_probe`). If the CPU samples of the run differ by more than BUSY times, or the database
+  samples by more than DB_BUSY times, the machine was busy: a route that is over its limit is then not
+  called slow, and the test fails once, saying the machine was too busy to measure. Run it again when the
+  machine is quiet. A database round trip varies by about 2 times on a quiet machine (a container here, a
+  service on CI), so its limit is wider than the CPU's.
+- The stale check divides by `min(SPEED, STALE_SPEED_CAP)`: a route that waits on the database slows
+  down on a slow runner less than the CPU probe does, so the full SPEED would call an entry stale that
+  is not. Load only makes a route slower, so the stale check ignores it.
 
 Run: .venv/bin/python ee/tests/test_factory_page_times.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_factory_page_times.py
@@ -42,19 +58,25 @@ TARGET = 0.300                                       # seconds, the median of a 
 SLACK = {"duckdb": 1.25, "postgres": 1.5}
 RUNS = 5                                             # timed calls per route, after one warm-up
 CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
+SPEED_TRIES = 3                                       # `calibrate()` runs at the start; the fastest sets SPEED
+ROUNDS = 3                                            # a route over its limit is timed again, up to this many rounds
+STALE_SPEED_CAP = 1.25                                # the stale check never divides by more than this
+BUSY = 1.5                                            # CPU probe samples that differ by more than this mean a busy machine
+DB_BUSY = 4.0                                         # database probe samples that differ by more than this do (a quiet one varies about 2 times)
+DB_PROBE_FLOOR = 0.010                                # seconds; below this a database probe says nothing (in-process DuckDB)
 
 # Routes over TARGET today, by backend: (the median in seconds when it was measured, the ticket that
 # brings it down). A route absent from here must meet TARGET.
 OVER: dict = {
     "duckdb": {
-        "setup": (0.848, "TR-1628"), "setup_progress": (0.844, "TR-1634"),
-        "home": (0.840, "TR-1629"), "crew": (0.853, "TR-1633"),
-        "tickets": (0.590, "TR-1612"), "tickets_list": (0.577, "TR-1612"),
-        "project_tickets": (0.576, "TR-1612"), "projects": (0.530, "TR-1610"),
+        "setup": (0.567, "TR-1628"), "setup_progress": (0.574, "TR-1634"),
+        "home": (0.557, "TR-1629"), "crew": (0.50, "TR-1633"),
+        "tickets": (0.576, "TR-1612"), "tickets_list": (0.575, "TR-1612"),
+        "project_tickets": (0.556, "TR-1612"), "projects": (0.518, "TR-1610"),
     },
     "postgres": {
-        "setup": (0.535, "TR-1628"), "setup_progress": (0.490, "TR-1634"),
-        "home": (0.462, "TR-1629"), "crew": (0.630, "TR-1633"),
+        "setup": (0.376, "TR-1628"), "setup_progress": (0.350, "TR-1634"),
+        "crew": (0.46, "TR-1631"),
     },
 }
 
@@ -184,6 +206,23 @@ def calibrate() -> float:
     return statistics.median(times)
 
 
+def db_probe() -> float:
+    """Seconds 100 trivial statements take on the state database: a round trip to Postgres, or a call
+    into DuckDB. It tells a busy database from a busy CPU; it never sets a limit."""
+    t = time.perf_counter()
+    for _ in range(100):
+        STORE.sc.execute("SELECT 1").fetchall()
+    return time.perf_counter() - t
+
+
+def probe() -> tuple:
+    return calibrate(), max(db_probe(), DB_PROBE_FLOOR)
+
+
+def spread(values) -> float:
+    return max(values) / min(values)
+
+
 SPEED = 1.0   # set in main(): how many times slower than the OVER machine this one is, never under 1
 
 
@@ -203,7 +242,8 @@ async def main():
     backend = "postgres" if os.environ.get("TARES_TEST_PG") else "duckdb"
     over = OVER[backend]
     slack = SLACK[backend]
-    cal = calibrate()
+    samples: list = []                                 # (cpu, database) probes taken during the run
+    cal = min(calibrate() for _ in range(SPEED_TRIES))
     SPEED = max(1.0, cal / CALIBRATION_REF)
     print(f"calibration {cal * 1000:.0f} ms (reference {CALIBRATION_REF * 1000:.0f} ms): limits times {SPEED:.2f}")
     root = {"Authorization": f"Bearer {TOKEN}"}
@@ -228,37 +268,61 @@ async def main():
                 statuses = route[2] if len(route) > 2 else (200,)
                 for _, clear in CACHES:
                     clear()
+                samples.append(probe())
                 warm = await cx.get(path)
-                times = []
                 bad = None if warm.status_code in statuses else (warm.status_code, warm.text[:200])
-                for _ in range(RUNS):
-                    for _, clear in CACHES:
-                        clear()
-                    t = time.perf_counter()
-                    resp = await cx.get(path)
-                    times.append(time.perf_counter() - t)
-                    if resp.status_code not in statuses and bad is None:
-                        bad = (resp.status_code, resp.text[:200])
-                results[name] = (statistics.median(times), bad, path)
+                best = None
+                for rnd in range(ROUNDS):
+                    times = []
+                    for _ in range(RUNS):
+                        for _, clear in CACHES:
+                            clear()
+                        t = time.perf_counter()
+                        resp = await cx.get(path)
+                        times.append(time.perf_counter() - t)
+                        if resp.status_code not in statuses and bad is None:
+                            bad = (resp.status_code, resp.text[:200])
+                    med = statistics.median(times)
+                    best = med if best is None else min(best, med)
+                    if bad or best <= allowed(over, name, slack):
+                        break
+                    samples.append(probe())              # over its limit: the machine may have been busy, time it again
+                results[name] = (best, bad, path)
+        samples.append(probe())
+        busy = spread([c for c, _ in samples]) > BUSY or spread([d for _, d in samples]) > DB_BUSY
+        print(f"probes: cpu {min(c for c, _ in samples) * 1000:.0f} to {max(c for c, _ in samples) * 1000:.0f} ms, "
+              f"database {min(d for _, d in samples) * 1000:.0f} to {max(d for _, d in samples) * 1000:.0f} ms "
+              f"({len(samples)} samples): {'BUSY' if busy else 'quiet'}")
         print(f"\n== medians ({backend}, target {TARGET * 1000:.0f} ms, slack {slack}, speed {SPEED:.2f}) ==")
         print(f"  {'route':<24} {'median ms':>10} {'allowed ms':>11}  status")
         for name, (med, bad, path) in results.items():
             lim = allowed(over, name, slack)
             status = "ok" if med <= lim and not bad else "FAIL"
+            if med > lim and busy and not bad:
+                status = "not measured: the machine is busy"
             if name in over:
                 status += f" (over target, {over[name][1]})"
             print(f"  {name:<24} {med * 1000:>10.0f} {lim * 1000:>11.0f}  {status}")
         print()
+        unmeasured: list = []
         for name, (med, bad, path) in results.items():
             ck(f"{name} answers as the page expects", bad is None, f"{path} {bad}")
+            if med > allowed(over, name, slack) and busy and not bad:
+                unmeasured.append(f"{name} {med * 1000:.0f} ms")
+                continue
             ck(f"{name} median {med * 1000:.0f} ms is within {allowed(over, name, slack) * 1000:.0f} ms",
                med <= allowed(over, name, slack), f"{path} {med * 1000:.0f} ms")
         for name, (med, bad, path) in results.items():
             if name in over:
                 # stale only when the route is clearly under target on the reference machine (the median
                 # divided by SPEED), so a route near it does not flap on a faster or slower one
-                ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", med / SPEED >= TARGET / slack,
-                   f"{med / SPEED * 1000:.0f} ms is under {TARGET / slack * 1000:.0f} ms: remove the entry")
+                scaled = med / min(SPEED, STALE_SPEED_CAP)
+                ck(f"the OVER entry of {name} ({over[name][1]}) is not stale", scaled >= TARGET / slack,
+                   f"{scaled * 1000:.0f} ms is under {TARGET / slack * 1000:.0f} ms: remove the entry")
+        ck("the machine was quiet enough to time every route", not unmeasured,
+           f"the machine was too busy to measure ({', '.join(sorted(set(unmeasured)))}): the CPU probe ran "
+           f"{spread([c for c, _ in samples]):.2f} times apart and the database probe "
+           f"{spread([d for _, d in samples]):.2f} times apart during the run; run it again when the machine is quiet")
         ck("every OVER entry names a route in ROUTES", all(n in results for n in over),
            str([n for n in over if n not in results]))
         ck("every OVER entry names a ticket", all(str(v[1]).startswith("TR-") for v in over.values()))

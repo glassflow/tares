@@ -62,6 +62,9 @@ const sideways = (page) => page.evaluate(() => document.documentElement.scrollWi
     {
       const { ctx, page } = await open();
       await rows(page).first().waitFor();
+      // A row shows a project's id until /api/projects answers, then its name: read the rows after the names.
+      await rows(page).filter({ hasText: "in Shop, Billing" }).waitFor();
+      await rows(page).filter({ hasText: "every 60s" }).filter({ hasText: "in Shop" }).waitFor();
       ck("list: one row per connection", await rows(page).count() === 4, String(await rows(page).count()));
       ck("list: the count says 4 of 4", (await count(page)) === "4 of 4", await count(page));
       const gh = rows(page).filter({ hasText: "acme/shop" });

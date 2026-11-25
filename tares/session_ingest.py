@@ -151,6 +151,25 @@ def claude_code_lines(store, envelopes) -> list:
     return [e for e in cands if e.source in ours]
 
 
+def holdable(store, lines: list) -> list:
+    """The claude_code `lines` the session store may hold alone, without a copy in DuckDB
+    (TR-1479): those of a session with no row yet, or whose row was born in the table and is
+    complete. A session from before `lines_origin` (null), one the reconcile made, or one a failed
+    write left incomplete keeps getting its lines in DuckDB too: it is judged against DuckDB's
+    count, and a read of it falls back to DuckDB, so a line held back would be missing there.
+    Called under `Store._sess_lock`, so no `record` changes a row meanwhile."""
+    sids = sorted({e.key_value for e in lines})
+    ok = set(sids)
+    c = sessions.c
+    with store.sessions_db.begin() as conn:
+        for i in range(0, len(sids), 500):
+            for sid, origin, done in conn.execute(select(c.session, c.lines_origin, c.lines_complete)
+                                                   .where(c.session.in_(sids[i:i + 500]))).all():
+                if not (origin == TABLE and done):
+                    ok.discard(sid)
+    return [e for e in lines if e.key_value in ok]
+
+
 def _utc(t: datetime) -> datetime:
     return t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
 
@@ -568,18 +587,22 @@ def _add_facts(store, facts: dict) -> None:
         _write_facts(conn, db, facts)
 
 
-def record(store, envelopes) -> None:
-    """Count a batch of claude_code lines (already committed to DuckDB) into `sessions`. A failure
-    logs one line and counts in tares_session_ingest_failures_total; it never reaches the caller,
-    because the lines are stored and the next start's reconcile counts them."""
+def record(store, envelopes) -> bool:
+    """Count a batch of claude_code lines (already committed to DuckDB, or held back from it, see
+    `Store.append`) into `sessions`. A failure logs one line and counts in
+    tares_session_ingest_failures_total; it never reaches the caller, because the lines are stored
+    and the next start's reconcile counts them. Returns whether the lines went into
+    `session_lines`: a caller that kept them out of DuckDB writes them there when it did not."""
     if not envelopes:
-        return
+        return True
     t0 = time.perf_counter()
     ok = True
+    lines_ok = False
     folded: dict = {}
     try:
         folded = _fold(envelopes)
         _add(store, folded, _line_rows(store, envelopes))
+        lines_ok = True
     except Exception as e:
         ok = False
         print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
@@ -611,6 +634,7 @@ def record(store, envelopes) -> None:
         print(f"taresd: writing the turns of {len(envelopes)} claude_code line(s) failed "
               f"({type(e).__name__}: {e}); written at the next start", flush=True)
     metrics.session_ingest(time.perf_counter() - t0, ok)
+    return lines_ok
 
 
 # ── catching up from DuckDB ──────────────────────────────────────────────────────────────────
@@ -1019,6 +1043,7 @@ def start_reconcile(store) -> threading.Thread:
                   "tried again at the next start", flush=True)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
+    store._reconcile_thread = th    # `Store.close` waits for it before the connections go
     stop = getattr(store, "_reconcile_stop", None)
     if stop is None:
         stop = store._reconcile_stop = threading.Event()
