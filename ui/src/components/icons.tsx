@@ -212,6 +212,14 @@ export const Ticket = (p: P) => (
   </S>
 );
 
+// Report: bars on a baseline, the factory's weeks side by side.
+export const BarChart = (p: P) => (
+  <S {...p}>
+    <path d="M3 21h18" />
+    <path d="M7 21v-8M12 21V4M17 21V10" />
+  </S>
+);
+
 export const Users = (p: P) => (
   <S {...p}>
     <circle cx="9" cy="8" r="3.5" />
