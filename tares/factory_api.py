@@ -3165,10 +3165,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def desk_allow(ref: str, request: Request, body: dict = Body(...)):
         """{words, scope: project|all}: the person allows a permission request (a desk item with
         a command) from the console. `words` is the grant as they let it stand (the console
-        offers a sentence naming the station and the command; they may edit it). It is kept as a
-        grant, for the item's project or for every project, and recorded as their decision made
-        in the console; the item is answered. The crew's watch restarts the station with it. A
-        person decides: refused from any crew station."""
+        offers a sentence naming the station and the command; they may edit it). It becomes a
+        grant by the rules of a standing answer (`standing_grant`): for every project it needs
+        an admin; for the item's project, the lead, an admin or the owner of every repo of its
+        tickets, and with an enterprise licence it may wait for consent (`granted` is false until
+        it takes effect). It is recorded as their decision made in the console and the item is
+        answered. A grant in effect reaches the stations' rules, and the crew's watch restarts
+        the station with it. A person decides: refused from any crew station."""
         if caller(request)["station"]:
             h.err(PermissionError("a permission is the person's to allow: they allow it in the "
                                   "console"), 403)
@@ -3201,10 +3204,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
             line = factory_mod.grant_line(words, now_utc().date().isoformat())
         except docs_mod.DocError as e:
             h.err(e)
-        added = append_grant(d["project"] if scope == "project" else None, line,
-                             "the person, in the console")
+        # who may give it is refused here, before anything is written
+        kind, grant_project, areas, needs_lead = standing_grant(d, me["id"], scope, "project",
+                                                                request)
+        # the grant row, not only its line in the doc: station settings are built from the rows
+        row, added = put_grant(kind, factory_mod.grant_words(words), grant_project, me["id"],
+                               areas, needs_lead, "the person, in the console")
+        granted = row["state"] == "active"   # one waiting for consent is not in effect yet
         dec = store.add_decision(d["project"], d["id"], d["question"], words, "allowed", True,
-                                 scope, False, None, True, d["tickets"], now_utc(),
+                                 scope, False, None, granted, d["tickets"], now_utc(),
                                  via=answers_mod.surface(request), person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
         answers_mod.record(store, request, item=f"permission:{d['label']}", kind="permission",
@@ -3213,7 +3221,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                "this project" if scope == "project" else "every project"),
                            person_id=answerer(request))
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
-                "station": d["station"], "line": line, "added": added, "scope": scope}
+                "station": d["station"], "line": line, "added": added, "scope": scope,
+                "granted": granted, "grant": grants_view([row])[0]}
 
     @app.get("/api/projects/{uid}/decisions")
     def project_decisions(uid: str):
