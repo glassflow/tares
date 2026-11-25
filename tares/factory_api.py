@@ -1644,8 +1644,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         read = []       # where each read of the session's lines came from (TR-1507)
         lines = []
         if n:
+            # `tail`: fewer lines than counted can be read, so the newest readable ones show
             lines, where = store.key_events_from(h.cc_source(), st["session"], limit=n,
-                                                 offset=max((st["lines"] or 0) - n, 0))
+                                                 offset=max((st["lines"] or 0) - n, 0), tail={})
             read.append(where)
         m = store.session_meters([st["session"]]).get(st["session"]) or {}
         convo = {}
@@ -1655,10 +1656,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
             start = max(end - c, 0)
             if since is not None and before is None:
                 start = max(min(since, end), end - SINCE_MAX, 0)
+            tail = {} if before is None and since is None else None     # the newest lines asked
             rows, where = store.key_payload_rows_from(h.cc_source(), st["session"],
-                                                      limit=end - start, offset=start)
+                                                      limit=end - start, offset=start, tail=tail)
             read.append(where)
-            convo = {"conversation": crew_conversation.build(rows)[0], "conversation_from": start}
+            convo = {"conversation": crew_conversation.build(rows)[0],
+                     "conversation_from": (tail or {}).get("start", start)}
         return {**st, "tickets": held, **convo, "lines_from": lines_from(read),
                 "context_detail": m.get("context"), "context_at": m.get("context_at"),
                 "context_asked_at": m.get("context_asked_at"),

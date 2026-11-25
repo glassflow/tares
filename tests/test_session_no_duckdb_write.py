@@ -185,7 +185,7 @@ def main():
     s.append([line("f1") for _ in range(2)])
     ck("its new lines are written to DuckDB", duck_count(s) == 2, duck_count(s))
 
-    print("== when the session store cannot take the lines, DuckDB keeps them ==")
+    print("== when the session store takes no write, nothing is stored and the lines are sent again (TR-1665) ==")
     s = open_store("factory")
     real = s.sessions_db.begin
 
@@ -197,9 +197,19 @@ def main():
             return False
 
     s.sessions_db.begin = lambda *a, **k: Down()
-    quiet(lambda: s.append([line("s4") for _ in range(3)]))
+    batch, refused = [line("s4") for _ in range(3)], None
+    try:
+        quiet(lambda: s.append(batch))
+    except session_ingest.LinesNotStored as e:
+        refused = e
     s.sessions_db.begin = real
-    ck("the lines are in DuckDB", duck_count(s) == 3, duck_count(s))
+    ck("the append is refused", refused is not None)
+    ck("nothing is in DuckDB or session_lines", (duck_count(s), table_count(s)) == (0, 0),
+       (duck_count(s), table_count(s)))
+    ck("and nothing is counted", (stats(s) or (0,))[0] == 0, stats(s))
+    s.append(batch)
+    ck("sent again, the lines are held back as usual", (duck_count(s), table_count(s)) == (0, 3),
+       (duck_count(s), table_count(s)))
     ck("source_stats counts them once", (stats(s) or (0,))[0] == 3, stats(s))
 
     print("== the platform edition ==")
