@@ -258,6 +258,7 @@ test_session_project
 test_session_readers_no_events
 test_session_store
 test_session_turns
+test_session_write_failure
 test_sessions_caught_up
 test_sessions_table
 test_setup_flow
