@@ -154,8 +154,12 @@ async def main():
             # the source's own poll, started when it was created, may have taken the two commits
             # first (requests run in threads, so it gets the loop meanwhile); either way they came
             # in once, through the credential's token
-            stored = [r for r in store.event_stats() if r["source"] == "app_commits"]
-            n_stored = stored[0]["events"] if stored else 0
+            for _ in range(100):                # the source's own poll may still be storing them
+                stored = [r for r in store.event_stats() if r["source"] == "app_commits"]
+                n_stored = stored[0]["events"] if stored else 0
+                if envs or n_stored >= 2:
+                    break
+                await asyncio.sleep(0.1)
             check("poll ingests commits with the credential token",
                   (len(envs) == 2 or (not envs and n_stored == 2)) and all(t == "tok-1" for _, t in STATE["calls"]),
                   f"{STATE['calls']} polled={len(envs)} stored={stored}")

@@ -5223,6 +5223,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # open tickets only: a finished one keeps the name of who did it
             self.sc.execute("UPDATE tickets SET assignee_person_id = NULL WHERE assignee_person_id = ? "
                             "AND status NOT IN ('done', 'canceled') AND stage NOT IN ('merged', 'shipped')", [pid])
+        # last: the guard above answers False once removed_at is set, so a crash before this line
+        # leaves a person a second remove still finishes (DuckDB and the session store are two databases)
+        with self.sessions_db.begin() as conn:
+            conn.execute(update(people_table).where(people_table.c.id == pid).values(
+                removed_at=now_utc()))
         return True
 
     def claim_local(self, email: str, name: str | None = None) -> dict | None:
