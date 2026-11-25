@@ -1,0 +1,239 @@
+{
+ "cases": [
+  {
+   "case": "room on both windows",
+   "pass": true,
+   "want": {
+    "known": true,
+    "level": 0,
+    "state": "ok"
+   },
+   "got": {
+    "known": true,
+    "level": 0,
+    "state": "ok",
+    "at_limit": false,
+    "until": null,
+    "session_pct": 6,
+    "weekly_pct": 20
+   }
+  },
+  {
+   "case": "5-hour window at 86%: slow",
+   "pass": true,
+   "want": {
+    "level": 1,
+    "state": "slow"
+   },
+   "got": {
+    "known": true,
+    "level": 1,
+    "state": "slow",
+    "at_limit": false,
+    "until": "2026-11-23T13:00:00Z",
+    "session_pct": 86,
+    "weekly_pct": 20
+   }
+  },
+  {
+   "case": "5-hour window at 96%: hold",
+   "pass": true,
+   "want": {
+    "level": 2,
+    "state": "hold"
+   },
+   "got": {
+    "known": true,
+    "level": 2,
+    "state": "hold",
+    "at_limit": false,
+    "until": "2026-11-23T13:00:00Z",
+    "session_pct": 96,
+    "weekly_pct": 20
+   }
+  },
+  {
+   "case": "week at 91%: slow",
+   "pass": true,
+   "want": {
+    "level": 1,
+    "state": "slow"
+   },
+   "got": {
+    "known": true,
+    "level": 1,
+    "state": "slow",
+    "at_limit": false,
+    "until": "2026-11-24T12:00:00Z",
+    "session_pct": 10,
+    "weekly_pct": 91
+   }
+  },
+  {
+   "case": "5-hour window full: at the limit, until its reset",
+   "pass": true,
+   "want": {
+    "level": 2,
+    "at_limit": true,
+    "state": "limit",
+    "until": "2026-11-23T13:00:00Z"
+   },
+   "got": {
+    "known": true,
+    "level": 2,
+    "state": "limit",
+    "at_limit": true,
+    "until": "2026-11-23T13:00:00Z",
+    "session_pct": 100,
+    "weekly_pct": 20
+   }
+  },
+  {
+   "case": "a full window whose reset time has passed counts as empty",
+   "pass": true,
+   "want": {
+    "level": 0,
+    "at_limit": false,
+    "state": "ok"
+   },
+   "got": {
+    "known": true,
+    "level": 0,
+    "state": "ok",
+    "at_limit": false,
+    "until": null,
+    "session_pct": 0,
+    "weekly_pct": 20
+   }
+  },
+  {
+   "case": "no reading at all: unknown, nothing is slowed",
+   "pass": true,
+   "want": {
+    "known": false,
+    "level": 0
+   },
+   "got": {
+    "known": false,
+    "level": 0,
+    "state": "ok",
+    "at_limit": false,
+    "until": null,
+    "session_pct": null,
+    "weekly_pct": null
+   }
+  },
+  {
+   "case": "a reading with no windows (an API key account): unknown",
+   "pass": true,
+   "want": {
+    "known": false,
+    "level": 0
+   },
+   "got": {
+    "known": false,
+    "level": 0,
+    "state": "ok",
+    "at_limit": false,
+    "until": null,
+    "session_pct": null,
+    "weekly_pct": null
+   }
+  },
+  {
+   "case": "a window of another length is not taken for the 5-hour one",
+   "pass": true,
+   "want": {
+    "level": 0,
+    "session_pct": null
+   },
+   "got": {
+    "known": true,
+    "level": 0,
+    "state": "ok",
+    "at_limit": false,
+    "until": null,
+    "session_pct": null,
+    "weekly_pct": null
+   }
+  },
+  {
+   "case": "a reading older than 30 minutes is dropped: unknown",
+   "pass": true,
+   "want": {
+    "known": false,
+    "level": 0
+   },
+   "got": {
+    "known": false,
+    "level": 0,
+    "state": "ok"
+   }
+  },
+  {
+   "case": "pace off: the reading changes nothing (as for Claude)",
+   "pass": true,
+   "want": {
+    "state": "off",
+    "level": 0
+   },
+   "got": {
+    "state": "off",
+    "level": 0
+   }
+  }
+ ],
+ "live": {
+  "reading": {
+   "account_type": "chatgpt",
+   "rateLimits": {
+    "limitId": "codex",
+    "primary": {
+     "usedPercent": 7,
+     "windowDurationMins": 300,
+     "resetsAt": 1795459426
+    },
+    "secondary": {
+     "usedPercent": 21,
+     "windowDurationMins": 10080,
+     "resetsAt": 1795681255
+    },
+    "rateLimitReachedType": null
+   },
+   "other_keys": [
+    "ordinaryUsageAllowed",
+    "rateLimitResetCredits",
+    "rateLimitUpsell",
+    "rateLimitsByLimitId"
+   ]
+  },
+  "plan": {
+   "limits": [
+    {
+     "kind": "session",
+     "percent": 7,
+     "resets_at": "2026-11-23T18:43:46Z",
+     "source": "codex account/rateLimits/read",
+     "observed_at": "2026-11-23T14:06:54.493716+00:00"
+    },
+    {
+     "kind": "weekly_all",
+     "percent": 21,
+     "resets_at": "2026-11-26T08:20:55Z",
+     "source": "codex account/rateLimits/read",
+     "observed_at": "2026-11-23T14:06:54.493716+00:00"
+    }
+   ]
+  },
+  "pace": {
+   "on": true,
+   "known": true,
+   "level": 0,
+   "at_limit": false,
+   "state": "ok",
+   "until": null,
+   "session_pct": 7,
+   "weekly_pct": 21
+  }
+ }
+}
