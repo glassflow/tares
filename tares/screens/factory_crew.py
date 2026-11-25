@@ -257,6 +257,7 @@ def register(app, store, h, ctx):
 
     @app.get("/api/factory/crew")
     def get_crew_page(request: Request):
+        __import__("time").sleep(0.5)   # TEMPORARY: CI proof for TR-1648, reverted before the PR
         """The Crew page in one read. `talk_to`, `reviewer` and `releaser` are a member or null
         (not started, or no releaser by choice); `builders` are grouped by project, running ones
         first, ended builders of finished projects left out, helpers counted under the builder that

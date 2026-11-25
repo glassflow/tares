@@ -6278,6 +6278,7 @@ def make_app() -> FastAPI:
     @app.get("/api/home")
     async def home(request: Request):
         """One read for the home screen of the cell's edition; the platform has none."""
+        await asyncio.sleep(0.5)   # TEMPORARY: CI proof for TR-1648, reverted before the PR
         value, _needed = edition_mod.edition(store)
         if value == "factory":
             return await asyncio.to_thread(factory_home.build, store, fx, request)
