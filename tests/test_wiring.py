@@ -28,6 +28,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
+from sqlalchemy import text
 import yaml
 
 from tares.builtin_agents import AgentRunner
@@ -328,8 +329,7 @@ async def main():
 
         # a cell where a trigger was deleted before deletes cleaned up: mended at the next open
         store.sc.execute("UPDATE catalog_agents SET trigger = 'old-esc' WHERE name = 'helper'")
-        store.sc.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, created_at) "
-                          "VALUES (?, 'trigger', 'trigger:old-esc', 'old-esc', now())", [b])
+        store.upsert_project_object(b, "trigger", "trigger:old-esc", "old-esc")
         store.normalize_projects()
         objs = (await cx.get(f"/api/projects/{b}")).json()["objects"]
         ck("an old dangling trigger is mended: off the agent and off the project",
@@ -375,12 +375,14 @@ async def main():
     print("== the upgrade: each project's skills become skills of the cell ==")
     p2 = "uc_other00001"
     st.create_project(p2, "custom", "Other", {"objects": []})
-    st.sc.execute("DELETE FROM shared_skills")
-    st.sc.execute("DELETE FROM usecase_objects WHERE kind = 'skill'")
-    for proj, name, body in ((uid, "codes", "E42 is a decline"), (p2, "codes", "E42 is a decline"),
-                             (uid, "runbook", "restart it"), (p2, "runbook", "page someone")):
-        st.sc.execute("INSERT INTO skills (project, name, description, body, created_at, "
-                       "updated_at) VALUES (?, ?, 'd', ?, now(), now())", [proj, name, body])
+    with st.sessions_db.begin() as c:
+        c.execute(text("DELETE FROM shared_skills"))
+        c.execute(text("DELETE FROM usecase_objects WHERE kind = 'skill'"))
+        for proj, name, body in ((uid, "codes", "E42 is a decline"), (p2, "codes", "E42 is a decline"),
+                                 (uid, "runbook", "restart it"), (p2, "runbook", "page someone")):
+            c.execute(text("INSERT INTO skills (project, name, description, body, created_at, updated_at) "
+                           "VALUES (:p, :n, 'd', :b, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+                      {"p": proj, "n": name, "b": body})
     st.set_setting("skills_shared", None)
     st.con.close()
     st = Store(path)

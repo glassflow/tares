@@ -90,7 +90,7 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
 # home 105 to 98 on Postgres, 127 to 117 on DuckDB (its counts are 96 and 115, plus 2 percent; the 127 is
 # TR-1480's, which the base brought in).
-_TODAY = {"home": 98, "projects": 82, "project": 85, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+_TODAY = {"home": 98, "projects": 84, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
@@ -108,12 +108,21 @@ DONE_EXTRA = 4
 # home 117 to 145, projects 95 to 116, project 94 to 119, ticket 27 to 30, raw_tickets 9 to 11, raw_ticket
 # 14 to 16 (the counts are 142, 113, 116, 29, 10 and 15, plus 2 percent). Postgres state counts each
 # once, as before, so its counts stay. Reading each of them once per request is TR-1631's.
-_DUCKDB = {**_TODAY, "home": 145, "projects": 116, "project": 119, "ticket": 30, "raw_tickets": 11,
-           "raw_ticket": 16}
+# TR-1610 (projects, their objects and log, docs, skills, shared skills, catalog sources, GitHub
+# credentials and model usage are read through the session store): the same on DuckDB, each read of
+# one of them is a SQLite transaction with its BEGIN: home 145 to 164, projects 116 to 133, project 119
+# to 135, ticket 30 to 32, raw_tickets 11 to 14, raw_ticket 16 to 17 (the counts are 160, 130, 132, 31, 13
+# and 16, plus 2 percent). Postgres state counts each once, as before, so its counts stay, but for the
+# two pages that read the review queue: its join of the tickets with the projects (one statement when
+# both were in one database) is now a tickets read and a projects read, so projects 82 to 84 and
+# project 85 to 87 (the counts are 83 and 86, plus 2 percent).
+_DUCKDB = {**_TODAY, "home": 164, "projects": 133, "project": 135, "ticket": 32, "raw_tickets": 14,
+           "raw_ticket": 17}
 # TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
-# DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 117, "setup_progress": 111},
+# DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With
+# TR-1610's reads, each a SQLite transaction on DuckDB: 114 to 126 and 108 to 118, so 129 and 121.
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121},
           "postgres": {**_TODAY, "setup": 88, "setup_progress": 84}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -274,8 +283,11 @@ def seed(store):
         # each project moved at its own minute, so the list's order does not hang on a tie
         stamp = ago(minutes=i * 3)
         store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?", [stamp, uid])
-        store.sc.execute("UPDATE usecases SET created_at = ?, updated_at = ? WHERE id = ?",
-                         [ago(days=30, minutes=i), stamp, uid])
+        from sqlalchemy import update
+        from tares.session_store.tables import usecases as projects_t
+        with store.sessions_db.begin() as c:
+            c.execute(update(projects_t).where(projects_t.c.id == uid).values(
+                created_at=ago(days=30, minutes=i), updated_at=stamp))
         if i < 3:
             store.set_handover(uid, [{"path": f"/Users/sam/code/budget-{i:02d}", "name": repo}],
                                None, None, ago(days=2))
@@ -454,7 +466,7 @@ async def main():
            str(built[name]))
     ck("home builds it (the counter sees a build)", built["home"]["read"] == 1, str(built["home"]))
     for name in ("home", "projects"):
-        ck(f"{name} runs under 150 statements at 25 projects", counts[name] < 150, counts[name])
+        ck(f"{name} runs under 180 statements at 25 projects", counts[name] < 180, counts[name])
 
 
     print("== the budget ==")
