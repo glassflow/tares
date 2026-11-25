@@ -313,6 +313,34 @@ guard.
 - Still open, not tried: a managed `requirements.toml` with `unified_exec = false`, for people who can
   install one.
 
+## 7. The pace of a Codex crew (TR-1597)
+
+Built on section 3's pacing row. Product code: `tares/crew/codex_pace.py`, the Codex paths of `tares/crew/pace.py`,
+and on the cell `tares/codex_usage.py`. No connection is kept open: the watch's pace step asks a station at the
+top of each round, on a short visit.
+
+Measured on Codex 0.171.0, a ChatGPT Plus account (`probe_pace_station.py`, 25 November 2026, `results/pace_station.json`):
+
+- A station started by the product, with no turn, answers `account/rateLimits/read` and `account/read`. Asking
+  starts no conversation (`thread/list` stayed empty) and uses no model.
+- The answer has `rateLimits` and `rateLimitsByLimitId`. On this account the second holds the same bucket
+  again under its id (`codex`), so two windows are kept, not four: 300 and 10080 minutes.
+- Through `pace.round_start`, a real cell (`tares.daemon`, a database and a key of its own) and back: the
+  reading was `ok`, the windows came out as `session` and `weekly_all` by their length, and the status line
+  read `pace: ok (5-hour 13%, week 32%)`. A Claude Code crew asking the same cell got "no plan reading".
+- What left the station had no `accountId`, no address and no workspace name.
+
+Not measured, and tested with stand-ins only (`tests/test_crew_codex_pace.py`, the fake `codex`):
+
+- An API-key account. The stand-in refuses `account/rateLimits/read` and says its type is `apiKey`; the crew
+  then sends a reading with no windows, which the cell calls `unsupported`. What the real Codex answers for an
+  API key was not seen.
+- A limit reached in the middle of a turn. The stand-in ends the turn as `failed` with `codexErrorInfo`
+  `usageLimitExceeded`, which is what the 0.171.0 schema names (`TurnError`, `CodexErrorInfo`); a real turn
+  ended by the limit was not produced. `rateLimitReachedType` and `ordinaryUsageAllowed` are kept or shown, and
+  not acted on.
+- A bucket of one model with a window of its own (the stand-in has one; this account showed none).
+
 ## What was not verified
 
 - Keeping the person's own Codex setup out of a station: not verified in the spike, where a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. Done since, in section 4.
@@ -322,7 +350,7 @@ guard.
 - Orphan cleanup after a crash. The crew's `strays` scan is the candidate; it was not run against Codex commands.
 - Hook trust by any route other than `bypass_hook_trust`, and managed `requirements.toml`.
 - `required = true` on the MCP server, so a station without Tares fails to start instead of running blind.
-- Linux and Windows. Longer sessions, compaction, rate-limit errors in the middle of a turn.
+- Linux and Windows. Longer sessions, compaction, rate-limit errors in the middle of a turn (section 7 says how one is handled; none was produced).
 - Other Codex versions. The feature list, the hook payloads and the app-server protocol are the parts to
   recheck on an upgrade; `codex app-server generate-json-schema` prints the protocol of the installed version.
 

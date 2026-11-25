@@ -5,7 +5,8 @@ Ports `serve_readings` of `claude-plugin/bin/factory`. On every tick of the watc
   * reads the plan's limits (`plan`, /usage) and sends them to Tares, every FACTORY_PLAN_EVERY seconds
     (default 600, 0 or less or not a number: never). The first tick reads at once. When it cannot read, it
     says so once ("could not read the plan's limits (... plan says why); trying again every Ns") and stays quiet
-    until a read works again, because with an API key there is no plan to read;
+    until a read works again, because with an API key there is no plan to read. Not for a crew on Codex: it
+    has no Claude plan, and the pace step reads the Codex account's limits itself (TR-1597);
   * answers the console's asks for a station's /context: Tares lists every crew's asks on GET
     /api/crew/context/asks, and crews repeat station names, so only an ask whose session is the one this watch's
     own station plays is read (a read for another crew's ask would fail every tick).
@@ -60,7 +61,11 @@ def _quietly(fn, *args) -> int:
         return 1
 
 
-def read_plan(env, say, *, now=time.time) -> None:
+def read_plan(env, say, *, now=time.time, paths: CrewPaths | None = None) -> None:
+    if paths is not None and _on_codex(paths):
+        # A crew on Codex has no Claude plan and may have no `claude`: its limits are the Codex account's,
+        # which the pace step reads from a station and sends at the top of every round (TR-1597).
+        return
     every = plan_every(env)
     t = int(now())
     if every <= 0 or t - MEMORY.plan_read_at < every:
@@ -72,6 +77,14 @@ def read_plan(env, say, *, now=time.time) -> None:
     elif MEMORY.plan_ok:
         MEMORY.plan_ok = False
         say(f"could not read the plan's limits ({ME} plan says why); trying again every {every}s")
+
+
+def _on_codex(paths: CrewPaths) -> bool:
+    from . import proc   # here: proc imports the launch, which imports the modules that import the watch
+    try:
+        return proc.crew_on_codex(paths)
+    except CrewError:
+        return False
 
 
 def _asks(client: TaresClient) -> list:
@@ -135,5 +148,5 @@ def step(paths: CrewPaths, *, env=None, say=None, now=time.time) -> None:
     env = os.environ if env is None else env
     if say is None:
         from .watch import _say as say
-    read_plan(env, say, now=now)
+    read_plan(env, say, now=now, paths=paths)
     answer_asks(paths, env, say)
