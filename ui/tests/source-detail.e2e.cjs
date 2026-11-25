@@ -61,7 +61,7 @@ const flat = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
       ck("head: the title from its settings", (await page.getByTestId("connection-title").innerText()) === "orders");
       ck("head: its internal name under the title", (await page.getByTestId("connection-page").innerText()).includes("pg_orders"));
       // Project names resolve after the page draws; wait for them, not a fixed time.
-      await page.getByTestId("connection-kind").getByRole("link", { name: "Billing" }).waitFor();
+      await page.getByTestId("connection-kind").getByRole("link", { name: "Billing", exact: true }).waitFor();
       const kind = await flat(page.getByTestId("connection-kind"));
       ck("head: kind, how often and its projects", /^Postgres table, checked every 5m, in Shop, Billing$/.test(kind), kind);
       ck("head: each project links to its page",
