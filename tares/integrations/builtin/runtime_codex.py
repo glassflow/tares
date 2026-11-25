@@ -13,8 +13,10 @@ machine knows, checks the Codex version, and starts the process (`tares.crew.cod
   settings  what the station's conversation is started with. Codex takes these per thread (`thread/start`),
             so nothing is written to the repository or to the person's `~/.codex`:
               thread       the `thread/start` parameters: model, approval policy, sandbox, the identity
-                           text, and `config` (the guard's hook, for every tool call and for the start
-                           of every turn, and the thread's trust for it);
+                           text with `{ROLE_MANUAL}` after it (the station's operating rules, which the
+                           crew renders from its kit: a Codex station reads no skills), and `config`
+                           (the guard's hook, for every tool call and for the start of every turn, and
+                           the thread's trust for it);
               effort       the reasoning effort of a turn;
               mcp_servers  the MCP servers the station's conversation is started with, as Codex takes
                            them (`config.mcp_servers`), and the only ones it may load: a station that loads
@@ -162,7 +164,9 @@ class RuntimeCodex(Runtime):
         thread = {
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
-            "developerInstructions": identity(role, station, parent, project, repo, work_role),
+            # who the station is, then its operating rules: the kit's skills as a Codex station reads them
+            # (tares.crew.role_text), which only the machine that holds the kit can render
+            "developerInstructions": identity(role, station, parent, project, repo, work_role) + "{ROLE_MANUAL}",
             "config": {
                 "hooks": {
                     # an empty matcher is every tool; the guard ignores what it has no rule for
