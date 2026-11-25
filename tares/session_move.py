@@ -1,10 +1,11 @@
-"""The one-time move of recent sessions' lines into the session store (P-TR-295, TR-1609).
+"""The one-time move of older lines out of DuckDB (P-TR-295, TR-1609 and TR-1611).
 
 In milestone 1 a line went to `session_lines` only from the upgrade on, while DuckDB got every line,
 so DuckDB holds every line written before RC 1. A session read from the table must hold all of its
-lines, so on the first start of RC 1 a background job rebuilds every `claude_code` session whose last
-line is inside the archive window (`ARCHIVE_AFTER_DAYS`). Older sessions stay in DuckDB: they would
-be archived straight away. Nothing is ever deleted from DuckDB.
+lines, so on the first start of RC 1 a background job rebuilds every `claude_code` session. One whose
+last line is inside the archive window (`ARCHIVE_AFTER_DAYS`) goes into `session_lines`; an older one
+goes straight to archive parts, without passing through the table, because the hourly job would
+archive it at once. Nothing is ever deleted from DuckDB.
 
 The ledger is `session_moves`, one row per session with its state: `pending`, `verified` or
 `failed`.
@@ -26,20 +27,37 @@ The ledger is `session_moves`, one row per session with its state: `pending`, `v
   database blipped, a part did not read) also rolls the transaction back, but leaves the session
   `pending` with the error and an `attempts` count, to be tried again after `RETRY_AFTER`; after
   `MAX_ATTEMPTS` tries it is `failed`.
+- `move_old` takes pending sessions whose last line is outside the window, builds the same full
+  list, and writes it as archive parts of at most `PART_LINES` lines, `seq` from 1. Then one
+  transaction replaces the session's rows in `session_archive_parts`, deletes its rows in
+  `session_lines`, sets the same columns of `sessions`, and marks it `verified` (target `archive`)
+  when the parts hold as many lines as the list. A cell with no archive (Postgres without
+  `TARES_ARCHIVE_URL`) skips these sessions, says so once, and their lines stay in DuckDB.
 - `run` is the daemon's background thread: it waits for the sessions table to catch up, plans, and
-  moves batches of 20 sessions with a pause between them. It resumes from the ledger after a
-  restart, and stops between sessions when `stop` is set.
+  moves batches of 20 sessions with a pause between them, the recent ones first. It resumes from
+  the ledger after a restart, and stops between sessions when `stop` is set.
 
-A session is moved under `Store._sess_lock`, as the reconcile and `Store.append` take it, so no
+An older session's parts are written with no lock held, so a line may arrive, or the hourly archive
+job may write a part, before the replacing transaction. That transaction reads the session again
+(its row, parts, table rows and DuckDB count); if any of it differs, nothing is replaced and the
+session stays `pending` for another go (`move_recent` takes it when the new line made it recent).
+The parts are named by their content (see `session_archive`), so writing them never changes a file
+a committed row points to. They are numbered after the session's last part, so an hourly pass that
+read the session before the move committed runs into the move's part number and rolls back.
+
+A recent session is moved under `Store._sess_lock`, as the reconcile and `Store.append` take it, so no
 line is counted into it meanwhile. On Postgres the transaction also takes
 `pg_advisory_xact_lock` on the session, which lets go with the transaction (PgBouncer in transaction
 mode allows nothing longer). On SQLite the transaction is the write lock: other writers wait on its
-busy timeout while one session is rebuilt.
+busy timeout while one session is rebuilt. The replacing transaction of an older session runs under
+`Store._sess_lock` too; on Postgres it also tries the hourly job's lock
+(`tares_session_archive:`), leaving the session `pending` when the job holds it, and locks the
+session's row, where another process's ingest waits.
 
-Nothing reads DuckDB inside that transaction. A store call holds the state lock, which on SQLite is
+Nothing reads DuckDB inside either transaction. A store call holds the state lock, which on SQLite is
 DuckDB's lock, while it writes the session store, so a read in there would wait on the call and the
-call on the transaction, until one of them gave up with "database is locked". The lines read ahead
-wait in a temporary file beside the database, so a long session is not held in memory.
+call on the transaction, until one of them gave up with "database is locked". The lines of a recent
+session read ahead wait in a temporary file beside the database, so a long one is not held in memory.
 """
 from __future__ import annotations
 
@@ -52,6 +70,7 @@ import time
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import delete, func, insert, or_, select, text, update
 
@@ -69,11 +88,14 @@ PLANNED = "session_move_planned"     # the plan's row in session_ingest_marks
 BATCH = 20                           # sessions taken at a time
 CHUNK = 5000                         # DuckDB lines read under one hold of the lock
 PAUSE = 0.5                          # seconds between batches
+OLD_PAUSE = 1.0                      # seconds between batches of older sessions
+PART_LINES = 5000                    # lines in one archive part of an older session, at most
 WAIT = 2.0                           # seconds between looks at whether the sessions table caught up
 MAX_ATTEMPTS = 5                     # tries of one session before it is `failed` for good
 RETRY_AFTER = 30.0                   # seconds before a session that failed to move is tried again
 PENDING, VERIFIED, FAILED = "pending", "verified", "failed"
-TARGET = "table"
+TARGET = "table"                     # where a recent session went
+ARCHIVE = "archive"                  # where an older one went
 
 
 class Mismatch(Exception):
@@ -169,29 +191,60 @@ def _duck_chunks(store, sources: list, sid: str):
         after = [rows[-1][7], rows[-1][9]]
 
 
+def _table_rows(conn, sid: str) -> list[dict]:
+    """The rows `session_lines` holds for the session, in `seq` order."""
+    t = session_lines.c
+    return [{"seq": r.seq, "line_key": r.line_key, "at": r.at, "type": r.type, "labels": r.labels,
+             "render": r.render, "payload": r.payload}
+            for r in conn.execute(select(t.seq, t.line_key, t.at, t.type, t.labels, t.render,
+                                         t.payload).where(t.session == sid).order_by(t.seq)).all()]
+
+
+def _parts(conn, sid: str) -> list:
+    return conn.execute(select(session_archive_parts).where(
+        session_archive_parts.c.session == sid).order_by(session_archive_parts.c.part)).all()
+
+
+def _from_parts(backend, parts: list) -> list[dict]:
+    """The lines of the archived parts, as `_table_rows` gives them. Raises when one cannot be
+    read."""
+    out = []
+    for p in parts:
+        for r in session_archive.read_part(backend, p):
+            at = r.get("at")
+            out.append({"seq": r["seq"], "line_key": r.get("line_key"),
+                        "at": _utc(datetime.fromisoformat(at)) if at else None,
+                        "type": r.get("type"), "labels": r.get("labels"),
+                        "render": r.get("render"), "payload": r.get("payload")})
+    return out
+
+
 def _existing(store, conn, sid: str) -> list[dict]:
     """The lines the table and the archived parts hold for the session, in `seq` order, each as the
     columns of `session_lines` without `session` and `seq`. Raises when a part cannot be read."""
-    t = session_lines.c
-    out = [{"seq": r.seq, "line_key": r.line_key, "at": r.at, "type": r.type, "labels": r.labels,
-            "render": r.render, "payload": r.payload}
-           for r in conn.execute(select(t.seq, t.line_key, t.at, t.type, t.labels, t.render,
-                                        t.payload).where(t.session == sid).order_by(t.seq)).all()]
-    parts = conn.execute(select(session_archive_parts).where(
-        session_archive_parts.c.session == sid).order_by(session_archive_parts.c.part)).all()
+    out = _table_rows(conn, sid)
+    parts = _parts(conn, sid)
     if parts:
         backend = session_archive.backend_of(store)
         if backend is None:
             raise session_archive.ArchiveError("parts exist but no archive is configured")
-        for p in parts:
-            for r in session_archive.read_part(backend, p):
-                at = r.get("at")
-                out.append({"seq": r["seq"], "line_key": r.get("line_key"),
-                            "at": _utc(datetime.fromisoformat(at)) if at else None,
-                            "type": r.get("type"), "labels": r.get("labels"),
-                            "render": r.get("render"), "payload": r.get("payload")})
+        out += _from_parts(backend, parts)
         out.sort(key=lambda r: r["seq"])
     return out
+
+
+def _extras(have: list, seen: Counter) -> list:
+    """The lines of `have` (table and archive) that DuckDB lacks: each (line_key, at) is matched with
+    one DuckDB line of the same key (`seen`) until DuckDB's are used up, and the rest are extra."""
+    used: Counter = Counter()
+    extra = []
+    for r in have:
+        k = (r["line_key"], _utc(r["at"]))
+        if used[k] < seen[k]:
+            used[k] += 1
+        else:
+            extra.append(r)
+    return extra
 
 
 def _count_rows(conn, sid: str) -> int:
@@ -244,16 +297,7 @@ def _rebuild(store, conn, read: tuple, sid: str) -> tuple[int, int]:
                                              for i, r in enumerate(rows)])
         seq += len(rows)
     duck = seq
-    # the lines DuckDB lacks: each (line_key, at) of the table or archive is matched with one DuckDB
-    # line of the same key until DuckDB's are used up, and the rest are extra
-    used: Counter = Counter()
-    extra = []
-    for r in have:
-        k = (r["line_key"], _utc(r["at"]))
-        if used[k] < seen[k]:
-            used[k] += 1
-        else:
-            extra.append(r)
+    extra = _extras(have, seen)
     for i in range(0, len(extra), CHUNK):
         part = extra[i:i + CHUNK]
         conn.execute(insert(session_lines), [
@@ -318,7 +362,174 @@ def _record_failure(db, sid: str, started: datetime, err: str, final: bool) -> N
             state=state, started_at=started, verified_at=None, error=err, attempts=tries))
 
 
+# ── one older session ────────────────────────────────────────────────────────────────────────
+class _Line(NamedTuple):
+    """One line as `session_archive.write_part` takes it: the columns of `session_lines`."""
+    session: str
+    seq: int
+    line_key: str | None
+    at: datetime | None
+    type: str | None
+    labels: str | None
+    render: str | None
+    payload: str | None
+
+
+def _state(conn, sid: str, lock: bool = False) -> tuple:
+    """What the session store holds of the session: its row, its parts and its table rows. A move
+    that finds this changed when it comes to replace them leaves them alone. `lock` takes the
+    session's row for the transaction (Postgres), where an ingest of the session waits."""
+    s = sessions.c
+    q = select(s.source, s.line_count, s.last_line_at).where(s.session == sid)
+    head = conn.execute(q.with_for_update() if lock else q).first()
+    parts = [(p.part, p.key, p.md5) for p in _parts(conn, sid)]
+    t = session_lines.c
+    n, top = conn.execute(select(func.count(), func.max(t.seq)).where(t.session == sid)).one()
+    return (None if head is None else tuple(head)), parts, int(n), top
+
+
+def _write_list(store, backend, sources: list, sid: str, have: list, part_no: int) -> tuple:
+    """Write the session's full list (every DuckDB line, then the lines of `have` DuckDB lacks) as
+    parts of at most `PART_LINES` lines, `seq` from 1, parts from `part_no`. Returns (the parts' rows,
+    DuckDB lines, all lines, the newest line time). Nothing is recorded in the store."""
+    parts: list = []
+    buf: list = []
+    seq = 0
+    last = None
+    seen: Counter = Counter()
+
+    def flush():
+        parts.append(session_archive.write_part(backend, sid, buf, part_no + len(parts),
+                                                by_content=True))
+        buf.clear()
+
+    def add(r):
+        nonlocal seq, last
+        seq += 1
+        at = _utc(r["at"])
+        if at is not None and (last is None or at > last):
+            last = at
+        buf.append(_Line(sid, seq, r["line_key"], at, r["type"], r["labels"], r["render"],
+                         r["payload"]))
+        if len(buf) >= PART_LINES:
+            flush()
+
+    for envs in _duck_chunks(store, sources, sid):
+        for r in session_ingest._line_rows(store, envs).get(sid, []):
+            seen[(r["line_key"], _utc(r["at"]))] += 1
+            add(r)
+    duck = seq
+    for r in _extras(have, seen):
+        add(r)
+    if buf:
+        flush()
+    return parts, duck, seq, last
+
+
+def _count_archived(conn, sid: str) -> int:
+    """The lines the session's parts hold (a seam for the test of a failed check)."""
+    return conn.execute(select(func.coalesce(func.sum(session_archive_parts.c.lines), 0)).where(
+        session_archive_parts.c.session == sid)).scalar_one()
+
+
+def _replace(store, sid: str, sources: list, before: tuple, wanted: int, built: tuple,
+             started: datetime) -> bool:
+    """Point the session at the parts `_write_list` wrote, in one transaction, and mark it verified.
+    False, with nothing replaced and the ledger row `pending`, when the session is not as it was
+    when the list was read, or the hourly job holds it. Raises `Mismatch` when the lines do not add
+    up."""
+    parts, duck, total, last = built
+    m = session_moves.c
+    db = store.sessions_db
+    with store._sess_lock:          # no line goes into DuckDB or is counted from here to the commit
+        # counted before the transaction: on SQLite a store call can hold DuckDB's lock while it
+        # waits to write the session store, so that lock is not taken inside this write
+        duck_now = _duck_count(store, sources, sid)
+        with db.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('tares_session_move:' "
+                                  "|| CAST(:s AS text)))"), {"s": sid})
+                # not waited for: the hourly job holds its lock across an upload, and ingest waits
+                # on `_sess_lock` meanwhile
+                if not session_archive._lock(conn, sid):
+                    return False
+            if _state(conn, sid, lock=True) != before or duck_now != wanted:
+                conn.execute(update(session_moves).where(m.session == sid, m.state != VERIFIED)
+                             .values(state=PENDING, error=None))
+                return False
+            if duck != wanted:
+                raise Mismatch(f"{duck} of {wanted} DuckDB lines read")
+            now = now_utc()
+            # no row in `sessions` means no line to replace; with no row to lock, nothing is deleted
+            if before[0] is not None:
+                conn.execute(delete(session_lines).where(session_lines.c.session == sid))
+                conn.execute(delete(session_archive_parts).where(
+                    session_archive_parts.c.session == sid))
+                if parts:
+                    conn.execute(insert(session_archive_parts),
+                                 [{**p, "written_at": now} for p in parts])
+                held = _count_archived(conn, sid)
+                if held != total:
+                    raise Mismatch(f"{duck} of {wanted} DuckDB lines read, {total - duck} extra, "
+                                   f"{held} lines archived of {total}")
+                values = dict(line_count=total, lines_origin=session_ingest.TABLE,
+                              lines_complete=True, updated_at=now)
+                if last is not None:
+                    values["last_line_at"] = last
+                conn.execute(update(sessions).where(sessions.c.session == sid).values(**values))
+            conn.execute(update(session_moves).where(m.session == sid).values(
+                state=VERIFIED, target=ARCHIVE, lines_events=duck, lines_after=total,
+                started_at=started, verified_at=now, error=None))
+    return True
+
+
+def move_old_session(store, sid: str, backend, sources: list | None = None) -> tuple[bool, str | None]:
+    """Move one older session to the archive. Returns (verified, error); (False, None) means it
+    changed while it was moved and stays `pending`. A failure leaves its rows and parts as they were
+    and is recorded as `move_session` records one."""
+    sources = sources or sorted(session_ingest.claude_code_sources(store))
+    db = store.sessions_db
+    started = now_utc()
+    try:
+        wanted = _duck_count(store, sources, sid)
+        # one snapshot of the row, the parts and the table rows; on SQLite without the write lock
+        with (db.snapshot() if db.dialect == "postgresql" else db.read()) as conn:
+            before = _state(conn, sid)
+            have = _table_rows(conn, sid)
+            old = _parts(conn, sid)
+        have += _from_parts(backend, old)
+        have.sort(key=lambda r: r["seq"])
+        if before[0] is None and (wanted or have):
+            raise RuntimeError("the session has lines but no row in sessions")
+        first = max((p.part for p in old), default=0) + 1
+        built = _write_list(store, backend, sources, sid, have, first)
+        if not _replace(store, sid, sources, before, wanted, built, started):
+            return False, None
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"[:1000]
+        try:
+            _record_failure(db, sid, started, err, final=isinstance(e, Mismatch))
+        except Exception as e2:
+            print(f"taresd: session move of {sid}: the failure was not recorded "
+                  f"({type(e2).__name__}: {e2}); the row stays as it was", flush=True)
+        return False, err
+    metrics.session_move_lines(built[2])
+    return True, None
+
+
 # ── a pass ───────────────────────────────────────────────────────────────────────────────────
+def _ready():
+    """A pending session that may be tried now: never tried, or `RETRY_AFTER` since its last try."""
+    m = session_moves.c
+    return or_(m.attempts.is_(None), m.attempts == 0,
+               m.started_at <= now_utc() - timedelta(seconds=RETRY_AFTER))
+
+
+def _older(cutoff: datetime):
+    """Outside the window: a last line before `cutoff`, or no last line (or no row) at all."""
+    return or_(sessions.c.last_line_at.is_(None), sessions.c.last_line_at < cutoff)
+
+
 def due(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
     """The pending sessions whose last line is inside the window, the oldest first. One that failed
     to move is left out until `RETRY_AFTER` has passed since its last try."""
@@ -327,20 +538,33 @@ def due(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
     with store.sessions_db.begin() as conn:
         return [r[0] for r in conn.execute(
             select(m.session).join(sessions, s.session == m.session)
-            .where(m.state == PENDING, s.last_line_at >= cutoff,
-                   or_(m.attempts.is_(None), m.attempts == 0,
-                       m.started_at <= now_utc() - timedelta(seconds=RETRY_AFTER)))
+            .where(m.state == PENDING, s.last_line_at >= cutoff, _ready())
             .order_by(s.last_line_at, m.session).limit(limit)).all()]
 
 
-def retrying(store, now: datetime | None = None) -> int:
-    """How many pending sessions with a last line inside the window have failed a try and wait."""
+def due_old(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
+    """The pending sessions outside the window, the oldest last line first; as `due` for one that
+    failed to move."""
+    cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
+    m, s = session_moves.c, sessions.c
+    with store.sessions_db.begin() as conn:
+        return [r[0] for r in conn.execute(
+            select(m.session).outerjoin(sessions, s.session == m.session)
+            .where(m.state == PENDING, _older(cutoff), _ready())
+            .order_by(s.last_line_at, m.session).limit(limit)).all()]
+
+
+def retrying(store, now: datetime | None = None, old: bool = False) -> int:
+    """How many pending sessions inside the window (outside it with `old`) have failed a try and
+    wait."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
     with store.sessions_db.begin() as conn:
         return int(conn.execute(
-            select(func.count()).select_from(session_moves).join(sessions, s.session == m.session)
-            .where(m.state == PENDING, s.last_line_at >= cutoff, m.attempts > 0)).scalar() or 0)
+            select(func.count()).select_from(session_moves)
+            .outerjoin(sessions, s.session == m.session)
+            .where(m.state == PENDING, _older(cutoff) if old else s.last_line_at >= cutoff,
+                   m.attempts > 0)).scalar() or 0)
 
 
 def counts(store) -> dict:
@@ -357,6 +581,59 @@ def refresh_gauges(store) -> None:
         pass
 
 
+def _fill(store, sources: list, sids: list) -> None:
+    try:
+        # the facts and turns of these sessions, from all their lines (since=None reads every one)
+        session_ingest._fill_chunk(store, sources, sids, None)
+        session_ingest._fill_turns_chunk(store, sources, sids, None)
+    except Exception as e:
+        print(f"taresd: session move: facts and turns not filled ({type(e).__name__}: {e}); "
+              "the start-up fill covers them", flush=True)
+
+
+def _old_backend(store):
+    """The archive older sessions go to, or None when the cell has none: said once per process
+    (the flag only holds back the repeat of the line)."""
+    why = "this cell has no archive (TARES_ARCHIVE_URL is not set)"
+    try:
+        backend = session_archive.backend_of(store)
+    except Exception as e:
+        backend, why = None, f"the archive cannot be used ({type(e).__name__}: {e})"
+    if backend is None and not getattr(store, "_move_old_skip_said", False):
+        store._move_old_skip_said = True
+        print(f"taresd: session move: older sessions stay in DuckDB, {why}", flush=True)
+    return backend
+
+
+def move_old(store, limit: int = BATCH, stop: threading.Event | None = None,
+             now: datetime | None = None) -> int:
+    """Move up to `limit` pending sessions outside the window to the archive, oldest first. Returns
+    how many it took: 0 when none is due, or when the cell has no archive. Stops between sessions
+    when `stop` is set."""
+    sids = due_old(store, limit, now)
+    if not sids:
+        return 0
+    backend = _old_backend(store)
+    if backend is None:
+        return 0
+    sources = sorted(session_ingest.claude_code_sources(store))
+    _fill(store, sources, sids)
+    n = 0
+    for sid in sids:
+        if stop is not None and stop.is_set():
+            break
+        ok, err = move_old_session(store, sid, backend, sources)
+        n += 1
+        if err:
+            print(f"taresd: session move of {sid} to the archive failed ({err}); its lines stay as "
+                  "they were", flush=True)
+        elif not ok:
+            print(f"taresd: session move of {sid}: it changed while it moved, so it is moved again",
+                  flush=True)
+    refresh_gauges(store)
+    return n
+
+
 def move_recent(store, limit: int = BATCH, stop: threading.Event | None = None,
                 now: datetime | None = None) -> int:
     """Move up to `limit` pending sessions with a last line inside the window, oldest first.
@@ -367,13 +644,7 @@ def move_recent(store, limit: int = BATCH, stop: threading.Event | None = None,
     if not sids:
         return 0
     sources = sorted(session_ingest.claude_code_sources(store))
-    try:
-        # the facts and turns of these sessions, from all their lines (since=None reads every one)
-        session_ingest._fill_chunk(store, sources, sids, None)
-        session_ingest._fill_turns_chunk(store, sources, sids, None)
-    except Exception as e:
-        print(f"taresd: session move: facts and turns not filled ({type(e).__name__}: {e}); "
-              "the start-up fill covers them", flush=True)
+    _fill(store, sources, sids)
     n = 0
     for sid in sids:
         if stop is not None and stop.is_set():
@@ -388,9 +659,10 @@ def move_recent(store, limit: int = BATCH, stop: threading.Event | None = None,
 
 
 # ── the daemon's thread ──────────────────────────────────────────────────────────────────────
-def run(store, stop: threading.Event, pause: float = PAUSE) -> None:
+def run(store, stop: threading.Event, pause: float = PAUSE, old_pause: float = OLD_PAUSE) -> None:
     """Wait for the sessions table to catch up with the events, plan, and move batches until none
-    is left, with `pause` seconds between them. A failure of the job itself prints one line; the
+    is left: recent sessions with `pause` seconds between batches, then older ones with
+    `old_pause`. A failure of the job itself prints one line; the
     ledger holds the progress, so the next start carries on."""
     t0 = time.perf_counter()
     try:
@@ -401,12 +673,20 @@ def run(store, stop: threading.Event, pause: float = PAUSE) -> None:
         if n:
             print(f"taresd: session move planned for {n} session(s)", flush=True)
         while not stop.is_set():
-            if move_recent(store, stop=stop) == 0:
-                if retrying(store) and not stop.wait(RETRY_AFTER):
-                    continue          # sessions that failed a try wait to be tried again
+            if move_recent(store, stop=stop):
+                if stop.wait(pause):
+                    return
+                continue
+            if stop.is_set():
                 break
-            if stop.wait(pause):
-                return
+            if move_old(store, stop=stop):
+                if stop.wait(old_pause):
+                    return
+                continue
+            waiting = retrying(store) or (retrying(store, old=True) and _old_backend(store))
+            if waiting and not stop.wait(RETRY_AFTER):
+                continue              # sessions that failed a try wait to be tried again
+            break
         done = counts(store)
         if done.get(VERIFIED) or done.get(FAILED):
             print(f"taresd: session move: {done.get(VERIFIED, 0)} verified, {done.get(FAILED, 0)} "

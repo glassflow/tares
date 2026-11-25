@@ -59,9 +59,11 @@ origin, starts false, and is set by comparing with DuckDB (every 10 minutes, and
 a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
 is the rows of `session_lines` plus the `lines` of the parts. `session_read.py` (TR-1507) reads a
 complete session from the table and the parts instead of DuckDB. The table is filled from old events
-once, by `session_move.py` (TR-1609): a background job at the first start of the factory edition
-rebuilds every session whose last line is inside the archive window, from DuckDB's lines and the
-lines only the table or the archive holds, and verifies each. `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
+once, by `session_move.py` (TR-1609, TR-1611): a background job at the first start of the factory
+edition rebuilds every session from DuckDB's lines and the lines only the table or the archive
+holds, into the table when its last line is inside the archive window and straight into archive
+parts when it is older, and verifies each. `tares_session_lines_rows` and
+`tares_session_lines_bytes` say how big the table is.
 
 Two things to know when reading the table:
 

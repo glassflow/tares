@@ -248,6 +248,7 @@ test_session_facts
 test_session_flow
 test_session_lines
 test_session_move
+test_session_move_archive
 test_session_no_duckdb_write
 test_session_project
 test_session_store
