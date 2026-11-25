@@ -19,6 +19,10 @@ needs and a Claude Code station does not:
     turn), and every command or MCP call a turn made must have its line, saying it was let through. A
     station that fails either is stopped.
 
+    The line of a call that is let through also holds its folder and what was asked (the command, or another
+    tool's input; see `started`): Codex lists a call only once it has ended, and not at all when the
+    app-server died while it ran.
+
   * Failing shut. A hook that ends with 1 lets the call through on Codex, as on Claude Code. Whatever goes
     wrong in here (a kit without its guard, a record that cannot be written) ends with 2, which blocks the
     call: a Codex station whose guard cannot run does no work.
@@ -51,6 +55,7 @@ CLOSE_STDIN = "exec </dev/null\n"   # the line put in front of a command that is
 RECORD = "codex.guard"              # stations/<station>.codex.guard in the crew home
 BLOCK = 2                           # the exit code that blocks the call (1 would let it through)
 UNKNOWN = "codex.unknown.json"      # stations/<station>.codex.unknown.json: calls whose outcome is not known
+KEPT = 4096                         # characters of a command, or of another tool's input, the record keeps
 
 
 def record_file(home: str, station: str) -> str:
@@ -177,6 +182,36 @@ def repeat_reason(n: int) -> str:
             f"`tares factory outcome {n} not-done \"<what you found>\"` when it had not. After that it is let through.")
 
 
+def started(tool: str, cmd, cwd, tool_input=None) -> dict:
+    """What the record keeps of a call that is let through, besides who and when: the folder (`cwd`), and
+    what was asked. For a shell command that is `command`, as the station asked for it; for any other tool
+    (a patch, an MCP call) it is `input`, the tool's input as Codex handed it to the hook. One shape for
+    every tool: {at, turn, call, tool, said, cwd, command or input, cut}.
+
+    Why it is kept: Codex lists a call only once it has ended. A command that was running when the app-server
+    died is in no stored conversation, and a call that waits for an approval is told in full only to whoever
+    was connected when it began. This line is the one durable place that saw the call before it ran (the
+    recorder, TR-1595, and the approvals of TR-1593 read it). What is longer than KEPT characters is cut and
+    the line says so (`cut`): an input that was cut is kept as the start of its JSON text."""
+    line = {}
+    if isinstance(cwd, str) and cwd:
+        line["cwd"] = cwd
+    if tool == "Bash":
+        if isinstance(cmd, str) and cmd:
+            asked_for = asked(cmd)
+            line["command"] = asked_for[:KEPT]
+            if len(asked_for) > KEPT:
+                line["cut"] = True
+        return line
+    if tool_input is not None:
+        text = json.dumps(tool_input, separators=(",", ":"), ensure_ascii=False)
+        if len(text) > KEPT:
+            line.update(input=text[:KEPT], cut=True)
+        else:
+            line["input"] = tool_input
+    return line
+
+
 def run(guard_py, env, raw: str, out) -> int:
     """One run of the hook: `raw` is the payload, `out` takes the answer's bytes. Returns the exit code."""
     if not env.get("FACTORY_ROLE"):   # the person's own session: never touched
@@ -204,7 +239,7 @@ def run(guard_py, env, raw: str, out) -> int:
         out.write(rules.deny_output(repeat_reason(again[0])))
         out.flush()
         return 0
-    note(env, {"turn": turn, "call": call, "tool": tool, "said": "allow"})
+    note(env, {"turn": turn, "call": call, "tool": tool, "said": "allow", **started(tool, cmd, rules.payload_cwd(raw), data.get("tool_input"))})
     if tool == "Bash" and cmd and not cmd.startswith(CLOSE_STDIN):
         answer = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
                                          "updatedInput": {"command": CLOSE_STDIN + cmd}}}

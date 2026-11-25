@@ -199,11 +199,27 @@ ck("it is stations/<station>.codex.guard in the crew home, the owner's alone",
 ck("one line each: the turn's start, the call let through, the two refused, with the turn and the call's id",
    [{k: v for k, v in x.items() if k != "at"} for x in lines] == [
        {"turn": "turn-1", "armed": True},
-       {"turn": "turn-1", "call": "exec-aaa", "tool": "Bash", "said": "allow"},
+       {"turn": "turn-1", "call": "exec-aaa", "tool": "Bash", "said": "allow", "cwd": str(TMP), "command": "ls"},
        {"turn": "turn-1", "call": "exec-bbb", "tool": "Bash", "said": "deny"},
        {"turn": "turn-1", "call": "exec-ccc", "tool": "mcp__slack__slack_send_message", "said": "deny"}], lines)
 ck("each line says when", all(abs(x["at"] - time.time()) < 60 for x in lines), lines)
-ck("no line holds the command or the prompt", "gh pr merge" not in file.read_text() and "next task" not in file.read_text())
+ck("the call let through has its command and folder; no line holds a refused command or the prompt",
+   "gh pr merge" not in file.read_text() and "next task" not in file.read_text())
+# what the record keeps of a call that is let through (TR-1595): one shape for every tool
+ck("a command already carrying the added line is kept as it was asked",
+   cg.started("Bash", cg.CLOSE_STDIN + "make test", "/w") == {"cwd": "/w", "command": "make test"})
+long = "echo " + "x" * (cg.KEPT + 50)
+ck("a long command is cut and the line says so",
+   cg.started("Bash", long, "/w") == {"cwd": "/w", "command": long[:cg.KEPT], "cut": True})
+patch = {"command": "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch\n"}
+ck("another tool's line keeps its input as Codex handed it over, and the folder",
+   cg.started("apply_patch", None, "/w", patch) == {"cwd": "/w", "input": patch})
+big = {"text": "y" * (cg.KEPT * 2)}
+got = cg.started("mcp__tares__add_note", None, "/w", big)
+ck("an input that is too long is kept as the start of its text, and the line says so",
+   got.get("cut") is True and isinstance(got.get("input"), str) and len(got["input"]) == cg.KEPT
+   and got["input"].startswith('{"text":"yyy'), got)
+ck("a call with neither a folder nor an input adds nothing", cg.started("mcp__tares__x", None, "") == {})
 with open(file, "a", encoding="utf-8") as f:
     f.write("not json\n[1, 2]\n\n")
 ck("a line that is not one is passed over when the record is read", len(record(home, "crew-reviewer")) == 4)
