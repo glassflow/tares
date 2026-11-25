@@ -3398,7 +3398,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     @staticmethod
     def _ticket_order():
         """The order of a project's list. NULLs last on SQLite too, as DuckDB and Postgres sort."""
-        return (tickets_table.c.position.nulls_last(), tickets_table.c.created_at.nulls_last())
+        return (tickets_table.c.position.nulls_last(), tickets_table.c.created_at.nulls_last(),
+                tickets_table.c.number.nulls_last(), tickets_table.c.id)
 
     def list_tickets(self, project: str) -> list[dict]:
         t = tickets_table
