@@ -9,6 +9,7 @@ text with markup in it. The body is checked against tares/words.py.
 Run: .venv/bin/python tests/test_factory_crew_page.py
 """
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -29,6 +30,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
+from session_helpers import seed_usage
 from tares import words
 from tares.screens import factory_crew as fc
 
@@ -420,8 +422,84 @@ async def holes():
     ck("only helpers count as helpers, a name nobody reported is not one", ms[2]["helpers"] == 1, ms[2])
 
 
+async def private_shares():
+    """A cell of its own: a private project's cost is in nobody's shares but its members'."""
+    import tares.daemon as daemon_mod
+    own = os.path.join(_TMP, "private")
+    os.makedirs(own, exist_ok=True)
+    daemon_mod.DB_PATH = os.path.join(own, "private.duckdb")
+    from tares.daemon import make_app
+    app = make_app()
+    mk = lambda timeout=10: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                              headers={"Authorization": f"Bearer {TOKEN}"})
+    print("== a private project the viewer is not on ==")
+    async with app.router.lifespan_context(app):
+        store = app.state.store
+        an_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        # 1000 spent this week: 800 on the private project, 200 on what everybody sees
+        spent = {"secret": 800, "a": 60, "b": 34, "c": 26, "d": 22, "e": 18, "f": 14, "g": 12,
+                 "h": 8, "i": 0.6}
+        for n, cost in spent.items():
+            store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
+            store.set_project_kind(f"uc_{n}", "software_factory")
+            seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
+        seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=5.4)   # "Other sessions"
+        store.set_project_scope("uc_secret", "private")
+        mia = store.create_person("Mia", "mia@example.com")["id"]
+        bo = store.create_person("Bo", "bo@example.com")["id"]
+        store.add_project_member("uc_secret", mia)
+
+        def key(kid, person=None):
+            token = f"nvf_{kid}_{kid}-secret-for-the-test"
+            store.insert_api_key(kid, kid, f"nvf_{kid}", hashlib.sha256(token.encode()).hexdigest(),
+                                 ["read"], person_id=person)
+            return {"Authorization": f"Bearer {token}"}
+
+        def rows(*xs):
+            return [{"name": f"project-{n}", "share_text": f"{pct}%", "cost_text": f"${usd} at API prices"}
+                    for n, pct, usd in xs]
+
+        everything = (rows(("secret", 80, 800), ("a", 6, 60), ("b", 3, 34), ("c", 3, 26), ("d", 2, 22),
+                           ("e", 2, 18)), "This week: project-secret 80%, project-a 6%")
+        # over 200: g (6%) passes the 5% line, h (4%) does not, and the list still stops at six
+        without = (rows(("a", 30, 60), ("b", 17, 34), ("c", 13, 26), ("d", 11, 22), ("e", 9, 18),
+                        ("f", 7, 14)),
+                   "This week: project-a 30%, project-b 17%, project-c 13%, project-d 11%, "
+                   "project-e 9%, project-f 7%, project-g 6%")
+        async with mk() as cx:
+            async def read(headers):
+                r = await cx.get("/api/factory/crew", headers=headers)
+                assert r.status_code == 200, r.text
+                return r
+
+            for who, headers in (("the cell's token", {}), ("a person on every project", key("kmia", mia))):
+                plan = (await read(headers)).json()["plan"]
+                ck(f"{who}: by project, over all the cost, the six biggest",
+                   plan["by_project"] == everything[0], plan["by_project"])
+                ck(f"{who}: the week's line, over all the cost", plan["share_text"] == everything[1],
+                   plan["share_text"])
+            for who, headers in (("a person not on it", key("kbo", bo)),
+                                 ("a key with no person", key("knobody")),
+                                 ("the cell's token narrowed to the team", {"x-tares-viewer": "public"})):
+                r = await read(headers)
+                plan = r.json()["plan"]
+                ck(f"{who}: by project, over the cost in view, the six biggest",
+                   plan["by_project"] == without[0], plan["by_project"])
+                ck(f"{who}: the week's line, over the cost in view, from 5% up",
+                   plan["share_text"] == without[1], plan["share_text"])
+                ck(f"{who}: neither the private name nor its id",
+                   "project-secret" not in r.text and "uc_secret" not in r.text, r.text)
+            # a lot more spent on project-a: every other project in view falls under half a percent,
+            # and the list has room for six, so only the 1% line keeps them off
+            seed_usage(store, "s-a2", "m-a2", project="uc_a", replied_at=an_hour_ago, cost_usd=10000)
+            plan = (await read(key("kbo2", bo))).json()["plan"]
+            got = [(x["name"], x["share_text"]) for x in plan["by_project"]]
+            ck("a project in view under 1% is left out", got == [("project-a", "99%")], got)
+
+
 units()
 asyncio.run(main())
 asyncio.run(holes())
+asyncio.run(private_shares())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

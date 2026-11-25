@@ -417,7 +417,9 @@ def _plan_title(store, owner: str | None, fx, request) -> str:
     return f"{name}'s Claude plan" if name else "Claude plan"
 
 
-def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
+def _plan(store, now: datetime, names: dict, hidden, fx=None, request=None) -> dict:
+    """The plan's limits and who used it this week. `hidden` is the ids of the projects the caller
+    cannot see: their cost is no part of any share."""
     plan = claude_usage.plan(store)
     limits = []
     shown = [x for x in (plan or {}).get("limits") or [] if x["kind"] in _LIMITS]
@@ -429,7 +431,7 @@ def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
                        "resets_at": _iso(at),
                        "text": f"{pct}% used" + (f" · resets {resets}" if resets else "")})
     shares = [f"{names[r['project']]} {round(r['share'] * 100)}%"
-              for r in claude_usage.by_project(store, now - timedelta(days=7))
+              for r in claude_usage.by_project(store, now - timedelta(days=7), hidden)
               if r["kind"] == "project" and r["project"] in names and (r["share"] or 0) >= 0.05]
     return {"known": plan is not None, "limits": limits,
             "share_text": "This week: " + ", ".join(shares) if shares else None,
@@ -584,7 +586,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
-            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
+            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
             "start": start_steps.checklist(
@@ -645,7 +647,9 @@ def build(store, fx=None, request=None, now=None) -> dict:
     caller who passes `now` (a test) gets a fresh read."""
     if now is not None:
         return home(store, fx, now, request=request)
-    key = _cache_key(store, request)
+    # the hidden projects are part of the key: one credential can read with more or less in view
+    # (`x-tares-viewer: public`), and a body is only for callers who see the same projects
+    key = (*_cache_key(store, request), frozenset(fx.hidden_ids()) if fx else frozenset())
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
