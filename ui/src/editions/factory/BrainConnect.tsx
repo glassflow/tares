@@ -3,8 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Collapse, EmptyState, Panel, Skeleton } from "../../components/edition";
-import { Checkbox } from "../../components/ui/checkbox";
-import { Input as TextInput } from "../../components/ui/input";
+import { Checkbox } from "@paper-kit/ui/checkbox";
+import { Input as TextInput } from "@paper-kit/ui/input";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { availableRepos, connectBrainRepos, type AvailableData, type AvailableRepo } from "./BrainConnect.api";

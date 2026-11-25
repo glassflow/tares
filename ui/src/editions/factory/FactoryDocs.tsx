@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import { ApiError } from "../../api";
 import { Banner, Button, Collapse, EmptyState, Loading, Skeleton, SkeletonLines } from "../../components/edition";
 import { Check, ChevronDown } from "../../components/icons";
-import { Input } from "../../components/ui/input";
+import { Input } from "@paper-kit/ui/input";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";

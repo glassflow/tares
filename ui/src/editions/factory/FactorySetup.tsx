@@ -11,9 +11,9 @@ import { SlackCloudPanel, SlackSelfHostedPanels, WaitingDmPanel } from "../setti
 import { Banner, Button, Collapse, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
 import { Check, ChevronDown } from "../../components/icons";
-import { Checkbox } from "../../components/ui/checkbox";
-import { Input } from "../../components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { Checkbox } from "@paper-kit/ui/checkbox";
+import { Input } from "@paper-kit/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@paper-kit/ui/select";
 import { ENTERPRISE_URL, licenceWordsOn } from "../../licenceWords";
 import { cn } from "../../lib/utils";
 import { useSample } from "../sample";
