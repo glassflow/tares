@@ -16,8 +16,9 @@ What a turn state means here, in the words the crew already uses for Claude Code
   blocked   in a turn that waits on an approval or on an answer
   ""        not alive
 A blocked station is never "between turns" here, however long it has waited. Claude Code's wait rule lets a
-restart replace a prompt nobody answered; on Codex nothing answers an approval yet (the desk is the next step
-of TR-1593), and a second prompt into a waiting turn would steer it, not replace it. So it is left alone.
+restart replace a prompt nobody answered; on Codex a second prompt into a waiting turn would steer it, not
+replace it. So it takes no prompt, and what it asks goes to the person's desk (`asked` and `answer` below, and
+`tares.crew.codex_asks`, which the watch runs once a round).
 
 Handing over a prompt (`hand`) is a turn start, only on a station that is done; one in a turn is refused with
 NotBetweenTurnsError, as a wake that finds a Claude Code station in a turn is. A second turn start into a
@@ -85,8 +86,10 @@ psutil and the standard library.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import shlex
 import signal
 import time
 
@@ -560,6 +563,150 @@ def check_guard(paths: CrewPaths, station: str) -> str:
         except (CrewError, NotCompared):
             return ""
         return why if why and _stop_unguarded(paths, station, why, rec, turn) else ""
+
+
+def failed_turn(paths: CrewPaths, station: str) -> tuple:
+    """(the id of the station's newest turn, why it failed) when that turn failed, ("", "") when it did not
+    or cannot be read. A turn that fails (a model the account cannot use, a limit, an error of Codex's own)
+    leaves the conversation at rest: `turn_state` says "done", and the station did nothing."""
+    thread = _recorded_thread(paths, station)
+    if not thread:
+        return "", ""
+    try:
+        with visit(paths, station) as wire:
+            found, _ = _thread(wire, thread, turns=True)
+    except CrewError:
+        return "", ""
+    turns = found.get("turns") if isinstance(found, dict) else None
+    last = turns[-1] if isinstance(turns, list) and turns and isinstance(turns[-1], dict) else {}
+    if last.get("status") != "failed":
+        return "", ""
+    error = last.get("error")
+    why = error.get("message") if isinstance(error, dict) else error
+    return str(last.get("id") or ""), " ".join(str(why or "Codex gave no reason").split())[:300]
+
+
+# ---- what a station asks (TR-1593: approvals and questions) ----
+#
+# A turn that needs a yes stops and asks: Codex sends a request of its own to whoever is connected to the
+# conversation, and the turn waits ("waiting" above). Measured on 0.171.0 with nobody connected: nothing runs;
+# a visitor that only reads is asked nothing and sees no item for the call; a visitor that joins the
+# conversation is asked again, with the same turn, item and start time, and a request id of its own
+# connection; when one answers and leaves at once, the turn goes on by itself; after an answer nobody is
+# asked again. So an approval needs nobody to stay connected: one visit reads what is asked, and a later one
+# gives the answer, to that same request only.
+
+ASKS = {"item/commandExecution/requestApproval": "command", "item/fileChange/requestApproval": "file",
+        "item/tool/requestUserInput": "question"}
+ASK_LISTEN = 2.0   # seconds a visit listens for what the station asks, after joining its conversation
+ASK_DONE = 5.0     # seconds an answer may take to be taken (the app-server says so)
+
+
+def _plain_command(command) -> str:
+    """A command as the model asked for it: without the shell Codex wraps it in and without the line the
+    guard put in front (`codex_guard.asked`)."""
+    text = str(command or "")
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = []
+    if len(words) == 3 and words[1] in ("-lc", "-c") and os.path.basename(words[0]) in ("zsh", "bash", "sh"):
+        text = words[2]
+    return codex_guard.asked(text)
+
+
+def ask_of(doc: dict) -> dict:
+    """What a request of the app-server's own asks, in the crew's words: {kind, method, thread, turn, item,
+    started, approval, key, command, cwd, reason, root, questions}. `kind` is command, file, question or
+    other (a request the crew has no answer for). `key` names the request whichever connection it came on;
+    two visits that are asked the same thing get the same key."""
+    method = str(doc.get("method") or "")
+    p = doc.get("params") if isinstance(doc.get("params"), dict) else {}
+    ask = {"kind": ASKS.get(method, "other"), "method": method, "thread": str(p.get("threadId") or ""),
+           "turn": str(p.get("turnId") or ""), "item": str(p.get("itemId") or ""), "started": p.get("startedAtMs"),
+           "approval": p.get("approvalId")}
+    name = state.dumps_compact([ask[k] for k in ("method", "thread", "turn", "item", "started", "approval")])
+    ask["key"] = hashlib.sha256(name.encode("utf-8")).hexdigest()[:24]
+    ask.update(command=_plain_command(p.get("command")) if p.get("command") else "", cwd=str(p.get("cwd") or ""),
+               reason=str(p.get("reason") or ""), root=str(p.get("grantRoot") or ""),
+               questions=p.get("questions") if isinstance(p.get("questions"), list) else [])
+    return ask
+
+
+def _asked_now(wire: Wire, start: dict, thread: str, listen: float) -> list:
+    """Join the conversation and read what it asks: [(the request's id on this connection, ask)]. A request
+    arrives right after the join; reading stops when none came for `listen` seconds."""
+    wire.request("thread/resume", {**start, "threadId": thread})
+    found = []
+    while True:
+        doc = wire.asked(listen if not found else min(listen, 0.5))
+        if doc is None:
+            return found
+        found.append((doc.get("id"), ask_of(doc)))
+
+
+def _join(paths: CrewPaths, station: str) -> tuple:
+    doc = settings(paths, station)
+    cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
+    servers = doc.get("mcp_servers") if isinstance(doc.get("mcp_servers"), dict) else {}
+    return _thread_start(doc["thread"], cwd, servers), _recorded_thread(paths, station)
+
+
+def asked(paths: CrewPaths, station: str, listen: float = ASK_LISTEN):
+    """What the station waits for an answer to: a list of asks (`ask_of`), [] when it waits for nothing, None
+    when it could not be asked now (it does not answer, or its conversation cannot be read: nothing is known).
+    One visit that joins the conversation only when it waits, reads and leaves; nothing is answered.
+
+    The caller holds the station's lock."""
+    try:
+        start, thread = _join(paths, station)
+        if not thread:
+            return []
+        with visit(paths, station) as wire:
+            kind = _where(wire, thread)
+            if kind == "unreadable":
+                return None
+            if kind != "waiting":
+                return []
+            return [ask for _, ask in _asked_now(wire, start, thread, listen)]
+    except (CrewError, WireError):
+        return None
+
+
+def answer(paths: CrewPaths, station: str, key: str, result: dict, listen: float = ASK_LISTEN) -> str:
+    """Give the station the answer to one thing it asked. Returns "answered", or why not: "gone" when the
+    station no longer asks it (the turn ended, somebody else answered, the station was started again), or
+    "unreachable" when it could not be asked now (try again later).
+
+    The request is looked for again on this visit and answered only when it is the same one (`key`: the same
+    conversation, turn, item and start time). An answer kept for a request that is no longer asked is never
+    given to another one. The caller holds the station's lock, and has checked the process is the one it
+    looked at."""
+    try:
+        start, thread = _join(paths, station)
+        if not thread:
+            return "gone"
+        with visit(paths, station) as wire:
+            kind = _where(wire, thread)
+            if kind in ("unreadable", "active"):   # active: between two asks of one turn; nothing to answer now
+                return "unreachable" if kind == "unreadable" else "gone"
+            if kind != "waiting":
+                return "gone"
+            for request_id, ask in _asked_now(wire, start, thread, listen):
+                if ask["key"] != key:
+                    continue
+                wire.answer(request_id, result)
+                deadline = time.monotonic() + ASK_DONE
+                while time.monotonic() < deadline:   # leaving before it is taken could lose it
+                    told = wire.next(deadline - time.monotonic())
+                    if told is None:
+                        break
+                    if told.get("method") == "serverRequest/resolved":
+                        return "answered"
+                return "answered" if _where(wire, thread) != "waiting" else "unreachable"
+            return "gone"
+    except (CrewError, WireError):
+        return "unreachable"
 
 
 def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) -> dict:

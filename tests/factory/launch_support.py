@@ -57,6 +57,8 @@ DEFAULT_WORLD = {
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
     "mcp_tool": "[]",        # the text a tool call at /mcp answers with, for a key the cell takes
     "mcp_key": None,         # the key the cell takes from a tool call at /mcp, when it is another than `token`
+    "desk": [],              # the desk's items, as POST /api/desk files them (FakeTares.reply answers one as a person)
+    "answers": [],           # the cell's record of answers people gave (GET /api/answers)
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
     "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"],   # what /health lists
@@ -118,6 +120,32 @@ class FakeTares:
                         return self._send(200, {"jsonrpc": "2.0", "id": asked.get("id"),
                                                 "result": {"content": [{"type": "text", "text": text}]}})
                     return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "fake"}}})
+                # the desk, as the cell keeps it (tares/factory_api.py): a station files nothing unless it is the
+                # orchestrator, and answers nothing at all
+                u = urlparse(self.path)
+                if w["token"] and auth != f"Bearer {w['token']}":
+                    return self._send(401, {"detail": "unauthorized"})
+                if u.path == "/api/desk":
+                    if self.headers.get("X-Tares-Station") and self.headers.get("X-Tares-Role") != "orchestrator":
+                        return self._send(403, {"detail": "only the orchestrator may do this"})
+                    n = len(w["desk"]) + 1
+                    item = {"id": f"dk_{n:04d}", "number": n, "label": f"D{n}", "state": "open", "command": None,
+                            **{k: asked.get(k) for k in ("question", "recommendation", "why", "options", "context",
+                                                         "station", "project", "blocking", "asked_by")}}
+                    w["desk"].append(item)
+                    return self._send(201, item)
+                parts = u.path.strip("/").split("/")
+                if len(parts) == 4 and parts[:2] == ["api", "desk"]:
+                    found = [d for d in w["desk"] if parts[2] in (d["label"], d["id"])]
+                    if not found:
+                        return self._send(404, {"detail": f"no desk item {parts[2]!r}"})
+                    if parts[3] in ("reply", "allow", "answer") and self.headers.get("X-Tares-Station"):
+                        return self._send(403, {"detail": "a person answers this in the console"})
+                    if parts[3] == "withdraw":
+                        if found[0]["state"] != "open":
+                            return self._send(409, {"detail": f"{found[0]['label']} is already {found[0]['state']}"})
+                        found[0].update(state="withdrawn", reason=asked.get("reason"))
+                        return self._send(200, found[0])
                 return self._send(404, {"detail": "no"})
 
             def do_GET(self):
@@ -169,12 +197,27 @@ class FakeTares:
                 hit = w["routes"].get(self.path) or w["routes"].get(u.path)
                 if hit:
                     return self._send(hit[0], hit[1])
+                if u.path == "/api/desk":
+                    want = (parse_qs(u.query).get("state") or ["open"])[0]
+                    return self._send(200, {"desk": [d for d in w["desk"] if d["state"] == want]})
+                if u.path == "/api/answers":
+                    item = (parse_qs(u.query).get("item") or [""])[0]
+                    return self._send(200, {"answers": [a for a in w["answers"] if a["id"] == item]})
                 return self._send(404, {"detail": "no"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         # a short poll interval: shutdown() waits for one, which was half a second per step
         self.thread = threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.02), daemon=True)
+
+    def reply(self, label: str, said: str, via: str = "console", by: str = "Pat") -> None:
+        """A person answers a desk item, as the console's reply does: the item is closed and the cell's record
+        of answers gets a row. `via` and `by` are what that row says of where and who."""
+        for d in self.world["desk"]:
+            if d["label"] == label:
+                d["state"] = "answered"
+        self.world["answers"].append({"id": f"question:{label}", "kind": "question", "choice": None, "said": said,
+                                      "via": via, "by": by})
 
     def rules_for(self, name: str, role: str) -> dict:
         """The rendered rules the launch route gives a station of `role` under project `name`."""
