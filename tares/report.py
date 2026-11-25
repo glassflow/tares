@@ -400,7 +400,7 @@ def read_weeks(store, projects: list[str] | None = None, from_: date | datetime 
 
 # ── the Report page's one read ────────────────────────────────────────────────
 DEFAULT_WEEKS = 8
-MAX_WEEKS = 104
+MAX_YEARS = 2         # between the dates as written; widened to whole weeks it can be 106 columns
 FIRST_YEAR = 2000     # an earlier date is a typo, and the week arithmetic stays in range
 CANNOT_SEE = (
     "Work done outside Tares.",
@@ -439,6 +439,14 @@ def _day(value: str) -> date:
     return day
 
 
+def _years_before(day: date, years: int) -> date:
+    """The same day `years` earlier; 28 February when that year has no such day."""
+    try:
+        return day.replace(year=day.year - years)
+    except ValueError:
+        return day.replace(year=day.year - years, day=28)
+
+
 def range_weeks(from_: str | None, to: str | None, today: date) -> list[date]:
     """The Mondays of a range, oldest first: every week that has a day in `from_` to `to`, up to
     the week of `today`. With no `to` it ends today; with no `from_` it is the last
@@ -449,12 +457,12 @@ def range_weeks(from_: str | None, to: str | None, today: date) -> list[date]:
         raise ValueError("The first date is after the last date.")
     if first and first > today:
         raise ValueError("The range starts in the future.")
-    end = week_of(min(last or today, today))
-    start = week_of(first) if first else end - timedelta(weeks=DEFAULT_WEEKS - 1)
-    count = (end - start).days // 7 + 1
-    if count > MAX_WEEKS:
+    until = min(last or today, today)
+    if first and first < _years_before(until, MAX_YEARS):
         raise ValueError("Pick a range of 2 years or less.")
-    return [start + timedelta(weeks=i) for i in range(count)]
+    end = week_of(until)
+    start = week_of(first) if first else end - timedelta(weeks=DEFAULT_WEEKS - 1)
+    return [start + timedelta(weeks=i) for i in range((end - start).days // 7 + 1)]
 
 
 def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owners,

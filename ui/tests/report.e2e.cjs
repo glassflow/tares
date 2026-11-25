@@ -234,6 +234,28 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
            && (await text(other.page, "report-range")) === "Two dates");
         await other.ctx.close();
       }
+      {
+        const to = page.getByTestId("report-to");
+        const away = () => page.getByRole("heading", { name: "Report", exact: true }).click();
+        await to.focus();
+        await page.keyboard.press("Delete");
+        await away();
+        await page.waitForTimeout(300);
+        ck("dates: a half-typed date changes nothing and the field comes back",
+           query(page).to === plus(ids.old_monday, 2) && (await to.inputValue()) === plus(ids.old_monday, 2),
+           `${page.url()} ${await to.inputValue()}`);
+        await to.focus();
+        for (let part = 0; part < 3; part++) {
+          await page.keyboard.press("Delete");
+          await page.keyboard.press("ArrowRight");
+        }
+        await away();
+        await says(page, "dates: a last date cleared by hand means today again", `10 tickets merged. ${said(ids.old_monday)}`);
+        ck("dates: and it leaves the address", !("to" in query(page)) && query(page).from === ids.old_monday, page.url());
+        await page.getByTestId("report-from").fill("");
+        await says(page, "dates: an emptied first date means the usual weeks", `9 tickets merged. ${said(plus(ids.monday, -49))} to `);
+        ck("dates: and it leaves the address too", same(query(page), { range: "dates", scope: `team:${ids.Ada}` }), page.url());
+      }
       await pick(page, "report-range", "Last 8 weeks");
       await says(page, "range: a preset again, 8 weeks of Ada's team", "9 tickets merged.");
       ck("range: a preset drops the two dates from the address",

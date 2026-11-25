@@ -147,9 +147,19 @@ def ranges():
     ck("a last date ahead ends this week", got == mondays(date(2026, 11, 2), 4), got)
     got = report.range_weeks("2026-11-25", None, day)
     ck("a first date of today is this week", got == [last], got)
-    two_years = (last - timedelta(weeks=103)).isoformat()
-    ck("104 weeks are a range", len(report.range_weeks(two_years, None, day)) == 104)
-    ck("105 are not", refused((last - timedelta(weeks=104)).isoformat(), None) == TOO_LONG)
+    got = report.range_weeks("2024-11-25", None, day)
+    ck("2 years to today are a range", got == mondays(date(2024, 11, 25), 105), (got[0], len(got)))
+    ck("a day more is not", refused("2024-11-24", None) == TOO_LONG, refused("2024-11-24", None))
+    ck("2 years up to a last date, a day more is not",
+       refused("2024-10-14", "2026-10-14") is None
+       and refused("2024-10-13", "2026-10-14") == TOO_LONG,
+       (refused("2024-10-14", "2026-10-14"), refused("2024-10-13", "2026-10-14")))
+    ck("a last date ahead is measured to today", refused("2024-11-25", "2027-03-01") is None,
+       refused("2024-11-25", "2027-03-01"))
+    leap = date(2028, 2, 29)
+    ck("2 years before 29 February is 28 February",
+       len(report.range_weeks("2026-02-28", None, leap)) > 0
+       and report.range_weeks("2026-02-28", None, leap)[0] == date(2026, 2, 23))
     for words in ("2026-13-01", "2026-02-30", "yesterday", "20261125", "2026-11-25T10:00:00",
                   "1999-12-31", "0002-01-01"):
         ck(f"{words!r} is no date, first or last",
@@ -294,6 +304,21 @@ async def scopes():
                    r.status_code == 404 and r.json() == {"detail": f"unknown team {tid!r}"},
                    f"{r.status_code} {r.text[:200]}")
 
+            # the built-in `local` person is nobody while it has no email, as before an owner claims it
+            def local_email(value):
+                with s._swrite:
+                    s.sc.execute("UPDATE people SET email = ? WHERE id = 'local'", [value])
+
+            s.set_project_lead("uc_gamma", "local")
+            local_email(None)
+            offered_teams = (await get(root, None)).json()["scope"]["teams"]
+            r = await get(root, None, scope="team:local")
+            ck("a lead nobody has claimed is no team",
+               offered_teams == [three_teams[0], three_teams[2]] and r.status_code == 404,
+               f"{offered_teams} {r.status_code}")
+            local_email("owner@example.com")
+            s.set_project_lead("uc_gamma", bo)
+
             print("== one project ==")
             await reads("a project", k_bo, "project:uc_beta", ["uc_beta"], 2, name="beta")
             await reads("one that is no factory project, asked by name", k_bo, "project:uc_other",
@@ -335,7 +360,7 @@ async def scopes():
                     ({"from_": "1999-12-31"}, BAD_DATE),
                     ({"from_": week(1).isoformat(), "to": week(2).isoformat()}, BACKWARDS),
                     ({"from_": (TODAY + timedelta(days=1)).isoformat()}, AHEAD),
-                    ({"from_": week(104).isoformat()}, TOO_LONG),
+                    ({"from_": (TODAY - timedelta(days=732)).isoformat()}, TOO_LONG),
                     ({"scope": "everything"}, BAD_SCOPE), ({"scope": ""}, BAD_SCOPE),
                     ({"scope": "team:"}, BAD_SCOPE), ({"scope": "project:"}, BAD_SCOPE),
                     ({"scope": "mine:x"}, BAD_SCOPE), ({"scope": "person:x"}, BAD_SCOPE)):

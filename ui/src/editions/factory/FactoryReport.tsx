@@ -52,14 +52,21 @@ function dates(range: string, params: URLSearchParams, now: number): { from?: st
   return {};
 }
 
-/** A date field that tells the page only a whole date: while a year is being typed the browser reports
- *  years such as 0002, and the page keeps what it has. */
+/** A date field that tells the page only a whole date or an emptied field: while a year is being typed
+ *  the browser reports years such as 0002, and a half-typed date reads as empty with `badInput` set, and
+ *  the page keeps what it has through both. */
 function DayInput({ value, onDay, ...props }: { label: string; value: string; onDay: (day: string) => void; "data-testid": string }) {
   const [draft, setDraft] = React.useState(value);
   React.useEffect(() => setDraft(value), [value]);
+  const emptied = (el: HTMLInputElement) => el.value === "" && !el.validity.badInput;
   return (
-    <Input {...props} type="date" value={draft} onBlur={() => setDraft(value)}
-           onChange={(e) => { setDraft(e.target.value); if (/^2\d{3}-\d{2}-\d{2}$/.test(e.target.value)) onDay(e.target.value); }} />
+    <Input {...props} type="date" value={draft}
+           onBlur={(e) => { if (value && emptied(e.target)) onDay(""); else setDraft(value); }}
+           onChange={(e) => {
+             const day = e.target.value;
+             setDraft(day);
+             if (/^2\d{3}-\d{2}-\d{2}$/.test(day) || (value && emptied(e.target))) onDay(day);
+           }} />
   );
 }
 
