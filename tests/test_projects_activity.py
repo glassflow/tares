@@ -77,11 +77,12 @@ async def api():
         with store.sessions_db.begin() as c:
             c.execute(text("UPDATE usecases SET updated_at = :t WHERE id IN (:a, :b)"),
                       {"t": old, "a": shop, "b": blog})
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?",
-                          [old + timedelta(days=1), shop])
         newest = old + timedelta(days=3)
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ? AND number = 1",
-                          [newest, shop])
+        with store.sessions_db.begin() as c:
+            c.execute(text("UPDATE tickets SET updated_at = :t WHERE project = :p"),
+                      {"t": old + timedelta(days=1), "p": shop})
+            c.execute(text("UPDATE tickets SET updated_at = :t WHERE project = :p AND number = 1"),
+                      {"t": newest, "p": shop})
 
         print("== GET /api/projects ==")
         async with mk() as cx:
@@ -119,8 +120,8 @@ async def reread():
               "merged": False, "head": "abc", "ci": "pending", "verdict": None,
               "checked_at": old.isoformat(), "error": None}
         store.update_ticket(tid, pr=pr)
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [old, tid])
         with store.sessions_db.begin() as c:
+            c.execute(text("UPDATE tickets SET updated_at = :t WHERE id = :i"), {"t": old, "i": tid})
             c.execute(text("UPDATE usecases SET updated_at = :t WHERE id = :i"), {"t": old, "i": uid})
         reads = []
 

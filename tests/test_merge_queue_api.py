@@ -858,12 +858,14 @@ async def main():
 
         def snapshot():
             out = {}
+            moved = ("usecases", "tickets", "ticket_history")   # in the session store (TR-1610, TR-1612)
             with store._sread:
                 for tname in TABLES:
-                    if tname != "usecases":
+                    if tname not in moved:
                         out[tname] = store.sc.execute(f"SELECT * FROM {tname} ORDER BY 1, 2").fetchall()
-            with store.sessions_db.read() as conn:       # the projects are in the session store (TR-1610)
-                out["usecases"] = conn.execute(text("SELECT * FROM usecases ORDER BY 1, 2")).fetchall()
+            with store.sessions_db.read() as conn:
+                for tname in moved:
+                    out[tname] = conn.execute(text(f"SELECT * FROM {tname} ORDER BY 1, 2")).fetchall()
             return out
 
         calls = []

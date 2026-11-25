@@ -77,9 +77,14 @@ async def main():
     def ago(**kw):
         return now_utc() - timedelta(**kw)
 
+    def set_ticket(tid, **values):      # written past the Store's methods, which stamp `now`
+        from sqlalchemy import update
+        from tares.session_store.tables import tickets as tickets_t
+        with store.sessions_db.begin() as c:
+            c.execute(update(tickets_t).where(tickets_t.c.id == tid).values(**values))
+
     def back(tid, **kw):
-        with store._swrite:
-            store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [ago(**kw), tid])
+        set_ticket(tid, updated_at=ago(**kw))
 
     def project(name):
         uid = f"uc_{name.replace('-', '')}"
@@ -341,16 +346,10 @@ async def main():
                and store.ticket_history(x_none)[-1]["reason"] == "Linear marked it Done", (t_["stage"], store.ticket_history(x_none)[-1:]))
             ck("and it is on no list", not any(r["ticket"]["title"] == "Add the archive"
                                               for r in a["waiting_for_you"] + a["with_the_crew"] + a["nobody_on_it"]))
-            with store._swrite:   # a ticket closed before TR-1008 kept its stage
-                store.sc.execute("UPDATE tickets SET status = 'canceled', stage = 'review' WHERE id = ?", [y_free])
+            set_ticket(y_free, status="canceled", stage="review")   # closed before TR-1008, it kept its stage
             q = (await cx.get("/api/review-queue")).json()["queue"]
-            ck("the review queue leaves out a canceled ticket even before the repair",
+            ck("the review queue leaves out a canceled ticket that kept its stage",
                not any(x["title"] == "Tidy the lists" for x in q))
-            store._ticket_stage_repair()
-            ck("the repair clears its stage", store.get_ticket(py, y_free)["stage"] is None)
-            store._ticket_stage_repair()
-            ck("a second repair finds nothing", sum(1 for x in store.ticket_history(y_free) if x["field"] == "stage") == 1,
-               store.ticket_history(y_free))
             store.update_ticket(x_new, status="done")    # merged above
             ck("a merged ticket marked done keeps merged", store.get_ticket(px, x_new)["stage"] == "merged")
 

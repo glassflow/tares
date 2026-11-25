@@ -95,7 +95,7 @@ _TODAY = {"home": 98, "projects": 84, "project": 87, "ticket": 27, "raw_tickets"
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
-DONE_EXTRA = 4
+DONE_EXTRA = 5
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
@@ -116,8 +116,13 @@ DONE_EXTRA = 4
 # two pages that read the review queue: its join of the tickets with the projects (one statement when
 # both were in one database) is now a tickets read and a projects read, so projects 82 to 84 and
 # project 85 to 87 (the counts are 83 and 86, plus 2 percent).
-_DUCKDB = {**_TODAY, "home": 164, "projects": 133, "project": 135, "ticket": 32, "raw_tickets": 14,
-           "raw_ticket": 17}
+# TR-1612 (tickets, ticket history and ticket numbers are read through the session store): on DuckDB
+# each ticket read is now a SQLite transaction, so it costs its BEGIN; the queries themselves are one
+# for one: home 164 to 171, projects 133 to 140, project 135 to 142, ticket 32 to 39, raw_ticket 17
+# to 20 (the counts are 167, 137, 139, 38 and 19, plus 2 percent). With finished projects their
+# grouped ticket read has a BEGIN of its own too: DONE_EXTRA 4 to 5. Postgres state keeps its counts.
+_DUCKDB = {**_TODAY, "home": 171, "projects": 140, "project": 142, "ticket": 39, "raw_tickets": 14,
+           "raw_ticket": 20}
 # TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
 # DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With
@@ -125,8 +130,9 @@ _DUCKDB = {**_TODAY, "home": 164, "projects": 133, "project": 135, "ticket": 32,
 # TR-1633 (Crew's standup reads the handed-over projects, their hand-overs, tickets, milestones and
 # open desk items once for all of them, not once each; Crew had no entry before): on this cell, with 3
 # projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
-# 2 percent.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121, "crew": 77},
+# 2 percent. With TR-1612, Crew's three ticket reads (the tickets twice, their history once) are each a
+# SQLite transaction on DuckDB: 75 to 78, so 80.
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121, "crew": 80},
           "postgres": {**_TODAY, "setup": 88, "setup_progress": 84, "crew": 45}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -290,10 +296,11 @@ def seed(store):
         by_project[uid] = tickets
         # each project moved at its own minute, so the list's order does not hang on a tie
         stamp = ago(minutes=i * 3)
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?", [stamp, uid])
         from sqlalchemy import update
+        from tares.session_store.tables import tickets as tickets_t
         from tares.session_store.tables import usecases as projects_t
         with store.sessions_db.begin() as c:
+            c.execute(update(tickets_t).where(tickets_t.c.project == uid).values(updated_at=stamp))
             c.execute(update(projects_t).where(projects_t.c.id == uid).values(
                 created_at=ago(days=30, minutes=i), updated_at=stamp))
         if i < 3:

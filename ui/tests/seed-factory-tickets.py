@@ -36,6 +36,9 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
+from sqlalchemy import update  # noqa: E402
+
+from tares.session_store.tables import tickets  # noqa: E402
 from tares.store import Store, now_utc  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
@@ -51,13 +54,18 @@ def project(name, goal):
     return uid
 
 
+def moved(tid, minutes):
+    """Say the ticket last changed `minutes` ago."""
+    with store.sessions_db.begin() as c:
+        c.execute(update(tickets).where(tickets.c.id == tid).values(updated_at=now_utc() - timedelta(minutes=minutes)))
+
+
 def ticket(uid, title, minutes, *, milestone=None, stage=None, status=None, holder=None, depends_on=None, pr=None):
     tid = store.create_ticket(uid, "tares", title, milestone=milestone, repo=REPO, depends_on=depends_on)
     fields = {k: v for k, v in (("stage", stage), ("status", status), ("holder", holder), ("pr", pr)) if v is not None}
     if fields:
         store.update_ticket(tid, **fields)
-    with store._swrite:
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [now_utc() - timedelta(minutes=minutes), tid])
+    moved(tid, minutes)
     return tid
 
 
@@ -89,8 +97,7 @@ for n, fields in ((13, {"assignee_person_id": ann["id"]}), (14, {"assignee_perso
                   (17, {"assignee_person_id": ann["id"]}), (15, {"assignee_person_id": bob["id"]}),
                   (18, {"assignee_raw": "carol@elsewhere.example"})):
     store.update_ticket(t[n], **fields)
-    with store._swrite:   # keep the last change the ticket was seeded with
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [now_utc() - timedelta(minutes=n * 20), t[n]])
+    moved(t[n], n * 20)   # keep the last change the ticket was seeded with
 
 y = project("project-y", "Tidy the styles across the console.")
 fast = store.create_milestone(y, "Faster lists")

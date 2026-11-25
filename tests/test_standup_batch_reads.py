@@ -21,6 +21,7 @@ sys.path.insert(0, ROOT)
 
 from tares import factory_owners, standup
 from tares.factory_api import project_progress
+from tares.session_store.tables import tickets as tickets_table
 from tares.store import Store
 
 P = F = 0
@@ -129,8 +130,9 @@ def tied(store, uid):
                          "(?, ?, 'tares', NULL, ?, '', '[]', 1, ?, ?)", [mid, uid, name, when, when])
     for number, mid in ((3, "ms_tie_c"), (1, "ms_tie_a"), (2, "ms_tie_b")):
         tid = ticket(store, uid, f"Ticket number {number}", "review", milestone=mid)
-        store.sc.execute("UPDATE tickets SET number = ?, position = 1, created_at = ? WHERE id = ?",
-                         [number, when, tid])
+        with store.sessions_db.begin() as conn:
+            conn.execute(tickets_table.update().where(tickets_table.c.id == tid)
+                         .values(number=number, position=1, created_at=when))
     base = 900
     for offset in (3, 1, 2):
         d = ask(store, uid, f"Question {offset}", at=when)
