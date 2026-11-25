@@ -888,6 +888,31 @@ async def _after_update(store, row: dict, t: dict, ans: dict | None) -> None:
         await asyncio.to_thread(_set, store, row, "waiting_ci",
                                 f"Could not compare the new commit: {cmp['error']}")
         return
+
+    # A review that came only as the `factory/review` status leaves no round to carry, so the
+    # status on the new commit, read above, decides before the queue writes its own pass. Any
+    # answer but a pass (pending too) sends the pull request out of the queue; once it passes it
+    # enters again. No status there: carried, which is what carrying is for.
+    def status_only() -> bool:
+        return (factory_api.outside_gate(store, row["project_uid"]) is None
+                and all(r["by"] == BY for r in store.ticket_reviews(row["ticket"])))
+
+    if await asyncio.to_thread(status_only):
+        said = pr.get("verdict")
+        if said not in (None, "pass"):
+            await asyncio.to_thread(_withdraw, store, row,
+                                    "the review status on the new commit is not a pass")
+            await asyncio.to_thread(
+                store.add_ticket_history, row["ticket"], row["project_uid"], "merge_queue",
+                "needs_review", f"the review status on the new commit is {said}; it needs a new "
+                "review", BY, BY, now_utc())
+            await asyncio.to_thread(store.merge_queue_delete, row["id"])
+            return
+        if pr.get("ci_partial"):    # the status may be there and not read: ask again
+            await asyncio.to_thread(_set, store, row, "waiting_ci",
+                                    "Could not read the review status on the new commit")
+            return
+
     before_head, before = _load_before(row)
     uid = row["project_uid"]
     if same_changes(before, cmp["files"]):

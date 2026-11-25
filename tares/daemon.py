@@ -5392,8 +5392,8 @@ def make_app() -> FastAPI:
         elif "last_review" in ctx:
             out["verdict"] = factory_api.verdict_now(t, ctx["last_review"].get(t["id"]))
         else:
-            last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
-            out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
+            rounds = store.ticket_reviews(t["id"]) if t["stage"] else []
+            out["verdict"] = factory_api.verdict_now(t, factory_mod.standing_round(rounds))
         return out
 
     def _tickets_out(uid: str) -> list[dict]:

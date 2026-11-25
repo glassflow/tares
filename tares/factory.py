@@ -646,6 +646,22 @@ def reviewer_last(rounds: list[dict]) -> dict | None:
     return next((r for r in reversed(rounds) if r.get("by") != MERGE_QUEUE), None)
 
 
+def standing_round(rounds: list[dict]) -> dict | None:
+    """The review round that says what the verdict is now, of `rounds` (oldest first): the newest,
+    except a merge queue pass over a reviewer whose last verdict, on whichever commit, is not a
+    pass. The queue carries a pass and gives none of its own, so the reviewer's round stands then.
+    None when there are no rounds. Everything that shows or acts on the verdict reads this; a list
+    of the rounds as history shows them all."""
+    if not rounds:
+        return None
+    last = rounds[-1]
+    if last.get("by") == MERGE_QUEUE:
+        own = reviewer_last(rounds)
+        if own is not None and own["verdict"] != "pass":
+            return own
+    return last
+
+
 def same_commit(a, b) -> bool:
     """Whether two commit hashes name the same commit. A hash may be short, so one that starts
     the other counts, in any case. An empty or missing hash is the same as nothing: False."""
