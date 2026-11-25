@@ -6577,7 +6577,7 @@ def make_app() -> FastAPI:
             _err(e)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
-    claude_usage.register(app, store)
+    claude_usage.register(app, store, _hidden_ids)
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares reads from Linear; write_ticket and write_milestone create there through Tares ──
