@@ -209,14 +209,35 @@ async def main():
                (queue_heads(tid), merged(repo), queue_row(repo)))
 
         print("== a second update, after the queue carried it once ==")
-        uid, tid, repo, _ = await approved("twice")
-        b = await update(repo)
-        c = await update(repo, say="failure")
-        await tick()
-        await tick()
-        ck("twice: only the first commit got the queue's pass", queue_heads(tid) == [b],
-           (queue_heads(tid), b, c))
-        sent_back("twice", tid, repo, "changes")
+        for name, say, word in (("twice", "failure", "changes"), ("twicewait", "pending", "pending")):
+            uid, tid, repo, _ = await approved(name)
+            # a commit made while the base has moved again: the queue carries and does not merge yet
+            BEHIND[repo] = 2
+            await tick()
+            b = PRS[repo]["head"] = next(heads)
+            await tick()
+            await tick()            # still behind: it asks for the second update
+            ck(f"{name}: the first commit is carried and waits for the second",
+               queue_heads(tid) == [b] and merged(repo) == []
+               and (queue_row(repo) or {}).get("state") == "waiting_ci",
+               (queue_heads(tid), merged(repo), queue_row(repo)))
+            c = PRS[repo]["head"] = next(heads)
+            STATUSES[c] = say
+            BEHIND[repo] = 0
+            await tick()
+            await tick()
+            await tick()
+            ck(f"{name}: only the first commit got the queue's pass", queue_heads(tid) == [b],
+               (queue_heads(tid), b, c))
+            sent_back(name, tid, repo, word)
+
+            # the outside review passes the second commit after all, the pull request sync reads it
+            STATUSES[c] = "success"
+            await factory_api.refresh_pr(store, uid, store.get_ticket(uid, tid))
+            for _ in range(4):
+                await tick()
+            ck(f"{name}: once the status passes, the pull request enters again and merges",
+               merged(repo) == [c], (merged(repo), queue_row(repo), store.get_ticket(uid, tid)["pr"]))
 
         print("== the new commit's status cannot be read ==")
         # the queue reads the new commit three times in the tick that decides: twice for its gates,
