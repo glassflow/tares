@@ -183,13 +183,19 @@ def pace_status_line(client: TaresClient) -> str:
     """The pace in one line for crew status; "" when it is off or Tares cannot say."""
     if not client.tares_on():
         return ""
+    from . import pace   # here: the pace step imports the modules this one is imported by
     try:
-        p = state.loads_json(client.tares_http("GET", "/api/crew/pace"))
+        p = state.loads_json(client.tares_http("GET", pace.pace_path(client.paths)))
     except (TaresHTTPError, ValueError):
         return ""
     if not isinstance(p, dict) or p.get("on") is not True:
         return ""
     if p.get("known") is not True:
+        if p.get("source") == "codex":   # a crew on Codex: say which kind of nothing it is (TR-1597)
+            why = {"stale": "the last reading of the Codex account's limits is too old to use",
+                   "unsupported": "this Codex account reports no limits"}.get(
+                       p.get("reading"), "no reading of the Codex account's limits yet")
+            return f"pace: on, {why}"
         return "pace: on, no reading of the plan limits yet"
 
     def pc(v):
