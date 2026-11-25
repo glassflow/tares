@@ -1,6 +1,6 @@
 // Tares enterprise licence, see ee/LICENSE
 import { Lock } from "@/components/icons";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@paper-kit/ui/select";
 import type { SlotProps } from "@/slotProps";
 import { Sender } from "../home/Sender";
 

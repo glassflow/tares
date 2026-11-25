@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../api";
 import { Banner, Button, Collapse, EmptyState, Skeleton } from "../../components/edition";
 import { Check, ChevronDown } from "../../components/icons";
-import { Input } from "../../components/ui/input";
+import { Input } from "@paper-kit/ui/input";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { DocPane } from "./FactoryDocs";

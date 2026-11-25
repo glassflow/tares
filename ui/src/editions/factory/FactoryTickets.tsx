@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ChevronDown, ChevronRight } from "../../components/icons";
 import { Banner, Button, Collapse, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot } from "../../components/edition";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@paper-kit/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
