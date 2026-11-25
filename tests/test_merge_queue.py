@@ -44,7 +44,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -329,6 +329,18 @@ async def main():
         FILES[(repo, n)] = before
         AFTER[(repo, n)] = after
         UPDATE[repo] = mode
+
+    def round_on(uid, tid, repo, n, verdict, head=None, by="crew-reviewer", at=None):
+        """A review round on `head` (the pull request's head now): by the reviewer, or by the
+        merge queue when `by` says so. `changes` and `block` carry a blocking finding."""
+        finds = [] if verdict == "pass" else [{"severity": "P2", "file": "a.py", "line": 1,
+                                               "blocking": True, "text": "A batch is lost"}]
+        store.add_review(uid, tid, f"https://github.com/{repo}/pull/{n}",
+                         head or PRS[(repo, n)]["head"], verdict, "Read the delta", "", by, finds,
+                         {}, factory_mod.finding_kind, at or now_utc())
+
+    def queue_rounds(tid):
+        return [x["head"] for x in store.ticket_reviews(tid) if x["by"] == "merge-queue"]
 
     def history(tid, field):
         return [h for h in store.ticket_history(tid) if h["field"] == field]
@@ -941,6 +953,156 @@ async def main():
             ck(f"{label}: nothing merged, no review was written, and it is not lined up again",
                merged_calls(repo) == [] and row(repo, 1) is None
                and [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"] == [], rows(repo))
+
+        print("== TR-1650: #934, the queue never carries a pass over the reviewer's later verdict ==")
+
+        def commit(x):
+            return x.ljust(40, "0")
+
+        def nov(day, clock):
+            return datetime(2026, 11, day, *map(int, clock.split(":")))
+
+        async def start(repo, first):
+            """A project on the Tares gate and one reviewed pull request at `first`."""
+            up = project(repo.split("/")[1], "L4-ship", review=None, ci="github")
+            t = ticket(up, repo, "Carried", 1)
+            PRS[(repo, 1)]["head"] = first
+            return up, t
+
+        async def base_moves(repo):
+            """The base moved: the next tick updates the branch and the row waits for it."""
+            behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", HUNK_MOVED)], "later")
+            await tick()
+
+        async def lands(repo, head):
+            land(repo, 1, head)
+            CHECKED.add(head)
+            await tick()
+
+        repo = "acme/p934"
+        a, b = commit("330bd6ce"), commit("8fd50693")
+        c, d, e = commit("a13a38ee"), commit("2f6af80f"), commit("5ecf0ebc")
+        up, t = await start(repo, a)
+        round_on(up, t, repo, 1, "changes", at=nov(24, "22:12:56"))
+        PRS[(repo, 1)]["head"] = b
+        store.add_review(up, t, f"https://github.com/{repo}/pull/1", b, "pass", "Ran the tests", "",
+                         "crew-reviewer", [], {"F1": "fixed"}, factory_mod.finding_kind,
+                         nov(24, "23:36:16"))
+        del MERGES[:], UPDATES[:]
+        for new in (c, d):
+            await base_moves(repo)
+            await lands(repo, new)
+        ck("a pass followed only by base merges is carried, an earlier changes round aside",
+           queue_rounds(t) == [c, d] and row(repo, 1)["state"] == "queued"
+           and row(repo, 1)["head"] == d, (queue_rounds(t), row(repo, 1)))
+        await base_moves(repo)
+        ck("the base moves again and the branch is updated once more",
+           row(repo, 1)["state"] == "waiting_ci", row(repo, 1))
+        round_on(up, t, repo, 1, "changes", head=d, at=nov(25, "01:36:15"))
+        await tick()
+        land(repo, 1, e)
+        round_on(up, t, repo, 1, "changes", at=nov(25, "01:41:07"))
+        CHECKED.add(e)
+        await tick()
+        ck("the reviewer asked for changes meanwhile: no queue pass for the new head",
+           queue_rounds(t) == [c, d], queue_rounds(t))
+        await tick()
+        await tick()
+        ck("and nothing merges", merged_calls(repo) == [] and row(repo, 1) is None
+           and stage(up, t) == "review", (merged_calls(repo), row(repo, 1), stage(up, t)))
+        h = history(t, "merge_queue")
+        ck("the history says why it left the queue", len(h) == 1 and h[0]["value"] == "needs_review"
+           and h[0]["reason"] == "the reviewer's last verdict is changes; it needs a new review"
+           and h[0]["by"] == "merge-queue", h)
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("merge_ready says the same: the reviewer asked for changes on this commit",
+           not ans["ready"] and ans["review"]["state"] == "changes"
+           and any("crew-reviewer asked for changes on 5ecf0eb" in x for x in ans["reasons"]),
+           ans["reasons"])
+        round_on(up, t, repo, 1, "pass")
+        await tick()
+        ck("a fresh pass from the reviewer is honoured and it merges",
+           [body["sha"] for _, body in merged_calls(repo)] == [e] and stage(up, t) == "merged",
+           (merged_calls(repo), stage(up, t)))
+
+        repo = "acme/blocked1650"
+        a, b, c = commit("a1650001"), commit("a1650002"), commit("a1650003")
+        up, t = await start(repo, a)
+        round_on(up, t, repo, 1, "pass")
+        await base_moves(repo)
+        await lands(repo, b)
+        await base_moves(repo)
+        round_on(up, t, repo, 1, "block", head=b)
+        await lands(repo, c)
+        await tick()
+        ck("a block on an earlier head ends the carry too", queue_rounds(t) == [b]
+           and merged_calls(repo) == [] and row(repo, 1) is None, (queue_rounds(t), row(repo, 1)))
+        h = history(t, "merge_queue")
+        ck("and the history names the block",
+           [x["reason"] for x in h] == ["the reviewer's last verdict is block; it needs a new review"], h)
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("the new head is not reviewed", not ans["ready"]
+           and any("older commit" in x for x in ans["reasons"]), ans["reasons"])
+        round_on(up, t, repo, 1, "pass")
+        await base_moves(repo)
+        await lands(repo, commit("a1650004"))
+        await tick()
+        ck("after a fresh pass the next base merge is carried again and merges",
+           queue_rounds(t) == [b, commit("a1650004")] and stage(up, t) == "merged",
+           (queue_rounds(t), stage(up, t)))
+
+        # a queue pass already on record after the reviewer's changes (one written before this
+        # rule, or a verdict that landed while the queue was writing) counts for nothing
+        repo = "acme/overwritten"
+        up, t = await start(repo, commit("b1650001"))
+        round_on(up, t, repo, 1, "pass", head=commit("b1650000"))
+        round_on(up, t, repo, 1, "changes")
+        round_on(up, t, repo, 1, "pass", by="merge-queue")
+        del MERGES[:]
+        await tick()
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("a queue pass after the reviewer's changes on this head does not make it ready",
+           not ans["ready"] and ans["review"]["state"] == "changes"
+           and any("crew-reviewer asked for changes" in x for x in ans["reasons"])
+           and row(repo, 1) is None and merged_calls(repo) == [], (ans["reasons"], row(repo, 1)))
+        PRS[(repo, 1)]["head"] = commit("b1650002")
+        round_on(up, t, repo, 1, "pass", by="merge-queue")
+        await tick()
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("nor on a later head: the reviewer has not passed it",
+           not ans["ready"] and ans["review"]["state"] == "stale" and row(repo, 1) is None
+           and merged_calls(repo) == [], (ans["reasons"], row(repo, 1)))
+
+        repo = "acme/queueonly"
+        up, t = await start(repo, commit("c1650001"))
+        round_on(up, t, repo, 1, "pass", by="merge-queue")
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("a queue pass with no reviewer round at all (approved by the PR's status) still counts",
+           ans["review"]["state"] == "approved", ans["review"])
+
+        repo = "acme/statusonly"
+        a, b = commit("e1650001"), commit("e1650002")
+        up, t = await start(repo, a)
+        store.update_ticket(t, pr={**store.get_ticket(up, t)["pr"], "head": a,    # posted with gh
+                                   "verdict": "pass", "verdict_head": a})
+        del MERGES[:]
+        await base_moves(repo)
+        await lands(repo, b)
+        await tick()
+        ck("approved by the status alone, a base merge is still carried and merges",
+           queue_rounds(t) == [b] and [body["sha"] for _, body in merged_calls(repo)] == [b],
+           (queue_rounds(t), merged_calls(repo), row(repo, 1)))
+
+        repo = "acme/p937"
+        up, t = await start(repo, commit("d25e2f37"))
+        round_on(up, t, repo, 1, "changes")
+        del MERGES[:]
+        await tick()
+        await tick()
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("only a changes verdict, the stage still review: not ready, no row, no merge",
+           not ans["ready"] and ans["review"]["state"] == "changes" and stage(up, t) == "review"
+           and row(repo, 1) is None and merged_calls(repo) == [], (ans["reasons"], row(repo, 1)))
 
         print("== TR-858: before_files empty or missing ==")
         repo = "acme/nobefore"
