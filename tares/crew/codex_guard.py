@@ -23,6 +23,12 @@ needs and a Claude Code station does not:
     wrong in here (a kit without its guard, a record that cannot be written) ends with 2, which blocks the
     call: a Codex station whose guard cannot run does no work.
 
+  * No repeat of a call whose outcome is not known (TR-1593). A turn cut off by a crash can leave a command
+    that was let through and never reported an end: it may have pushed, or opened a pull request, or done
+    nothing. The crew writes such calls to stations/<station>.codex.unknown.json
+    (`tares.crew.codex_station`), and this hook refuses the same command again until the station has looked
+    at what it left and said so (`tares factory outcome`). Looking is not refused: only the same command is.
+
 What the guard does not stop, on Codex as on Claude Code: it reads the text of a command, for a station that
 cooperates. A script file with a push in it is not read. On Codex, a command that opens the terminal for
 itself (`bash </dev/tty`) gets around the closed input; a station has no terminal (its app-server is started
@@ -44,6 +50,7 @@ from pathlib import Path
 CLOSE_STDIN = "exec </dev/null\n"   # the line put in front of a command that is let through
 RECORD = "codex.guard"              # stations/<station>.codex.guard in the crew home
 BLOCK = 2                           # the exit code that blocks the call (1 would let it through)
+UNKNOWN = "codex.unknown.json"      # stations/<station>.codex.unknown.json: calls whose outcome is not known
 
 
 def record_file(home: str, station: str) -> str:
@@ -136,6 +143,40 @@ def _text(value) -> str:
     return value if isinstance(value, str) else ""
 
 
+def unknown_file(home: str, station: str) -> str:
+    return os.path.join(home, "stations", f"{station}.{UNKNOWN}")
+
+
+def read_unknown(path) -> list:
+    """The calls whose outcome is not known, [] for no file or one that cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def repeats(env, command: str):
+    """(its number, the unknown call) when `command` is one whose earlier run never reported an end, else None."""
+    home, station = env.get("FACTORY_HOME", ""), env.get("FACTORY_STATION", "")
+    want = " ".join(asked(command).split())
+    if not home or not station or not want:
+        return None
+    for n, row in enumerate(read_unknown(unknown_file(home, station)), 1):
+        if row.get("command") and " ".join(str(row["command"]).split()) == want:
+            return n, row
+    return None
+
+
+def repeat_reason(n: int) -> str:
+    return (f"This command was started in a turn that was cut off, and what it did is not known (call {n} of "
+            "`tares factory outcome`). Running it again could do it twice. Look at what it left first (git status and "
+            "git log, the remote, the pull requests, the ticket), then say what you found: "
+            f"`tares factory outcome {n} done \"<what you found>\"` when it had done its work, or "
+            f"`tares factory outcome {n} not-done \"<what you found>\"` when it had not. After that it is let through.")
+
+
 def run(guard_py, env, raw: str, out) -> int:
     """One run of the hook: `raw` is the payload, `out` takes the answer's bytes. Returns the exit code."""
     if not env.get("FACTORY_ROLE"):   # the person's own session: never touched
@@ -157,7 +198,16 @@ def run(guard_py, env, raw: str, out) -> int:
         out.flush()
         rules.log_deny(env, tool, reason)
         return 0
-    note(env, {"turn": turn, "call": call, "tool": tool, "said": "allow"})
+    again = repeats(env, cmd) if tool == "Bash" and cmd else None
+    if again:
+        note(env, {"turn": turn, "call": call, "tool": tool, "said": "deny"})
+        out.write(rules.deny_output(repeat_reason(again[0])))
+        out.flush()
+        return 0
+    line = {"turn": turn, "call": call, "tool": tool, "said": "allow", "cwd": _text(rules.payload_cwd(raw))}
+    if tool == "Bash" and cmd:
+        line["command"] = asked(cmd)   # as it was asked: the record is where a call cut off by a crash is read from
+    note(env, line)
     if tool == "Bash" and cmd and not cmd.startswith(CLOSE_STDIN):
         answer = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
                                          "updatedInput": {"command": CLOSE_STDIN + cmd}}}

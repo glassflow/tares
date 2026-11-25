@@ -1612,6 +1612,127 @@ codex_step(paths, tares)
 ck("a crew on Claude Code is left alone by the Codex round", len(tares.log) == before, tares.log[before:])
 
 # ---------------------------------------------------------------------------------------------
+print("m. a conversation that can no longer be loaded (TR-1593)")
+LISTING["as"] = ""
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true")
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("a turn the crew started is written on the station's row, and is not yet one that was compared",
+   row(paths)[cs.LAST_TURN] == row(paths)["codex"]["turn"] and not cs.last_turn_compared(paths, S), row(paths))
+watch_round(paths, tares)
+ck("the watch's look at the ended turn writes that it was found in order",
+   row(paths).get(cs.COMPARED) == row(paths)[cs.LAST_TURN] and cs.last_turn_compared(paths, S), row(paths))
+end(pid, signal.SIGKILL)
+(paths.station_file(S, "codex") / "fake-threads.json").unlink()   # the conversation can no longer be loaded
+n = conversations()
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+note(paths)
+ck("a lost conversation whose last turn was compared is replaced by a new one, with an event, as before",
+   err is None and conversations() == n + 1 and row(paths)["sessionId"] != thread and cs.is_alive(paths, S)
+   and len(events(paths, "conversation-replaced")) == 1 and cs.unverified(paths, S) == {}, (err, out))
+end(pid_of(paths), signal.SIGKILL)
+
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true")
+fake(turn="hang", think=0.05, commands=json.dumps(["/usr/bin/true"]))
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+end(pid, signal.SIGKILL)   # it dies in its turn: nobody looked at what the turn ran
+(paths.station_file(S, "codex") / "fake-threads.json").unlink()
+n = conversations()
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+ck("a lost conversation whose last turn was never compared is not replaced: the station stays down, and is marked",
+   kind is not None and "cannot be loaded" in (err or "") and "never compared with the guard's record" in err
+   and f"`tares factory revive {S} --fresh`" in err and conversations() == n and not cs.is_alive(paths, S)
+   and cs.unverified(paths, S).get("thread") == thread and row(paths)["sessionId"] == thread
+   and not events(paths, "conversation-replaced") and len(events(paths, "guard-unverified")) == 1, (err, kind, row(paths)))
+watch_revive._guard_told.discard(S)
+said_w = watch_round(paths, tares)
+ck("the watch does not start it in a new conversation either", conversations() == n and not cs.is_alive(paths, S)
+   and cs.unverified(paths, S).get("thread") == thread, said_w)
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S, "--fresh"], claude_bin="")
+note(paths)
+ck("a person's `revive --fresh` gives the conversation up and starts the station in a new one",
+   err is None and conversations() == n + 1 and cs.is_alive(paths, S) and cs.unverified(paths, S) == {}
+   and row(paths)["sessionId"] != thread and len(events(paths, "guard-unverified-given-up")) == 1, (err, out))
+end(pid_of(paths), signal.SIGKILL)
+
+print("n. a call whose outcome is not known (TR-1593)")
+tares, paths, said, mk = crew()
+again = SCRATCH / "ran-again.log"
+again.unlink(missing_ok=True)
+command = f"echo started >> {again}; sleep 6"
+fake(turn=0.2, think=0.05, commands=json.dumps([command]))
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+until(lambda: again.exists())
+end(pid, signal.SIGKILL)   # the app-server dies while the command runs: the guard let it through, no item says it ended
+line = [r for r in cs._record(paths, S) if r.get("call")][-1]
+ck("the guard's line for a call it lets through keeps the command as it was asked, and its folder",
+   line.get("said") == "allow" and line.get("command") == command and line.get("cwd") == str(paths.home), line)
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+note(paths)
+pid2 = pid_of(paths)
+rows = cs.unknown(paths, S)
+prompt = calls(pid2, "turn/start")[-1][1]["input"][0]["text"] if calls(pid2, "turn/start") else ""
+ck("started again in its conversation, the call that was cut off is written down as one whose outcome is not known",
+   err is None and row(paths)["sessionId"] == thread and len(rows) == 1 and rows[0]["command"] == command
+   and rows[0]["call"] == line["call"] and stat.S_IMODE(paths.station_file(S, cg.UNKNOWN).stat().st_mode) == 0o600
+   and len(events(paths, "outcome-unknown")) == 1, (err, rows))
+ck("its first prompt names the call, says not to run it again yet, and how to say what was found",
+   "Before anything else" in prompt and f"1. `{command}`" in prompt and "tares factory outcome <number> done" in prompt
+   and rows[0].get("told") is True, prompt[-700:])
+until(lambda: cs.turn_state(paths, S) == "done")
+last = [r for r in cs._record(paths, S) if r.get("call")][-1]
+ck("the same command, asked again by the new turn, is refused by the guard and does not run",
+   last.get("said") == "deny" and last["call"] != line["call"] and again.read_text().count("started") == 1, (last, again.read_text()))
+got = cs.hand(paths, S, "Carry on.")
+ck("a later prompt does not tell of it a second time, and the call stays refused",
+   "Before anything else" not in calls(pid2, "turn/start")[-1][1]["input"][0]["text"] and len(cs.unknown(paths, S)) == 1)
+until(lambda: cs.turn_state(paths, S) == "done")
+env_s = {"FACTORY_STATION": S, "FACTORY_CREW_HOME": str(paths.home), "FACTORY_HOME": str(paths.home), "FACTORY_ROLE": "reviewer"}
+out_l = io.StringIO()
+with redirect_stdout(out_l):
+    code_l = cs.cmd_outcome([], env_s)
+bad = [quietly(cs.cmd_outcome, argv, env_s)[0] for argv in (["1"], ["1", "maybe", "x"], ["7", "done", "x"], ["1", "done", " "])]
+ck("`tares factory outcome` lists it, and takes no answer that says nothing",
+   code_l == 0 and out_l.getvalue().startswith(f"1. {command}") and all(bad) and len(cs.unknown(paths, S)) == 1, (out_l.getvalue(), bad))
+out_r = io.StringIO()
+with redirect_stdout(out_r):
+    cs.cmd_outcome(["1", "not-done", "the", "log", "has", "one", "line", "and", "no", "process", "is", "left"], env_s)
+ck("the station's account of what it found takes the call off the list, and an event keeps the account",
+   cs.unknown(paths, S) == [] and "recorded: not-done" in out_r.getvalue()
+   and [e for e in events(paths, "outcome-reconciled") if "not-done:" in str(e) and "the log has one line" in str(e)],
+   events(paths, "outcome-reconciled"))
+cs.hand(paths, S, "Now run it.")
+until(lambda: again.read_text().count("started") == 2, 8)
+ck("after that the command is let through again", again.read_text().count("started") == 2, again.read_text())
+end(pid2, signal.SIGKILL)
+
+turn_items = [{"id": "c1", "status": "completed"}, {"id": "c2", "status": "inProgress"}, {"id": "c4", "status": "failed"}]
+rec = [{"turn": "t1", "armed": True}, {"turn": "t1", "call": "c1", "tool": "Bash", "said": "allow", "command": "true"},
+       {"turn": "t1", "call": "c2", "tool": "Bash", "said": "allow", "command": "git push", "cwd": "/w"},
+       {"turn": "t1", "call": "c3", "tool": "mcp__tares__set_stage", "said": "allow"},
+       {"turn": "t1", "call": "c4", "tool": "Bash", "said": "allow", "command": "false"},
+       {"turn": "t1", "call": "c5", "tool": "Bash", "said": "deny", "command": "gh pr merge 3"},
+       {"turn": "t0", "call": "c0", "tool": "Bash", "said": "allow", "command": "old"}]
+ck("unknown is a call of that turn that was let through and has no item saying it ended: not a denied one, not an older turn's",
+   [r["call"] for r in cs.unknown_of("t1", turn_items, rec)] == ["c2", "c3"]
+   and cs.unknown_of("t1", turn_items, rec)[0] == {"call": "c2", "turn": "t1", "tool": "Bash", "command": "git push", "cwd": "/w", "at": None}
+   and [r["call"] for r in cs.unknown_of("t1", None, rec)] == ["c1", "c2", "c3", "c4"] and cs.unknown_of("", None, rec) == [])
+tares, paths, said, mk = crew()
+paths.stations_dir.mkdir(parents=True, exist_ok=True)
+(paths.stations_dir / f"{S}.{cg.UNKNOWN}").write_text(json.dumps([{"call": "c2", "command": "git push  origin HEAD"}]))
+env_g = {"FACTORY_STATION": S, "FACTORY_HOME": str(paths.home), "FACTORY_ROLE": "builder"}
+ck("the guard refuses that command however it is spaced or wrapped, and no other",
+   cg.repeats(env_g, "git push origin HEAD")[0] == 1 and cg.repeats(env_g, cg.CLOSE_STDIN + "git push origin HEAD") is not None
+   and cg.repeats(env_g, "git push origin main") is None and cg.repeats(env_g, "git status") is None
+   and cg.repeats({**env_g, "FACTORY_STATION": "another"}, "git push origin HEAD") is None
+   and "tares factory outcome 1 done" in cg.repeat_reason(1))
+
+# ---------------------------------------------------------------------------------------------
 for pid in STARTED:
     end(pid, signal.SIGKILL)
 left = [pid for pid in STARTED if alive(pid)]

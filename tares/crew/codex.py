@@ -50,7 +50,7 @@ import psutil
 
 from . import state
 from .codex_wire import Wire, WireError
-from .errors import CrewError, GuardOffError
+from .errors import CrewError, GuardOffError, NeverComparedError
 from .paths import CrewPaths, home_dir
 
 RUNTIME = "codex"
@@ -463,6 +463,12 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
             stop(proc, sock)
             _put_back(paths, station, before)
             codex_station.mark_off(paths, station, e.why, e.turn)
+            raise
+        except NeverComparedError as e:   # the row as it was, with the conversation marked: only a person gives it up
+            stop(proc, sock)
+            _put_back(paths, station, before)
+            codex_station.mark_unverified(paths, station, e.thread, f"its conversation cannot be loaded ({e.why})",
+                                          event=False)   # `hand` recorded the event; the row was put back since
             raise
         except CrewError:
             stop(proc, sock)
