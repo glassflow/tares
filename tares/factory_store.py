@@ -19,6 +19,7 @@ from .integrations import SLOTS
 from .session_store.tables import (project_sessions, session_commands, session_messages,
                                    session_states, session_stations, session_turns, session_usage)
 from .session_store.tables import sessions as sessions_table
+from .session_store.tables import people as people_table
 
 log = logging.getLogger("tares.factory_store")
 
@@ -640,10 +641,9 @@ class FactoryStore:
         ids = sorted({i for i in ids if i})
         if not ids:
             return {}
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT id, name FROM people WHERE id IN ({', '.join('?' for _ in ids)})",
-                ids).fetchall()
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(people_table.c.id, people_table.c.name).where(
+                people_table.c.id.in_(ids))).all()
         return {r[0]: {"id": r[0], "name": r[1]} for r in rows}
 
     def _with_people(self, rows: list[dict], by_key: str | None = "by") -> list[dict]:

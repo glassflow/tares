@@ -4,7 +4,7 @@ second owner is a new person; a teammate is never made `local`, and neither is a
 names; the real owner, arriving after them, still takes `local`. Runs on a licensed daemon; the
 one-person half is tests/test_owner_claims_local.py.
 """
-import asyncio, os, subprocess, sys
+import asyncio, os, subprocess, sys, tempfile
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +36,12 @@ async def _wait(url):
     return False
 
 
+def _db(name):
+    """A DuckDB path in a folder of its own: the people live in tares.sqlite beside it (TR-1608), and
+    two daemons in one folder would share them."""
+    return os.path.join(tempfile.mkdtemp(prefix=name + "-"), name + ".duckdb")
+
+
 def start(db, port):
     for p in (db, db + ".wal"):
         if os.path.exists(p):
@@ -65,7 +71,7 @@ async def who(cx, B, tok):
 async def second_owner():
     """Once `local` is claimed, a second owner is a new person."""
     port = "8871"
-    proc = start("/tmp/owner_second.duckdb", port)
+    proc = start(_db("owner_second"), port)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -87,7 +93,7 @@ async def teammate_first():
     """A teammate, or a person an admin key names as owner, never becomes local; the real owner,
     arriving after them, still does."""
     port = "8872"
-    proc = start("/tmp/owner_teammate.duckdb", port)
+    proc = start(_db("owner_teammate"), port)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):

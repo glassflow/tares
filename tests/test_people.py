@@ -3,7 +3,7 @@ names the person calling. Root token = the system, no person; a key = its person
 `local` while `local` is alone on the cell); auth off = `local`. Also the upgrade of a database that
 has keys but no people. Everything that needs a second person is in ee/tests/test_people_team.py.
 """
-import asyncio, os, subprocess, sys
+import asyncio, os, subprocess, sys, tempfile
 import duckdb
 import httpx
 
@@ -16,6 +16,12 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 AUTH = "root-token"
+
+
+def _db(name):
+    """A database in a folder of its own: the session store (tares.sqlite) sits beside it, and two
+    databases in one folder would share it."""
+    return os.path.join(tempfile.mkdtemp(prefix="people_"), name)
 
 
 async def _wait(url):
@@ -47,7 +53,7 @@ def start(db, port, auth):
 
 async def auth_one_person():
     port = "8861"
-    proc = start("/tmp/people_on.duckdb", port, True)
+    proc = start(_db("people_on.duckdb"), port, True)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -85,7 +91,7 @@ async def auth_one_person():
 
 async def auth_off():
     port = "8862"
-    proc = start("/tmp/people_off.duckdb", port, False)
+    proc = start(_db("people_off.duckdb"), port, False)
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):
@@ -109,7 +115,7 @@ async def auth_off():
 def upgrade():
     """A database from before people: its keys survive, `local` is made, person_id is added."""
     from tares.store import Store
-    db = "/tmp/people_old.duckdb"
+    db = _db("people_old.duckdb")
     for p in (db, db + ".wal"):
         if os.path.exists(p):
             os.remove(p)
@@ -132,7 +138,7 @@ def threads():
     """Several threads create one person at once (the store, no HTTP): one row, no crash."""
     import threading
     from tares.store import Store
-    db = "/tmp/people_race.duckdb"
+    db = _db("people_race.duckdb")
     for p in (db, db + ".wal"):
         if os.path.exists(p):
             os.remove(p)

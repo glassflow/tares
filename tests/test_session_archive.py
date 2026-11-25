@@ -42,7 +42,7 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 1, 8, 0, 0, tzinfo=timezone.utc)
 NOW = T0 + timedelta(days=30)               # a month on: every session of the test is over a week old
-HEAD = "0009_session_origin"
+HEAD = "0010_core_people"
 SRC = "claude_code"
 _N = [0]
 os.environ.pop("TARES_ARCHIVE_URL", None)

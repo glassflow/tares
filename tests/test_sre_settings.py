@@ -38,6 +38,15 @@ os.environ["TARES_WATCH_SECONDS"] = "3600"              # nor the watch loop
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
+from sqlalchemy import update
+
+from tares.session_store.tables import api_keys
+
+
+def _key_used(store, kid, when):
+    """Set when a key was last used: `api_keys` lives in the session store (TR-1608)."""
+    with store.sessions_db.begin() as c:
+        c.execute(update(api_keys).where(api_keys.c.id == kid).values(last_used_at=when))
 
 from fixtures.sre_cell import PROJECT, build
 from tares import edition as edition_mod
@@ -400,11 +409,11 @@ async def main():
         r2 = await httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                      headers={"Authorization": "Bearer " + made["secret"]}).get("/api/sre/settings")
         eq("the new key is real: a key that only sends data cannot read the page", r2.status_code, 403)
-        store.sc.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [datetime.now(UTC) - timedelta(minutes=1, seconds=5), made["id"]])
+        _key_used(store, made["id"], datetime.now(UTC) - timedelta(minutes=1, seconds=5))
         b = (await get()).json()
         eq("a key used a minute ago is worded in the singular",
            next(k for k in b["people"]["keys"] if k["name"] == "grafana")["last_used_words"], "Used 1 minute ago")
-        store.sc.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [datetime.now(UTC) - timedelta(minutes=12), made["id"]])
+        _key_used(store, made["id"], datetime.now(UTC) - timedelta(minutes=12))
         b = (await get()).json()
         eq("and one used twelve minutes ago in the plural",
            next(k for k in b["people"]["keys"] if k["name"] == "grafana")["last_used_words"], "Used 12 minutes ago")

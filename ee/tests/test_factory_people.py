@@ -34,6 +34,8 @@ os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx
 
+from sqlalchemy import update
+from tares.session_store.tables import api_keys
 from tares_ee import areas as areas_mod
 from tares import words
 
@@ -82,8 +84,8 @@ async def main():
         r = await call("alex", "PATCH", f"/api/projects/{vault}", {"scope": "private"})
         assert r.status_code < 300, r.text
         areas_mod.save(store, [{"repo": "example-org/service-a", "person_id": pid["kim"]}])
-        with store._swrite:     # Kim was added, never signed in
-            store.sc.execute("UPDATE api_keys SET last_used_at = NULL WHERE person_id = ?", [pid["kim"]])
+        with store.sessions_db.begin() as c:     # Kim was added, never signed in
+            c.execute(update(api_keys).where(api_keys.c.person_id == pid["kim"]).values(last_used_at=None))
 
         print("== the list ==")
         r = await call("alex", "GET", "/api/factory/people")

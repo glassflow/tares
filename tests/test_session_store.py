@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0009_session_origin"              # the newest revision: tests that count revisions move with it
-REVISIONS = 9
+HEAD = "0010_core_people"              # the newest revision: tests that count revisions move with it
+REVISIONS = 10
 FAILS = []
 
 
@@ -240,7 +240,8 @@ def upgrade_failure():
 
 
 SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
-ALL_TABLES = SESSION_TABLES + ["settings", "session_store_copies", "session_ingest_marks", "sessions",
+ACCOUNT_TABLES = ["people", "api_keys", "project_members"]      # TR-1608, with settings: taken over
+ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts"]
 
@@ -293,8 +294,10 @@ def session_tables():
     ck("the copy ledger is empty", _count(sdb, "session_store_copies") == 0)
     step_down(sdb, "0001_base")
     ck("a downgrade puts the version back to the base", versions(sdb) == ["0001_base"], versions(sdb))
-    ck("and removes the tables the store made, but not settings (a downgrade never drops a taken-over table)",
-       sorted(inspect(sdb.engine).get_table_names()) == ["session_store_version", "settings"],
+    ck("and removes the tables the store made, but not settings and the accounts (a downgrade never "
+       "drops a taken-over table)",
+       sorted(inspect(sdb.engine).get_table_names())
+       == sorted(["session_store_version", "settings"] + ACCOUNT_TABLES),
        inspect(sdb.engine).get_table_names())
     sdb.upgrade()
     ck("an upgrade after a downgrade builds them again", shape(sdb.engine) == declared(sdb.engine)
@@ -421,8 +424,9 @@ def copy_sqlite():
        {t: len(r) for t, r in before.items()})
     ck("nothing is in the session store yet", all(_count(s.sessions_db, t) == 0 for t in SESSION_TABLES))
     got = copy_from_duckdb(s, s.sessions_db)
-    ck("the first call reports the rows it copied (settings is not in DuckDB here: zero)",
-       got == {**{t: len(before[t]) for t in SESSION_TABLES}, "settings": 0}, got)
+    ck("the first call reports the rows it copied (settings and the accounts are not in DuckDB here: zero)",
+       got == {**{t: len(before[t]) for t in SESSION_TABLES}, "settings": 0,
+               **{t: 0 for t in ACCOUNT_TABLES}}, got)
     for t in SESSION_TABLES:
         tbl = declared_tables.metadata.tables[t]
         with s.sessions_db.begin() as c:       # through the declared table, so times come back as UTC
@@ -433,7 +437,8 @@ def copy_sqlite():
     with s.sessions_db.begin() as c:
         ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
     ck("the ledger holds each table and its count", ledger == {**{t: len(before[t]) for t in SESSION_TABLES},
-                                                              "settings": 0}, ledger)
+                                                              "settings": 0, **{t: 0 for t in ACCOUNT_TABLES}},
+       ledger)
     ck("DuckDB is unchanged", {t: _duck_rows(s, t)[1] for t in SESSION_TABLES} == before)
     again = copy_from_duckdb(s, s.sessions_db)
     ck("a second call copies nothing", again == {}, again)
@@ -476,7 +481,8 @@ def copy_sqlite():
         c.execute(text("DROP TRIGGER drop_states"))
     got = copy_from_duckdb(m, m.sessions_db)
     ck("after the cause is gone, the next call copies the rest and not the first",
-       sorted(got) == ["project_sessions", "session_meters", "session_states", "session_usage", "settings"], got)
+       sorted(got) == sorted(["project_sessions", "session_meters", "session_states", "session_usage", "settings"]
+                             + ACCOUNT_TABLES), got)
     m.close()
 
 

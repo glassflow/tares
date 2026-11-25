@@ -49,7 +49,9 @@ class UTCDateTime(TypeDecorator):
 class JSONText(TypeDecorator):
     """A JSON value kept as text: `json.dumps` on the way in, `json.loads` on the way out, on
     SQLite and Postgres alike. Python None is SQL NULL (not the text `null`), and a NULL reads
-    back as None. The column is TEXT, never a database JSON type."""
+    back as None. A blank string reads as None too: a table the old code made can hold one (an
+    empty `people.emails`), and Postgres keeps its rows as they are. The column is TEXT, never a
+    database JSON type."""
 
     impl = Text
     cache_ok = True
@@ -58,4 +60,4 @@ class JSONText(TypeDecorator):
         return None if value is None else json.dumps(value)
 
     def process_result_value(self, value, dialect):
-        return None if value is None else json.loads(value)
+        return None if value is None or not value.strip() else json.loads(value)

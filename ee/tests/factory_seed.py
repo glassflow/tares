@@ -315,6 +315,16 @@ class _Gen:
         with self.store._swrite:
             self.store.sc.executemany(f"INSERT INTO {table} ({cols}) VALUES ({marks}){tail}", rows)
 
+    def put_t(self, table: str, cols: str, rows: list, tail: str = "") -> None:
+        """`put`, for a table that may have moved to the session store (people, api_keys,
+        project_members since TR-1608): there it goes through Core, so a JSON column takes the list
+        itself and not its text. `tail` is for the state connection only."""
+        t = session_table(table)
+        if t is None:
+            return self.put(table, cols, rows, tail)
+        names = [c.strip() for c in cols.split(",")]
+        self.put_s(t, [dict(zip(names, r)) for r in rows])
+
     def put_s(self, table, rows: list, chunk: int = 20000) -> None:
         """SQLAlchemy Core insert() into a table of the sessions database."""
         if not rows:
@@ -341,8 +351,10 @@ class _Gen:
     # ── people and crews ───────────────────────────────────────────────────────────────────────
     def people_and_crews(self):
         rng, st = self.rng, self.store
-        with st._swrite:
-            have = [r[0] for r in st.sc.execute("SELECT id FROM people ORDER BY created_at").fetchall()]
+        from sqlalchemy import select
+        from tares.session_store.tables import people as people_t
+        with st.sessions_db.read() as c:
+            have = [r[0] for r in c.execute(select(people_t.c.id).order_by(people_t.c.created_at)).all()]
         self.people = have[:]
         rows = []
         k = 0
@@ -351,10 +363,10 @@ class _Gen:
             k += 1
             pid = self.id("per")
             self.people.append(pid)
-            rows.append([pid, name, email, json.dumps([email]), None, k == 1,
+            rows.append([pid, name, email, [email], None, k == 1,
                          NOW - timedelta(days=50 - k), "invite", None, None])
-        self.put("people", "id, name, email, emails, github, is_admin, created_at, created_via, "
-                           "picture, removed_at", rows)
+        self.put_t("people", "id, name, email, emails, github, is_admin, created_at, created_via, "
+                             "picture, removed_at", rows)
         # crews, with the stations each runs
         rows = []
         for i in range(self.need("crews")):
@@ -380,12 +392,12 @@ class _Gen:
             with_person = i < self.mix["api_keys_with_person"]
             rows.append([self.id("key"), f"laptop-{i:02d}", f"tk_{rng.getrandbits(24):06x}",
                          hashlib.sha256(f"seed-key-{i}".encode()).hexdigest(),
-                         json.dumps(["admin"] if i % 7 == 0 else ["read", "write"]),
+                         ["admin"] if i % 7 == 0 else ["read", "write"],
                          self.stamp(60), self.stamp(10) if i % 5 else None,
                          self.stamp(20) if i % 9 == 0 else None, None,
                          self.people[i % len(self.people)] if with_person else None])
-        self.put("api_keys", "id, name, prefix, hash, scopes, created_at, last_used_at, revoked_at, "
-                             "project, person_id", rows)
+        self.put_t("api_keys", "id, name, prefix, hash, scopes, created_at, last_used_at, revoked_at, "
+                               "project, person_id", rows)
         # settings: harmless keys of their own
         rows = [[f"seed.note_{i:02d}", str(i), NOW - timedelta(days=i)] for i in range(self.need("settings"))]
         t = session_table("settings")
@@ -921,7 +933,7 @@ class _Gen:
         self.put("grants", "id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, state, "
                            "needs_lead", rows)
         n = self.need("project_members")
-        self.put("project_members", "project, person_id, added_by, added_at, reason",
+        self.put_t("project_members", "project, person_id, added_by, added_at, reason",
                  [[self.ticket_projects[k]["uid"], self.people[(k + 1) % len(self.people)], "Ada Quill",
                    NOW - timedelta(days=k + 2), "joined"] for k in range(n)])
         n = self.need("project_required_checks")

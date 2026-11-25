@@ -102,7 +102,14 @@ DONE_EXTRA = 4
 # TR-1480 (the settings table is read and written through the session store): on DuckDB each settings
 # read is now a SQLite transaction, so it costs its BEGIN IMMEDIATE too: home 115 to 127, projects 89 to
 # 95, project 88 to 94. Postgres state counts a settings read once, as before, so its counts stay.
-_DUCKDB = {**_TODAY, "home": 117, "projects": 95, "project": 94}
+# TR-1608 (people, API keys and project members are read through the session store): on DuckDB each of
+# those reads is now a SQLite transaction too, so it costs its BEGIN as well. Most of them are the
+# per-request "is `local` the only person" check and the person lookups, which ran once each before:
+# home 117 to 145, projects 95 to 116, project 94 to 119, ticket 27 to 30, raw_tickets 9 to 11, raw_ticket
+# 14 to 16 (the counts are 142, 113, 116, 29, 10 and 15, plus 2 percent). Postgres state counts each
+# once, as before, so its counts stay. Reading each of them once per request is TR-1631's.
+_DUCKDB = {**_TODAY, "home": 145, "projects": 116, "project": 119, "ticket": 30, "raw_tickets": 11,
+           "raw_ticket": 16}
 BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it

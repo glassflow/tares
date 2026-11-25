@@ -2,7 +2,7 @@
 settings over the cell's default, and a personal AGENTS.md and memory that only they see. With auth
 off the one person is `local` and the cell keeps one set of settings, as before.
 """
-import asyncio, json, os, subprocess, sys
+import asyncio, json, os, subprocess, sys, tempfile
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -39,9 +39,9 @@ def H(tok):
 def start(db, port, auth, people=()):
     """Start a daemon on a fresh database. `people` are put on the cell first: adding a second
     person over HTTP needs a licence and is tested under ee/tests."""
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    # a folder of its own: the people live in tares.sqlite beside the DuckDB file, and daemons that
+    # share a folder share them
+    db = os.path.join(tempfile.mkdtemp(prefix="personal-docs-"), os.path.basename(db))
     if people:
         _people.seed(db, list(people))
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
