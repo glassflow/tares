@@ -28,6 +28,13 @@ A new commit on the pull request deletes its row (and withdraws its question); t
 enters again when it is ready, so an approval never carries over to a different commit. The one
 exception is the commit Tares itself makes by updating the branch (TR-858): the row stays in
 `waiting_ci` and, when the changes against the base are the same as before, keeps its review.
+
+A ticket the queue sent back for failing CI returns to `review` by itself when that same commit
+turns green, as when the failed job is rerun (TR-1652): only while that send-back is still why it
+is in `changes`, the commit is still the pull request's head, the review still approves it and CI
+says success. Its `sent_back` row is deleted, and CI failing again on the commit sends it back
+again. A conflict or guardrail send-back, and a `changes` a station, a person or a reviewer set,
+stay.
 """
 from __future__ import annotations
 
@@ -282,10 +289,17 @@ def _load_before(row: dict) -> tuple[str, list]:
 
 
 def _sent_before(store, ticket: str, kind: str, head: str) -> bool:
-    """True when the ticket was sent back once already for this kind on this head."""
+    """True when the ticket was sent back already for this kind on this head. A CI send-back the
+    queue has undone since (its own move back to `review`, TR-1652) does not count."""
     want = f"{kind}:{head}"
-    return any(h.get("field") == "send_back" and h.get("value") == want
-               for h in store.ticket_history(ticket))
+    sent = False
+    for h in store.ticket_history(ticket):          # oldest first
+        if h.get("field") == "send_back" and h.get("value") == want:
+            sent = True
+        elif (kind == "ci_failure" and h.get("field") == "stage" and h.get("value") == "review"
+                and h.get("by") == BY):             # only _return_to_review writes this row
+            sent = False
+    return sent
 
 
 async def send_back(store, row: dict, kind: str, reason: str) -> None:
@@ -357,8 +371,8 @@ def _reviewed_failure(ans: dict) -> tuple[str, str] | None:
 
 
 async def _back_if_failed(store, row: dict, ans: dict) -> bool:
-    """A reviewed pull request that fails goes back to its builder, once per kind and head.
-    True when it was sent back now."""
+    """A reviewed pull request that fails goes back to its builder, once per kind and head (again
+    only after the queue cleared that send-back). True when it was sent back now."""
     found = _reviewed_failure(ans)
     if found is None:
         return False
@@ -601,6 +615,76 @@ def _clear_sent_back(store, g: dict) -> None:
         if (pr.get("repo"), pr.get("number")) == (row["repo"], row["pr"]) and head and \
                 not factory_mod.same_commit(head, row["head"]):
             store.merge_queue_delete(row["id"])
+
+
+# ── back to review after a green rerun (TR-1652) ──────────────────────────────
+
+def _ci_sent_head(store, t: dict | None) -> str:
+    """The commit the queue sent the ticket back on for failing CI, when that send-back is still
+    why it is in `changes`; "" otherwise. Its latest `stage` history row is the queue's move to
+    `changes`, its latest `send_back` row is `ci_failure:<head>`, and both give the reason the
+    ticket shows, so a stage set afterwards by anyone else is left alone."""
+    if not t or t.get("stage") != "changes" or not t.get("stage_reason"):
+        return ""
+    last = {h.get("field"): h for h in store.ticket_history(t["id"])}
+    moved, sent = last.get("stage") or {}, last.get("send_back") or {}
+    kind, _, head = str(sent.get("value") or "").partition(":")
+    if (moved.get("by") != BY or moved.get("value") != "changes" or kind != "ci_failure"
+            or not moved.get("reason") == sent.get("reason") == t["stage_reason"]):
+        return ""
+    return head
+
+
+def _return_to_review(store, g: dict, uid: str, tid: str, head: str) -> dict | None:
+    """Move the ticket back to `review` and delete its `sent_back` row; the ticket as it is then.
+    None, with nothing written, when a fresh read says the send-back on `head` no longer holds it
+    (a stage was set while GitHub was read)."""
+    t = store.get_ticket(uid, tid)
+    if _ci_sent_head(store, t) != head:
+        return None
+    store.update_ticket(tid, stage="review", stage_reason=None)
+    store.add_ticket_history(tid, uid, "stage", "review", f"CI is green again on {head[:7]}",
+                             BY, BY, now_utc())
+    for row in store.merge_queue_sent_back():
+        if row["ticket"] == tid and factory_mod.same_commit(row["head"], head):
+            store.merge_queue_delete(row["id"])
+            g["sent"] = [r for r in g.get("sent", []) if r["id"] != row["id"]]
+    return store.get_ticket(uid, tid)
+
+
+async def _back_to_review(store, g: dict) -> None:
+    """A ticket the queue sent back for failing CI returns to `review` when CI on that same commit
+    is green now. GitHub is read only for a ticket still held by such a send-back on the head of
+    its pull request; the ticket in `g` is updated, so `_enter` can queue it in the same pass."""
+    for uid in g["projects"]:
+        for t in g["tickets"].get(uid, []):
+            if t.get("stage") != "changes":
+                continue
+            try:
+                pr = t.get("pr") or {}
+                if (not pr.get("repo") or not pr.get("number") or pr.get("merged")
+                        or pr.get("state") == "closed"):
+                    continue
+                head = await asyncio.to_thread(_ci_sent_head, store, t)
+                if not head or not factory_mod.same_commit(head, pr.get("head")):
+                    continue
+                if factory_github.rate_low():
+                    return
+                ans = await merge_ready(store, f"{pr['repo']}#{pr['number']}")
+                brief = ans.get("pr") or {}
+                if (brief.get("state") != "open" or brief.get("merged")
+                        or not factory_mod.same_commit(head, ans.get("head"))
+                        or (ans.get("review") or {}).get("state") != "approved"
+                        or (ans.get("ci") or {}).get("state") != "success"):
+                    continue
+                after = await asyncio.to_thread(_return_to_review, store, g, uid, t["id"], head)
+                if after is None:
+                    continue
+                t.update(stage="review", stage_reason=None)
+                await factory_api.write_status(store, uid, after, "review")
+            except Exception as e:  # noqa: BLE001 - one ticket never stops the others
+                print(f"[tares] merge queue return of {t.get('id')} to review failed: "
+                      f"{type(e).__name__}: {e}", flush=True)
 
 
 async def _enter(store, g: dict, fresh: dict[str, dict]) -> None:
@@ -937,6 +1021,7 @@ async def tick(store) -> None:
     g = await asyncio.to_thread(_gather, store)
     fresh = await _keep_rows(store, g)
     await asyncio.to_thread(_clear_sent_back, store, g)
+    await _back_to_review(store, g)
     await _enter(store, g, fresh)
     # what changed above is in `g["rows"]` (the same dicts); re-read states the walkers wrote
     g["rows"] = await asyncio.to_thread(store.merge_queue_open)
