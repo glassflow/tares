@@ -16,21 +16,22 @@ Run: .venv/bin/python tests/test_project_keys.py
 import asyncio
 import json
 import os
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-DB = "/tmp/tares-project-keys.duckdb"
-OPEN_DB = "/tmp/tares-project-keys-open.duckdb"
+# a folder per run: the session store is a file next to the database, and in a shared folder one
+# checkout's newer schema would stop every other checkout's run
+TMP = tempfile.mkdtemp(prefix="tares-project-keys-")
+DB = os.path.join(TMP, "keys.duckdb")
+OPEN_DB = os.path.join(TMP, "keys-open.duckdb")
 ROOT = "root-token-project-keys"
 os.environ["TARES_DB"] = DB
-os.environ["TARES_CATALOG"] = "/tmp/tares-project-keys.catalog.yaml"
+os.environ["TARES_CATALOG"] = os.path.join(TMP, "catalog.yaml")
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
-for _p in (DB, DB + ".wal", OPEN_DB, OPEN_DB + ".wal", os.environ["TARES_CATALOG"]):
-    if os.path.exists(_p):
-        os.remove(_p)
 
 import httpx
 from fastapi.routing import APIRoute
