@@ -2893,14 +2893,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return desk_out(desk_or_404(d["id"]))
 
     def standing_grant(d: dict, giver: str | None, scope: str, grant_kind: str,
-                       request: Request) -> tuple:
+                       request: Request, may_ask_lead: bool = False) -> tuple:
         """What a standing answer becomes (TR-634): (kind, project, areas, needs_lead) for
         put_grant, given by the person who answered (`giver`, the item's person), by the same rules as POST /api/grants:
         a team grant (scope all, or an item with no project) needs an admin; a project grant, the
         project's lead, an admin or the owner of every repo it reaches into; personal, a person,
         for themselves. The repos are those of the item's tickets; one owned by someone else
         makes the grant wait for them, and one from a person who is neither lead nor admin waits
-        for the lead too."""
+        for the lead too. `may_ask_lead` (the console's Allow, TR-1651): with an enterprise
+        licence a project grant from someone who may not give it is not refused, it waits for the
+        lead (an admin when there is none) and the owners of its repos."""
         person = store.get_person(giver) if giver else None
         admin = bool(person["is_admin"]) if person else h.is_admin(request)
         if grant_kind == "personal":
@@ -2911,8 +2913,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
             return "personal", uid, [], False
         if scope == "all" or not d["project"]:
             if not admin:
-                h.err(PermissionError("a grant for every project needs an admin: this answer "
-                                      "can be a project grant, or an admin gives it"), 403)
+                other = ("an admin has to allow it" if may_ask_lead
+                         else "this answer can be a project grant, or an admin gives it")
+                h.err(PermissionError(f"a grant for every project needs an admin: {other}"), 403)
             return "team", None, [], False
         areas = []
         if team_mod.enabled():   # without a team nobody owns a repo, so a repo is nothing to wait for
@@ -2927,7 +2930,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         leads_it = bool(giver and p.get("lead_person_id") == giver)
         owns_all = bool(areas) and giver is not None and all(
             (h.area_owner(a) or {}).get("id") == giver for a in areas)
-        if not (admin or leads_it or owns_all):
+        # without a team a grant waits for no one (it would take effect), so it is refused there
+        asks_lead = may_ask_lead and giver is not None and team_mod.enabled()
+        if not (admin or leads_it or owns_all or asks_lead):
             h.err(PermissionError("a project grant comes from the project's lead, or from the "
                                   "owner of the repos it names"), 403)
         return "project", d["project"], areas, not (admin or leads_it)
@@ -3166,10 +3171,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """{words, scope: project|all}: the person allows a permission request (a desk item with
         a command) from the console. `words` is the grant as they let it stand (the console
         offers a sentence naming the station and the command; they may edit it). It becomes a
-        grant by the rules of a standing answer (`standing_grant`): for every project it needs
-        an admin; for the item's project, the lead, an admin or the owner of every repo of its
-        tickets, and with an enterprise licence it may wait for consent (`granted` is false until
-        it takes effect). It is recorded as their decision made in the console and the item is
+        grant (`standing_grant`): for every project it needs an admin. For the item's project,
+        the lead's or an admin's takes effect; with an enterprise licence anyone else's waits for
+        the lead (an admin when there is none), as does a repo's owner who is not the giver
+        (`granted` is false until it takes effect). Without a licence it needs the lead or an
+        admin. It is recorded as their decision made in the console and the item is
         answered. A grant in effect reaches the stations' rules, and the crew's watch restarts
         the station with it. A person decides: refused from any crew station."""
         if caller(request)["station"]:
@@ -3206,7 +3212,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(e)
         # who may give it is refused here, before anything is written
         kind, grant_project, areas, needs_lead = standing_grant(d, me["id"], scope, "project",
-                                                                request)
+                                                                request, may_ask_lead=True)
         # the grant row, not only its line in the doc: station settings are built from the rows
         row, added = put_grant(kind, factory_mod.grant_words(words), grant_project, me["id"],
                                areas, needs_lead, "the person, in the console")

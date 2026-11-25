@@ -269,7 +269,8 @@ async def main():
         r = await call("kim_admin", "POST", f"/api/desk/{d5['label']}/allow",
                        {"words": words, "scope": "all"})
         ck("kim, who is not an admin, cannot allow it for every project: 403", r.status_code == 403
-           and "needs an admin" in r.text and store.get_desk_item(d5["label"])["state"] == "open"
+           and "an admin has to allow it" in r.text
+           and store.get_desk_item(d5["label"])["state"] == "open"
            and not [g for g in store.all_grant_rows() if g["words"] == words], r.text)
         r = await call("kim_admin", "POST", f"/api/desk/{d5['label']}/allow",
                        {"words": words, "scope": "project"})
@@ -286,6 +287,19 @@ async def main():
         r = await call("alex", "POST", f"/api/grants/{g.get('id')}/consent")
         ck("once alex agrees it reaches both", r.status_code == 200 and await station_has_it()
            and await in_shop_doc(), r.text)
+
+        d8 = await add("Shop: run git fetch?", tickets=[t_web], command="git fetch",
+                       station="shop-build-m1", to=pid["lee"])
+        words8 = "shop-build-m1 may run `git fetch` in shop"
+        r = await call("lee_admin", "POST", f"/api/desk/{d8['label']}/allow",
+                       {"words": words8, "scope": "project"})
+        out = r.json() if r.status_code == 200 else {}
+        g = out.get("grant") or {}
+        ck("lee, who neither leads the project nor owns the repo, is not refused: it waits",
+           r.status_code == 200 and g.get("state") == "waiting" and out.get("granted") is False
+           and store.get_desk_item(d8["label"])["state"] == "answered", r.text)
+        ck("for the repo's owner and for the lead",
+           {w["id"] for w in g.get("waiting_for", [])} == {pid["kim"], pid["alex"]}, r.text)
 
         print("== a question answered, from the console and from a session ==")
         as_({**keys["alex"], **STATION})

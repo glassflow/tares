@@ -311,12 +311,9 @@ async def main():
            and dq["from"]["name"] in ("Your crew", "Alex", "Kim", "Lee"), (dp["from"], dq["from"]))
         ck("Lee has only the item for Lee, Kim has none", len(by_kind(await home("lee")).get("desk", [])) == 1
            and "desk" not in by_kind(await home("kim")))
-        # Alex does not lead Shop and the item names no ticket: a grant takes an admin (TR-1651)
-        store.update_person(pid["alex"], is_admin=True)
         r = await call("alex", "POST", f"/api/desk/{perm['label']}/allow", {
             "words": "shop-build-m1 may read the status of a commit", "scope": "project"})
         ck("Alex allows the permission", r.status_code == 200, r.text)
-        store.update_person(pid["alex"], is_admin=False)
         ck("the permission is gone and the others stay", len(by_kind(await home("alex")).get("desk", [])) == 2)
         for d in store.list_desk("open"):
             store.close_desk_item(d["id"], "answered", None, now_utc())

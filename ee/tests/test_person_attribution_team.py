@@ -170,13 +170,10 @@ async def auth_on():
             desk = (await cx.get(f"{B}/api/desk", headers=Bn)).json()["desk"]
             ck("desk listing: both asked by Ann", len(desk) == 2
                and all(name_of(d) == "Ann" for d in desk), str(desk))
-            # Shop is Ann's project: a permission for it needs its lead or an admin (TR-1651)
-            await cx.patch(f"{B}/api/people/{pid['Ben']}", headers=H(AUTH), json={"is_admin": True})
             r = await cx.post(f"{B}/api/desk/{pq['label']}/allow", headers=Bn, json={
                 "words": "shop-build-m1 may run `gh pr merge 12 --squash` in Shop", "scope": "project"})
             ck("Ben allows it in the console", r.status_code == 200
                and name_of(r.json()["decision"]) == "Ben", r.text)
-            await cx.patch(f"{B}/api/people/{pid['Ben']}", headers=H(AUTH), json={"is_admin": False})
             decs = (await cx.get(f"{B}/api/projects/{uid}/decisions", headers=A)).json()
             decs = decs.get("decisions", decs)
             ck("decisions listing: Ben", decs and name_of(decs[0]) == "Ben", str(decs))
