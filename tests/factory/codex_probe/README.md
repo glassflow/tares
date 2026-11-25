@@ -19,10 +19,11 @@ python tests/factory/codex_probe/probe_pace.py      --out /tmp/codex-probe/pace
 python tests/factory/codex_probe/probe_mcp.py       --out /tmp/codex-probe/mcp
 python tests/factory/codex_probe/probe_evidence.py  --out /tmp/codex-probe/evidence   # offline, no codex
 python tests/factory/codex_probe/probe_launch.py    --out /tmp/codex-probe/launch     # TR-1592: the product's own start
+python tests/factory/codex_probe/probe_station.py   --out /tmp/codex-probe/station    # TR-1593: turn state, the next prompt, the stop
 ```
 
-`--only NAME ...` runs some scenarios of the first two and of `probe_launch.py`. Each run writes `results.json` (or `hooks.json`,
-`pace.json`, `mcp.json`, `evidence.json`, `launch.json`) and one wire transcript per scenario: every JSON-RPC message in both
+`--only NAME ...` runs some scenarios of the first two, of `probe_launch.py` and of `probe_station.py`. Each run writes `results.json` (or `hooks.json`,
+`pace.json`, `mcp.json`, `evidence.json`, `launch.json`, `station.json`) and one wire transcript per scenario: every JSON-RPC message in both
 directions, so the evidence is the wire itself. The transcripts hold local paths and are not committed;
 `fixtures/commands.wire.jsonl` is a small one with the paths replaced.
 
@@ -39,6 +40,7 @@ directions, so the evidence is the wire itself. The transcripts hold local paths
 | `probe_mcp.py` | a station's token and identity headers on an HTTP MCP endpoint |
 | `probe_evidence.py` | Codex command records through the crew's own `match_check` |
 | `probe_launch.py` | TR-1592: the crew's own launch code against the real Codex: the socket, a stale one, the person's own setup kept out, an older Codex |
+| `probe_station.py` | TR-1593: the crew's own station code against the real Codex: turns with nobody connected, a prompt refused in a turn, a conversation carried on after a stop, a station blocked on an approval |
 
 The model and effort default to `gpt-5.6-luna` and `low` (`TARES_PROBE_MODEL`, `TARES_PROBE_EFFORT`). The
 scenarios depend on the model doing the steps it is asked for; a scenario that fails because the model did

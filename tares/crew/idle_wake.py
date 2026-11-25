@@ -30,7 +30,7 @@ import re
 import sys
 import time
 
-from . import claude, launch, lifecycle, locks, pace, state
+from . import claude, launch, lifecycle, locks, pace, proc, state
 from .claude import SessionListUnreadableError
 from .client import TaresClient, TaresHTTPError, cksum, uri
 from .errors import CrewError, NotBetweenTurnsError
@@ -250,7 +250,7 @@ def _stall_items(doc, client: TaresClient, paths: CrewPaths) -> list:
         if stage == "changes" and isinstance(holder, str) and holder in known:   # a station this crew does not know is not ours to call gone
             if holder not in running:
                 try:
-                    running[holder] = claude.is_alive(holder, "", claude.claude_bin(client.env), paths)
+                    running[holder] = proc.is_alive(holder, "", proc.binary(client.env, paths), paths)
                 except (SessionListUnreadableError, CrewError):
                     running[holder] = True   # not known to be gone: no wake on a reading that failed
             if not running[holder]:
@@ -305,7 +305,7 @@ def scan_orchestrator(client: TaresClient, paths: CrewPaths, s: str) -> dict:
     work_keys = [] if items is None else [i["key"] for i in items]
     orch = state.crew_orchestrator(paths)
     base = state.wake_read(orch, paths)["baseline"]
-    act = claude.station_updated(orch, paths)   # an answer the orchestrator itself recorded is not news to it
+    act = proc.station_updated(orch, paths)   # an answer the orchestrator itself recorded is not news to it
     answers = [a for a in _list(_get(desk, "desk"))
                if _get(a, "command") is None and _get(a, "closed_at") is not None]
     dmax = max((a["closed_at"] for a in answers), default="")
@@ -435,7 +435,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
             return None
     elif st != "on":
         return None
-    if claude.attached(s, paths) or not claude.at_rest(s, claude_bin, paths):
+    if proc.attached(s, paths) or not proc.at_rest(s, claude_bin, paths):
         return None
     now = state.now_s() if now is None else now
     out = {"station": s, "state": st, "now": now, "keys": [], "baseline": None, "n": 0, "work": False}
@@ -449,7 +449,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
         settle = _settle(client.env)
     except ScanError:
         return None
-    upd = claude.station_updated(s, paths)
+    upd = proc.station_updated(s, paths)
     level = pace_level(paths, client.env)
     hold = role == "builder" and level >= 2   # a builder told to hold gets no work wake
     c0 = _alt(w["clock"], now)
@@ -503,8 +503,8 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
             return
         if launch.idle_wake_state(fresh) != p["state"]:
             return   # the setting changed since the round began
-        if (state.halted(paths) or claude.attached(s, paths)
-                or not claude.at_rest(s, claude_bin, paths)):
+        if (state.halted(paths) or proc.attached(s, paths)
+                or not proc.at_rest(s, claude_bin, paths)):
             return   # it started something since the first check, or it waits on a prompt
         client.say(f"waking {s} ({p['reason'].split(':')[0]}); restarting it in the same conversation")
         try:
@@ -548,7 +548,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     if not names:
         return
     if claude_bin is None:
-        claude_bin = claude.claude_bin(env)
+        claude_bin = proc.binary(env, paths)
     client = TaresClient(paths, env)
     try:
         for s in names:
@@ -560,7 +560,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             if s in watch_revive.last.handled:
                 continue
             try:
-                if not claude.is_alive(s, "", claude_bin, paths):
+                if not proc.is_alive(s, "", claude_bin, paths):
                     continue
             except SessionListUnreadableError:
                 client.say(f"skipping {s} this round")
@@ -619,10 +619,10 @@ def console_tick(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
         if latest <= _ANSWERED_DONE.get(home, ""):
             return
         if claude_bin is None:
-            claude_bin = claude.claude_bin(env)
+            claude_bin = proc.binary(env, paths)
         try:
-            if (not claude.is_alive(orch, "", claude_bin, paths) or claude.attached(orch, paths)
-                    or not claude.at_rest(orch, claude_bin, paths)):
+            if (not proc.is_alive(orch, "", claude_bin, paths) or proc.attached(orch, paths)
+                    or not proc.at_rest(orch, claude_bin, paths)):
                 return   # not now: the next tick asks again
             p = plan(client, paths, orch, claude_bin=claude_bin)
             if p is None or not p["work"]:   # nothing new for it; a release note or a liveness wake waits for the round

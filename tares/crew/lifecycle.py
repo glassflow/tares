@@ -10,6 +10,11 @@ Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon)
 What is not here: the pace (pace.py, TR-962). The watch itself is watch.py (TR-958); watch_pid and stop_watch call it.
 rearm_text reads the pace with pace.read.
 
+A station on Codex (TR-1593)
+  revive, restart and retire work for a station recorded on Codex: its app-server is started, handed a prompt
+  and ended by tares.crew.codex_station, and no `claude` is looked for when the crew runs on Codex (`proc`).
+  See _restart_codex for what a restart is there. The rest of this note is about Claude Code.
+
 Differences from bash
   * A missing station argument (`tares factory revive` with nothing after it) is refused with
     "tares factory: usage: tares factory revive <station> [--fresh] [prompt]". Bash prints the shell's own
@@ -24,7 +29,7 @@ import subprocess
 import sys
 import time
 
-from . import claude, jsonrun, launch, locks, pace, report, stations, state, watch
+from . import claude, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
 from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -128,8 +133,11 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     locks.station_lock(station, paths)
     if get("status") == "retired":
         raise CrewError(f"{station} was retired; tares factory spawn starts it again")
-    if claude.is_alive(station, "", claude_bin, paths):
+    if proc.is_alive(station, "", claude_bin, paths):
         raise CrewError(f"{station} is running; message it instead")
+    if _codex_station(paths, station):
+        # what it had started and left running when it died: ended, so nothing runs twice, and said
+        prompt = _with_cut_off(prompt, codex_station.end_leftovers(paths, station))
     launch.launch(client, station, role, parent, project, repo, cwd, model, effort, prompt,
                   "" if fresh else session, claude=claude_bin)
     # Resuming starts a copy under a new id; drop the stopped original so the agent view shows one row,
@@ -139,6 +147,17 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
         _remove_session(old_id, claude_bin)
         _keep_earlier(paths, station, old_id, session)
     state.event("restarted-fresh" if fresh else "revived", station, new_id, paths=paths)
+
+
+def _with_cut_off(prompt: str, names: list) -> str:
+    """`prompt` with a first paragraph that names the programs the station had left running, when there were
+    any: they were ended, and what they did is not known."""
+    if not names:
+        return prompt
+    return (f"Before anything else: when your process ended, {len(names)} program(s) you had started were still "
+            f"running ({', '.join(names)}), and the factory ended them. What they did is not known. Look at the "
+            "state they may have changed (the working tree, the remote, your pull request, Tares) before you run "
+            f"any of it again.\n\n{prompt}")
 
 
 def _keep_earlier(paths: CrewPaths, station: str, old_id: str, session: str) -> None:
@@ -171,6 +190,8 @@ def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: st
     if not args or not args[0]:
         _usage(RESTART_USAGE)
     station = stations.station_name(args[0], paths)
+    if _codex_station(paths, station):
+        return _restart_codex(client, paths, station, list(args[1:]), claude_bin, only_between_turns)
     job_id = state.stations_get(station, "id", paths=paths)
     if not job_id:
         raise CrewError(f"{station} is not a recorded station")
@@ -190,6 +211,51 @@ def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: st
     if claude.is_alive(station, "", claude_bin, paths):
         raise CrewError(f"{station} did not stop within {_stop_wait_text(client.env)}s; try again")
     revive(client, paths, [station, *args[1:]], claude_bin=claude_bin)
+
+
+def _codex_station(paths: CrewPaths, station: str) -> bool:
+    """A recorded station whose runtime is Codex."""
+    return bool(state.stations_get(station, "role", paths=paths)) and proc.on_codex(station, paths)
+
+
+def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: list, claude_bin,
+                   only_between_turns: bool) -> None:
+    """restart for a station on Codex. A station that runs, is between turns and would be started with exactly
+    what it runs on now is handed the prompt as its next turn, and its app-server is left alone: on Codex a
+    prompt needs no restart. Anything else is a real restart: the app-server is stopped (a running turn is
+    interrupted first) and the station is revived, with freshly made settings, in its own conversation or,
+    with --fresh, a new one. `only_between_turns` (a wake) leaves a station in a turn alone
+    (NotBetweenTurnsError)."""
+    locks.station_lock(station, paths)
+    fresh = bool(rest) and rest[0] == "--fresh"
+    prompt = (rest[1:] if fresh else rest)[:1]
+    prompt = prompt[0] if prompt else ""
+    alive = codex_station.is_alive(paths, station)
+    resting = alive and codex_station.at_rest(paths, station)
+    if only_between_turns and alive and not resting:
+        raise NotBetweenTurnsError(f"{station} is in a turn; not stopping it")
+    if resting and prompt and not fresh and _launched_as_now(client, paths, station):
+        codex_station.hand(paths, station, prompt)
+        state.event("prompted", station, paths=paths)
+        return
+    if alive:
+        codex_station.stop(paths, station)
+        if codex_station.is_alive(paths, station):
+            raise CrewError(f"{station} did not stop; try again")
+    revive(client, paths, [station, *rest], claude_bin=claude_bin)
+
+
+def _launched_as_now(client: TaresClient, paths: CrewPaths, station: str) -> bool:
+    """Would a start now give the station exactly what it runs on? False when that cannot be told (the launch
+    cannot be had), so a restart then starts it anew, or says why it cannot."""
+    get = lambda key: state.stations_get(station, key, paths=paths)  # noqa: E731
+    try:
+        plan = launch.launch_plan(client, station, get("role"), get("parent"), get("project"), get("repo"),
+                                  get("model"), get("effort"))
+        now = launch.cx.fingerprint(plan, launch.kit_version(launch.kit_dir(client)))
+    except CrewError:
+        return False
+    return now == codex_station.info(paths, station).get("launched")
 
 
 def _stop_wait_text(env) -> str:
@@ -213,12 +279,16 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     if not args or not args[0]:
         _usage(RETIRE_USAGE)
     station = stations.station_name(args[0], paths)
+    on_codex = _codex_station(paths, station)
     job_id = state.stations_get(station, "id", paths=paths)
-    if not job_id:
+    if not job_id and not on_codex:
         raise CrewError(f"{station} is not a recorded station")
     locks.station_lock(station, paths)
-    _stop_session(job_id, claude_bin)
-    _remove_session(job_id, claude_bin)
+    if on_codex:   # its own app-server: a running turn is interrupted, then the process is ended
+        job_id = f"codex app-server {codex_station.stop(paths, station)}"
+    else:
+        _stop_session(job_id, claude_bin)
+        _remove_session(job_id, claude_bin)
     state.stations_put(station, {"status": "retired"}, paths)
     with contextlib.suppress(FileNotFoundError):
         paths.pace_station_file(station).unlink()   # what the pace told it (TR-674)
@@ -343,7 +413,7 @@ def _command(fn, *, local_only: bool, name: str = "", offline_ok: bool = False):
     def body(argv: list, env: dict) -> int:
         words = 2 if argv[:1] == ["crew"] else 1
         paths = CrewPaths.from_env()
-        binary = claude.claude_bin(env)   # bash looks for claude before it does anything else
+        binary = proc.binary(env, paths)   # bash looks for claude before it does anything else; a Codex crew needs none
         state.crew_name(paths)
         client = TaresClient(paths, env)
         try:

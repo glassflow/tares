@@ -617,7 +617,7 @@ def start_stations(client: TaresClient, env: dict, roles: list, claude: str | No
     """Start the crew's stations, the orchestrator first so the others can check in with it. A station that
     already runs is left alone. FACTORY_PAUSE seconds (default 5) pass after the orchestrator starts."""
     from . import launch
-    from .claude import is_alive
+    from .proc import is_alive
     from .locks import station_lock
     from .stations import station_name
     paths = client.paths

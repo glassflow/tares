@@ -11,6 +11,17 @@ them (TR-1576): `initialize` (with `codexHome`, the CODEX_HOME it runs on), `mcp
 `config/read`. On the socket each JSON document is one WebSocket text frame. SIGTERM removes the link and the
 socket and exits 0; a kill leaves both behind, and the next start replaces them, as with the real one.
 
+It also keeps conversations the way a station's needs them (TR-1593), as 0.171.0 was measured to: `thread/start`
+gives a new one, idle; `turn/start` puts it in a turn that ends by itself after $FAKE_CODEX_TURN seconds (0.2
+when unset) and goes on when the connection that started it leaves; a second `turn/start` into a running turn is
+taken as a steer and answers with the running turn's id; `thread/read` says idle, active (with
+`waitingOnApproval` under FAKE_CODEX_APPROVAL) or notLoaded, and when it last did anything, fails for the first
+$FAKE_CODEX_UNREAD reads after a turn starts (2 when unset), and answers "thread not
+loaded" for a conversation it does not know; `turn/interrupt` ends
+the turn; a conversation outlives the process in $CODEX_HOME/fake-threads.json, where a new process knows it
+as not loaded until `thread/resume`, which fails for one that never had a turn. Each of those requests is
+appended to $FAKE_CODEX_LOG, one JSON document per line.
+
 What it took from its start (arguments, folder, the station's variables, its session) is written to
 $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_VERSION   the version `--version` prints
@@ -20,7 +31,13 @@ $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_NOTIFY    when set, `config/read` shows a notify program
   FAKE_CODEX_MODE      the socket's mode in octal (600 when unset)
   FAKE_CODEX_PLAIN     when set, the socket is made at the path itself, with no link
+  FAKE_CODEX_DAEMON    the folder the socket itself is kept in (/tmp/fake-codex-daemon-<uid> when unset)
   FAKE_CODEX_LATE      seconds between the path appearing and the app-server listening on it
+  FAKE_CODEX_TURN      seconds a turn takes; `hang` for a turn that only an interrupt ends
+  FAKE_CODEX_UNREAD    how many reads of a conversation fail right after a turn starts
+  FAKE_CODEX_APPROVAL  when set, a turn stops on an approval nobody answers
+  FAKE_CODEX_REFUSE    when set, `turn/start` is refused with this text
+  FAKE_CODEX_DEAF      when set, SIGTERM is ignored (only a kill ends it)
   FAKE_CODEX_DIE       when set, the app-server prints a line and exits 3 at once
   FAKE_CODEX_SILENT    when set, the app-server never opens its socket
 
@@ -72,6 +89,134 @@ def send_text(conn, doc):
     conn.sendall(head + data)
 
 
+THREADS = {}            # id -> {"turns": [...], "updatedAt": seconds, "flags": [...]}
+LOADED = set()          # the conversations this process has open
+LOCK = threading.Lock()
+
+
+def _store() -> str:
+    return os.path.join(os.environ.get("CODEX_HOME") or ".", "fake-threads.json")
+
+
+def _load() -> None:
+    try:
+        with open(_store(), encoding="utf-8") as f:
+            THREADS.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    for t in THREADS.values():   # a turn that ran when the last process ended was cut off
+        t["unread"] = 0
+        for turn in t["turns"]:
+            if turn["status"] == "inProgress":
+                turn["status"] = "interrupted"
+
+
+def _save() -> None:
+    kept = {k: v for k, v in THREADS.items() if v["turns"]}   # one that never had a turn leaves no file
+    tmp = _store() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(kept, f)
+    os.replace(tmp, _store())
+
+
+def _note(method, params) -> None:
+    log = os.environ.get("FAKE_CODEX_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"method": method, "params": params, "station": os.environ.get("FACTORY_STATION", ""),
+                                "pid": os.getpid()}) + "\n")
+
+
+def _running(t):
+    return next((turn for turn in t["turns"] if turn["status"] == "inProgress"), None)
+
+
+def _end_turn(thread_id, turn_id, status="completed") -> None:
+    with LOCK:
+        t = THREADS.get(thread_id)
+        for turn in (t or {}).get("turns", []):
+            if turn["id"] == turn_id and turn["status"] == "inProgress":
+                turn["status"] = status
+                t["flags"] = []
+                t["updatedAt"] = int(time.time())
+                _save()
+
+
+def _view(thread_id, turns=False) -> dict:
+    t = THREADS[thread_id]
+    if thread_id not in LOADED:
+        status = {"type": "notLoaded"}
+    elif _running(t):
+        status = {"type": "active", "activeFlags": list(t.get("flags") or [])}
+    else:
+        status = {"type": "idle"}
+    return {"id": thread_id, "status": status, "updatedAt": t["updatedAt"],
+            "turns": [{"id": x["id"], "status": x["status"]} for x in t["turns"]] if turns else []}
+
+
+class Refused(Exception):
+    pass
+
+
+def conversation(method, params):
+    """The answer to a conversation request, or None when `method` is not one. Raises Refused with the error."""
+    env = os.environ
+    if method not in ("thread/start", "thread/read", "thread/resume", "turn/start", "turn/interrupt"):
+        return None
+    if method != "thread/read":
+        _note(method, params)
+    with LOCK:
+        if method == "thread/start":
+            tid = "thr-" + os.urandom(4).hex()
+            THREADS[tid] = {"turns": [], "updatedAt": int(time.time()), "flags": []}
+            LOADED.add(tid)
+            return {"thread": _view(tid)}
+        tid = params.get("threadId")
+        if tid not in THREADS:
+            raise Refused(f"no rollout found for thread id {tid}" if method == "thread/resume" else f"thread not loaded: {tid}")
+        t = THREADS[tid]
+        if method == "thread/read":
+            if t.get("unread", 0) > 0:   # for a moment after a turn starts the conversation cannot be read
+                t["unread"] -= 1
+                raise Refused("failed to read thread: thread-store internal error")
+            if params.get("includeTurns") and not t["turns"]:
+                raise Refused("list_turns is not supported yet")
+            return {"thread": _view(tid, bool(params.get("includeTurns")))}
+        if method == "thread/resume":
+            if not t["turns"]:
+                raise Refused(f"no rollout found for thread id {tid}")
+            LOADED.add(tid)
+            return {"thread": _view(tid)}
+        if tid not in LOADED:
+            raise Refused(f"thread not loaded: {tid}")
+        if method == "turn/interrupt":
+            turn = _running(t)
+            if turn and turn["id"] == params.get("turnId"):
+                turn["status"] = "interrupted"
+                t["flags"] = []
+                t["updatedAt"] = int(time.time())
+                _save()
+            return {}
+        if env.get("FAKE_CODEX_REFUSE"):
+            raise Refused(env["FAKE_CODEX_REFUSE"])
+        running = _running(t)
+        if running:   # a steer of the running turn, not a new one
+            return {"turn": {"id": running["id"], "status": "inProgress"}}
+        turn = {"id": "turn-" + os.urandom(4).hex(), "status": "inProgress",
+                "text": "".join(i.get("text", "") for i in params.get("input") or [])}
+        t["turns"].append(turn)
+        t["updatedAt"] = int(time.time())
+        t["flags"] = ["waitingOnApproval"] if env.get("FAKE_CODEX_APPROVAL") else []
+        t["unread"] = int(env.get("FAKE_CODEX_UNREAD") or 2)
+        _save()
+        took = env.get("FAKE_CODEX_TURN") or "0.2"
+        if took != "hang" and not env.get("FAKE_CODEX_APPROVAL"):
+            timer = threading.Timer(float(took), _end_turn, args=(tid, turn["id"]))
+            timer.daemon = True
+            timer.start()
+        return {"turn": {"id": turn["id"], "status": "inProgress"}}
+
+
 def answer(method, args):
     env = os.environ
     if method == "initialize":
@@ -110,7 +255,13 @@ def serve(conn, args):
             msg = json.loads(payload)
             if "id" not in msg:
                 continue
-            result = answer(msg.get("method"), args)
+            try:
+                result = conversation(msg.get("method"), msg.get("params") or {})
+            except Refused as e:
+                send_text(conn, {"id": msg["id"], "error": {"code": -32600, "message": str(e)}})
+                continue
+            if result is None:
+                result = answer(msg.get("method"), args)
             if result is None:
                 send_text(conn, {"id": msg["id"], "error": {"code": -32601, "message": "no such method"}})
             else:
@@ -145,7 +296,7 @@ def main(argv):
         return 0
     real = path
     if not os.environ.get("FAKE_CODEX_PLAIN"):
-        folder = f"/tmp/fake-codex-daemon-{os.getuid()}"
+        folder = os.environ.get("FAKE_CODEX_DAEMON") or f"/tmp/fake-codex-daemon-{os.getuid()}"
         os.makedirs(folder, mode=0o700, exist_ok=True)
         real = os.path.join(folder, hashlib.sha256(path.encode()).hexdigest())
     for stale in {real, path}:   # what a killed one left
@@ -170,7 +321,8 @@ def main(argv):
             except OSError:
                 pass
         os._exit(0)
-    signal.signal(signal.SIGTERM, end)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN if os.environ.get("FAKE_CODEX_DEAF") else end)
+    _load()
     while True:
         conn, _ = server.accept()
         threading.Thread(target=serve, args=(conn, argv), daemon=True).start()

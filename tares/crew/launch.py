@@ -857,8 +857,9 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
     session id to carry on in. claude, platform and sleep are for tests (the claude binary, "win32", a
     sleep that does not wait).
 
-    A launch for the Codex runtime starts the station's own app-server instead (tares.crew.codex.start): the
-    prompt and the session to carry on are kept for its controller, and no `claude` is looked for."""
+    A launch for the Codex runtime starts the station's own app-server instead (tares.crew.codex.start) and
+    hands it the prompt as a turn, on the conversation `resume` names or on a new one. No `claude` is looked
+    for."""
     paths = client.paths
     check_model(model, station)
     # The grants it starts with, read before its settings are written: one that lands in between costs

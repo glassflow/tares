@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 
-from . import claude, launch, locks, pace, state
+from . import claude, launch, locks, pace, proc, state
 from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths
@@ -192,7 +192,7 @@ def spawn(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin=None)
         raise CrewError("spawn takes builder or helper")
     station, cwd = plan["station"], plan["cwd"]
     locks.station_lock(station, paths)
-    if claude.is_alive(station, cwd, claude_bin, paths):
+    if proc.is_alive(station, cwd, claude_bin, paths):
         raise CrewError(f"{station} is already running; message it instead")
     if plan["role"] == "builder":
         state.stations_put(station, {"autonomy": plan["autonomy"], "project_id": plan["project_id"]}, paths)

@@ -23,11 +23,12 @@
   5. waits for the socket and checks what came up (`verify`): the socket is the owner's and theirs alone, the
      app-server answers `initialize` and runs on the station's folder, it has loaded no MCP server the launch
      did not name and has no notify program. A station that fails a check is stopped, not left running.
-  6. records the station (stations.json, runtime "codex", the process's id and start time) and keeps the
-     first prompt in <station>.prompt.
+  6. records the station (stations.json, runtime "codex", the process's id and start time) and hands it its
+     first prompt (`codex_station.hand`): a turn on the conversation recorded for it, or on a new one. A
+     station that will not take the prompt is stopped, and its record is left as it was.
 
-What a start does not do yet: open the conversation and hand it the prompt. That is the controller's
-(TR-1593), which also tells whether the station is alive; until then the watch does not know a Codex station.
+What happens to a station after its start (is it alive, where is it in its turn, the next prompt, the stop)
+is tares.crew.codex_station (TR-1593).
 
 Unix only: the app-server listens on a Unix socket. psutil and the standard library.
 """
@@ -216,6 +217,19 @@ def _unlink(path) -> None:
         pass
 
 
+def remove_socket(sock) -> None:
+    """Remove the socket of an app-server that has ended: the path in the crew home and, where that is a link,
+    the socket Codex kept elsewhere. A killed app-server removes neither, and a station that is never started
+    again would leave its socket in /tmp for good."""
+    target = os.path.realpath(sock) if os.path.islink(sock) else ""
+    _unlink(sock)
+    try:
+        if target and stat.S_ISSOCK(os.lstat(target).st_mode):
+            os.unlink(target)
+    except OSError:
+        pass
+
+
 # ---------- the process ----------
 
 
@@ -248,7 +262,7 @@ def stop(proc, sock: Path | None = None) -> None:
     except (OSError, subprocess.SubprocessError):
         pass
     if sock is not None:
-        _unlink(sock)
+        remove_socket(sock)
 
 
 def _tail(path: Path, lines: int = 8) -> str:
@@ -321,15 +335,36 @@ def plan(spec: dict, values: dict, tares_bin: str = "") -> dict:
             "settings": fill_placeholders(spec["settings"], values), "otel": {}, "otel_file": {}, "mcp": {}}
 
 
+def fingerprint(plan: dict, kit: str = "") -> str:
+    """One number for what a station is started with (its arguments, environment, settings and kit): a
+    restart compares it with the one recorded at the start to tell whether anything changed."""
+    from .client import cksum
+    text = state.dumps_compact([plan.get("args"), plan.get("env"), plan.get("settings"), kit])
+    return str(cksum(text.encode("utf-8")))
+
+
+def _put_back(paths: CrewPaths, station: str, before) -> None:
+    """The station's row as it was before a start that did not succeed (no row when it had none)."""
+    data = state.stations_load(paths)
+    if before is None:
+        data.pop(station, None)
+    else:
+        data[station] = before
+    state.write_json(paths.stations, data)
+
+
 def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *, drop_env=(), codex: str | None = None,
           sleep=time.sleep) -> None:
-    """Start the station's app-server and record it (see the module's note for the steps). `plan` is
-    `launch.launch_plan`'s answer for the Codex runtime. `row` is what the caller records of a station
-    whatever its runtime (role, parent, project, repo, cwd, model, effort, settings, kit, plugin, grants,
-    sessionId). `drop_env` names variables of this process the station must not inherit. Dies (CrewError)
-    for anything that stops a start; an app-server that came up wrong is stopped first."""
+    """Start the station's app-server, record it and hand it its first prompt (see the module's note for the
+    steps). `plan` is `launch.launch_plan`'s answer for the Codex runtime. `row` is what the caller records of
+    a station whatever its runtime (role, parent, project, repo, cwd, model, effort, settings, kit, plugin,
+    grants, sessionId: the conversation to carry on, "" for a new one). `prompt` may be "" for a station
+    that is to get no turn yet. `drop_env` names variables of this process the station must not inherit.
+    Dies (CrewError) for anything that stops a start; an app-server that came up wrong, or would not take
+    its prompt, is stopped first and the station's record is left as it was."""
     if sys.platform == "win32":
         raise CrewError("a Codex station listens on a Unix socket, which a start does not set up on Windows yet")
+    from . import codex_station   # here: it imports this module
     paths = client.paths
     codex = codex or codex_bin(client.env)
     version = check_version(codex_version(codex), lambda text: print(f"  note: {text}", file=sys.stderr))
@@ -338,9 +373,6 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
     clear_socket(station, sock)
     home = prepare_home(paths, station, client.env)
-    prompt_file = paths.station_file(station, "prompt")
-    state.atomic_write_text(prompt_file, prompt.rstrip("\n") + "\n", mode=0o600)
-    os.chmod(prompt_file, 0o600)
 
     env = {k: v for k, v in os.environ.items() if k not in drop_env}
     env.update({k: str(v) for k, v in plan["env"].items()})
@@ -371,11 +403,21 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
         stop(proc, sock)
         raise
 
+    before = state.stations_load(paths).get(station)
     state.stations_put(station, {
         **row, "runtime": RUNTIME, "id": "", "status": "active", "startedAt": state.utc_stamp(),
         "codex": {"pid": proc.pid, "born": _born(proc.pid), "version": version, "socket": str(sock),
-                  "home": str(home), "log": str(log)}}, paths)
+                  "home": str(home), "log": str(log), "launched": fingerprint(plan, str(row.get("kit") or ""))}}, paths)
+    if prompt:
+        try:
+            got = codex_station.hand(paths, station, prompt, fresh=not row.get("sessionId"))
+        except CrewError:
+            stop(proc, sock)
+            _put_back(paths, station, before)
+            raise
+        if got["replaced"]:
+            print(f"  note: the last conversation of {station} could not be carried on; it starts a new one",
+                  file=sys.stderr)
     state.event("started", station, f"codex {version}, pid {proc.pid}", paths=paths)
-    print(f"  ✓ started {station} on Codex {version} ({row.get('model') or 'its default model'}, "
+    print(f"  \u2713 started {station} on Codex {version} ({row.get('model') or 'its default model'}, "
           f"{row.get('effort') or 'its default effort'})", file=sys.stderr)
-    print(f"  note: {station} has no conversation yet; its first prompt is kept in {prompt_file}", file=sys.stderr)

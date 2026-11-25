@@ -27,7 +27,7 @@ import os
 import re
 import sys
 
-from . import claude, locks, state
+from . import claude, codex_station, locks, proc, state
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
@@ -95,7 +95,10 @@ _THRASH = re.compile(r'"<synthetic>".*Autocompact is thrashing')
 
 
 def stuck_on_context(paths: CrewPaths, binary: str, station: str, agents=None) -> bool:
-    """True when Claude Code's thrashing notice is the last thing said and nothing new runs."""
+    """True when Claude Code's thrashing notice is the last thing said and nothing new runs. Never for a station
+    on Codex, which compacts by itself and has no such notice."""
+    if proc.on_codex(station, paths):
+        return False
     try:
         transcript = claude.transcript_of(station, binary, paths, agents)
     except (CrewError, OSError):
@@ -153,8 +156,8 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
     last = this = Round()
     this.ran = True
     try:
-        binary = claude.claude_bin(env)
-        claude.active_json(binary)
+        binary = proc.binary(env, paths)
+        proc.sessions_readable(binary, paths)
     except CrewError as e:   # the session list is unreadable (or there is no claude): nothing is guessed
         this.unread = True
         _say(f"{e}; nothing is revived or restarted this round")
@@ -168,7 +171,7 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
         if role == "builder" and (paths.stations_dir / f"{s}.done").exists():
             continue
         try:
-            up = claude.is_alive(s, "", binary, paths)
+            up = proc.is_alive(s, "", binary, paths)
         except CrewError as e:
             print(e.line, file=sys.stderr, flush=True)
             _say(f"skipping {s} this round")
@@ -176,6 +179,8 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
             this.handled.add(s)
             continue
         if up:
+            if proc.on_codex(s, paths):   # what runs under it now, for the day it dies with a command running
+                codex_station.note_children(paths, s)
             if paths.pace_file.exists():
                 pace.revived(paths, s)
             if stuck_on_context(paths, binary, s):
