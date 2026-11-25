@@ -549,6 +549,29 @@ def crew_runtime(paths: CrewPaths) -> str:
     return ""
 
 
+RUNTIME_SLOT = "/api/factory/integrations/effective"
+
+
+def planned_runtime(client: TaresClient) -> str:
+    """The runtime the crew's stations run on, or will: its recorded stations', else, for a crew that has
+    started none yet, the one the cell's runtime slot holds now (its first station's launch is built by it).
+    "" when neither says. Never raises for what Tares does."""
+    have = crew_runtime(client.paths)
+    if have:
+        return have
+    try:
+        if not client.tares_on():
+            return ""
+        doc = state.loads_json(client.tares_http("GET", RUNTIME_SLOT))
+    except (CrewError, ValueError):
+        return ""
+    slots = doc.get("slots") if isinstance(doc, dict) else None
+    for row in slots if isinstance(slots, list) else []:
+        if isinstance(row, dict) and row.get("slot") == "runtime":
+            return str(row.get("integration") or "")
+    return ""
+
+
 def check_runtime(paths: CrewPaths, station: str, spec: dict) -> None:
     """A crew stays on the runtime it was started on: a conversation of one cannot be carried on by another,
     and its stations would be half one and half the other. Dies when the spec is for another runtime."""
@@ -971,13 +994,14 @@ def boot_prompt(client: TaresClient, role: str, task: str = "", runtime: str | N
     """The first prompt of a station: its boot instructions, the idle-wake note when that is on, and the task.
     Trailing newlines are dropped, as `$(boot_prompt ...)` drops them in bash.
 
-    `runtime` is the runtime the station starts on; left out, it is the crew's recorded one (Claude Code for
-    a crew that has recorded no station yet, so the first start of a Codex crew names it). A Codex station is
+    `runtime` is the runtime the station starts on; left out, it is the crew's recorded one, and for a crew that
+    has recorded no station yet the one the cell's runtime slot holds (`planned_runtime`): the first start of a
+    Codex crew is a Codex start. A Codex station is
     told nothing of skills or of a READY message: its rules are in its instructions already (role_manual), and
     it sends no messages. It is also told of a halt here, which a Claude Code station hears from its
     session-start hook."""
     if runtime is None:
-        runtime = crew_runtime(client.paths)
+        runtime = planned_runtime(client)
     if runtime == cx.RUNTIME:
         return _codex_boot_prompt(client, role, task)
     orchestrator = state.crew_orchestrator(client.paths)

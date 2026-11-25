@@ -211,7 +211,9 @@ def crew(runtime="codex"):
     tmp = SCRATCH / f"t{_n[0]}"
     tmp.mkdir()
     LS.make_crew(tmp, {"token": "tok-fake-role-text-0123456789", "stations": {}})
-    tares = LS.FakeTares({"runtime": runtime})
+    # the cell's runtime slot, as GET /api/factory/integrations/effective answers it
+    slot = {"slots": [{"slot": "runtime", "integration": runtime, "title": runtime, "source": "factory", "reason": ""}]}
+    tares = LS.FakeTares({"runtime": runtime, "routes": {L.RUNTIME_SLOT: (200, slot)}})
     tares.__enter__()
     paths = CrewPaths.at(tmp / "crew")
     client = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=lambda *_: None)
@@ -273,6 +275,20 @@ halted = L.boot_prompt(client, "builder", runtime="codex")
 ck("a Codex station is told of a halt at its start, which a Claude Code one hears from its hook",
    "The crew is halted (the person said stop): start nothing new until it is resumed." in halted
    and "halted" not in L.boot_prompt(client, "builder"), halted)
+tares.__exit__(None, None, None)
+
+tares, paths, client = crew()
+first = L.boot_prompt(client, "builder", "T1")
+ck("a new Codex crew, with no station recorded yet, gets the Codex prompt at its first start: the cell says the runtime",
+   first == codex_boot and named(first) == [] and "load the skills" not in first and "READY" not in first
+   and "CronCreate" not in first and L.planned_runtime(client) == "codex", first)
+tares.__exit__(None, None, None)
+
+tares, paths, client = crew("claude_code")
+ck("a new Claude Code crew gets Claude Code's", L.boot_prompt(client, "builder") == BOOT)
+tares.world["routes"][L.RUNTIME_SLOT] = (500, {"detail": "down"})
+ck("a cell that cannot say leaves the prompt Claude Code's, as before", L.planned_runtime(client) == ""
+   and L.boot_prompt(client, "builder") == BOOT)
 tares.__exit__(None, None, None)
 
 tares, paths, client = crew()
