@@ -528,16 +528,18 @@ def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dic
     return mine, order_waiting(owners_mod.for_others(owners_mod.Owners(store), rest), now)
 
 
-def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
+def home(store, fx, now, credential_key: str = "open", request=None, hidden=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
-    is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
+    is addressed to the caller's person (TR-739); its keys replace the single-person ones.
+    `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
     team = team_of(fx, request, now)
     # a private project the caller is not on is left out of every count and name
-    hidden = fx.hidden_ids() if fx else set()
+    if hidden is None:
+        hidden = fx.hidden_ids() if fx else set()
     projects = store.list_projects(kind="software_factory", exclude_ids=hidden)
     # a project kept for later is off the home until someone starts it
     open_ps = [p for p in projects if p["status"] not in ("done", "later")]
@@ -649,13 +651,14 @@ def build(store, fx=None, request=None, now=None) -> dict:
         return home(store, fx, now, request=request)
     # the hidden projects are part of the key: one credential can read with more or less in view
     # (`x-tares-viewer: public`), and a body is only for callers who see the same projects
-    key = (*_cache_key(store, request), frozenset(fx.hidden_ids()) if fx else frozenset())
+    hidden = fx.hidden_ids() if fx else set()
+    key = (*_cache_key(store, request), frozenset(hidden))
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
         gen = _GEN[0]
-    out = home(store, fx, now_utc(), key[1], request)
+    out = home(store, fx, now_utc(), key[1], request, hidden)
     with _cache_lock:
         # a clear_cache() that landed while this was building means the body may be stale
         if gen == _GEN[0]:
