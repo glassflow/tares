@@ -485,13 +485,15 @@ def note_unknown(paths: CrewPaths, station: str, found: list) -> list:
 
 
 def reconcile(paths: CrewPaths, station: str, ref: str, verdict: str, words: str) -> dict:
-    """Take one call off the station's unknown calls: `ref` is its number in the list (from 1) or its call id,
-    `verdict` what was found (done, not-done), `words` the station's own account. Records the event and
-    returns the row. Dies when there is no such call, or the account is empty."""
+    """Take one call off the station's unknown calls: `ref` is its call id, as the prompt and the list name it
+    (never a place in the list: settling one call would move the others, and a second answer would land on
+    the wrong one). `verdict` is what was found (done, not-done), `words` the station's own account. Records
+    the event and returns the row. Dies when there is no such call, or the account is empty."""
     rows = unknown(paths, station)
-    at = int(ref) - 1 if str(ref).isdigit() else next((i for i, r in enumerate(rows) if r.get("call") == ref), -1)
-    if not 0 <= at < len(rows):
-        raise CrewError(f"{station} has no call {ref} with an unknown outcome (it has {len(rows)})")
+    at = next((i for i, r in enumerate(rows) if r.get("call") and r.get("call") == str(ref)), -1)
+    if at < 0:
+        named = ", ".join(str(r.get("call")) for r in rows) or "none"
+        raise CrewError(f"{station} has no call {ref} with an unknown outcome; name it by its call id ({named})")
     if verdict not in ("done", "not-done"):
         raise CrewError("say what you found: done (it had done its work) or not-done (it had not)")
     if not str(words or "").strip():
@@ -508,18 +510,18 @@ def unknown_note(rows: list) -> str:
     """What a station is told, in its next prompt, of the calls whose outcome is not known."""
     if not rows:
         return ""
-    lines = [f"{n}. `{r.get('command') or r.get('tool') or 'a call'}`" + (f" (in {r['cwd']})" if r.get("cwd") else "")
-             for n, r in rows]
+    lines = [f"- call {r.get('call')}: `{r.get('command') or r.get('tool') or 'a call'}`" + (f" (in {r['cwd']})" if r.get("cwd") else "")
+             for r in rows]
     return ("\n\nBefore anything else: your last turn was cut off, and these calls of it were started and never "
             "reported an end. What each did is not known: all of its work, part of it, or none.\n" + "\n".join(lines) +
             "\nDo not run any of them again yet. For each, look at what it left (git status and git log, the remote, "
-            "the pull requests, the ticket and its checks), then say what you found with `tares factory outcome <number> "
-            "done \"<what you found>\"` or `tares factory outcome <number> not-done \"<what you found>\"`. The guard "
-            "refuses a repeat of one until you have.")
+            "the pull requests, the ticket and its checks), then say what you found with `tares factory outcome <call> "
+            "done \"<what you found>\"` or `tares factory outcome <call> not-done \"<what you found>\"`, naming the call "
+            "as it is written here. The guard refuses a repeat of one until you have.")
 
 
 def cmd_outcome(argv: list, env: dict) -> int:
-    """`tares factory outcome [<number> done|not-done <what you found>]`: with nothing, list the calls of this
+    """`tares factory outcome [<call> done|not-done <what you found>]`: with nothing, list the calls of this
     station whose outcome is not known; else take one off the list (see `reconcile`). The station is
     FACTORY_STATION, or `--station NAME` for a person."""
     args = list(argv)
@@ -534,13 +536,13 @@ def cmd_outcome(argv: list, env: dict) -> int:
     paths = CrewPaths.at(home) if home else CrewPaths.from_env()
     if not args:
         rows = unknown(paths, station)
-        for n, r in enumerate(rows, 1):
-            print(f"{n}. {r.get('command') or r.get('tool') or r.get('call')}" + (f"  (in {r['cwd']})" if r.get("cwd") else ""))
+        for r in rows:
+            print(f"{r.get('call')}  {r.get('command') or r.get('tool') or ''}" + (f"  (in {r['cwd']})" if r.get("cwd") else ""))
         if not rows:
             print(f"{station} has no call with an unknown outcome")
         return 0
     if len(args) < 3:
-        raise CrewError("usage: tares factory outcome <number> done|not-done \"<what you found>\"")
+        raise CrewError("usage: tares factory outcome <call> done|not-done \"<what you found>\"")
     row = reconcile(paths, station, args[0], args[1], " ".join(args[2:]))
     print(f"recorded: {args[1]} for {row.get('command') or row.get('tool') or row.get('call')}")
     return 0
@@ -957,7 +959,7 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                     held = never_let_run(paths, station)
                     note_unknown(paths, station, [r for r in unknown_of(str(cut.get("id") or ""), cut.get("items"),
                                                                        _record(paths, station)) if r["call"] not in held])
-                untold = [(n, r) for n, r in enumerate(unknown(paths, station), 1) if not r.get("told")]
+                untold = [r for r in unknown(paths, station) if not r.get("told")]
                 prompt += unknown_note(untold)
                 _trim_record(paths, station, last)
                 params = {"threadId": thread, "input": [{"type": "text", "text": prompt}]}

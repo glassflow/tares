@@ -1713,7 +1713,7 @@ ck("started again in its conversation, the call that was cut off is written down
    and rows[0]["call"] == line["call"] and stat.S_IMODE(paths.station_file(S, cg.UNKNOWN).stat().st_mode) == 0o600
    and len(events(paths, "outcome-unknown")) == 1, (err, rows))
 ck("its first prompt names the call, says not to run it again yet, and how to say what was found",
-   "Before anything else" in prompt and f"1. `{command}`" in prompt and "tares factory outcome <number> done" in prompt
+   "Before anything else" in prompt and f"- call {line['call']}: `{command}`" in prompt and "tares factory outcome <call> done" in prompt
    and rows[0].get("told") is True, prompt[-700:])
 until(lambda: cs.turn_state(paths, S) == "done")
 last = [r for r in cs._record(paths, S) if r.get("call")][-1]
@@ -1727,12 +1727,15 @@ env_s = {"FACTORY_STATION": S, "FACTORY_CREW_HOME": str(paths.home), "FACTORY_HO
 out_l = io.StringIO()
 with redirect_stdout(out_l):
     code_l = cs.cmd_outcome([], env_s)
-bad = [quietly(cs.cmd_outcome, argv, env_s)[0] for argv in (["1"], ["1", "maybe", "x"], ["7", "done", "x"], ["1", "done", " "])]
-ck("`tares factory outcome` lists it, and takes no answer that says nothing",
-   code_l == 0 and out_l.getvalue().startswith(f"1. {command}") and all(bad) and len(cs.unknown(paths, S)) == 1, (out_l.getvalue(), bad))
+call_id = line["call"]
+bad = [quietly(cs.cmd_outcome, argv, env_s)[0] for argv in ([call_id], [call_id, "maybe", "x"], ["exec-nothing", "done", "x"],
+                                                            [call_id, "done", " "], ["1", "done", "a place in the list"])]
+ck("`tares factory outcome` lists it by its call id, and takes no answer that says nothing or names a place in the list",
+   code_l == 0 and out_l.getvalue().startswith(f"{call_id}  {command}") and all(bad) and "name it by its call id" in bad[4]
+   and len(cs.unknown(paths, S)) == 1, (out_l.getvalue(), bad))
 out_r = io.StringIO()
 with redirect_stdout(out_r):
-    cs.cmd_outcome(["1", "not-done", "the", "log", "has", "one", "line", "and", "no", "process", "is", "left"], env_s)
+    cs.cmd_outcome([call_id, "not-done", "the", "log", "has", "one", "line", "and", "no", "process", "is", "left"], env_s)
 ck("the station's account of what it found takes the call off the list, and an event keeps the account",
    cs.unknown(paths, S) == [] and "recorded: not-done" in out_r.getvalue()
    and [e for e in events(paths, "outcome-reconciled") if "not-done:" in str(e) and "the log has one line" in str(e)],
@@ -1758,10 +1761,22 @@ paths.stations_dir.mkdir(parents=True, exist_ok=True)
 (paths.stations_dir / f"{S}.{cg.UNKNOWN}").write_text(json.dumps([{"call": "c2", "command": "git push  origin HEAD"}]))
 env_g = {"FACTORY_STATION": S, "FACTORY_HOME": str(paths.home), "FACTORY_ROLE": "builder"}
 ck("the guard refuses that command however it is spaced or wrapped, and no other",
-   cg.repeats(env_g, "git push origin HEAD")[0] == 1 and cg.repeats(env_g, cg.CLOSE_STDIN + "git push origin HEAD") is not None
+   cg.repeats(env_g, "git push origin HEAD")["call"] == "c2" and cg.repeats(env_g, cg.CLOSE_STDIN + "git push origin HEAD") is not None
    and cg.repeats(env_g, "git push origin main") is None and cg.repeats(env_g, "git status") is None
    and cg.repeats({**env_g, "FACTORY_STATION": "another"}, "git push origin HEAD") is None
-   and "tares factory outcome 1 done" in cg.repeat_reason(1))
+   and "tares factory outcome c2 done" in cg.repeat_reason("c2"))
+# three calls of unknown outcome, settled one after the other (the review of b52f7f01): each answer lands on the
+# call it names, whatever was settled before it
+(paths.stations_dir / f"{S}.{cg.UNKNOWN}").write_text(json.dumps(
+    [{"call": "exec-a", "command": "git push"}, {"call": "exec-b", "command": "gh pr create"}, {"call": "exec-c", "command": "make deploy"}]))
+first_ = cs.reconcile(paths, S, "exec-a", "done", "the branch is on the remote")
+second_ = cs.reconcile(paths, S, "exec-c", "not-done", "nothing was deployed")
+ck("settling one call does not move the others: the second answer settles the call it names, not the one after it",
+   (first_["command"], second_["command"]) == ("git push", "make deploy")
+   and [r["call"] for r in cs.unknown(paths, S)] == ["exec-b"], cs.unknown(paths, S))
+ck("the prompt and the guard name each call by its id, never by a place in the list",
+   "- call exec-b: `gh pr create`" in cs.unknown_note(cs.unknown(paths, S)) and "1." not in cs.unknown_note(cs.unknown(paths, S))
+   and "(call exec-b)" in cg.repeat_reason(cg.repeats(env_g, "gh pr create")["call"]))
 
 # ---------------------------------------------------------------------------------------------
 print("o. the session is recorded by the watch's rounds and at every stop (TR-1595 wired in by TR-1593)")
@@ -1901,6 +1916,32 @@ codex_step(paths, tares)
 ck("and sent by the next look once Tares answers: the unfinished command is unknown",
    [c["outcome"] for c in rows_on_the_cell(tares)] == ["unknown"] and not codex_record._load(paths, S).get("closing"),
    rows_on_the_cell(tares))
+
+# the same, but the station is started in a new conversation before any look could send the closing (the
+# review of b52f7f01): the closing kept from the stop is sent with the old conversation's end, not dropped
+tares, paths, said, mk = crew()
+os.environ.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp", FACTORY_CREW_HOME=str(paths.home))
+fake(turn="hang", think=0.05, unread=0, commands=json.dumps([f"{sys.executable} -c 'import time; time.sleep(30)'"]))
+start(mk())
+old_thread = row(paths)["sessionId"]
+until(lambda: any("time.sleep(30)" in str(r.get("command")) for r in cs._record(paths, S)))
+time.sleep(0.3)
+codex_record._post = lambda client, found: (_ for _ in ()).throw(CrewError("Tares is down"))
+quietly(cs.stop, paths, S)
+codex_record._post = real_post
+kept_ = codex_record._load(paths, S)
+fake(turn=0.2, think=0.05, unread=0, commands=json.dumps(["echo fresh"]))
+err, kind, _ = quietly(lifecycle.revive, mk(), paths, [S, "--fresh"], claude_bin="")
+note(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+codex_step(paths, tares)
+cell_rows = rows_on_the_cell(tares)
+ck("a stop's closing kept while Tares was down is sent when the station moves to a new conversation: nothing is lost",
+   kept_.get("closing") and kept_.get("untold") and err is None and row(paths)["sessionId"] != old_thread
+   and sorted((r["session"] == old_thread, "sleep" if "time.sleep(30)" in r["command"] else r["command"], r["outcome"])
+              for r in cell_rows) == [(False, "echo fresh", "ended"), (True, "sleep", "unknown")]
+   and not codex_record._load(paths, S).get("untold"), (kept_, cell_rows))
+end(pid_of(paths))
 
 tares, paths, said, mk = crew(world={"runtime": "claude_code"})
 before = len(tares.log)

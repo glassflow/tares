@@ -163,23 +163,25 @@ def read_unknown(path) -> list:
 
 
 def repeats(env, command: str):
-    """(its number, the unknown call) when `command` is one whose earlier run never reported an end, else None."""
+    """The unknown call (its row) when `command` is one whose earlier run never reported an end, else None."""
     home, station = env.get("FACTORY_HOME", ""), env.get("FACTORY_STATION", "")
     want = " ".join(asked(command).split())
     if not home or not station or not want:
         return None
-    for n, row in enumerate(read_unknown(unknown_file(home, station)), 1):
-        if row.get("command") and " ".join(str(row["command"]).split()) == want:
-            return n, row
+    for row in read_unknown(unknown_file(home, station)):
+        if row.get("command") and row.get("call") and " ".join(str(row["command"]).split()) == want:
+            return row
     return None
 
 
-def repeat_reason(n: int) -> str:
-    return (f"This command was started in a turn that was cut off, and what it did is not known (call {n} of "
-            "`tares factory outcome`). Running it again could do it twice. Look at what it left first (git status and "
-            "git log, the remote, the pull requests, the ticket), then say what you found: "
-            f"`tares factory outcome {n} done \"<what you found>\"` when it had done its work, or "
-            f"`tares factory outcome {n} not-done \"<what you found>\"` when it had not. After that it is let through.")
+def repeat_reason(call: str) -> str:
+    """What a station is told when a repeat is refused. The call is named by its own id, which does not
+    change when another call is settled first (a place in a list would)."""
+    return (f"This command was started in a turn that was cut off, and what it did is not known (call {call}). "
+            "Running it again could do it twice. Look at what it left first (git status and git log, the remote, the "
+            "pull requests, the ticket), then say what you found: "
+            f"`tares factory outcome {call} done \"<what you found>\"` when it had done its work, or "
+            f"`tares factory outcome {call} not-done \"<what you found>\"` when it had not. After that it is let through.")
 
 
 def started(tool: str, cmd, cwd, tool_input=None) -> dict:
@@ -236,7 +238,7 @@ def run(guard_py, env, raw: str, out) -> int:
     again = repeats(env, cmd) if tool == "Bash" and cmd else None
     if again:
         note(env, {"turn": turn, "call": call, "tool": tool, "said": "deny"})
-        out.write(rules.deny_output(repeat_reason(again[0])))
+        out.write(rules.deny_output(repeat_reason(again["call"])))
         out.flush()
         return 0
     note(env, {"turn": turn, "call": call, "tool": tool, "said": "allow", **started(tool, cmd, rules.payload_cwd(raw), data.get("tool_input"))})
