@@ -37,6 +37,9 @@ from tares.session_store.tables import (session_archive_parts, session_commands,
 from tares.store import Store  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
+# the harness (CI's postgres suite) puts every Store on Postgres; the duckdb and mit suites have
+# TARES_TEST_PG and no harness, so their Stores are on SQLite
+HARNESS = Store.__init__.__module__ != "tares.store"
 FAILS = []
 SRC = "claude_code"
 NOW = now_utc().replace(microsecond=0)
@@ -142,7 +145,7 @@ def main_run():
     print("== 30 sessions, 10 recent, a dual-written one and an archived one ==")
     s = open_store()
     ck("the session store is on the expected database", s.sessions_db.dialect == (
-        "postgresql" if PG else "sqlite"), s.sessions_db.dialect)
+        "postgresql" if PG and HARNESS else "sqlite"), s.sessions_db.dialect)
     backend = FileBackend(ARCHIVE)
     day = 86400
     # 20 old sessions (20 days), 8 recent ones from 6 hours to 1 hour ago, oldest first
