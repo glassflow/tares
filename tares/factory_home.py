@@ -66,8 +66,10 @@ def _dt(v) -> datetime | None:
 
 
 def _iso(v) -> str | None:
+    """An ISO string in UTC. In one offset, because the console orders `since` as text, and DuckDB
+    reads a time back in the machine's own offset where the session store reads it in UTC."""
     t = _dt(v)
-    return t.isoformat() if t else None
+    return t.astimezone(timezone.utc).isoformat() if t else None
 
 
 _count = status_words._count
