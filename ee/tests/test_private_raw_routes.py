@@ -128,9 +128,7 @@ async def main():
         store.upsert_catalog_source("zephyr-memory", "agent_memory", "memory", "5s", {})
         store.put_in_project("source", "zephyr-memory", vault)
         runtime.reload_catalog()
-        with store._swrite:
-            store.sc.execute("DELETE FROM usecase_objects WHERE kind = 'source' AND name = 'zephyr-logs' "
-                             "AND usecase_id = ?", [open_uid])
+        store.delete_project_object(open_uid, "source", "source:zephyr-logs")
 
         def event(source, service, text, project=None, minutes=3):
             t = base - timedelta(minutes=minutes)

@@ -25,6 +25,7 @@ for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY",
     os.environ.pop(k, None)
 
 import httpx
+from sqlalchemy import text
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
@@ -73,7 +74,9 @@ async def api():
         await m.write_ticket("Catalog", project="Shop")
         await mf.hand_over(project="Shop", repo="/w/shop")
         old = datetime.now(timezone.utc) - timedelta(days=9)
-        store.sc.execute("UPDATE usecases SET updated_at = ? WHERE id IN (?, ?)", [old, shop, blog])
+        with store.sessions_db.begin() as c:
+            c.execute(text("UPDATE usecases SET updated_at = :t WHERE id IN (:a, :b)"),
+                      {"t": old, "a": shop, "b": blog})
         store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?",
                           [old + timedelta(days=1), shop])
         newest = old + timedelta(days=3)
@@ -117,7 +120,8 @@ async def reread():
               "checked_at": old.isoformat(), "error": None}
         store.update_ticket(tid, pr=pr)
         store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [old, tid])
-        store.sc.execute("UPDATE usecases SET updated_at = ? WHERE id = ?", [old, uid])
+        with store.sessions_db.begin() as c:
+            c.execute(text("UPDATE usecases SET updated_at = :t WHERE id = :i"), {"t": old, "i": uid})
         reads = []
 
         async def same(_store, repo, number, prev=None, **changes):

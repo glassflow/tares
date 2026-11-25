@@ -297,7 +297,7 @@ def world(team="team_full"):
     """A store with a project linked to the fake Linear project, and its three tickets synced."""
     reset(team)
     _n[0] += 1
-    s = Store(os.path.join(tmp, f"t{_n[0]}.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(dir=tmp), f"t{_n[0]}.duckdb"))      # its own tares.sqlite
     s.create_project("p1", "blank", "Invoices", {})
     s.set_project_linear("p1", {"id": PROJECT["id"], "name": PROJECT["name"]})
     linear._save_connection(s, {"kind": "api_key", "token": GOOD_KEY,
@@ -374,7 +374,7 @@ STATE["issues"][0] = {**STATE["issues"][0], "state": {"name": "Done", "type": "c
 run(b.sync("p1"))
 ck("a change in Linear is read", tk(s, "FAC-1")["status"] == "done")
 ck("a project not linked to Linear has nothing to sync", run(TicketsLinear(Store(
-   os.path.join(tmp, "unlinked.duckdb"))).sync("nope")) == 0)
+   os.path.join(tempfile.mkdtemp(dir=tmp), "unlinked.duckdb"))).sync("nope")) == 0)
 
 print("== the guards stay (TR-1024) ==")
 s, b = world()

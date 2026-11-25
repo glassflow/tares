@@ -255,7 +255,9 @@ def upgrade():
     software factory project, once; an ordinary project stays as it is."""
     print("== project kind upgrade ==")
     from tares.store import Store
-    path = os.path.join(_TMP, "upgrade.duckdb")
+    # a folder of its own: the session store (tares.sqlite) sits beside the DuckDB file, and this is another cell
+    os.makedirs(os.path.join(_TMP, "upgrade"))
+    path = os.path.join(_TMP, "upgrade", "upgrade.duckdb")
     s = Store(path)
     s.create_project("uc_spec", "custom", "Spec made", {"objects": []})
     s.create_project("uc_plain", "custom", "Plain", {"objects": []})

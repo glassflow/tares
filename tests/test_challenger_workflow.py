@@ -6,7 +6,9 @@ Run: .venv/bin/python tests/test_challenger_workflow.py
 import asyncio
 import json
 import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,9 +28,10 @@ def test_repo_label_migration():
     any trigger on it to `repo` (stored events keep theirs). The same rewrite runs after a catalog import."""
     from tares.store import Store
     print("== repo label migration ==")
-    path = DB + ".migration"
-    if os.path.exists(path):
-        os.remove(path)
+    # a folder of its own: the session store (tares.sqlite) sits beside the DuckDB file, and the daemon
+    # below is another cell
+    folder = tempfile.mkdtemp(prefix="tares-challenger-migration-")
+    path = os.path.join(folder, "migration.duckdb")
     s = Store(path)
     s.upsert_catalog_source("claude_code", "logs", "claude_code", "10s", {"push": True, "labels": [
         {"name": "session", "field": "session", "primary": True},
@@ -65,7 +68,7 @@ def test_repo_label_migration():
                                       if x["name"] == "claude_code")["config"]["labels"]}
     check("rewrite is repeatable after an import", labels == {"repo"}, str(labels))
     s.con.close()
-    os.remove(path)
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 def check(label, cond, detail=""):

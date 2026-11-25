@@ -1,6 +1,8 @@
 """The session store's tables, as SQLAlchemy Core declares them (P-TR-295).
 
-These are the five session tables, `settings`, and the accounts (`people`, `api_keys`, `project_members`), exactly as they are today in DuckDB and in the state Postgres:
+These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`)
+and the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
+`shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -336,10 +338,143 @@ project_members = Table(
     Column("reason", Text),
 )
 
+# Projects (store.py create_project, TR-1610). The tables and columns predate the rename (use case,
+# recipe): a row here is a project, `recipe` its template. `params`, `setup`, `linear` and
+# `github_issues` are JSON the Store parses, so they are `JSONText`.
+usecases = Table(
+    "usecases", metadata,
+    Column("id", Text, primary_key=True),
+    Column("recipe", Text),
+    Column("name", Text),
+    Column("params", JSONText),
+    Column("status", Text),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("last_error", Text),
+    Column("goal", Text),
+    Column("setup", JSONText),
+    Column("linear", JSONText),
+    Column("github_issues", JSONText),
+    Column("kind", Text),
+    Column("lead_person_id", Text),
+    Column("scope", Text),
+    Column("icon", Text),
+)
+
+# The parts a project uses: kind source, trigger, agent, mcp_server, skill or doc, and the plan key
+# of a template project.
+usecase_objects = Table(
+    "usecase_objects", metadata,
+    Column("usecase_id", Text, primary_key=True),
+    Column("kind", Text, primary_key=True),
+    Column("key", Text, primary_key=True),
+    Column("name", Text),
+    Column("customized", Boolean),
+    Column("created_at", UTCDateTime),
+)
+
+# What happened to a project (create, update, repair), newest first when read
+usecase_log = Table(
+    "usecase_log", metadata,
+    Column("usecase_id", Text),
+    Column("logged_at", UTCDateTime),
+    Column("action", Text),
+    Column("detail", Text),
+)
+
+# Markdown that belongs to the cell, included by projects through usecase_objects (kind doc)
+docs = Table(
+    "docs", metadata,
+    Column("id", Text, primary_key=True),
+    Column("kind", Text),
+    Column("title", Text),
+    Column("body", Text),
+    Column("made_by", Text),
+    Column("updated_by", Text),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("owner", Text),
+)
+
+# The per-project skills from before skills were shared: nothing reads it any more, it moves with
+# the rest so no table is left behind
+skills = Table(
+    "skills", metadata,
+    Column("project", Text, primary_key=True),
+    Column("name", Text, primary_key=True),
+    Column("description", Text),
+    Column("body", Text),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+)
+
+# Skills that belong to the cell, used by projects through usecase_objects (kind skill)
+shared_skills = Table(
+    "shared_skills", metadata,
+    Column("name", Text, primary_key=True),
+    Column("description", Text),
+    Column("body", Text),
+    Column("made_by", Text),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
+# The cell's sources. `config` is the connector's settings, JSON the Store parses.
+catalog_sources = Table(
+    "catalog_sources", metadata,
+    Column("name", Text, primary_key=True),
+    Column("type", Text),
+    Column("connector", Text),
+    Column("poll", Text),
+    Column("config", JSONText),
+    Column("paused", Boolean, server_default=false()),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("ingest_key", Text),
+    Column("owned_by", Text),
+    Column("customized", Boolean),
+)
+
+# A GitHub token or App stored once and named by sources and MCP servers. `config` is JSON text the
+# Store reads leniently (a row with text that is not JSON reads as {}), so it stays `Text`.
+github_credentials = Table(
+    "github_credentials", metadata,
+    Column("name", Text, primary_key=True),
+    Column("kind", Text),
+    Column("token", Text),
+    Column("api_url", Text),
+    Column("account", Text),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("config", Text),
+)
+
+# The model-usage ledger: one row per model interaction, priced when written
+model_usage = Table(
+    "model_usage", metadata,
+    Column("id", Text, primary_key=True),
+    Column("ts", UTCDateTime),
+    Column("surface", Text),
+    Column("agent", Text),
+    Column("run_id", Text),
+    Column("model", Text),
+    Column("calls", Integer),
+    Column("input_tokens", BigInteger),
+    Column("output_tokens", BigInteger),
+    Column("cache_creation_input_tokens", BigInteger),
+    Column("cache_read_input_tokens", BigInteger),
+    Column("cost_usd", Double),
+    Column("key_source", Text),
+    Column("provider", Text),
+)
+Index("ix_model_usage_ts", model_usage.c.ts)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
 # `state_db.move`. Moving a table means adding it here and a revision that takes it over.
 MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
-                settings, people, api_keys, project_members)
+                settings, people, api_keys, project_members, usecases, usecase_objects, usecase_log,
+                docs, skills, shared_skills, catalog_sources, github_credentials, model_usage)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)
