@@ -40,6 +40,7 @@ os.environ["TARES_EDITION"] = "factory"
 os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx
+from sqlalchemy import text
 
 from tares import status_words as sw
 from tares import factory as factory_mod
@@ -859,7 +860,10 @@ async def main():
             out = {}
             with store._sread:
                 for tname in TABLES:
-                    out[tname] = store.sc.execute(f"SELECT * FROM {tname} ORDER BY 1, 2").fetchall()
+                    if tname != "usecases":
+                        out[tname] = store.sc.execute(f"SELECT * FROM {tname} ORDER BY 1, 2").fetchall()
+            with store.sessions_db.read() as conn:       # the projects are in the session store (TR-1610)
+                out["usecases"] = conn.execute(text("SELECT * FROM usecases ORDER BY 1, 2")).fetchall()
             return out
 
         calls = []

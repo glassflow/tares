@@ -87,6 +87,7 @@ from sqlalchemy import bindparam, delete, func, insert, select, text, update
 from . import metrics
 from .envelope import now_utc
 from .factory import is_coordination
+from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (session_archive_parts, session_commands, session_files,
                                    session_ingest_marks, session_lines, session_messages,
                                    session_said, session_turns, sessions)
@@ -136,9 +137,9 @@ def coordination_in(text: str | None, payload) -> int:
 def claude_code_sources(store) -> set[str]:
     """The names of the cell's claude_code sources (`claude_code` too, which `cc_source` falls back
     to when the catalog has none)."""
-    with store._sread:
-        rows = store.sc.execute(
-            "SELECT name FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
+    with store.sessions_db.read() as conn:
+        rows = conn.execute(select(sources_table.c.name).where(
+            sources_table.c.connector == "claude_code")).all()
     return {r[0] for r in rows} | {"claude_code"}
 
 
@@ -539,17 +540,13 @@ def render_flags(store, sources) -> dict:
     flags the connector builds a line's text with (`include_thinking`, `redact`), read from the
     source's config in the catalog, with the connector's defaults when the source has none."""
     flags = {s: {"include_thinking": False, "redact": True} for s in sources}
-    with store._sread:
-        rows = store.sc.execute(
-            "SELECT name, config FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
+    with store.sessions_db.read() as conn:
+        rows = conn.execute(select(sources_table.c.name, sources_table.c.config).where(
+            sources_table.c.connector == "claude_code")).all()
     for name, raw in rows:
         if name not in flags:
             continue
-        try:
-            cfg = json.loads(raw or "{}")
-        except (TypeError, ValueError):
-            cfg = {}
-        cfg = cfg if isinstance(cfg, dict) else {}
+        cfg = raw if isinstance(raw, dict) else {}
         flags[name] = {"include_thinking": bool(cfg.get("include_thinking", False)),
                        "redact": bool(cfg.get("redact", True))}
     return {s: json.dumps(f, sort_keys=True) for s, f in flags.items()}

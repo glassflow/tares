@@ -19,8 +19,10 @@ from sqlalchemy import BigInteger, bindparam, case, distinct, false, func, liter
 
 from . import claude_usage_hourly as hourly
 from .pricing import cost_usd
+from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (project_sessions, session_meters, session_stations,
                                    session_usage, session_usage_hourly)
+from .session_store.tables import usecases as projects_table
 
 CLAUDE_USAGE_SCHEMA = [
     # One row per model reply in a Claude Code session. Claude Code repeats a reply's usage on each
@@ -96,10 +98,12 @@ class ClaudeUsageStore:
         with self.sessions_db.begin() as conn:
             newest = conn.execute(select(func.max(u.c.replied_at))).scalar_one()
         since = newest - timedelta(days=1) if newest is not None else None
-        sources = [r[0] for r in self.sc.execute(
-            "SELECT name FROM catalog_sources WHERE connector = 'claude_code'").fetchall()]
+        with self.sessions_db.read() as conn:
+            sources = list(conn.execute(select(sources_table.c.name).where(
+                sources_table.c.connector == "claude_code")).scalars())
+            names = conn.execute(select(projects_table.c.id, projects_table.c.name)).all()
         projects = {}
-        for pid, pname in self.sc.execute("SELECT id, name FROM usecases").fetchall():
+        for pid, pname in names:
             projects.setdefault(pname, pid)
             projects[pid] = pid                            # an id wins over a same-named project
         j = "json_extract(e.payload, '$.message.usage')"

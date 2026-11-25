@@ -25,11 +25,18 @@ Cases:
   accounts_methods   the Store's people, key and member methods keep their names and return shapes;
                      revoking a key deletes its subscriptions; deleting a project revokes its keys
   accounts_takeover  Postgres: the three tables the old DDL made are taken over, rows untouched
+  projects_copy      the nine project tables (TR-1610): DuckDB's rows arrive in SQLite with JSON columns
+                     parsed (null and blank kept apart), ledger counts, DuckDB untouched
+  projects_methods   the Store's project, object, log, doc, skill, source, GitHub credential and model
+                     usage methods keep their names and return shapes, and each group changes the rows
+                     it says and no others
+  projects_takeover  Postgres: the nine tables the old DDL made are taken over, rows untouched
 """
 import os
 import re
 import sys
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -48,6 +55,7 @@ from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
 from tares.session_store.tables import people as people_table  # noqa: E402
 from tares.session_store.tables import project_members as members_table  # noqa: E402
 from tares.session_store.tables import settings as settings_table  # noqa: E402
+from tares.session_store.tables import usecases as projects_table  # noqa: E402
 from tares.session_store.takeover import TakeoverError, takeover  # noqa: E402
 from tares.session_store.types import JSONText  # noqa: E402
 from tares.store import Store  # noqa: E402
@@ -697,6 +705,317 @@ def accounts_takeover():
     finally:
         _drop_schema(sch)
 
+# The project tables as an old cell holds them (old_ddl's SEED has none). `params`, `setup`, `linear`,
+# `github_issues` and `config` are JSON text, and the blank and null forms are the ones the copy must
+# tell apart. `github_credentials.config` stays text.
+PROJECT_TABLES = ("usecases", "usecase_objects", "usecase_log", "docs", "skills", "shared_skills",
+                  "catalog_sources", "github_credentials", "model_usage")
+_PROJECT_COLS = ("id", "recipe", "name", "params", "status", "created_at", "updated_at", "last_error", "goal",
+                 "setup", "linear", "github_issues", "kind", "lead_person_id", "scope", "icon")
+PROJECTS = {
+    "usecases": (_PROJECT_COLS, [
+        ("uc_demo", "custom", "Demo", '{"objects": [{"kind": "source", "name": "logs"}]}', "active", _T, _T,
+         None, "Make it fast", '{"step": "plan"}', '{"team": "T1"}', '{"repo": "o/r"}', "software_factory",
+         "p_kim", "private", "\U0001f9ed"),
+        ("uc_old", "custom", "Old", "{}", "active", _T, _T, "boom", None, None, None, None, None, None, None, None),
+        ("uc_blank", "custom", "Blank", None, "draft", _T, _T, None, "", None, None, None, None, None, "team", None),
+    ]),
+    "usecase_objects": (("usecase_id", "kind", "key", "name", "customized", "created_at"), [
+        ("uc_demo", "source", "source:logs", "logs", False, _T),
+        ("uc_demo", "doc", "doc:d1", "d1", True, _T),
+        ("uc_old", "skill", "skill:runbook", "runbook", None, _T),
+    ]),
+    "usecase_log": (("usecase_id", "logged_at", "action", "detail"), [
+        ("uc_demo", _T, "create", None),
+        ("uc_demo", _T, "edit", "renamed"),
+    ]),
+    "docs": (("id", "kind", "title", "body", "made_by", "updated_by", "created_at", "updated_at", "owner"), [
+        ("d1", "spec", "Spec", "# Spec", "uc_demo", "console", _T, _T, None),
+        ("d2", "personal_agents", "Yours", "mine", None, None, _T, _T, "p_kim"),
+    ]),
+    "skills": (("project", "name", "description", "body", "created_at", "updated_at"), [
+        ("uc_old", "runbook", "How to restart", "restart it", _T, _T),
+    ]),
+    "shared_skills": (("name", "description", "body", "made_by", "created_at", "updated_at", "updated_by"), [
+        ("runbook", "How to restart", "restart it", "uc_demo", _T, _T, "console"),
+        ("plain", "Plain", "do it", None, _T, _T, None),
+    ]),
+    "catalog_sources": (("name", "type", "connector", "poll", "config", "paused", "created_at", "updated_at",
+                         "ingest_key", "owned_by", "customized"), [
+        ("logs", "otlp", "otlp", "5s", '{"labels": [1]}', False, _T, _T, "ik_logs", "uc_demo", False),
+        ("laptop", "poll", "claude_code", "5m", None, True, _T, _T, None, None, None),
+    ]),
+    "github_credentials": (("name", "kind", "token", "api_url", "account", "created_at", "updated_at", "config"), [
+        ("gh1", "app", "tok1", "https://api.github.com", "org", _T, _T, '{"app_id": 7}'),
+        ("gh2", "token", "tok2", None, None, _T, _T, None),
+    ]),
+    "model_usage": (("id", "ts", "surface", "agent", "run_id", "model", "calls", "input_tokens", "output_tokens",
+                     "cache_creation_input_tokens", "cache_read_input_tokens", "cost_usd", "key_source",
+                     "provider"), [
+        ("m1", _T, "ask", None, None, "claude", 1, 100, 50, 0, 0, 0.01, "env", "anthropic"),
+        ("m2", _T, "agent", "a1", "r1", "claude", 2, 10, 5, 1, 2, None, None, None),
+    ]),
+}
+PROJECT_COUNTS = {"usecases": 3, "usecase_objects": 3, "usecase_log": 2, "docs": 2, "skills": 1,
+                  "shared_skills": 2, "catalog_sources": 2, "github_credentials": 2, "model_usage": 2}
+
+
+def _table_rows(sdb, name):
+    with sdb.begin() as c:
+        return c.execute(text(f"SELECT * FROM {name}")).all()
+
+
+def _n(sdb, name):
+    with sdb.begin() as c:
+        return c.execute(text(f"SELECT count(*) FROM {name}")).scalar()
+
+
+def projects_copy():
+    print("== the project tables are copied from DuckDB at the first start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old_ddl_duckdb(con, seed={**SEED, **PROJECTS})
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    with s.sessions_db.begin() as c:
+        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger counts each table as DuckDB held it", {t: ledger.get(t) for t in PROJECT_TABLES} == PROJECT_COUNTS,
+       ledger)
+    have = {t: _n(s.sessions_db, t) for t in PROJECT_TABLES}
+    ck("the rows are there (the start may add the default project, a log line or the seeds)",
+       all(have[t] >= PROJECT_COUNTS[t] for t in PROJECT_TABLES), have)
+    demo, old, blank = s.get_project("uc_demo"), s.get_project("uc_old"), s.get_project("uc_blank")
+    # (demo is the cell's default project in SEED: the start adds the loose source `laptop` to it)
+    ck("params arrive parsed", demo["params"]["objects"][0] == {"kind": "source", "name": "logs"}
+       and old["params"] == {} and blank["params"] == {}, (demo["params"], old["params"], blank["params"]))
+    ck("a project keeps its goal, kind, lead, scope and icon", (demo["goal"], demo["kind"], demo["lead_person_id"],
+       demo["scope"], demo["icon"]) == ("Make it fast", "software_factory", "p_kim", "private", "\U0001f9ed"), demo)
+    ck("a null scope reads as team, and a null goal stays None", old["scope"] == "team" and old["goal"] is None
+       and old["last_error"] == "boom", old)
+    ck("setup, linear and github_issues are parsed, and null and blank are None",
+       s.get_project_setup("uc_demo") == {"step": "plan"} and s.get_project_linear("uc_demo") == {"team": "T1"}
+       and s.get_project_github("uc_demo") == {"repo": "o/r"} and s.get_project_setup("uc_old") is None
+       and s.get_project_setup("uc_blank") is None and s.get_project_linear("uc_blank") is None,
+       (s.get_project_setup("uc_demo"), s.get_project_linear("uc_demo"), s.get_project_github("uc_demo")))
+    objs = {o["key"]: o["customized"] for o in s.list_project_objects("uc_demo")}
+    ck("a project's objects arrive, with the customized flag", objs["doc:d1"] is True
+       and objs["source:logs"] is False and set(objs) <= {"doc:d1", "source:logs", "source:laptop"}, objs)
+    ck("the log keeps a null detail and a text one", {e["action"]: e["detail"] for e in s.list_project_log("uc_demo")}
+       .get("create") in (None, "") and {e["action"]: e["detail"] for e in s.list_project_log("uc_demo")}
+       .get("edit") == "renamed", s.list_project_log("uc_demo"))
+    src = {x["name"]: x for x in s.list_catalog_sources()}
+    ck("a source's config arrives parsed, null as is", src["logs"]["config"] == {"labels": [1]}
+       and src["laptop"]["config"] in (None, {}) and src["laptop"]["paused"] is True
+       and src["logs"]["ingest_key"] == "ik_logs" and src["logs"]["owned_by"] == "uc_demo", src)
+    gh = {c["name"]: c for c in s.list_github_credentials()}
+    ck("a GitHub credential's config is the dict, and a null one is {}", gh["gh1"]["config"] == {"app_id": 7}
+       and gh["gh2"]["config"] == {} and gh["gh2"]["api_url"] == "" and gh["gh1"]["token"] == "tok1", gh)
+    ck("shared skills and docs arrive", s.get_skill(None, "runbook")["body"] == "restart it"
+       and s.get_doc(None, "d1")["body"] == "# Spec" and s.get_doc(None, "d2")["title"] == "Yours")
+    tot = s.model_usage_summary()["total"]
+    ck("the usage ledger sums as DuckDB's rows did", (tot["calls"], tot["input_tokens"], tot["output_tokens"],
+       tot["cache_creation_input_tokens"], tot["cache_read_input_tokens"], tot["cost_usd"], tot["uncosted_calls"])
+       == (3, 110, 55, 1, 2, 0.01, 2), tot)
+    with s._lock:
+        n = [s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in PROJECT_TABLES]
+    ck("DuckDB still has its rows: nothing is deleted there", n == [PROJECT_COUNTS[t] for t in PROJECT_TABLES], n)
+    s.create_project("uc_later", "custom", "Later", {})
+    s.close()
+    s = Store(path, state_dsn="")
+    ck("a second start copies nothing: a project made after the copy is kept",
+       s.get_project("uc_later") is not None and len(s.list_projects()) >= 4)
+    s.close()
+
+
+def _waits_for_write_lock(s, call):
+    """Whether `call`, on another thread, stays out while this thread holds the store's write lock."""
+    done = threading.Event()
+    t = threading.Thread(target=lambda: (call(), done.set()), daemon=True)
+    with s._swrite:
+        t.start()
+        early = done.wait(0.3)
+    t.join(10)
+    return not early and done.is_set()
+
+
+def projects_methods():
+    print("== projects, objects, log, docs, skills, sources, credentials and usage through Core ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    sdb = s.sessions_db
+    base = {t: _n(sdb, t) for t in PROJECT_TABLES}
+
+    def grew(**kw):
+        now = {t: _n(sdb, t) for t in PROJECT_TABLES}
+        out = {t: now[t] - base[t] for t in PROJECT_TABLES if now[t] != base[t]}
+        base.update(now)
+        return out == kw, out
+
+    print("== projects ==")
+    s.create_project("uc_a", "custom", "Alpha", {"k": [1]}, goal="Ship", lead_person_id="local", icon="A")
+    a = s.get_project("uc_a")
+    ck("create_project writes one row, params a dict, scope team", a["name"] == "Alpha"
+       and a["params"] == {"k": [1]} and a["goal"] == "Ship" and a["scope"] == "team" and a["icon"] == "A"
+       and a["lead_person_id"] == "local" and a["status"] == "active", a)
+    ck("create_project touched only usecases", grew(usecases=1)[0], grew())
+    s.update_project("uc_a", params={"k": 2}, status="paused", last_error="bad", name="Alpha2", goal=None)
+    a = s.get_project("uc_a")
+    ck("update_project sets params, status, error, name, and clears a goal given as None", a["params"] == {"k": 2}
+       and a["status"] == "paused" and a["last_error"] == "bad" and a["name"] == "Alpha2" and a["goal"] is None, a)
+    s.update_project("uc_a")
+    ck("update_project with no arguments leaves the row as it was", s.get_project("uc_a")["last_error"] == "bad")
+    s.set_project_setup("uc_a", {"step": 1})
+    s.set_project_scope("uc_a", "private")
+    s.set_project_kind("uc_a", "software_factory")
+    s.set_project_icon("uc_a", None)
+    a = s.get_project("uc_a")
+    ck("setup, scope, kind and icon each change their own column", s.get_project_setup("uc_a") == {"step": 1}
+       and a["scope"] == "private" and a["kind"] == "software_factory" and a["icon"] is None, a)
+    s.set_project_setup("uc_a", None)
+    ck("a cleared setup reads None", s.get_project_setup("uc_a") is None)
+    try:
+        s.set_project_scope("uc_a", "bogus")
+        ck("a bad scope is refused", False, "no error")
+    except ValueError:
+        ck("a bad scope is refused", s.get_project("uc_a")["scope"] == "private")
+    ck("get_project of nobody is None", s.get_project("uc_missing") is None)
+    ck("list_projects has it, filtered by kind", "uc_a" in [p["id"] for p in s.list_projects()]
+       and [p["id"] for p in s.list_projects(kind="software_factory")] == ["uc_a"])
+    ck("list_projects ids filter", [p["id"] for p in s.list_projects(ids=["uc_a"])] == ["uc_a"])
+
+    print("== log ==")
+    s.log_project("uc_a", "edit", "x" * 3000)
+    s.log_project("uc_a", "note")
+    lg = s.list_project_log("uc_a")
+    ck("log_project keeps two lines, detail cut at 2000, empty detail kept", len(lg) >= 2
+       and any(len(e["detail"] or "") == 2000 for e in lg) and any(e["action"] == "note" for e in lg), lg)
+    ck("the log touched only usecase_log", grew(usecase_log=len(lg))[0], grew())
+
+    print("== docs ==")
+    did = s.create_doc("uc_a", "spec", "Spec", "# hi", by="uc_a")
+    ck("create_doc writes the doc and its project object", grew(docs=1, usecase_objects=1)[0], grew())
+    g = s.get_doc("uc_a", did)
+    ck("get_doc returns body and the projects that include it", g["title"] == "Spec" and g["body"] == "# hi"
+       and g["projects"] == ["uc_a"] and g["kind"] == "spec", g)
+    ck("get_doc of a project that lacks it is None", s.get_doc("uc_missing", did) is None)
+    s.update_doc(did, title="Spec2", by="console")
+    g = s.get_doc(None, did)
+    ck("update_doc changes the title, who, and keeps the body", g["title"] == "Spec2" and g["body"] == "# hi"
+       and g["updated_by"] == "console", g)
+    ld = s.list_docs("uc_a")
+    ck("list_docs gives size in bytes, no body", [x["id"] for x in ld] == [did] and ld[0]["size"] == 4
+       and "body" not in ld[0], ld)
+    ck("list_docs by kind", s.list_docs("uc_a", kind="other") == [] and len(s.list_docs("uc_a", kind="spec")) == 1)
+    pd = s.create_doc(None, "personal_agents", "Mine", "x", owner="local")
+    ck("a personal doc is not in a project's list, is in its owner's", pd not in [x["id"] for x in s.list_docs("uc_a")]
+       and (s.personal_doc("local", "personal_agents") or {}).get("id") == pd)
+    ck("doc_titles reads titles for the ids asked", s.doc_titles("uc_a", [did]) == {did: "Spec2"}, s.doc_titles("uc_a", [did]))
+    grew()
+    ck("remove_doc returns True and deletes a doc only that project used", s.remove_doc("uc_a", did) is True
+       and s.get_doc(None, did) is None)
+    ck("remove_doc of one not included is False", s.remove_doc("uc_a", did) is False)
+    ck("remove_doc touched docs and objects only", grew(docs=-1, usecase_objects=-1)[0], grew())
+
+    print("== skills ==")
+    ck("upsert_skill is True the first time", s.upsert_skill("uc_a", "run", "How", "do it", updated_by="me") is True)
+    ck("and False the second", s.upsert_skill("uc_a", "run", "How2", "do it again") is False)
+    ck("one shared skill and one object", grew(shared_skills=1, usecase_objects=1)[0], grew())
+    sk = s.get_skill("uc_a", "run")
+    ck("get_skill has the changed description and body", sk["description"] == "How2" and sk["body"] == "do it again", sk)
+    ls = s.list_skills("uc_a")
+    ck("list_skills has size, no body", [x["name"] for x in ls] == ["run"] and ls[0]["size"] == 11
+       and "body" not in ls[0], ls)
+    ck("list_all_skills names its users", [x["projects"] for x in s.list_all_skills() if x["name"] == "run"] == [["uc_a"]])
+    s.mark_skill_customized("uc_a", "run")
+    ck("mark_skill_customized sets the flag on the object", {o["key"]: o["customized"] for o in
+       s.list_project_objects("uc_a")}.get("skill:run") is True, s.list_project_objects("uc_a"))
+    ck("delete_skill returns True, removes the use, the unused skill goes with it", s.delete_skill("uc_a", "run") is True
+       and s.get_skill(None, "run") is None and s.delete_skill("uc_a", "run") is False)
+
+    print("== sources ==")
+    s.upsert_catalog_source("src1", "poll", "http_poll", "1m", {"url": "u"}, paused=False, ingest_key="k1")
+    cs = {x["name"]: x for x in s.list_catalog_sources()}
+    ck("upsert_catalog_source writes one row, config a dict", cs["src1"]["config"] == {"url": "u"}
+       and cs["src1"]["ingest_key"] == "k1" and cs["src1"]["paused"] is False, cs["src1"])
+    s.upsert_catalog_source("src1", "poll", "http_poll", "2m", {"url": "v"})
+    cs = {x["name"]: x for x in s.list_catalog_sources()}
+    ck("a second upsert replaces the config and keeps the ingest key", cs["src1"]["config"] == {"url": "v"}
+       and cs["src1"]["poll"] == "2m" and cs["src1"]["ingest_key"] == "k1", cs["src1"])
+    s.set_source_paused("src1", True)
+    s.set_source_ingest_key("src1", "k2")
+    cs = {x["name"]: x for x in s.list_catalog_sources()}
+    ck("pause and ingest key change their column only", cs["src1"]["paused"] is True
+       and cs["src1"]["ingest_key"] == "k2" and cs["src1"]["config"] == {"url": "v"}, cs["src1"])
+    s.put_in_project("source", "src1", "uc_a")
+    ck("project_sources joins the project's objects to the sources", list(s.project_sources("uc_a"))
+       == ["src1"], s.project_sources("uc_a"))
+    ck("projects_using names the project", s.projects_using("source", "src1") == ["uc_a"])
+    grew()
+    s.delete_catalog_source("src1")
+    ck("delete_catalog_source removes the source and its objects", "src1" not in [x["name"] for x in s.list_catalog_sources()]
+       and s.projects_using("source", "src1") == [], s.projects_using("source", "src1"))
+
+    print("== GitHub credentials ==")
+    s.upsert_github_credential("gh", "tok", kind="app", api_url="https://x", account="org", config={"app_id": 1})
+    g = {c["name"]: c for c in s.list_github_credentials()}["gh"]
+    ck("the credential is stored with its config dict", g["config"] == {"app_id": 1} and g["token"] == "tok"
+       and g["kind"] == "app" and g["account"] == "org", g)
+    s.upsert_github_credential("gh", "tok2")
+    g = {c["name"]: c for c in s.list_github_credentials()}["gh"]
+    ck("a rotation with config None keeps the config", g["token"] == "tok2" and g["config"] == {"app_id": 1}, g)
+    s.upsert_github_credential("gh", "tok2", config={})
+    ck("config {} clears it", {c["name"]: c for c in s.list_github_credentials()}["gh"]["config"] == {})
+    s.update_github_credential_config("gh", {"installs": [3]})
+    ck("update_github_credential_config replaces only the config", {c["name"]: c for c in s.list_github_credentials()}
+       ["gh"]["config"] == {"installs": [3]})
+    s.delete_github_credential("gh")
+    ck("delete removes it", "gh" not in [c["name"] for c in s.list_github_credentials()])
+
+    print("== model usage ==")
+    grew()
+    base_tot = s.model_usage_summary()["total"]["calls"]
+    s.record_model_usage("ask", "", "", "m", 2, 100, 20, 3, 4, cost_usd=0.5, key_source="env", provider="anthropic")
+    s.record_model_usage("agent", "a", "r1", "m", 1, 10, 2)
+    sm = s.model_usage_summary()
+    ck("the totals add both rows", sm["total"]["calls"] - base_tot == 3, sm["total"])
+    ck("an unpriced row counts as uncosted and the cost total is a float", sm["total"]["uncosted_calls"] >= 1
+       and isinstance(sm["total"]["cost_usd"], float), sm["total"])
+    ck("by surface, key source and provider split them", sm["by_surface"]["ask"]["calls"] == 2
+       and sm["by_surface"]["agent"]["calls"] >= 1 and sm["by_key_source"]["env"]["input_tokens"] == 100
+       and "unknown" in sm["by_key_source"] and sm["by_provider"]["anthropic"]["calls"] >= 3, sm)
+    ck("days has today with both rows", sm["days"] and sm["days"][-1]["calls"] >= 3 and sm["window_days"] == 30, sm["days"])
+    ck("only model_usage grew", *(lambda r: (r[0], r[1]))(grew(model_usage=2)))
+
+    print("== delete_project ==")
+    s.create_project("uc_b", "custom", "Beta", {})
+    s.log_project("uc_b", "x")
+    s.create_doc("uc_b", "spec", "T", "b")
+    s.upsert_skill("uc_b", "own", "d", "b")
+    s.upsert_skill("uc_a", "shared", "d", "b")
+    s.upsert_skill("uc_b", "shared", "d", "b")
+    s.insert_api_key("kP", "p", "nvf_p", "hP", [], project="uc_b")
+    s.delete_project("uc_b")
+    ck("the project, its log, objects and its only doc and skill are gone", s.get_project("uc_b") is None
+       and s.list_project_log("uc_b") == [] and s.list_project_objects("uc_b") == []
+       and s.get_skill(None, "own") is None, s.list_project_objects("uc_b"))
+    ck("a skill another project uses stays", s.get_skill("uc_a", "shared") is not None)
+    ck("its key is revoked", s.get_api_key("kP")["revoked_at"] is not None, s.get_api_key("kP"))
+    ck("the other project is untouched", s.get_project("uc_a") is not None)
+
+    print("== writes that read first wait for the store's write lock ==")
+    s.upsert_catalog_source("src2", "poll", "http_poll", "1m", {})
+    # on Postgres two of these threads' transactions interleave; only this lock keeps them apart
+    for name, call in (
+            ("delete_catalog_source", lambda: s.delete_catalog_source("src2")),
+            ("upsert_skill", lambda: s.upsert_skill("uc_a", "locked", "d", "b")),
+            ("delete_skill", lambda: s.delete_skill("uc_a", "locked")),
+            ("upsert_github_credential", lambda: s.upsert_github_credential("locked", "tok")),
+            ("update_github_credential_config", lambda: s.update_github_credential_config("locked", {}))):
+        ck(f"{name} waits for the write lock", _waits_for_write_lock(s, call))
+    s.close()
+
 
 def cli_edition():
     print("== tares up reads the edition from tares.sqlite ==")
@@ -810,11 +1129,62 @@ def sqlite_and_pg_units():
             _drop_schema(sch)
 
 
+def projects_takeover():
+    print("== Postgres: the project tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        seeded = old_ddl_postgres(dsn, seed={**SEED, **PROJECTS})
+
+        def snapshot():
+            out = {}
+            with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+                for t in PROJECT_TABLES:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                                     "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
+                                     [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
+                    out[t] = (cols, sorted(tuple(map(str, r)) for r in rows))
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the nine tables, with the sample rows",
+           {t: len(before[t][1]) for t in PROJECT_TABLES} == PROJECT_COUNTS, {t: len(before[t][1]) for t in PROJECT_TABLES})
+        ck("params and config are TEXT there", dict((c[0], c[1]) for c in before["usecases"][0])["params"] == "text"
+           and dict((c[0], c[1]) for c in before["catalog_sources"][0])["config"] == "text")
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types and rows, is as the old code left it", snapshot() == before)
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        with ts.capture_logs("alembic.runtime.migration") as recs:
+            sdb.upgrade()
+        ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
+        ts.step_down(sdb, "0012_session_usage_hourly")
+        ck("a downgrade to the revision before keeps the tables and their rows", snapshot() == before
+           and ts.versions(sdb) == ["0012_session_usage_hourly"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it takes them over again, rows untouched", snapshot() == before)
+        with sdb.begin() as c:
+            demo = c.execute(projects_table.select().where(projects_table.c.id == "uc_demo")).first()
+            blank = c.execute(projects_table.select().where(projects_table.c.id == "uc_blank")).first()
+        ck("Core reads a project the old code wrote, JSON text parsed, null as None",
+           demo.params == {"objects": [{"kind": "source", "name": "logs"}]} and demo.setup == {"step": "plan"}
+           and blank.params is None and blank.setup is None, (demo, blank))
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+
 if __name__ == "__main__":
-    ck("settings and the accounts are in MOVED_TABLES, with the five session tables",
+    ck("settings, the accounts and the project tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
        == ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters",
-           "settings", "people", "api_keys", "project_members"])
+           "settings", "people", "api_keys", "project_members", "usecases", "usecase_objects", "usecase_log",
+           "docs", "skills", "shared_skills", "catalog_sources", "github_credentials", "model_usage"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -825,8 +1195,11 @@ if __name__ == "__main__":
     ddl_skips()
     methods()
     accounts_copy()
+    projects_copy()
     accounts_methods()
+    projects_methods()
     postgres_takeover()
     accounts_takeover()
+    projects_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

@@ -258,7 +258,7 @@ def the_migration_is_additive():
         raw = conn.execute(select(func.count()).select_from(session_usage)).scalar_one()
         cfg = sdb._config()
         cfg.attributes["connection"] = conn
-        command.downgrade(cfg, "-1")
+        command.downgrade(cfg, "0011_session_moves")
     names = inspect(sdb.engine).get_table_names()
     ck("a downgrade drops the two new tables", "session_usage_hourly" not in names
        and "session_rollup_state" not in names, names)

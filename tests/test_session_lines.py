@@ -38,7 +38,7 @@ from tares.store import Store  # noqa: E402
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
-HEAD = "0012_session_usage_hourly"
+HEAD = "0013_project_tables"
 SRC = "claude_code"
 _N = [0]
 
@@ -162,11 +162,8 @@ def revision():
 def lines_in_both():
     print("== a line is in both stores after Store.append ==")
     s = open_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector, config) VALUES "
-                     "('plain', 'claude_code', '{}')")
-        s.sc.execute("INSERT INTO catalog_sources (name, connector, config) VALUES "
-                     "('open', 'claude_code', ?)", [json.dumps({"redact": False, "include_thinking": True})])
+    s.upsert_catalog_source("plain", "claude_code", "claude_code", "", {})
+    s.upsert_catalog_source("open", "claude_code", "claude_code", "", {"redact": False, "include_thinking": True})
     batch = [line("a", "user", {"uuid": "k1", "message": {"content": "hi"}}, {"tares_person": "ann"}),
              line("a", "assistant", {"uuid": "k2"}), line("a", "tool_use", {"x": 1}),
              line("b", "user", {"uuid": "kb", "text": "é ✓ \u0000 nul"}, source="open"),
@@ -319,8 +316,7 @@ def concurrent_appends():
 def purge_and_gauges():
     print("== purging a source ==")
     s = open_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
     s.append([line("p", "user", {"uuid": "p1"}, source="laptop"), line("keep", "user", {"uuid": "k1"})])
     s.purge_events("laptop")
     ck("the purged source's lines are gone from session_lines", stored(s, "p") == [])
@@ -526,9 +522,7 @@ def tool_equal(s, session, tool_id, source=SRC):
 def reads():
     print("== a session whose lines are complete is read from the table, with DuckDB's answer ==")
     s = open_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector, config) VALUES "
-                     "('open', 'claude_code', ?)", [json.dumps({"redact": False, "include_thinking": True})])
+    s.upsert_catalog_source("open", "claude_code", "claude_code", "", {"redact": False, "include_thinking": True})
     make_session(s, "t1")
     make_session(s, "t2", n=3)
     make_session(s, "o1", config={"redact": False, "include_thinking": True}, source="open")
