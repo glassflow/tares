@@ -63,12 +63,12 @@ def window(percent, mins, reset=3600, now=NOW):
             "resetsAt": int((now + timedelta(seconds=reset)).timestamp()) if reset is not None else None}
 
 
-def limits(primary=None, secondary=None, primary_reset=3600, secondary_reset=86400, primary_mins=300, **more):
+def limits(primary=None, secondary=None, primary_reset=3600, secondary_reset=86400, primary_mins=300, now=NOW, **more):
     rl = {"limitId": "codex", "limitName": None}
     if primary is not None:
-        rl["primary"] = window(primary, primary_mins, primary_reset)
+        rl["primary"] = window(primary, primary_mins, primary_reset, now=now)
     if secondary is not None:
-        rl["secondary"] = window(secondary, 10080, secondary_reset)
+        rl["secondary"] = window(secondary, 10080, secondary_reset, now=now)
     return {"rateLimits": rl, **more}
 
 
@@ -140,7 +140,7 @@ ck("a further bucket (the limit of one model) is shown and never slows the crew,
    and got["limits"][2]["label"] == "Another model, 5 hours", got["limits"])
 kept = cu.compact_reading({"limits": {**limits(6, 20), "accountId": "acct-123"},
                            "account": {"type": "chatgpt", "planType": "plus", "email": "pat@example.com",
-                                       "workspaceName": "Pat's workspace"}, "taken_at": "2026-11-25T12:00:00Z"})
+                                       "workspaceName": "Pat's workspace"}, "taken_at": NOW.isoformat()})
 ck("of a reading the windows and the account's type and plan are kept; no account id, address or workspace name",
    kept["account"] == {"type": "chatgpt", "plan": "plus"} and len(kept["windows"]) == 2
    and not any(x in json.dumps(kept) for x in ("acct-123", "pat@example.com", "workspace")), kept)
@@ -191,9 +191,11 @@ async def main():
             print("c. the routes")
             await root.put("/api/crew/settings", json={"pace": True})
             now = datetime.now(timezone.utc)
-            body = {"limits": {**limits(96, 20), "accountId": "acct-123"},
+            # Route handlers use the real clock; their quota windows must too.
+            # Keep NOW only for the pure mapping cases above.
+            body = {"limits": {**limits(96, 20, now=now), "accountId": "acct-123"},
                     "account": {"type": "chatgpt", "planType": "plus", "email": "pat@example.com"},
-                    "taken_at": "2026-11-25T12:00:00Z"}
+                    "taken_at": now.isoformat()}
             body["limits"]["rateLimits"]["primary"]["resetsAt"] = int((now + timedelta(hours=1)).timestamp())
             body["limits"]["rateLimits"]["secondary"]["resetsAt"] = int((now + timedelta(days=2)).timestamp())
             r = await root.get("/api/crew/pace", params={"runtime": "codex"})
@@ -220,7 +222,7 @@ async def main():
                  "resets_at": (now + timedelta(hours=1)).isoformat()}]}}))
             claude = (await root.get("/api/crew/pace")).json()
             ck("a Claude plan at 99% holds the Claude Code crew", has(claude, {"known": True, "level": 2, "session_pct": 99}), claude)
-            await root.put("/api/crew/codex-limits", json={"limits": limits(6, 20), "account": {"type": "chatgpt"}})
+            await root.put("/api/crew/codex-limits", json={"limits": limits(6, 20, now=now), "account": {"type": "chatgpt"}})
             got = (await root.get("/api/crew/pace", params={"runtime": "codex"})).json()
             ck("and leaves the Codex crew alone: its own reading says there is room",
                has(got, {"known": True, "level": 0, "state": "ok", "session_pct": 6}), got)
