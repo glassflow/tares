@@ -32,6 +32,13 @@ Paths in the JSON
   shlex.quote on POSIX, and on Windows (quote_windows) double quotes around a path that needs them, with
   a refusal for a character that cmd or Git Bash would act on inside them. Both are tested without Windows.
 
+Another runtime
+  The cell says which runtime a launch is for (`runtime` next to the spec; none said is Claude Code). A spec of
+  the Codex runtime (TR-1592) is not started here: launch_plan fills it and adds nothing of Claude Code's, and
+  launch hands it to tares.crew.codex, which starts a `codex app-server` of the station's own. Everything else
+  in this note is about Claude Code. A crew stays on the runtime its first station was started on
+  (check_runtime).
+
 Notes written at a start
   The idle-wake file is written by iw_launch_note (TR-961), the pace file by pace.launch_note (TR-962).
 
@@ -62,6 +69,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from . import claude as cl
+from . import codex as cx
 from . import pace, state
 from .client import TaresClient, TaresHTTPError, cksum, uri
 from .errors import CrewError
@@ -436,6 +444,15 @@ def saved_spec(paths: CrewPaths, station: str):
 def _with_model(spec: dict, model: str, effort: str) -> dict:
     """The kept launch with the model and effort this start asks for (`crew settings` may have changed them
     since the copy was made)."""
+    if spec_runtime(spec) == cx.RUNTIME:   # no flags: the model is the thread's, the effort a turn's
+        settings = dict(spec["settings"])
+        thread = dict(settings["thread"]) if isinstance(settings.get("thread"), dict) else {}
+        for key, value, holder in (("model", model, thread), ("effort", effort, settings)):
+            if value:
+                holder[key] = value
+            else:
+                holder.pop(key, None)
+        return {**spec, "settings": {**settings, "thread": thread}}
     command = list(spec["command"])
     for flag, value in (("--model", model), ("--effort", effort)):
         if flag in command and command.index(flag) + 1 < len(command):
@@ -493,6 +510,38 @@ def _ask(client: TaresClient, station: str, role: str, query: dict) -> dict:
     return doc
 
 
+RUNTIME_DEFAULT = "claude_code"   # a spec or a recorded station that names no runtime is Claude Code's
+RUNTIME_TITLES = {"claude_code": "Claude Code", "codex": "Codex"}
+
+
+def spec_runtime(spec: dict) -> str:
+    """The runtime a launch spec is for (the cell says it next to the spec)."""
+    return str(spec.get("runtime") or RUNTIME_DEFAULT)
+
+
+def crew_runtime(paths: CrewPaths) -> str:
+    """The runtime this crew's stations were started on, "" for a crew that has recorded none yet."""
+    try:
+        data = state.stations_load(paths)
+    except CrewError:
+        return ""
+    for row in data.values():
+        if isinstance(row, dict) and row.get("role"):
+            return str(row.get("runtime") or RUNTIME_DEFAULT)
+    return ""
+
+
+def check_runtime(paths: CrewPaths, station: str, spec: dict) -> None:
+    """A crew stays on the runtime it was started on: a conversation of one cannot be carried on by another,
+    and its stations would be half one and half the other. Dies when the spec is for another runtime."""
+    have, given = crew_runtime(paths), spec_runtime(spec)
+    if have and have != given:
+        was, now = RUNTIME_TITLES.get(have, have), RUNTIME_TITLES.get(given, given)
+        raise CrewError(f"this crew runs on {was}, and Tares now gives {station} a launch for {now}. A crew is never "
+                        f"moved to another runtime. Set the factory's runtime back to {was}, or start a new crew "
+                        f"for {now} in a crew home of its own.")
+
+
 def _spec(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
           model: str, effort: str) -> dict:
     """The launch spec for a start, unfilled: Tares's answer (kept as the copy), else the copy of the last
@@ -515,12 +564,14 @@ def _spec(client: TaresClient, station: str, role: str, parent: str, project: st
         except ValueError as e:
             why = f"Tares could not give it ({e})"
     if spec is not None:
+        check_runtime(paths, station, spec)   # before the copy is replaced: a refused launch leaves it as it was
         paths.launch_dir.mkdir(parents=True, exist_ok=True)
         state.write_json(paths.launch_file(station), without_otel(spec))
         return spec
     spec = saved_spec(paths, station)
     if spec is None:
         raise CrewError("Tares is unreachable and this station has never started; start Tares first.")
+    check_runtime(paths, station, spec)
     client.say(f"{why}; starting {station} from the launch kept from its last start")
     return _with_model(spec, model, effort)
 
@@ -738,7 +789,11 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
     this fills the placeholders of this machine and adds FACTORY_TARES, the `tares` that started the crew.
     Dies (CrewError) for a model that cannot run auto mode, a name that is not a station name, a helper whose
-    parent's role is not clear, or a spec Tares will not give and no copy stands in for."""
+    parent's role is not clear, a spec Tares will not give and no copy stands in for, or a spec for another
+    runtime than the crew's.
+
+    For a spec of the Codex runtime the answer is tares.crew.codex.plan's: the same keys and `runtime`, the
+    spec filled, FACTORY_TARES added, and none of the additions above, which are Claude Code's."""
     from ..integrations.runtime import fill_placeholders   # here: the runtime imports this module
     paths = client.paths
     if model is None or effort is None:
@@ -753,12 +808,15 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
                         f"from its parent ('{parent}'). Name the parent as one of this crew's stations, then run this again.")
     spec = _spec(client, station, role, parent, project, repo, model, effort)
     values = machine_values(client, station, project, repo)
-    env = fill_placeholders(spec["env"], values)
     # the `tares` that started the crew, written for a later release to read (TR-1069); nothing reads it yet
     try:
         tares_bin = shutil.which("tares")
     except (AttributeError, OSError):  # a lookup that cannot run never stops a launch
         tares_bin = None
+    if spec_runtime(spec) == cx.RUNTIME:
+        # nothing of Claude Code's is added: no flags, no settings of the person's, no MCP servers of theirs
+        return cx.plan(spec, {**values, **cx.machine_values(paths, station)}, _forward(tares_bin) if tares_bin else "")
+    env = fill_placeholders(spec["env"], values)
     if tares_bin:
         env["FACTORY_TARES"] = _forward(tares_bin)
     person = person_settings(client.env)
@@ -797,7 +855,10 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
 
     client: the crew's view of Tares, primed. prompt is the station's first message (boot_prompt). resume is a
     session id to carry on in. claude, platform and sleep are for tests (the claude binary, "win32", a
-    sleep that does not wait)."""
+    sleep that does not wait).
+
+    A launch for the Codex runtime starts the station's own app-server instead (tares.crew.codex.start): the
+    prompt and the session to carry on are kept for its controller, and no `claude` is looked for."""
     paths = client.paths
     check_model(model, station)
     # The grants it starts with, read before its settings are written: one that lands in between costs
@@ -810,6 +871,15 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
         grants = gsum = ""
     plan = launch_plan(client, station, role, parent, project, repo, model, effort)
     settings = write_settings(client, station, role, parent, project, repo, plan)
+    if plan.get("runtime") == cx.RUNTIME:
+        kd = kit_dir(client)
+        cx.start(client, station, plan, cwd, prompt, {
+            "role": role, "parent": parent, "project": project, "repo": repo, "cwd": cwd, "sessionId": resume,
+            "model": model, "effort": effort, "settings": settings, "kit": kit_version(kd), "plugin": kd,
+            "grants": gsum, "grants_tried": None}, drop_env=KEPT_FROM_CHILDREN)
+        if gsum:
+            state.atomic_write_text(paths.station_file(station, "grants"), grants + "\n")
+        return
     held = sorted(set(plan["otel"]) - set(plan["otel_file"]))
     if held:
         print(f"  note: {station} sends its telemetry without {', '.join(held)}: a variable that may hold a secret "

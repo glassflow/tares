@@ -17,6 +17,8 @@ PLACEHOLDERS: dict[str, str] = {
     "REPOS": "the sentence naming the repositories checked out on that machine",
     "TOKEN_FILE": "the file that holds the crew's key (the key itself is never in a spec)",
     "SETTINGS_FILE": "the settings file the station is started with (--settings)",
+    "STATION_SOCKET": "the private socket the station's own Codex app-server listens on",
+    "CODEX_HOME": "the station's own Codex folder; of the person's it holds a link to their login and nothing else",
 }
 
 
