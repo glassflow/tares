@@ -567,6 +567,10 @@ def accounts_methods():
     ck("key_person_id and set_key_person", s.key_person_id("kA") == a["id"]
        and s.set_key_person("kB", b["id"]) and s.key_person_id("kB") == b["id"]
        and s.set_key_person("kB", None) and s.key_person_id("kB") is None and not s.set_key_person("nope", None))
+    s.insert_api_key("kRev", "r", "nvf_r", "hRev", [], person_id=a["id"])
+    s.revoke_api_key("kRev")
+    ck("set_key_person leaves a revoked key alone", s.set_key_person("kRev", b["id"]) is False
+       and s.get_api_key("kRev")["person_id"] == a["id"], s.get_api_key("kRev"))
     s.touch_api_key("kA")
     ck("touch_api_key sets the time", s.get_api_key("kA")["last_used_at"] is not None)
     s.add_subscription("sub_kA", "t1", "https://hook.example.test/a", created_by="key:kA")
@@ -585,6 +589,31 @@ def accounts_methods():
     ck("remove_person says it removed", s.remove_person(b["id"]) is True)
     ck("their keys are revoked", s.find_api_key("hC") is None and s.find_api_key("hD") is None)
     ck("a second remove says no", s.remove_person(b["id"]) is False)
+    # a crash between the DuckDB cleanup and the session store write leaves a person a retry finishes
+    cy = s.create_person("Cy2")
+    s.create_project("uc_cy", "custom", "cy", {}, lead_person_id=cy["id"])
+
+    class Boom:
+        def __init__(self, real):
+            self.real = real
+
+        def execute(self, q, *a):
+            if "UPDATE tickets" in q:
+                raise RuntimeError("crash")
+            return self.real.execute(q, *a)
+
+        def __getattr__(self, n):
+            return getattr(self.real, n)
+    real_sc, s.sc = s.sc, Boom(s.sc)
+    try:
+        s.remove_person(cy["id"])
+        ck("a crash in the cleanup raises", False, "no error")
+    except RuntimeError:
+        ck("a crash in the cleanup raises", True)
+    finally:
+        s.sc = real_sc
+    ck("the person is not marked removed yet, so a retry can finish", not s.get_person(cy["id"]).get("removed_at"))
+    ck("the retry removes them", s.remove_person(cy["id"]) is True and s.get_person(cy["id"])["removed_at"])
 
     print("== members and a project's end ==")
     s.create_project("uc_x", "custom", "x", {}, lead_person_id=a["id"])
