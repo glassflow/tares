@@ -251,6 +251,7 @@ test_session_move
 test_session_move_archive
 test_session_no_duckdb_write
 test_session_project
+test_session_readers_no_events
 test_session_store
 test_session_turns
 test_sessions_caught_up
