@@ -17,6 +17,7 @@ edition-routes
 edition-shell
 ee-chunk
 ee-project-access
+embedded
 explore
 factory-crew
 factory-docs
