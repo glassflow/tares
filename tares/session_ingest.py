@@ -76,7 +76,7 @@ import time
 import weakref
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import bindparam, delete, func, insert, select, text, update
+from sqlalchemy import Text, bindparam, delete, func, insert, select, text, update
 
 from . import metrics
 from .envelope import now_utc
@@ -330,9 +330,9 @@ def _write_facts(conn, db, facts: dict) -> None:
         # the whole command where the start held a cut one; a Claude Code result changes none of those.
         conn.execute(session_commands.update().where(t.tool_use_id == bindparam("r_id")).values(
             exit_code=bindparam("r_exit"), output_tail=bindparam("r_out"),
-            result_at=bindparam("r_at"), outcome=func.coalesce(bindparam("r_outcome"), t.outcome),
-            cwd=func.coalesce(bindparam("r_cwd"), t.cwd),
-            command=func.coalesce(bindparam("r_command"), t.command)),
+            result_at=bindparam("r_at"), outcome=func.coalesce(bindparam("r_outcome", type_=Text), t.outcome),
+            cwd=func.coalesce(bindparam("r_cwd", type_=Text), t.cwd),
+            command=func.coalesce(bindparam("r_command", type_=Text), t.command)),
             [{"r_id": r["tool_use_id"], "r_exit": r["exit_code"], "r_out": r["output_tail"],
               "r_at": r["result_at"], "r_outcome": r.get("outcome"), "r_cwd": r.get("cwd"),
               "r_command": r.get("command")} for r in facts["results"]])
