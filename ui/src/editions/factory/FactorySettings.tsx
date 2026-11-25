@@ -13,7 +13,7 @@ import { TracingPanel } from "../settings/TracingPanel";
 import { ProvidersPanel } from "../settings/ProvidersPanel";
 import { ApiKeysPanel } from "../settings/ApiKeysPanel";
 import { Banner, Button, Collapse, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
-import { Switch } from "../../components/ui/switch";
+import { Switch } from "@paper-kit/ui/switch";
 import { cn } from "../../lib/utils";
 import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
 import { usePagePolling } from "../usePagePolling";

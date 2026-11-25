@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "../../components/edition";
-import { Switch } from "../../components/ui/switch";
+import { Switch } from "@paper-kit/ui/switch";
 import { cn } from "@/lib/utils";
 import { CopyCommand, Tick } from "../StartChecklist";
 import type { StartStep } from "../StartChecklist.api";
