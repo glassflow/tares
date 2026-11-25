@@ -552,9 +552,9 @@ async def _refresh_one(store, uid: str, t: dict, sem: "asyncio.Semaphore",
     fields: dict = {"pr": pr} if pr is not t["pr"] else {}
     fields.update(merged_fields(cur, pr))
     # new commits after the reviewer asked for changes: it is back in review (TR-444)
-    newest = store.ticket_reviews(cur["id"])[-1:]
-    if (not fields.get("stage") and cur["stage"] == "changes" and newest and pr.get("head")
-            and not verdict_now({"pr": pr}, newest[0])["current"]):
+    standing = factory_mod.standing_round(store.ticket_reviews(cur["id"]))
+    if (not fields.get("stage") and cur["stage"] == "changes" and standing and pr.get("head")
+            and not verdict_now({"pr": pr}, standing)["current"]):
         fields["stage"] = "review"
         store.add_ticket_history(cur["id"], uid, "stage", "review",
                                  "new commits pushed after the verdict", "github", "github",
@@ -631,7 +631,7 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
         layer = factory_mod.challenger_layer(
             store.challenge_events(source, uid, factory_mod.label(t)))
     return {"checks": checks, "reviews": reviews, "challenger": layer,
-            "verdict": verdict_now(t, reviews[-1] if reviews else None)}
+            "verdict": verdict_now(t, factory_mod.standing_round(reviews))}
 
 
 def pr_note(t: dict) -> str | None:
@@ -3198,13 +3198,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """{words, scope: project|all}: the person allows a permission request (a desk item with
         a command) from the console. `words` is the grant as they let it stand (the console
         offers a sentence naming the station and the command; they may edit it). It becomes a
-        grant (`standing_grant`): for every project it needs an admin. For the item's project,
-        the lead's or an admin's takes effect; with an enterprise licence anyone else's waits for
-        the lead (an admin when there is none), as does a repo's owner who is not the giver
-        (`granted` is false until it takes effect). Without a licence it needs the lead or an
-        admin. It is recorded as their decision made in the console and the item is
-        answered. A grant in effect reaches the stations' rules, and the crew's watch restarts
-        the station with it. A person decides: refused from any crew station."""
+        grant (`standing_grant`): for every project it needs an admin. For the item's project it
+        needs the lead or an admin. With an enterprise licence anyone else's is not refused: it
+        waits for the lead (an admin when there is none), and any project grant, the lead's or an
+        admin's too, also waits for the owner of a repo it names who is not the giver (`granted`
+        is false until it takes effect). It is recorded as their decision made in the console and
+        the item is answered. A grant in effect reaches the stations' rules, and the crew's watch
+        restarts the station with it. A person decides: refused from any crew station."""
         if caller(request)["station"]:
             h.err(PermissionError("a permission is the person's to allow: they allow it in the "
                                   "console"), 403)
