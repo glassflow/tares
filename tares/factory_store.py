@@ -1741,7 +1741,10 @@ class FactoryStore:
 
     def _challenges_fill(self) -> None:
         """Copy challenger lines stored before `challenges` existed, or while a write to it
-        failed. One scan of the events at open, then only the lines `append` records."""
+        failed. One scan of the events at open, then only the lines `append` records. The factory
+        edition scans once and records it (`challenges_filled`, TR-1613)."""
+        if session_ingest.filled_once(self, session_ingest.CHALLENGES_FILLED):
+            return
         rows = self.con.execute(
             "SELECT source, coalesce(key_value, ''), event_time, event_type, "
             "coalesce(json_extract_string(labels, '$.branch'), ''), "
@@ -1750,6 +1753,7 @@ class FactoryStore:
             ).fetchall()
         if rows:
             self._record_challenges(rows)
+        session_ingest.set_filled(self, session_ingest.CHALLENGES_FILLED)
 
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it

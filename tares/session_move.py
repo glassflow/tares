@@ -45,6 +45,9 @@ The parts are named by their content (see `session_archive`), so writing them ne
 a committed row points to. They are numbered after the session's last part, so an hourly pass that
 read the session before the move committed runs into the move's part number and rolls back.
 
+The move is `complete` when the plan ran and no session is `pending`. From then on, in the factory
+edition, the passes of `session_ingest` read no claude_code line from DuckDB (`events_done`, TR-1613).
+
 A recent session is moved under `Store._sess_lock`, as the reconcile and `Store.append` take it, so no
 line is counted into it meanwhile. On Postgres the transaction also takes
 `pg_advisory_xact_lock` on the session, which lets go with the transaction (PgBouncer in transaction
@@ -74,7 +77,7 @@ from typing import NamedTuple
 
 from sqlalchemy import delete, func, insert, or_, select, text, update
 
-from . import metrics, session_archive, session_ingest
+from . import edition, metrics, session_archive, session_ingest
 from .envelope import Envelope, now_utc
 from .session_archive import ARCHIVE_AFTER_DAYS
 from .session_store.tables import (session_archive_parts, session_ingest_marks, session_lines,
@@ -117,6 +120,32 @@ def planned(store) -> bool:
     with store.sessions_db.begin() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == PLANNED)).first() is not None
+
+
+def complete(store) -> bool:
+    """True once the plan ran and no session is `pending`. A `failed` session does not hold it back:
+    it was not born in the table, so a read of it still falls back to DuckDB (`session_read`). Only
+    a True answer is kept on the store: the plan adds its rows once and a `verified` or `failed` row
+    does not go back to `pending`, so losing the answer changes nothing."""
+    if getattr(store, "_move_complete", False):
+        return True
+    with store.sessions_db.read() as conn:
+        # the mark first: the plan writes it after its rows, so rows read next include them all
+        if conn.execute(select(session_ingest_marks.c.at).where(
+                session_ingest_marks.c.name == PLANNED)).first() is None:
+            return False
+        if conn.execute(select(session_moves.c.session).where(
+                session_moves.c.state == PENDING).limit(1)).first() is not None:
+            return False
+    store._move_complete = True
+    return True
+
+
+def events_done(store) -> bool:
+    """True in the factory edition once the move is complete: the start-up and ten-minute passes
+    then read no claude_code line from DuckDB's events (TR-1613). The platform editions keep reading
+    them, whatever the ledger says."""
+    return edition.edition(store)[0] == "factory" and complete(store)
 
 
 def plan(store) -> int:
@@ -701,7 +730,6 @@ def start(store) -> threading.Thread | None:
     """Run `run` in a background thread, on a factory cell only. `Store.close` stops it and waits.
     Returns the thread, or None when the move is parked (`MOVE_ENABLED`) or the cell is not a
     factory."""
-    from . import edition
     if not MOVE_ENABLED:
         return None
     try:
