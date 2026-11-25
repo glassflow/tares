@@ -282,10 +282,11 @@ def seed(store):
         by_project[uid] = tickets
         # each project moved at its own minute, so the list's order does not hang on a tie
         stamp = ago(minutes=i * 3)
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?", [stamp, uid])
         from sqlalchemy import update
+        from tares.session_store.tables import tickets as tickets_t
         from tares.session_store.tables import usecases as projects_t
         with store.sessions_db.begin() as c:
+            c.execute(update(tickets_t).where(tickets_t.c.project == uid).values(updated_at=stamp))
             c.execute(update(projects_t).where(projects_t.c.id == uid).values(
                 created_at=ago(days=30, minutes=i), updated_at=stamp))
         if i < 3:

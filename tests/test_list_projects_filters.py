@@ -108,8 +108,10 @@ def ticket(uid, title, status="todo", stage=None, repo=None, position=None, deps
 
 
 def set_created(tid, at):
-    with store._swrite:
-        store.sc.execute("UPDATE tickets SET created_at = ? WHERE id = ?", [at, tid])
+    from sqlalchemy import update
+    from tares.session_store.tables import tickets as tickets_t
+    with store.sessions_db.begin() as c:
+        c.execute(update(tickets_t).where(tickets_t.c.id == tid).values(created_at=at))
 
 
 project("p_merged")

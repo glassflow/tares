@@ -11,7 +11,7 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import and_, func, null, or_, select, update
+from sqlalchemy import Text, and_, delete, func, insert, null, or_, select, type_coerce, update
 
 from . import claude_usage_hourly as hourly
 from . import session_ingest
@@ -23,6 +23,9 @@ from .session_store.tables import (project_sessions, session_commands, session_m
 from .session_store.tables import sessions as sessions_table
 from .session_store.tables import usecases as projects_table
 from .session_store.tables import people as people_table
+from .session_store.tables import ticket_history as history_table
+from .session_store.tables import ticket_numbers as numbers_table
+from .session_store.tables import tickets as tickets_table
 
 log = logging.getLogger("tares.factory_store")
 
@@ -73,24 +76,6 @@ FACTORY_SCHEMA = [
       parent      TEXT,
       project     TEXT,
       seen_at     TIMESTAMPTZ
-    )""",
-    # The last ticket number a project gave out: numbers are never reused, so T5 keeps meaning
-    # the same ticket in branch names and messages after a ticket is deleted.
-    """CREATE TABLE IF NOT EXISTS ticket_numbers (
-      project     TEXT PRIMARY KEY,
-      last        INTEGER
-    )""",
-    # Every change to a ticket's holder or stage (TR-427), with who made it (a station, or the
-    # caller's name when unlabeled, or "github" when Tares read a merge off the pull request).
-    """CREATE TABLE IF NOT EXISTS ticket_history (
-      ticket      TEXT,
-      project     TEXT,
-      changed_at  TIMESTAMPTZ,
-      field       TEXT,
-      value       TEXT,
-      reason      TEXT,
-      by_station  TEXT,
-      by_role     TEXT
     )""",
     # Assumptions a builder made so it did not block (TR-433): numbered per project, never
     # reused; open until the orchestrator confirms them with the person (kept or overturned).
@@ -280,7 +265,6 @@ FACTORY_SCHEMA = [
     # The person behind every "who did this" (TR-619): the people.id of the credential that made
     # the call, NULL when the system credential or Tares itself did (GitHub read a merge off the
     # pull request). The station above stays as it was; the person is who stood behind it.
-    "ALTER TABLE ticket_history ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE decisions ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS person_id TEXT",
     # The person a desk item is addressed to (TR-634): it shows in their my_work and only words
@@ -717,18 +701,20 @@ class FactoryStore:
         # reads that hand-over as overridden (its rule compares the two times)
         self.sc.execute("UPDATE handovers SET override_at = COALESCE(handed_at, now()) "
                          "WHERE override_reason IS NOT NULL AND override_at IS NULL")
-        rows = self.sc.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
-                                ).fetchall()
-        for (project,) in rows:
-            top = self.sc.execute("SELECT max(number) FROM tickets WHERE project = ?",
-                                   [project]).fetchone()[0] or 0
-            todo = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND number IS NULL "
-                                    "ORDER BY position, created_at", [project]).fetchall()
-            for i, (tid,) in enumerate(todo, top + 1):
-                self.sc.execute("UPDATE tickets SET number = ? WHERE id = ?", [i, tid])
-            self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON "
-                             "CONFLICT (project) DO UPDATE SET last = greatest(ticket_numbers.last, "
-                             "excluded.last)", [project, top + len(todo)])
+        t, n = tickets_table, numbers_table
+        with self.sessions_db.begin() as conn:
+            for project in conn.execute(select(t.c.project).where(
+                    t.c.number.is_(None), t.c.project.is_not(None)).distinct()).scalars().all():
+                top = conn.execute(select(func.max(t.c.number)).where(
+                    t.c.project == project)).scalar() or 0
+                todo = conn.execute(select(t.c.id).where(
+                    t.c.project == project, t.c.number.is_(None)
+                ).order_by(*self._ticket_order())).scalars().all()
+                for i, tid in enumerate(todo, top + 1):
+                    conn.execute(update(t).where(t.c.id == tid).values(number=i))
+                ins = self.sessions_db.upsert(n).values(project=project, last=top + len(todo))
+                conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+                    "last": self.sessions_db.greatest(n.c.last, ins.excluded["last"])}))
         self._credentials_to_factory()
 
     def _credentials_to_factory(self) -> None:
@@ -812,22 +798,24 @@ class FactoryStore:
         for slot, name in bare:
             connect(slot, name, {}, at, "upgrade")
 
-    def _next_ticket_number(self, project: str) -> int:
-        """The project's next ticket number, never one given out before. Lock held."""
-        row = self.sc.execute("SELECT last FROM ticket_numbers WHERE project = ?",
-                               [project]).fetchone()
-        top = self.sc.execute("SELECT max(number) FROM tickets WHERE project = ?",
-                               [project]).fetchone()[0] or 0
-        n = max(row[0] if row else 0, top) + 1
-        self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON CONFLICT "
-                         "(project) DO UPDATE SET last = excluded.last", [project, n])
-        return n
+    def _next_ticket_number(self, conn, project: str) -> int:
+        """The project's next ticket number, never one given out before. One statement in the
+        caller's transaction, so two writers cannot get the same number: the second waits for the
+        project's row until the first commits, and adds to what it finds there."""
+        t, n = tickets_table, numbers_table
+        after_tickets = select(func.coalesce(func.max(t.c.number), 0) + 1).where(
+            t.c.project == project).scalar_subquery()
+        ins = self.sessions_db.upsert(n).values(project=project, last=after_tickets)
+        return conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+            "last": self.sessions_db.greatest(n.c.last + 1, ins.excluded["last"])
+        }).returning(n.c.last)).scalar_one()
 
     def _factory_forget_project(self, uid: str) -> None:
         """A project is deleted: its factory rows go. Lock held."""
         self.sc.execute("DELETE FROM milestones WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(numbers_table).where(numbers_table.c.project == uid))
+            conn.execute(delete(history_table).where(history_table.c.project == uid))
         self.sc.execute("DELETE FROM assumptions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM milestone_check_results WHERE project = ?", [uid])
@@ -1300,18 +1288,19 @@ class FactoryStore:
     def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,
                            reason: str | None, by_station: str | None, by_role: str | None,
                            at, person_id: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO ticket_history (ticket, project, changed_at, field, value, reason, "
-                "by_station, by_role, person_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [ticket, project, at, field, value, reason or None, by_station or None,
-                 by_role or None, person_id or None])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(history_table).values(
+                ticket=ticket, project=project, changed_at=at, field=field, value=value,
+                reason=reason or None, by_station=by_station or None, by_role=by_role or None,
+                person_id=person_id or None))
 
     def ticket_history(self, ticket: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT changed_at, field, value, reason, by_station, by_role, person_id "
-                "FROM ticket_history WHERE ticket = ? ORDER BY changed_at", [ticket]).fetchall()
+        h = history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                h.c.changed_at, h.c.field, h.c.value, h.c.reason, h.c.by_station, h.c.by_role,
+                h.c.person_id).where(h.c.ticket == ticket)
+                .order_by(h.c.changed_at.nulls_last())).all()
         return self._with_people([{"at": r[0], "field": r[1], "value": r[2], "reason": r[3],
                                    "by": r[4], "role": r[5], "person_id": r[6]} for r in rows])
 
@@ -1320,52 +1309,50 @@ class FactoryStore:
         did are absent."""
         if not tickets:
             return {}
-        marks = ", ".join("?" for _ in tickets)
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, max(changed_at) FROM ticket_history WHERE ticket IN "
-                f"({marks}) AND field = 'stage' AND value = ? GROUP BY ticket",
-                list(tickets) + [stage]).fetchall()
-        return dict(rows)
+        h = history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(h.c.ticket, func.max(h.c.changed_at)).where(
+                h.c.ticket.in_(list(tickets)), h.c.field == "stage", h.c.value == stage
+            ).group_by(h.c.ticket)).all()
+        return {r[0]: r[1] for r in rows}
 
     def review_tickets(self) -> list[tuple[str, dict]]:
         """Every ticket in review with its project's name, in the order the projects were made
         and then the list's own order, in one query (TR-648). "In review" is factory.state_of's:
         stage review and a status that is not done or canceled (TR-1008)."""
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._TICKET_COLS} FROM tickets WHERE stage = 'review' AND "
-                "(status IS NULL OR status NOT IN ('done', 'canceled'))").fetchall()
-        # the projects are in the session store, the tickets in DuckDB: the join is made here
-        with self.sessions_db.read() as conn:
+        t = tickets_table
+        with self.sessions_db.snapshot() as conn:
+            rows = conn.execute(select(t).where(t.c.stage == "review", or_(
+                t.c.status.is_(None), t.c.status.not_in(("done", "canceled"))))).all()
             made = {r[0]: (r[1], r[2]) for r in conn.execute(select(
                 projects_table.c.id, projects_table.c.name, projects_table.c.created_at))}
-        rows = [r for r in rows if r[1] in made]
+        rows = [r for r in rows if r.project in made]
 
         def order(r):
             return tuple((v is None, v) if v is not None else (True, 0) for v in (
-                made[r[1]][1], r[8], r[10]))
+                made[r.project][1], r.position, r.created_at))
         rows.sort(key=order)
-        return [(made[r[1]][0], self._ticket_row(r)) for r in rows]
+        return [(made[r.project][0], self._ticket_row(r)) for r in rows]
 
     def milestone_statuses(self, milestones: list[str]) -> list[dict]:
         """Project, milestone, id and status of every ticket in these milestones (TR-648)."""
         if not milestones:
             return []
-        marks = ", ".join("?" for _ in milestones)
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT project, milestone, id, status FROM tickets WHERE milestone IN ({marks})",
-                list(milestones)).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.project, t.c.milestone, t.c.id, t.c.status).where(
+                t.c.milestone.in_(list(milestones)))).all()
         return [{"project": r[0], "milestone": r[1], "id": r[2], "status": r[3]} for r in rows]
 
     def history_between(self, since, until) -> list[dict]:
         """Every ticket change in [since, until), oldest first, for every project (the standup)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, project, changed_at, field, value, reason, by_station, person_id "
-                "FROM ticket_history WHERE changed_at >= ? AND changed_at < ? "
-                "ORDER BY changed_at", [since, until]).fetchall()
+        h = history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                h.c.ticket, h.c.project, h.c.changed_at, h.c.field, h.c.value, h.c.reason,
+                h.c.by_station, h.c.person_id
+            ).where(h.c.changed_at >= since, h.c.changed_at < until)
+                .order_by(h.c.changed_at)).all()
         return self._with_people([{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3],
                                    "value": r[4], "reason": r[5], "by": r[6], "person_id": r[7]}
                                   for r in rows])
@@ -1401,11 +1388,17 @@ class FactoryStore:
     def factory_ref_elsewhere(self, uid: str, repo: str, ref: str) -> bool:
         """Another project has a ticket called `ref` in the work whose PRs live in `repo`: a
         branch named after the ref could be either's, so it is not linked by name."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT t.project, t.number, t.identifier, t.stage FROM tickets t WHERE "
-                "t.project <> ? AND t.project IN (SELECT project FROM tickets WHERE "
-                "json_extract_string(pr, '$.repo') = ?)", [uid, repo]).fetchall()
+        if repo is None:                 # a pull request with no `repo` is not in "no repo"
+            return False
+        t = tickets_table
+        with self.sessions_db.snapshot() as conn:
+            # the stored text is searched for the name, then each hit's `repo` is compared
+            there = {r.project for r in conn.execute(select(t.c.project, t.c.pr).where(
+                t.c.project != uid,
+                type_coerce(t.c.pr, Text).contains(json.dumps(repo), autoescape=True)))
+                if (r.pr or {}).get("repo") == repo}
+            rows = conn.execute(select(t.c.project, t.c.number, t.c.identifier, t.c.stage).where(
+                t.c.project.in_(sorted(there)))).all() if there else []
         for project, number, ident, stage in rows:
             lab = ident or (f"T{number}" if number else "")
             if lab.upper() == ref.upper() and stage in ("doing", "review", "changes", "blocked"):
@@ -1675,16 +1668,28 @@ class FactoryStore:
         """Every reviewer finding on tickets whose PR lives in `repo` since `since`, with the
         ticket and project (TR-443). Each row also carries the ticket's own project, identifier and
         number (what factory.label needs), so a caller names the tickets without reading each."""
+        if repo is None:
+            return []
         with self._sread:
             rows = self.sc.execute(
-                "SELECT f.ticket, f.project, f.kind, f.text, f.severity, f.found_at, t.project, "
-                "t.identifier, t.number FROM "
-                "review_findings f JOIN tickets t ON t.id = f.ticket WHERE "
-                "json_extract_string(t.pr, '$.repo') = ? AND f.found_at >= ?",
-                [repo, since]).fetchall()
+                "SELECT ticket, project, kind, text, severity, found_at FROM review_findings "
+                "WHERE found_at >= ?", [since]).fetchall()
+        if not rows:
+            return []
+        # the findings are in DuckDB, the tickets in the session store: the join is made here
+        t = tickets_table
+        ids = sorted({r[0] for r in rows if r[0] is not None})
+        mine: dict = {}
+        with self.sessions_db.snapshot() as conn:
+            for i in range(0, len(ids), 500):
+                for tk in conn.execute(select(t.c.id, t.c.project, t.c.identifier, t.c.number,
+                                              t.c.pr).where(t.c.id.in_(ids[i:i + 500]))):
+                    if (tk.pr or {}).get("repo") == repo:
+                        mine[tk.id] = tk
         return [{"ticket": r[0], "project": r[1], "kind": r[2], "text": r[3], "severity": r[4],
-                 "at": r[5], "ticket_project": r[6], "ticket_identifier": r[7],
-                 "ticket_number": r[8]} for r in rows]
+                 "at": r[5], "ticket_project": mine[r[0]].project,
+                 "ticket_identifier": mine[r[0]].identifier,
+                 "ticket_number": mine[r[0]].number} for r in rows if r[0] in mine]
 
     # ── what the recording says (TR-440, TR-442) ──────────────────────────────
     CHALLENGE_TYPES = ("challenge_commit", "challenge_waived", "challenge_plan")
@@ -2616,8 +2621,12 @@ class FactoryStore:
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""
+        t = tickets_table
         with self._swrite:
-            self.sc.execute("UPDATE tickets SET milestone = NULL WHERE milestone = ?", [mid])
+            # the tickets first: safe to repeat, so a crash after it leaves a delete a second call
+            # finishes
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(t).where(t.c.milestone == mid).values(milestone=None))
             self.sc.execute("DELETE FROM milestones WHERE id = ?", [mid])
 
     # ── grants by kind (TR-630) ───────────────────────────────────────────────
@@ -3531,12 +3540,20 @@ class FactoryStore:
         sql, args = f"SELECT {self._PW_COLS} FROM pending_writeback WHERE 1 = 1", []
         if integration:
             sql, args = sql + " AND integration = ?", args + [integration]
-        if project:
-            sql += " AND ticket IN (SELECT id FROM tickets WHERE project = ?)"
-            args.append(project)
         with self._sread:
             rows = self.sc.execute(sql + " ORDER BY updated_at, ticket", args).fetchall()
-        return [self._pw_row(r) for r in rows]
+        out = [self._pw_row(r) for r in rows]
+        if project and out:
+            # the tickets are in the session store: which of the waiting ones are the project's
+            t = tickets_table
+            ids = sorted({r["ticket"] for r in out if r["ticket"] is not None})
+            mine: set = set()
+            with self.sessions_db.snapshot() as conn:
+                for i in range(0, len(ids), 500):
+                    mine.update(conn.execute(select(t.c.id).where(
+                        t.c.project == project, t.c.id.in_(ids[i:i + 500]))).scalars())
+            out = [r for r in out if r["ticket"] in mine]
+        return out
 
     def clear_project_choice(self, uid: str, slot: str) -> bool:
         """Drop the project's own choice, so the slot follows the factory's again. False when

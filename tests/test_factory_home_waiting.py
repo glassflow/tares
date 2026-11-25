@@ -65,6 +65,12 @@ async def main():
 
     def back(table, key, col, **kw):
         sql = f"UPDATE {table} SET {col} = :at WHERE id = :key"
+        if table == "tickets":                   # in the session store (TR-1612)
+            from sqlalchemy import update
+            from tares.session_store.tables import tickets as tickets_t
+            with store.sessions_db.begin() as conn:
+                conn.execute(update(tickets_t).where(tickets_t.c.id == key).values({col: ago(**kw)}))
+            return
         if table == "docs":                      # in the session store (TR-1610)
             with store.sessions_db.begin() as conn:
                 conn.execute(text(sql), {"at": ago(**kw), "key": key})

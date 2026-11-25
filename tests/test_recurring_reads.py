@@ -167,18 +167,20 @@ async def main():
     async with app.router.lifespan_context(app):
         tickets = seed(store)
         # a finding that is not on its ticket's project, one older than the window
-        old = store.sc.execute("SELECT id FROM review_findings WHERE ticket IN "
-                               "(SELECT id FROM tickets WHERE project = 'uc_rec1' AND number = 1)").fetchone()[0]
+        first = next(t["id"] for t in store.list_tickets("uc_rec1") if t["number"] == 1)
+        old = store.sc.execute("SELECT id FROM review_findings WHERE ticket = ?", [first]).fetchone()[0]
         store.sc.execute("UPDATE review_findings SET project = 'uc_gone' WHERE id = ?", [old])
         older = store.sc.execute("SELECT id FROM review_findings WHERE project = 'uc_rec2' LIMIT 1").fetchone()[0]
         store.sc.execute("UPDATE review_findings SET found_at = ? WHERE id = ?",
                          [now_utc() - timedelta(days=90), older])
         total = store.sc.execute("SELECT count(*) FROM review_findings").fetchone()[0]
         print(f"== {total} findings over {tickets} tickets in 5 projects ==")
+        # the findings are in DuckDB, the tickets in the session store (TR-1612)
+        here = {t["id"] for i in range(5) for t in store.list_tickets(f"uc_rec{i}")
+                if (t["pr"] or {}).get("repo") == REPO}
+        found = store.sc.execute("SELECT ticket FROM review_findings").fetchall()
         ck("the cell holds 200 findings on the repo and 3 on another",
-           store.sc.execute("SELECT count(*) FROM review_findings f JOIN tickets t ON t.id = f.ticket "
-                            "WHERE json_extract_string(t.pr, '$.repo') = ?", [REPO]).fetchone()[0] == 200
-           and total == 203, total)
+           sum(1 for r in found if r[0] in here) == 200 and total == 203, total)
 
         want = reference(store, REPO)
         ck("the reference finds recurring kinds", len(want) >= 5 and any("?" in " ".join(r["tickets"]) for r in want), want[:2])

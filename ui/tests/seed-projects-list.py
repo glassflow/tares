@@ -79,13 +79,12 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
-from sqlalchemy import update  # noqa: E402
+from sqlalchemy import select, update  # noqa: E402
 
-from tares.session_store.tables import usecases  # noqa: E402
+from tares.session_store.tables import tickets, usecases  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
-con = store.con
 for name, goal, factory, counts, status, days, fresh in SPECS:
     uid = ids[name]
     values = {"status": status, "updated_at": datetime.now(timezone.utc) - timedelta(days=days)}
@@ -101,9 +100,14 @@ for name, goal, factory, counts, status, days, fresh in SPECS:
         tid = store.create_ticket(uid, "tares", f"Ticket {n + 1}", {"done": "done", "doing": "in_progress"}.get(k, "todo"))
         if k == "blocked":
             store.update_ticket(tid, status="in_progress", stage="blocked", stage_reason="waiting on a decision")
-        con.execute("UPDATE tickets SET updated_at = now() - to_days(?) WHERE id = ?", [days, tid])
+        with store.sessions_db.begin() as c:
+            c.execute(update(tickets).where(tickets.c.id == tid).values(
+                updated_at=datetime.now(timezone.utc) - timedelta(days=days)))
     if fresh is not None:
-        con.execute("UPDATE tickets SET updated_at = now() - to_minutes(?) WHERE id = "
-                    "(SELECT id FROM tickets WHERE project = ? ORDER BY position LIMIT 1)", [fresh, uid])
-con.close()
+        first = (select(tickets.c.id).where(tickets.c.project == uid)
+                 .order_by(tickets.c.position.nulls_last()).limit(1).scalar_subquery())
+        with store.sessions_db.begin() as c:
+            c.execute(update(tickets).where(tickets.c.id == first).values(
+                updated_at=datetime.now(timezone.utc) - timedelta(minutes=fresh)))
+store.con.close()
 print(json.dumps(ids))

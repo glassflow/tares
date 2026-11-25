@@ -31,6 +31,12 @@ Cases:
                      usage methods keep their names and return shapes, and each group changes the rows
                      it says and no others
   projects_takeover  Postgres: the nine tables the old DDL made are taken over, rows untouched
+  tickets_copy       tickets, ticket_history and ticket_numbers (TR-1612): DuckDB's rows arrive in
+                     SQLite, and a ticket from before numbers gets one at that start
+  tickets_methods    ticket numbers are never given twice (several writers at once too), NULLs sort
+                     last, and the methods that also touch the tables still in DuckDB (deletes,
+                     write-backs, reviews) change both sides
+  tickets_takeover   Postgres: the three tables the old DDL made are taken over, rows untouched
 """
 import os
 import re
@@ -55,6 +61,9 @@ from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
 from tares.session_store.tables import people as people_table  # noqa: E402
 from tares.session_store.tables import project_members as members_table  # noqa: E402
 from tares.session_store.tables import settings as settings_table  # noqa: E402
+from tares.session_store.tables import ticket_history as history_table  # noqa: E402
+from tares.session_store.tables import ticket_numbers as numbers_table  # noqa: E402
+from tares.session_store.tables import tickets as tickets_table  # noqa: E402
 from tares.session_store.tables import usecases as projects_table  # noqa: E402
 from tares.session_store.takeover import TakeoverError, takeover  # noqa: E402
 from tares.session_store.types import JSONText  # noqa: E402
@@ -597,31 +606,37 @@ def accounts_methods():
     ck("remove_person says it removed", s.remove_person(b["id"]) is True)
     ck("their keys are revoked", s.find_api_key("hC") is None and s.find_api_key("hD") is None)
     ck("a second remove says no", s.remove_person(b["id"]) is False)
-    # a crash between the DuckDB cleanup and the session store write leaves a person a retry finishes
+    # the whole cleanup is one transaction: a crash at its last step leaves nothing half done
     cy = s.create_person("Cy2")
     s.create_project("uc_cy", "custom", "cy", {}, lead_person_id=cy["id"])
+    theirs = s.create_ticket("uc_cy", "tares", "open work", assignee_person_id=cy["id"])
+    s.update_ticket(theirs, stage="doing")
+    done = s.create_ticket("uc_cy", "tares", "finished work", status="done", assignee_person_id=cy["id"])
+    s.update_ticket(done, stage="merged")
 
-    class Boom:
-        def __init__(self, real):
-            self.real = real
+    def assignee(tid):
+        return s.get_ticket("uc_cy", tid)["assignee_person_id"]
 
-        def execute(self, q, *a):
-            if "UPDATE tickets" in q:
-                raise RuntimeError("crash")
-            return self.real.execute(q, *a)
+    import tares.store as store_mod
+    real_now = store_mod.now_utc
 
-        def __getattr__(self, n):
-            return getattr(self.real, n)
-    real_sc, s.sc = s.sc, Boom(s.sc)
+    def boom():
+        raise RuntimeError("crash")
+    store_mod.now_utc = boom         # cy has no key, so the first call is the one that marks them removed
     try:
         s.remove_person(cy["id"])
         ck("a crash in the cleanup raises", False, "no error")
     except RuntimeError:
         ck("a crash in the cleanup raises", True)
     finally:
-        s.sc = real_sc
+        store_mod.now_utc = real_now
     ck("the person is not marked removed yet, so a retry can finish", not s.get_person(cy["id"]).get("removed_at"))
+    ck("and their ticket and lead are as before", assignee(theirs) == cy["id"]
+       and s.get_project("uc_cy")["lead_person_id"] == cy["id"], (assignee(theirs), s.get_project("uc_cy")))
     ck("the retry removes them", s.remove_person(cy["id"]) is True and s.get_person(cy["id"])["removed_at"])
+    ck("their open ticket and lead are nobody's, a finished ticket keeps their name", assignee(theirs) is None
+       and assignee(done) == cy["id"] and s.get_project("uc_cy")["lead_person_id"] is None,
+       (assignee(theirs), assignee(done)))
 
     print("== members and a project's end ==")
     s.create_project("uc_x", "custom", "x", {}, lead_person_id=a["id"])
@@ -1204,13 +1219,348 @@ def projects_takeover():
     finally:
         _drop_schema(sch)
 
+# The ticket tables as an old cell holds them. `depends_on` and `pr` are JSON (TEXT on Postgres);
+# tk_null has what an old row may lack: no position, no created_at, a JSON null.
+TICKET_TABLES = ("tickets", "ticket_history", "ticket_numbers")
+_TICKET_COLS = ("id", "project", "owner", "external_id", "identifier", "url", "title", "status", "position",
+                "working_doc", "created_at", "updated_at", "milestone", "depends_on", "number", "holder",
+                "stage", "stage_reason", "pr", "repo", "assignee_person_id", "assignee_raw")
+_HISTORY_COLS = ("ticket", "project", "changed_at", "field", "value", "reason", "by_station", "by_role",
+                 "person_id")
+_PR = '{"repo": "o/r", "number": 7, "state": "open"}'
+TICKETS = {
+    "tickets": (_TICKET_COLS, [
+        ("tk_a", "uc_demo", "tares", None, None, None, "A", "todo", 1.0, "d1", _T, _T, "ms1", None, 1,
+         None, "review", None, _PR, "o/r", "p_kim", None),
+        ("tk_b", "uc_demo", "linear", "ext-b", "ENG-2", "https://x.test/2", "B", "todo", 2.0, None, _T, _T,
+         None, '["tk_a"]', 2, "ashish", "doing", "why", None, None, None, "kim@x.test"),
+        ("tk_null", "uc_demo", "tares", None, None, None, "N", "done", None, None, None, None, None, "null", 3,
+         None, None, None, "null", None, None, None),
+    ]),
+    "ticket_history": (_HISTORY_COLS, [
+        # two lines alike: the table has no key, and both must arrive
+        ("tk_a", "uc_demo", _T, "stage", "review", None, "s1", "builder", None),
+        ("tk_a", "uc_demo", _T, "stage", "review", None, "s1", "builder", None),
+        ("tk_b", "uc_demo", _T, "holder", "ashish", "why", None, None, "p_kim"),
+    ]),
+    "ticket_numbers": (("project", "last"), [("uc_demo", 5)]),
+}
+TICKET_COUNTS = {"tickets": 3, "ticket_history": 3, "ticket_numbers": 1}
+
+
+def tickets_copy():
+    print("== the ticket tables are copied from DuckDB at the first start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old_ddl_duckdb(con, seed={**SEED, **PROJECTS, **TICKETS})
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    with s.sessions_db.begin() as c:
+        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger counts each table as DuckDB held it", {t: ledger.get(t) for t in TICKET_TABLES} == TICKET_COUNTS,
+       ledger)
+    ck("the rows are there", {t: _n(s.sessions_db, t) for t in TICKET_TABLES} == TICKET_COUNTS)
+    got = {t["id"]: t for t in s.list_tickets("uc_demo")}
+    ck("JSON arrives parsed: pr a dict, depends_on a list, null as None and []",
+       got["tk_a"]["pr"] == {"repo": "o/r", "number": 7, "state": "open"} and got["tk_a"]["depends_on"] == []
+       and got["tk_b"]["depends_on"] == ["tk_a"] and got["tk_null"]["pr"] is None
+       and got["tk_null"]["depends_on"] == [], got)
+    ck("times arrive as UTC datetimes, and a missing one stays None", got["tk_a"]["created_at"] == _T
+       and got["tk_null"]["created_at"] is None, (got["tk_a"]["created_at"], got["tk_null"]["created_at"]))
+    ck("the other columns arrive", (got["tk_b"]["owner"], got["tk_b"]["external_id"], got["tk_b"]["identifier"],
+       got["tk_b"]["holder"], got["tk_b"]["stage_reason"], got["tk_b"]["assignee_raw"], got["tk_a"]["milestone"],
+       got["tk_a"]["working_doc"]) == ("linear", "ext-b", "ENG-2", "ashish", "why", "kim@x.test", "ms1", "d1"),
+       got["tk_b"])
+    ck("both history lines that are alike arrived", [h["value"] for h in s.ticket_history("tk_a")]
+       == ["review", "review"], s.ticket_history("tk_a"))
+    next_id = s.create_ticket("uc_demo", "tares", "next")
+    ck("the next number follows the copied counter, not the tickets", s.get_ticket("uc_demo", next_id)["number"] == 6,
+       s.get_ticket("uc_demo", next_id))
+    with s._lock:
+        n = [s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in TICKET_TABLES]
+    ck("DuckDB still has its rows: nothing is deleted there", n == [TICKET_COUNTS[t] for t in TICKET_TABLES], n)
+    s.close()
+    s = Store(path, state_dsn="")
+    ck("a second start copies nothing: a ticket made after the copy is kept",
+       s.get_ticket("uc_demo", next_id) is not None and _n(s.sessions_db, "tickets") == 4)
+    s.close()
+
+    print("== a DuckDB file from before numbers, stages and pull requests ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old = {"tickets": (("id", "project", "owner", "title", "status", "position", "created_at"), [
+        ("tk_2", "uc_demo", "tares", "second", "todo", 2.0, _T),
+        ("tk_1", "uc_demo", "tares", "first", "todo", 1.0, _T),
+        ("tk_last", "uc_demo", "tares", "no position", "todo", None, _T),
+        ("tk_o", "uc_old", "tares", "other project", "todo", 1.0, _T),
+    ])}
+    old_ddl_duckdb(con, seed={**SEED, **PROJECTS, **old})
+    for col in ("number", "stage", "pr", "assignee_person_id", "assignee_raw"):
+        con.execute(f"ALTER TABLE tickets DROP COLUMN {col}")
+    con.execute("ALTER TABLE ticket_history DROP COLUMN person_id")
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    nums = {t["id"]: t["number"] for p in ("uc_demo", "uc_old") for t in s.list_tickets(p)}
+    ck("each project's tickets are numbered in plan order, one with no position last",
+       nums == {"tk_1": 1, "tk_2": 2, "tk_last": 3, "tk_o": 1}, nums)
+    ck("a column the old file lacks reads as None", s.get_ticket("uc_demo", "tk_1")["pr"] is None
+       and s.get_ticket("uc_demo", "tk_1")["stage"] is None)
+    n = s.get_ticket("uc_demo", s.create_ticket("uc_demo", "tares", "new"))["number"]
+    ck("a new ticket continues after them", n == 4, n)
+    s.close()
+
+
+def tickets_methods():
+    print("== ticket numbers ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    sdb = s.sessions_db
+    s.create_project("uc_t", "custom", "T", {})
+    s.create_project("uc_u", "custom", "U", {})
+
+    def num(tid, project="uc_t"):
+        return s.get_ticket(project, tid)["number"]
+
+    a = s.create_ticket("uc_t", "tares", "A")
+    b = s.create_ticket("uc_t", "linear", "B", identifier="ENG-9", external_id="ext-9", depends_on=[a],
+                        working_doc="d_x")
+    c_ = s.create_ticket("uc_t", "tares", "C")
+    ck("tickets are numbered 1, 2, 3 at positions 1, 2, 3", [(t["number"], t["position"])
+       for t in s.list_tickets("uc_t")] == [(1, 1.0), (2, 2.0), (3, 3.0)], s.list_tickets("uc_t"))
+    s.delete_ticket(c_)
+    c_ = s.create_ticket("uc_t", "tares", "C again")
+    ck("the number of a deleted ticket is not given out again", num(c_) == 4, num(c_))
+    with sdb.begin() as conn:
+        conn.execute(numbers_table.delete().where(numbers_table.c.project == "uc_t"))
+    e = s.create_ticket("uc_t", "tares", "E")
+    ck("with no counter row, numbering continues after the highest ticket", num(e) == 5, num(e))
+    with sdb.begin() as conn:
+        conn.execute(numbers_table.update().where(numbers_table.c.project == "uc_t").values(last=1))
+    f = s.create_ticket("uc_t", "tares", "F")
+    ck("a counter behind the tickets catches up", num(f) == 6, num(f))
+    for tid in (e, f):
+        s.delete_ticket(tid)
+
+    # several writers with no lock of the process between them, as two processes on one Postgres
+    got, errors = [], []
+
+    def writer():
+        try:
+            for _ in range(15):
+                with sdb.begin() as conn:
+                    got.append(s._next_ticket_number(conn, "uc_many"))
+        except Exception as exc:         # reported by the check below
+            errors.append(repr(exc))
+    threads = [threading.Thread(target=writer) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(60)
+    ck("four writers at once get sixty different numbers", not errors and sorted(got) == list(range(1, 61)),
+       (errors[:2], len(got), len(set(got))))
+
+    print("== reading, updating, adopting ==")
+    ck("get_ticket by id, identifier in any case, external id, T<n> and <n>",
+       {s.get_ticket("uc_t", r)["id"] for r in (b, "eng-9", "ext-9", "T2", "2", " t2 ")} == {b})
+    byname = s.create_ticket("uc_t", "tares", "named 1", identifier="1")
+    ck("a name is preferred to a number", s.get_ticket("uc_t", "1")["id"] == byname)
+    s.delete_ticket(byname)
+    ck("get_ticket of nothing is None", s.get_ticket("uc_t", "T99") is None and s.get_ticket("uc_t", None) is None
+       and s.get_ticket(None, a) is None and s.get_ticket("uc_u", a) is None)
+    row = s.get_ticket("uc_t", a)
+    ck("a ticket reads with every column, depends_on a list and times aware",
+       set(row) == set(_TICKET_COLS) and row["depends_on"] == [] and row["created_at"].tzinfo is not None, row)
+    before = row["updated_at"]
+    s.update_ticket(a, touch=False, title="A2", pr={"repo": "o/r", "number": 7, "at": _T})
+    row = s.get_ticket("uc_t", a)
+    ck("update_ticket without touch keeps updated_at; a pr's datetime is kept as text",
+       row["title"] == "A2" and row["updated_at"] == before and row["pr"]["at"] == str(_T), row)
+    s.update_ticket(a, stage="doing")
+    s.update_ticket(a, status="done", why="marked there")
+    ck("a done status clears an open stage and the history says why", s.get_ticket("uc_t", a)["stage"] is None
+       and [(h["field"], h["value"], h["reason"]) for h in s.ticket_history(a)] == [("stage", None, "marked there")],
+       (s.get_ticket("uc_t", a), s.ticket_history(a)))
+    s.update_ticket(a, status="todo", stage="merged")
+    s.update_ticket(a, status="done")
+    ck("a merged stage stays", s.get_ticket("uc_t", a)["stage"] == "merged" and len(s.ticket_history(a)) == 1)
+    s.update_ticket(b, depends_on=[])
+    with sdb.begin() as conn:
+        raw = conn.execute(text("SELECT depends_on FROM tickets WHERE id = :i"), {"i": b}).scalar()
+    ck("an empty depends_on is stored as NULL", raw is None, raw)
+    s.update_ticket(b, depends_on=[a])
+    s.pending_writeback_fail(b, "linear", "done", "down", _T)
+    ck("unless_pending leaves a ticket with a write-back waiting alone",
+       s.update_ticket(b, unless_pending=True, title="changed") is False and s.get_ticket("uc_t", b)["title"] == "B")
+    ck("and writes one with none", s.update_ticket(a, unless_pending=True, title="A3") is True)
+    one = s.adopt_ticket("uc_u", "github", "i-1", "One", "todo", "#1", "https://x.test/1")
+    two = s.adopt_ticket("uc_u", "github", "i-1", "One", "todo", "#1b", "https://x.test/1b", repo="o/u")
+    ck("adopting one issue twice makes one row, which takes what is new", one == two
+       and len(s.list_tickets("uc_u")) == 1 and s.get_ticket("uc_u", one)["identifier"] == "#1b"
+       and s.get_ticket("uc_u", one)["repo"] == "o/u" and num(one, "uc_u") == 1, s.list_tickets("uc_u"))
+    n1 = s.adopt_ticket("uc_u", "github", None, "x", "todo", "#x", "u")
+    n2 = s.adopt_ticket("uc_u", "github", None, "x", "todo", "#x", "u")
+    ck("no external id never matches a row", n1 != n2)
+    s.update_ticket_owner(n1, "tares")
+    ck("update_ticket_owner", s.get_ticket("uc_u", n1)["owner"] == "tares")
+
+    print("== NULLs sort last, as on Postgres and DuckDB ==")
+    with sdb.begin() as conn:
+        conn.execute(tickets_table.update().where(tickets_table.c.id == n1).values(position=None))
+        conn.execute(tickets_table.update().where(tickets_table.c.id == n2).values(repo="o/late"))
+        conn.execute(tickets_table.update().where(tickets_table.c.id == n1).values(repo="o/null"))
+    ck("list_tickets puts a ticket with no position last", [t["id"] for t in s.list_tickets("uc_u")] == [one, n2, n1],
+       [(t["id"], t["position"]) for t in s.list_tickets("uc_u")])
+    ck("tickets_by_project gives the same order, and an empty list for a project with none",
+       [t["id"] for t in s.tickets_by_project(["uc_u", "uc_none"])["uc_u"]] == [one, n2, n1]
+       and s.tickets_by_project(["uc_u", "uc_none"])["uc_none"] == [] and s.tickets_by_project([]) == {})
+    facts = s.done_ticket_facts(["uc_u"])["uc_u"]
+    ck("done_ticket_facts lists the repos in that order", facts["repos"] == ["o/u", "o/late", "o/null"]
+       and facts["total"] == 3, facts)
+    s.add_ticket_history(n2, "uc_u", "stage", "review", None, None, None, _T)
+    s.add_ticket_history(n2, "uc_u", "holder", "x", None, None, None, _T)
+    with sdb.begin() as conn:
+        conn.execute(history_table.update().where(history_table.c.ticket == n2, history_table.c.field == "holder")
+                     .values(changed_at=None))
+    ck("ticket_history puts a line with no time last", [h["field"] for h in s.ticket_history(n2)]
+       == ["stage", "holder"], s.ticket_history(n2))
+    later = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    s.add_ticket_history(n2, "uc_u", "stage", "review", None, None, None, later)
+    ck("entered_stage is the latest time, aware; a ticket that never did is absent",
+       s.entered_stage([n2, n1], "review") == {n2: later} and s.entered_stage([], "review") == {},
+       s.entered_stage([n2, n1], "review"))
+    ck("history_between takes the lines in [since, until)", [h["at"] for h in s.history_between(_T, later)
+       if h["ticket"] == n2] == [_T])
+
+    print("== pull requests, reviews and milestones ==")
+    s.update_ticket(a, pr={"repo": "O/R", "number": 7}, stage="merged")
+    s.update_ticket(b, pr={"repo": "o/r", "number": 7}, stage="review")
+    s.update_ticket(c_, pr={"repo": "o/r", "number": 70}, stage="doing")
+    ck("ticket_for_pr matches repo in any case and the whole number, an open ticket first",
+       s.ticket_for_pr("o/R", 7)["id"] == b and s.ticket_for_pr("o/r", "70")["id"] == c_
+       and s.ticket_for_pr("o/r", 8) is None and s.ticket_for_pr("", 7) is None)
+    ck("review_tickets gives the ticket in review with its project's name",
+       [(name, t["id"]) for name, t in s.review_tickets() if t["project"] == "uc_t"] == [("T", b)])
+    ms = s.create_milestone("uc_t", "M1")
+    s.update_ticket(a, milestone=ms)
+    ck("milestone_statuses", s.milestone_statuses([ms]) == [{"project": "uc_t", "milestone": ms, "id": a,
+       "status": "done"}] and s.milestone_statuses([]) == [], s.milestone_statuses([ms]))
+    # a pull request with no `repo` (and a null elsewhere in it) belongs to no repo
+    nr = s.create_ticket("uc_nr", "tares", "no repo", identifier="ENG-9")
+    s.update_ticket(nr, pr={"number": 1, "url": None}, stage="doing")
+    ck("factory_ref_elsewhere: another project's open ticket of that name in that repo",
+       s.factory_ref_elsewhere("uc_u", "o/r", "eng-9") is True
+       and s.factory_ref_elsewhere("uc_t", "o/r", "ENG-9") is False
+       and s.factory_ref_elsewhere("uc_u", "o/other", "ENG-9") is False
+       and s.factory_ref_elsewhere("uc_u", None, "ENG-9") is False)
+    finding = {"severity": "high", "file": "f.py", "line": 1, "blocking": True, "text": "a leak"}
+    s.add_review("uc_t", b, None, "abc", "changes", "tests", "", "rev", [finding], {}, lambda t_: "bug", _T)
+    found = s.repo_findings("o/r", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    ck("repo_findings joins a finding to its ticket in that repo", [(f["ticket"], f["ticket_project"],
+       f["ticket_identifier"], f["ticket_number"]) for f in found] == [(b, "uc_t", "ENG-9", 2)]
+       and s.repo_findings("o/other", datetime(2026, 1, 1, tzinfo=timezone.utc)) == []
+       and s.repo_findings(None, datetime(2026, 1, 1, tzinfo=timezone.utc)) == [], found)
+    ck("list_pending_writebacks of a project keeps its tickets' rows",
+       [r["ticket"] for r in s.list_pending_writebacks(project="uc_t")] == [b]
+       and s.list_pending_writebacks(project="uc_u") == []
+       and [r["ticket"] for r in s.list_pending_writebacks()] == [b], s.list_pending_writebacks())
+
+    print("== writes wait for the store's write lock ==")
+    for name, call in (
+            ("create_ticket", lambda: s.create_ticket("uc_lock", "tares", "l")),
+            ("adopt_ticket", lambda: s.adopt_ticket("uc_lock", "github", "i", "l", "todo", "#1", "u")),
+            ("update_ticket", lambda: s.update_ticket(a, title="locked")),
+            ("update_ticket_owner", lambda: s.update_ticket_owner(a, "tares")),
+            ("add_ticket_history", lambda: s.add_ticket_history(a, "uc_t", "holder", "h", None, None, None, _T)),
+            ("delete_ticket", lambda: s.delete_ticket("tk_none")),
+            ("delete_milestone", lambda: s.delete_milestone("ms_none")),
+            ("remove_doc", lambda: s.remove_doc("uc_t", "d_none"))):
+        ck(f"{name} waits for the write lock", _waits_for_write_lock(s, call))
+
+    print("== deletes reach both databases ==")
+    s.remove_doc("uc_t", "d_x")
+    ck("remove_doc clears the ticket's working doc", s.get_ticket("uc_t", b)["working_doc"] is None)
+    s.delete_milestone(ms)
+    ck("delete_milestone keeps the ticket, without a milestone", s.get_ticket("uc_t", a)["milestone"] is None
+       and s.get_milestone("uc_t", ms) is None)
+    s.delete_ticket(a)
+    ck("delete_ticket takes it out of the others' dependencies", s.get_ticket("uc_t", a) is None
+       and s.get_ticket("uc_t", b)["depends_on"] == [], s.get_ticket("uc_t", b))
+    s.pending_writeback_fail(one, "github", "done", "down", _T)
+    s.delete_project("uc_t")
+    with sdb.begin() as conn:
+        left = [conn.execute(text(f"SELECT count(*) FROM {t_} WHERE project = 'uc_t'")).scalar() for t_ in TICKET_TABLES]
+        other = [conn.execute(text(f"SELECT count(*) FROM {t_} WHERE project = 'uc_u'")).scalar() for t_ in TICKET_TABLES]
+    ck("delete_project drops its tickets, history and counter, and leaves another project's",
+       left == [0, 0, 0] and other[0] == 3 and other[1] == 3 and other[2] == 1, (left, other))
+    ck("and its tickets' write-backs, not another project's",
+       [r["ticket"] for r in s.list_pending_writebacks()] == [one], s.list_pending_writebacks())
+    s.close()
+
+
+def tickets_takeover():
+    print("== Postgres: the ticket tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        old_ddl_postgres(dsn, seed={**SEED, **TICKETS})
+
+        def snapshot():
+            out = {}
+            with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+                for t in TICKET_TABLES:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                                     "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
+                                     [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT * FROM {t}").fetchall()
+                    out[t] = (cols, sorted(tuple(map(str, r)) for r in rows))
+                out["indexes"] = c.execute(
+                    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND indexname IN "
+                    "('tickets_project', 'ticket_history_ticket') ORDER BY indexname", [sch]).fetchall()
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the three tables, with the sample rows, and both indexes",
+           {t: len(before[t][1]) for t in TICKET_TABLES} == TICKET_COUNTS and len(before["indexes"]) == 2,
+           before["indexes"])
+        ck("depends_on and pr are TEXT there", {c[0]: c[1] for c in before["tickets"][0]}["depends_on"] == "text"
+           and {c[0]: c[1] for c in before["tickets"][0]}["pr"] == "text")
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types, rows and indexes, is as the old code left it", snapshot() == before)
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        with ts.capture_logs("alembic.runtime.migration") as recs:
+            sdb.upgrade()
+        ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
+        ts.step_down(sdb, "0013_project_tables")
+        ck("a downgrade to the revision before keeps the tables, rows and indexes", snapshot() == before
+           and ts.versions(sdb) == ["0013_project_tables"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it takes them over again, rows untouched", snapshot() == before)
+        with sdb.begin() as c:
+            rows = {r.id: r for r in c.execute(tickets_table.select())}
+        ck("Core reads a ticket the old code wrote", rows["tk_a"].pr == {"repo": "o/r", "number": 7, "state": "open"}
+           and rows["tk_b"].depends_on == ["tk_a"] and rows["tk_null"].pr is None
+           and rows["tk_null"].depends_on is None and rows["tk_a"].created_at == _T, rows)
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
 
 if __name__ == "__main__":
-    ck("settings, the accounts and the project tables are in MOVED_TABLES, with the five session tables",
+    ck("settings, the accounts, the project and ticket tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
        == ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters",
            "settings", "people", "api_keys", "project_members", "usecases", "usecase_objects", "usecase_log",
-           "docs", "skills", "shared_skills", "catalog_sources", "github_credentials", "model_usage"])
+           "docs", "skills", "shared_skills", "catalog_sources", "github_credentials", "model_usage",
+           "tickets", "ticket_history", "ticket_numbers"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -1222,10 +1572,13 @@ if __name__ == "__main__":
     methods()
     accounts_copy()
     projects_copy()
+    tickets_copy()
     accounts_methods()
     projects_methods()
+    tickets_methods()
     postgres_takeover()
     accounts_takeover()
     projects_takeover()
+    tickets_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)
