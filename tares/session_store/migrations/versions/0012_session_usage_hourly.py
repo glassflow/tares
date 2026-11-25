@@ -12,14 +12,14 @@ taken over as it is.
 
 Downgrade: drops the two tables and the index. The usage rows are not touched.
 
-Revision ID: 0011_session_usage_hourly
-Revises: 0010_core_people
+Revision ID: 0012_session_usage_hourly
+Revises: 0011_session_moves
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0011_session_usage_hourly"
-down_revision = "0010_core_people"
+revision = "0012_session_usage_hourly"
+down_revision = "0011_session_moves"
 branch_labels = None
 depends_on = None
 
