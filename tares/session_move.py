@@ -655,6 +655,8 @@ def refresh_gauges(store) -> None:
 
 
 def _fill(store, sources: list, sids: list) -> None:
+    """The movers pass one session: filling a batch of 20 held all their lines at once, which took
+    the whole move on a large cell over its memory limit (TR-1664)."""
     try:
         # the facts and turns of these sessions, from all their lines (since=None reads every one)
         session_ingest._fill_chunk(store, sources, sids, None)
@@ -690,9 +692,9 @@ def move_old(store, limit: int = BATCH, stop: threading.Event | None = None,
     if backend is None:
         return 0
     sources = sorted(session_ingest.claude_code_sources(store))
-    _fill(store, sources, sids)
     n = 0
     for sid in sids:
+        _fill(store, sources, [sid])         # one session's lines in memory at a time
         if stop is not None and stop.is_set():
             break
         ok, err = move_old_session(store, sid, backend, sources)
@@ -717,9 +719,9 @@ def move_recent(store, limit: int = BATCH, stop: threading.Event | None = None,
     if not sids:
         return 0
     sources = sorted(session_ingest.claude_code_sources(store))
-    _fill(store, sources, sids)
     n = 0
     for sid in sids:
+        _fill(store, sources, [sid])         # one session's lines in memory at a time
         if stop is not None and stop.is_set():
             break
         ok, err = move_session(store, sid, sources)

@@ -321,11 +321,20 @@ def thread():
         order.append("old")
         return real_old(store, sid, *a)
 
-    real_due = session_move.due_old
+    real_due, real_fill = session_move.due_old, session_move._fill
+    filled = []
+
+    def fill(store, sources, sids):
+        filled.append(list(sids))
+        return real_fill(store, sources, sids)
+
     stop = Waits()
     with patched(session_move, "move_session", new), patched(session_move, "move_old_session", old), \
+            patched(session_move, "_fill", fill), \
             patched(session_move, "due_old", lambda store, limit=20, now=None: real_due(store, 2, now)):
         session_move.run(s, stop)
+    ck("both movers fill one session at a time, so one session's lines are held at once",
+       [len(x) for x in filled] == [1] * 8, filled)
     ck("all 8 are verified", session_move.counts(s) == {"verified": 8}, session_move.counts(s))
     ck("the recent ones went first", order == ["recent"] * 3 + ["old"] * 5, order)
     ck("OLD_PAUSE is 1 s", session_move.OLD_PAUSE == 1.0)
