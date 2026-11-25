@@ -60,6 +60,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import licence
 from . import session_archive
+from . import session_ingest
 from . import session_move
 from . import team as team_mod
 from . import docs as docs_mod
@@ -1607,6 +1608,8 @@ def make_app() -> FastAPI:
             _err(e, 404)
         except ValueError as e:
             _err(e, 400)
+        except session_ingest.LinesNotStored as e:
+            _err(e, 503)         # not acknowledged: the sender keeps the lines and sends them again
         await _seed_challenger(token, body)
         return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
 
