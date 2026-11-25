@@ -3171,13 +3171,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """{words, scope: project|all}: the person allows a permission request (a desk item with
         a command) from the console. `words` is the grant as they let it stand (the console
         offers a sentence naming the station and the command; they may edit it). It becomes a
-        grant (`standing_grant`): for every project it needs an admin. For the item's project,
-        the lead's or an admin's takes effect; with an enterprise licence anyone else's waits for
-        the lead (an admin when there is none), as does a repo's owner who is not the giver
-        (`granted` is false until it takes effect). Without a licence it needs the lead or an
-        admin. It is recorded as their decision made in the console and the item is
-        answered. A grant in effect reaches the stations' rules, and the crew's watch restarts
-        the station with it. A person decides: refused from any crew station."""
+        grant (`standing_grant`): for every project it needs an admin. For the item's project it
+        needs the lead or an admin. With an enterprise licence anyone else's is not refused: it
+        waits for the lead (an admin when there is none), and any project grant, the lead's or an
+        admin's too, also waits for the owner of a repo it names who is not the giver (`granted`
+        is false until it takes effect). It is recorded as their decision made in the console and
+        the item is answered. A grant in effect reaches the stations' rules, and the crew's watch
+        restarts the station with it. A person decides: refused from any crew station."""
         if caller(request)["station"]:
             h.err(PermissionError("a permission is the person's to allow: they allow it in the "
                                   "console"), 403)
