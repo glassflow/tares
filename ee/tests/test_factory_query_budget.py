@@ -5,7 +5,7 @@ A licensed factory cell with a team's worth of work: 25 projects of 10 tickets e
 3 of them handed to a crew, 40 crew sessions over 6 stations, and one person who signs in with a key
 (next to the cell's own `local` person, so the team parts of the pages run). That person reads the
 pages the console opens on: Home, the Projects list, one project, one ticket, and the two raw ticket
-routes. A counting stand-in replaces the store's connections, so every statement a route runs is
+routes (and Setup and its progress, counted only). A counting stand-in replaces the store's connections, so every statement a route runs is
 counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc.execute`; a
 sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
 its BUDGET fails the test.
@@ -110,7 +110,11 @@ DONE_EXTRA = 4
 # once, as before, so its counts stay. Reading each of them once per request is TR-1631's.
 _DUCKDB = {**_TODAY, "home": 145, "projects": 116, "project": 119, "ticket": 30, "raw_tickets": 11,
            "raw_ticket": 16}
-BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
+# TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
+# the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
+# DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent.
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 117, "setup_progress": 111},
+          "postgres": {**_TODAY, "setup": 88, "setup_progress": 84}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
@@ -121,6 +125,11 @@ ROUTES = [
     ("ticket", "/api/factory/projects/{uid}/tickets/{ref}"),
     ("raw_tickets", "/api/projects/{uid}/tickets"),
     ("raw_ticket", "/api/projects/{uid}/tickets/{ref}"),
+]
+# counted against BUDGET like the routes above, with no body in the golden file
+SETUP_ROUTES = [
+    ("setup", "/api/factory/setup"),
+    ("setup_progress", "/api/factory/setup/progress"),
 ]
 
 P = F = 0
@@ -400,21 +409,22 @@ async def main():
             builds["home"] += 1
             return real_home(t)
         th.HomeRead.__init__, th._team_home = counted_init, counted_home
-        # how often a request reads the stations roll-up (TR-1629: Home reads it once)
+        # how often a request reads the stations roll-up (TR-1629: Home reads it once), and how often
+        # with the totals over every session (TR-1634: Setup never)
         real_rollup = store.station_rollup
 
         def counted_rollup(*a, **kw):
             builds["rollup"] += 1
+            builds["totals"] += bool(kw.get("totals", True))
             return real_rollup(*a, **kw)
         store.station_rollup = counted_rollup
-        builds["rollup"] = 0
         built = {}
-        for name, tmpl in ROUTES:
+        for name, tmpl in ROUTES + SETUP_ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
             claude_usage.clear_week_by_project()
             counter = [0]
-            builds["read"] = builds["home"] = builds["rollup"] = 0
+            builds["read"] = builds["home"] = builds["rollup"] = builds["totals"] = 0
             token = _COUNTER.set(counter)
             try:
                 resp = await call(sam, path)
@@ -423,15 +433,9 @@ async def main():
             built[name] = dict(builds)
             ck(f"GET {tmpl} answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
             counts[name] = counter[0]
-            bodies[name] = steady(resp.json())
+            if (name, tmpl) in ROUTES:
+                bodies[name] = steady(resp.json())
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
-        # Setup builds the home for its "steps around the integrations": it too reads the roll-up once
-        # (TR-1629). It has no BUDGET entry, only this count.
-        fh.clear_cache()
-        builds["rollup"] = 0
-        resp = await call(sam, "/api/factory/setup")
-        setup_rollups = builds["rollup"]
-        ck("GET /api/factory/setup answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
         print("== finished projects on a team cell (TR-1503) ==")
         await done_projects(store, sam, call, counts["projects"])
 
@@ -439,7 +443,10 @@ async def main():
     th.HomeRead.__init__, th._team_home = real_init, real_home
     store.station_rollup = real_rollup
     ck("Home reads the stations roll-up once (TR-1629)", built["home"]["rollup"] == 1, str(built["home"]))
-    ck("Setup reads the stations roll-up once (TR-1629)", setup_rollups == 1, setup_rollups)
+    for name, _ in SETUP_ROUTES:
+        b = built[name]
+        ck(f"{name} reads who runs once, with no totals, and no team home (TR-1634)",
+           (b["rollup"], b["totals"], b["read"], b["home"]) == (1, 0, 0, 0), str(b))
     print("  roll-up reads per route:", {n: b["rollup"] for n, b in built.items()})
     for name, _ in ROUTES:
         ck(f"{name}: the team home is read once at most ({built[name]['read']} reads, "
@@ -452,7 +459,7 @@ async def main():
 
     print("== the budget ==")
     budget = BUDGET[backend]
-    for name, _ in ROUTES:
+    for name, _ in ROUTES + SETUP_ROUTES:
         ck(f"{name} runs statements the counter can see", counts[name] > 0, counts[name])
         ck(f"{name}: {counts[name]} statements, budget {budget.get(name)}",
            name in budget and counts[name] <= budget[name],
