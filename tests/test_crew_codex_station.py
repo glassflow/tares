@@ -1663,7 +1663,7 @@ print("n. a call whose outcome is not known (TR-1593)")
 tares, paths, said, mk = crew()
 again = SCRATCH / "ran-again.log"
 again.unlink(missing_ok=True)
-command = f"echo started >> {again}; sleep 6"
+command = f"echo started >> {again}; {sys.executable} -c 'import time; time.sleep(6)'"   # PATH here has no sleep
 fake(turn=0.2, think=0.05, commands=json.dumps([command]))
 err, _ = start(mk())
 pid, thread = pid_of(paths), row(paths)["sessionId"]

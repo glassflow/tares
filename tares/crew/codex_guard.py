@@ -204,10 +204,7 @@ def run(guard_py, env, raw: str, out) -> int:
         out.write(rules.deny_output(repeat_reason(again[0])))
         out.flush()
         return 0
-    line = {"turn": turn, "call": call, "tool": tool, "said": "allow", "cwd": _text(rules.payload_cwd(raw))}
-    if tool == "Bash" and cmd:
-        line["command"] = asked(cmd)   # as it was asked: the record is where a call cut off by a crash is read from
-    note(env, line)
+    note(env, {"turn": turn, "call": call, "tool": tool, "said": "allow"})
     if tool == "Bash" and cmd and not cmd.startswith(CLOSE_STDIN):
         answer = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
                                          "updatedInput": {"command": CLOSE_STDIN + cmd}}}

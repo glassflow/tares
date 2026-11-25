@@ -84,7 +84,8 @@ sys.path.insert(0, str(HERE / "factory"))
 
 import psutil  # noqa: E402
 
-from tares.crew import codex as cx  # noqa: E402
+from tares.crew import codex as cx
+from tares.crew import codex_station  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
 from tares.crew import state  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
@@ -579,10 +580,19 @@ ck("the conversation it had is loaded again and carried on, not replaced",
    r.get("sessionId") == thread and r["codex"]["pid"] != first and [m for m, _ in took] == ["thread/resume", "turn/start"]
    and took[0][1]["threadId"] == thread and took[0][1]["model"] == "gpt-5.6", (r.get("sessionId"), took))
 end(r["codex"]["pid"])
+before = len(calls())
+err, out = start(down, resume="thr-unknown")
+ck("a conversation that cannot be loaded, whose last turn nobody compared with the guard's record, is not given up (TR-1593)",
+   err and "cannot be loaded" in err and "never compared with the guard's record" in err
+   and [m for m, _ in calls()[before:]] == ["thread/resume"] and "codex" not in (row(paths) or {}).get("status", "codex")
+   and (row(paths).get(codex_station.UNVERIFIED) or {}).get("thread") == "thr-unknown", (err, calls()[before:], row(paths)))
+# the watch's look at the ended turn would have written this; then nothing of the conversation is unseen
+codex_station._clear_unverified(paths, "crew-reviewer")
+state.stations_put("crew-reviewer", {codex_station.COMPARED: row(paths)[codex_station.LAST_TURN]}, paths)
 err, out = start(down, resume="thr-unknown")
 r = row(paths)
 took = calls(r["codex"]["pid"])
-ck("a conversation that cannot be loaded is given up for a new one, with a line and an event",
+ck("one whose last turn was compared is given up for a new one, with a line and an event",
    err is None and [m for m, _ in took] == ["thread/resume", "thread/start", "turn/start"] and r["sessionId"] not in ("thr-unknown", thread)
    and "could not be carried on; it starts a new one" in out
    and any(json.loads(x)["event"] == "conversation-replaced" for x in paths.events.read_text().splitlines()), (err, took, out))
