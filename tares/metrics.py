@@ -83,6 +83,9 @@ if AVAILABLE:
                                       "Batches of claude_code lines the sessions table could not "
                                       "take (the lines are stored; the next start catches the "
                                       "table up)")
+    SESSION_LINES_TO_DUCKDB = Counter("tares_session_lines_to_duckdb_total",
+                                      "claude_code lines written to the DuckDB events table (stays 0 "
+                                      "on a factory cell with an archive)")
     SESSION_LINES_ROWS = Gauge("tares_session_lines_rows",
                                "Rows in the session_lines table (every claude_code line stored "
                                "since it was added), read every ten minutes")
@@ -107,6 +110,11 @@ _licence_probe = None
 def events_ingested(source: str, n: int) -> None:
     if AVAILABLE and n:
         EVENTS.labels(source=source).inc(n)
+
+
+def session_lines_to_duckdb(n: int) -> None:
+    if AVAILABLE and n:
+        SESSION_LINES_TO_DUCKDB.inc(n)
 
 
 def poll(source: str, outcome: str) -> None:
