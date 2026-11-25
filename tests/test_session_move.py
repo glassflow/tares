@@ -246,6 +246,31 @@ def main_run():
     s.close()
 
 
+def repeats():
+    print("== a line key that repeats: matched as a multiset ==")
+    s = open_store()
+    # DuckDB holds the same line twice (a resumed session copies old lines; DuckDB does not
+    # deduplicate), the table holds it three times: the third is the extra one
+    e = line("rep", 600, "assistant")
+    other = line("rep", 500, "assistant")
+    s._append_events([e, e, other])
+    ck("the table takes all four lines", session_ingest.record(s, [e, e, e, other]))
+    ck("the table holds 4 rows", len(rows_of(s, "rep")) == 4, len(rows_of(s, "rep")))
+    # a session written out of time order: the move keeps time order (`event_time`, then rowid)
+    s._append_events([line("shuf", 100 + i * 60, "assistant") for i in range(6)])
+    session_ingest.reconcile_sessions(s)
+    session_move.plan(s)
+    ck("the move takes both", session_move.move_recent(s) == 2)
+    check_rows(s, "shuf", [], "shuf")
+    got = rows_of(s, "rep")
+    ck("verified", move_of(s, "rep")["state"] == "verified", dict(move_of(s, "rep")))
+    ck("DuckDB's 3 lines and the 1 extra, none lost", len(got) == 4 and [r[0] for r in got] == [1, 2, 3, 4],
+       len(got))
+    ck("the repeated line is there 3 times", [r[6] for r in got].count(json.dumps(e.payload)) == 3,
+       [r[6] for r in got])
+    s.close()
+
+
 def failures():
     print("== a failed check or an unreadable part leaves the session as it was ==")
     s = open_store()
@@ -394,6 +419,7 @@ def revision():
 if __name__ == "__main__":
     revision()
     main_run()
+    repeats()
     failures()
     thread()
     if FAILS:
