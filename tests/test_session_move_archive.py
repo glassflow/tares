@@ -432,6 +432,39 @@ def new_line():
     ck("then it is stored after the moved ones", duck_total(s) == events + 1
        and [r[0] for r in rows_of(s, "commit")] == [5], [r[0] for r in rows_of(s, "commit")])
 
+    # a store call that holds DuckDB's lock while it writes the session store (on SQLite one writer
+    # at a time) is not shut out by the replace, which counts DuckDB before it starts its write
+    seed(s, "locks", 4)
+    ready(s)
+    with s.sessions_db.begin() as c:
+        c.execute(insert(session_moves).values(session="locks", state="pending", target="table"))
+    wrote, others, holding = [], [], threading.Event()
+    real_duck = session_move._duck_count
+
+    def other_call():
+        with s._lock:
+            holding.set()
+            try:
+                with s.sessions_db.begin() as c:
+                    c.execute(update(session_moves).where(session_moves.c.session == "nobody")
+                              .values(error=None))
+                wrote.append("ok")
+            except Exception as e:
+                wrote.append(type(e).__name__)
+
+    def count_while_held(store, sources, sid):
+        if store._sess_lock.locked() and not others:
+            others.append(threading.Thread(target=other_call))
+            others[0].start()
+            holding.wait(10)
+        return real_duck(store, sources, sid)
+
+    with patched(session_move, "_duck_count", count_while_held):
+        ok, err = session_move.move_old_session(s, "locks", FileBackend(ARCHIVE))
+    others[0].join(30)
+    ck("a call under DuckDB's lock still writes the session store during the replace",
+       ok and wrote == ["ok"], (ok, err, wrote))
+
     # through the thread: it ends verified without another start
     seed(s, "live2", 4)
     ready(s)

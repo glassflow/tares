@@ -408,6 +408,9 @@ def _replace(store, sid: str, sources: list, before: tuple, wanted: int, built: 
     m = session_moves.c
     db = store.sessions_db
     with store._sess_lock:          # no line goes into DuckDB or is counted from here to the commit
+        # counted before the transaction: on SQLite a store call can hold DuckDB's lock while it
+        # waits to write the session store, so that lock is not taken inside this write
+        duck_now = _duck_count(store, sources, sid)
         with db.begin() as conn:
             if conn.dialect.name == "postgresql":
                 conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('tares_session_move:' "
@@ -416,7 +419,7 @@ def _replace(store, sid: str, sources: list, before: tuple, wanted: int, built: 
                 # on `_sess_lock` meanwhile
                 if not session_archive._lock(conn, sid):
                     return False
-            if _state(conn, sid, lock=True) != before or _duck_count(store, sources, sid) != wanted:
+            if _state(conn, sid, lock=True) != before or duck_now != wanted:
                 conn.execute(update(session_moves).where(m.session == sid, m.state != VERIFIED)
                              .values(state=PENDING, error=None))
                 return False
