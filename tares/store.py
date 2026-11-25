@@ -48,8 +48,8 @@ from .session_store.tables import github_credentials as github_table
 from .session_store.tables import model_usage as usage_table
 from .session_store.tables import tickets as tickets_table
 from .session_store.tables import session_commands, session_messages
-from .session_store.tables import (session_archive_parts, session_files, session_lines, session_said,
-                                    session_turns)
+from .session_store.tables import (session_archive_parts, session_files, session_ingest_marks,
+                                   session_lines, session_said, session_turns)
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
@@ -1364,21 +1364,54 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             return self._append(envelopes)
         # In the factory edition with an archive, the claude_code lines of a session the session
         # store answers for alone go only there (TR-1479); anywhere else they are written to DuckDB
-        # as before. They are counted into `sessions` after the commit. The reconcile at start holds
-        # the same lock, so a line is never counted by both.
+        # as before. The reconcile at start holds the same lock, so a line is never counted by both.
         gate = self._lines_skip_duckdb()
+        factory = self._factory_writes()
         with self._sess_lock:
             try:
                 held = session_ingest.holdable(self, cc) if gate else []
             except Exception:                # no answer from the session store: DuckDB keeps them
                 held = []
-            self._append(envelopes, held)
-            if not session_ingest.record(self, cc) and held:
-                # the session store could not take them: DuckDB keeps them (no counters: the
-                # batch's source_stats already counted them)
-                self._append_events(held)
+            if factory:
+                held = self._append_session_first(envelopes, cc, held)
+            else:                            # counted into `sessions` after the commit
+                self._append(envelopes, held)
+                if not session_ingest.record(self, cc) and held:
+                    # the session store could not take them: DuckDB keeps them (no counters: the
+                    # batch's source_stats already counted them)
+                    self._append_events(held)
         if len(cc) > len(held):
             metrics.session_lines_to_duckdb(len(cc) - len(held))
+
+    def _factory_writes(self) -> bool:
+        """True when claude_code lines are written to the session store first (the factory edition,
+        TR-1665). A settings read that fails gives the last answer; with none yet, True: a factory
+        cell must not acknowledge lines its pages would never show."""
+        try:
+            self._factory_edition = edition.edition(self)[0] == "factory"
+        except Exception:
+            return getattr(self, "_factory_edition", True)
+        return self._factory_edition
+
+    def _append_session_first(self, envelopes, cc, held) -> list:
+        """The factory's order (TR-1665): the session store, then DuckDB. Raises
+        `session_ingest.LinesNotStored` with no line stored, so the sender sends the batch again.
+        A DuckDB failure takes the session store's write back before it is raised. Lines of a
+        session the store refused are never held back from DuckDB: the drain copies them from there.
+        Returns the lines that were held back. Called under `_sess_lock`."""
+        try:
+            written = session_ingest.record_first(self, cc)
+        except session_ingest.LinesNotStored:
+            # a challenger line is sent once, with no retry: keep its verdict (a repeat is skipped)
+            self._keep_challenges(envelopes)
+            raise
+        held = [e for e in held if e.key_value not in written.refused]
+        try:
+            self._append(envelopes, held)
+        except Exception:
+            session_ingest.take_back(self, written)
+            raise
+        return held
 
     _HELD_MODE_TTL = 30.0                  # seconds the edition answer of `_lines_skip_duckdb` is kept
 
@@ -1427,6 +1460,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         session readers scan events until this has finished once, and read the table after (TR-1520);
         a failed pass leaves them on the scan and the next start tries again."""
         self._lines_skip_duckdb()          # says once, at start, when the lines still go to DuckDB
+        self._factory_writes()             # remembered, should a later settings read fail
         return session_ingest.start_reconcile(self)
 
     def _append_events(self, envelopes: list[Envelope]) -> None:
@@ -1507,6 +1541,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             except Exception:
                 self.con.execute("ROLLBACK")
                 raise
+        self._keep_challenges(envelopes)
+
+    def _keep_challenges(self, envelopes) -> None:
         # the challenger's lines also go to `challenges` (state), after the events committed. One
         # lost to a crash in between is copied at the next open (_challenges_fill) on a platform
         # edition; the factory edition runs that fill once (TR-1613), so there it is not copied.
@@ -4499,12 +4536,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """One entity's events on one source, oldest first (a session read top to bottom)."""
         return self.key_events_from(source, key, limit, offset)[0]
 
-    def key_events_from(self, source: str, key: str, limit: int = 200,
-                        offset: int = 0) -> tuple[list[dict], str]:
+    def key_events_from(self, source: str, key: str, limit: int = 200, offset: int = 0,
+                        tail: dict | None = None) -> tuple[list[dict], str]:
         """`key_events` and where the lines came from: `table`, `archive`, `both` (the session's
         own tables and archive, TR-1507) or `events` (DuckDB, for a session they do not hold in
-        full)."""
-        got = session_read.lines(self, source, key, limit, offset)
+        full). `tail`: the page is the session's end (`session_read._fetch`)."""
+        got = session_read.lines(self, source, key, limit, offset, tail)
         if got is not None:
             rows, where = got
             return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
@@ -4522,10 +4559,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         conversation). The payload is the transcript line as it came in."""
         return self.key_payload_rows_from(source, key, limit, offset)[0]
 
-    def key_payload_rows_from(self, source: str, key: str, limit: int = 200,
-                              offset: int = 0) -> tuple[list[dict], str]:
+    def key_payload_rows_from(self, source: str, key: str, limit: int = 200, offset: int = 0,
+                              tail: dict | None = None) -> tuple[list[dict], str]:
         """`key_payload_rows` and where the lines came from (see `key_events_from`)."""
-        got = session_read.lines(self, source, key, limit, offset)
+        got = session_read.lines(self, source, key, limit, offset, tail)
         if got is not None:
             rows, where = got
             return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
@@ -4790,6 +4827,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 # but a count of them left behind would be added to the numbers of a re-ship
                 conn.execute(delete(session_archive_parts).where(session_archive_parts.c.session.in_(
                     select(sessions_table.c.session).where(sessions_table.c.source == source))))
+                # the drain's marks of those sessions (TR-1665), while their rows still name them
+                for prefix in (session_ingest.DRAIN_TODO, session_ingest.DRAIN_GAVE_UP):
+                    conn.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.in_(
+                        select(literal(prefix) + sessions_table.c.session).where(
+                            sessions_table.c.source == source))))
                 conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
                 # and so do the facts read from them (TR-1477); a call's results live on its row
                 conn.execute(delete(session_commands).where(session_commands.c.source == source))
