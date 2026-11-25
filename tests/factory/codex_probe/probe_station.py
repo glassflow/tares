@@ -145,6 +145,7 @@ def no_prompt_into_a_turn(out):
             "stopped in the middle of the command, the app-server ended when asked": how == "stopped" and not cs.is_alive(c.paths, STATION),
             "no command of the turn is left running": left == [],
             "the stop's look at the interrupted turn found nothing past the guard": cs.guard_off(c.paths, STATION) == "",
+            "and that look could be made (the turn was listed with its items)": cs.unverified(c.paths, STATION) == {},
         }, refusal=refused, stop=how, seconds_to_stop=took, commands_left=len(left), conversation=bool(thread),
             guard_off=cs.guard_off(c.paths, STATION))
     finally:
@@ -205,6 +206,7 @@ def blocked_on_approval(out):
             "a blocked station is not between turns, and takes no prompt": not between and refused,
             "it can still be stopped": how in ("stopped", "killed") and not cs.is_alive(c.paths, STATION),
             "the stop's look at the turn that waited found nothing past the guard": cs.guard_off(c.paths, STATION) == "",
+            "and that look could be made (the turn was listed with its items)": cs.unverified(c.paths, STATION) == {},
         }, states_seen=seen, seconds_until_blocked=took, stop=how, guard_off=cs.guard_off(c.paths, STATION))
     finally:
         c.end(wait=3)

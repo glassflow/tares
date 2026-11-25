@@ -40,7 +40,10 @@ by hand: tests/factory/codex_probe/probe_station.py.
     the station at the watch's next round or before its next prompt; a last turn that cannot be listed with
     its items is not taken for one in order, and the next prompt waits for it; the watch's look is made under
     the station's lock, and a station started again since the look is not stopped for the old one; a stop
-    compares the last turn once more, so `restart --fresh` does not start a station found out there; a
+    compares the last turn once more, so `restart --fresh` does not start a station found out there; a stop
+    that cannot compare it leaves a mark, and then only the station's own conversation is started (compared
+    first) until a person gives it up with `revive --fresh` or `retire`; a person's `revive` of a station
+    stopped for a turn is not undone by that same turn; a
     repository that brings a Codex setup of its own adds nothing to a station, and a Codex that would read it
     all the same stops the start.
 
@@ -795,6 +798,19 @@ ck("the watch's next round compares what ran with the record, stops the station 
 n = len(calls(method="thread/resume"))
 watch_round(paths, tares)
 ck("and does not start it again", not cs.is_alive(paths, S) and len(calls(method="thread/resume")) == n and pid_of(paths) == pid)
+thread, shown = row(paths)["sessionId"], row(paths)["codex"]["guard_off"].get("turn")
+model_runs("/usr/bin/true")   # the app-servers started from here on run their hooks again
+err, _, _ = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+note(paths)
+pid2 = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("a person's `revive` starts it again in its conversation: the turn it was stopped for is not held against it again",
+   err is None and shown and alive(pid2) and row(paths)["sessionId"] == thread and row(paths).get(cs.SEEN) == shown
+   and cs.guard_off(paths, S) == "" and [m for m, _ in calls(pid2)] == ["thread/resume", "turn/start"], (err, calls(pid2)))
+ck("and the watch compares the turn after it as any other, and leaves the station up",
+   cs.check_guard(paths, S) == "" and "cannot be relied on" not in watch_round(paths, tares) and alive(pid2)
+   and len(cs._record(paths, S)) > 1)
+end(pid2)
 
 tares, paths, said, mk = crew()
 model_runs("/usr/bin/true", nopre=1)
@@ -823,11 +839,12 @@ for label, commands, switch, why in (
 
 # A turn that cannot be listed with its items is not a turn that was compared (the review of PR 929).
 real_request = Wire.request
-LISTING = {"as": ""}   # how `thread/turns/list` answers: "" as the app-server does, "fail", or "bare" (no items)
+LISTING = {"as": ""}   # how `thread/turns/list` answers: "" as the app-server does, "fail", "once" (fails once), "bare" (no items)
 
 
 def listed(self, method, params=None):
-    if method == "thread/turns/list" and LISTING["as"] == "fail":
+    if method == "thread/turns/list" and LISTING["as"] in ("fail", "once"):
+        LISTING["as"] = "" if LISTING["as"] == "once" else "fail"
         raise WireError("thread-store internal error")
     got = real_request(self, method, params)
     if method == "thread/turns/list" and LISTING["as"] == "bare":
@@ -945,6 +962,128 @@ off = events(paths, "guard-off")
 ck("`retire` records what the last turn ran past the guard, and retires the station all the same",
    err is None and gone(pid) and row(paths)["status"] == "retired" and len(off) == 1
    and "a command ran with no run of the guard before it" in off[0].get("detail", ""), (err, off))
+
+# A look at a stop that could not be made is not a look that found the turn in order (the second review of PR 929).
+Wire.request = listed
+
+
+def stopped_uncompared(*commands, **switches):
+    """A station whose `restart --fresh` could not compare its last turn: (tares, paths, mk, pid, thread, err, kind)."""
+    tares_, paths_, _, mk_ = crew()
+    model_runs(*commands, **switches)
+    start(mk_())
+    pid_, thread_ = pid_of(paths_), row(paths_)["sessionId"]
+    until(lambda: cs.turn_state(paths_, S) == "done")
+    LISTING["as"] = "fail"
+    err_, kind_, _ = quietly(lifecycle.restart, mk_(), paths_, [S, "--fresh"], claude_bin="")
+    watch_revive._guard_told.discard(S)
+    return tares_, paths_, mk_, pid_, thread_, err_, kind_
+
+
+def conversations():
+    return len(calls(method="thread/start"))
+
+
+n = conversations() + 1
+tares, paths, mk, pid, thread, err, kind = stopped_uncompared("/usr/bin/true", nopre=1)
+ck("`restart --fresh` whose stop cannot compare the last turn stops the station and starts no new conversation",
+   kind is CrewError and "could not be compared with the guard's record (its turns could not be listed" in err
+   and f"`tares factory revive {S}` starts it in its own" in err and f"`tares factory revive {S} --fresh`" in err
+   and gone(pid) and not cs.is_alive(paths, S) and conversations() == n and row(paths)["sessionId"] == thread,
+   (err, kind, conversations(), n))
+ck("the station's row says which conversation was never compared, and an event records it; it is not marked as found out",
+   cs.unverified(paths, S).get("thread") == thread and len(events(paths, "guard-unverified")) == 1
+   and cs.guard_off(paths, S) == "" and not events(paths, "guard-off"), row(paths))
+turns = len(calls(method="turn/start"))
+said_1 = watch_round(paths, tares)
+ck("the watch starts it in its own conversation only, and while the turn still cannot be compared no turn is started",
+   "not handing it a prompt" in said_1 and f"could not revive {S}" in said_1 and not cs.is_alive(paths, S)
+   and len(calls(method="turn/start")) == turns and conversations() == n and cs.unverified(paths, S).get("thread") == thread,
+   said_1)
+LISTING["as"] = ""
+said_2 = watch_round(paths, tares)
+ck("once it can be, the start compares that turn first: what it ran past the guard is found, and the station stays down",
+   "a command ran with no run of the guard before it" in said_2 and not cs.is_alive(paths, S)
+   and len(calls(method="turn/start")) == turns and conversations() == n
+   and "no run of the guard" in cs.guard_off(paths, S), said_2)
+
+n = conversations() + 1
+tares, paths, mk, pid, thread, err, kind = stopped_uncompared("/usr/bin/true")
+LISTING["as"] = ""
+said_1 = watch_round(paths, tares)
+note(paths)
+pid2 = pid_of(paths)
+ck("a last turn that was in order: compared at the next start, the station runs on in its own conversation, the mark gone",
+   kind is CrewError and alive(pid2) and pid2 != pid and row(paths)["sessionId"] == thread and conversations() == n
+   and [m for m, _ in calls(pid2)] == ["thread/resume", "turn/start"] and cs.unverified(paths, S) == {}
+   and cs.guard_off(paths, S) == "", (said_1, calls(pid2)))
+until(lambda: cs.turn_state(paths, S) == "done")
+cs._mark_unverified(paths, S, thread, "its turns could not be listed (a test)")
+err, kind, _ = quietly(cs.hand, paths, S, "A prompt for a new conversation.", fresh=True)
+ck("with such a mark no turn is started in another conversation, whoever asks",
+   kind is CrewError and "is not started in a new conversation" in (err or "") and conversations() == n
+   and cs.unverified(paths, S).get("thread") == thread and alive(pid2), (err, kind))
+err, kind, _ = quietly(cs.hand, paths, S, "A prompt for its own conversation.")
+ck("in its own conversation the turn is compared, the prompt handed over and the mark cleared",
+   err is None and cs.unverified(paths, S) == {} and row(paths)["sessionId"] == thread, err)
+until(lambda: cs.turn_state(paths, S) == "done")
+LISTING["as"] = "once"   # the stop's look fails, the start's does not
+err, kind, _ = quietly(lifecycle.restart, mk(), paths, [S], claude_bin="")
+note(paths)
+pid3 = pid_of(paths)
+ck("a restart in the same conversation goes on after a stop that could not compare: its start compares first",
+   err is None and gone(pid2) and alive(pid3) and row(paths)["sessionId"] == thread and cs.unverified(paths, S) == {}
+   and len(events(paths, "guard-unverified")) == 3 and LISTING["as"] == "", (err, events(paths, "guard-unverified")))
+until(lambda: cs.turn_state(paths, S) == "done")
+end(pid3)
+
+n = conversations() + 1
+tares, paths, mk, pid, thread, err, kind = stopped_uncompared("/usr/bin/true")
+(paths.station_file(S, "codex") / "fake-threads.json").unlink()   # the conversation can no longer be loaded
+LISTING["as"] = ""
+err, kind, _ = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+ck("a conversation that was never compared and can no longer be loaded is not replaced by a new one",
+   kind is CrewError and "cannot be loaded" in (err or "") and "never compared with the guard's record" in err
+   and f"`tares factory revive {S} --fresh`" in err and conversations() == n and not cs.is_alive(paths, S)
+   and cs.unverified(paths, S).get("thread") == thread, (err, kind))
+
+
+class AlwaysFresh(watch_revive.PaceSeam):
+    """A pace that sends the watch to a new conversation, as after a resume that failed twice."""
+
+    def stopped(self, paths, station):
+        return True
+
+    def tried(self, paths, station):
+        return True
+
+
+real_pace, watch_revive.pace = watch_revive.pace, AlwaysFresh()
+said_1 = watch_round(paths, tares)
+said_2 = watch_round(paths, tares)
+watch_revive.pace = real_pace
+ck("nor does the watch start it in a new conversation: it stays down, said once with the way on",
+   f"{S} stays down: what its last turn ran could not be compared" in said_1
+   and f"`tares factory revive {S} --fresh` does that" in said_1 and "stays down" not in said_2
+   and conversations() == n and not cs.is_alive(paths, S), (said_1, said_2))
+err, kind, _ = quietly(lifecycle.revive, mk(), paths, [S, "--fresh"], claude_bin="")
+note(paths)
+pid2 = pid_of(paths)
+given = events(paths, "guard-unverified-given-up")
+ck("a person's `revive --fresh` gives the conversation up: a new one, the mark gone, and an event that keeps it",
+   err is None and alive(pid2) and conversations() == n + 1 and row(paths)["sessionId"] not in ("", thread)
+   and cs.unverified(paths, S) == {} and len(given) == 1 and given[0].get("detail") == f"revive --fresh: {thread}",
+   (err, given))
+until(lambda: cs.turn_state(paths, S) == "done")
+LISTING["as"] = "fail"
+err, kind, _ = quietly(lifecycle.retire, mk(), paths, [S], claude_bin="")
+ck("`retire` goes through when the last turn cannot be compared, and the events keep that it was not",
+   err is None and gone(pid2) and row(paths)["status"] == "retired" and cs.unverified(paths, S) == {}
+   and len(events(paths, "guard-unverified")) == 2
+   and [e.get("detail", "").split(":")[0] for e in events(paths, "guard-unverified-given-up")] == ["revive --fresh", "retire"],
+   (err, events(paths, "guard-unverified-given-up")))
+LISTING["as"] = ""
+Wire.request = real_request
 
 tares, paths, said, mk = crew()
 fake(project=1)

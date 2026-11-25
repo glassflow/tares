@@ -462,7 +462,7 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
         except GuardOffError as e:   # already stopped; the row as it was, marked, so the watch leaves it down
             stop(proc, sock)
             _put_back(paths, station, before)
-            codex_station.mark_off(paths, station, e.why)
+            codex_station.mark_off(paths, station, e.why, e.turn)
             raise
         except CrewError:
             stop(proc, sock)

@@ -283,12 +283,19 @@ Three things changed in how the comparison is made, none in what Codex was measu
 - the watch's look and the stop are one step under the station's lock, and the stop ends only the
   app-server that was looked at;
 - a stop compares the newest turn once more before it ends the app-server, so a station started in a new
-  conversation afterwards (`restart --fresh`) does not escape the comparison of its last turn.
+  conversation afterwards (`restart --fresh`) does not escape the comparison of its last turn;
+- a stop that cannot make that comparison goes on, and writes on the station's row which conversation was
+  never compared. Until it is, only that conversation is started (the start compares first):
+  `restart --fresh`, the watch and a start that finds the conversation gone leave the station down. A person
+  gives it up with `tares factory revive <station> --fresh` or by retiring the station;
+- a station stopped for what a turn ran is started again by a person's `tares factory revive` without being
+  stopped for that same turn again (before, the start compared it once more and stopped the station every
+  time).
 
 Run again on Codex 0.171.0 with these: `probe_guard_on.py` 3 of 3, `probe_station.py` 5 of 5. A stop in the
-middle of a command still took 0.1 s, and the look at a stop found nothing past the guard, neither on an
-interrupted turn nor on one that waited on an approval. `results/station.json` and `results/guard_on.json`
-hold the runs of 24 November.
+middle of a command still took 0.1 s. The look at a stop could be made both on an interrupted turn and on one
+that waited on an approval (the turn was listed with its items), and found nothing past the guard.
+`results/station.json` and `results/guard_on.json` hold the runs of 24 November.
 
 ### Decided
 

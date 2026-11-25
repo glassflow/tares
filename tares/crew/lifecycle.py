@@ -136,6 +136,12 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     if proc.is_alive(station, "", claude_bin, paths):
         raise CrewError(f"{station} is running; message it instead")
     if _codex_station(paths, station):
+        # TR-1594. A station stopped for what a turn ran is started again by a person only (the watch leaves it
+        # down): that turn is not held against it again. And with --fresh a person gives up a conversation whose
+        # last turn was never compared; the watch and `restart` do not get here with --fresh for such a station.
+        codex_station.seen_by_a_person(paths, station)
+        if fresh:
+            codex_station.give_up_unverified(paths, station, "revive --fresh")
         # what it had started and left running when it died: ended, so nothing runs twice, and said
         prompt = _with_cut_off(prompt, codex_station.end_leftovers(paths, station))
     launch.launch(client, station, role, parent, project, repo, cwd, model, effort, prompt,
@@ -227,7 +233,9 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
     with --fresh, a new one. `only_between_turns` (a wake) leaves a station in a turn alone
     (NotBetweenTurnsError). A station whose stop finds that its last turn ran something the guard has no
     record of is not started again (GuardOffError): `tares factory revive` does that, as for one the watch
-    stopped."""
+    stopped. When the stop could not make that comparison, `--fresh` is refused after the stop (the station
+    stays down, and the error names the two ways on), and a restart without it goes on: the start compares
+    first, in the same conversation."""
     locks.station_lock(station, paths)
     fresh = bool(rest) and rest[0] == "--fresh"
     prompt = (rest[1:] if fresh else rest)[:1]
@@ -247,6 +255,13 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
         off = codex_station.guard_off(paths, station)
         if off:   # its last turn ran something the guard has no record of (TR-1594): it stays down
             raise GuardOffError(station, off)
+        pending = codex_station.unverified(paths, station)
+        if fresh and pending:   # not compared, so not known to be in order: not given up for a new conversation
+            raise CrewError(
+                f"{station} was stopped, but what its last turn ran could not be compared with the guard's record "
+                f"({pending.get('why')}), so it is not started in a new conversation. `tares factory revive "
+                f"{station}` starts it in its own, where the comparison is made first; `tares factory revive "
+                f"{station} --fresh` starts it in a new one without the comparison")
     revive(client, paths, [station, *rest], claude_bin=claude_bin)
 
 
@@ -291,6 +306,7 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     locks.station_lock(station, paths)
     if on_codex:   # its own app-server: a running turn is interrupted, then the process is ended
         job_id = f"codex app-server {codex_station.stop(paths, station)}"
+        codex_station.give_up_unverified(paths, station, "retire")   # retired for good: nothing waits on it
     else:
         _stop_session(job_id, claude_bin)
         _remove_session(job_id, claude_bin)

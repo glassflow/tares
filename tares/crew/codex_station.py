@@ -48,7 +48,12 @@ checks, with what a short visit can see:
     lists a command only once it has ended, so this is seen after the fact, at the next look. The look at
     a stop is the last one a conversation gets when the station is then started in a new one
     (`restart --fresh`), or not at all (`retire`); a station found out there is marked like any other, and
-    a restart does not start it again.
+    a restart does not start it again. A look at a stop that could not be made is written on the station's
+    row (`unverified`), and from then on nothing gives that conversation up by itself: a start in the
+    same conversation compares first, as always, and `hand` starts no turn in any other one, so
+    `restart --fresh`, the watch, and a start that finds the conversation can no longer be loaded leave
+    the station down. A person gives it up, with `tares factory revive <station> --fresh` or by retiring
+    the station (`give_up_unverified`).
 A station that fails one is stopped and marked (`guard_off`); the watch does not start it again by itself,
 `tares factory revive` does. Two things keep that from going wrong:
   * a turn that cannot be listed with its items is not a turn that was compared. The watch then looks again
@@ -310,6 +315,8 @@ def _audit(wire: Wire, thread: str, paths: CrewPaths, station: str) -> tuple:
     turn = _last_turn(wire, thread)
     if turn is None:
         return "", ""
+    if turn.get("id") and turn.get("id") == state.stations_get(station, SEEN, paths=paths):
+        return "", str(turn["id"])   # the station was stopped for this turn, and a person started it again
     found = unguarded(turn.get("items"), _record(paths, station))
     why = found[0] + (f", and {len(found) - 1} more" if len(found) > 1 else "") if found else ""
     return why, str(turn.get("id") or "")
@@ -360,12 +367,62 @@ def _armed(wire: Wire, paths: CrewPaths, station: str, thread: str, turn: str) -
             return "" if shown() else "the turn ended with no run of the guard"
 
 
-def mark_off(paths: CrewPaths, station: str, why: str) -> None:
-    """Write down that the station was stopped for its guard, on its row, when it has one."""
+SEEN = "guardSeenTurn"   # on a station's row, beside `codex`: see `seen_by_a_person`
+
+
+def mark_off(paths: CrewPaths, station: str, why: str, turn: str = "") -> None:
+    """Write down that the station was stopped for its guard, on its row, when it has one. `turn` is the turn
+    that showed it, when a comparison did."""
     row = state.stations_load(paths).get(station)
     if isinstance(row, dict):
-        state.stations_put(station, {"codex": {**info(paths, station), "guard_off": {"at": state.utc_stamp(),
-                                                                                     "why": why}}}, paths)
+        state.stations_put(station, {"codex": {**info(paths, station), "guard_off": {
+            "at": state.utc_stamp(), "why": why, **({"turn": turn} if turn else {})}}}, paths)
+
+
+def seen_by_a_person(paths: CrewPaths, station: str) -> None:
+    """A person starts a station again that was stopped for what a turn ran (`tares factory revive`): that turn
+    is written on the row, and is not held against the station again. Without this the start would compare the
+    same turn, find the same thing and stop the station once more, every time. A turn after it is compared as
+    any other. Nothing when the station was not stopped for a turn."""
+    mark = info(paths, station).get("guard_off")
+    turn = mark.get("turn") if isinstance(mark, dict) else None
+    if turn:
+        state.stations_put(station, {SEEN: str(turn)}, paths)
+
+
+UNVERIFIED = "guardUnverified"   # on a station's row, beside `codex`: a start writes `codex` anew, and keeps this
+
+
+def unverified(paths: CrewPaths, station: str) -> dict:
+    """{} or {"thread", "why", "at"}: the conversation whose last turn could not be compared with the guard's
+    record when the station was stopped, and has not been compared since."""
+    row = state.stations_load(paths).get(station)
+    mark = row.get(UNVERIFIED) if isinstance(row, dict) else None
+    return mark if isinstance(mark, dict) and mark.get("thread") else {}
+
+
+def _mark_unverified(paths: CrewPaths, station: str, thread: str, why: str) -> None:
+    row = state.stations_load(paths).get(station)
+    if isinstance(row, dict):
+        state.stations_put(station, {UNVERIFIED: {"at": state.utc_stamp(), "thread": thread, "why": why[:300]}}, paths)
+        state.event("guard-unverified", station, why[:300], paths=paths)
+
+
+def _clear_unverified(paths: CrewPaths, station: str) -> None:
+    data = state.stations_load(paths)
+    row = data.get(station)
+    if isinstance(row, dict) and UNVERIFIED in row:
+        del row[UNVERIFIED]
+        state.write_json(paths.stations, data)
+
+
+def give_up_unverified(paths: CrewPaths, station: str, how: str) -> None:
+    """A person's word that the conversation whose last turn was never compared is given up (`how`: the command
+    that said so). The mark goes, and an event keeps that it was there. Nothing when there is no mark."""
+    pending = unverified(paths, station)
+    if pending:
+        _clear_unverified(paths, station)
+        state.event("guard-unverified-given-up", station, f"{how}: {pending.get('thread')}"[:300], paths=paths)
 
 
 def guard_off(paths: CrewPaths, station: str) -> str:
@@ -379,7 +436,7 @@ def _is(rec: dict, now: dict) -> bool:
     return isinstance(rec.get("pid"), int) and rec.get("pid") == now.get("pid") and rec.get("born") == now.get("born")
 
 
-def _stop_unguarded(paths: CrewPaths, station: str, why: str, rec: dict) -> bool:
+def _stop_unguarded(paths: CrewPaths, station: str, why: str, rec: dict, turn: str = "") -> bool:
     """Stop a station whose guard cannot be relied on, mark it and record the event. `rec` is the app-server
     that was looked at (`info`, read before the look): when the station's record names another one by now, it
     was started again since, and nothing is stopped or marked for what the old one did. Returns whether it
@@ -387,7 +444,7 @@ def _stop_unguarded(paths: CrewPaths, station: str, why: str, rec: dict) -> bool
     if not _is(rec, info(paths, station)):
         return False
     stop(paths, station, compare=False)
-    mark_off(paths, station, why)
+    mark_off(paths, station, why, turn)
     state.event("guard-off", station, why[:300], paths=paths)
     return True
 
@@ -411,10 +468,10 @@ def check_guard(paths: CrewPaths, station: str) -> str:
             return ""
         try:
             with visit(paths, station) as wire:
-                why, _ = _audit(wire, thread, paths, station)
+                why, turn = _audit(wire, thread, paths, station)
         except (CrewError, NotCompared):
             return ""
-        return why if why and _stop_unguarded(paths, station, why, rec) else ""
+        return why if why and _stop_unguarded(paths, station, why, rec, turn) else ""
 
 
 def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) -> dict:
@@ -431,11 +488,12 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
     The caller holds the station's lock, as every command that starts or stops a station does."""
     doc = settings(paths, station)
     rec = info(paths, station)
+    pending = unverified(paths, station)
     cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
     start = _thread_start(doc["thread"], cwd)
     allowed = set(doc.get("mcp_servers") or {})
     recorded = _recorded_thread(paths, station)
-    thread, replaced, turn, off = ("" if fresh else recorded), False, "", ""
+    thread, replaced, turn, off, shown = ("" if fresh else recorded), False, "", "", ""
     with visit(paths, station) as wire:
         try:
             last = ""
@@ -450,7 +508,18 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                 except WireError as e:
                     if kind != "notLoaded":   # one the app-server has open is not given up for this
                         raise CrewError(f"could not join the conversation of {station}: {e}") from None
+                    if pending:   # its last turn was never compared, and now cannot be: only a person gives it up
+                        raise CrewError(
+                            f"the conversation of {station} cannot be loaded ({e}), and what its last turn ran was "
+                            f"never compared with the guard's record ({pending.get('why')}); `tares factory revive "
+                            f"{station} --fresh` starts it in a new conversation without that") from None
                     thread, replaced = "", True   # the app-server was started again since and cannot load it
+            if pending and thread != pending.get("thread"):   # a turn anywhere else would leave it never compared
+                raise CrewError(
+                    f"{station} is not started in a new conversation: what the last turn of its own ran could not be "
+                    f"compared with the guard's record ({pending.get('why')}). `tares factory revive {station}` "
+                    f"starts it in its own, where the comparison is made first; `tares factory revive {station} "
+                    "--fresh` starts it in a new one without the comparison")
             if not thread:
                 thread = str((wire.request("thread/start", start).get("thread") or {}).get("id") or "")
                 if not thread:
@@ -459,6 +528,7 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
             if not off and thread == recorded:
                 try:
                     off, last = _audit(wire, thread, paths, station)
+                    shown = last if off else ""
                 except NotCompared as e:   # not known to be in order: the next turn waits until it is
                     raise CrewError(f"what the last turn of {station} ran cannot be compared with the guard's "
                                     f"record now ({e}); not handing it a prompt") from None
@@ -477,11 +547,13 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
         except WireError as e:
             raise CrewError(f"could not hand {station} its prompt: {e}") from None
     if off:
-        if not _stop_unguarded(paths, station, off, rec):
+        if not _stop_unguarded(paths, station, off, rec, shown):
             raise CrewError(f"{station} was started again while it was handed a prompt; try again")
-        raise GuardOffError(station, off)
+        raise GuardOffError(station, off, shown)
     state.stations_put(station, {"sessionId": thread, "codex": {**info(paths, station), "turn": turn,
                                                               "turn_at": state.utc_stamp()}}, paths)
+    if pending:   # the same conversation, compared above before its turn was started
+        _clear_unverified(paths, station)
     if recorded and thread != recorded:
         state.event("conversation-replaced" if replaced else "conversation-fresh", station, recorded, paths=paths)
     return {"thread": thread, "turn": turn, "replaced": replaced}
@@ -665,17 +737,17 @@ def end_leftovers(paths: CrewPaths, station: str, *, grace: float = cx.STOP_GRAC
     return names
 
 
-def _compared_at_stop(paths: CrewPaths, station: str) -> str:
-    """What the station's newest turn shows the guard did not do, looked at once more before its app-server is
-    ended; "" when nothing, and when it cannot be looked at. Never fails."""
-    thread = _recorded_thread(paths, station)
-    if not thread:
-        return ""
+def _compared_at_stop(paths: CrewPaths, station: str, thread: str) -> tuple:
+    """The station's newest turn, compared with the guard's record once more before its app-server is ended:
+    (what it shows the guard did not do, that turn's id, why it could not be compared). ("", id, "") is a turn
+    that was compared and is in order; one that could not be looked at is never that. Never fails."""
     try:
         with visit(paths, station, timeout=5) as wire:
-            return _audit(wire, thread, paths, station)[0]
-    except (CrewError, NotCompared):
-        return ""
+            return (*_audit(wire, thread, paths, station), "")
+    except NotCompared as e:
+        return "", "", str(e)
+    except CrewError as e:
+        return "", "", f"the station did not answer ({e})"
 
 
 def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, grace: float = cx.STOP_GRACE,
@@ -686,7 +758,8 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
 
     Before the app-server is ended its newest turn is compared with the guard's record once more (`compare`),
     since nothing can ask it afterwards: a station that ran something the guard has no record of is marked
-    (`guard_off`) and the event recorded, as when the watch finds it."""
+    (`guard_off`) and the event recorded, as when the watch finds it. When the comparison cannot be made the
+    stop goes on, and the station's row says so (`unverified`): the turn is not known to be in order."""
     rec = info(paths, station)
     sock = rec.get("socket") or str(cx.socket_path(paths, station))
     if not _same_process(rec):
@@ -695,7 +768,8 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
         return "not running"
     pid = rec["pid"]
     _interrupt(paths, station, turn_wait, sleep)
-    why = _compared_at_stop(paths, station) if compare else ""
+    thread = _recorded_thread(paths, station) if compare else ""
+    why, shown, unknown = _compared_at_stop(paths, station, thread) if thread else ("", "", "")
     note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:
@@ -712,6 +786,8 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     cx.remove_socket(sock)
     end_leftovers(paths, station, grace=grace, sleep=sleep)
     if why:
-        mark_off(paths, station, why)
+        mark_off(paths, station, why, shown)
         state.event("guard-off", station, why[:300], paths=paths)
+    elif unknown:
+        _mark_unverified(paths, station, thread, unknown)
     return how

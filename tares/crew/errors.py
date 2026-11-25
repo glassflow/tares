@@ -54,12 +54,12 @@ class NotBetweenTurnsError(CrewError):
 
 class GuardOffError(CrewError):
     """A Codex station's guard was found not to run, or not alone (TR-1594): the station was stopped. `why`
-    is what was seen."""
+    is what was seen, `turn` the turn that showed it when a comparison did."""
 
     code = "guard_off"
 
-    def __init__(self, station: str, why: str):
-        self.station, self.why = station, why
+    def __init__(self, station: str, why: str, turn: str = ""):
+        self.station, self.why, self.turn = station, why, turn
         super().__init__(f"{station} was stopped, since its guard cannot be relied on: {why}")
 
 
