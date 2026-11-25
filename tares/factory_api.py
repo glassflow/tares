@@ -1140,6 +1140,36 @@ def register(app, store, h: Host) -> SimpleNamespace:
         out.update(marks.get(prefix, {}))
         return out
 
+    def shown_station_state(cur: dict, now: datetime) -> str:
+        """The state a station shows, from its newest session."""
+        state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
+        return "ended" if state == "replaced" else state
+
+    def in_sight(rows: list[dict], hidden: set) -> list[dict]:
+        """`rows` without the stations that worked only in projects the caller cannot see (TR-629)."""
+        return [st for st in rows if not (st["projects"] and set(st["projects"]) <= hidden)]
+
+    def in_crew_order(rows: list[dict]) -> list[dict]:
+        order = {r: i for i, r in enumerate(factory_mod.ROLES)}
+        return sorted(rows, key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
+
+    def station_states() -> list[dict]:
+        """Who runs, for a reader that needs no more of `stations()` (Setup, TR-1634): name, role,
+        state, last_at, crew_id, person and projects of every station the caller may see, in the
+        same order. Reads no earlier session, no usage and no line count."""
+        crews = {c["id"]: c for c in store.list_crews()}
+        now = now_utc()
+        out = [{"name": g["station"], "role": g["cur"]["role"], "crew_id": g["crew_id"],
+                "state": shown_station_state(g["cur"], now), "last_at": g["cur"]["last_at"],
+                "person": (crews.get(g["crew_id"]) or {}).get("person"), "projects": g["projects"]}
+               for g in store.station_rollup(h.cc_source(), totals=False)]
+        hidden = h.hidden_ids()
+        if hidden:
+            out = in_sight(out, hidden)
+            for st in out:
+                st["projects"] = [u for u in st["projects"] if u not in hidden]
+        return in_crew_order(out)
+
     def stations(project: str | None = None) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
         never merge. Each row names its crew, machine and person."""
@@ -1155,9 +1185,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             cid, name, cur = g["crew_id"], g["station"], g["cur"]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
-            state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
-            if state == "replaced":
-                state = "ended"
+            state = shown_station_state(cur, now)
             # the most recent sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],
                         "last_at": s["last_at"], "lines": s["lines"], "state": "replaced"}
@@ -1176,10 +1204,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "coordination_calls": g["coordination_calls"]})
         hidden = h.hidden_ids()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
-            kept = []
+            out = in_sight(out, hidden)
             for st in out:
-                if st["projects"] and set(st["projects"]) <= hidden:
-                    continue
                 seen = [u for u in st["projects"] if u not in hidden]
                 if len(seen) != len(st["projects"]) or st["project"] in hidden:
                     # the station also works on a project the caller cannot see: its reason
@@ -1188,8 +1214,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
-                kept.append(st)
-            out = kept
         meters = store.session_meters([st["session"] for st in out])
         retry = claude_retry()
         for st in out:
@@ -1206,9 +1230,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                   or retry.get(retry_key(pid, None), {}).get(st["name"]))
         if project:
             out = [s for s in out if project in s["projects"]]
-        order = {r: i for i, r in enumerate(factory_mod.ROLES)}
-        out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
-        return out
+        return in_crew_order(out)
 
     def pace(request: Request | None = None) -> dict:
         """The pace under the caller's settings (a person's own `pace` over the cell's)."""
@@ -2893,14 +2915,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return desk_out(desk_or_404(d["id"]))
 
     def standing_grant(d: dict, giver: str | None, scope: str, grant_kind: str,
-                       request: Request) -> tuple:
+                       request: Request, may_ask_lead: bool = False) -> tuple:
         """What a standing answer becomes (TR-634): (kind, project, areas, needs_lead) for
         put_grant, given by the person who answered (`giver`, the item's person), by the same rules as POST /api/grants:
         a team grant (scope all, or an item with no project) needs an admin; a project grant, the
         project's lead, an admin or the owner of every repo it reaches into; personal, a person,
         for themselves. The repos are those of the item's tickets; one owned by someone else
         makes the grant wait for them, and one from a person who is neither lead nor admin waits
-        for the lead too."""
+        for the lead too. `may_ask_lead` (the console's Allow, TR-1651): with an enterprise
+        licence a project grant from someone who may not give it is not refused, it waits for the
+        lead (an admin when there is none) and the owners of its repos."""
         person = store.get_person(giver) if giver else None
         admin = bool(person["is_admin"]) if person else h.is_admin(request)
         if grant_kind == "personal":
@@ -2911,8 +2935,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
             return "personal", uid, [], False
         if scope == "all" or not d["project"]:
             if not admin:
-                h.err(PermissionError("a grant for every project needs an admin: this answer "
-                                      "can be a project grant, or an admin gives it"), 403)
+                other = ("an admin has to allow it" if may_ask_lead
+                         else "this answer can be a project grant, or an admin gives it")
+                h.err(PermissionError(f"a grant for every project needs an admin: {other}"), 403)
             return "team", None, [], False
         areas = []
         if team_mod.enabled():   # without a team nobody owns a repo, so a repo is nothing to wait for
@@ -2927,7 +2952,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         leads_it = bool(giver and p.get("lead_person_id") == giver)
         owns_all = bool(areas) and giver is not None and all(
             (h.area_owner(a) or {}).get("id") == giver for a in areas)
-        if not (admin or leads_it or owns_all):
+        # without a team a grant waits for no one (it would take effect), so it is refused there
+        asks_lead = may_ask_lead and giver is not None and team_mod.enabled()
+        if not (admin or leads_it or owns_all or asks_lead):
             h.err(PermissionError("a project grant comes from the project's lead, or from the "
                                   "owner of the repos it names"), 403)
         return "project", d["project"], areas, not (admin or leads_it)
@@ -3165,10 +3192,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def desk_allow(ref: str, request: Request, body: dict = Body(...)):
         """{words, scope: project|all}: the person allows a permission request (a desk item with
         a command) from the console. `words` is the grant as they let it stand (the console
-        offers a sentence naming the station and the command; they may edit it). It is kept as a
-        grant, for the item's project or for every project, and recorded as their decision made
-        in the console; the item is answered. The crew's watch restarts the station with it. A
-        person decides: refused from any crew station."""
+        offers a sentence naming the station and the command; they may edit it). It becomes a
+        grant (`standing_grant`): for every project it needs an admin. For the item's project,
+        the lead's or an admin's takes effect; with an enterprise licence anyone else's waits for
+        the lead (an admin when there is none), as does a repo's owner who is not the giver
+        (`granted` is false until it takes effect). Without a licence it needs the lead or an
+        admin. It is recorded as their decision made in the console and the item is
+        answered. A grant in effect reaches the stations' rules, and the crew's watch restarts
+        the station with it. A person decides: refused from any crew station."""
         if caller(request)["station"]:
             h.err(PermissionError("a permission is the person's to allow: they allow it in the "
                                   "console"), 403)
@@ -3201,10 +3232,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
             line = factory_mod.grant_line(words, now_utc().date().isoformat())
         except docs_mod.DocError as e:
             h.err(e)
-        added = append_grant(d["project"] if scope == "project" else None, line,
-                             "the person, in the console")
+        # who may give it is refused here, before anything is written
+        kind, grant_project, areas, needs_lead = standing_grant(d, me["id"], scope, "project",
+                                                                request, may_ask_lead=True)
+        # the grant row, not only its line in the doc: station settings are built from the rows
+        row, added = put_grant(kind, factory_mod.grant_words(words), grant_project, me["id"],
+                               areas, needs_lead, "the person, in the console")
+        granted = row["state"] == "active"   # one waiting for consent is not in effect yet
         dec = store.add_decision(d["project"], d["id"], d["question"], words, "allowed", True,
-                                 scope, False, None, True, d["tickets"], now_utc(),
+                                 scope, False, None, granted, d["tickets"], now_utc(),
                                  via=answers_mod.surface(request), person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
         answers_mod.record(store, request, item=f"permission:{d['label']}", kind="permission",
@@ -3213,7 +3249,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                "this project" if scope == "project" else "every project"),
                            person_id=answerer(request))
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
-                "station": d["station"], "line": line, "added": added, "scope": scope}
+                "station": d["station"], "line": line, "added": added, "scope": scope,
+                "granted": granted, "grant": grants_view([row])[0]}
 
     @app.get("/api/projects/{uid}/decisions")
     def project_decisions(uid: str):
@@ -3563,7 +3600,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
-    fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
+    fx = SimpleNamespace(stations=stations, station_states=station_states, queue=queue_all, pace=pace,
+                         settings=settings,
                          team_home=team_home, project_waiting=project_waiting,
                          waiting_for_person=waiting_for_person,
                          team_projects=team_projects, own_stations=own_stations,

@@ -104,6 +104,10 @@ async def main():
         r = await call("lee", "POST", f"/api/desk/{a1['label']}/allow",
                        {"words": WORDS, "scope": "project"})
         ck("a signed-in person allows it", r.status_code == 200, f"{r.status_code} {r.text}")
+        out = r.json() if r.status_code == 200 else {}
+        ck("lee is no lead: the grant waits and is not in effect (TR-1651)",
+           out.get("granted") is False and (out.get("grant") or {}).get("state") == "waiting",
+           f"{r.status_code} {r.text}")
         ck("and it is answered", state(a1) == "answered", state(a1))
 
         a2 = await add("Shop: one page or two?")
