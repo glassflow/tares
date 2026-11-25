@@ -76,6 +76,7 @@ OVER: dict = {
     },
     "postgres": {
         "setup": (0.376, "TR-1628"), "setup_progress": (0.350, "TR-1634"),
+        "crew": (0.46, "TR-1631"),
     },
 }
 
