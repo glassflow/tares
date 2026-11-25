@@ -274,6 +274,22 @@ On Codex as on Claude Code the guard reads the text of a command, for a station 
   still runs would run commands unseen until the watch's next round. No case of that was found; the two are
   one command under one trust setting.
 
+### After the review of 25 November 2026
+
+Three things changed in how the comparison is made, none in what Codex was measured to do:
+
+- a turn that cannot be listed, or that comes without its items (`itemsView` other than `full`), is not a turn
+  that was compared: the watch looks again next round and the next prompt waits;
+- the watch's look and the stop are one step under the station's lock, and the stop ends only the
+  app-server that was looked at;
+- a stop compares the newest turn once more before it ends the app-server, so a station started in a new
+  conversation afterwards (`restart --fresh`) does not escape the comparison of its last turn.
+
+Run again on Codex 0.171.0 with these: `probe_guard_on.py` 3 of 3, `probe_station.py` 5 of 5. A stop in the
+middle of a command still took 0.1 s, and the look at a stop found nothing past the guard, neither on an
+interrupted turn nor on one that waited on an approval. `results/station.json` and `results/guard_on.json`
+hold the runs of 24 November.
+
 ### Decided
 
 - **No process id written by the adapter** (the question left by section 5). The adapter would have to put a

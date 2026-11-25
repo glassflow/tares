@@ -31,7 +31,7 @@ import time
 
 from . import claude, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
-from .errors import CrewError, NotBetweenTurnsError, SessionListUnreadableError
+from .errors import CrewError, GuardOffError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
@@ -225,7 +225,9 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
     prompt needs no restart. Anything else is a real restart: the app-server is stopped (a running turn is
     interrupted first) and the station is revived, with freshly made settings, in its own conversation or,
     with --fresh, a new one. `only_between_turns` (a wake) leaves a station in a turn alone
-    (NotBetweenTurnsError)."""
+    (NotBetweenTurnsError). A station whose stop finds that its last turn ran something the guard has no
+    record of is not started again (GuardOffError): `tares factory revive` does that, as for one the watch
+    stopped."""
     locks.station_lock(station, paths)
     fresh = bool(rest) and rest[0] == "--fresh"
     prompt = (rest[1:] if fresh else rest)[:1]
@@ -242,6 +244,9 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
         codex_station.stop(paths, station)
         if codex_station.is_alive(paths, station):
             raise CrewError(f"{station} did not stop; try again")
+        off = codex_station.guard_off(paths, station)
+        if off:   # its last turn ran something the guard has no record of (TR-1594): it stays down
+            raise GuardOffError(station, off)
     revive(client, paths, [station, *rest], claude_bin=claude_bin)
 
 

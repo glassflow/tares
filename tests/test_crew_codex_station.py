@@ -39,7 +39,8 @@ by hand: tests/factory/codex_probe/probe_station.py.
     run of the guard before it, one that ran though it was refused, and one whose input was not closed stop
     the station at the watch's next round or before its next prompt; a last turn that cannot be listed with
     its items is not taken for one in order, and the next prompt waits for it; the watch's look is made under
-    the station's lock, and a station started again since the look is not stopped for the old one; a
+    the station's lock, and a station started again since the look is not stopped for the old one; a stop
+    compares the last turn once more, so `restart --fresh` does not start a station found out there; a
     repository that brings a Codex setup of its own adds nothing to a station, and a Codex that would read it
     all the same stops the start.
 
@@ -902,6 +903,48 @@ ck("the one that was looked at is, and the lock is let go after the look",
    "a command ran with no run of the guard before it" in got and gone(pid) and cs.guard_off(paths, S) == got
    and not paths.lock_dir(S).exists(), got)
 end(newer.pid, signal.SIGKILL)
+
+# A stop is the last look a conversation gets: the station is then started in a new one, or not at all.
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true", nopre=1)
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+until(lambda: cs.turn_state(paths, S) == "done")
+n = len(calls(method="thread/start"))
+err, kind, _ = quietly(lifecycle.restart, mk(), paths, [S, "--fresh"], claude_bin="")
+off = events(paths, "guard-off")
+ck("`restart --fresh` compares the last turn before it ends the app-server, and does not start the station again",
+   kind is GuardOffError and "a command ran with no run of the guard before it" in err and gone(pid)
+   and not cs.is_alive(paths, S) and len(calls(method="thread/start")) == n and row(paths)["sessionId"] == thread
+   and "no run of the guard" in cs.guard_off(paths, S) and len(off) == 1, (err, kind, off))
+watch_revive._guard_told.discard(S)   # this watch said it of the station of an earlier crew here, of the same name
+ck("the watch then leaves it down", f"{S} stays down" in watch_round(paths, tares) and not cs.is_alive(paths, S)
+   and len(calls(method="thread/start")) == n)
+
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true")
+err, _ = start(mk())
+pid = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+err, kind, _ = quietly(lifecycle.restart, mk(), paths, [S, "--fresh"], claude_bin="")
+note(paths)
+pid2 = pid_of(paths)
+ck("a station whose last turn is in order is started again by `restart --fresh`, with no mark",
+   err is None and gone(pid) and pid2 != pid and alive(pid2) and cs.guard_off(paths, S) == ""
+   and not events(paths, "guard-off"), (err, kind))
+until(lambda: cs.turn_state(paths, S) == "done")
+end(pid2)
+
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true", nopre=1)
+err, _ = start(mk())
+pid = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+err, kind, _ = quietly(lifecycle.retire, mk(), paths, [S], claude_bin="")
+off = events(paths, "guard-off")
+ck("`retire` records what the last turn ran past the guard, and retires the station all the same",
+   err is None and gone(pid) and row(paths)["status"] == "retired" and len(off) == 1
+   and "a command ran with no run of the guard before it" in off[0].get("detail", ""), (err, off))
 
 tares, paths, said, mk = crew()
 fake(project=1)

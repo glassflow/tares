@@ -42,10 +42,13 @@ checks, with what a short visit can see:
   * at the start of every turn (`hand`): the guard's record of that turn must be there before the turn's
     first item. Codex runs the hook after `turn/start` and before it asks the model, so a turn without the
     record is interrupted before the model has said anything, and nothing has run;
-  * for every command and MCP call (`check_guard`, by the watch every round, and `hand` before the next
-    turn): each one the last turn made must have the guard's record saying it was let through, and a command
-    must carry the line that closes its input. An app-server lists a command only once it has ended, so
-    this is seen after the fact, at the next look.
+  * for every command and MCP call (`check_guard`, by the watch every round, `hand` before the next turn,
+    and `stop` before it ends the app-server): each one the last turn made must have the guard's record
+    saying it was let through, and a command must carry the line that closes its input. An app-server
+    lists a command only once it has ended, so this is seen after the fact, at the next look. The look at
+    a stop is the last one a conversation gets when the station is then started in a new one
+    (`restart --fresh`), or not at all (`retire`); a station found out there is marked like any other, and
+    a restart does not start it again.
 A station that fails one is stopped and marked (`guard_off`); the watch does not start it again by itself,
 `tares factory revive` does. Two things keep that from going wrong:
   * a turn that cannot be listed with its items is not a turn that was compared. The watch then looks again
@@ -383,7 +386,7 @@ def _stop_unguarded(paths: CrewPaths, station: str, why: str, rec: dict) -> bool
     was stopped."""
     if not _is(rec, info(paths, station)):
         return False
-    stop(paths, station)
+    stop(paths, station, compare=False)
     mark_off(paths, station, why)
     state.event("guard-off", station, why[:300], paths=paths)
     return True
@@ -662,11 +665,28 @@ def end_leftovers(paths: CrewPaths, station: str, *, grace: float = cx.STOP_GRAC
     return names
 
 
+def _compared_at_stop(paths: CrewPaths, station: str) -> str:
+    """What the station's newest turn shows the guard did not do, looked at once more before its app-server is
+    ended; "" when nothing, and when it cannot be looked at. Never fails."""
+    thread = _recorded_thread(paths, station)
+    if not thread:
+        return ""
+    try:
+        with visit(paths, station, timeout=5) as wire:
+            return _audit(wire, thread, paths, station)[0]
+    except (CrewError, NotCompared):
+        return ""
+
+
 def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, grace: float = cx.STOP_GRACE,
-         sleep=time.sleep) -> str:
+         sleep=time.sleep, compare: bool = True) -> str:
     """End the station's app-server (see the module's note for the order). Returns what it took: "not running",
     "stopped" (it ended when asked) or "killed". The socket's path in the crew home goes with it, and so does
-    whatever the station had started that still runs (`end_leftovers`): after a stop nothing of it is left."""
+    whatever the station had started that still runs (`end_leftovers`): after a stop nothing of it is left.
+
+    Before the app-server is ended its newest turn is compared with the guard's record once more (`compare`),
+    since nothing can ask it afterwards: a station that ran something the guard has no record of is marked
+    (`guard_off`) and the event recorded, as when the watch finds it."""
     rec = info(paths, station)
     sock = rec.get("socket") or str(cx.socket_path(paths, station))
     if not _same_process(rec):
@@ -675,6 +695,7 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
         return "not running"
     pid = rec["pid"]
     _interrupt(paths, station, turn_wait, sleep)
+    why = _compared_at_stop(paths, station) if compare else ""
     note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:
@@ -690,4 +711,7 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
         _gone(pid, grace, sleep)
     cx.remove_socket(sock)
     end_leftovers(paths, station, grace=grace, sleep=sleep)
+    if why:
+        mark_off(paths, station, why)
+        state.event("guard-off", station, why[:300], paths=paths)
     return how

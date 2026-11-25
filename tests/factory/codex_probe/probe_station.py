@@ -144,7 +144,9 @@ def no_prompt_into_a_turn(out):
             "a prompt for it was refused": "is in a turn" in refused,
             "stopped in the middle of the command, the app-server ended when asked": how == "stopped" and not cs.is_alive(c.paths, STATION),
             "no command of the turn is left running": left == [],
-        }, refusal=refused, stop=how, seconds_to_stop=took, commands_left=len(left), conversation=bool(thread))
+            "the stop's look at the interrupted turn found nothing past the guard": cs.guard_off(c.paths, STATION) == "",
+        }, refusal=refused, stop=how, seconds_to_stop=took, commands_left=len(left), conversation=bool(thread),
+            guard_off=cs.guard_off(c.paths, STATION))
     finally:
         for pid in running("sleep 41.4142"):
             subprocess.run(["kill", pid])
@@ -202,7 +204,8 @@ def blocked_on_approval(out):
             "nothing ran unanswered": not ran,
             "a blocked station is not between turns, and takes no prompt": not between and refused,
             "it can still be stopped": how in ("stopped", "killed") and not cs.is_alive(c.paths, STATION),
-        }, states_seen=seen, seconds_until_blocked=took, stop=how)
+            "the stop's look at the turn that waited found nothing past the guard": cs.guard_off(c.paths, STATION) == "",
+        }, states_seen=seen, seconds_until_blocked=took, stop=how, guard_off=cs.guard_off(c.paths, STATION))
     finally:
         c.end(wait=3)
         c.remove()
