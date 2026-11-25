@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { designContract } from './paper-kit/eslint/design-contract.mjs'
-import { EDITION, KIT_REGISTER } from './eslint-rules/kit-register.mjs'
+import { EDITION, KIT_REGISTER, KIT_WORDS } from './eslint-rules/kit-register.mjs'
 
 const json = (f) => JSON.parse(readFileSync(new URL(f, import.meta.url), 'utf8'))
 
@@ -42,5 +42,5 @@ export default designContract({
   // npm run kit-baseline).
   baselines: { time: json('./time-contract.baseline.json'), kit: json('./kit-contract.baseline.json') },
   // The kit's own primitives (components/ui) and the dev gallery are out of scope for kit-only.
-  kitOnly: { files: ['src/**/*.tsx'], ignores: ['src/components/ui/**', 'src/pages/dev/**'] },
+  kitOnly: { files: ['src/**/*.tsx'], ignores: ['src/components/ui/**', 'src/pages/dev/**'], ...KIT_WORDS },
 })
