@@ -391,6 +391,15 @@ ck("the session's state is the last one sent", (store.session_state(THREAD) or {
 mine = [r for r in store.station_sessions("claude_code") if r["session"] == THREAD]
 ck("the session is listed as its station's, with its role",
    len(mine) == 1 and mine[0]["station"] == "crew-builder" and mine[0]["role"] == "builder", mine)
+from tares import crew_conversation  # noqa: E402
+
+shown, _ = crew_conversation.build([{"event_type": e.event_type, "event_time": e.event_time, "payload": e.payload,
+                                     "text": e.text} for e in sorted(envelopes, key=lambda e: e.event_time)])
+tools = {i["id"]: i for i in shown if i.get("kind") == "tool"}
+ck("the Crew page's conversation shows each command as one call with its output, and what the station said",
+   tools[f"codex:{THREAD}:exec-1"]["output"] == "14 passed" and tools[f"codex:{THREAD}:exec-1"]["failed"] is False
+   and tools[f"codex:{THREAD}:exec-1"]["name"] == "Bash" and len(tools) == 2
+   and [i["text"] for i in shown if i.get("kind") == "said"] == ["I will run them.", "slept"], shown)
 store.con.close()
 
 print(f"\n{P} passed, {F} failed")
