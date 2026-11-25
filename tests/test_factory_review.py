@@ -155,6 +155,26 @@ def unit():
     early = [{"at": t0 - timedelta(hours=3), "command": "pytest -q", "output": "14 passed", "is_error": False}]
     ck("a run from before the ticket went into the work does not count",
        factory.match_check(check("pytest -q", "14 passed"), early, since=t0 - timedelta(hours=1))[0] == "not_found")
+    # a Codex station's command says how it ended (TR-1595): only one that ended backs a claim
+    def ran(outcome, code=None, output="", minutes=5):
+        return [{"at": t0 - timedelta(minutes=minutes), "command": "make test", "output": output,
+                 "is_error": bool(code) or outcome in ("failed", "declined"), "outcome": outcome, "exit_code": code}]
+    ck("a Codex command that ended with 0 backs its claim",
+       factory.match_check(check("make test", "passed"), ran("ended", 0, "ok"))[0] == "matched")
+    ck("one that only started backs none, though nothing says it failed",
+       factory.match_check(check("make test", "passed"), ran("started")) == ("differs", factory.NOT_ENDED["started"]))
+    ck("one whose outcome is unknown backs none",
+       factory.match_check(check("make test", "passed"), ran("unknown", None, "outcome unknown: x"))
+       == ("differs", factory.NOT_ENDED["unknown"]))
+    ck("one that exited 7 cannot back a passing claim",
+       factory.match_check(check("make test", "passed"), ran("ended", 7, "boom"))[0] == "differs")
+    ck("nor one Codex declined to run",
+       factory.match_check(check("make test", "passed"), ran("declined"))[0] == "differs")
+    unknown_then_pass = [*ran("unknown", None, "test_cart", 6),
+                         {"at": t0 - timedelta(minutes=4), "command": "pytest tests/test_cart.py", "output": "1 passed test_cart",
+                          "is_error": False, "outcome": "ended", "exit_code": 0}]
+    ck("a command with an unknown outcome is not the failing run of a break check",
+       factory.match_check(check("pytest tests/test_cart.py", "1 passed", broke="test_cart"), unknown_then_pass)[0] == "differs")
     ck("finding kinds use whole words: blocking is not a lock",
        factory.finding_kind("this is a blocking issue") != "concurrency"
        and factory.finding_kind("the author field") != "security")
@@ -339,6 +359,73 @@ async def main():
             ck("the line is there", "- Every schema change ships with its migration." in doc["body"], doc["body"])
             await store_reject_and_reoffer(cx, store, mf, as_station)
         await outside_gate_cases(store, mf, m, as_station, shop)
+        await codex_builder(store, mf, as_station, mk)
+
+
+async def codex_builder(store, mf, as_station, mk):
+    """A builder on Codex (TR-1595): its commands reach the cell as the crew's recorder posts them to
+    /ingest/codex, and its claimed checks are matched against them like a Claude Code builder's."""
+    from tares.crew import codex_record
+    print("== a Codex builder's checks against its recorded commands (TR-1595) ==")
+    thread, turn, now = "01a2-codex-thread", "01a2-turn-1", datetime.now(timezone.utc).timestamp()
+    base = {"sessionId": thread, "factory_station": "shop-build-cx", "factory_crew": "crew", "station": "shop-build-cx",
+            "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop", "cwd": "/w/shop", "model": "gpt-5.6-luna"}
+
+    def item(call, command, code, output, status="completed"):
+        return {"type": "commandExecution", "id": call, "command": f"/bin/zsh -lc 'exec </dev/null\n{command}'",
+                "cwd": "/w/shop/app", "exitCode": code, "aggregatedOutput": output, "status": status, "durationMs": 20,
+                "startedAtMs": int(now * 1000) - 4000, "completedAtMs": int(now * 1000) - 3000}
+
+    def started(call, command):
+        return {"at": now - 5, "turn": turn, "call": call, "tool": "Bash", "said": "allow", "command": command, "cwd": "/w/shop"}
+    record = [{"at": now - 6, "turn": turn, "armed": True}, started("exec-1", "pytest -q"), started("exec-2", "make lint"),
+              started("exec-3", "make e2e"), started("exec-4", "make smoke")]
+    found = {"id": thread, "status": {"type": "active", "activeFlags": []}, "createdAt": int(now) - 60, "turns": [
+        {"id": turn, "status": "inProgress", "startedAt": int(now) - 6, "items": [
+            item("exec-1", "pytest -q", 0, "14 passed in 1.2s"), item("exec-2", "make lint", 7, "3 errors")]}]}
+    as_station("crew-orchestrator", "orchestrator")
+    await mf.assign_ticket("T2", "shop-build-cx", project="Shop")
+    as_station("shop-build-cx", "builder", "crew-orchestrator")
+    await mf.set_stage("T2", "doing", project="Shop")
+    facts, sent = codex_record.facts(found, record, codex_record.new_sent(thread), base, True, now)
+    async with mk() as cx:
+        r = await cx.post("/ingest/codex", json=facts)
+        ck("the cell takes what the recorder posts to /ingest/codex", r.status_code == 202 and r.json()["ingested"] >= 7, r.text)
+        again = await cx.post("/ingest/codex", json=facts)   # a post whose answer was lost is sent again
+        ck("and takes it again", again.status_code == 202, again.text)
+    rows = store.recorded_commands("claude_code", [thread])
+    by = {c["command"]: c for c in rows}
+    ck("each command is one row, though it was posted twice, as the builder asked for it",
+       sorted(c["command"] for c in rows) == ["make e2e", "make lint", "make smoke", "pytest -q"], rows)
+    ck("the row keeps the real exit code and the folder the command ran in",
+       by["make lint"]["exit_code"] == 7 and by["make lint"]["is_error"] and by["make lint"]["cwd"] == "/w/shop/app"
+       and by["pytest -q"]["exit_code"] == 0 and by["pytest -q"]["outcome"] == "ended", by)
+    ck("a command that started and has no end yet is there, as started",
+       by["make e2e"]["outcome"] == "started" and by["make e2e"]["output"] == "" and by["make e2e"]["exit_code"] is None, by["make e2e"])
+    ck("the session is the station's", store.station_session_ids("shop-build-cx") == [thread], store.station_session_ids("shop-build-cx"))
+    # the app-server dies: the stored turn says interrupted and has no item for the two commands that ran
+    found["status"] = {"type": "idle"}
+    found["turns"][0]["status"] = "interrupted"
+    _, sent = codex_record.facts(found, record, sent, base, True, now + 1)          # the look that sees the turn ended
+    last, sent = codex_record.facts(found, record, sent, base, True, now + 2)       # the next one closes it
+    ck("the recorder then says the two commands' outcome is unknown",
+       sorted(f["call"] for f in last if f["kind"] == "unknown") == ["exec-3", "exec-4"], last)
+    async with mk() as cx:
+        await cx.post("/ingest/codex", json=last)
+    await mf.add_check("T2", "pytest -q", "14 passed", project="Shop")
+    await mf.add_check("T2", "make lint", "passed", project="Shop")
+    await mf.add_check("T2", "make e2e", "all green", project="Shop")
+    await mf.add_check("T2", "make deploy-check", "ok", project="Shop")
+    await mf.set_stage("T2", "review", pr="https://github.com/acme/shop/pull/9", project="Shop")
+    as_station("crew-reviewer", "reviewer")
+    brief = await mf.review_brief("T2", project="Shop")
+    ck("a check the Codex builder really ran is matched", "[matched] `pytest -q`" in brief, brief)
+    ck("a check it never ran is not in the recording", "[NOT IN THE RECORDING] `make deploy-check`" in brief, brief)
+    ck("a command that exited 7 does not back a claim that it passed",
+       "[RECORDING DIFFERS] `make lint` -> passed. Recording: 3 errors" in brief, brief)
+    ck("a command whose outcome is unknown does not back a claim either, and the brief says why",
+       "[RECORDING DIFFERS] `make e2e` -> all green. Recording: " + factory.NOT_ENDED["unknown"] in brief, brief)
+    as_station()
 
 
 async def outside_gate_cases(store, mf, m, as_station, shop):

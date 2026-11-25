@@ -29,8 +29,8 @@ from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0007_session_archive"              # the newest revision: tests that count revisions move with it
-REVISIONS = 7
+HEAD = "0008_session_command_outcome"              # the newest revision: tests that count revisions move with it
+REVISIONS = 8
 FAILS = []
 
 
