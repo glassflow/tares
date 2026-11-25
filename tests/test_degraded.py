@@ -10,7 +10,7 @@ import asyncio, os, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 P = F = 0
 def ck(l, c, d=""):
@@ -51,10 +51,9 @@ async def _health(port, tries=80):
 
 def _rm(*paths):
     for p in paths:
-        for f in (p, p + ".wal"):
-            if os.path.exists(f):
-                os.chmod(f, 0o644)
-                os.remove(f)
+        if os.path.exists(p):
+            os.chmod(p, 0o644)   # a run stopped half way leaves BAD_DB unreadable
+    remove_db(*paths)
 
 
 async def main():

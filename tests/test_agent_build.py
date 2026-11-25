@@ -7,14 +7,13 @@ Run: .venv/bin/python tests/test_agent_build.py
 """
 import asyncio
 import os
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/agent_build_t.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/none_agent_build.yaml"
 os.environ.pop("TARES_ANTHROPIC_KEY", None)
 os.environ.pop("ANTHROPIC_API_KEY", None)
-for _p in ("/tmp/agent_build_t.duckdb", "/tmp/agent_build_t.duckdb.wal"):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db("/tmp/agent_build_t.duckdb")
 
 import httpx
 from tares import agent

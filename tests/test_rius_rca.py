@@ -13,6 +13,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-rius-rca-test.duckdb"
 CATALOG = "/tmp/tares-rius-rca-test.catalog.yaml"
 os.environ["TARES_DB"] = DB
@@ -50,9 +51,9 @@ PARAMS = {
 
 
 async def main():
-    for p in (DB, DB + ".wal", CATALOG):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
+    if os.path.exists(CATALOG):
+        os.remove(CATALOG)
 
     from tares.daemon import make_app
     app = make_app()

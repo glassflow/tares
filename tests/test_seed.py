@@ -14,7 +14,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 import httpx
 
@@ -24,8 +24,6 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 DB, PORT = "/tmp/tares-seed-test.duckdb", "8811"
-# the cell's settings (the seed marker) live in tares.sqlite beside the DuckDB file (TR-1480)
-SIDE = os.path.join(os.path.dirname(DB), "tares.sqlite")
 B = f"http://127.0.0.1:{PORT}"
 
 
@@ -86,9 +84,7 @@ async def projects(cx):
 
 
 async def main():
-    for p in (DB, DB + ".wal", SIDE, SIDE + "-wal", SIDE + "-shm"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
     stack = HTTPServer(("127.0.0.1", 0), FakeStack)
     threading.Thread(target=stack.serve_forever, daemon=True).start()
 
@@ -123,8 +119,7 @@ async def main():
         stop(proc)
 
     # ── unknown template: warns, no marker, so fixing the config still seeds ───
-    for p in (DB, DB + ".wal", SIDE, SIDE + "-wal", SIDE + "-shm"):
-        os.path.exists(p) and os.remove(p)
+    remove_db(DB)
     proc, up = await boot(daemon_env(stack.server_port, "no_such_template"))
     try:
         ck("daemon healthy despite unknown seed template", up)
@@ -143,8 +138,7 @@ async def main():
         stop(proc)
 
     # ── var unset: nothing happens ───────────────────────────────────────────
-    for p in (DB, DB + ".wal", SIDE, SIDE + "-wal", SIDE + "-shm"):
-        os.path.exists(p) and os.remove(p)
+    remove_db(DB)
     proc, up = await boot(daemon_env(stack.server_port, None))
     try:
         ck("daemon up without the var", up)

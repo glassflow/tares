@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-loki-test.duckdb"
 os.environ["TARES_DB"] = DB
 
@@ -56,9 +57,7 @@ def loki_response(entries):
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
     srv = HTTPServer(("127.0.0.1", 0), FakeLoki)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
