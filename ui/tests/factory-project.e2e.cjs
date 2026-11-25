@@ -421,6 +421,95 @@ async function waitFor(url, tries = 100) {
       }
     }
 
+    // ── 1d. the summary of an accepted milestone (TR-1645) ──────────────────────────────────────
+    // the seeded cell has no model key, so the text is the fixed sentences
+    for (const width of [1440, 390]) {
+      const zid = ids["project-z"];
+      const { ctx: c, page: p } = await newPage(width);
+      const posts = [];
+      p.on("request", (req) => { if (req.method() === "POST" && req.url().includes("/summary/rewrite")) posts.push(req.url()); });
+      await open(p, zid, "", "milestones");
+      const block = p.locator('[data-testid="milestone-row"][data-ms="M1"]').getByTestId("milestone-summary");
+      const read = () => p.evaluate(async ([id]) => {
+        const d = await (await fetch(`/api/factory/projects/${id}`)).json();
+        return (await fetch(`/api/projects/${id}/milestones/${d.milestones[0].id}/summary`)).json();
+      }, [zid]);
+      await block.getByTestId("summary-text").waitFor();
+      const text = await block.getByTestId("summary-text").innerText();
+      ck(`${width}: an accepted milestone says what it delivered, what was decided and what is left`, text ===
+         "Delivered: 3 tickets. Write part 1; Write part 2; Write part 3.\nNo decisions were recorded on these tickets.\nNothing is left in later milestones.", JSON.stringify(text));
+      ck(`${width}: with no model key the fixed sentences are used`, (await block.getAttribute("data-source")) === "template:no-key");
+      const state = await txt(block.getByTestId("summary-state"));
+      ck(`${width}: it says who wrote it and when`, /^Written by Tares from these figures, \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z$/.test(state), state);
+      ck(`${width}: no sideways scroll with the summary`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await checkWords(p, ck, `${width}: milestone summary`);
+      await shot(p, `live-milestone-summary-${width}.png`);
+      const before = (await read()).summary.written_at;
+      await block.getByRole("button", { name: "Write again" }).click();
+      let after = before;
+      for (let i = 0; i < 50 && after === before; i++) { await p.waitForTimeout(200); after = (await read()).summary.written_at; }
+      ck(`${width}: Write again asks the cell once and a new text is written`, posts.length === 1 && after > before, `${posts.length} ${before} ${after}`);
+      const refusal = "A person asks for this, not a station.";
+      await p.route("**/summary/rewrite", (r) => r.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ detail: refusal }) }));
+      await block.getByRole("button", { name: "Write again" }).click();
+      await block.getByTestId("summary-error").waitFor();
+      ck(`${width}: a refusal shows the cell's sentence and keeps the text`, (await txt(block.getByTestId("summary-error"))) === refusal
+         && (await block.getByTestId("summary-text").count()) === 1);
+      await c.close();
+    }
+    {
+      const { ctx: c, page: p } = await newPage(1440);
+      const asked = [];
+      p.on("request", (req) => { if (/\/milestones\/[^/]+\/summary$/.test(new URL(req.url()).pathname)) asked.push(req.url()); });
+      await open(p, ids["project-k"], "", "milestones");
+      await settle(p);
+      ck("a milestone that is not accepted has no summary and asks for none",
+         (await p.getByTestId("milestone-summary").count()) === 0 && asked.length === 0, asked.join());
+      // under way: said so, with no button, and asked for again until the text is there
+      let writing = true;
+      await p.route("**/milestones/*/summary", (r) => writing
+        ? r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ milestone: "m", summary: null, writing: true }) })
+        : r.continue());
+      await open(p, ids["project-z"], "", "milestones");
+      const block = p.getByTestId("milestone-summary");
+      await block.waitFor();
+      ck("while it is written the page says so, with no button",
+         (await txt(block.getByTestId("summary-state"))) === "Tares is writing the summary." && (await block.getByTestId("summary-again").count()) === 0);
+      await checkWords(p, ck, "milestone summary being written");
+      writing = false;
+      await block.getByTestId("summary-text").waitFor({ timeout: 8000 }).catch(() => {});
+      ck("and the text shows by itself once it is there", (await block.getByTestId("summary-text").count()) === 1);
+      await p.unroute("**/milestones/*/summary");
+      const answer = (summary, busy) => (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ milestone: "m", summary, writing: busy }) });
+      await p.route("**/milestones/*/summary", answer({ text: "Delivered: 1 ticket.", source: "model", figures: {}, written_at: "2026-11-20T09:30:00Z" }, true));
+      await open(p, ids["project-z"], "", "milestones");
+      await block.getByTestId("summary-text").waitFor();
+      ck("a text being written again stays, said so, with no button",
+         (await txt(block.getByTestId("summary-state"))) === "Written by Tares from these figures, 2026-11-20 09:30Z. Writing it again." &&
+         (await block.getByTestId("summary-again").count()) === 0, await txt(block.getByTestId("summary-state")));
+      await p.unroute("**/milestones/*/summary");
+      await p.route("**/milestones/*/summary", answer(null, false));
+      await open(p, ids["project-z"], "", "milestones");
+      await block.waitFor();
+      ck("no text and none under way says so and offers to write again",
+         (await txt(block.getByTestId("summary-state"))) === "The summary could not be written." &&
+         (await block.getByRole("button", { name: "Write again" }).count()) === 1, await txt(block));
+      await p.unroute("**/milestones/*/summary");
+      await p.route("**/milestones/*/summary", (r) => r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) }));
+      await open(p, ids["project-z"], "", "milestones");
+      await block.waitFor();
+      ck("a read that fails says so and offers to try again",
+         (await txt(block.getByTestId("summary-state"))) === "The summary did not load." && (await block.getByRole("button", { name: "Try again" }).count()) === 1);
+      await checkWords(p, ck, "milestone summary did not load");
+      await p.unroute("**/milestones/*/summary");
+      const rewrites = [];
+      p.on("request", (req) => { if (req.method() === "POST" && req.url().includes("/summary/rewrite")) rewrites.push(req.url()); });
+      await block.getByRole("button", { name: "Try again" }).click();
+      await block.getByTestId("summary-text").waitFor({ timeout: 8000 }).catch(() => {});
+      ck("Try again reads it, and asks for no new text", (await block.getByTestId("summary-text").count()) === 1 && rewrites.length === 0, rewrites.join());
+      await c.close();
+    }
+
     // ── 2. project-z: ready to close ────────────────────────────────────────────────────────────
     const z = ids["project-z"];
     await open(page, z);

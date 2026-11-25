@@ -239,6 +239,8 @@ async def main():
                   ("GET", "/api/projects/{uid}/pickup"),
                   # the factory's plan (TR-411)
                   ("GET", "/api/projects/{uid}/milestones"),
+                  # what an accepted milestone delivered (TR-1645)
+                  ("GET", "/api/projects/{uid}/milestones/{ref}/summary"),
                   # the crew that works on it (TR-422)
                   ("GET", "/api/projects/{uid}/crew"),
                   # the crew's messages about a ticket (TR-429)
