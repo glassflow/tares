@@ -129,11 +129,16 @@ def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float |
     now = time.time() if now is None else now
     sent = json.loads(json.dumps(sent))   # the caller keeps the old one until the post is taken
     out = []
+    turns = [t for t in (found or {}).get("turns") or [] if isinstance(t, dict) and t.get("id")]
     if not sent["announced"]:
-        out.append(_fact(base, "session", now))
+        # dated at the conversation's own start when that is known, so it comes before what was said in it
+        try:
+            born = float((found or {}).get("createdAt") or 0)
+        except (TypeError, ValueError):
+            born = 0.0
+        out.append(_fact(base, "session", born or now))
         sent["announced"] = True
 
-    turns = [t for t in (found or {}).get("turns") or [] if isinstance(t, dict) and t.get("id")]
     listed = {t["id"]: t for t in turns}
     for tid in listed:
         if tid not in sent["seen"]:
