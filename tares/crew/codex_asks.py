@@ -13,7 +13,8 @@ every Codex station, under the station's lock (`step`):
      started again, or a request put again, files nothing twice;
   3. for a request whose item the person answered, gives the station that answer
      (`codex_station.answer`): only to the same request, looked for again on that visit. "Approve" lets the one
-     call through, anything else declines it; a question gets the person's words;
+     call through, anything else declines it. A request that asks several questions gets one item for each,
+     and is answered once every one of them is, each question with the words given to its own item;
   4. withdraws the item of a request the station no longer asks (the turn ended or was interrupted, the
      station was stopped or started again): an answer given later is then never handed to another request.
 
@@ -39,7 +40,7 @@ from . import locks, state
 from .errors import CrewError, StationLockedError
 from .paths import CrewPaths
 
-KEPT = "codex.asks.json"   # stations/<station>.codex.asks.json: {key: {ask, desk, label, state, at, ...}}
+KEPT = cs.ASKS_KEPT   # stations/<station>.codex.asks.json: {key: {ask, desk, label, state, at, parts?, gave?}}
 APPROVE, DECLINE = "Approve", "Decline"
 BY_A_PERSON = ("console", "feed", "message", "session")   # where the cell records a person's answer from
 CLOSED_KEPT = 50   # answered and gone requests kept per station, newest first
@@ -72,8 +73,18 @@ def _seen_by_guard(paths: CrewPaths, station: str, call: str) -> dict:
     return {}
 
 
-def item_for(paths: CrewPaths, station: str, ask: dict, project: str = "") -> dict:
-    """The desk item for one request: the body of POST /api/desk. Pure but for the guard's record."""
+def _questions(ask: dict) -> list:
+    return [q for q in ask.get("questions") or [] if isinstance(q, dict)]
+
+
+def marker(key: str, qid=None) -> str:
+    """The words in an item's context that name what it asks: the request, and the question of it."""
+    return f"Request {key}." if qid is None else f"Request {key}, question {qid}."
+
+
+def item_for(paths: CrewPaths, station: str, ask: dict, project: str = "", qid=None) -> dict:
+    """The desk item for one request, or for its question `qid` when it asks several: the body of
+    POST /api/desk. Pure but for the guard's record."""
     kind, reason = ask["kind"], _cut(ask.get("reason"), 300)
     options = [APPROVE, DECLINE]
     recommendation = "Approve it if the station's task calls for this; decline it otherwise."
@@ -90,14 +101,18 @@ def item_for(paths: CrewPaths, station: str, ask: dict, project: str = "") -> di
             question += f", and to write under {_cut(ask['root'], 200)} from now on"
         detail = ("The change, as the guard saw it: " + _cut(what if isinstance(what, str) else state.dumps_compact(what), 900)
                   if what else "The crew did not see what the change is: Codex names only the call.")
-    elif kind == "question" and not any(q.get("isSecret") for q in ask["questions"] if isinstance(q, dict)):
-        asked = [q for q in ask["questions"] if isinstance(q, dict)]
-        question = f"{station} asks: " + _cut(" / ".join(str(q.get("question") or "") for q in asked), 800)
-        first = asked[0].get("options") if len(asked) == 1 and isinstance(asked[0].get("options"), list) else []
+    elif kind == "question" and answerable(ask):
+        every = _questions(ask)
+        asked = [q for q in every if str(q.get("id")) == str(qid)] if qid is not None else every[:1]
+        q = asked[0] if asked else {}
+        part = f" (question {every.index(q) + 1} of {len(every)})" if len(every) > 1 and q in every else ""
+        question = f"{station} asks{part}: " + _cut(q.get("question"), 800)
+        first = q.get("options") if isinstance(q.get("options"), list) else []
         options = [_cut(o.get("label"), 280) for o in first if isinstance(o, dict) and o.get("label")][:8]
         recommendation = "Answer in your own words, or pick one of its options."
-        why = "The station's turn waits for your answer. Your words are handed to it as you give them."
-        detail = "\n".join(_cut(f"{q.get('header') or ''}: {q.get('question') or ''}", 400) for q in asked)
+        why = ("The station's turn waits for your answer. Your words are handed to it as you give them"
+               + (", with the answers to its other questions once each has one." if part else "."))
+        detail = _cut(f"{q.get('header') or ''}: {q.get('question') or ''}", 400)
     else:
         secret = kind == "question"
         question = (f"{station} asks for a secret, which the crew does not pass on" if secret else
@@ -110,7 +125,7 @@ def item_for(paths: CrewPaths, station: str, ask: dict, project: str = "") -> di
     if reason:
         question += f". Its reason: {reason}"
     names = (f"Codex station {station}, conversation {ask['thread']}, turn {ask['turn']}, call {ask['item']}, "
-             f"first asked at {_stamp(ask.get('started'))}. Request {ask['key']}.")
+             f"first asked at {_stamp(ask.get('started'))}. {marker(ask['key'], qid)}")
     body = {"question": _cut(question, 990), "recommendation": recommendation, "why": why, "options": options,
             "context": (detail + "\n" + names).strip()[:1490], "station": station, "blocking": True,
             "asked_by": f"{station} (asked by Codex, filed by the crew's watch)"}
@@ -134,10 +149,13 @@ def answerable(ask: dict) -> bool:
 
 def result_for(ask: dict, said) -> dict:
     """What the station is told. `said` is the person's answer as the cell recorded it, or None for an item
-    withdrawn without one."""
+    withdrawn without one; for a question, {question id: that}, each question its own answer (a single answer
+    is taken only for a request of one question)."""
     if ask["kind"] == "question":
-        words = WITHDRAWN if said is None else str(said)
-        return {"answers": {str(q.get("id")): {"answers": [words]} for q in ask["questions"] if isinstance(q, dict)}}
+        ids = [str(q.get("id")) for q in _questions(ask)]
+        if not isinstance(said, dict):
+            said = {ids[0]: said} if len(ids) == 1 else {}
+        return {"answers": {i: {"answers": [WITHDRAWN if said.get(i) is None else str(said[i])]} for i in ids}}
     yes = said is not None and " ".join(str(said).lower().split()).strip(" .!\"'") == APPROVE.lower()
     return {"decision": "accept" if yes else "decline"}
 
@@ -148,13 +166,23 @@ def _json(client, method: str, path: str, body=None):
     return state.loads_json(client.tares_http(method, path, body))
 
 
-def _filed(client, key: str):
-    """The open desk item that already names this request, or None: a watch that ended between filing an item
-    and writing it down must not file a second one."""
+def _filed(client, key: str, qid=None):
+    """The open desk item that already names this request (or this question of it), or None: a watch that
+    ended between filing an item and writing it down must not file a second one."""
     for d in client.desk_json():
-        if isinstance(d, dict) and f"Request {key}." in str(d.get("context") or ""):
+        if isinstance(d, dict) and marker(key, qid) in str(d.get("context") or ""):
             return d
     return None
+
+
+def _parts(row: dict) -> list:
+    """The desk items of one request: one, or one for each of its questions ({qid, desk, label})."""
+    parts = row.get("parts")
+    return parts if isinstance(parts, list) and parts else [{"qid": None, "desk": row.get("desk"), "label": row.get("label")}]
+
+
+def _labels(row: dict) -> str:
+    return ", ".join(str(p.get("label")) for p in _parts(row))
 
 
 def _decided(client, row: dict):
@@ -172,10 +200,11 @@ def _decided(client, row: dict):
 
 
 def _withdraw(client, row: dict, reason: str) -> None:
-    try:
-        client.tares_http("POST", f"/api/desk/{row['label']}/withdraw", {"reason": reason})
-    except CrewError:
-        pass   # answered or withdrawn meanwhile: there is nothing left to withdraw
+    for part in _parts(row):
+        try:
+            client.tares_http("POST", f"/api/desk/{part['label']}/withdraw", {"reason": reason})
+        except CrewError:
+            pass   # answered or withdrawn meanwhile: there is nothing left to withdraw
 
 
 # ---- the watch's step ----
@@ -192,32 +221,40 @@ def _station(client, paths: CrewPaths, station: str, project: str) -> list:
         if row.get("state") == "open" and key not in asks:
             _withdraw(client, row, f"{station} no longer asks this: its turn ended or it was stopped")
             row.update(state="gone", at=time.time())
-            state.event("ask-gone", station, f"{row.get('label')} {key}", paths=paths)
-            did.append(f"{station} no longer asks {row.get('label')}; the item is withdrawn")
+            state.event("ask-gone", station, f"{_labels(row)} {key}", paths=paths)
+            did.append(f"{station} no longer asks {_labels(row)}; the item is withdrawn")
     for key, ask in asks.items():
         row = rows.get(key)
         if row is None:
-            item = _filed(client, key) or _json(client, "POST", "/api/desk", item_for(paths, station, ask, project))
-            if not isinstance(item, dict) or not item.get("label"):
-                raise CrewError(f"Tares gave no desk item for what {station} asks")
-            rows[key] = {"ask": ask, "desk": item.get("id"), "label": item["label"], "state": "open", "at": time.time()}
-            state.event("asked", station, f"{item['label']} {ask['kind']} {key}", paths=paths)
-            did.append(f"{station} waits for an answer: {item['label']} on the desk")
+            several = ask["kind"] == "question" and answerable(ask) and len(_questions(ask)) > 1
+            qids = [str(q.get("id")) for q in _questions(ask)] if several else [None]
+            parts = []
+            for qid in qids:
+                item = _filed(client, key, qid) or _json(client, "POST", "/api/desk",
+                                                         item_for(paths, station, ask, project, qid))
+                if not isinstance(item, dict) or not item.get("label"):
+                    raise CrewError(f"Tares gave no desk item for what {station} asks")
+                parts.append({"qid": qid, "desk": item.get("id"), "label": item["label"]})
+            rows[key] = {"ask": ask, "desk": parts[0]["desk"], "label": parts[0]["label"], "state": "open",
+                         "at": time.time(), **({"parts": parts} if several else {})}
+            state.event("asked", station, f"{_labels(rows[key])} {ask['kind']} {key}", paths=paths)
+            did.append(f"{station} waits for an answer: {_labels(rows[key])} on the desk")
             continue
         if row.get("state") != "open" or not answerable(ask):
             continue
-        decided, said = _decided(client, row)
-        if not decided:
+        got_all = [(part["qid"], *_decided(client, part)) for part in _parts(row)]
+        if not all(decided for _, decided, _ in got_all):
             continue
+        said = {qid: words for qid, _, words in got_all} if row.get("parts") else got_all[0][2]
         result = result_for(ask, said)
         got = cs.answer(paths, station, key, result)
         if got == "unreachable":   # the answer is the cell's to keep: asked for again next round
             continue
         shown = result.get("decision") or "answered"
         row.update(state="answered" if got == "answered" else "gone", at=time.time(), gave=shown)
-        state.event("ask-answered" if got == "answered" else "ask-gone", station, f"{row['label']} {shown} {key}", paths=paths)
-        did.append(f"{station} was given the answer to {row['label']} ({shown})" if got == "answered" else
-                   f"{station} no longer asks {row['label']}; the answer was not given")
+        state.event("ask-answered" if got == "answered" else "ask-gone", station, f"{_labels(row)} {shown} {key}", paths=paths)
+        did.append(f"{station} was given the answer to {_labels(row)} ({shown})" if got == "answered" else
+                   f"{station} no longer asks {_labels(row)}; the answer was not given")
     if state.dumps_compact(rows) != was:
         _keep(paths, station, rows)
     return did

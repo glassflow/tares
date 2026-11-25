@@ -448,6 +448,15 @@ def last_turn_compared(paths: CrewPaths, station: str) -> bool:
 # station's next prompt, and refused by the guard as a repeat (`codex_guard.repeats`) until the station has
 # looked and said what it found (`reconcile`, `tares factory outcome`).
 ENDED = ("completed", "failed", "declined")
+ASKS_KEPT = "codex.asks.json"   # what the station asked the person (tares.crew.codex_asks keeps it)
+
+
+def never_let_run(paths: CrewPaths, station: str) -> set:
+    """The calls that stopped on a question to the person and were never given a yes: they did not run, so
+    their outcome is known even with no item. A call that was given a yes may have run, and is not here."""
+    rows = state.read_json(paths.station_file(station, ASKS_KEPT), None)
+    return {str((r.get("ask") or {}).get("item")) for r in (rows.values() if isinstance(rows, dict) else [])
+            if isinstance(r, dict) and isinstance(r.get("ask"), dict) and r.get("gave") != "accept"}
 
 
 def unknown(paths: CrewPaths, station: str) -> list:
@@ -642,8 +651,8 @@ def give_up_unverified(paths: CrewPaths, station: str, how: str) -> None:
         _clear_unverified(paths, station)
         state.event("guard-unverified-given-up", station, f"{how}: {pending.get('thread')}"[:300], paths=paths)
         # nobody will list that turn's items now: whatever it was let through has an outcome nobody knows
-        last = state.stations_get(station, LAST_TURN, paths=paths)
-        note_unknown(paths, station, unknown_of(last, None, _record(paths, station)))
+        last, held = state.stations_get(station, LAST_TURN, paths=paths), never_let_run(paths, station)
+        note_unknown(paths, station, [r for r in unknown_of(last, None, _record(paths, station)) if r["call"] not in held])
 
 
 def guard_off(paths: CrewPaths, station: str) -> str:
@@ -923,7 +932,9 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                     except NotCompared as e:
                         raise CrewError(f"what the last turn of {station} left unfinished cannot be listed now "
                                         f"({e}); not handing it a prompt") from None
-                    note_unknown(paths, station, unknown_of(str(cut.get("id") or ""), cut.get("items"), _record(paths, station)))
+                    held = never_let_run(paths, station)
+                    note_unknown(paths, station, [r for r in unknown_of(str(cut.get("id") or ""), cut.get("items"),
+                                                                       _record(paths, station)) if r["call"] not in held])
                 untold = [(n, r) for n, r in enumerate(unknown(paths, station), 1) if not r.get("told")]
                 prompt += unknown_note(untold)
                 _trim_record(paths, station, last)

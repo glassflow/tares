@@ -319,8 +319,11 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
         tool = "mcp__" + mcp if mcp else "apply_patch" if ask == "file" else "Bash"
         denied, runs = False, asked
         for h in _hooks(t, "PreToolUse"):
+            given = ({} if mcp else  # apply_patch hands the hook the patch as `command`, as 0.171.0 does
+                     {"command": f"*** Begin Patch\n*** Add File: {c['path']}\n+changed\n*** End Patch"} if ask == "file"
+                     else {"command": asked})
             code, said = _hook(h, {**base, "hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": call,
-                                   "tool_input": {} if mcp else {"command": asked}}, cwd)
+                                   "tool_input": given}, cwd)
             out = said.get("hookSpecificOutput") if isinstance(said.get("hookSpecificOutput"), dict) else {}
             if code == 2 or out.get("permissionDecision") == "deny":
                 denied = True

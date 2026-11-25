@@ -1511,15 +1511,12 @@ out_file = SCRATCH / "outside-the-workspace.txt"
 tares, paths, mk, pid, thread = asking({"ask": "file", "path": str(out_file)})
 codex_step(paths, tares)
 item = tares.world["desk"][0]
-ck("a file change is put on the desk, saying plainly when the crew did not see what the change is",
-   "asks to change files outside its workspace" in item["question"] and "did not see what the change is" in item["context"]
+ck("a file change is put on the desk with what the change is, as the guard's record of the call holds it",
+   "asks to change files outside its workspace" in item["question"] and f"Add File: {out_file}" in item["context"]
    and item["options"] == ["Approve", "Decline"], item)
-file = paths.station_file(S, cg.RECORD)
-call = next(iter(codex_asks.kept(paths, S).values()))["ask"]["item"]
-with open(file, "a", encoding="utf-8") as f:
-    f.write(json.dumps({"at": 1, "call": call, "tool": "apply_patch", "said": "allow", "input": {"patch": f"*** Add File: {out_file}"}}) + "\n")
-ck("with the guard's record of the call, the item says what the change is",
-   f"Add File: {out_file}" in codex_asks.item_for(paths, S, next(iter(codex_asks.kept(paths, S).values()))["ask"])["context"])
+unseen = {**next(iter(codex_asks.kept(paths, S).values()))["ask"], "item": "exec-the-guard-never-saw"}
+ck("without the guard's record of the call, the item says plainly that the crew did not see the change",
+   "did not see what the change is" in codex_asks.item_for(paths, S, unseen)["context"])
 tares.reply("D1", "Approve")
 codex_step(paths, tares)
 until(lambda: cs.turn_state(paths, S) == "done")
@@ -1539,6 +1536,40 @@ until(lambda: cs.turn_state(paths, S) == "done")
 ck("the person's words are handed to the station as they gave them",
    answers_given(pid) == [{"answers": {"q1": {"answers": ["release, and rebase first"]}}}], answers_given(pid))
 end(pid)
+
+two = [{"id": "q1", "header": "Branch", "question": "Which branch?", "options": [{"label": "main", "description": ""}]},
+       {"id": "q2", "header": "Region", "question": "Which region?", "options": [{"label": "eu-west", "description": ""},
+                                                                              {"label": "us-east", "description": ""}]}]
+tares, paths, mk, pid, thread = asking({"ask": "question", "questions": two})
+codex_step(paths, tares)
+items = tares.world["desk"]
+ck("a request with several questions gets one desk item for each, with its own options",
+   [d["question"] for d in items] == [f"{S} asks (question 1 of 2): Which branch?", f"{S} asks (question 2 of 2): Which region?"]
+   and items[0]["options"] == ["main"] and items[1]["options"] == ["eu-west", "us-east"]
+   and "question q1." in items[0]["context"] and "question q2." in items[1]["context"], items)
+codex_step(paths, tares)
+ck("a later round files none of them again", len(tares.world["desk"]) == 2)
+tares.reply("D1", "main, from the last tag")
+codex_step(paths, tares)
+ck("one answered and one not: nothing is given yet", answers_given(pid) == [] and cs.turn_state(paths, S) == "blocked")
+tares.reply("D2", "eu-west")
+codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("once each has its answer, each question gets its own",
+   answers_given(pid) == [{"answers": {"q1": {"answers": ["main, from the last tag"]}, "q2": {"answers": ["eu-west"]}}}],
+   answers_given(pid))
+end(pid)
+tares, paths, mk, pid, thread = asking({"ask": "question", "questions": two})
+codex_step(paths, tares)
+cs.stop(paths, S)
+codex_step(paths, tares)
+ck("a request that is no longer asked has every one of its items withdrawn",
+   [d["state"] for d in tares.world["desk"]] == ["withdrawn", "withdrawn"], tares.world["desk"])
+q_ask = {"kind": "question", "questions": two}
+ck("a single answer is never copied to several questions",
+   codex_asks.result_for(q_ask, "main") == {"answers": {"q1": {"answers": [codex_asks.WITHDRAWN]}, "q2": {"answers": [codex_asks.WITHDRAWN]}}}
+   and codex_asks.result_for({"kind": "question", "questions": two[:1]}, "main") == {"answers": {"q1": {"answers": ["main"]}}}
+   and codex_asks.result_for(q_ask, {"q1": "main", "q2": None})["answers"]["q2"] == {"answers": [codex_asks.WITHDRAWN]})
 
 for asked_, shown in (({"ask": "question", "questions": [{**question, "isSecret": True}]}, "asks for a secret, which the crew does not pass on"),
                       ({"ask": "other"}, "waits on a request the crew cannot answer (item/permissions/requestApproval)")):
