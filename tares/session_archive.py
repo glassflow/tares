@@ -24,7 +24,15 @@ A file is named `<session>/<part>.jsonl.gz` under the prefix (the session is per
 id can leave its folder). The one-time move of older sessions (`session_move.move_old`) writes the
 same files as `<session>/<part>-<md5>.jsonl.gz`: the name holds the content's MD5, so it never
 writes over a file that other content is in. A failure of any step leaves the rows where they
-are and prints one line; the next pass tries the session again. Deleting archive files is not done here.
+are and prints one line; the next pass tries the session again.
+
+Unused files (TR-1664). A replace or a try that did not finish leaves files no part row names. On a
+factory cell the hourly loop runs `sweep` after the pass: it removes such a file when its name is
+exactly a part's name, it was last written over `SWEEP_AFTER_DAYS` days ago, the session's recorded
+parts reach its part number or pass it, and nothing in this process is writing the session. A file
+numbered after the session's last part, or of a session with no part, stays: a database copied or
+restored from earlier does not know the newer parts, and must not remove them. Every caller of
+`write_part` holds `writing(session)` until the part row is committed or given up.
 
 A read (`session_read.py`, TR-1507) fetches a part, checks its size and MD5 against the part's row
 and its lines against the row's range, and `decode`s it; any step that fails raises `ArchiveError`
@@ -47,8 +55,11 @@ import hashlib
 import io
 import json
 import os
+import re
+import threading
 import urllib.parse
-from datetime import datetime, timedelta
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import delete, exists, func, insert, select, text
@@ -61,6 +72,11 @@ ARCHIVE_AFTER_DAYS = 7           # a session whose last line is older than this 
 EVERY = 3600.0                   # seconds between passes
 FIRST_AFTER = 300.0              # the first pass waits for the start-up reconcile to mark sessions
 PER_PASS = 200                   # sessions moved by one pass
+SWEEP_AFTER_DAYS = 7             # a file no part names is kept this long after it was last written
+
+_PART_KEY = re.compile(r"([^/]+)/([1-9][0-9]{0,8})(?:-([0-9a-f]{32}))?\.jsonl\.gz")
+_writes = threading.Lock()       # guards `_writing`; held by the sweep from its check to its delete
+_writing: Counter = Counter()    # sessions whose parts are being written now, lower case
 
 
 class ArchiveError(Exception):
@@ -70,7 +86,9 @@ class ArchiveError(Exception):
 # ── backends ────────────────────────────────────────────────────────────────────
 class Backend:
     """Where parts live. `put` returns the etag (the MD5 of the data as hex), `head` the
-    `(size, etag)` of a stored key, `get` its bytes."""
+    `(size, etag)` of a stored key, `get` its bytes. For the sweep: `files` gives
+    `(key, last written)` of every stored file, `modified` that time for one key, `delete` removes
+    one."""
 
     def put(self, key: str, data: bytes) -> str:
         raise NotImplementedError
@@ -79,6 +97,15 @@ class Backend:
         raise NotImplementedError
 
     def head(self, key: str) -> tuple[int, str]:
+        raise NotImplementedError
+
+    def files(self) -> list[tuple[str, datetime]]:
+        raise NotImplementedError
+
+    def modified(self, key: str) -> datetime:
+        raise NotImplementedError
+
+    def delete(self, key: str) -> None:
         raise NotImplementedError
 
 
@@ -117,6 +144,27 @@ class FileBackend(Backend):
     def head(self, key: str) -> tuple[int, str]:
         data = self.get(key)
         return len(data), hashlib.md5(data).hexdigest()
+
+    def files(self) -> list[tuple[str, datetime]]:
+        """The files one folder down, where parts are. Links are not followed."""
+        try:
+            with os.scandir(self.root) as it:
+                folders = [d for d in it if d.is_dir(follow_symlinks=False)]
+        except FileNotFoundError:
+            return []                    # nothing was ever written
+        out = []
+        for d in folders:
+            with os.scandir(d.path) as it:
+                out += [(f"{d.name}/{f.name}", datetime.fromtimestamp(
+                    f.stat(follow_symlinks=False).st_mtime, timezone.utc))
+                    for f in it if f.is_file(follow_symlinks=False)]
+        return out
+
+    def modified(self, key: str) -> datetime:
+        return datetime.fromtimestamp(os.stat(self._path(key)).st_mtime, timezone.utc)
+
+    def delete(self, key: str) -> None:
+        os.remove(self._path(key))
 
 
 class S3Backend(Backend):
@@ -159,6 +207,25 @@ class S3Backend(Backend):
     def head(self, key: str) -> tuple[int, str]:
         out = self.client.head_object(Bucket=self.bucket, Key=self._key(key))
         return int(out["ContentLength"]), self._etag(out.get("ETag"))
+
+    def files(self) -> list[tuple[str, datetime]]:
+        """Every object under the prefix (needs s3:ListBucket)."""
+        base = self._key("")
+        args = {"Bucket": self.bucket, "Prefix": base}
+        out = []
+        while True:
+            page = self.client.list_objects_v2(**args)
+            out += [(o["Key"][len(base):], o["LastModified"]) for o in page.get("Contents", [])
+                    if o["Key"].startswith(base)]
+            if not page.get("IsTruncated"):
+                return out
+            args["ContinuationToken"] = page["NextContinuationToken"]
+
+    def modified(self, key: str) -> datetime:
+        return self.client.head_object(Bucket=self.bucket, Key=self._key(key))["LastModified"]
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=self._key(key))
 
 
 def backend_for(url: str | None, data_dir: str | None, postgres: bool, env=None) -> Backend | None:
@@ -269,12 +336,28 @@ def write_part(backend: Backend, session: str, rows, part_no: int, by_content: b
             "lines": len(rows), "bytes": len(data), "md5": md5, "key": key}
 
 
+@contextlib.contextmanager
+def writing(session: str):
+    """Held around `write_part` until the part row is committed or given up, so the sweep leaves the
+    session's files alone meanwhile."""
+    key = session.lower()
+    with _writes:
+        _writing[key] += 1
+    try:
+        yield
+    finally:
+        with _writes:
+            _writing[key] -= 1
+            if not _writing[key]:
+                del _writing[key]
+
+
 def _archive_session(db, backend: Backend, session: str, now: datetime) -> int | None:
     """Move one session's rows into a new part. Returns the part's size, or None when there was
     nothing to do (no rows, or another cell holds the session). Raises on any failure, with the
     rows still in `session_lines` and no part row."""
     postgres = db.dialect == "postgresql"
-    with contextlib.ExitStack() as stack:
+    with writing(session), contextlib.ExitStack() as stack:
         if postgres:
             conn = stack.enter_context(db.begin())
             if not _lock(conn, session):
@@ -348,9 +431,76 @@ def archive_pass(store, backend: Backend | None = None, now: datetime | None = N
     return moved
 
 
+# ── the sweep of unused files ───────────────────────────────────────────────────
+def _sweep_session(db, backend: Backend, session: str, files: list, cutoff: datetime) -> int:
+    """Remove `files` [(key, part number)] of `session` that no part row names, reading the rows
+    again. The caller holds `_writes`. On Postgres the hourly job's lock on the session is held from
+    the read to the last delete, so a job of another process cannot write meanwhile."""
+    p = session_archive_parts.c
+    postgres = db.dialect == "postgresql"
+    removed = 0
+    with (db.begin() if postgres else db.read()) as conn:
+        if postgres and not _lock(conn, session):
+            return 0
+        # every case of the id: a file system that ignores case keeps them in one folder
+        rows = conn.execute(select(p.session, p.part, p.key).where(
+            func.lower(p.session) == func.lower(session))).all()
+        top = max((r.part for r in rows if r.session == session), default=0)
+        used = {r.key.lower() for r in rows}
+        for key, part in files:
+            if part > top or key.lower() in used or backend.modified(key) > cutoff:
+                continue
+            backend.delete(key)
+            removed += 1
+    return removed
+
+
+def sweep(store, backend: Backend | None = None, now: datetime | None = None) -> int:
+    """Remove the archive files no part row names (see the module docstring), on a factory cell
+    only; returns how many. Raises when the listing or the rows cannot be read."""
+    from . import edition
+    if edition.edition(store)[0] != "factory":
+        return 0
+    backend = backend or backend_of(store)
+    if backend is None:
+        return 0
+    cutoff = (now or now_utc()) - timedelta(days=SWEEP_AFTER_DAYS)
+    db = store.sessions_db
+    found = backend.files()
+    with db.read() as conn:
+        used = {k.lower() for k in conn.execute(select(session_archive_parts.c.key)).scalars()}
+    unused: dict = {}
+    for key, modified in found:
+        m = _PART_KEY.fullmatch(key)
+        if m is None or modified > cutoff or key.lower() in used:
+            continue
+        session = urllib.parse.unquote(m[1])
+        if part_key(session, int(m[2]), m[3]) != key:
+            continue                     # not a name `part_key` writes
+        unused.setdefault(session, []).append((key, int(m[2])))
+    removed = 0
+    for session, files in unused.items():
+        with _writes:
+            if not _writing[session.lower()]:
+                removed += _sweep_session(db, backend, session, files, cutoff)
+    return removed
+
+
+def sweep_pass(store) -> int:
+    """`sweep` for the hourly loop: one line when it removed files or failed."""
+    try:
+        removed = sweep(store)
+    except Exception as e:
+        print(f"taresd: session archive sweep failed ({type(e).__name__}: {e})", flush=True)
+        return 0
+    if removed:
+        print(f"taresd: session archive sweep removed {removed} unused file(s)", flush=True)
+    return removed
+
+
 async def run(store, stop: asyncio.Event, every: float = EVERY, first: float = FIRST_AFTER) -> None:
-    """The hourly loop the daemon starts: wait, run a pass in a thread, wait again. Never stops on
-    an error (a pass already catches each session's)."""
+    """The hourly loop the daemon starts: wait, run a pass and the sweep in a thread, wait again.
+    Never stops on an error (a pass already catches each session's)."""
     delay = first
     while not stop.is_set():
         try:
@@ -361,6 +511,7 @@ async def run(store, stop: asyncio.Event, every: float = EVERY, first: float = F
         delay = every
         try:
             await asyncio.to_thread(archive_pass, store)
+            await asyncio.to_thread(sweep_pass, store)
         except asyncio.CancelledError:
             raise
         except Exception as e:
