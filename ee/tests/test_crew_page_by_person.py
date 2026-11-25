@@ -76,6 +76,7 @@ def nd(lines) -> str:
 
 
 async def main():
+    from tares import factory_home
     from tares.daemon import make_app
     app = make_app()
     root = {"Authorization": f"Bearer {TOKEN}"}
@@ -98,6 +99,7 @@ async def main():
             async with mk(keys[who]) as cx:
                 r = await cx.post("/ingest/claude_code", content=nd(lines), headers=nd_h)
                 ck(f"{who}'s lines are taken in", r.status_code < 300, r.text)
+            factory_home.clear_cache()   # the Crew page is kept 5 s (TR-1630): the next read sees the lines
 
         await push("ashish", [st_line("a-o", "crew-orchestrator", "orchestrator", "ashish-mbp", ago=50),
                               say("a-o", "crew-orchestrator", "handing out work", 1), state("a-o", "working", 1),

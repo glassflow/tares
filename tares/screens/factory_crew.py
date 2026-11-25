@@ -22,7 +22,7 @@ from .. import standup as standup_mod
 from ..envelope import now_utc
 from ..factory_api import project_progress
 from ..factory_home import (_STALE_MINUTES, _count, _dt, _how_far, _minutes, _plan, _resets,
-                            crew_member, for_caller, heard_ago, plain_wait)
+                            cached, crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
 
 _SHOWN_ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -270,8 +270,9 @@ def register(app, store, h, ctx):
         talk_to, reviewer, releaser, builders}; `machine_shown` is true when that person has more than
         one crew; `ended` is true when every member ended over a day ago (they come last). A
         member's `crew` is its crew's id, for the detail call. The top-level summary, talk_to,
-        reviewer, releaser and builders are the first crew's."""
-        return build(request)
+        reviewer, releaser and builders are the first crew's.
+        Kept for 5 seconds per caller, as Home is (factory_home.cached)."""
+        return cached("crew", store, request, lambda: build(request))
 
     @app.get("/api/factory/crew/{crew_id}/{station}/sessions")
     def get_station_sessions(request: Request, crew_id: str, station: str, limit: int = 50,

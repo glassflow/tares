@@ -1632,18 +1632,27 @@ class FactoryStore:
         return self._with_people(out)
 
     def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
-        """Each ticket's latest review round, shaped like an element of ticket_reviews(), in two
-        queries for any number of tickets (TR-657). Tickets never reviewed are absent."""
+        """Each ticket's standing review round (`factory.standing_round`), shaped like an element
+        of ticket_reviews(), in two queries for any number of tickets (TR-657). Tickets never
+        reviewed are absent."""
         if not tickets:
             return {}
+        from .factory import MERGE_QUEUE, standing_round
         marks = ", ".join("?" for _ in tickets)
         with self._sread:
             revs = self.sc.execute(
                 "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
-                "reviewed_at, ticket FROM (SELECT *, row_number() OVER (PARTITION BY ticket "
-                f"ORDER BY round DESC) AS rn FROM reviews WHERE ticket IN ({marks})) r "
-                "WHERE rn = 1",
-                list(tickets)).fetchall()
+                "reviewed_at, ticket FROM (SELECT *, row_number() OVER (PARTITION BY ticket, "
+                "CASE WHEN by_station = ? THEN 1 ELSE 0 END ORDER BY round DESC) AS rn "
+                f"FROM reviews WHERE ticket IN ({marks})) r WHERE rn = 1 ORDER BY round",
+                [MERGE_QUEUE, *tickets]).fetchall()
+            # per ticket the newest round of the merge queue and the newest of everyone else, so
+            # the one that stands is among them
+            newest: dict[str, list[dict]] = {}
+            for r in revs:
+                newest.setdefault(r[9], []).append({"id": r[0], "by": r[7], "verdict": r[4]})
+            standing = {standing_round(v)["id"] for v in newest.values()}
+            revs = [r for r in revs if r[0] in standing]
             ids = [r[0] for r in revs]
             fs = self.sc.execute(
                 "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
