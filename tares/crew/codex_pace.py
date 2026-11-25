@@ -247,6 +247,19 @@ def limit_turn(paths: CrewPaths, station: str) -> dict | None:
         return None
 
 
+def held(paths: CrewPaths, station: str) -> str:
+    """Why the station gets no automatic prompt now, "" when it may: its last turn was ended by the account's
+    limit, which holds it until the reset carries it on (`limit_step`). Read from the mark the pace step
+    writes and, for a turn ended since the pace step last looked, from the turn itself, so a step that runs
+    before the pace step in a round (idle wake, regrant) holds it too. Whatever the reading says: a model's
+    own limit, and a reading that is missing or stale, hold it the same."""
+    mark = mark_read(paths, station)
+    if mark:
+        return f"the account's limit ended its turn {mark.get('turn')}"
+    hit = limit_turn(paths, station)
+    return f"the account's limit ended its turn {hit['turn']}" if hit else ""
+
+
 def _when(text) -> float | None:
     if not isinstance(text, str) or not text:
         return None
@@ -324,7 +337,7 @@ def limit_step(client: TaresClient, paths: CrewPaths, s: str, reading, *, claude
         client.say(f"pacing: the account's limit has reset; carrying {s} on in the same conversation")
         try:
             lifecycle.restart(fresh, paths, [s, limit_prompt(fresh)], claude_bin=claude_bin, only_between_turns=True,
-                              prompt_wait=math.inf)
+                              prompt_wait=math.inf, past_limit=True)
         except NotBetweenTurnsError:
             _mark_drop(paths, s)   # something else carried it on first
             return True

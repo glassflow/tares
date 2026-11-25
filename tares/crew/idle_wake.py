@@ -33,7 +33,7 @@ import time
 from . import claude, launch, lifecycle, locks, pace, proc, state
 from .claude import SessionListUnreadableError
 from .client import TaresClient, TaresHTTPError, cksum, uri
-from .errors import CrewError, NotBetweenTurnsError
+from .errors import CrewError, LimitHeldError, NotBetweenTurnsError
 from .paths import CrewPaths
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -510,6 +510,9 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
         try:
             lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin, only_between_turns=True,
                               prompt_wait=math.inf)
+        except LimitHeldError as e:   # TR-1597: the wake waits for the account's limit to reset
+            client.say(f"{e}; the wake is kept for after the reset")
+            return
         except NotBetweenTurnsError:
             client.say(f"{s} started a turn; not waking it, will look again next round")
             return

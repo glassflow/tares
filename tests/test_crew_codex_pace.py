@@ -81,7 +81,7 @@ import psutil  # noqa: E402
 
 from tares import codex_usage  # noqa: E402
 from tares.factory import pace_now  # noqa: E402
-from tares.crew import codex_pace, pace, person, proc, readings, state, stations, views, watch_revive  # noqa: E402
+from tares.crew import codex_pace, lifecycle, pace, person, proc, readings, state, stations, views, watch_revive  # noqa: E402
 from tares.crew import codex_station as cs  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
@@ -514,6 +514,35 @@ ck("and is carried on at the first reading that says there is room", len(prompts
 end(pid)
 
 # ---------------------------------------------------------------------------------------------
+# every automatic prompt checks the hold, not only the pace step's (the review of PR 942)
+cell, paths, said, mk, env = crew({"settings": {**LS.DEFAULT_WORLD["settings"], "idle_wake": True}})
+fake()
+account(100, 20, session_reset=3600, limit_error="You have hit your usage limit. Try again later.")
+start(mk(), B, "builder", "shop", prompt="Build the thing.")
+pid = pid_of(paths, B)
+rested(paths, B)
+ck("before the pace step has looked, the turn itself holds the station", codex_pace.mark_read(paths, B) is None
+   and "ended its turn" in codex_pace.held(paths, B))
+for who, how in (("an idle wake", lambda: lifecycle.restart(mk(), paths, [B, "A planned wake: the next ticket."], claude_bin="",
+                                                             only_between_turns=True)),
+                 ("a grant", lambda: lifecycle.restart(mk(), paths, [B, "New grants."], claude_bin="", only_between_turns=True,
+                                                       prompt_wait=0))):
+    err, _ = quietly(how)
+    ck(f"{who} before the pace step is refused, and nothing reaches the station", "held until the account's limit resets" in (err or "")
+       and prompts(pid) == ["Build the thing."] and alive(pid), (err, prompts(pid)))
+account(None, None, kind="chatgpt", limits={"error": "the backend did not answer"})   # a reading that is missing
+round_(paths, env)
+for model_only in (False, True):
+    if model_only:   # a limit of one model's own: no account-wide window is full
+        account(10, 20)
+    err, _ = quietly(lifecycle.restart, mk(), paths, [B, "A planned wake."], claude_bin="", only_between_turns=True)
+    ck("with the station marked, a wake is refused " + ("with the account's windows open (a model's own limit)" if model_only
+                                                     else "whatever the reading says"),
+       "held until the account's limit resets" in (err or "") and prompts(pid) == ["Build the thing."], (err, prompts(pid)))
+err, _ = quietly(lifecycle.restart, mk(), paths, [B, "The person's own prompt."], claude_bin="")
+ck("a person's own restart is not held: they decide", err is None and prompts(pid)[-1] == "The person's own prompt.", (err, prompts(pid)))
+end(pid_of(paths, B))
+
 print("e. no reset time, and a mark that is no longer true")
 cell, paths, said, mk, env = crew({"settings": {**LS.DEFAULT_WORLD["settings"], "idle_wake": True}})
 fake()
