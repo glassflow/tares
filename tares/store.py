@@ -3454,7 +3454,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             func.row_number().over(partition_by=(t.c.project, t.c.repo),
                                    order_by=self._ticket_order()).label("rn")
         ).where(mine, t.c.repo.is_not(None), t.c.repo != "").subquery()
-        with self.sessions_db.snapshot() as conn:
+        with self.sessions_db.consistent_read() as conn:
             groups = conn.execute(select(*flags.c, func.count()).group_by(*flags.c)).all()
             first = conn.execute(
                 select(ranked.c.project, ranked.c.repo).where(ranked.c.rn == 1)

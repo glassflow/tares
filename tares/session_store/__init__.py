@@ -71,6 +71,12 @@ class SessionStore:
                 with conn.begin():
                     yield conn
 
+    def consistent_read(self):
+        """`snapshot()` without SQLite's write lock, for a page read that joins several queries and
+        writes nothing: SQLite's deferred transaction already sees one state from its first read to
+        its end."""
+        return self.snapshot() if self.dialect == "postgresql" else self.read()
+
     def upsert(self, table):
         """An INSERT for `table` that takes `.on_conflict_do_update(...)` and
         `.on_conflict_do_nothing()`, in the dialect the store runs on."""

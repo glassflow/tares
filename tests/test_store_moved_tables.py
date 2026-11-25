@@ -855,6 +855,18 @@ def _waits_for_write_lock(s, call):
     return not early and done.is_set()
 
 
+def _runs_under_the_write_lock(s, call):
+    """Whether `call`, on another thread, finishes while a transaction holds the session store's
+    write lock (SQLite has one writer at a time; a page read must not queue behind it)."""
+    done = threading.Event()
+    t = threading.Thread(target=lambda: (call(), done.set()), daemon=True)
+    with s.sessions_db.begin():
+        t.start()
+        early = done.wait(2)
+    t.join(10)
+    return early
+
+
 def projects_methods():
     print("== projects, objects, log, docs, skills, sources, credentials and usage through Core ==")
     d = tempfile.mkdtemp()
@@ -1467,6 +1479,19 @@ def tickets_methods():
        [r["ticket"] for r in s.list_pending_writebacks(project="uc_t")] == [b]
        and s.list_pending_writebacks(project="uc_u") == []
        and [r["ticket"] for r in s.list_pending_writebacks()] == [b], s.list_pending_writebacks())
+
+    print("== reads do not wait for the store's write lock ==")
+    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for name, call in (
+            ("get_ticket", lambda: s.get_ticket("uc_t", b)),
+            ("list_tickets", lambda: s.list_tickets("uc_t")),
+            ("tickets_by_project", lambda: s.tickets_by_project(["uc_t", "uc_u"])),
+            ("done_ticket_facts", lambda: s.done_ticket_facts(["uc_u"])),
+            ("review_tickets", lambda: s.review_tickets()),
+            ("factory_ref_elsewhere", lambda: s.factory_ref_elsewhere("uc_u", "o/r", "ENG-9")),
+            ("repo_findings", lambda: s.repo_findings("o/r", since)),
+            ("list_pending_writebacks", lambda: s.list_pending_writebacks(project="uc_t"))):
+        ck(f"{name} does not wait for the write lock", _runs_under_the_write_lock(s, call))
 
     print("== writes wait for the store's write lock ==")
     for name, call in (

@@ -1321,7 +1321,7 @@ class FactoryStore:
         and then the list's own order, in one query (TR-648). "In review" is factory.state_of's:
         stage review and a status that is not done or canceled (TR-1008)."""
         t = tickets_table
-        with self.sessions_db.snapshot() as conn:
+        with self.sessions_db.consistent_read() as conn:
             rows = conn.execute(select(t).where(t.c.stage == "review", or_(
                 t.c.status.is_(None), t.c.status.not_in(("done", "canceled"))))).all()
             made = {r[0]: (r[1], r[2]) for r in conn.execute(select(
@@ -1391,7 +1391,7 @@ class FactoryStore:
         if repo is None:                 # a pull request with no `repo` is not in "no repo"
             return False
         t = tickets_table
-        with self.sessions_db.snapshot() as conn:
+        with self.sessions_db.consistent_read() as conn:
             # the stored text is searched for the name, then each hit's `repo` is compared
             there = {r.project for r in conn.execute(select(t.c.project, t.c.pr).where(
                 t.c.project != uid,
@@ -1680,7 +1680,7 @@ class FactoryStore:
         t = tickets_table
         ids = sorted({r[0] for r in rows if r[0] is not None})
         mine: dict = {}
-        with self.sessions_db.snapshot() as conn:
+        with self.sessions_db.read() as conn:
             for i in range(0, len(ids), 500):
                 for tk in conn.execute(select(t.c.id, t.c.project, t.c.identifier, t.c.number,
                                               t.c.pr).where(t.c.id.in_(ids[i:i + 500]))):
@@ -3548,7 +3548,7 @@ class FactoryStore:
             t = tickets_table
             ids = sorted({r["ticket"] for r in out if r["ticket"] is not None})
             mine: set = set()
-            with self.sessions_db.snapshot() as conn:
+            with self.sessions_db.read() as conn:
                 for i in range(0, len(ids), 500):
                     mine.update(conn.execute(select(t.c.id).where(
                         t.c.project == project, t.c.id.in_(ids[i:i + 500]))).scalars())
