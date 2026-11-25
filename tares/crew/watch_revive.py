@@ -94,6 +94,9 @@ pace = PaceSeam()
 _THRASH = re.compile(r'"<synthetic>".*Autocompact is thrashing')
 
 
+_guard_told: set = set()   # Codex stations this watch already said it leaves down for their guard
+
+
 def stuck_on_context(paths: CrewPaths, binary: str, station: str, agents=None) -> bool:
     """True when Claude Code's thrashing notice is the last thing said and nothing new runs. Never for a station
     on Codex, which compacts by itself and has no such notice."""
@@ -181,6 +184,14 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
         if up:
             if proc.on_codex(s, paths):   # what runs under it now, for the day it dies with a command running
                 codex_station.note_children(paths, s)
+                why = codex_station.check_guard(paths, s)   # what its last turn ran, against the guard's record
+                if why:
+                    _say(f"{s} was stopped, since its guard cannot be relied on: {why}; "
+                         f"`tares factory revive {s}` starts it again")
+                    _guard_told.add(s)
+                    this.down = True
+                    this.handled.add(s)
+                    continue
             if paths.pace_file.exists():
                 pace.revived(paths, s)
             if stuck_on_context(paths, binary, s):
@@ -194,7 +205,15 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
             continue
         this.down = True
         this.handled.add(s)
+        if proc.on_codex(s, paths) and codex_station.guard_off(paths, s):
+            # stopped for its guard (TR-1594): starting it again would run it unguarded again, so a person does
+            if s not in _guard_told:
+                _guard_told.add(s)
+                _say(f"{s} stays down: it was stopped since its guard cannot be relied on "
+                     f"({codex_station.guard_off(paths, s)}); `tares factory revive {s}` starts it again")
+            continue
         if pace.closed(paths):   # the plan's limit is full: no reviving into a closed door
+            _guard_told.discard(s)
             pace.hold_down(paths, s)
             continue
         fresh, pprompt = "", ""
@@ -209,10 +228,20 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
             else:
                 pprompt = pace.resume_prompt(paths)
             why = ", in a new conversation since its own could not be resumed" if fresh else ""
-            _say(f"{s} stopped while the plan's limit was full, which has reset; reviving it under the same name{why}")
+            told = f"{s} stopped while the plan's limit was full, which has reset; reviving it under the same name{why}"
         else:
             why = ", in a new conversation since its last one thrashed" if fresh else ""
-            _say(f"{s} stopped; reviving it under the same name{why}")
+            told = f"{s} stopped; reviving it under the same name{why}"
+        if fresh and proc.on_codex(s, paths) and codex_station.unverified(paths, s):
+            # what its last turn ran was never compared with the guard's record (TR-1594): the watch does not
+            # give that conversation up for a new one, a person does
+            if s not in _guard_told:
+                _guard_told.add(s)
+                _say(f"{s} stays down: what its last turn ran could not be compared with the guard's record, so it is "
+                     f"not started in a new conversation; `tares factory revive {s} --fresh` does that")
+            continue
+        _guard_told.discard(s)
+        _say(told)
         argv = ["revive", s, *([fresh] if fresh else []), pprompt]
         if _run(lifecycle.cmd_revive, argv, env) == 0:
             this.started.add(s)

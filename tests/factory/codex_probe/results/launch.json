@@ -43,7 +43,7 @@
     "no MCP server is loaded": true,
     "no plugin is installed": true,
     "no notify program is configured": true,
-    "the guard's hook is the thread's only hook, and it ran before the command": true,
+    "the guard is the thread's only hook (every tool call, the start of every turn), and it ran before the command": true,
     "the command ran": true,
     "no program was started that carries the prompt": true,
     "the conversation is kept in the station's own folder": true,
@@ -54,7 +54,7 @@
    "approvals_asked": [],
    "commands": [
     {
-     "command": "/bin/zsh -lc 'echo launch-probe'",
+     "command": "/bin/zsh -lc 'exec </dev/null\necho launch-probe'",
      "exit": 0
     }
    ],
@@ -73,6 +73,8 @@
     "goals_1.sqlite-wal",
     "installation_id",
     "logs_2.sqlite",
+    "logs_2.sqlite-shm",
+    "logs_2.sqlite-wal",
     "memories_1.sqlite",
     "memories_1.sqlite-wal",
     "models_cache.json",
@@ -87,8 +89,6 @@
     "state_5.sqlite-wal",
     "thread-writer-locks",
     "thread_history_1.sqlite",
-    "thread_history_1.sqlite-shm",
-    "thread_history_1.sqlite-wal",
     "tmp"
    ],
    "config_keys_codex_wrote_during_the_run": [

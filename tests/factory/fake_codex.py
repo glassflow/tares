@@ -22,6 +22,21 @@ the turn; a conversation outlives the process in $CODEX_HOME/fake-threads.json, 
 as not loaded until `thread/resume`, which fails for one that never had a turn. Each of those requests is
 appended to $FAKE_CODEX_LOG, one JSON document per line.
 
+It runs a conversation's hooks and keeps what a turn did (TR-1594), as 0.171.0 was measured to. A conversation
+keeps the `config` and `cwd` it was started or joined with. With `bypass_hook_trust` in that config, a turn
+runs the `UserPromptSubmit` hooks first, then tells the connections that started or joined the conversation
+of its first item (`item/started`, a `userMessage`); without it no hook runs and nothing is said about that.
+The "model" then runs $FAKE_CODEX_COMMANDS, a JSON list: a string is a shell command, {"mcp": "server__tool"}
+an MCP call. Each goes to the `PreToolUse` hooks first (the payload Codex gives: `tool_name`, `tool_input`,
+`tool_use_id`, `turn_id`, `cwd`); a deny leaves no item and nothing runs, an allow with `updatedInput` runs
+the command it gives. What ran is kept as the turn's items, listed by `thread/turns/list` once the command has
+ended.
+A connection that only reads is told nothing of a turn. `hooks/list` and `config/read` answer for a folder
+as the real one does: a folder nobody marked is recorded as trusted in $CODEX_HOME/config.toml when a
+conversation starts in it, and from then on a repository that brings its own setup ($FAKE_CODEX_PROJECT)
+shows its hook and its MCP server; a folder marked `untrusted`, there or in the conversation's start, shows
+neither and is not recorded.
+
 What it took from its start (arguments, folder, the station's variables, its session) is written to
 $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_VERSION   the version `--version` prints
@@ -37,6 +52,14 @@ $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_UNREAD    how many reads of a conversation fail right after a turn starts
   FAKE_CODEX_APPROVAL  when set, a turn stops on an approval nobody answers
   FAKE_CODEX_REFUSE    when set, `turn/start` is refused with this text
+  FAKE_CODEX_COMMANDS  what the model runs in each turn (see above); nothing when unset
+  FAKE_CODEX_THINK     seconds the model takes before each command (0.3 when unset)
+  FAKE_CODEX_NOHOOKS   when set, no hook runs whatever the conversation's config says (trust is ignored)
+  FAKE_CODEX_NOPRE     when set, the `PreToolUse` hooks do not run (the others do)
+  FAKE_CODEX_DENY_RUNS when set, a command the hook denied runs all the same
+  FAKE_CODEX_KEEP_INPUT  when set, the command runs as the model gave it, not as the hook changed it
+  FAKE_CODEX_PROJECT   when set, the repository brings a hook and an MCP server of its own (see above);
+                       `force` shows them even in a folder marked untrusted
   FAKE_CODEX_DEAF      when set, SIGTERM is ignored (only a kill ends it)
   FAKE_CODEX_DIE       when set, the app-server prints a line and exits 3 at once
   FAKE_CODEX_SILENT    when set, the app-server never opens its socket
@@ -47,9 +70,11 @@ import base64
 import hashlib
 import json
 import os
+import shlex
 import signal
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -81,17 +106,156 @@ def read_frame(conn):
     return b0 & 0x0F, payload
 
 
+SEND = threading.Lock()   # one frame at a time: a turn's thread and a connection's own write to the same socket
+
+
 def send_text(conn, doc):
     data = json.dumps(doc).encode()
     n = len(data)
     head = bytes([0x81]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536
                             else bytes([127]) + struct.pack(">Q", n))
-    conn.sendall(head + data)
+    with SEND:
+        conn.sendall(head + data)
 
 
-THREADS = {}            # id -> {"turns": [...], "updatedAt": seconds, "flags": [...]}
+THREADS = {}            # id -> {"turns": [...], "updatedAt": seconds, "flags": [...], "config": {...}, "cwd": str}
 LOADED = set()          # the conversations this process has open
+JOINED = {}             # id -> the connections that started or joined it: they are told of its turns
 LOCK = threading.Lock()
+
+
+def _tell(thread_id, method, params) -> None:
+    for conn in list(JOINED.get(thread_id) or []):
+        try:
+            send_text(conn, {"method": method, "params": {"threadId": thread_id, **params}})
+        except OSError:
+            JOINED[thread_id].discard(conn)
+
+
+def _home_config() -> str:
+    return os.path.join(os.environ.get("CODEX_HOME") or ".", "config.toml")
+
+
+def _marks() -> dict:
+    """folder -> trust level, from the Codex folder's config.toml (only the `projects` tables are read)."""
+    found, folder = {}, None
+    try:
+        with open(_home_config(), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("[projects.") and line.endswith("]"):
+                    folder = json.loads(line[len("[projects."):-1])
+                elif folder and line.startswith("trust_level"):
+                    found[folder] = json.loads(line.split("=", 1)[1].strip())
+                elif line.startswith("["):
+                    folder = None
+    except (OSError, ValueError):
+        pass
+    return found
+
+
+def _trusted(cwd) -> bool:
+    if os.environ.get("FAKE_CODEX_PROJECT") == "force":
+        return True
+    marks = _marks()
+    return any(marks.get(f) == "trusted" for f in (cwd, os.path.realpath(cwd or ".")))
+
+
+def _settle_trust(params) -> None:
+    """A conversation starts in a folder: one nobody marked is recorded as trusted, as the real one does."""
+    cwd = params.get("cwd")
+    if not cwd:
+        return
+    names = {cwd, os.path.realpath(cwd)}
+    session = (params.get("config") or {}).get("projects") or {}
+    if any(f in session for f in names) or any(f in _marks() for f in names):
+        return
+    with open(_home_config(), "a", encoding="utf-8") as f:
+        f.write(f"[projects.{json.dumps(os.path.realpath(cwd))}]\ntrust_level = \"trusted\"\n\n")
+
+
+def _hook(entry, payload, cwd):
+    """Run one hook command with the payload on stdin: (exit code, what it printed as JSON or {})."""
+    try:
+        r = subprocess.run(entry.get("command") or "true", shell=True, input=json.dumps(payload).encode(),
+                           capture_output=True, cwd=cwd or None, timeout=float(entry.get("timeout") or 5))
+    except (OSError, subprocess.SubprocessError):
+        return 1, {}
+    try:
+        doc = json.loads(r.stdout or b"{}")
+    except ValueError:
+        doc = {}
+    return r.returncode, doc if isinstance(doc, dict) else {}
+
+
+def _hooks(t, event) -> list:
+    env, config = os.environ, t.get("config") or {}
+    if env.get("FAKE_CODEX_NOHOOKS") or not config.get("bypass_hook_trust"):
+        return []
+    if event == "PreToolUse" and env.get("FAKE_CODEX_NOPRE"):
+        return []
+    return [h for group in (config.get("hooks") or {}).get(event) or [] for h in group.get("hooks") or []]
+
+
+def _still(thread_id, turn_id) -> bool:
+    with LOCK:
+        return any(x["id"] == turn_id and x["status"] == "inProgress" for x in THREADS[thread_id]["turns"])
+
+
+def _run_turn(thread_id, turn_id, prompt) -> None:
+    """What a turn does after `turn/start` was answered (see the module's note)."""
+    env, t = os.environ, THREADS[thread_id]
+    cwd = t.get("cwd")
+    base = {"session_id": thread_id, "turn_id": turn_id, "cwd": cwd, "model": "fake", "permission_mode": "default"}
+    for h in _hooks(t, "UserPromptSubmit"):
+        _hook(h, {**base, "hook_event_name": "UserPromptSubmit", "prompt": prompt}, cwd)
+    _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "userMessage", "id": "msg-" + os.urandom(4).hex()}})
+    try:
+        commands = json.loads(env.get("FAKE_CODEX_COMMANDS") or "[]")
+    except ValueError:
+        commands = []
+    for c in commands:
+        time.sleep(float(env.get("FAKE_CODEX_THINK") or 0.3))
+        if not _still(thread_id, turn_id):
+            return
+        call = "exec-" + os.urandom(6).hex()
+        mcp = c.get("mcp") if isinstance(c, dict) else None
+        asked = "" if mcp else str(c)
+        tool = "mcp__" + mcp if mcp else "Bash"
+        denied, runs = False, asked
+        for h in _hooks(t, "PreToolUse"):
+            code, said = _hook(h, {**base, "hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": call,
+                                   "tool_input": {} if mcp else {"command": asked}}, cwd)
+            out = said.get("hookSpecificOutput") if isinstance(said.get("hookSpecificOutput"), dict) else {}
+            if code == 2 or out.get("permissionDecision") == "deny":
+                denied = True
+            elif isinstance(out.get("updatedInput"), dict) and isinstance(out["updatedInput"].get("command"), str):
+                runs = out["updatedInput"]["command"]
+        if denied and not env.get("FAKE_CODEX_DENY_RUNS"):
+            continue
+        if env.get("FAKE_CODEX_KEEP_INPUT"):
+            runs = asked
+        if mcp:
+            server, _, name = mcp.partition("__")
+            item = {"type": "mcpToolCall", "id": call, "server": server, "tool": name, "status": "completed"}
+        else:
+            _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "commandExecution", "id": call}})
+            subprocess.run(runs, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+            item = {"type": "commandExecution", "id": call, "command": "/bin/zsh -lc " + shlex.quote(runs),
+                    "commandActions": [{"type": "unknown", "command": runs}], "source": "unifiedExecStartup",
+                    "status": "completed"}
+        with LOCK:
+            for turn in t["turns"]:
+                if turn["id"] == turn_id:
+                    turn.setdefault("items", []).append(item)
+            _save()
+    took = env.get("FAKE_CODEX_TURN") or "0.2"
+    if took == "hang" or env.get("FAKE_CODEX_APPROVAL"):
+        return
+    time.sleep(float(took))
+    if _still(thread_id, turn_id):
+        _end_turn(thread_id, turn_id)
+        _tell(thread_id, "turn/completed", {"turn": {"id": turn_id, "status": "completed"}})
 
 
 def _store() -> str:
@@ -158,23 +322,33 @@ class Refused(Exception):
     pass
 
 
-def conversation(method, params):
+def conversation(method, params, conn=None):
     """The answer to a conversation request, or None when `method` is not one. Raises Refused with the error."""
     env = os.environ
-    if method not in ("thread/start", "thread/read", "thread/resume", "turn/start", "turn/interrupt"):
+    if method not in ("thread/start", "thread/read", "thread/resume", "thread/turns/list", "turn/start",
+                      "turn/interrupt"):
         return None
-    if method != "thread/read":
+    if method not in ("thread/read", "thread/turns/list"):
         _note(method, params)
     with LOCK:
         if method == "thread/start":
             tid = "thr-" + os.urandom(4).hex()
-            THREADS[tid] = {"turns": [], "updatedAt": int(time.time()), "flags": []}
+            THREADS[tid] = {"turns": [], "updatedAt": int(time.time()), "flags": [],
+                            "config": params.get("config") or {}, "cwd": params.get("cwd")}
             LOADED.add(tid)
+            JOINED.setdefault(tid, set()).add(conn)
+            _settle_trust(params)
             return {"thread": _view(tid)}
         tid = params.get("threadId")
         if tid not in THREADS:
             raise Refused(f"no rollout found for thread id {tid}" if method == "thread/resume" else f"thread not loaded: {tid}")
         t = THREADS[tid]
+        if method == "thread/turns/list":
+            full = params.get("itemsView") == "full"
+            turns = [{"id": x["id"], "status": x["status"], "itemsView": "full" if full else "summary",
+                      "items": list(x.get("items") or []) if full else []}
+                     for x in reversed(t["turns"])]
+            return {"data": turns[:int(params.get("limit") or 50)], "nextCursor": None}
         if method == "thread/read":
             if t.get("unread", 0) > 0:   # for a moment after a turn starts the conversation cannot be read
                 t["unread"] -= 1
@@ -186,6 +360,11 @@ def conversation(method, params):
             if not t["turns"]:
                 raise Refused(f"no rollout found for thread id {tid}")
             LOADED.add(tid)
+            JOINED.setdefault(tid, set()).add(conn)
+            if "config" in params:
+                t["config"] = params.get("config") or {}
+            t["cwd"] = params.get("cwd") or t.get("cwd")
+            _settle_trust(params)
             return {"thread": _view(tid)}
         if tid not in LOADED:
             raise Refused(f"thread not loaded: {tid}")
@@ -209,15 +388,14 @@ def conversation(method, params):
         t["flags"] = ["waitingOnApproval"] if env.get("FAKE_CODEX_APPROVAL") else []
         t["unread"] = int(env.get("FAKE_CODEX_UNREAD") or 2)
         _save()
-        took = env.get("FAKE_CODEX_TURN") or "0.2"
-        if took != "hang" and not env.get("FAKE_CODEX_APPROVAL"):
-            timer = threading.Timer(float(took), _end_turn, args=(tid, turn["id"]))
-            timer.daemon = True
-            timer.start()
+        # after the answer has left: the hooks, the first item, what the model runs, the end
+        timer = threading.Timer(0.03, _run_turn, args=(tid, turn["id"], turn["text"]))
+        timer.daemon = True
+        timer.start()
         return {"turn": {"id": turn["id"], "status": "inProgress"}}
 
 
-def answer(method, args):
+def answer(method, args, params):
     env = os.environ
     if method == "initialize":
         return {"userAgent": "fake-codex", "codexHome": env.get("FAKE_CODEX_HOME") or env.get("CODEX_HOME", ""),
@@ -229,8 +407,17 @@ def answer(method, args):
             names.append("codex_apps")
         return {"data": [{"name": n, "tools": {}} for n in names], "nextCursor": None}
     if method == "config/read":
-        return {"config": {"notify": ["/person/notify-program"] if env.get("FAKE_CODEX_NOTIFY") else None},
+        brings = bool(env.get("FAKE_CODEX_PROJECT")) and _trusted(params.get("cwd"))
+        return {"config": {"notify": ["/person/notify-program"] if env.get("FAKE_CODEX_NOTIFY") else None,
+                           "mcp_servers": {"repo_server": {"command": "x"}} if brings else {}},
                 "origins": {}}
+    if method == "hooks/list":
+        data = []
+        for cwd in params.get("cwds") or []:
+            brings = bool(env.get("FAKE_CODEX_PROJECT")) and _trusted(cwd)
+            data.append({"cwd": cwd, "hooks": [{"eventName": "preToolUse", "source": "project", "trustStatus": "untrusted",
+                                                "sourcePath": os.path.join(cwd, ".codex", "config.toml")}] if brings else []})
+        return {"data": data}
     return None
 
 
@@ -256,12 +443,12 @@ def serve(conn, args):
             if "id" not in msg:
                 continue
             try:
-                result = conversation(msg.get("method"), msg.get("params") or {})
+                result = conversation(msg.get("method"), msg.get("params") or {}, conn)
             except Refused as e:
                 send_text(conn, {"id": msg["id"], "error": {"code": -32600, "message": str(e)}})
                 continue
             if result is None:
-                result = answer(msg.get("method"), args)
+                result = answer(msg.get("method"), args, msg.get("params") or {})
             if result is None:
                 send_text(conn, {"id": msg["id"], "error": {"code": -32601, "message": "no such method"}})
             else:
@@ -269,6 +456,8 @@ def serve(conn, args):
     except (EOFError, OSError, ValueError, IndexError):
         return
     finally:
+        for joined in JOINED.values():
+            joined.discard(conn)
         conn.close()
 
 

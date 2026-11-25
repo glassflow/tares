@@ -43,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from contextlib import redirect_stderr
 from pathlib import Path
 
@@ -73,6 +74,9 @@ LOGIN.write_text('{"auth_mode": "chatgpt", "tokens": "fake"}\n')
 (HOME / ".codex" / "skills").mkdir()
 (BIN / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{HERE / "factory" / "fake_codex.py"}" "$@"\n')
 (BIN / "codex").chmod(0o755)
+(BIN / "tares").write_text(f'#!/bin/sh\nPYTHONPATH="{ROOT}" exec "{sys.executable}" -c '
+                           '"import sys; sys.argv[0] = \'tares\'; from tares.cli import main; main()" "$@"\n')
+(BIN / "tares").chmod(0o755)   # the station's guard is `tares hook codex-guard`, found on its PATH
 _crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
 
 sys.path.insert(0, str(ROOT))
@@ -276,12 +280,15 @@ hook = doc["thread"]["config"]["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 ck("the settings file holds the thread's settings, every placeholder filled, readable by the owner alone",
    doc["thread"]["model"] == MODEL and doc["effort"] == EFFORT and doc["thread"]["approvalPolicy"] == "on-request"
    and doc["thread"]["sandbox"] == "workspace-write" and doc["thread"]["config"]["bypass_hook_trust"] is True
-   and hook.startswith("tares hook guard --plugin-root ") and not UNFILLED.search(json.dumps(doc)) and doc["env"]["FACTORY_STATION"] == "crew-reviewer"
+   and hook.startswith("tares hook codex-guard --plugin-root ")
+   and doc["thread"]["config"]["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == hook and not UNFILLED.search(json.dumps(doc)) and doc["env"]["FACTORY_STATION"] == "crew-reviewer"
    and stat.S_IMODE(settings_file.stat().st_mode) == 0o600 and r.get("settings", "").endswith("crew-reviewer.settings.json"),
    json.dumps(doc)[:500])
 took = calls(info.get("pid"))
 ck("the first prompt is handed over as a turn on a new conversation, with the thread's settings and the turn's effort",
-   [m for m, _ in took] == ["thread/start", "turn/start"] and took[0][1] == {**doc["thread"], "cwd": str(paths.home)}
+   [m for m, _ in took] == ["thread/start", "turn/start"]
+   and took[0][1] == {**doc["thread"], "cwd": str(paths.home),   # and the folder marked not trusted (TR-1594)
+                      "config": {**doc["thread"]["config"], "projects": cx.not_trusted(str(paths.home))}}
    and took[1][1]["input"] == [{"type": "text", "text": PROMPT + "\n"}] and took[1][1]["effort"] == EFFORT
    and r.get("sessionId", "").startswith("thr-") and took[1][1]["threadId"] == r["sessionId"]
    and info.get("turn", "").startswith("turn-"), (took, r.get("sessionId")))
@@ -300,8 +307,14 @@ ck("the app-server's output goes to a log of the owner's", log.exists() and stat
 print("c. the person's own Codex setup stays out")
 ck("the station's Codex folder is the owner's alone", stat.S_IMODE(home.stat().st_mode) == 0o700, oct(home.stat().st_mode))
 ck("of the person's it holds a link to their login, and nothing else",
-   sorted(e for e in os.listdir(home) if e != "fake-threads.json") == ["auth.json"] and (home / "auth.json").is_symlink()
+   sorted(e for e in os.listdir(home) if e != "fake-threads.json") == ["auth.json", "config.toml"]
+   and (home / "auth.json").is_symlink()
    and os.path.realpath(home / "auth.json") == os.path.realpath(LOGIN), sorted(os.listdir(home)))
+marks = tomllib.loads((home / "config.toml").read_text())
+ck("its own config says one thing: the folder it works in is not trusted, so a repository's own Codex setup is not read",
+   list(marks) == ["projects"] and str(paths.home) in marks["projects"]
+   and all(v == {"trust_level": "untrusted"} for v in marks["projects"].values())
+   and stat.S_IMODE((home / "config.toml").stat().st_mode) == 0o600, marks)
 ck("the person's own files are as they were", LOGIN.read_text().startswith('{"auth_mode"')
    and "notify" in (HOME / ".codex" / "config.toml").read_text() and not LOGIN.is_symlink())
 pid_b = info["pid"]
@@ -310,8 +323,8 @@ ck("ended, the app-server takes its socket with it", end(pid_b) and not sock.exi
 (home / "sessions").mkdir()
 fake()
 err, _ = start(mk())
-ck("a config left in the station's folder is removed at the next start; its conversations stay",
-   err is None and not (home / "config.toml").exists() and (home / "sessions").is_dir(), err)
+ck("a config left in the station's folder is written anew at the next start; its conversations stay",
+   err is None and tomllib.loads((home / "config.toml").read_text()) == marks and (home / "sessions").is_dir(), err)
 end(row(paths)["codex"]["pid"])
 
 for label, switches, words in (
@@ -437,6 +450,8 @@ err, _ = start(mk())
 os.environ["PATH"] = str(BIN)
 ck("no codex on PATH is said by name", err == "codex not found on PATH (set CODEX_BIN to its path)", err)
 os.environ["CODEX_BIN"] = str(BIN / "codex")
+(SCRATCH / "empty").mkdir(exist_ok=True)   # empty of codex; the station still finds its guard, `tares`, there
+shutil.copy2(BIN / "tares", SCRATCH / "empty" / "tares")
 os.environ["PATH"] = str(SCRATCH / "empty")
 err, _ = start(mk())
 os.environ["PATH"] = str(BIN)

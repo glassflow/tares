@@ -16,7 +16,7 @@
     "working",
     "done"
    ],
-   "seconds_of_the_first_turn": 12.1,
+   "seconds_of_the_first_turn": 10.1,
    "states_seen_second": [
     "working",
     "done"
@@ -79,7 +79,7 @@
     "working",
     "blocked"
    ],
-   "seconds_until_blocked": 6.3,
+   "seconds_until_blocked": 3.0,
    "stop": "stopped"
   },
   "killed_mid_command": {

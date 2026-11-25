@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
 from tares.factory import match_check  # noqa: E402
 
-CLOSE_STDIN = "exec </dev/null\n"     # what codex_guard.py puts in front of a command it lets through
+from tares.crew.codex_guard import CLOSE_STDIN  # noqa: E402  (what the guard puts in front of a command it lets through)
 
 
 def model_command(item: dict) -> str:

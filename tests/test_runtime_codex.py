@@ -109,10 +109,12 @@ ck("the identity says who the station is and nothing of Claude Code's",
    thread["developerInstructions"] == "You are a tares-factory station: role builder, session name shop-build-api, "
    "project alpha, repo /work/alpha. Act only within your role.", thread["developerInstructions"])
 hooks = thread["config"]["hooks"]
-ck("the guard is registered for every tool call, with the thread's trust for it",
-   list(hooks) == ["PreToolUse"] and hooks["PreToolUse"] == [{"matcher": "", "hooks": [
-       {"type": "command", "command": GUARD_HOOK, "timeout": 5}]}] and thread["config"]["bypass_hook_trust"] is True
-   and GUARD_HOOK == "tares hook guard --plugin-root {PLUGIN_DIR_SHELL}", thread["config"])
+ck("the guard is registered for every tool call and for the start of every turn, with the thread's trust for it",
+   list(hooks) == ["PreToolUse", "UserPromptSubmit"] and hooks["PreToolUse"] == [{"matcher": "", "hooks": [
+       {"type": "command", "command": GUARD_HOOK, "timeout": 5}]}]
+   and hooks["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": GUARD_HOOK, "timeout": 5}]}]
+   and thread["config"]["bypass_hook_trust"] is True
+   and GUARD_HOOK == "tares hook codex-guard --plugin-root {PLUGIN_DIR_SHELL}", thread["config"])
 ck("the MCP server is named, with its address and the identity headers read from the station's variables, and no token",
    spec.settings["mcp_servers"] == {"tares": {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY}}
    and all(v in spec.env or v == "TARES_PROJECT" for v in MCP_IDENTITY.values()), spec.settings["mcp_servers"])
