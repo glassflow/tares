@@ -101,6 +101,15 @@ if AVAILABLE:
     ARCHIVE_FAILURES = Counter("tares_archive_failures_total",
                                "Sessions the hourly archive could not move (the rows stay in "
                                "session_lines; the next pass tries again)")
+    SESSION_MOVE_SESSIONS = Gauge("tares_session_move_sessions",
+                                  "Sessions in the one-time move of recent sessions' lines into "
+                                  "the session store, by state (pending, verified, failed)",
+                                  ["state"])
+    SESSION_MOVE_LINES = Counter("tares_session_move_lines_total",
+                                 "Lines the one-time move wrote into session_lines for sessions it "
+                                 "verified")
+    for _state in ("pending", "verified", "failed"):
+        SESSION_MOVE_SESSIONS.labels(state=_state)
 
 _storage_probe = None
 _licence_probe = None
@@ -187,6 +196,19 @@ def session_archived(nbytes: int) -> None:
     if AVAILABLE:
         ARCHIVE_SESSIONS.inc()
         ARCHIVE_BYTES.inc(nbytes)
+
+
+def session_move_sessions(counts: dict) -> None:
+    """The sessions of the one-time move by state, {state: n} (TR-1609); a state missing reads 0."""
+    if AVAILABLE:
+        for state in ("pending", "verified", "failed"):
+            SESSION_MOVE_SESSIONS.labels(state=state).set(int(counts.get(state, 0)))
+
+
+def session_move_lines(n: int) -> None:
+    """Lines written into session_lines for one verified session of the move (TR-1609)."""
+    if AVAILABLE and n:
+        SESSION_MOVE_LINES.inc(n)
 
 
 def archive_failed() -> None:
