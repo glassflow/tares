@@ -6,6 +6,7 @@ import { formatCount } from "../../lib/number";
 import { DAY, formatDayUTC } from "../../lib/time";
 import { usePagePolling } from "../usePagePolling";
 import { factoryReport, isRefused, type ReportData, type SectionKey } from "./FactoryReport.api";
+import { Delivered } from "./report/Delivered";
 
 // Report (TR-1667): what the factory delivered, week by week, for a range and a scope. Both live in
 // the address (`?range=4w|8w|quarter|dates&from=&to=&scope=`), so a copied address opens the same view.
@@ -26,7 +27,7 @@ const DEFAULT_SCOPE = "factory";
  *  when no ticket was merged (cost or waiting can exist without a merge), so a `body` says for itself
  *  when it has nothing. */
 const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: ReportData) => React.ReactNode }[] = [
-  { key: "delivered", title: "Delivered" },
+  { key: "delivered", title: "Delivered", body: (data) => <Delivered data={data} /> },
 
   { key: "time", title: "Time" },
 

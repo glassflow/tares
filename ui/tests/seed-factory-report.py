@@ -1,13 +1,18 @@
-"""Seed a scratch factory Tares for report.e2e.cjs (TR-1667). Invented names only.
-Tickets merged in whole weeks before this one, so the counts hold on any day:
-  project-a (Ada leads it): 3 merged 1 week ago, 1 merged 20 weeks ago;
-  project-b (Ada leads it): 2 merged 2 weeks ago, 4 merged 6 weeks ago;
+"""Seed a scratch factory Tares for report.e2e.cjs (TR-1667, TR-1668). Invented names only.
+Tickets merged in whole weeks before this one, so the counts hold on any day (in brackets: hours
+from start to merge, "-" a ticket never marked doing):
+  project-a (Ada leads it): 3 merged 1 week ago [2, 3, 4], 1 merged 20 weeks ago [2];
+    1 week ago one of them passed review in a second round and one in its first;
+    a milestone accepted 1 week ago and one 5 weeks ago;
+  project-b (Ada leads it): 2 merged 2 weeks ago [26, -], 4 merged 6 weeks ago [1, 1, 1, 1];
+    2 weeks ago one passed its first review; 30 weeks ago an open ticket was sent back;
+    a milestone accepted 5 weeks ago;
   project-c (Bo leads it): one open ticket, nothing merged.
 So 8 weeks hold 9 merged tickets, 4 weeks 5, and the last 20 weeks and more 10.
 Starts a daemon on the scratch data dir with TARES_EDITION=factory (so the cell settles to the
-factory edition), stops it, then writes the people, projects and tickets straight into the database
-and rolls them up into the weekly figures. Prints a JSON map of names to ids, with the Mondays used,
-on the last line.
+factory edition), stops it, then writes the people, projects, tickets, reviews and milestones
+straight into the database and rolls them up into the weekly figures. Prints a JSON map of names to
+ids, with the Mondays used, on the last line.
 usage: python seed-factory-report.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.request
 from datetime import datetime, timedelta, timezone
@@ -34,7 +39,7 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
-from tares import report  # noqa: E402
+from tares import factory, report  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
@@ -51,23 +56,50 @@ def project(name, lead):
     return uid
 
 
-def merged(uid, back, n):
-    """`n` tickets of `uid`, merged on the Wednesday `back` weeks before this week's."""
+def wednesday(back, hour=12):
+    """The Wednesday `back` weeks before this week's, at `hour` UTC."""
     day = monday - timedelta(weeks=back) + timedelta(days=2)
-    when = datetime(day.year, day.month, day.day, 12, tzinfo=timezone.utc)
-    for _ in range(n):
+    return datetime(day.year, day.month, day.day, hour, tzinfo=timezone.utc)
+
+
+def merged(uid, back, *took):
+    """A ticket of `uid` for each of `took`, merged `back` weeks ago, that many hours after it was
+    taken up (None: it was never marked doing)."""
+    tids = []
+    for hours in took:
         tid = store.create_ticket(uid, "tares", "Add a page")
-        store.add_ticket_history(tid, uid, "stage", "doing", None, None, None, when - timedelta(hours=2))
-        store.add_ticket_history(tid, uid, "stage", "merged", None, None, None, when)
+        if hours is not None:
+            store.add_ticket_history(tid, uid, "stage", "doing", None, None, None,
+                                     wednesday(back) - timedelta(hours=hours))
+        store.add_ticket_history(tid, uid, "stage", "merged", None, None, None, wednesday(back))
+        tids.append(tid)
+    return tids
+
+
+def reviewed(uid, tid, back, verdict, hour=10):
+    store.add_review(uid, tid, "7", "abc1234", verdict, "read the diff", "", "crew-reviewer", [], {},
+                     factory.finding_kind, wednesday(back, hour))
+
+
+def accepted(uid, back):
+    mid = store.create_milestone(uid, f"Step {back}")
+    store.accept_milestone(uid, mid, "Ada", None, wednesday(back))
 
 
 a = project("project-a", "Ada")
 b = project("project-b", "Ada")
 c = project("project-c", "Bo")
-merged(a, 1, 3)
-merged(a, 20, 1)
-merged(b, 2, 2)
-merged(b, 6, 4)
+first, second, _ = merged(a, 1, 2, 3, 4)
+merged(a, 20, 2)
+third, _ = merged(b, 2, 26, None)
+merged(b, 6, 1, 1, 1, 1)
+reviewed(a, first, 1, "changes")
+reviewed(a, first, 1, "pass", hour=11)
+reviewed(a, second, 1, "pass")
+reviewed(b, third, 2, "pass")
+reviewed(b, store.create_ticket(b, "tares", "Not merged"), 30, "changes")
+for uid, back in ((a, 1), (a, 5), (b, 5)):
+    accepted(uid, back)
 store.create_ticket(c, "tares", "Write the plan")
 report.rebuild_all(store)
 store.con.close()

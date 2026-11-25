@@ -1,12 +1,14 @@
 /*
- * Browser e2e for TR-1667: the factory Report page's frame.
+ * Browser e2e for TR-1667 (the factory Report page's frame) and TR-1668 (its Delivered section).
  *
  * A scratch factory cell seeded by tests/seed-factory-report.py (8 weeks hold 9 merged tickets, 4 weeks
  * 5). Checked: the menu entry; the page from one read of GET /api/factory/report; the six section
  * headings, the "cannot see" line and the "API-equivalent" label; each range and each kind of scope
  * changing the address and the figures; a copied address opening the same view; two dates; a range with
- * no merged ticket; a scope or a date the cell refuses; a read that fails; at 1440 and 390 wide, and
- * embedded in the desktop (?embed=desktop).
+ * no merged ticket; Delivered's four tiles, their change on the weeks before, the lines under them and
+ * the two weekly charts, also with reviews and no merge and with nothing delivered; a scope or a date
+ * the cell refuses; a read that fails; at 1440 and 390 wide, and embedded in the desktop
+ * (?embed=desktop).
  * Run:  npm run build && TARES_E2E_PORT=<free port> node tests/report.e2e.cjs
  * (tares installed in ../.venv or on PATH). Set SHOTS_DIR to keep screenshots. TARES_E2E_PORT
  * (default 8883), MCP port +1. TARES_E2E_CHROME points Playwright at another Chrome binary.
@@ -87,9 +89,11 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       return { ctx, page, asked };
     };
     const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    // what a chart's own sideways scroll box holds may reach past the window; the box may not
     const inside = (page) => page.evaluate(() => {
       const w = document.documentElement.clientWidth;
-      return [...document.querySelectorAll("main *")].every((e) => e.getBoundingClientRect().right <= w + 1);
+      return [...document.querySelectorAll("main *")].every((e) => e.getBoundingClientRect().right <= w + 1
+        || !!e.parentElement.closest('[data-week-chart] [role="region"]'));
     });
     const shot = async (page, name) => {
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `report-${name}.png`), fullPage: true });
@@ -149,8 +153,9 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
-      ck("frame: each section says it is not built yet",
-         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 6);
+      ck("frame: each section but Delivered says it is not built yet",
+         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 5
+         && !(await text(page, "report-section-delivered")).includes("not built"));
       ck("frame: the Cost section is labelled API-equivalent",
          await page.getByTestId("report-section-cost").getByText("API-equivalent", { exact: true }).isVisible());
       ck("frame: no date fields until two dates are asked for", (await count(page, "report-from")) === 0);
@@ -340,6 +345,138 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await ctx.close();
     }
 
+    // ---- Delivered: the four tiles and the two charts
+    {
+      const { ctx, page, asked } = await fresh(1440);
+      const TILES = ["merged", "milestones", "projects", "start-to-merge"];
+      /** Each tile's lines as read: the label (shown in capitals), the value, then what is under it;
+       * nothing for a tile that is not there. */
+      const lines = async (id) =>
+        ((await count(page, `delivered-${id}`)) ? await page.getByTestId(`delivered-${id}`).innerText() : "")
+          .split("\n").map((l) => l.trim()).filter(Boolean);
+      const tiles = () => Promise.all(TILES.map(lines));
+      const is = async (label, ...want) => {
+        const got = await tiles();
+        ck(label, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+      };
+      /** A chart's value for each week, oldest first; "-" for a week with none. */
+      const weekly = (id) => page.getByTestId(`delivered-${id}-weeks`).locator("tr[data-series] td")
+        .evaluateAll((cells) => cells.map((c) => (c.querySelector(".sr-only") ? "-" : c.textContent.trim())));
+      const marks = (id, mark) => page.getByTestId(`delivered-${id}-weeks`).locator(`[data-plot] ${mark}`).count();
+      const view = async (to) => {
+        await open(page, to);
+        await page.getByTestId("report-section-delivered").waitFor();
+      };
+      const days = (back) => `/report?range=dates&from=${plus(ids.monday, -7 * back)}&to=${plus(ids.monday, -7 * back + 6)}`;
+
+      await view("/report");
+      await is("delivered: 8 weeks, with nothing in the 8 weeks before",
+        ["MERGED", "9", "No figures for the 8 weeks before", "67% passed first review, of 3 tickets first reviewed"],
+        ["MILESTONES ACCEPTED", "3", "No figures for the 8 weeks before"],
+        ["PROJECTS WITH A MERGE", "2", "No figures for the 8 weeks before"],
+        ["START TO MERGE, P50", "1 hour 30 minutes", "p90 10 hours 36 minutes", "from 8 of 9 merged tickets",
+         "No figures for the 8 weeks before", "1.3 review rounds per ticket reviewed"]);
+      ck("delivered: a change line on each of the four tiles and nowhere else",
+         (await page.getByTestId("report-section-delivered").locator("[data-change]").count()) === 4
+         && (await page.locator("[data-change]").count()) === 4);
+      ck("delivered: the four tiles sit in one row", new Set(await Promise.all(TILES.map(async (id) =>
+        Math.round((await page.getByTestId(`delivered-${id}`).boundingBox()).y)))).size === 1);
+      ck("delivered: with nothing to compare, no word about the unfinished week under the tiles",
+         (await count(page, "delivered-unfinished")) === 0);
+      ck("delivered: merged per week, 0 in a week without a merge",
+         (await weekly("merged")).join("|") === "0|4|0|0|0|2|3|0" && (await marks("merged", "[data-bar]")) === 3,
+         `${await weekly("merged")} ${await marks("merged", "[data-bar]")}`);
+      ck("delivered: start to merge per week, no point in a week without a merge",
+         (await weekly("p50")).join("|") === "-|1 hour|-|-|-|1 day|3 hours|-" && (await marks("p50", "[data-dot]")) === 3,
+         `${await weekly("p50")} ${await marks("p50", "[data-dot]")}`);
+      const charts = await page.getByTestId("report-section-delivered").locator("[data-week-chart]")
+        .evaluateAll((els) => els.map((e) => `${e.dataset.weekChart}:${e.querySelector("figcaption").textContent}`));
+      ck("delivered: bars for merged, a line for start to merge",
+         charts.join("|") === "bars:Merged per week|lines:Start to merge, p50 per week", charts.join("|"));
+      ck("delivered: the running week's column says so far in both charts",
+         (await page.locator(`[data-week-chart] th[data-week="${ids.monday}"]`).filter({ hasText: "so far" }).count()) === 2);
+      ck("delivered: the whole page still comes from one read", asked.length === 1, `${asked.length} reads`);
+      await shot(page, "delivered-8w-1440");
+
+      await view("/report?range=4w");
+      await is("delivered: 4 weeks against the 4 weeks before",
+        ["MERGED", "5", "+1 on the 4 weeks before", "67% passed first review, of 3 tickets first reviewed"],
+        ["MILESTONES ACCEPTED", "1", "-1 on the 4 weeks before"],
+        ["PROJECTS WITH A MERGE", "2", "+1 on the 4 weeks before"],
+        ["START TO MERGE, P50", "3 hours 30 minutes", "p90 19 hours 24 minutes", "from 4 of 5 merged tickets",
+         "+2 hours 30 minutes on the 4 weeks before", "1.3 review rounds per ticket reviewed"]);
+      ck("delivered: the running week in range is said to be unfinished",
+         (await count(page, "delivered-unfinished")) === 1 && (await text(page, "delivered-unfinished")) === "This week is not over yet.");
+      await checkWords(page, ck, "delivered @1440");
+      await shot(page, "delivered-4w-1440");
+
+      await view(`/report?range=4w&scope=project:${ids["project-b"]}`);
+      await is("delivered: one project's own figures, the same count, and one of each in the singular",
+        ["MERGED", "2", "-2 on the 4 weeks before", "100% passed first review, of 1 ticket first reviewed"],
+        ["MILESTONES ACCEPTED", "0", "-1 on the 4 weeks before"],
+        ["PROJECTS WITH A MERGE", "1", "Same as the 4 weeks before"],
+        ["START TO MERGE, P50", "1 day 2 hours", "p90 1 day 2 hours", "from 1 of 2 merged tickets",
+         "+1 day 1 hour on the 4 weeks before", "1 review round per ticket reviewed"]);
+
+      await view(`/report?range=4w&scope=project:${ids["project-a"]}`);
+      await is("delivered: every ticket with a start, and earlier weeks with no merge",
+        ["MERGED", "3", "+3 on the 4 weeks before", "50% passed first review, of 2 tickets first reviewed"],
+        ["MILESTONES ACCEPTED", "1", "Same as the 4 weeks before"],
+        ["PROJECTS WITH A MERGE", "1", "+1 on the 4 weeks before"],
+        ["START TO MERGE, P50", "3 hours", "p90 3 hours 48 minutes", "No figures for the 4 weeks before",
+         "1.5 review rounds per ticket reviewed"]);
+
+      await view(days(1));
+      ck("delivered: one week against the one before it",
+         (await tiles())[0][2] === "+1 on the week before", JSON.stringify((await tiles())[0]));
+      ck("delivered: a past range says nothing about this week",
+         (await count(page, "delivered-unfinished")) === 0 && !(await text(page, "report-section-delivered")).includes("so far"));
+
+      await view(days(30));
+      await is("delivered: reviews and no merge read 0 and no value",
+        ["MERGED", "0", "No figures for the week before", "0% passed first review, of 1 ticket first reviewed"],
+        ["MILESTONES ACCEPTED", "0", "No figures for the week before"],
+        ["PROJECTS WITH A MERGE", "0", "No figures for the week before"],
+        ["START TO MERGE, P50", "no value", "No figures for the week before", "1 review round per ticket reviewed"]);
+      ck("delivered: and the charts hold a 0 and no point",
+         (await weekly("merged")).join("|") === "0" && (await marks("merged", "[data-bar]")) === 0
+         && (await marks("p50", "[data-dot]")) === 0);
+      await checkWords(page, ck, "delivered with no merge @1440");
+      await shot(page, "delivered-no-merge-1440");
+
+      await view(`/report?scope=team:${ids.Bo}`);
+      ck("delivered: an empty range says nothing was delivered, with no tile and no chart",
+         (await count(page, "delivered-empty")) === 1 && (await text(page, "delivered-empty")) === "Nothing was delivered in these weeks."
+         && (await count(page, "delivered-merged")) === 0 && (await page.locator("[data-week-chart]").count()) === 0,
+         await text(page, "report-section-delivered"));
+
+      // earlier medians the seed has none of: a longer one, and one seconds away; then no merge now
+      const reading = /\/api\/factory\/report\?/;
+      for (const [label, alter, want] of [
+        ["delivered: a shorter start to merge reads as a minus", (d) => { d.previous.start_to_merge.p50 = 30.5; },
+         "-1 day 3 hours on the 4 weeks before"],
+        ["delivered: under a minute apart reads the same", (d) => { d.previous.start_to_merge.p50 = 3.505; },
+         "Same as the 4 weeks before"],
+        ["delivered: earlier figures and no start time now give no change line",
+         (d) => { d.start_to_merge = { p50: null, p90: null, tickets: 0 }; }, undefined],
+      ]) {
+        await page.route(reading, async (r) => {
+          const res = await r.fetch();
+          const body = await res.json();
+          // an answer with nothing earlier passes as it is and fails the check: a throw in here
+          // would end the process with the daemon still running
+          if (body.sections.delivered.previous) alter(body.sections.delivered);
+          await r.fulfill({ response: res, json: body });
+        });
+        await view("/report?range=4w");
+        const line = page.getByTestId("delivered-start-to-merge").locator("[data-change]");
+        const got = (await line.count()) ? (await line.innerText()).trim() : undefined;
+        ck(label, got === want, `${got}`);
+        await page.unroute(reading);
+      }
+      await ctx.close();
+    }
+
     // ---- phone width
     {
       const { ctx, page } = await fresh(390);
@@ -347,6 +484,16 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await says(page, "390: the page reads", "5 tickets merged.");
       ck("390: six section headings", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("390: no horizontal scroll", (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      const at = await Promise.all(["merged", "milestones", "projects", "start-to-merge"].map((id) => page.getByTestId(`delivered-${id}`).boundingBox()));
+      ck("390: the tiles sit two to a row",
+         at[0].y === at[1].y && at[2].y === at[3].y && at[2].y > at[0].y && at[0].x === at[2].x, JSON.stringify(at));
+      await page.goto(`${BASE}/report`, { waitUntil: "networkidle" });
+      await page.getByTestId("delivered-p50-weeks").waitFor();
+      ck("390: 8 weeks of charts scroll inside their own box, not the page",
+         await page.locator('[data-week-chart] [role="region"]').evaluateAll((els) => els.length === 2 && els.every((e) => e.scrollWidth > e.clientWidth))
+         && (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      await shot(page, "delivered-8w-390");
+      await open(page, "/report?range=4w");
       await checkWords(page, ck, "frame @390");
       await shot(page, "frame-390");
       await pick(page, "report-range", "Two dates");

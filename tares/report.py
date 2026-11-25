@@ -407,11 +407,50 @@ CANNOT_SEE = (
     "Pushes that skipped the merge queue.",
     "Your bill: cost is API-equivalent (list prices), not what a subscription charges.",
 )
+
+
+def _delivered_figures(rows: list[dict]) -> dict:
+    """What was delivered in the weekly rows `rows`. Durations are in hours."""
+    hours = [h for r in rows for h in r["start_to_merge"]]
+    rounds = [n for r in rows for n in r["rounds"]]
+    return {
+        "merged": sum(r["merged"] for r in rows),
+        "milestones_accepted": sum(r["milestones_accepted"] for r in rows),
+        "projects_merged": len({r["project"] for r in rows if r["merged"]}),
+        "start_to_merge": {"p50": percentile(hours, 0.5), "p90": percentile(hours, 0.9),
+                           "tickets": len(hours)},      # of `merged`: those with a start
+        "first_pass": {"passed": sum(r["passed_first"] for r in rows),
+                       "reviewed": sum(r["reviewed"] for r in rows)},
+        "rounds_per_ticket": sum(rounds) / len(rounds) if rounds else None,
+    }
+
+
+def delivered(rows: list[dict], weeks: list[date], before: list[dict] | tuple = ()) -> dict:
+    """The Delivered section (TR-1668): the figures of the range, the same figures for the rows
+    `before` it (None when no project has a row there: cost nothing claims is no figure of what
+    was delivered), and what merged week by week."""
+    by_week = defaultdict(list)
+    for r in rows:
+        by_week[r["week"]].append(r)
+    return {
+        **_delivered_figures(rows),
+        "previous": _delivered_figures(before)
+                    if any(r["project"] != NO_PROJECT for r in before) else None,
+        "weeks": [{"week": w.isoformat(),
+                   "merged": sum(r["merged"] for r in by_week[w]),
+                   "p50": percentile([h for r in by_week[w] for h in r["start_to_merge"]], 0.5)}
+                  for w in weeks],
+    }
+
+
 # The sections of the page, in its order. A section's ticket puts its builder in its line:
 # f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
-# (read_weeks) and the Mondays of the range. A builder reads nothing else.
-SECTIONS: dict[str, Callable[[list[dict], list[date]], dict] | None] = {
-    "delivered": None,
+# (read_weeks) and the Mondays of the range. A builder named in COMPARED is also handed the rows
+# of as many weeks just before the range, in the same scope: f(rows, weeks, before). A builder
+# reads nothing else.
+COMPARED = {"delivered"}
+SECTIONS: dict[str, Callable[..., dict] | None] = {
+    "delivered": delivered,
 
     "time": None,
 
@@ -503,7 +542,11 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         ids, rest, name = [key], False, visible[key]["name"]
     else:
         raise ValueError("A scope is mine, factory, team:<id> or project:<id>.")
-    rows = read_weeks(store, ids + ([NO_PROJECT] if rest else []), weeks[0], weeks[-1])
+    # one read for the range and the same number of weeks before it, for the sections that compare
+    read = read_weeks(store, ids + ([NO_PROJECT] if rest else []),
+                      weeks[0] - timedelta(weeks=len(weeks)), weeks[-1])
+    rows = [r for r in read if r["week"] >= weeks[0]]
+    before = [r for r in read if r["week"] < weeks[0]]
     running = week_of(today)
     return {
         "range": {"from": weeks[0].isoformat(),
@@ -514,7 +557,8 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         "scope": {"value": scope, "name": name, "count": len(ids), "teams": teams,
                   "projects": [{"id": p["id"], "name": p["name"]} for p in factory_projects]},
         "cannot_see": list(CANNOT_SEE),
-        "sections": {k: build(rows, weeks) for k, build in SECTIONS.items() if build},
+        "sections": {k: build(rows, weeks, before) if k in COMPARED else build(rows, weeks)
+                     for k, build in SECTIONS.items() if build},
     }
 
 
