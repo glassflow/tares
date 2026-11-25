@@ -71,7 +71,8 @@ def _from_duckdb(table, row: tuple, cols: list[str]) -> dict:
     out = dict(zip(cols, row))
     for c in table.columns:
         if isinstance(c.type, JSONText) and isinstance(out.get(c.name), str):
-            out[c.name] = json.loads(out[c.name])
+            # an empty string is no JSON: it copies as NULL, so one odd row cannot stop a start
+            out[c.name] = json.loads(out[c.name]) if out[c.name].strip() else None
     return out
 
 
