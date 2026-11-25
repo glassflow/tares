@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from sqlalchemy import bindparam, case, distinct, false, func, select, update
+from sqlalchemy import BigInteger, bindparam, case, distinct, false, func, literal, select, union_all, update
 
+from . import claude_usage_hourly as hourly
 from .pricing import cost_usd
 from .session_store.tables import (project_sessions, session_meters, session_stations,
-                                   session_usage)
+                                   session_usage, session_usage_hourly)
 
 CLAUDE_USAGE_SCHEMA = [
     # One row per model reply in a Claude Code session. Claude Code repeats a reply's usage on each
@@ -124,6 +125,10 @@ class ClaudeUsageStore:
         stmt = self.sessions_db.upsert(u).on_conflict_do_nothing(
             index_elements=["session", "message"])
         with self.sessions_db.begin() as conn:
+            touched = {r["session"] for r in rows}           # the kept hourly totals follow (TR-1632)
+            touched.update(r[0] for r in conn.execute(
+                select(u.c.session).where(u.c.model == SYNTHETIC).distinct()))
+            hourly.lock(self.sessions_db, conn, touched)
             for i in range(0, len(rows), 1000):
                 conn.execute(stmt, rows[i:i + 1000])
             conn.execute(u.delete().where(u.c.model == SYNTHETIC))
@@ -142,12 +147,18 @@ class ClaudeUsageStore:
                 conn.execute(update(u).where(u.c.session == bindparam("b_session"),
                                              u.c.message == bindparam("b_message"))
                              .values(cost_usd=bindparam("b_cost")), priced)
+                touched.update(p["b_session"] for p in priced)
+            hourly.after_write(self, conn, touched)
 
     def _usage_forget_project(self, uid: str) -> None:
         """A project is deleted: its replies stay, counted as the session's own."""
         with self.sessions_db.begin() as conn:
+            touched = {r[0] for r in conn.execute(select(session_usage.c.session).where(
+                session_usage.c.project == uid).distinct())}
+            hourly.lock(self.sessions_db, conn, touched)
             conn.execute(update(session_usage).where(session_usage.c.project == uid)
                          .values(project=None))
+            hourly.after_write(self, conn, touched)
 
     # ── writes, from the claude_code source ───────────────────────────────────
     def record_reply_usage(self, session: str, message: str, at, model: str | None,
@@ -171,7 +182,9 @@ class ClaudeUsageStore:
             "project": func.coalesce(u.c.project, x.project),
             "model": func.coalesce(u.c.model, x.model)})
         with db.begin() as conn:
+            hourly.lock(db, conn, [session])         # the reply and its hour's total, one transaction
             conn.execute(stmt)
+            hourly.after_reply(self, conn, session, message)
 
     def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
         """The status line's report and the person of the credential that sent it; an older one
@@ -282,25 +295,53 @@ class ClaudeUsageStore:
         reply was stamped with, else the station's project (a builder), else the project the
         session worked in. The crew's own stations serve every project, so their unstamped replies
         are the crew's (`kind` crew); anything else unclaimed is `other`."""
-        u, ss, ps = session_usage, session_stations, project_sessions
+        u, ss, ps, h = session_usage, session_stations, project_sessions, session_usage_hourly
         worked = select(ps.c.session, func.min(ps.c.project).label("project")).group_by(
             ps.c.session).subquery()
         is_crew = ss.c.role.in_(CREW_ROLES)
-        q = (select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
-                    u.c.cache_read_tokens, u.c.cost_usd,
-                    func.coalesce(u.c.project, ss.c.project,
-                                  case((is_crew, None), else_=worked.c.project)).label("proj"),
-                    is_crew.label("crew"))
-             .select_from(u.outerjoin(ss, ss.c.session == u.c.session)
-                          .outerjoin(worked, worked.c.session == u.c.session)))
-        if since is not None:
-            q = q.where(u.c.replied_at >= since)
-        r = q.cte("r")
+        if hourly.ready(self):
+            # the kept hourly totals from the first whole hour of the window on, and the replies of
+            # the partial hour before it from the rows (TR-1632); one query, one snapshot
+            parts = []
+            first = hourly.first_whole_hour(since) if since is not None else None
+            b = select(h.c.session, h.c.replies, h.c.input_tokens, h.c.output_tokens,
+                       h.c.cache_write_tokens, h.c.cache_read_tokens, h.c.cost_usd, h.c.unpriced,
+                       func.nullif(h.c.project, "").label("project"))
+            parts.append(b if first is None else b.where(h.c.hour >= first))
+            if since is not None and first > since:
+                parts.append(select(
+                    u.c.session, literal(1, BigInteger), u.c.input_tokens, u.c.output_tokens,
+                    u.c.cache_write_tokens, u.c.cache_read_tokens, u.c.cost_usd,
+                    case((u.c.cost_usd.is_(None), 1), else_=0), u.c.project)
+                    .where(u.c.replied_at >= since, u.c.replied_at < first))
+            src = (parts[0] if len(parts) == 1 else union_all(*parts)).subquery("src")
+            q = (select(src.c.session, src.c.replies, src.c.input_tokens, src.c.output_tokens,
+                        src.c.cache_write_tokens, src.c.cache_read_tokens, src.c.cost_usd,
+                        src.c.unpriced,
+                        func.coalesce(src.c.project, ss.c.project,
+                                      case((is_crew, None), else_=worked.c.project)).label("proj"),
+                        is_crew.label("crew"))
+                 .select_from(src.outerjoin(ss, ss.c.session == src.c.session)
+                              .outerjoin(worked, worked.c.session == src.c.session)))
+            r = q.cte("r")
+            n_replies, n_unpriced = func.sum(r.c.replies), func.sum(r.c.unpriced)
+        else:
+            q = (select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
+                        u.c.cache_read_tokens, u.c.cost_usd,
+                        func.coalesce(u.c.project, ss.c.project,
+                                      case((is_crew, None), else_=worked.c.project)).label("proj"),
+                        is_crew.label("crew"))
+                 .select_from(u.outerjoin(ss, ss.c.session == u.c.session)
+                              .outerjoin(worked, worked.c.session == u.c.session)))
+            if since is not None:
+                q = q.where(u.c.replied_at >= since)
+            r = q.cte("r")
+            n_replies, n_unpriced = func.count(), func.count().filter(r.c.cost_usd.is_(None))
         kind = case((r.c.proj.is_not(None), "project"),
                     (func.coalesce(r.c.crew, false()), "crew"), else_="other")
-        totals = [func.count(), func.sum(r.c.input_tokens), func.sum(r.c.output_tokens),
+        totals = [n_replies, func.sum(r.c.input_tokens), func.sum(r.c.output_tokens),
                   func.sum(r.c.cache_write_tokens), func.sum(r.c.cache_read_tokens),
-                  func.sum(r.c.cost_usd), func.count().filter(r.c.cost_usd.is_(None))]
+                  func.sum(r.c.cost_usd), n_unpriced]
         final = (select(r.c.proj, kind.label("kind"), func.count(distinct(r.c.session)), *totals)
                  .group_by(r.c.proj, kind)
                  .order_by(func.sum(r.c.cost_usd).desc().nulls_last()))

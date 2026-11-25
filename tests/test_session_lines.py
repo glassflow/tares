@@ -38,7 +38,7 @@ from tares.store import Store  # noqa: E402
 PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
-HEAD = "0010_core_people"
+HEAD = "0011_session_usage_hourly"
 SRC = "claude_code"
 _N = [0]
 
