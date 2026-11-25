@@ -18,11 +18,16 @@ at once. Two writers keep the row right:
   chunks it sets the `sessions_caught_up` row in `session_ingest_marks`; a pass that raised does
   not, so the readers stay on the scan and the next start tries again.
 
+In the factory edition, once the one-time move out of DuckDB is complete (`session_move.complete`:
+planned, no session `pending`), `reconcile_sessions` reads nothing from DuckDB, nor do `fill_facts`
+and `fill_turns` once each has finished one pass (TR-1613), and the usage and challenger fills of
+`Store._upgrade` read it once (`filled_once`). The platform editions are as described below.
+
 The readers know the table has caught up from one row in `session_ingest_marks`, `CAUGHT_UP`. It
 is set by the first complete `reconcile_sessions`, or at once by `Store.__init__` on a cell whose
 events hold no claude_code line (nothing to catch up on). It is never unset.
 
-DuckDB is never changed: `Store.append` keeps writing every line there.
+Nothing here changes DuckDB: `Store.append` keeps writing every line there.
 
 The same two writers keep the facts the factory reads (TR-1477): the crew's protocol messages in
 `session_messages` and the shell commands sessions ran, with what they printed, in
@@ -86,7 +91,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import bindparam, delete, func, insert, select, text, update
 
-from . import metrics
+from . import edition, metrics
 from .envelope import now_utc
 from .factory import is_coordination
 from .session_store.tables import catalog_sources as sources_table
@@ -100,6 +105,10 @@ MARGIN = timedelta(minutes=10)       # a pass starts this long before the last o
 CHUNK = 200                          # sessions read from DuckDB under one hold of the lock
 FACTS_MARK = "session_facts"         # the facts fill's row in session_ingest_marks (TR-1477)
 TURNS_MARK = "session_turns"         # the turns fill's row in session_ingest_marks (TR-1505)
+USAGE_FILLED = "claude_usage_filled"     # the factory's usage fill read DuckDB (TR-1613)
+CHALLENGES_FILLED = "challenges_filled"  # the factory's challenger fill read DuckDB (TR-1613)
+FACTS_FILLED = "session_facts_filled"    # a facts fill finished on this factory cell (TR-1613)
+TURNS_FILLED = "session_turns_filled"    # a turns fill finished on this factory cell (TR-1613)
 SAID_KEEP = 3                        # the assistant messages kept per session
 SAID_READ = 60                       # the newest assistant lines per session a fill reads
 FILES_READ = 400                     # the newest file-editing tool_use lines per session a fill reads
@@ -639,6 +648,27 @@ def record(store, envelopes) -> bool:
     return lines_ok
 
 
+# ── fills the factory runs once ──────────────────────────────────────────────────────────────
+def filled_once(store, name: str) -> bool:
+    """True in the factory edition when the fill `name` has finished before, so it reads DuckDB's
+    events no more (TR-1613). The platform editions run their fills at every open."""
+    if edition.edition(store)[0] != "factory":
+        return False
+    with store.sessions_db.read() as conn:
+        return conn.execute(select(session_ingest_marks.c.at).where(
+            session_ingest_marks.c.name == name)).first() is not None
+
+
+def set_filled(store, name: str) -> None:
+    """Record, in the factory edition, that the fill `name` finished. Call it after the fill wrote."""
+    if edition.edition(store)[0] != "factory":
+        return
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).values(name=name, at=now_utc())
+    with db.begin() as conn:
+        conn.execute(stmt.on_conflict_do_nothing(index_elements=["name"]))
+
+
 # ── catching up from DuckDB ──────────────────────────────────────────────────────────────────
 def _mark(store):
     with store.sessions_db.begin() as conn:
@@ -702,7 +732,15 @@ def reconcile_sessions(store, chunk: int = CHUNK) -> int:
     chunks of `chunk` sessions, taking and letting go of the store's lock for each, and writes
     under the same lock that `Store.append` holds across its commit and `record`, so a line is
     never counted by both. Sets the caught-up row when every chunk has been written (even when it
-    found no session). Returns how many sessions it looked at."""
+    found no session). Returns how many sessions it looked at.
+
+    In the factory edition, once the one-time move is complete (`session_move.events_done`), DuckDB
+    is not read: the caught-up row is set and the mark is left where it was."""
+    from . import session_move          # session_move imports this module
+    if session_move.events_done(store):
+        if not caught_up(store):
+            _set_caught_up(store)
+        return 0
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _mark(store)
@@ -865,7 +903,14 @@ def fill_facts(store, chunk: int = CHUNK) -> int:
     line `record` already wrote, or a pass that runs twice, changes nothing. Reads DuckDB for
     `chunk` sessions at a time, taking and letting go of the store's lock for each; the mark moves
     to the newest `ingest_time` read once every chunk is written, so a pass that raised is read
-    again from the same place. Returns how many sessions it looked at."""
+    again from the same place. Returns how many sessions it looked at.
+
+    In the factory edition, once the one-time move is complete and this fill has finished before
+    (`FACTS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
+    reads once more, so a session whose fill failed during the move is covered."""
+    from . import session_move          # session_move imports this module
+    if session_move.events_done(store) and filled_once(store, FACTS_FILLED):
+        return 0
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _facts_mark(store)
@@ -883,6 +928,7 @@ def fill_facts(store, chunk: int = CHUNK) -> int:
         _fill_chunk(store, sources, sids[i:i + chunk], since)
     if newest is not None:
         _set_facts_mark(store, _utc(newest))
+    set_filled(store, FACTS_FILLED)
     return len(sids)
 
 
@@ -928,7 +974,14 @@ def fill_turns(store, chunk: int = CHUNK) -> int:
     changes nothing. Reads DuckDB for `chunk` sessions at a time, taking and letting go of the
     store's lock for each, so one chunk is in memory at once; the mark moves to the newest
     `ingest_time` read once every chunk is written, so a pass that raised is read again from the
-    same place. Returns how many sessions it looked at."""
+    same place. Returns how many sessions it looked at.
+
+    In the factory edition, once the one-time move is complete and this fill has finished before
+    (`TURNS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
+    reads once more, so a session whose fill failed during the move is covered."""
+    from . import session_move          # session_move imports this module
+    if session_move.events_done(store) and filled_once(store, TURNS_FILLED):
+        return 0
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _turns_mark(store)
@@ -946,6 +999,7 @@ def fill_turns(store, chunk: int = CHUNK) -> int:
         _fill_turns_chunk(store, sources, sids[i:i + chunk], since)
     if newest is not None:
         _set_turns_mark(store, _utc(newest))
+    set_filled(store, TURNS_FILLED)
     return len(sids)
 
 

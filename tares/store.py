@@ -27,7 +27,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import Date, LargeBinary, and_, cast, delete, func, insert, null, or_, select, update
 
-from . import edition, metrics, session_archive, session_ingest, session_read, state_db
+from . import edition, metrics, session_archive, session_ingest, session_move, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, session_stations,
@@ -550,6 +550,32 @@ def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     if sessions:
         sql += f" AND NOT COALESCE(key_value IN ({ph(len(sessions))}), FALSE)"
     return sql, [*both, *pparams, *sessions]
+
+
+def _line_hidden(exclude, source: str):
+    """The label and payload tests of `_exclude_sql` for a line read from `session_lines`: a
+    function of (labels, payload), both JSON texts, true when the line is left out. The session
+    test is the caller's."""
+    ids = list((exclude or {}).get("ids") or [])
+    names = list((exclude or {}).get("names") or [])
+    if not (ids or names):
+        return lambda labels, payload: False
+    both = {v.lower() for v in [*ids, *names]}
+    shared = exclude.get("shared")
+    in_payload = shared is None or source in shared
+
+    def field(blob, name):
+        try:
+            return json.loads(blob or "{}").get(name)
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    def hidden(labels, payload) -> bool:
+        tag = field(labels, "tares_project")
+        if tag is not None and str(tag).lower() in both:
+            return True
+        return in_payload and field(payload, "project") in ids
+    return hidden
 
 
 def _cgroup_mem_bytes() -> int | None:
@@ -1521,8 +1547,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             except Exception:
                 self.con.execute("ROLLBACK")
                 raise
-        # the challenger's lines also go to `challenges` (state), after the events committed; one
-        # lost to a crash in between is copied at the next open (_challenges_fill)
+        # the challenger's lines also go to `challenges` (state), after the events committed. One
+        # lost to a crash in between is copied at the next open (_challenges_fill) on a platform
+        # edition; the factory edition runs that fill once (TR-1613), so there it is not copied.
         ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
                str((e.labels or {}).get("branch") or ""),
                None if (e.labels or {}).get("tares_project") is None
@@ -1533,8 +1560,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 with self._swrite:
                     self._record_challenges(ch)
             except Exception as ex:          # the events are in; never fail the ingest for this
-                print(f"taresd: keeping {len(ch)} challenger line(s) failed ({ex}); "
-                      "copied at the next start", flush=True)
+                print(f"taresd: keeping {len(ch)} challenger line(s) failed ({ex}); they are "
+                      "copied at the next start, except on a factory cell that has already run "
+                      "that fill", flush=True)
 
     def _apply_entity_deltas(self, ent: dict) -> None:
         """Fold this batch's (source, label, value) deltas into entity_counts. Already-truncated
@@ -4587,17 +4615,35 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 return str(p["finding"])
         return None
 
+    def _table_payloads(self, source: str, limit: int, exclude) -> list[str] | None:
+        """`recent_payloads` from `session_lines`, newest first by the line's time (TR-1613): the
+        lines still in the table, not the archived ones. None when DuckDB answers: a platform
+        edition, another connector's source, or a table with nothing to show while the one-time
+        move is not complete."""
+        if (edition.edition(self)[0] != "factory"
+                or source not in session_ingest.claude_code_sources(self)):
+            return None
+        ids = list((exclude or {}).get("ids") or [])
+        hidden = set(self.sessions_of_projects(ids)) if ids else set()
+        got = session_read.newest_payloads(self, source, limit, hidden,
+                                           _line_hidden(exclude, source))
+        return got if got or session_move.complete(self) else None
+
     def recent_payloads(self, source: str, limit: int = 500,
                         exclude: dict | None = None) -> list[dict]:
-        """The lossless payloads of a source's most recent events (for field profiling)."""
-        esql, eparams = self._exclude(exclude, [source])
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT payload FROM events WHERE source = ?{esql} "
-                "ORDER BY ingest_time DESC LIMIT ?",
-                [source, *eparams, int(limit)]).fetchall()
+        """The lossless payloads of a source's most recent events (for field profiling). In the
+        factory edition a claude_code source is read from `session_lines` (`_table_payloads`)."""
+        texts = self._table_payloads(source, int(limit), exclude)
+        if texts is None:
+            esql, eparams = self._exclude(exclude, [source])
+            with self._lock:
+                rows = self.con.execute(
+                    f"SELECT payload FROM events WHERE source = ?{esql} "
+                    "ORDER BY ingest_time DESC LIMIT ?",
+                    [source, *eparams, int(limit)]).fetchall()
+            texts = [r[0] for r in rows]
         out = []
-        for (pj,) in rows:
+        for pj in texts:
             try:
                 out.append(json.loads(pj) if pj else {})
             except (TypeError, ValueError):

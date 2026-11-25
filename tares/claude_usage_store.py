@@ -18,6 +18,7 @@ from datetime import timedelta
 from sqlalchemy import BigInteger, bindparam, case, distinct, false, func, literal, select, union_all, update
 
 from . import claude_usage_hourly as hourly
+from . import session_ingest
 from .pricing import cost_usd
 from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (project_sessions, session_meters, session_stations,
@@ -93,7 +94,9 @@ class ClaudeUsageStore:
         """Replies stored as claude_code events without a usage row get one: every one on the
         first start, then those from a day before the newest row on (a version that did not count
         them may have run in between). Lock not needed (init). The usage rows are in the session
-        store and the replies are events, so they are read from DuckDB and written there."""
+        store and the replies are events, so they are read from DuckDB and written there. The
+        factory edition reads the events once and records it (`claude_usage_filled`, TR-1613); the
+        SYNTHETIC rows are removed and unpriced rows priced at every start, as before."""
         u = session_usage
         with self.sessions_db.begin() as conn:
             newest = conn.execute(select(func.max(u.c.replied_at))).scalar_one()
@@ -107,7 +110,8 @@ class ClaudeUsageStore:
             projects.setdefault(pname, pid)
             projects[pid] = pid                            # an id wins over a same-named project
         j = "json_extract(e.payload, '$.message.usage')"
-        rows = self.con.execute(
+        done = session_ingest.filled_once(self, session_ingest.USAGE_FILLED)
+        rows = [] if done else self.con.execute(
             "SELECT e.key_value, json_extract_string(e.payload, '$.message.id'), min(e.event_time), "
             "any_value(json_extract_string(e.payload, '$.message.model')), "
             "any_value(json_extract_string(e.payload, '$.tares_project')), "
@@ -153,6 +157,8 @@ class ClaudeUsageStore:
                              .values(cost_usd=bindparam("b_cost")), priced)
                 touched.update(p["b_session"] for p in priced)
             hourly.after_write(self, conn, touched)
+        if not done:
+            session_ingest.set_filled(self, session_ingest.USAGE_FILLED)
 
     def _usage_forget_project(self, uid: str) -> None:
         """A project is deleted: its replies stay, counted as the session's own."""
