@@ -42,6 +42,7 @@ test_crew_claude
 test_crew_client
 test_crew_codex_pace
 test_crew_codex_station
+test_crew_codex_up
 test_crew_context
 test_crew_contract
 test_crew_conversation

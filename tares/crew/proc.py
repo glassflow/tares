@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from . import claude, codex_station, launch, state
 from .codex import RUNTIME as CODEX
-from .errors import ClaudeNotFoundError
+from .errors import ClaudeNotFoundError, CrewError
 from .paths import CrewPaths
 
 
@@ -33,6 +33,31 @@ def on_codex(station: str, paths: CrewPaths | None = None) -> bool:
 def crew_on_codex(paths: CrewPaths | None = None) -> bool:
     """Is this crew's runtime Codex? False for a crew that has recorded no station yet."""
     return launch.crew_runtime(paths or CrewPaths.from_env()) == CODEX
+
+
+RUNTIME_SLOT = "/api/factory/integrations/effective"
+
+
+def planned_runtime(client, paths: CrewPaths | None = None) -> str:
+    """The runtime this crew's stations run on, or will: the one its recorded stations were started on, else,
+    for a crew that has started none yet, the one the cell's runtime slot holds now (the launch of its first
+    station is built by it). "" when neither says: Tares does not answer, is too old to have the route, or
+    names no runtime. `client` is the crew's TaresClient; `paths` its crew home when the caller has it (the
+    client's own otherwise). Never raises for what Tares does."""
+    have = launch.crew_runtime(paths or client.paths)
+    if have:
+        return have
+    try:
+        if not client.tares_on():
+            return ""
+        doc = state.loads_json(client.tares_http("GET", RUNTIME_SLOT))
+    except (CrewError, ValueError):
+        return ""
+    slots = doc.get("slots") if isinstance(doc, dict) else None
+    for row in slots if isinstance(slots, list) else []:
+        if isinstance(row, dict) and row.get("slot") == "runtime":
+            return str(row.get("integration") or "")
+    return ""
 
 
 def binary(env=None, paths: CrewPaths | None = None) -> str:

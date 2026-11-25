@@ -26,7 +26,9 @@ Differences from the old bash crew (each one a decision, none an accident):
     cmd_crew_up: the roles loop and its "Starting the crew" line, the orchestrator first.
  4. The claude binary: CLAUDE_BIN, else the first `claude` on PATH that is not a cmux wrapper script
     (the old bash claude_bin). It is looked up when crew up starts, as
-    bash does at its own start.
+    bash does at its own start. A machine without one is not stopped there when the crew is on Codex
+    (its recorded stations', else the cell's runtime slot: proc.planned_runtime): such a crew is asked
+    for `codex`, its version and its login instead (codex_ready), and nothing of Claude Code's.
  5. The terminal box (tares/factory_setup.py) is not imported here: it stays out of the engine, so the plain prompts need no terminal.
     `tares factory` runs it before the dispatcher, so a terminal user still sees the box.
  6. prod_pattern is saved with the release profile as the default pattern, as bash does; the box keeps a
@@ -664,9 +666,34 @@ def entry_crew_up(argv: list, env: dict) -> int:
     return cmd_crew_up(argv, env)
 
 
+def codex_ready(env: dict) -> str:
+    """What a crew on Codex needs on this machine before a station is started, checked once at the start of
+    `crew up` so a missing piece stops here and not halfway: the `codex` program, a version stations start on,
+    and the person's login file. Returns the version. Dies (CrewError) with what is missing."""
+    from . import codex as cx
+    version = cx.check_version(cx.codex_version(cx.codex_bin(env)), lambda text: _err(f"  note: {text}\n"))
+    login = cx.person_login(env)
+    if not login.is_file():
+        raise CrewError(f"no Codex login at {login}: a station runs on the login of the person who starts it. Run "
+                        "`codex login`, then run this again.")
+    return version
+
+
 def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
-    claude = claude_bin(env)
+    from . import proc
+    from .codex import RUNTIME as CODEX
+    # bash looks for claude before it does anything else. A machine without it may still start a crew on
+    # Codex: the crew's own stations say so, else the cell's runtime slot does (TR-1593).
+    try:
+        claude, no_claude = claude_bin(env), None
+    except CrewError as e:
+        claude, no_claude = "", e
     up = Up(env)
+    runtime = None
+    if no_claude is not None:
+        runtime = proc.planned_runtime(up.client)
+        if runtime != CODEX:
+            raise no_claude
     state.crew_name(up.paths)                      # a name that is not valid stops here, not halfway
     c = up.client
     c.prime()
@@ -688,21 +715,29 @@ def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
             raise SetupNeededError(f"setup needs answers before crew up --json can run: {', '.join(ids)}. "
                                    f"Read them with {ME} crew setup --questions, give them with {ME} crew setup --answers <file>, "
                                    f"then run crew up --json --yes again")
-    my_version = kit_version(up.kit)
-    clash = installed_tares(env, my_version)
-    if clash:
-        up.say(f"warning: {clash_text(clash, up.kit, my_version)}")
+    # What follows of Claude Code's (a plugin of the same name installed for it, its trust of the crew home,
+    # its language servers) is not asked of a crew on Codex, which loads nothing of Claude Code's.
+    on_codex = (proc.planned_runtime(c) if runtime is None else runtime) == CODEX
+    if on_codex:
+        codex_ready(env)
+    else:
+        my_version = kit_version(up.kit)
+        clash = installed_tares(env, my_version)
+        if clash:
+            up.say(f"warning: {clash_text(clash, up.kit, my_version)}")
     state.ensure_crew_home(up.paths)
-    up.ensure_home_trusted(claude)
+    if not on_codex:
+        up.ensure_home_trusted(claude)
     c.keep_token()
     up.setup_crew_name()
     up.report_machine()
     up.ensure_settings()
     c.prime()
-    up.lsp_offer(claude)
+    if not on_codex:
+        up.lsp_offer(claude)
     if not roles:
         roles = c.crew_roles()
-    code = start_stations(c, env, roles, claude)
+    code = start_stations(c, env, roles, claude or None)
     if code:
         return code
     if watch:
@@ -714,9 +749,12 @@ def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
     elif idle_wake_on(c):
         _err(f"idle_wake is on and the watch is off: nothing wakes the stations and they hold no tick. "
              f"Run {ME} crew watch.\n")
+    # nobody attaches to a Codex station: what it asks is on the desk
+    answer = (f"  Answer its questions  {ME} desk\n" if on_codex else
+              f"  Answer its questions  {ME} crew attach orchestrator   (← to leave it running)\n")
     _err(f"\nThe crew takes a few minutes to check in. Next:\n"
          f"  Watch it              {c.tares}/crew\n"
-         f"  Answer its questions  {ME} crew attach orchestrator   (← to leave it running)\n"
+         f"{answer}"
          f"  Give it a project     {ME} spec \"what to build\"   (in the project's repo)\n"
          f"  Stop it               {ME} crew down\n")
     return 0

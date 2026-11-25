@@ -371,16 +371,39 @@ def verify(station: str, sock: Path, home: Path, allowed_mcp, deadline: float | 
         raise CrewError(f"the app-server of {station} did not answer as one: {e}") from None
 
 
+_CLAUDE_MODEL = re.compile(r"^(claude-|opus|sonnet|haiku)", re.IGNORECASE)
+
+
+def claude_model(model: str) -> bool:
+    """Is `model` the name of a Claude model? The crew's settings file (crew.json) starts from a template
+    that names them (opus, sonnet), and Codex takes none: measured on 0.171.0, a turn asked for `opus` fails
+    with "The 'opus' model is not supported", while the station reads as started and at rest."""
+    return bool(_CLAUDE_MODEL.match(str(model or "").strip()))
+
+
+def without_claude_model(settings: dict) -> dict:
+    """`settings` (a filled spec's) with a Claude model taken out of the conversation's start, and the effort
+    that was chosen for that model with it: the station then runs on the model and effort Codex gives the
+    account by default. Settings that name any other model, or none, come back as they are."""
+    thread = settings.get("thread")
+    if not isinstance(thread, dict) or not claude_model(thread.get("model")):
+        return settings
+    return {**{k: v for k, v in settings.items() if k != "effort"},
+            "thread": {k: v for k, v in thread.items() if k != "model"}}
+
+
 def plan(spec: dict, values: dict, tares_bin: str = "") -> dict:
     """What a Codex station starts with, from the cell's spec and not started: {runtime, args, env, settings}
-    with every placeholder filled from `values`, and FACTORY_TARES when `tares_bin` is given. `otel`,
-    `otel_file` and `mcp` are there and empty, the shape `launch.launch_plan` gives for Claude Code."""
+    with every placeholder filled from `values`, and FACTORY_TARES when `tares_bin` is given. A Claude model's
+    name is not handed to Codex (see without_claude_model). `otel`, `otel_file` and `mcp` are there and empty,
+    the shape `launch.launch_plan` gives for Claude Code."""
     from ..integrations.runtime import fill_placeholders
     env = fill_placeholders(spec["env"], values)
     if tares_bin:
         env["FACTORY_TARES"] = tares_bin
     return {"runtime": RUNTIME, "args": fill_placeholders(spec["command"], values), "env": env,
-            "settings": fill_placeholders(spec["settings"], values), "otel": {}, "otel_file": {}, "mcp": {}}
+            "settings": without_claude_model(fill_placeholders(spec["settings"], values)),
+            "otel": {}, "otel_file": {}, "mcp": {}}
 
 
 def fingerprint(plan: dict, kit: str = "") -> str:

@@ -918,6 +918,13 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
     settings = write_settings(client, station, role, parent, project, repo, plan)
     if plan.get("runtime") == cx.RUNTIME:
         kd = kit_dir(client)
+        # what the station really starts on: a Claude model's name in crew.json is not handed to Codex
+        thread = plan["settings"].get("thread") if isinstance(plan["settings"].get("thread"), dict) else {}
+        if model and not thread.get("model") and cx.claude_model(model):
+            print(f"  note: {station} is set to {model}, a Claude model: on Codex it runs on the model and effort "
+                  f"the account gives by default. Set stations.{role}.model in crew.json to a Codex model to "
+                  "choose one.", file=sys.stderr)
+            model, effort = "", str(plan["settings"].get("effort") or "")
         cx.start(client, station, plan, cwd, prompt, {
             "role": role, "parent": parent, "project": project, "repo": repo, "cwd": cwd, "sessionId": resume,
             "model": model, "effort": effort, "settings": settings, "kit": kit_version(kd), "plugin": kd,

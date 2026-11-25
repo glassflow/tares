@@ -31,7 +31,7 @@ import time
 
 from . import claude, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
-from .errors import CrewError, GuardOffError, LimitHeldError, NotBetweenTurnsError, SessionListUnreadableError
+from .errors import ClaudeNotFoundError, CrewError, GuardOffError, LimitHeldError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
@@ -455,10 +455,20 @@ def _command(fn, *, local_only: bool, name: str = "", offline_ok: bool = False):
     def body(argv: list, env: dict) -> int:
         words = 2 if argv[:1] == ["crew"] else 1
         paths = CrewPaths.from_env()
-        binary = proc.binary(env, paths)   # bash looks for claude before it does anything else; a Codex crew needs none
+        # bash looks for claude before it does anything else; a Codex crew needs none. A crew that has recorded
+        # no station yet is asked after Tares was: its first station may be about to start on Codex.
+        no_claude = None
+        try:
+            binary = proc.binary(env, paths)
+        except ClaudeNotFoundError as e:
+            if launch.crew_runtime(paths):
+                raise
+            binary, no_claude = "", e
         state.crew_name(paths)
         client = TaresClient(paths, env)
         try:
+            if no_claude is not None and proc.planned_runtime(client) != proc.CODEX:
+                raise no_claude
             if local_only:   # these work while Tares is down: stopping the crew never waits for it
                 state.merge_crew_defaults(paths)
                 client.tares_on()
