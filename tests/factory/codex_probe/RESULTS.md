@@ -359,6 +359,13 @@ for the run (`tares up` on a port and a data folder of its own), 15 of 15:
 - Tokens of four replies were stored (2,806 input, 45,440 cached, 260 output). No cost: the cell has no
   price for the model, and counts the four replies as not priced.
 
+The console itself, looked at once with the cell of a second run left up (`TARES_PROBE_KEEP_CELL=1`, a built
+console given with `TARES_UI_DIST`): the Crew page lists the station under its role, ended. Its row opens
+only for a station that has not ended, so the session was set to idle by hand, and "Show what it did" then
+showed the run as recorded: the two prompts as the factory's, what the station said, "Ran 3 tools, 1 FAILED",
+its answer, and the killed `sleep 61.4949` as a Bash call marked FAILED. The page has two marks for a call,
+failed or not, so a command with an unknown outcome reads as failed there; its output says "outcome unknown".
+
 Not done here: a station recorded by the watch itself (the step is called by hand; it is not in the watch's
 round yet), station to station messages, files a station changed as `session_files` rows (a file change is
 on the session's timeline only), and a long conversation (every look reads the whole of it).

@@ -253,7 +253,11 @@ class Cell:
         self.port = s.getsockname()[1]
         s.close()
         self.url = f"http://127.0.0.1:{self.port}"
-        self.token = "probe-" + secrets.token_urlsafe(18)   # made for this run, good for nothing else
+        # A login made for this run, good for nothing else. With TARES_PROBE_KEEP_CELL set the cell asks for
+        # none and is left running at the end (its address and process id are printed), for a look at its
+        # console; it listens on this machine only.
+        self.keep = bool(os.environ.get("TARES_PROBE_KEEP_CELL"))
+        self.token = "" if self.keep else "probe-" + secrets.token_urlsafe(18)
         tares = os.path.join(os.path.dirname(sys.executable), "tares")
         env = {**os.environ, "TARES_OTLP_GRPC_PORT": "off", "TARES_HOME": self.dir, "TARES_AUTH_TOKEN": self.token}
         for k in ("TARES_DB", "TARES_CATALOG", "TARES_FACTORY_URL", "TARESD_URL", "FACTORY_STATION", "FACTORY_ROLE"):
@@ -273,8 +277,9 @@ class Cell:
 
     def http(self, method: str, path: str, body=None, headers=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
+        auth = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         req = urllib.request.Request(self.url + path, data=data, method=method, headers={
-            "Authorization": f"Bearer {self.token}", "Content-Type": "application/json", **(headers or {})})
+            **auth, "Content-Type": "application/json", **(headers or {})})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 text = r.read().decode("utf-8", "replace")
@@ -289,6 +294,9 @@ class Cell:
         return json.dumps(self.http(method, path, body, headers))
 
     def end(self):
+        if self.keep:
+            print(f"      the cell is left running at {self.url} (process {self.proc.pid}, data in {self.dir})")
+            return
         self.proc.terminate()
         try:
             self.proc.wait(20)
