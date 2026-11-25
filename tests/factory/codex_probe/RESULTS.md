@@ -341,6 +341,80 @@ Not measured, and tested with stand-ins only (`tests/test_crew_codex_pace.py`, t
   not acted on.
 - A bucket of one model with a window of its own (the stand-in has one; this account showed none).
 
+## 8. Tares over MCP (TR-1596)
+
+A station on Codex is connected to the crew's Tares MCP endpoint as itself, and gets no turn without it.
+`probe_mcp_station.py` runs the product's own start against a real cell that it starts and throws away
+(`cell.py`: `tares up` and `tares mcp`, a login required, the Codex runtime, one project handed over, one
+ticket assigned to the station). Measured on 0.171.0, macOS.
+
+### What Codex does with an MCP server
+
+- A server given in a conversation's start (`thread/start`, `config.mcp_servers`) is connected for that
+  conversation. Nothing is written to a config file, and the app-server's own list of servers stays empty.
+- `http_headers_helper` is a string that Codex runs through a shell (quoting and a `NAME=value` in front both
+  work) and whose output, a JSON object, becomes headers. The helper gets an environment of its own: HOME,
+  PATH, SHELL, TMPDIR, USER, LOGNAME and LC_CTYPE, and none of the station's variables. A list or a table for
+  it is refused ("expected a string").
+- `env_http_headers` leaves a header off when its variable is empty or unset; it is not an error.
+- `required = true`: a conversation whose server does not answer its first request is not started
+  ("required MCP servers failed to initialize: tares: ..."), and is not joined either (`thread/resume` after
+  the app-server was started again gives the same sentence). Without `required` the conversation starts and
+  the server reads `failed`.
+- An unknown key in a server's table is accepted without a word, so a typing error in `required` would not
+  show. The tests of the launch spec hold the spelling; the probe's `no_key` scenario holds the effect.
+- With the conversation's approval policy `on-request`, every call of an MCP tool stops on a question to the
+  person. `default_tools_approval_mode = "approve"` on the server lets its calls through. They still pass the
+  guard's hook.
+- The app-server makes a call itself on request (`mcpServer/tool/call`, with the conversation's id): no turn
+  and no model, on the conversation's own connection, so with the same headers the model's calls carry.
+  `mcpServerStatus/list` with the conversation's id gives the server's `runtimeStatus`.
+
+### What the Tares endpoint does with a key
+
+It takes any bearer at the first request (a missing one is refused, when the endpoint has a key of its own),
+passes the caller's key to the cell with each call, and hands the cell's refusal back as the tool's text,
+`error 401: authentication required`, with no error flag. So `required` finds an endpoint that is down, a
+helper that fails and a missing key. It does not find a wrong key. The crew's own read before each prompt does.
+
+### Decided
+
+- The key reaches Codex through the plugin's headers helper (`tares hook mcp-headers`), the way it reaches
+  Claude Code, told the key file on its own command line. Not through `bearer_token_env_var`: that needs the
+  key in the app-server's environment, which every command of the model inherits (the spike printed its
+  length) and which `ps` shows for the person's own processes. Not through a stdio bridge: one more process
+  per station, and a second way to reach Tares.
+- The identity headers are the plugin's five, read from the station's environment.
+- Before every prompt, not only the first, the crew checks that the server is connected for the conversation
+  and asks it one read, `list_crew`, which a cell answers for any key it takes, on a cell with no station yet
+  too. A station that fails gets no turn and the caller is told why. It is not stopped for it.
+- A refused join is told apart from a lost conversation by Codex's own sentence. A station is never given a
+  new conversation because Tares was down.
+
+### `probe_mcp_station.py`
+
+| Scenario | Result |
+|---|---|
+| `as_itself` | Pass. One turn: `builder_brief` with start and `get_ticket` went through. The ticket moved to `doing`, which the cell lets only its holder do, and the cell's history of the ticket names the station and the role `builder`. The key was not in the output of `printenv` run by the model (the path of the key file is), not in the arguments or environment of the app-server and what ran under it, not in any file of the crew home other than the key file (the station's Codex folder, its settings and its log among them), and not in the stored conversation. |
+| `tares_down_keeps_the_conversation` | Pass. Station stopped, endpoint ended: the start in its conversation was refused ("cannot reach an MCP server it is started with"), nothing was left running, and the recorded conversation was unchanged. Endpoint back: the same conversation was joined and took a turn. |
+| `wrong_key` | Pass. No turn: "tares.list_crew was refused (error 401: authentication required)". Nothing left running. |
+| `no_key` | Pass. An empty key file: Codex refused the conversation ("HTTP 401"), nothing left running. |
+
+The probes that start a station through the product (`probe_launch.py`, `probe_station.py`, `probe_guard_on.py`)
+now give it a stand-in for the endpoint (`standin_mcp.py`), since a station does not start without one. Run again
+with it: 6 of 6, 5 of 5 and 3 of 3.
+
+### What this does not do
+
+- The key file is readable by the station's commands: its path is in their environment, as on a Claude Code
+  station, and the sandbox does not stop a read. What is kept out is the key itself, from the environment,
+  from argument lists, from settings and from what is recorded.
+- The cell was told the station's crew and project by header; the probe shows the station and the role in
+  the cell's record, and that the project was taken from the header (the calls name none). It does not show
+  the crew header's effect, which no route in the probe depends on.
+- Linux was not run. An endpoint that answers the first request and then hangs was not run: a call waits for
+  the app-server's own time limit.
+
 ## What was not verified
 
 - Keeping the person's own Codex setup out of a station: not verified in the spike, where a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. Done since, in section 4.
@@ -349,7 +423,7 @@ Not measured, and tested with stand-ins only (`tests/test_crew_codex_pace.py`, t
 - A real Tares cell and crew: launch through `tares factory`, the Tares MCP, the desk, the merge queue.
 - Orphan cleanup after a crash. The crew's `strays` scan is the candidate; it was not run against Codex commands.
 - Hook trust by any route other than `bypass_hook_trust`, and managed `requirements.toml`.
-- `required = true` on the MCP server, so a station without Tares fails to start instead of running blind.
+- `required = true` on the MCP server: verified since, in section 8.
 - Linux and Windows. Longer sessions, compaction, rate-limit errors in the middle of a turn (section 7 says how one is handled; none was produced).
 - Other Codex versions. The feature list, the hook payloads and the app-server protocol are the parts to
   recheck on an upgrade; `codex app-server generate-json-schema` prints the protocol of the installed version.

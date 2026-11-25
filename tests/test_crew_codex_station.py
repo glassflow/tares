@@ -140,7 +140,7 @@ def crew(world=None, stations=None):
     said = []
 
     def make_client():
-        c = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=said.append)
+        c = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}, say=said.append)
         c.prime()
         return c
     return tares, paths, said, make_client
@@ -159,7 +159,9 @@ def calls(pid=None, method=None) -> list:
         rows = [json.loads(x) for x in CALLS.read_text().splitlines()]
     except OSError:
         return []
-    return [(r["method"], r["params"]) for r in rows if (pid is None or r["pid"] == pid) and (method is None or r["method"] == method)]
+    # the read asked of Tares before a prompt (TR-1596) is listed only when asked for: its own cases look at it
+    return [(r["method"], r["params"]) for r in rows if (pid is None or r["pid"] == pid)
+            and (r["method"] == method if method else r["method"] != "mcpServer/tool/call")]
 
 
 def quietly(fn, *args, **kw):
@@ -419,7 +421,7 @@ pid5 = pid_of(paths)
 ck("revive starts a station that died, in the conversation it had",
    err is None and alive(pid5) and [m for m, _ in calls(pid5)] == ["thread/resume", "turn/start"]
    and calls(pid5)[1][1]["input"][0]["text"] == "Carry on." and len(events(paths, "revived")) >= 2, err)
-os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
 out = io.StringIO()
 with redirect_stderr(out), redirect_stdout(out):
     code = lifecycle.cmd_retire(["retire", S], dict(os.environ))
@@ -434,7 +436,7 @@ fake()
 start(mk())
 start(mk(), station="crew-releaser", role="releaser")
 pids = [pid_of(paths), pid_of(paths, "crew-releaser")]
-os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
 out = io.StringIO()
 with redirect_stderr(out), redirect_stdout(out):
     code = lifecycle.cmd_down(["crew", "down"], dict(os.environ))
@@ -452,8 +454,8 @@ pid, other = pid_of(paths), pid_of(paths, "crew-releaser")
 thread = row(paths)["sessionId"]
 until(lambda: cs.turn_state(paths, S) == "done")
 end(pid, signal.SIGKILL)
-env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url}
-os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
 out = io.StringIO()
 with redirect_stderr(out), redirect_stdout(out):
     watch_revive.step(paths, env)
@@ -491,8 +493,8 @@ tares, paths, said, mk = crew(world={"settings": {**LS.DEFAULT_WORLD["settings"]
 fake(turn=1.5)
 err, _ = start(mk())
 pid, thread = pid_of(paths), row(paths)["sessionId"]
-env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url}
-os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
 
 
 def wake_round():
@@ -622,7 +624,7 @@ fake()
 start(mk(), station="crew-orchestrator", role="orchestrator")
 dead = pid_of(paths, "crew-orchestrator")
 until(lambda: cs.turn_state(paths, "crew-orchestrator") == "done")
-os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
 out, errs = io.StringIO(), io.StringIO()
 with redirect_stdout(out), redirect_stderr(errs):
     code = views.cmd_status(["crew", "status"], dict(os.environ))
@@ -706,8 +708,8 @@ def model_runs(*commands, **switches):
 
 
 def watch_round(paths, tares):
-    env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url}
-    os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url)
+    env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}
+    os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
     out = io.StringIO()
     with redirect_stderr(out), redirect_stdout(out):
         watch_revive.step(paths, env)
@@ -1228,6 +1230,152 @@ cs._trim_record(paths, S, "new")
 ck("one that grew large keeps the newest turn's lines, which a look may still compare, and drops the rest",
    [x.get("call") for x in cs._record(paths, S)] == [None, "exec-n"] and file.stat().st_size < 1000
    and stat.S_IMODE(file.stat().st_mode) == 0o600, file.stat().st_size)
+
+# ---------------------------------------------------------------------------------------------
+print("k. Tares before a prompt (TR-1596)")
+
+
+def every_call(pid=None) -> list:
+    """Every request an app-server took, the read asked of Tares among them, in order."""
+    try:
+        rows = [json.loads(x) for x in CALLS.read_text().splitlines()]
+    except OSError:
+        return []
+    return [(r["method"], r["params"]) for r in rows if pid is None or r["pid"] == pid]
+
+
+def as_station(tares) -> list:
+    """What reached the fake cell's MCP endpoint with a station's name on it (the crew's own probe has none)."""
+    return [e for e in tares.log if e.get("post") and e["path"] == "/mcp" and e.get("x-tares-station")]
+
+
+fake(turn=0.2)
+record = SCRATCH / "k-record.json"
+os.environ["FAKE_CODEX_RECORD"] = str(record)
+tares, paths, said, mk = crew()
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths).get("sessionId")
+rec = json.loads(record.read_text()) if record.exists() else {}
+reached = as_station(tares)
+ck("a start connects the station to the crew's MCP endpoint as itself: its name, role and crew, and the crew's key",
+   err is None and reached and reached[0]["method"] == "initialize" and reached[0]["auth"] == f"Bearer {FAKE_TOKEN}"
+   and reached[0]["x-tares-station"] == S and reached[0]["x-tares-role"] == "reviewer"
+   and reached[0]["x-tares-crew"] == rec.get("env", {}).get("FACTORY_CREW") != ""
+   and "x-tares-parent" not in reached[0] and "x-tares-project" not in reached[0], (err, reached[:1]))
+took = every_call(pid)
+ck("before the first turn it asks one read of Tares, on the conversation's own connection",
+   [m for m, _ in took] == ["thread/start", "mcpServer/tool/call", "turn/start"]
+   and took[1][1] == {"server": "tares", "tool": "list_crew", "arguments": {"mine": True}, "threadId": thread}
+   and [(e["method"], e.get("tool"), e["auth"]) for e in reached[1:2]] == [("tools/call", "list_crew", f"Bearer {FAKE_TOKEN}")]
+   and reached[1]["x-tares-station"] == S, (took, reached[1:2]))
+config = took[0][1].get("config", {}).get("mcp_servers", {}).get("tares", {}) if took else {}
+ck("the conversation is started with the server marked required and the helper told the key file by its path",
+   config.get("required") is True and config.get("url") == tares.url + "/mcp"
+   and config.get("http_headers_helper", "").startswith(f"TARES_FACTORY_CRED_FILE={paths.home}/.tares-token tares hook mcp-headers"),
+   config)
+everywhere = [record.read_text(), CALLS.read_text(), paths.station_file(S, "settings.json").read_text(),
+              paths.stations.read_text(), paths.station_file(S, "codex.log").read_text()]
+ck("the key is in no argument, environment, settings file, record or request to the app-server",
+   all(FAKE_TOKEN not in text for text in everywhere) and len(everywhere[0]) > 100)
+until(lambda: cs.turn_state(paths, S) == "done")
+tares.world["mcp"] = False
+n = len(calls(pid, "turn/start"))
+err, kind, _ = quietly(cs.hand, paths, S, "The reviewer has a new pull request.")
+ck("a station whose Tares went away gets no next turn, and is told why; it is not stopped for it",
+   kind is CrewError and "would work without Tares" in str(err) and "list_crew did not go through" in str(err)
+   and len(calls(pid, "turn/start")) == n and cs.is_alive(paths, S) and row(paths)["sessionId"] == thread, err)
+tares.world["mcp"] = True
+err, kind, _ = quietly(cs.hand, paths, S, "The reviewer has a new pull request.")
+ck("once Tares answers again the prompt is taken, in the same conversation",
+   err is None and len(calls(pid, "turn/start")) == n + 1 and row(paths)["sessionId"] == thread, err)
+until(lambda: cs.turn_state(paths, S) == "done")
+
+# the app-server ends, and Tares is down when the station is started again: Codex refuses to join the conversation
+end(pid)
+tares.world["mcp"] = False
+before = len(every_call())
+err, _ = start(mk(), resume=thread)
+took = every_call()[before:]
+ck("a station started again while Tares is down is not started, and its conversation is not given up for a new one",
+   err and "cannot reach an MCP server it is started with" in err and "HTTP 404" in err
+   and [m for m, _ in took] == ["thread/resume"] and row(paths).get("sessionId") == thread
+   and not cs.is_alive(paths, S) and not events(paths, "conversation-replaced"), (err, took))
+ck("what Codex said is shown without the names of its own types", err and "Transport [" not in err and len(err) < 500, err)
+tares.world["mcp"] = True
+before = len(every_call())
+err, _ = start(mk(), resume=thread)
+ck("with Tares back it is started in the conversation it had",
+   err is None and [m for m, _ in every_call()[before:]] == ["thread/resume", "mcpServer/tool/call", "turn/start"]
+   and row(paths)["sessionId"] == thread, (err, every_call()[before:]))
+end(pid_of(paths))
+
+tares, paths, said, mk = crew(world={"token": FAKE_TOKEN, "mcp_key": "a-key-the-cell-takes-instead"})
+before = len(every_call())
+err, _ = start(mk())
+took = every_call()[before:]
+ck("a key the cell refuses stops the first turn: the station is not started, and the refusal is the cell's own words",
+   err and "would work without Tares" in err and "tares.list_crew was refused (error 401: authentication required)" in err
+   and [m for m, _ in took] == ["thread/start", "mcpServer/tool/call"] and not row(paths)
+   and gone(json.loads(record.read_text())["pid"]), (err, took))
+
+tares, paths, said, mk = crew(world={"mcp": False})
+before = len(every_call())
+err, _ = start(mk())
+ck("an endpoint that does not answer stops the start before any conversation: the server is required",
+   err and "cannot reach an MCP server it is started with (tares:" in err and [m for m, _ in every_call()[before:]] == ["thread/start"]
+   and not row(paths) and gone(json.loads(record.read_text())["pid"]), (err, every_call()[before:]))
+del os.environ["FAKE_CODEX_RECORD"]
+
+
+class McpWire:
+    """An app-server that answers the two questions about a conversation's MCP servers from a script."""
+
+    def __init__(self, statuses=(), call=None, fail=""):
+        self.statuses, self.call, self.fail, self.asked = list(statuses), call, fail, []
+
+    def request(self, method, params=None):
+        self.asked.append((method, params))
+        if self.fail:
+            raise WireError(self.fail)
+        if method == "mcpServerStatus/list":
+            status = self.statuses.pop(0) if len(self.statuses) > 1 else (self.statuses or [None])[0]
+            return {"data": [] if status is None else [{"name": params["serverName"], "runtimeStatus": status}]}
+        return self.call
+
+
+nap = []
+w = McpWire(["starting", "starting", "connected"])
+ck("a server still starting is waited for", cs.mcp_ready(w, "thr", {"tares": {}}, sleep=nap.append) == "" and len(nap) == 2
+   and w.asked[0] == ("mcpServerStatus/list", {"threadId": "thr", "serverName": "tares", "detail": "toolsAndAuthOnly"}), (nap, w.asked))
+ck("one that never comes up is not waited for longer than the time given",
+   cs.mcp_ready(McpWire(["starting"]), "thr", {"tares": {}}, sleep=lambda s: None, wait=0)
+   == "its MCP server tares is not connected (starting)")
+ck("a failed one, one not listed for the conversation, and an app-server that cannot say are all not ready",
+   cs.mcp_ready(McpWire(["failed"]), "thr", {"tares": {}}) == "its MCP server tares is not connected (failed)"
+   and cs.mcp_ready(McpWire([None]), "thr", {"tares": {}}) == "its MCP server tares is not connected (not listed for its conversation)"
+   and "could not be asked about" in cs.mcp_ready(McpWire(fail="no such method"), "thr", {"tares": {}})
+   and cs.mcp_ready(McpWire(), "thr", {}) == "")
+check = {"server": "tares", "tool": "list_crew", "arguments": {"mine": True}}
+text = lambda t, **kw: {"content": [{"type": "text", "text": t}], **kw}  # noqa: E731
+ck("the read goes through for an answer, whatever it lists",
+   cs.mcp_answers(McpWire(call=text("[]")), "thr", check) == "" and cs.mcp_answers(McpWire(call=text('[{"station": "error 500"}]')), "thr", check) == "")
+ck("a refusal worded as the tool's text is a refusal, as one flagged an error is",
+   cs.mcp_answers(McpWire(call=text("error 403: this needs an admin or a crew station")), "thr", check)
+   == "tares.list_crew was refused (error 403: this needs an admin or a crew station)"
+   and cs.mcp_answers(McpWire(call=text("no", isError=True)), "thr", check) == "tares.list_crew was refused (no)"
+   and "did not go through" in cs.mcp_answers(McpWire(fail="tool call failed"), "thr", check)
+   and cs.mcp_answers(McpWire(), "thr", None) == "")
+long = ("error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tares: "
+        "handshaking with MCP server failed: Send message error Transport [a::B<c::D<e::F>>] error: unexpected server "
+        "response: HTTP 401: unauthorized, when send initialize request: Send message error Transport [a::B<c::D<e::F>>] "
+        "error: unexpected server response: HTTP 401: unauthorized, when send initialize request")
+ck("Codex's refusal to start a conversation without a required server is told apart from any other failure",
+   cs.mcp_refused(WireError(long)) == "tares: handshaking with MCP server failed: Send message error unexpected server response: HTTP 401: unauthorized"
+   and cs.mcp_refused(WireError("no rollout found for thread id thr-1")) == "", cs.mcp_refused(WireError(long)))
+started = cs._thread_start({"model": "m", "config": {"hooks": {}}}, "/w", {"tares": {"url": "http://c/mcp", "required": True}})
+ck("a conversation's start names its MCP servers next to its hooks, and none when the station has none",
+   started["config"]["mcp_servers"] == {"tares": {"url": "http://c/mcp", "required": True}} and "hooks" in started["config"]
+   and "mcp_servers" not in cs._thread_start({"model": "m"}, "/w")["config"], started)
 
 # ---------------------------------------------------------------------------------------------
 for pid in STARTED:

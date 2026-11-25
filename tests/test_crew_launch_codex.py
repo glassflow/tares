@@ -126,7 +126,7 @@ def crew(world=None, stations=None, home_name="crew"):
     said = []
 
     def make_client():
-        c = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=said.append)
+        c = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}, say=said.append)
         c.prime()
         return c
     return tares, paths, said, make_client
@@ -150,7 +150,9 @@ def calls(pid=None, method=None) -> list:
         rows = [json.loads(x) for x in CALLS.read_text().splitlines()]
     except OSError:
         return []
-    return [(r["method"], r["params"]) for r in rows if (pid is None or r["pid"] == pid) and (method is None or r["method"] == method)]
+    # the read asked of Tares before a prompt (TR-1596) is listed only when asked for: its own cases look at it
+    return [(r["method"], r["params"]) for r in rows if (pid is None or r["pid"] == pid)
+            and (r["method"] == method if method else r["method"] != "mcpServer/tool/call")]
 
 
 def start(client, station="crew-reviewer", role="reviewer", cwd=None, model=MODEL, prompt=PROMPT, resume="", **kw):
@@ -288,7 +290,8 @@ took = calls(info.get("pid"))
 ck("the first prompt is handed over as a turn on a new conversation, with the thread's settings and the turn's effort",
    [m for m, _ in took] == ["thread/start", "turn/start"]
    and took[0][1] == {**doc["thread"], "cwd": str(paths.home),   # and the folder marked not trusted (TR-1594)
-                      "config": {**doc["thread"]["config"], "projects": cx.not_trusted(str(paths.home))}}
+                      "config": {**doc["thread"]["config"], "projects": cx.not_trusted(str(paths.home)),
+                                 "mcp_servers": doc["mcp_servers"]}}   # and its MCP servers (TR-1596)
    and took[1][1]["input"] == [{"type": "text", "text": PROMPT + "\n"}] and took[1][1]["effort"] == EFFORT
    and r.get("sessionId", "").startswith("thr-") and took[1][1]["threadId"] == r["sessionId"]
    and info.get("turn", "").startswith("turn-"), (took, r.get("sessionId")))
@@ -549,7 +552,7 @@ tares, paths, said, mk = crew(world={"health": False}, stations=codex_row)
 paths.launch_dir.mkdir(exist_ok=True)
 state.write_json(paths.launch_file("crew-reviewer"), claude_copy)
 try:
-    L.launch_plan(TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=said.append), "crew-reviewer", "reviewer", "", "", "", "sonnet", "high")
+    L.launch_plan(TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}, say=said.append), "crew-reviewer", "reviewer", "", "", "", "sonnet", "high")
     err = None
 except CrewError as e:
     err = str(e)
@@ -565,7 +568,7 @@ thread = row(paths)["sessionId"]
 time.sleep(0.4)   # the first turn ends
 end(first)
 tares.world["health"] = False
-down = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=said.append)
+down = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}, say=said.append)
 err, _ = start(down, model="gpt-5.6", resume=thread)
 r = row(paths)
 doc = json.loads(paths.station_file("crew-reviewer", "settings.json").read_text())

@@ -22,13 +22,14 @@ python tests/factory/codex_probe/probe_launch.py    --out /tmp/codex-probe/launc
 python tests/factory/codex_probe/probe_station.py   --out /tmp/codex-probe/station    # TR-1593: turn state, the next prompt, the stop
 python tests/factory/codex_probe/probe_guard_on.py  --out /tmp/codex-probe/guard-on   # TR-1594: the guard, proven on
 python tests/factory/codex_probe/probe_pace_station.py --out /tmp/codex-probe/pace-station   # TR-1597: the account's limits through the pace step and a cell; no model
+python tests/factory/codex_probe/probe_mcp_station.py --out /tmp/codex-probe/mcp-station  # TR-1596: Tares over MCP, against a real cell it starts and throws away
 ```
 
 Run them with the checkout's own interpreter (`.venv/bin/python`): a station's guard is `tares hook codex-guard`,
 and the probes that start a station through the product put that interpreter's folder first on the station's PATH.
 
 `--only NAME ...` runs some scenarios of the first two, of `probe_launch.py`, of `probe_station.py` and of `probe_guard_on.py`. Each run writes `results.json` (or `hooks.json`,
-`pace.json`, `mcp.json`, `evidence.json`, `launch.json`, `station.json`, `guard_on.json`, `pace_station.json`) and one wire transcript per scenario: every JSON-RPC message in both
+`pace.json`, `mcp.json`, `evidence.json`, `launch.json`, `station.json`, `guard_on.json`, `pace_station.json`, `mcp_station.json`) and one wire transcript per scenario: every JSON-RPC message in both
 directions, so the evidence is the wire itself. The transcripts hold local paths and are not committed;
 `fixtures/commands.wire.jsonl` is a small one with the paths replaced.
 
@@ -45,6 +46,9 @@ directions, so the evidence is the wire itself. The transcripts hold local paths
 | `probe_evidence.py` | Codex command records through the crew's own `match_check` |
 | `probe_launch.py` | TR-1592: the crew's own launch code against the real Codex: the socket, a stale one, the person's own setup kept out, an older Codex |
 | `probe_guard_on.py` | TR-1594: the crew's own check that a station's guard runs, against the real Codex: the record at the start of a turn and for each call, a station without trust for its hooks stopped before it ran anything, a repository's own Codex setup kept out |
+| `probe_mcp_station.py` | TR-1596: a Codex station on a real Tares cell that the probe starts and throws away: its ticket read and started over MCP as itself, the crew's key looked for everywhere it must not be, a wrong key, no key, and the endpoint down |
+| `cell.py` | that cell: `tares up` and `tares mcp` in a folder of their own, a login required, set to the Codex runtime, with a project, a ticket and a key for the crew |
+| `standin_mcp.py` | a stand-in for the crew's MCP endpoint, for the probes that start a station and are not about Tares: a Codex station does not start without one |
 | `probe_station.py` | TR-1593: the crew's own station code against the real Codex: turns with nobody connected, a prompt refused in a turn, a conversation carried on after a stop, a station blocked on an approval |
 
 The model and effort default to `gpt-5.6-luna` and `low` (`TARES_PROBE_MODEL`, `TARES_PROBE_EFFORT`). The
