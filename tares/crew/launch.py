@@ -585,6 +585,7 @@ def machine_values(client: TaresClient, station: str, project: str, repo: str) -
     repos, _, wt_repos = _repo_words(client, project, repo)
     return {"CREW_HOME": home, "PLUGIN_DIR": kit, "PLUGIN_DIR_SHELL": shell_word(_forward(kit)),
             "WT_REPOS": wt_repos, "REPOS": repos, "TOKEN_FILE": f"{home}/{paths.token_file.name}",
+            "TOKEN_FILE_SHELL": shell_word(f"{home}/{paths.token_file.name}"),
             "SETTINGS_FILE": settings_path(client, station)[1]}
 
 

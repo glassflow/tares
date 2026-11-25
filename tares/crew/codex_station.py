@@ -67,11 +67,26 @@ A station that fails one is stopped and marked (`guard_off`); the watch does not
 What is not covered: a helper conversation the station starts inside Codex runs the same hook (TR-1576), but
 its commands are not compared.
 
+Tares, before a prompt (TR-1596). A station's conversation is started with the MCP servers of its settings
+(`mcp_servers`: the crew's Tares endpoint, marked required), and `hand` starts no turn until two things hold,
+both asked of the app-server on the visit, with no turn and no model:
+  * each of those servers is connected for the conversation (`mcpServerStatus/list`). Codex itself refuses to
+    start or join a conversation whose required server does not answer; that refusal is told apart from a
+    conversation that is lost, so a station is never given a new conversation because Tares was down;
+  * the read named by `mcp_check` goes through (`mcpServer/tool/call`: Codex makes the call on the
+    conversation's own connection, so it carries the station's identity and the crew's key as the model's
+    calls will). The Tares endpoint takes any key when a conversation connects and hands the cell's refusal
+    back as a tool's text, so this read is what finds a key the cell does not take.
+A station that fails either gets no turn and the caller is told why; it is not stopped for it (a first start
+that fails is undone by `codex.start`). The key itself never passes through here: the settings hold the path
+of the crew's key file, which the headers helper reads.
+
 psutil and the standard library.
 """
 from __future__ import annotations
 
 import os
+import re
 import signal
 import time
 
@@ -232,12 +247,79 @@ def _record(paths: CrewPaths, station: str) -> list:
     return codex_guard.read_record(paths.station_file(station, codex_guard.RECORD))
 
 
-def _thread_start(thread: dict, cwd: str) -> dict:
-    """The parameters a conversation is started (or joined) with: the station's settings, its folder, and the
-    folder marked not trusted."""
+def _thread_start(thread: dict, cwd: str, servers=None) -> dict:
+    """The parameters a conversation is started (or joined) with: the station's settings, its folder, the
+    folder marked not trusted, and the MCP servers it is started with (`servers`, {name: what Codex takes})."""
     config = dict(thread.get("config") or {})
     config["projects"] = {**(config.get("projects") or {}), **cx.not_trusted(cwd)}
+    if servers:
+        config["mcp_servers"] = {**(config.get("mcp_servers") or {}), **servers}
     return {**thread, "cwd": cwd, "config": config}
+
+
+# ---- Tares, before a prompt (see the module's note) ----
+
+MCP_WAIT = 20   # seconds a server may take to connect for a conversation that was just started or joined
+_REQUIRED = "required MCP servers failed to initialize:"
+# How a Tares tool words what the cell refused: `error <status>: <detail>` as its text, with no error flag
+# (tares/mcp_server.py `_out`).
+_REFUSAL = re.compile(r"\s*error \d{3}\b")
+_RUST_TYPE = re.compile(r"Transport \[[^\]]*\] error: ")
+
+
+def _short(text: str, limit: int = 300) -> str:
+    """Codex's words for a failed MCP connection, without the names of its own types."""
+    text = _RUST_TYPE.sub("", str(text))
+    half = text.find(", when send ")   # "when send initialize request: " and the same sentence a second time
+    if half > 0:
+        text = text[:half]
+    return " ".join(text.split())[:limit]
+
+
+def mcp_refused(e) -> str:
+    """Why Codex would not start or join a conversation, when the reason is a required MCP server that did
+    not answer; "" for any other failure."""
+    text = str(e)
+    at = text.find(_REQUIRED)
+    return _short(text[at + len(_REQUIRED):]) if at >= 0 else ""
+
+
+def mcp_ready(wire: Wire, thread: str, servers, sleep=time.sleep, wait: float = MCP_WAIT) -> str:
+    """"" when every server of `servers` is connected for the conversation, else what is wrong with the first
+    that is not. One still starting is waited for, `wait` seconds at most."""
+    deadline = time.monotonic() + wait
+    for name in sorted(servers or {}):
+        while True:
+            try:
+                rows = wire.request("mcpServerStatus/list", {"threadId": thread, "serverName": name,
+                                                             "detail": "toolsAndAuthOnly"}).get("data")
+            except WireError as e:
+                return f"its MCP server {name} could not be asked about ({_short(e)})"
+            row = next((r for r in rows or [] if isinstance(r, dict) and r.get("name") == name), None)
+            status = str((row or {}).get("runtimeStatus") or "")
+            if status == "connected":
+                break
+            if status not in ("starting", "notStarted") or time.monotonic() >= deadline:
+                return f"its MCP server {name} is not connected ({status or 'not listed for its conversation'})"
+            sleep(0.3)
+    return ""
+
+
+def mcp_answers(wire: Wire, thread: str, check) -> str:
+    """"" when the read `check` names ({server, tool, arguments}) goes through on the conversation's own
+    connection, else why not, in the server's words. No `check`: nothing is asked."""
+    if not isinstance(check, dict) or not check.get("server") or not check.get("tool"):
+        return ""
+    name = f"{check['server']}.{check['tool']}"
+    try:
+        got = wire.request("mcpServer/tool/call", {"server": check["server"], "threadId": thread,
+                                                   "tool": check["tool"], "arguments": check.get("arguments") or {}})
+    except WireError as e:
+        return f"{name} did not go through ({_short(e)})"
+    text = " ".join(str(c.get("text") or "") for c in got.get("content") or [] if isinstance(c, dict))
+    if got.get("isError") or _REFUSAL.match(text):
+        return f"{name} was refused ({_short(text) or 'no reason given'})"
+    return ""
 
 
 def _brought_along(wire: Wire, cwd: str, allowed) -> str:
@@ -496,8 +578,9 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
     rec = info(paths, station)
     pending = unverified(paths, station)
     cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
-    start = _thread_start(doc["thread"], cwd)
-    allowed = set(doc.get("mcp_servers") or {})
+    servers = doc.get("mcp_servers") if isinstance(doc.get("mcp_servers"), dict) else {}
+    start = _thread_start(doc["thread"], cwd, servers)
+    allowed = set(servers)
     recorded = _recorded_thread(paths, station)
     thread, replaced, turn, off, shown = ("" if fresh else recorded), False, "", "", ""
     with visit(paths, station) as wire:
@@ -512,6 +595,9 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                 try:
                     wire.request("thread/resume", {**start, "threadId": thread})
                 except WireError as e:
+                    if mcp_refused(e):   # Tares did not answer: the conversation is there, and is kept
+                        raise CrewError(f"{station} cannot reach an MCP server it is started with "
+                                        f"({mcp_refused(e)}); not handing it a prompt") from None
                     if kind != "notLoaded":   # one the app-server has open is not given up for this
                         raise CrewError(f"could not join the conversation of {station}: {e}") from None
                     if pending:   # its last turn was never compared, and now cannot be: only a person gives it up
@@ -527,7 +613,13 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                     f"starts it in its own, where the comparison is made first; `tares factory revive {station} "
                     "--fresh` starts it in a new one without the comparison")
             if not thread:
-                thread = str((wire.request("thread/start", start).get("thread") or {}).get("id") or "")
+                try:
+                    thread = str((wire.request("thread/start", start).get("thread") or {}).get("id") or "")
+                except WireError as e:
+                    if mcp_refused(e):
+                        raise CrewError(f"{station} cannot reach an MCP server it is started with "
+                                        f"({mcp_refused(e)}); not handing it a prompt") from None
+                    raise
                 if not thread:
                     raise CrewError(f"{station} gave no conversation to start a turn in")
             off = _brought_along(wire, cwd, allowed)
@@ -539,6 +631,9 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                     raise CrewError(f"what the last turn of {station} ran cannot be compared with the guard's "
                                     f"record now ({e}); not handing it a prompt") from None
             if not off:
+                blind = mcp_ready(wire, thread, servers) or mcp_answers(wire, thread, doc.get("mcp_check"))
+                if blind:
+                    raise CrewError(f"{station} would work without Tares: {blind}; not handing it a prompt")
                 _trim_record(paths, station, last)
                 params = {"threadId": thread, "input": [{"type": "text", "text": prompt}]}
                 if doc.get("effort"):

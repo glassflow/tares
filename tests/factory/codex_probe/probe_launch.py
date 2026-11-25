@@ -33,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import stat
@@ -48,6 +49,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 
+import standin_mcp  # noqa: E402
 from appserver import AppServer, codex_bin, items, notifications  # noqa: E402
 
 from tares.crew import codex as cx  # noqa: E402
@@ -61,6 +63,15 @@ OLD_CODEX = os.environ.get("TARES_PROBE_CODEX_OLD") or "/Applications/ChatGPT.ap
 PERSONAL = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
 STATION = "probe-reviewer"
 SCENARIOS = {}
+TARES_KEY = "probe-key-" + os.urandom(6).hex()   # made for this run, good for nothing else
+_TARES: list = []
+
+
+def tares_mcp() -> int:
+    """The port of the stand-in for the crew's MCP endpoint, started at its first use."""
+    if not _TARES:
+        _TARES.append(standin_mcp.serve(TARES_KEY)[0])
+    return _TARES[0]
 
 
 def scenario(fn):
@@ -96,11 +107,13 @@ class Crew:
         self.left_behind: list = []
 
     def plan(self, lean: bool = True) -> dict:
+        # a station does not start without the crew's MCP endpoint (TR-1596): a stand-in, and a key made for this run
+        key = standin_mcp.key_file(self.home, TARES_KEY)
         spec = RuntimeCodex().launch_spec("reviewer", STATION, {
             "crew": "probe", "crew_autonomy": "L3-review", "human": "the person", "model": MODEL, "effort": EFFORT,
-            "tares_url": "http://127.0.0.1:9", "mcp_url": "http://127.0.0.1:9/mcp",
+            "tares_url": "http://127.0.0.1:9", "mcp_url": f"http://127.0.0.1:{tares_mcp()}/mcp", "token_file": True,
             "rules": {"allow": ["Work in {where} is expected work for this station."], "soft_deny": []}})
-        values = {"CREW_HOME": self.home, "TOKEN_FILE": os.path.join(self.home, ".tares-token"),
+        values = {"CREW_HOME": self.home, "TOKEN_FILE": key, "TOKEN_FILE_SHELL": shlex.quote(key),
                   "PLUGIN_DIR_SHELL": os.path.join(ROOT, "claude-plugin"), "REPOS": "the probe's folder",
                   "WT_REPOS": "the probe's folder", **cx.machine_values(self.paths, STATION)}
         plan = cx.plan({"command": spec.command, "env": spec.env, "settings": spec.settings}, values)
