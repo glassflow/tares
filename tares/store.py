@@ -916,6 +916,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         th = getattr(self, "_reconcile_thread", None)
         if th is not None and th is not threading.current_thread():
             th.join(60)
+        move_stop = getattr(self, "_move_stop", None)
+        if move_stop is not None:
+            move_stop.set()     # the session move (session_move.run) stops between sessions
+        th = getattr(self, "_move_thread", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(60)
         sessions_db = getattr(self, "sessions_db", None)
         if sessions_db is not None:
             sessions_db.close()

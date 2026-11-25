@@ -60,6 +60,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import licence
 from . import session_archive
+from . import session_move
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -651,6 +652,8 @@ def make_app() -> FastAPI:
     # The sessions table catches up with the events in the background (TR-1471); the lines stored
     # from here on are counted as they arrive.
     store.start_session_reconcile()
+    # the factory edition's recent sessions are rebuilt in the session store, once (TR-1609)
+    session_move.start(store)
 
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)

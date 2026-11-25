@@ -215,6 +215,23 @@ session_archive_parts = Table(
     Column("written_at", UTCDateTime),
 )
 
+# The one-time move of recent sessions' lines into the session store (session_move.py, TR-1609): one
+# row per claude_code session DuckDB holds lines for. `state` is pending, verified or failed;
+# `target` is table or archive; `lines_events` is DuckDB's line count, `lines_after` the rows the
+# move wrote, `error` why a move failed. Not in MOVED_TABLES: nothing is copied from DuckDB into it.
+session_moves = Table(
+    "session_moves", metadata,
+    Column("session", Text, primary_key=True),
+    Column("state", Text, nullable=False),
+    Column("target", Text),
+    Column("lines_events", Integer),
+    Column("lines_after", Integer),
+    Column("started_at", UTCDateTime),
+    Column("verified_at", UTCDateTime),
+    Column("error", Text),
+)
+Index("session_moves_state", session_moves.c.state)
+
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
     "session_ingest_marks", metadata,

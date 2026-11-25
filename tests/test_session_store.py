@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0009_session_origin"              # the newest revision: tests that count revisions move with it
-REVISIONS = 9
+HEAD = "0010_session_moves"              # the newest revision: tests that count revisions move with it
+REVISIONS = 10
 FAILS = []
 
 
@@ -242,7 +242,7 @@ def upgrade_failure():
 SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
 ALL_TABLES = SESSION_TABLES + ["settings", "session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
-                               "session_files", "session_lines", "session_archive_parts"]
+                               "session_files", "session_lines", "session_archive_parts", "session_moves"]
 
 
 def shape(engine, names=ALL_TABLES):
