@@ -36,10 +36,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from itertools import groupby
+from typing import Callable
 
 from sqlalchemy import delete, select
 
@@ -394,6 +396,118 @@ def read_weeks(store, projects: list[str] | None = None, from_: date | datetime 
         for column in JSON_COLUMNS:
             row[column] = json.loads(row[column])
     return rows
+
+
+# ── the Report page's one read ────────────────────────────────────────────────
+DEFAULT_WEEKS = 8
+MAX_WEEKS = 104
+FIRST_YEAR = 2000     # an earlier date is a typo, and the week arithmetic stays in range
+CANNOT_SEE = (
+    "Work done outside Tares.",
+    "Pushes that skipped the merge queue.",
+    "Your bill: cost is API-equivalent (list prices), not what a subscription charges.",
+)
+# The sections of the page, in its order. A section's ticket puts its builder in its line:
+# f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
+# (read_weeks) and the Mondays of the range. A builder reads nothing else.
+SECTIONS: dict[str, Callable[[list[dict], list[date]], dict] | None] = {
+    "delivered": None,
+
+    "time": None,
+
+    "review": None,
+
+    "cost": None,
+
+    "merges": None,
+
+    "architecture": None,
+}
+
+
+class UnknownScope(LookupError):
+    """A scope that names nothing the caller can read: an unknown id and a hidden one are alike."""
+
+
+def _day(value: str) -> date:
+    try:
+        day = date.fromisoformat(value) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else None
+    except ValueError:
+        day = None
+    if day is None or day.year < FIRST_YEAR:
+        raise ValueError("A date is written as year-month-day, for example 2026-11-25.")
+    return day
+
+
+def range_weeks(from_: str | None, to: str | None, today: date) -> list[date]:
+    """The Mondays of a range, oldest first: every week that has a day in `from_` to `to`, up to
+    the week of `today`. With no `to` it ends today; with no `from_` it is the last
+    DEFAULT_WEEKS weeks up to `to`. Raises ValueError in words for a range there is no report of."""
+    first = _day(from_) if from_ else None
+    last = _day(to) if to else None
+    if first and last and first > last:
+        raise ValueError("The first date is after the last date.")
+    if first and first > today:
+        raise ValueError("The range starts in the future.")
+    end = week_of(min(last or today, today))
+    start = week_of(first) if first else end - timedelta(weeks=DEFAULT_WEEKS - 1)
+    count = (end - start).days // 7 + 1
+    if count > MAX_WEEKS:
+        raise ValueError("Pick a range of 2 years or less.")
+    return [start + timedelta(weeks=i) for i in range(count)]
+
+
+def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owners,
+         scope: str = "factory", from_: str | None = None, to: str | None = None,
+         today: date | None = None) -> dict:
+    """What GET /api/factory/report answers. `projects` are the ones the caller can read, and no
+    other is ever named or counted. `mine` gives the ids that are the caller's own (None: nothing
+    narrows them) and is asked for the "mine" scope only. `owners` (factory_owners.Owners) says
+    who is here to lead a team.
+
+    A team is the projects one person leads, named by that person's id; a cell of one person has
+    none. The "" rows (cost no project claims) belong to the whole factory only."""
+    today = today or now_utc().date()
+    weeks = range_weeks(from_, to, today)
+    visible = {p["id"]: p for p in projects}
+    factory_projects = sorted((p for p in projects if p["kind"] == "software_factory"),
+                              key=lambda p: (p["name"].lower(), p["id"]))
+    lead_of = {} if owners.single else {p["id"]: p["lead_person_id"] for p in projects
+                                        if p.get("lead_person_id") in owners.alive}
+    leads = {lead_of[p["id"]] for p in factory_projects if p["id"] in lead_of}
+    teams = sorted(({"id": i, "name": owners.names.get(i) or i} for i in leads),
+                   key=lambda t: (t["name"].lower(), t["id"]))
+    name = None
+    kind, _, key = scope.partition(":")
+    if scope == "factory":
+        ids, rest = list(visible), True
+    elif scope == "mine":
+        own = mine()
+        ids, rest = [i for i in visible if own is None or i in own], False
+    elif kind == "team" and key:
+        if key not in leads:
+            raise UnknownScope(f"unknown team {key!r}")
+        ids, rest = [i for i in visible if lead_of.get(i) == key], False
+        name = owners.names.get(key) or key
+    elif kind == "project" and key:
+        if key not in visible:
+            raise UnknownScope(f"unknown project {key!r}")
+        ids, rest, name = [key], False, visible[key]["name"]
+    else:
+        raise ValueError("A scope is mine, factory, team:<id> or project:<id>.")
+    rows = read_weeks(store, ids + ([NO_PROJECT] if rest else []), weeks[0], weeks[-1])
+    running = week_of(today)
+    return {
+        "range": {"from": weeks[0].isoformat(),
+                  "to": (weeks[-1] + timedelta(days=6)).isoformat(),
+                  "weeks": [w.isoformat() for w in weeks],
+                  "running_week": running.isoformat() if running in weeks else None,
+                  "merged": sum(r["merged"] for r in rows)},
+        "scope": {"value": scope, "name": name, "count": len(ids), "teams": teams,
+                  "projects": [{"id": p["id"], "name": p["name"]} for p in factory_projects]},
+        "cannot_see": list(CANNOT_SEE),
+        "sections": {k: build(rows, weeks) for k, build in SECTIONS.items() if build},
+    }
 
 
 # ── the background pass ───────────────────────────────────────────────────────

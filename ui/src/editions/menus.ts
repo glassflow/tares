@@ -22,6 +22,7 @@ export const MENUS: Record<"factory" | "sre", MenuEntry[]> = {
     { key: "projects", label: "Projects", to: "/projects", today: true, group: WORK_GROUP },
     { key: "tickets", label: "Tickets", to: "/tickets", today: false, group: WORK_GROUP },
     { key: "reviews", label: "Reviews", to: "/reviews", today: false, group: WORK_GROUP },
+    { key: "report", label: "Report", to: "/report", today: true, group: WORK_GROUP },
     { key: "crew", label: "Crew", to: "/crew", today: true, group: TEAM_GROUP },
     { key: "people", label: "People", to: "/people", today: false, group: TEAM_GROUP },
     { key: "docs", label: "Docs and memory", to: "/docs", today: false, group: KNOWLEDGE_GROUP },

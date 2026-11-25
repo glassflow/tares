@@ -2,13 +2,14 @@
  * Browser e2e for TR-768: the route table of the factory and sre editions and Settings, Advanced.
  *
  * Factory: /settings/advanced lands on Settings with its Advanced group open, which links Connections
- * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
+ * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /report the
+ * Report page (TR-1667), /docs lands
  * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); /sources still opens today's
- * page; the menu is Home, Integrations, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings;
+ * page; the menu is Home, Integrations, Projects, Tickets, Reviews, Report, Crew, People, Docs and memory, Settings;
  * / on a new cell (no project, setup not done) opens Set up your factory;
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is the Timeline page (TR-752); /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
- * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
+ * Platform: /settings/advanced lands on /settings, /reviews and /report on /, Settings has no Advanced tab.
  * Every edition: /welcome/edition lands on /. /feed and /feed?item=x land on / and /?item=x, the query kept (TR-1527). The Advanced tab passes the words check, and is shot at
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
  * the flag rule: the address alone never shows sample data.
@@ -161,6 +162,10 @@ function loadSample(env) {
       ck("factory: /reviews opens the Reviews page", where(page) === "/reviews"
          && await page.getByRole("heading", { name: "Reviews", exact: true }).isVisible()
          && (await page.getByTestId("factory-reviews").count()) === 1, where(page));
+      await go(page, e, "/report");
+      ck("factory: /report opens the Report page", where(page) === "/report"
+         && await page.getByRole("heading", { level: 1, name: "Report", exact: true }).isVisible()
+         && (await page.getByTestId("factory-report").count()) === 1, where(page));
       await go(page, e, "/docs");
       ck("factory: /docs is the Docs and memory page, on a full page load", where(page) === "/docs"
          && await page.getByRole("heading", { name: "Docs and memory", exact: true }).isVisible(), where(page));
@@ -176,10 +181,11 @@ function loadSample(env) {
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Integrations, Projects, Tickets, Reviews, Crew, People, Docs and memory, Settings",
-         items.join(",") === "Home,Integrations,Projects,Tickets,Reviews,Crew,People,Docs and memory,Settings", items.join(","));
+      ck("factory: the menu is Home, Integrations, Projects, Tickets, Reviews, Report, Crew, People, Docs and memory, Settings",
+         items.join(",") === "Home,Integrations,Projects,Tickets,Reviews,Report,Crew,People,Docs and memory,Settings", items.join(","));
       ck("factory: the People entry opens /people", (await page.locator('nav[aria-label="Main"] a', { hasText: "People" }).getAttribute("href")) === "/people");
       ck("factory: the Reviews entry links to /reviews", (await page.getByTestId("menu-reviews").getAttribute("href")) === "/reviews");
+      ck("factory: the Report entry links to /report", (await page.getByTestId("menu-report").getAttribute("href")) === "/report");
       ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");
 
       // the sample address alone changes nothing on a live cell
@@ -212,7 +218,7 @@ function loadSample(env) {
       const home = await homeOf(page, e);
       await go(page, e, "/services");
       ck("sre: /services stays on its address and shows the Services page", where(page) === "/services" && (await page.getByTestId("sre-services").count()) === 1, where(page));
-      for (const p of ["/reviews", "/tickets", "/welcome/edition"]) {
+      for (const p of ["/reviews", "/report", "/tickets", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`sre: ${p} lands on /`, where(page) === home && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
       }
@@ -247,7 +253,7 @@ function loadSample(env) {
       ck("platform: ?tab=advanced shows no Advanced panel", (await page.getByTestId("advanced-panel").count()) === 0
          && (await advancedTab(page).count()) === 0);
       const home = await homeOf(page, e);
-      for (const p of ["/reviews", "/tickets", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
+      for (const p of ["/reviews", "/report", "/tickets", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`platform: ${p} lands on /`, where(page) === home && !(await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
       }

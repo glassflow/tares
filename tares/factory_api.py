@@ -16,7 +16,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from fastapi import Body, HTTPException, Request
+from fastapi import Body, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 
 from . import answers as answers_mod
@@ -3595,6 +3595,25 @@ def register(app, store, h: Host) -> SimpleNamespace:
         ho = store.get_handover(uid) or {}
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
+
+    @app.get("/api/factory/report")
+    def report_read(request: Request, scope: str = "factory", to: str | None = None,
+                    from_: str | None = Query(None, alias="from")):
+        """The Report page in one read, from the weekly figures: {range, scope, cannot_see,
+        sections}. `from` and `to` are days (year-month-day) widened to whole ISO weeks in UTC;
+        with neither it is the last 8 weeks. `scope` is factory (default), mine (Home's rule),
+        team:<person id> (what that person leads) or project:<id>. Every scope counts only the
+        projects the caller can read, so a private one is not in it and, asked for by name, is
+        unknown. Needs the read scope; a project key is refused."""
+        hidden = h.hidden_ids()
+        projects = [p for p in store.list_projects() if p["id"] not in hidden]
+        try:
+            return report_mod.page(store, projects, lambda: my_projects(request),
+                                   owners_mod.Owners(store), scope, from_, to)
+        except report_mod.UnknownScope as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     @app.post("/api/factory/report/rebuild")
     def report_rebuild():

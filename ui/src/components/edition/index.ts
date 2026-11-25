@@ -24,3 +24,4 @@ export { Switch, type SwitchProps } from "./Switch";
 export { Tabs, type TabItem, type TabsProps } from "./Tabs";
 export { Textarea, type TextareaProps } from "./Textarea";
 export { Toaster, TOAST_MS, useToast } from "./Toast";
+export { WeekChart, type WeekChartProps, type WeekSeries } from "./WeekChart";
