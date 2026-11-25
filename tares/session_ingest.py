@@ -1018,7 +1018,23 @@ def _cycle(ref, stop: threading.Event) -> None:
         if store is None:
             return
         _reconcile_pass(store, time.perf_counter())
+        _usage_hourly_pass(store)       # a no-op once the hourly totals are built (TR-1632)
         del store
+
+
+def _usage_hourly_pass(store) -> None:
+    """Build the hourly usage totals the page reads (`claude_usage_hourly.fill`): chunked, resumes
+    from its cursor, sets its ready mark only after the totals match the usage rows."""
+    from . import claude_usage_hourly
+    t = time.perf_counter()
+    try:
+        n = claude_usage_hourly.fill(store)
+        if n:
+            print(f"taresd: hourly usage totals built for {n} session(s) in "
+                  f"{time.perf_counter() - t:.1f}s", flush=True)
+    except Exception as e:
+        print(f"taresd: hourly usage totals failed ({type(e).__name__}: {e}); "
+              "tried again at the next pass", flush=True)
 
 
 def start_reconcile(store) -> threading.Thread:
@@ -1046,6 +1062,7 @@ def start_reconcile(store) -> threading.Thread:
         except Exception as e:
             print(f"taresd: session turns fill failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)
+        _usage_hourly_pass(store)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
     store._reconcile_thread = th    # `Store.close` waits for it before the connections go
