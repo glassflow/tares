@@ -635,6 +635,16 @@ def add_check_to_doc(body: str, line: str) -> str:
 
 VERDICTS = ("pass", "changes", "block")
 
+# the `by` of a review round the merge queue writes: a pass it carries onto a commit that only
+# moved the base. It is never a review of its own.
+MERGE_QUEUE = "merge-queue"
+
+
+def reviewer_last(rounds: list[dict]) -> dict | None:
+    """The newest of `rounds` (oldest first) the merge queue did not write: the reviewer's last
+    verdict on the ticket, on whichever commit. None when only the queue wrote, or nobody did."""
+    return next((r for r in reversed(rounds) if r.get("by") != MERGE_QUEUE), None)
+
 
 def same_commit(a, b) -> bool:
     """Whether two commit hashes name the same commit. A hash may be short, so one that starts

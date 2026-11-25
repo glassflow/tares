@@ -69,9 +69,10 @@ class TaresReview(ReviewGate):
 
     # ── from the store ────────────────────────────────────────────────────────
     def _read(self, pr: PRRef) -> tuple[dict | None, dict | None, list[dict]]:
-        """(the ticket, its latest review round, its open findings from every round). (None, None,
-        []) when the PR reference names no ticket of a project, or the project has no such
-        ticket."""
+        """(the ticket, the review round that stands, its open findings from every round). (None,
+        None, []) when the PR reference names no ticket of a project, or the project has no such
+        ticket. The latest round stands, except a merge queue pass over a reviewer who has not
+        passed: the queue carries a pass and gives none of its own, so the reviewer's stands."""
         if self.store is None:
             raise RuntimeError("the Tares review gate needs the cell's store")
         uid = str(getattr(pr, "project_uid", "") or "").strip()
@@ -85,7 +86,12 @@ class TaresReview(ReviewGate):
         # a finding stays open across rounds until a later round fixes it, so the open ones come
         # from every round, not only the latest
         open_ = [f for r in rounds for f in r["findings"] if f["state"] == "open"]
-        return ticket, (rounds[-1] if rounds else None), open_
+        last = rounds[-1] if rounds else None
+        if last is not None and last.get("by") == factory_mod.MERGE_QUEUE:
+            own = factory_mod.reviewer_last(rounds)
+            if own is not None and own["verdict"] != "pass":
+                last = own
+        return ticket, last, open_
 
     @staticmethod
     def _texts(findings: list[dict] | None) -> list[str]:
