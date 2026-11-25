@@ -25,7 +25,7 @@ from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
-from sqlalchemy import and_, delete, null, select
+from sqlalchemy import and_, delete, null, select, update
 
 from . import edition, metrics, session_archive, session_ingest, session_read, state_db
 from .session_store import SessionStore
@@ -33,6 +33,9 @@ from .session_store.copy import copy_from_duckdb
 from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, session_stations,
                                    session_states)
 from .session_store.tables import settings as settings_table
+from .session_store.tables import api_keys as api_keys_table
+from .session_store.tables import people as people_table
+from .session_store.tables import project_members as members_table
 from .session_store.tables import session_commands, session_messages
 from .session_store.tables import (session_archive_parts, session_files, session_lines, session_said,
                                     session_turns)
@@ -94,36 +97,6 @@ CREATE TABLE IF NOT EXISTS dispatch_deliveries (
   ok              BOOLEAN,
   delivered_at    TIMESTAMPTZ,
   error           TEXT
-);
-CREATE TABLE IF NOT EXISTS api_keys (
-  id           TEXT PRIMARY KEY,
-  name         TEXT,
-  prefix       TEXT,
-  hash         TEXT,
-  scopes       JSON,
-  created_at   TIMESTAMPTZ,
-  last_used_at TIMESTAMPTZ,
-  revoked_at   TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS people (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  email      TEXT,
-  emails     TEXT,
-  github     TEXT,
-  is_admin   BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ,
-  created_via TEXT
-);
--- Who is on a project besides its lead (usecases.lead_person_id): reason 'manual' (the lead or
--- the system added them) or 'ticket' (they hold one of its tickets). The lead is not a row.
-CREATE TABLE IF NOT EXISTS project_members (
-  project   TEXT,
-  person_id TEXT,
-  added_by  TEXT,
-  added_at  TIMESTAMPTZ,
-  reason    TEXT,
-  PRIMARY KEY (project, person_id)
 );
 CREATE TABLE IF NOT EXISTS catalog_sources (
   name       TEXT PRIMARY KEY,
@@ -483,7 +456,6 @@ _MIGRATIONS = [
     # Project keys and joining a project (TR-335, TR-336): a key may belong to one project, and a
     # subscription may be to a whole project (every trigger of it, including ones added later)
     # instead of to one trigger. NULL on both is what every row before meant.
-    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS project TEXT",
     # The goal-first project page: what a project is for, in the user's words (NULL = not said
     # yet), and on a run the one-line headline and next step of what it concluded, plus when a
@@ -536,19 +508,10 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
     # Who last changed a shared skill, when a person did it from a page (TR-753); NULL otherwise
     "ALTER TABLE shared_skills ADD COLUMN IF NOT EXISTS updated_by TEXT",
-    # The person a key belongs to (a people.id); NULL = a key made before people existed, or one
-    # nobody has bound yet. The cell reads who is calling from this, never from a header.
-    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS person_id TEXT",
     # A project's lead (a people.id; NULL = nobody, as for every project made before people) and
     # its scope, 'team' or 'private'. No DEFAULT for the same reason as paused above; NULL scope
     # reads as 'team'.
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS lead_person_id TEXT",
-    # A person's picture (TR-1016): an https address the console shows instead of their initials,
-    # the one they sign in to Tares Cloud with or one they set. NULL = initials. Never fetched here.
-    "ALTER TABLE people ADD COLUMN IF NOT EXISTS picture TEXT",
-    # When a person left the cell (their membership ended). NULL = on the cell. The row stays, so
-    # the work they did keeps their name; they no longer count as a person on the cell.
-    "ALTER TABLE people ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ",
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
     # A project's icon (TR-617): one emoji the console shows beside its name, never part of the
     # name. NULL = no icon, as for every project made before this column.
@@ -1024,10 +987,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _people_upgrade(self) -> None:
         """The person `local` always exists: the one person of a cell with auth off, and the one
         an unbound key acts as while nobody else is on the cell."""
-        self.sc.execute(
-            "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, created_via) "
-            "SELECT 'local', 'You', NULL, '[]', NULL, TRUE, ?, 'boot' "
-            "WHERE NOT EXISTS (SELECT 1 FROM people WHERE id = 'local')", [now_utc()])
+        with self.sessions_db.begin() as conn:
+            conn.execute(self.sessions_db.upsert(people_table).values(
+                id="local", name="You", email=None, emails=[], github=None, is_admin=True,
+                created_at=now_utc(), created_via="boot").on_conflict_do_nothing(
+                index_elements=["id"]))
 
     def _columns(self, table: str) -> set:
         con = self.con if table in state_db.EVENT_TABLES else self.sc
@@ -2924,54 +2888,55 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         with self._swrite:
             self.sc.execute("UPDATE usecases SET scope = ? WHERE id = ?", [scope, uid])
 
+    # The member list lives in the session store (TR-1608), like settings: no DuckDB or state lock
+    # is taken, so these are safe from inside one.
     def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
                            reason: str = "manual") -> bool:
         """Put a person on the project. True when they were added, False when they already were
         a member (a second add changes nothing, the first reason stays)."""
         if reason not in ("manual", "ticket"):
             raise ValueError("reason is manual or ticket")
-        with self._swrite:
-            if self.sc.execute("SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
-                                [uid, person_id]).fetchone():
-                return False
-            self.sc.execute(
-                "INSERT INTO project_members (project, person_id, added_by, added_at, reason) "
-                "VALUES (?, ?, ?, ?, ?)", [uid, person_id, added_by or None, now_utc(), reason])
-        return True
+        with self.sessions_db.begin() as conn:
+            # RETURNING, not rowcount: Postgres reports -1 for an insert that skipped on conflict
+            done = conn.execute(self.sessions_db.upsert(members_table).values(
+                project=uid, person_id=person_id, added_by=added_by or None, added_at=now_utc(),
+                reason=reason).on_conflict_do_nothing(index_elements=["project", "person_id"])
+                .returning(members_table.c.person_id))
+            return done.first() is not None
 
     def remove_project_member(self, uid: str, person_id: str) -> bool:
         """True when they were a member (a stored one; the lead is not)."""
-        with self._swrite:
-            hit = self.sc.execute("SELECT 1 FROM project_members WHERE project = ? "
-                                   "AND person_id = ?", [uid, person_id]).fetchone()
-            self.sc.execute("DELETE FROM project_members WHERE project = ? AND person_id = ?",
-                             [uid, person_id])
-        return bool(hit)
+        with self.sessions_db.begin() as conn:
+            done = conn.execute(delete(members_table).where(
+                members_table.c.project == uid, members_table.c.person_id == person_id))
+        return done.rowcount > 0
+
+    @staticmethod
+    def _member_row(r) -> dict:
+        return {"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
 
     def list_project_members(self, uid: str) -> list[dict]:
         """The people on the project besides its lead, oldest first: {person_id, added_by,
         added_at, reason}."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT person_id, added_by, added_at, reason FROM project_members "
-                "WHERE project = ? ORDER BY added_at, person_id", [uid]).fetchall()
-        return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
-                for r in rows]
+        t = members_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.person_id, t.c.added_by, t.c.added_at, t.c.reason).where(
+                t.c.project == uid).order_by(t.c.added_at, t.c.person_id)).all()
+        return [self._member_row(r) for r in rows]
 
     def members_by_project(self, uids: list[str]) -> dict[str, list[dict]]:
         """{project: its members as list_project_members gives them} for `uids`, in one query."""
         ids = sorted({u for u in uids if u})
         if not ids:
             return {}
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT project, person_id, added_by, added_at, reason FROM project_members "
-                f"WHERE project IN ({', '.join('?' for _ in ids)}) ORDER BY added_at, person_id",
-                ids).fetchall()
+        t = members_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.project, t.c.person_id, t.c.added_by, t.c.added_at,
+                                       t.c.reason).where(t.c.project.in_(ids)).order_by(
+                t.c.added_at, t.c.person_id)).all()
         out: dict[str, list[dict]] = {}
         for r in rows:
-            out.setdefault(r[0], []).append({"person_id": r[1], "added_by": r[2],
-                                             "added_at": r[3], "reason": r[4]})
+            out.setdefault(r[0], []).append(self._member_row(r[1:]))
         return out
 
     # Licence-independent by design (TR-915): never consult licence or team here.
@@ -2982,11 +2947,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         with self._sread:
             lead = self.sc.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
                                     [uid]).fetchone()
-            if lead and lead[0] == person_id:
-                return True
-            return bool(self.sc.execute(
-                "SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
-                [uid, person_id]).fetchone())
+        if lead and lead[0] == person_id:
+            return True
+        with self.sessions_db.read() as conn:
+            return conn.execute(select(members_table.c.person_id).where(
+                members_table.c.project == uid, members_table.c.person_id == person_id)
+            ).first() is not None
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
         with self._swrite:
@@ -3012,12 +2978,18 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # the state rows first: a delete that stops half way leaves session rows with no
             # project, which every reader ignores
             # its keys stop working and nothing is delivered for it any more (TR-335)
-            self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
-                             "AND revoked_at IS NULL", [now_utc(), uid])
+            # (the keys and members are in the session store, a second database: a crash between
+            # the two leaves a project whose keys are revoked and whose rows remain, and a second
+            # delete finishes it)
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(api_keys_table).where(
+                    api_keys_table.c.project == uid, api_keys_table.c.revoked_at.is_(None)
+                ).values(revoked_at=now_utc()))
             self.sc.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
             self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.sc.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
-            self.sc.execute("DELETE FROM project_members WHERE project = ?", [uid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(members_table).where(members_table.c.project == uid))
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
             self.sc.execute("DELETE FROM pending_writeback WHERE ticket IN "
@@ -4993,73 +4965,84 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                  "key": r[3], "dispatch_id": r[4], "error": r[5]} for r in rows]
 
     # ── API keys (scoped credentials; only the SHA-256 of the secret is stored) ─
+    # `api_keys` lives in the session store (TR-1608): these methods take no DuckDB or state lock,
+    # so find_api_key, which every authenticated request calls, no longer queues behind them.
     def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str],
                        project: str | None = None, person_id: str | None = None) -> None:
         """`project` makes it a project key: it reads that project only (TR-335). `person_id`
         is the person it belongs to."""
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO api_keys (id, name, prefix, hash, scopes, created_at, last_used_at, "
-                "revoked_at, project, person_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
-                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None,
-                 person_id or None])
+        with self.sessions_db.begin() as conn:
+            conn.execute(api_keys_table.insert().values(
+                id=kid, name=name, prefix=prefix, hash=hash_, scopes=list(scopes),
+                created_at=now_utc(), last_used_at=None, revoked_at=None,
+                project=project or None, person_id=person_id or None))
 
     def list_api_keys(self, project: str | None = None) -> list[dict]:
         """Every key, newest first; with `project`, only that project's keys."""
-        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project, "
-               "person_id FROM api_keys ")
-        params = []
+        t = api_keys_table
+        q = select(t.c.id, t.c.name, t.c.prefix, t.c.scopes, t.c.created_at, t.c.last_used_at,
+                   t.c.revoked_at, t.c.project, t.c.person_id)
         if project is not None:
-            sql += "WHERE project = ? "
-            params.append(project)
-        with self._sread:
-            rows = self.sc.execute(sql + "ORDER BY created_at DESC", params).fetchall()
-        return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": json.loads(r[3]),
+            q = q.where(t.c.project == project)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.created_at.desc(), t.c.id)).all()
+        # a key with no scopes gets none (least privilege), never a crash in the key list
+        return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": r[3] or [],
                  "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
                  "project": r[7], "person_id": r[8]} for r in rows]
 
     def get_api_key(self, kid: str) -> dict | None:
-        return next((k for k in self.list_api_keys() if k["id"] == kid), None)
+        t = api_keys_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.id, t.c.name, t.c.prefix, t.c.scopes, t.c.created_at,
+                                    t.c.last_used_at, t.c.revoked_at, t.c.project,
+                                    t.c.person_id).where(t.c.id == kid)).first()
+        if not r:
+            return None
+        return {"id": r[0], "name": r[1], "prefix": r[2], "scopes": r[3] or [],
+                "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
+                "project": r[7], "person_id": r[8]}
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def find_api_key(self, hash_: str) -> dict | None:
         """Active (non-revoked) key by secret hash, or None."""
-        with self._sread:
-            r = self.sc.execute(
-                "SELECT id, name, scopes, last_used_at, project, person_id FROM api_keys "
-                "WHERE hash = ? AND revoked_at IS NULL", [hash_]).fetchone()
+        t = api_keys_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.id, t.c.name, t.c.scopes, t.c.last_used_at, t.c.project,
+                                    t.c.person_id).where(
+                t.c.hash == hash_, t.c.revoked_at.is_(None))).first()
         if not r:
             return None
-        return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
+        return {"id": r[0], "name": r[1], "scopes": r[2] or [], "last_used_at": r[3],
                 "project": r[4], "person_id": r[5]}
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def key_person_id(self, kid: str) -> str | None:
         """The person an active key is bound to, None for an unbound or unknown key (unlike a
         credential's person, this never falls back to `local`)."""
-        with self._sread:
-            r = self.sc.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
-                                 [kid]).fetchone()
-        return r[0] if r else None
+        t = api_keys_table
+        with self.sessions_db.read() as conn:
+            return conn.execute(select(t.c.person_id).where(
+                t.c.id == kid, t.c.revoked_at.is_(None))).scalar_one_or_none()
 
     def set_key_person(self, kid: str, person_id: str | None) -> bool:
         """Bind an active key to a person (None unbinds it). False when there is no such key."""
-        with self._swrite:
-            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
-                                   [kid]).fetchone()
-            if not hit:
-                return False
-            self.sc.execute("UPDATE api_keys SET person_id = ? WHERE id = ?", [person_id, kid])
-        return True
+        t = api_keys_table
+        with self.sessions_db.begin() as conn:
+            done = conn.execute(update(t).where(t.c.id == kid, t.c.revoked_at.is_(None)).values(
+                person_id=person_id))
+        return done.rowcount > 0
 
     # ── People: who is on the cell. A key belongs to one; the credential names the person ─
-    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via, picture, removed_at"
+    _PERSON_COLS = tuple(people_table.c[n] for n in (
+        "id", "name", "email", "emails", "github", "is_admin", "created_at", "created_via",
+        "picture", "removed_at"))
     PICTURE_MAX = 2048
 
     @staticmethod
     def _person_row(r) -> dict:
         return {"id": r[0], "name": r[1], "email": r[2],
-                "emails": json.loads(r[3]) if r[3] else [], "github": r[4],
+                "emails": list(r[3] or []), "github": r[4],
                 "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7],
                 "picture": r[8] or None, "removed_at": r[9]}
 
@@ -5113,10 +5096,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             raise ValueError(f"{bad!r} is not an email address")
         return out
 
-    def _taken_emails(self, emails: list[str], besides: str | None = None) -> str | None:
+    def _taken_emails(self, emails: list[str], besides: str | None = None, conn=None) -> str | None:
         """The first of `emails` another person already has (as the main or an extra email)."""
+        people = self._people(conn)
         for e in emails:
-            for p in self._people():
+            for p in people:
                 if p["id"] != besides and e in ([p["email"]] + p["emails"]):
                     return e
         return None
@@ -5132,36 +5116,39 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         email = self.check_email(email)
         extra = self._norm_emails(emails)
         github = str(github or "").strip().lstrip("@").lower() or None
-        with self._swrite:
-            clash = self._taken_emails(([email] if email else []) + extra)
+        pid = "p_" + uuid.uuid4().hex[:10]
+        # the check and the insert are one transaction (one writer at a time on SQLite) and sit
+        # under the write lock so two callers in this process cannot both pass the check on Postgres
+        with self._swrite, self.sessions_db.begin() as conn:
+            clash = self._taken_emails(([email] if email else []) + extra, conn=conn)
             if clash:
                 raise ValueError(f"{clash} already belongs to another person")
-            if github and any(p["github"] == github for p in self._people()):
+            if github and any(p["github"] == github for p in self._people(conn)):
                 raise ValueError(f"the GitHub login {github} already belongs to another person")
-            pid = "p_" + uuid.uuid4().hex[:10]
-            self.sc.execute(
-                "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, "
-                "created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [pid, name, email, json.dumps(extra), github, bool(is_admin), now_utc(), via])
+            conn.execute(people_table.insert().values(
+                id=pid, name=name, email=email, emails=extra, github=github,
+                is_admin=bool(is_admin), created_at=now_utc(), created_via=via))
         return self.get_person(pid)
 
     def get_person(self, pid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._PERSON_COLS} FROM people WHERE id = ?",
-                                 [pid]).fetchone()
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(*self._PERSON_COLS).where(people_table.c.id == pid)).first()
         return self._person_row(r) if r else None
 
-    def _people(self) -> list[dict]:
-        """list_people for a caller that already holds the lock."""
-        rows = self.sc.execute(
-            f"SELECT {self._PERSON_COLS} FROM people WHERE removed_at IS NULL "
-            "ORDER BY created_at, id").fetchall()
+    def _people(self, conn=None) -> list[dict]:
+        """list_people; `conn` is the caller's open session store transaction, if it has one."""
+        q = select(*self._PERSON_COLS).where(people_table.c.removed_at.is_(None)).order_by(
+            people_table.c.created_at, people_table.c.id)
+        if conn is None:
+            with self.sessions_db.read() as c:
+                rows = c.execute(q).all()
+        else:
+            rows = conn.execute(q).all()
         return [self._person_row(r) for r in rows]
 
     def list_people(self) -> list[dict]:
         """Everyone on the cell, oldest first (`local` first on a cell that has it)."""
-        with self._sread:
-            return self._people()
+        return self._people()
 
     def find_person_by_email(self, email: str) -> dict | None:
         """The person with this main or extra email, ignoring case."""
@@ -5198,18 +5185,17 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             new["is_admin"] = bool(fields["is_admin"])
         if "picture" in fields:
             new["picture"] = self.check_picture(fields["picture"])
-        with self._swrite:
+        with self._swrite, self.sessions_db.begin() as conn:
             clash = self._taken_emails(([new["email"]] if new["email"] else []) + new["emails"],
-                                       besides=pid)
+                                       besides=pid, conn=conn)
             if clash:
                 raise ValueError(f"{clash} already belongs to another person")
             if new["github"] and any(p["github"] == new["github"] and p["id"] != pid
-                                     for p in self._people()):
+                                     for p in self._people(conn)):
                 raise ValueError(f"the GitHub login {new['github']} already belongs to another person")
-            self.sc.execute(
-                "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ?, "
-                "picture = ? WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
-                                             new["github"], new["is_admin"], new["picture"], pid])
+            conn.execute(update(people_table).where(people_table.c.id == pid).values(
+                name=new["name"], email=new["email"], emails=new["emails"], github=new["github"],
+                is_admin=new["is_admin"], picture=new["picture"]))
         return self.get_person(pid)
 
     def remove_person(self, pid: str) -> bool:
@@ -5222,13 +5208,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         cur = self.get_person(pid)
         if not cur or cur.get("removed_at"):
             return False
-        with self._sread:
-            keys = [r[0] for r in self.sc.execute(
-                "SELECT id FROM api_keys WHERE person_id = ? AND revoked_at IS NULL", [pid]).fetchall()]
+        with self.sessions_db.read() as conn:
+            keys = list(conn.execute(select(api_keys_table.c.id).where(
+                api_keys_table.c.person_id == pid, api_keys_table.c.revoked_at.is_(None))).scalars())
         for kid in keys:
             self.revoke_api_key(kid)
+        with self.sessions_db.begin() as conn:
+            conn.execute(update(people_table).where(people_table.c.id == pid).values(
+                removed_at=now_utc()))
         with self._swrite:
-            self.sc.execute("UPDATE people SET removed_at = ? WHERE id = ?", [now_utc(), pid])
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
             self.sc.execute("UPDATE usecases SET lead_person_id = NULL WHERE lead_person_id = ?", [pid])
@@ -5245,14 +5233,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         e = self.check_email(email)
         if not e:
             return None
-        with self._swrite:
-            local = next((p for p in self._people() if p["id"] == "local"), None)
+        with self._swrite, self.sessions_db.begin() as conn:
+            local = next((p for p in self._people(conn) if p["id"] == "local"), None)
             if not local or local["email"] or local["emails"]:
                 return None
-            if self._taken_emails([e]):
+            if self._taken_emails([e], conn=conn):
                 return None
-            self.sc.execute("UPDATE people SET name = ?, email = ? WHERE id = 'local'",
-                            [str(name or "").strip() or e.split("@")[0], e])
+            conn.execute(update(people_table).where(people_table.c.id == "local").values(
+                name=str(name or "").strip() or e.split("@")[0], email=e))
         return self.get_person("local")
 
     def person_or_create(self, email: str, name: str | None = None, via: str = "key",
@@ -5282,22 +5270,30 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def only_local_person(self) -> bool:
         """True while `local` is the only person on the cell: a key nobody has bound still acts
         as them, so a single-user cell keeps working."""
-        with self._sread:
-            rows = self.sc.execute("SELECT id FROM people WHERE removed_at IS NULL LIMIT 2").fetchall()
-        return [r[0] for r in rows] == ["local"]
+        with self.sessions_db.read() as conn:
+            rows = list(conn.execute(select(people_table.c.id).where(
+                people_table.c.removed_at.is_(None)).limit(2)).scalars())
+        return rows == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now_utc(), kid])
+        with self.sessions_db.begin() as conn:
+            conn.execute(update(api_keys_table).where(api_keys_table.c.id == kid).values(
+                last_used_at=now_utc()))
 
     def revoke_api_key(self, kid: str) -> bool:
         """Revoke the key and delete its subscriptions (a revoked agent must stop receiving
-        trigger dispatches — otherwise its webhook is a post-revocation exfiltration path)."""
+        trigger dispatches — otherwise its webhook is a post-revocation exfiltration path).
+        The subscriptions go first: a crash between the two steps leaves a key still active and a
+        second revoke finishes it, never a revoked key whose webhook still gets deliveries."""
+        t = api_keys_table
         with self._swrite:
-            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
-                                   [kid]).fetchone()
+            with self.sessions_db.read() as conn:
+                hit = conn.execute(select(t.c.id).where(
+                    t.c.id == kid, t.c.revoked_at.is_(None))).first()
             if not hit:
                 return False
-            self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE id = ?", [now_utc(), kid])
             self.sc.execute("DELETE FROM subscriptions WHERE created_by = ?", [f"key:{kid}"])
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(t).where(t.c.id == kid, t.c.revoked_at.is_(None)).values(
+                    revoked_at=now_utc()))
         return True

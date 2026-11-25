@@ -342,7 +342,7 @@ def thread():
 
 
 def revision():
-    print("== revision 0010_session_moves ==")
+    print("== revision 0011_session_moves ==")
     d = tempfile.mkdtemp()
     schema = dsn = None
     if PG:
@@ -380,9 +380,9 @@ def revision():
            and "session_lines" in names and kept, names)
         sdb.upgrade()
         ck("an upgrade builds it again", "session_moves" in inspect(sdb.engine).get_table_names()
-           and version(sdb) == ["0010_session_moves"])
+           and version(sdb) == ["0011_session_moves"])
         sdb.upgrade()
-        ck("an upgrade at the head changes nothing", version(sdb) == ["0010_session_moves"])
+        ck("an upgrade at the head changes nothing", version(sdb) == ["0011_session_moves"])
         sdb.close()
     finally:
         if PG:

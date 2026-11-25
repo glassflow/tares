@@ -20,6 +20,11 @@ Cases:
   methods            get_setting / set_setting answer as before, on whatever the Store runs on
   postgres_takeover  a table made by the old DDL is taken over with its rows untouched; an upgrade,
                      a downgrade and an upgrade again keep the rows
+  accounts_copy      people, api_keys and project_members (TR-1608): DuckDB's rows arrive in SQLite with
+                     JSON columns parsed (null and empty kept apart), ledger counts, DuckDB untouched
+  accounts_methods   the Store's people, key and member methods keep their names and return shapes;
+                     revoking a key deletes its subscriptions; deleting a project revokes its keys
+  accounts_takeover  Postgres: the three tables the old DDL made are taken over, rows untouched
 """
 import os
 import re
@@ -33,12 +38,15 @@ import duckdb  # noqa: E402
 from sqlalchemy import Column, Index, Integer, MetaData, Table, Text, inspect, text  # noqa: E402
 
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
-from old_ddl import OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
+from old_ddl import _T, OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
 from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store import copy as copy_mod  # noqa: E402
 from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
+from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
+from tares.session_store.tables import people as people_table  # noqa: E402
+from tares.session_store.tables import project_members as members_table  # noqa: E402
 from tares.session_store.tables import settings as settings_table  # noqa: E402
 from tares.session_store.takeover import TakeoverError, takeover  # noqa: E402
 from tares.session_store.types import JSONText  # noqa: E402
@@ -444,6 +452,223 @@ def postgres_takeover():
         _drop_schema(sch)
 
 
+# The accounts as an old cell holds them (old_ddl's SEED has none): `emails` and `scopes` are JSON
+# text, and the blank and null forms are the ones the copy must tell apart
+_PEOPLE_COLS = ("id", "name", "email", "emails", "github", "is_admin", "created_at", "created_via",
+                "picture", "removed_at")
+_KEY_COLS = ("id", "name", "prefix", "hash", "scopes", "created_at", "last_used_at", "revoked_at",
+             "project", "person_id")
+_MEMBER_COLS = ("project", "person_id", "added_by", "added_at", "reason")
+ACCOUNTS = {
+    "people": (_PEOPLE_COLS, [
+        ("local", "You", None, "[]", None, True, _T, "boot", None, None),
+        ("p_kim", "Kim", "kim@example.test", '["kim@work.test", "k@home.test"]', "kimgh", False, _T,
+         "admin", None, None),
+        ("p_null", "Null", "null@example.test", None, None, False, _T, "admin", None, None),
+        ("p_blank", "Blank", None, "", None, False, _T, "admin", "pic.png", _T),
+    ]),
+    "api_keys": (_KEY_COLS, [
+        ("k1", "one", "nvf_k1", "h1", '["read"]', _T, None, None, None, None),
+        ("k2", "two", "nvf_k2", "h2", None, _T, _T, None, "uc_demo", "p_kim"),
+        ("k3", "three", "nvf_k3", "h3", "[]", _T, None, _T, None, "p_kim"),
+    ]),
+    "project_members": (_MEMBER_COLS, [
+        ("uc_demo", "p_kim", "local", _T, "manual"),
+        ("uc_demo", "p_null", None, _T, "ticket"),
+    ]),
+}
+
+
+def _account_rows(sdb, table):
+    with sdb.begin() as c:
+        return sorted(_norm(r) for r in c.execute(table.select().order_by(*table.primary_key.columns)).all())
+
+
+def accounts_copy():
+    print("== people, api_keys and project_members are copied from DuckDB at the first start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old_ddl_duckdb(con, seed={**SEED, **ACCOUNTS})
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    with s.sessions_db.begin() as c:
+        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger counts the accounts as DuckDB held them",
+       (ledger["people"], ledger["api_keys"], ledger["project_members"]) == (4, 3, 2), ledger)
+    ppl = {r[0]: r for r in _account_rows(s.sessions_db, people_table)}
+    ck("every person arrived", sorted(ppl) == ["local", "p_blank", "p_kim", "p_null"], sorted(ppl))
+    with s.sessions_db.begin() as c:
+        emails = dict(c.execute(text("SELECT id, emails FROM people")).all())
+    ck("emails is the same JSON text in the table", emails["p_kim"] == '["kim@work.test", "k@home.test"]'
+       and emails["local"] == "[]", emails)
+    ck("a null emails stays NULL and an empty string is NULL too, not a crash",
+       emails["p_null"] is None and emails["p_blank"] is None, emails)
+    ck("a person's flags and times arrived", ppl["local"][5] in (True, 1) and ppl["p_kim"][5] in (False, 0)
+       and ppl["p_blank"][9] is not None and ppl["p_kim"][9] is None, ppl)
+    ck("list_people reads them", [p["id"] for p in s.list_people()] and
+       {p["id"] for p in s.list_people()} >= {"local", "p_kim", "p_null"}, s.list_people())
+    kim = s.get_person("p_kim")
+    ck("emails comes back as a list", kim and kim["emails"] == ["kim@work.test", "k@home.test"], kim)
+    ck("and as an empty list when null or blank", s.get_person("p_null")["emails"] == []
+       and (s.get_person("p_blank") or {"emails": []})["emails"] == [])
+    k1, k2, k3 = s.get_api_key("k1"), s.get_api_key("k2"), s.get_api_key("k3")
+    ck("a key's scopes come back as a list: one, none, empty",
+       k1["scopes"] == ["read"] and k2["scopes"] == [] and k3["scopes"] == [], (k1, k2, k3))
+    ck("a project key keeps its project and person, and a revoked one its time",
+       k2["project"] == "uc_demo" and k2["person_id"] == "p_kim" and k3["revoked_at"] is not None
+       and k1["revoked_at"] is None, (k2, k3))
+    ck("find_api_key finds an active key and not a revoked one", s.find_api_key("h1")["id"] == "k1"
+       and s.find_api_key("h3") is None)
+    ck("members arrived", sorted(m["person_id"] for m in s.list_project_members("uc_demo")) == ["p_kim", "p_null"])
+    with s._lock:
+        n = [s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+             for t in ("people", "api_keys", "project_members")]
+    ck("DuckDB still has its rows: nothing is deleted there", n == [4, 3, 2], n)
+    s.create_person("Later", email="later@example.test")
+    s.close()
+    s = Store(path, state_dsn="")
+    ck("a second start copies nothing: a person made after the copy is kept",
+       s.find_person_by_email("later@example.test") is not None and len(s.list_people()) >= 4)
+    s.close()
+
+
+def accounts_methods():
+    print("== people, keys and members through Core ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    local = s.get_person("local")
+    ck("a new cell has `local`, an admin", local and local["is_admin"] and local["emails"] == [], local)
+    a = s.create_person("Ann", email="Ann@Example.test", emails=["ann2@example.test"], github="@AnnGH")
+    ck("create_person lowercases and keeps the extra emails", a["email"] == "ann@example.test"
+       and a["emails"] == ["ann2@example.test"] and a["github"] == "anngh", a)
+    b = s.create_person("Bob")
+    ck("a person with no email has an empty list", b["email"] is None and b["emails"] == [], b)
+    try:
+        s.create_person("Dup", email="ann2@example.test")
+        ck("an email in use is refused", False, "no error")
+    except ValueError as e:
+        ck("an email in use is refused, naming it", "ann2@example.test" in str(e), str(e))
+    ck("a clash left no row", sum(1 for p in s.list_people() if p["name"] == "Dup") == 0)
+    up = s.update_person(a["id"], name="Ann B", emails=[])
+    ck("update_person changes the name and clears the extra emails", up["name"] == "Ann B"
+       and up["emails"] == [] and s.get_person(a["id"])["emails"] == [], up)
+    ck("an email freed by an update can be used again", s.create_person("Cy", email="ann2@example.test"))
+    ck("update_person of nobody is None", s.update_person("p_missing", name="x") is None)
+
+    print("== keys ==")
+    s.insert_api_key("kA", "a", "nvf_a", "hA", ["read", "write"], person_id=a["id"])
+    s.insert_api_key("kB", "b", "nvf_b", "hB", [], project="uc_x")
+    ck("a key's scopes are a list, empty when none", s.get_api_key("kA")["scopes"] == ["read", "write"]
+       and s.get_api_key("kB")["scopes"] == [], (s.get_api_key("kA"), s.get_api_key("kB")))
+    ck("list_api_keys for a project lists its keys only", [k["id"] for k in s.list_api_keys("uc_x")] == ["kB"])
+    ck("list_api_keys lists both, newest first", {k["id"] for k in s.list_api_keys()} == {"kA", "kB"})
+    ck("key_person_id and set_key_person", s.key_person_id("kA") == a["id"]
+       and s.set_key_person("kB", b["id"]) and s.key_person_id("kB") == b["id"]
+       and s.set_key_person("kB", None) and s.key_person_id("kB") is None and not s.set_key_person("nope", None))
+    s.touch_api_key("kA")
+    ck("touch_api_key sets the time", s.get_api_key("kA")["last_used_at"] is not None)
+    s.add_subscription("sub_kA", "t1", "https://hook.example.test/a", created_by="key:kA")
+    s.add_subscription("sub_other", "t1", "https://hook.example.test/o", created_by="key:kB")
+    ck("revoke_api_key says it revoked", s.revoke_api_key("kA") is True)
+    with s._sread:
+        subs = [r[0] for r in s.sc.execute("SELECT subscription_id FROM subscriptions").fetchall()]
+    ck("and deleted that key's subscriptions only", "sub_kA" not in subs and "sub_other" in subs, subs)
+    ck("a revoked key is not found, and revoking again says no", s.find_api_key("hA") is None
+       and s.get_api_key("kA")["revoked_at"] is not None and s.revoke_api_key("kA") is False
+       and s.revoke_api_key("kNope") is False)
+
+    print("== a person who leaves ==")
+    s.insert_api_key("kC", "c", "nvf_c", "hC", ["read"], person_id=b["id"])
+    s.insert_api_key("kD", "d", "nvf_d", "hD", ["read"], person_id=b["id"])
+    ck("remove_person says it removed", s.remove_person(b["id"]) is True)
+    ck("their keys are revoked", s.find_api_key("hC") is None and s.find_api_key("hD") is None)
+    ck("a second remove says no", s.remove_person(b["id"]) is False)
+
+    print("== members and a project's end ==")
+    s.create_project("uc_x", "custom", "x", {}, lead_person_id=a["id"])
+    ck("add_project_member says added, then already", s.add_project_member("uc_x", "p1", added_by="local")
+       is True and s.add_project_member("uc_x", "p1", added_by="other", reason="ticket") is False)
+    ck("the first reason stays", [m["reason"] for m in s.list_project_members("uc_x")] == ["manual"])
+    try:
+        s.add_project_member("uc_x", "p2", reason="odd")
+        ck("an unknown reason is refused", False, "no error")
+    except ValueError:
+        ck("an unknown reason is refused", True)
+    s.add_project_member("uc_x", "p2", reason="ticket")
+    by = s.members_by_project(["uc_x", "uc_none"])
+    ck("members_by_project groups them", sorted(m["person_id"] for m in by.get("uc_x", [])) == ["p1", "p2"]
+       and not by.get("uc_none"), by)
+    ck("is_project_member: a member, the lead, a stranger", s.is_project_member("uc_x", "p1")
+       and s.is_project_member("uc_x", a["id"]) and not s.is_project_member("uc_x", "p_none")
+       and not s.is_project_member("uc_x", None))
+    ck("remove_project_member says removed, then no", s.remove_project_member("uc_x", "p2") is True
+       and s.remove_project_member("uc_x", "p2") is False)
+    s.insert_api_key("kE", "e", "nvf_e", "hE", ["read"], project="uc_x")
+    s.insert_api_key("kF", "f", "nvf_f", "hF", ["read"], project="uc_other")
+    s.delete_project("uc_x")
+    ck("deleting the project revokes its keys and drops its members", s.find_api_key("hE") is None
+       and s.get_api_key("kE")["revoked_at"] is not None and s.list_project_members("uc_x") == [])
+    ck("and left another project's key alone", s.find_api_key("hF") is not None)
+    s.close()
+
+
+def accounts_takeover():
+    print("== Postgres: the accounts tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        seeded = old_ddl_postgres(dsn, seed={**SEED, **ACCOUNTS})
+        tables = ("people", "api_keys", "project_members")
+
+        def snapshot():
+            out = {}
+            with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+                for t in tables:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                                     "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
+                                     [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
+                    out[t] = (cols, [tuple(map(str, r)) for r in rows])
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the three tables, with the sample rows",
+           [len(before[t][1]) for t in tables] == [4, 3, 2], {t: len(before[t][1]) for t in tables})
+        ck("emails and scopes are TEXT there", dict((c[0], c[1]) for c in before["people"][0])["emails"] == "text"
+           and dict((c[0], c[1]) for c in before["api_keys"][0])["scopes"] == "text")
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types and rows, is as the old code left it", snapshot() == before)
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        with ts.capture_logs("alembic.runtime.migration") as recs:
+            sdb.upgrade()
+        ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
+        ts.step_down(sdb, "0009_session_origin")
+        ck("a downgrade to the revision before keeps the tables and their rows", snapshot() == before
+           and ts.versions(sdb) == ["0009_session_origin"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it takes them over again, rows untouched", snapshot() == before)
+        # the Core tables read what the old code wrote
+        ppl = {r[0]: r for r in _account_rows(sdb, people_table)}
+        ck("Core reads a person the old code wrote", sorted(ppl) == ["local", "p_blank", "p_kim", "p_null"])
+        with sdb.begin() as c:
+            kim = c.execute(people_table.select().where(people_table.c.id == "p_kim")).first()
+            k2 = c.execute(api_keys_table.select().where(api_keys_table.c.id == "k2")).first()
+            blank = c.execute(people_table.select().where(people_table.c.id == "p_blank")).first()
+        ck("JSON text parses to a list, null to None", kim.emails == ["kim@work.test", "k@home.test"]
+           and k2.scopes is None and blank.emails is None, (kim, k2, blank))
+        ck("members read too", len(_account_rows(sdb, members_table)) == 2)
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+
 def cli_edition():
     print("== tares up reads the edition from tares.sqlite ==")
     from tares import cli
@@ -557,8 +782,10 @@ def sqlite_and_pg_units():
 
 
 if __name__ == "__main__":
-    ck("settings is in MOVED_TABLES, with the five session tables", [t.name for t in MOVED_TABLES]
-       == ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters", "settings"])
+    ck("settings and the accounts are in MOVED_TABLES, with the five session tables",
+       [t.name for t in MOVED_TABLES]
+       == ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters",
+           "settings", "people", "api_keys", "project_members"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -568,6 +795,9 @@ if __name__ == "__main__":
     sqlite_and_pg_units()
     ddl_skips()
     methods()
+    accounts_copy()
+    accounts_methods()
     postgres_takeover()
+    accounts_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)
