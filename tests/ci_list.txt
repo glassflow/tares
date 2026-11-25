@@ -304,6 +304,7 @@ test_tracing
 test_trigger_debounce
 test_upgrade_hard_stop
 test_usage
+test_usage_hourly
 test_vercel
 test_waiting_slack
 test_watch_escalate

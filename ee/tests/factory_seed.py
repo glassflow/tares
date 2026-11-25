@@ -1229,6 +1229,9 @@ class _Gen:
             c.execute(delete(T.session_ingest_marks))
             c.execute(insert(T.session_ingest_marks), [{"name": m, "at": NOW} for m in
                       (si.MARK, si.CAUGHT_UP, si.FACTS_MARK, si.TURNS_MARK)][:self.shape["tables"]["session_ingest_marks"]])
+        # the hourly usage totals a cell builds in the background after its first start (TR-1632)
+        from tares import claude_usage_hourly
+        claude_usage_hourly.fill(st)
 
     def stations_and_states(self):
         from tares.session_store import tables as T

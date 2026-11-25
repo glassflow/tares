@@ -67,6 +67,41 @@ session_usage = Table(
     Column("cache_write_1h_tokens", BigInteger),
 )
 
+# The index the readers' boundary slice uses (TR-1632): the replies of the first, partial hour of a
+# window are read from the raw rows by `replied_at`. Not in the old DDL.
+Index("session_usage_replied_at", session_usage.c.replied_at)
+
+# What the replies of one session add up to in one hour, by the project each reply was stamped with
+# (TR-1632). The usage readers sum these instead of every reply: `station_rollup`'s spend and
+# `usage_by_project`. `hour` is the start of the hour in UTC and `project` is '' for a reply with
+# none (a primary key cannot hold NULL). `cost_usd` is NULL while every reply of the bucket is
+# unpriced, so a sum over buckets orders as a sum over replies does. A bucket is rebuilt from the
+# raw rows in the transaction that writes a reply (claude_usage_hourly.py), never changed by a delta.
+session_usage_hourly = Table(
+    "session_usage_hourly", metadata,
+    Column("session", Text, primary_key=True),
+    Column("hour", UTCDateTime, primary_key=True),
+    Column("project", Text, primary_key=True, server_default=""),
+    Column("replies", BigInteger, nullable=False),
+    Column("input_tokens", BigInteger, nullable=False),
+    Column("output_tokens", BigInteger, nullable=False),
+    Column("cache_write_tokens", BigInteger, nullable=False),
+    Column("cache_read_tokens", BigInteger, nullable=False),
+    Column("cost_usd", Double),
+    Column("unpriced", BigInteger, nullable=False),
+)
+Index("session_usage_hourly_hour", session_usage_hourly.c.hour)
+
+# How far the fill of `session_usage_hourly` has got (TR-1632): one row, `usage_hourly`. `cursor` is
+# the last session rebuilt (sessions go in order; null before the first chunk), `ready_at` is set
+# once the buckets were checked against the raw rows. The readers use the buckets only when it is set.
+session_rollup_state = Table(
+    "session_rollup_state", metadata,
+    Column("name", Text, primary_key=True),
+    Column("cursor", Text),
+    Column("ready_at", UTCDateTime),
+)
+
 # The status line's and /context's latest readings per session (claude_usage_store.py).
 # `status` and `context` hold JSON that callers parse themselves, so they are Text.
 session_meters = Table(
