@@ -53,7 +53,9 @@ checks, with what a short visit can see:
     same conversation compares first, as always, and `hand` starts no turn in any other one, so
     `restart --fresh`, the watch, and a start that finds the conversation can no longer be loaded leave
     the station down. A person gives it up, with `tares factory revive <station> --fresh` or by retiring
-    the station (`give_up_unverified`).
+    the station (`give_up_unverified`). `restart --fresh` goes on only when its own stop made the
+    comparison: a station that was not running then has nobody to ask, which is a comparison that could
+    not be made, and is marked the same way (`lifecycle._restart_codex`).
 A station that fails one is stopped and marked (`guard_off`); the watch does not start it again by itself,
 `tares factory revive` does. Two things keep that from going wrong:
   * a turn that cannot be listed with its items is not a turn that was compared. The watch then looks again
@@ -309,15 +311,18 @@ def _last_turn(wire: Wire, thread: str):
     return turn
 
 
-def _audit(wire: Wire, thread: str, paths: CrewPaths, station: str) -> tuple:
+def _audit(wire: Wire, thread: str, paths: CrewPaths, station: str, ended: bool = False) -> tuple:
     """(what the newest turn shows the guard did not do, "" when nothing; that turn's id). Raises NotCompared
-    when the turn could not be looked at."""
+    when the turn could not be looked at. With `ended` (the last look a turn gets, at a stop) a turn that still
+    runs and shows nothing so far is not compared either: a command of it that has not ended is not listed."""
     turn = _last_turn(wire, thread)
     if turn is None:
         return "", ""
     if turn.get("id") and turn.get("id") == state.stations_get(station, SEEN, paths=paths):
         return "", str(turn["id"])   # the station was stopped for this turn, and a person started it again
     found = unguarded(turn.get("items"), _record(paths, station))
+    if ended and not found and turn.get("status") == "inProgress":
+        raise NotCompared("its newest turn had not ended")
     why = found[0] + (f", and {len(found) - 1} more" if len(found) > 1 else "") if found else ""
     return why, str(turn.get("id") or "")
 
@@ -401,7 +406,8 @@ def unverified(paths: CrewPaths, station: str) -> dict:
     return mark if isinstance(mark, dict) and mark.get("thread") else {}
 
 
-def _mark_unverified(paths: CrewPaths, station: str, thread: str, why: str) -> None:
+def mark_unverified(paths: CrewPaths, station: str, thread: str, why: str) -> None:
+    """Write on the station's row that the last turn of `thread` could not be compared, and record the event."""
     row = state.stations_load(paths).get(station)
     if isinstance(row, dict):
         state.stations_put(station, {UNVERIFIED: {"at": state.utc_stamp(), "thread": thread, "why": why[:300]}}, paths)
@@ -743,7 +749,7 @@ def _compared_at_stop(paths: CrewPaths, station: str, thread: str) -> tuple:
     that was compared and is in order; one that could not be looked at is never that. Never fails."""
     try:
         with visit(paths, station, timeout=5) as wire:
-            return (*_audit(wire, thread, paths, station), "")
+            return (*_audit(wire, thread, paths, station, ended=True), "")
     except NotCompared as e:
         return "", "", str(e)
     except CrewError as e:
@@ -789,5 +795,5 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
         mark_off(paths, station, why, shown)
         state.event("guard-off", station, why[:300], paths=paths)
     elif unknown:
-        _mark_unverified(paths, station, thread, unknown)
+        mark_unverified(paths, station, thread, unknown)
     return how

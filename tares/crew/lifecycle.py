@@ -233,9 +233,11 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
     with --fresh, a new one. `only_between_turns` (a wake) leaves a station in a turn alone
     (NotBetweenTurnsError). A station whose stop finds that its last turn ran something the guard has no
     record of is not started again (GuardOffError): `tares factory revive` does that, as for one the watch
-    stopped. When the stop could not make that comparison, `--fresh` is refused after the stop (the station
-    stays down, and the error names the two ways on), and a restart without it goes on: the start compares
-    first, in the same conversation."""
+    stopped, and a restart of a station that is down for that already is refused the same way. `--fresh`
+    goes on only when this call's own stop compared the last turn: when the stop could not, when an earlier
+    one could not, or when the station was not running (nobody to ask), the station is left down and the
+    error names the two ways on. A restart without `--fresh` goes on in all three: its start compares first,
+    in the same conversation."""
     locks.station_lock(station, paths)
     fresh = bool(rest) and rest[0] == "--fresh"
     prompt = (rest[1:] if fresh else rest)[:1]
@@ -248,20 +250,31 @@ def _restart_codex(client: TaresClient, paths: CrewPaths, station: str, rest: li
         codex_station.hand(paths, station, prompt)
         state.event("prompted", station, paths=paths)
         return
+    stopped = ""
     if alive:
-        codex_station.stop(paths, station)
+        stopped = codex_station.stop(paths, station)
         if codex_station.is_alive(paths, station):
             raise CrewError(f"{station} did not stop; try again")
-        off = codex_station.guard_off(paths, station)
-        if off:   # its last turn ran something the guard has no record of (TR-1594): it stays down
-            raise GuardOffError(station, off)
+    # TR-1594. Looked at whether this call stopped the station or found it down: `revive` below takes its
+    # caller for a person who has seen why the station is down, and a restart is not that.
+    off = codex_station.guard_off(paths, station)
+    if off:   # stopped for what it ran past the guard, now or before: it stays down until `revive`
+        raise GuardOffError(station, off)
+    if fresh:
+        # A new conversation gives the old one up, so its last turn must have been compared, by this call's
+        # own stop. A station that was not running has nobody to ask: that is a comparison that could not be
+        # made, like one that failed, and is written down the same way.
+        thread = state.stations_get(station, "sessionId", paths=paths)
+        if thread and stopped in ("", "not running") and not codex_station.unverified(paths, station):
+            codex_station.mark_unverified(paths, station, thread, "the station was not running, so there was "
+                                                                  "nobody to ask what its last turn ran")
         pending = codex_station.unverified(paths, station)
-        if fresh and pending:   # not compared, so not known to be in order: not given up for a new conversation
+        if pending:   # not compared, so not known to be in order: not given up for a new conversation
             raise CrewError(
-                f"{station} was stopped, but what its last turn ran could not be compared with the guard's record "
-                f"({pending.get('why')}), so it is not started in a new conversation. `tares factory revive "
-                f"{station}` starts it in its own, where the comparison is made first; `tares factory revive "
-                f"{station} --fresh` starts it in a new one without the comparison")
+                f"{station} is down and is not started in a new conversation: what its last turn ran could not be "
+                f"compared with the guard's record ({pending.get('why')}). `tares factory revive {station}` starts "
+                f"it in its own conversation, where the comparison is made first; `tares factory revive {station} "
+                "--fresh` starts it in a new one without the comparison")
     revive(client, paths, [station, *rest], claude_bin=claude_bin)
 
 
