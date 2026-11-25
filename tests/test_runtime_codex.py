@@ -121,14 +121,15 @@ ck("the MCP server is named, with its address and the identity headers read from
    and all(v in spec.env or v == "TARES_PROJECT" for v in MCP_IDENTITY.values()), spec.settings["mcp_servers"])
 ck("it is required, and the crew's key reaches it through the plugin's headers helper, told the key file by its path (TR-1596)",
    spec.settings["mcp_servers"] == {"tares": {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY, "required": True,
-                                              "http_headers_helper": MCP_HELPER}}
+                                              "default_tools_approval_mode": "approve", "http_headers_helper": MCP_HELPER}}
    and MCP_HELPER == "TARES_FACTORY_CRED_FILE={TOKEN_FILE_SHELL} tares hook mcp-headers --plugin-root {PLUGIN_DIR_SHELL}",
    spec.settings["mcp_servers"])
 ck("the read the crew asks before a prompt is one the cell answers for any key it takes",
    spec.settings["mcp_check"] == {"server": "tares", "tool": "list_crew", "arguments": {"mine": True}}, spec.settings.get("mcp_check"))
 no_key = RuntimeCodex().launch_spec("builder", "alpha-build-s1", {**proj, "token_file": False})
 ck("a crew with no key file gets no helper, and the server is required all the same",
-   no_key.settings["mcp_servers"]["tares"] == {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY, "required": True}
+   no_key.settings["mcp_servers"]["tares"] == {"url": "http://cell.test/mcp", "env_http_headers": MCP_IDENTITY, "required": True,
+                                               "default_tools_approval_mode": "approve"}
    and "TOKEN_FILE_SHELL" not in no_key.placeholders, no_key.settings["mcp_servers"])
 try:
     RuntimeCodex().launch_spec("builder", "alpha-build-s1", {**proj, "mcp_url": ""})

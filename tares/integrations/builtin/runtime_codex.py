@@ -53,7 +53,9 @@ down, a helper that fails, no key at an endpoint that wants one. It does not cat
 endpoint takes any bearer at the first request and passes it to the cell with each call, and the cell's
 refusal comes back as a tool's text ("error 401: ..."), not as a failed call. So the crew asks one read
 itself before every prompt (`mcp_check`, see `tares.crew.codex_station`). A crew with no key file (a cell
-with no login) gets no helper.
+with no login) gets no helper. The server's tools are approved as a set (`default_tools_approval_mode`):
+with the conversation's approval policy Codex would stop every call to Tares on a question to the person
+(measured: a first turn that calls `builder_brief` waits for an approval and never ends).
 
 Not here yet: recording (TR-1595), the role instructions (TR-1598) and monitoring. The approval policy and the sandbox are the tightest pair TR-1576 ran a guarded command
 under; whether a builder can work in them is for TR-1598 to find.
@@ -174,7 +176,10 @@ class RuntimeCodex(Runtime):
         }
         if _text(ctx, "model"):
             thread["model"] = _text(ctx, "model")
-        tares = {"url": mcp_url, "env_http_headers": dict(MCP_IDENTITY), "required": True}
+        tares = {"url": mcp_url, "env_http_headers": dict(MCP_IDENTITY), "required": True,
+                 # Codex asks the person before each call of an MCP tool unless told otherwise, and a station
+                 # has nobody to ask. A call to Tares passes the guard, and the cell checks who may do what.
+                 "default_tools_approval_mode": "approve"}
         if ctx.get("token_file"):
             tares["http_headers_helper"] = MCP_HELPER
         settings = {
