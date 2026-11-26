@@ -29,8 +29,8 @@ of its first item (`item/started`, a `userMessage`); without it no hook runs and
 The "model" then runs $FAKE_CODEX_COMMANDS, a JSON list: a string is a shell command, {"mcp": "server__tool"}
 an MCP call. Each goes to the `PreToolUse` hooks first (the payload Codex gives: `tool_name`, `tool_input`,
 `tool_use_id`, `turn_id`, `cwd`); a deny leaves no item and nothing runs, an allow with `updatedInput` runs
-the command it gives. What ran is kept as the turn's items, listed by `thread/turns/list` once the command has
-ended.
+the command it gives. What ran is kept as the turn's items, with the real exit code, the folder and what the
+command printed, listed by `thread/turns/list` and by `thread/read` with its turns once the command has ended.
 A connection that only reads is told nothing of a turn. `hooks/list` and `config/read` answer for a folder
 as the real one does: a folder nobody marked is recorded as trusted in $CODEX_HOME/config.toml when a
 conversation starts in it, and from then on a repository that brings its own setup ($FAKE_CODEX_PROJECT)
@@ -54,6 +54,18 @@ answer 200 is `failed`, and when it is marked `required` the conversation is not
 conversation's servers with their `runtimeStatus`; `mcpServer/tool/call` posts `tools/call` on the same
 connection, with the same headers, and gives the server's answer.
 
+It asks, as 0.171.0 was measured to (TR-1593). An entry of $FAKE_CODEX_COMMANDS that is {"ask": ...} is a call
+the turn stops on, after the `PreToolUse` hooks ran: {"ask": "command", "command": "..."} (a command the
+sandbox does not allow), {"ask": "file", "path": "..."} (a change outside the workspace; the request names
+only the call), {"ask": "question", "questions": [...]} or {"ask": "other"} (a request of another kind). The
+conversation then reads active with `waitingOnApproval`, no item is listed for the call, and the request is
+put to every connection that started or joined the conversation, and again to each that joins later: the same
+turn, item and start time, with an id that is that connection's own (each connection's first is 0). A
+connection that only reads is asked nothing. The first answer counts: "accept" runs the command (a file
+change writes "changed" to the path), anything else does not; every connection of the conversation is told
+`serverRequest/resolved`, and the turn goes on by itself. An answer to a request that is no longer asked is
+dropped.
+
 What it took from its start (arguments, folder, the station's variables, its session) is written to
 $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_VERSION   the version `--version` prints
@@ -69,6 +81,7 @@ $FAKE_CODEX_RECORD as JSON. Switches, all from the environment:
   FAKE_CODEX_UNREAD    how many reads of a conversation fail right after a turn starts
   FAKE_CODEX_APPROVAL  when set, a turn stops on an approval nobody answers
   FAKE_CODEX_REFUSE    when set, `turn/start` is refused with this text
+  FAKE_CODEX_FAIL      when set, a turn is taken and then fails with this text before the model does anything
   FAKE_CODEX_COMMANDS  what the model runs in each turn (see above); nothing when unset
   FAKE_CODEX_THINK     seconds the model takes before each command (0.3 when unset)
   FAKE_CODEX_NOHOOKS   when set, no hook runs whatever the conversation's config says (trust is ignored)
@@ -198,6 +211,8 @@ def send_text(conn, doc):
 THREADS = {}            # id -> {"turns": [...], "updatedAt": seconds, "flags": [...], "config": {...}, "cwd": str}
 LOADED = set()          # the conversations this process has open
 MCP = {}                # id -> {server name: {url, headers, status, error}}: its MCP connections
+PENDING = {}            # id -> {"method", "params", "answered": Event, "result", "ids": {connection: request id}}
+ASK_IDS = {}            # connection -> the id its next request of the server's own gets
 JOINED = {}             # id -> the connections that started or joined it: they are told of its turns
 LOCK = threading.Lock()
 
@@ -287,6 +302,13 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
     base = {"session_id": thread_id, "turn_id": turn_id, "cwd": cwd, "model": "fake", "permission_mode": "default"}
     for h in _hooks(t, "UserPromptSubmit"):
         _hook(h, {**base, "hook_event_name": "UserPromptSubmit", "prompt": prompt}, cwd)
+    if env.get("FAKE_CODEX_FAIL"):   # as a model the account cannot use: the turn fails, the conversation is at rest
+        with LOCK:
+            for turn in t["turns"]:
+                if turn["id"] == turn_id:
+                    turn["error"] = {"message": env["FAKE_CODEX_FAIL"], "codexErrorInfo": "modelNotFound"}
+        _end_turn(thread_id, turn_id, "failed")
+        return
     _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "userMessage", "id": "msg-" + os.urandom(4).hex()}})
     try:
         commands = json.loads(env.get("FAKE_CODEX_COMMANDS") or "[]")
@@ -298,12 +320,16 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
             return
         call = "exec-" + os.urandom(6).hex()
         mcp = c.get("mcp") if isinstance(c, dict) else None
-        asked = "" if mcp else str(c)
-        tool = "mcp__" + mcp if mcp else "Bash"
+        ask = c.get("ask") if isinstance(c, dict) else None
+        asked = "" if mcp or ask in ("file", "question", "other") else str(c.get("command") if ask else c)
+        tool = "mcp__" + mcp if mcp else "apply_patch" if ask == "file" else "Bash"
         denied, runs = False, asked
         for h in _hooks(t, "PreToolUse"):
+            given = ({} if mcp else  # apply_patch hands the hook the patch as `command`, as 0.171.0 does
+                     {"command": f"*** Begin Patch\n*** Add File: {c['path']}\n+changed\n*** End Patch"} if ask == "file"
+                     else {"command": asked})
             code, said = _hook(h, {**base, "hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": call,
-                                   "tool_input": {} if mcp else {"command": asked}}, cwd)
+                                   "tool_input": given}, cwd)
             out = said.get("hookSpecificOutput") if isinstance(said.get("hookSpecificOutput"), dict) else {}
             if code == 2 or out.get("permissionDecision") == "deny":
                 denied = True
@@ -313,15 +339,29 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
             continue
         if env.get("FAKE_CODEX_KEEP_INPUT"):
             runs = asked
+        if ask:
+            result = _ask(thread_id, turn_id, call, ask, c, runs, cwd)
+            if result is None or not _still(thread_id, turn_id):
+                return   # the turn was ended while it waited
+            if ask in ("question", "other") or result.get("decision") not in ("accept", "acceptForSession"):
+                continue
+            if ask == "file":
+                with open(c["path"], "w", encoding="utf-8") as f:
+                    f.write("changed\n")
+                continue
         if mcp:
             server, _, name = mcp.partition("__")
             item = {"type": "mcpToolCall", "id": call, "server": server, "tool": name, "status": "completed"}
         else:
             _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "commandExecution", "id": call}})
-            subprocess.run(runs, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+            began = int(time.time() * 1000)
+            done = subprocess.run(runs, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, timeout=30)
             item = {"type": "commandExecution", "id": call, "command": "/bin/zsh -lc " + shlex.quote(runs),
                     "commandActions": [{"type": "unknown", "command": runs}], "source": "unifiedExecStartup",
-                    "status": "completed"}
+                    "status": "completed" if done.returncode == 0 else "failed", "cwd": cwd,
+                    "exitCode": done.returncode, "aggregatedOutput": (done.stdout or "") + (done.stderr or ""),
+                    "startedAtMs": began, "completedAtMs": int(time.time() * 1000)}
         with LOCK:
             for turn in t["turns"]:
                 if turn["id"] == turn_id:
@@ -340,6 +380,63 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
             return
         _end_turn(thread_id, turn_id)
         _tell(thread_id, "turn/completed", {"turn": {"id": turn_id, "status": "completed"}})
+
+
+def _put(conn, thread_id) -> None:
+    """Put the conversation's waiting request to one connection, under an id of that connection's own."""
+    with LOCK:
+        pending = PENDING.get(thread_id)
+        if pending is None or pending["answered"].is_set():
+            return
+        number = ASK_IDS.get(conn, 0)
+        ASK_IDS[conn] = number + 1
+        pending["ids"][conn] = number
+    try:
+        send_text(conn, {"id": number, "method": pending["method"], "params": pending["params"]})
+    except OSError:
+        pass
+
+
+def _ask(thread_id, turn_id, call, kind, c, command, cwd):
+    """Stop the turn on a request and wait for its answer; the answer's result, or None when the turn ended."""
+    method = {"command": "item/commandExecution/requestApproval", "file": "item/fileChange/requestApproval",
+              "question": "item/tool/requestUserInput"}.get(kind, "item/permissions/requestApproval")
+    params = {"threadId": thread_id, "turnId": turn_id, "itemId": call, "startedAtMs": int(time.time() * 1000)}
+    if kind == "command":
+        params.update(command="/bin/zsh -lc " + shlex.quote(command), cwd=cwd, kind="command", reason=c.get("reason"))
+    elif kind == "file":
+        params.update(reason=c.get("reason"), grantRoot=None)
+    elif kind == "question":
+        params.update(questions=c.get("questions") or [], isBlocking=True)
+    pending = {"method": method, "params": params, "answered": threading.Event(), "result": None, "ids": {}}
+    with LOCK:
+        PENDING[thread_id] = pending
+        THREADS[thread_id]["flags"] = ["waitingOnApproval"]
+        joined = list(JOINED.get(thread_id, ()))
+    for conn in joined:
+        _put(conn, thread_id)
+    while not pending["answered"].wait(0.1):
+        if not _still(thread_id, turn_id):
+            with LOCK:
+                PENDING.pop(thread_id, None)
+            return None
+    with LOCK:
+        PENDING.pop(thread_id, None)
+        THREADS[thread_id]["flags"] = []
+    return pending["result"] if isinstance(pending["result"], dict) else {}
+
+
+def _answered(conn, msg) -> None:
+    """A connection's answer to a request of the server's own. The first answer to a waiting request counts."""
+    with LOCK:
+        found = [(tid, p) for tid, p in PENDING.items() if p["ids"].get(conn) == msg.get("id") and not p["answered"].is_set()]
+        if not found:
+            return
+        thread_id, pending = found[0]
+        pending["result"] = msg.get("result")
+        pending["answered"].set()
+    _note("answer", {"threadId": thread_id, "method": pending["method"], "result": msg.get("result")})
+    _tell(thread_id, "serverRequest/resolved", {"threadId": thread_id, "requestId": msg.get("id")})
 
 
 def _account() -> dict:
@@ -411,7 +508,8 @@ def _view(thread_id, turns=False) -> dict:
     else:
         status = {"type": "idle"}
     return {"id": thread_id, "status": status, "updatedAt": t["updatedAt"],
-            "turns": [{"id": x["id"], "status": x["status"]} for x in t["turns"]] if turns else []}
+            "turns": [{"id": x["id"], "status": x["status"], "error": x.get("error"), "items": list(x.get("items") or [])}
+                      for x in t["turns"]] if turns else []}
 
 
 class Refused(Exception):
@@ -468,6 +566,8 @@ def conversation(method, params, conn=None):
                 t["config"] = params.get("config") or {}
             t["cwd"] = params.get("cwd") or t.get("cwd")
             _settle_trust(params)
+            if tid in PENDING:   # whoever joins is asked again, once the join is answered
+                threading.Timer(0.05, _put, (conn, tid)).start()
             return {"thread": _view(tid)}
         if tid not in LOADED:
             raise Refused(f"thread not loaded: {tid}")
@@ -569,6 +669,9 @@ def serve(conn, args):
                 continue
             msg = json.loads(payload)
             if "id" not in msg:
+                continue
+            if "method" not in msg:   # an answer to a request of the server's own
+                _answered(conn, msg)
                 continue
             try:
                 result = conversation(msg.get("method"), msg.get("params") or {}, conn)

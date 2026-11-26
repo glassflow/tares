@@ -4,7 +4,9 @@
 document is one WebSocket text frame (RFC 6455). This is just enough of both to ask a question and read its
 answer: the upgrade handshake, masked text frames out, frames in, a pong for a ping. A notification that
 arrives while an answer is awaited is kept (the last KEPT of them) and given out by `next`, which also waits
-for the one after; a request of the server's own is passed over.
+for the one after. A request of the server's own (an approval, a question to the person: a document with both
+`id` and `method`) is kept too, and given out by `asked`; `answer` sends its answer. The id of such a request
+belongs to this connection: the same request put to another connection has another id (TR-1593).
 
 Measured against Codex 0.171.0 (TR-1576, tests/factory/codex_probe/appserver.py, the fuller client the
 probes use). Standard library only.
@@ -25,6 +27,7 @@ class WireError(Exception):
 
 
 KEPT = 500   # notifications kept while nobody reads them
+ASKED = 100  # requests of the server's own kept while nobody reads them
 
 
 class Wire:
@@ -43,6 +46,7 @@ class Wire:
         self._buf = b""
         self._part = b""
         self._kept = collections.deque(maxlen=KEPT)
+        self._asked = collections.deque(maxlen=ASKED)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
         try:
@@ -162,8 +166,7 @@ class Wire:
             except OSError as e:
                 raise WireError(f"the app-server hung up: {e}") from None
             if not doc or doc.get("id") != mine or "method" in doc:
-                if doc and "method" in doc and "id" not in doc:
-                    self._kept.append(doc)
+                self._keep(doc)
                 continue
             if doc.get("error") is not None:
                 err = doc["error"]
@@ -171,24 +174,39 @@ class Wire:
             result = doc.get("result")
             return result if isinstance(result, dict) else {}
 
-    def next(self, timeout: float) -> dict | None:
-        """The next notification ({"method", "params"}): one kept while an answer was awaited, else the one
-        that arrives within `timeout` seconds; None when none does. WireError when the app-server hung up."""
-        if self._kept:
-            return self._kept.popleft()
+    def _keep(self, doc) -> None:
+        """Put away a document that is not the answer awaited: a notification, or a request of the server's own."""
+        if doc and "method" in doc:
+            (self._asked if "id" in doc else self._kept).append(doc)
+
+    def _wait(self, kept, timeout: float) -> dict | None:
+        """The oldest document in `kept`, waiting up to `timeout` seconds for one to arrive."""
         deadline = time.monotonic() + max(timeout, 0)
-        while True:
+        while not kept:
             self.sock.settimeout(max(deadline - time.monotonic(), 0.001))
             try:
-                doc = self._message()
+                self._keep(self._message())
             except socket.timeout:
                 return None
             except OSError as e:
                 raise WireError(f"the app-server hung up: {e}") from None
-            if doc and "method" in doc and "id" not in doc:
-                return doc
-            if time.monotonic() >= deadline:
+            if not kept and time.monotonic() >= deadline:
                 return None
+        return kept.popleft()
+
+    def next(self, timeout: float) -> dict | None:
+        """The next notification ({"method", "params"}): one kept while an answer was awaited, else the one
+        that arrives within `timeout` seconds; None when none does. WireError when the app-server hung up."""
+        return self._wait(self._kept, timeout)
+
+    def asked(self, timeout: float) -> dict | None:
+        """The next request of the server's own ({"id", "method", "params"}), kept or arriving within `timeout`
+        seconds; None when none does. It waits for `answer`: nothing is answered by reading it."""
+        return self._wait(self._asked, timeout)
+
+    def answer(self, request_id, result: dict) -> None:
+        """Answer a request of the server's own, by the id it had on this connection."""
+        self._send({"id": request_id, "result": result})
 
     def initialize(self, version: str = "0") -> dict:
         """The handshake every connection starts with. The answer names the Codex folder in use (`codexHome`)."""

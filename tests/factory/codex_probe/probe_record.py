@@ -439,6 +439,55 @@ def recorded_on_a_cell(out):
         cell.end()
 
 
+@scenario
+def through_the_watch(out):
+    """The recorder as the watch runs it (PR 947): the watch's Codex step, and the last recording of a stop.
+    Nothing calls the recorder by hand."""
+    from tares.crew import codex_round
+    cell = Cell()
+    c = Crew()
+    kept = {k: os.environ.get(k) for k in ("TARESD_URL", "TARES_FACTORY_URL", "TARES_AUTH_TOKEN", "FACTORY_CREW_HOME")}
+    # the watch and a stop reach the cell their process names, with the person's key
+    os.environ.update(TARESD_URL=cell.url, TARES_FACTORY_URL=cell.url, TARES_AUTH_TOKEN=cell.token,
+                      FACTORY_CREW_HOME=c.home)
+    try:
+        err, _ = c.start(prompt="Do these as two separate shell commands, one tool call each, waiting for the first "
+                                "to end before the second: 1) `echo watch-a-4949` 2) `sleep 61.4949`. Then answer: done")
+        if err:
+            return finish({"the start succeeded": False}, error=err)
+        thread = c.row().get("sessionId")
+        for _ in range(90):
+            if running("sleep 61.4949"):
+                break
+            time.sleep(1)
+        time.sleep(3)   # an item is listed a moment after it ends
+        codex_round.step(c.paths, dict(os.environ))
+        mid = cell.http("GET", f"/api/crew/{STATION}?recent=50")
+        mid_text = " | ".join(x["text"] for x in mid.get("recent") or [])
+        how = cs.stop(c.paths, STATION)   # no round after this: the stop records last
+        ended = cell.http("GET", f"/api/crew/{STATION}?recent=50")
+        ended_text = " | ".join(x["text"] for x in ended.get("recent") or [])
+        codex_round.step(c.paths, dict(os.environ))
+        again = cell.http("GET", f"/api/crew/{STATION}?recent=50")
+        return finish({
+            "a watch round in the middle of the turn put the station on the cell, at work, in its conversation":
+                mid.get("session") == thread and mid.get("state") == "working",
+            "with the command that ended and the one that runs": "watch-a-4949" in mid_text and "sleep 61.4949" in mid_text,
+            "the stop alone, with no round after it, ended the session": ended.get("state") == "ended" and how in ("stopped", "killed"),
+            "and recorded the command it cut off as one whose outcome is not known": "outcome unknown" in ended_text,
+            "a round after the stop changes nothing": again.get("lines") == ended.get("lines"),
+        }, thread=thread, stop=how, mid_turn_lines=mid_text[:1200], lines_after_the_stop=ended_text[-1200:])
+    finally:
+        for k, v in kept.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        c.end(wait=3)
+        c.remove()
+        cell.end()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(os.getcwd(), "codex-probe-out"))

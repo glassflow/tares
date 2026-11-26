@@ -31,6 +31,13 @@ command's row is keyed by conversation and call).
 
 `step` never raises and never changes a station. It takes no lock: it only reads, and a station that is
 stopped or started under it reads as not running for this round.
+
+The watch runs `step` first in its Codex step, and that step first in the round (TR-1593): before revive,
+regrant, idle wake or pace can start another turn, what the last one did is recorded. A stop records last
+(`tares.crew.codex_station.stop`, which every stop goes through: restart, retire, crew down, a station found
+running past its guard): one look while the app-server still answers, then, once it has ended, `close_station`
+says every start that has no end has an outcome nobody will know. A closing Tares did not take is kept and
+sent again by the next look, whether or not the station runs again.
 """
 from __future__ import annotations
 
@@ -83,9 +90,10 @@ def new_sent(thread: str = "") -> dict:
     by call ({turn, at}); `items` the items sent of turns that are not closed (and the calls settled
     without a turn); `seen` the turns it listed; `ended` the turns seen ended at the last look; `closed`
     the turns all of whose items were sent; `usage` the replies whose tokens were sent; `path` its own
-    file; `before` the conversation the station had before this one."""
+    file; `before` the conversation the station had before this one; `closing` why a stop closed its open
+    starts, while Tares has not taken that closing yet, with `untold` the starts it found that no look sent."""
     return {"thread": thread, "before": "", "announced": False, "state": "", "starts": {}, "items": [],
-            "closed": [], "ended": [], "seen": [], "usage": 0, "path": ""}
+            "closed": [], "ended": [], "seen": [], "usage": 0, "path": "", "closing": "", "untold": []}
 
 
 def _fact(base: dict, kind: str, at=None, **more) -> dict:
@@ -312,6 +320,71 @@ def _post(client, found: list) -> None:
         client.tares_http("POST", "/ingest/codex", found[i:i + POST_FACTS])
 
 
+def close_station(client, paths: CrewPaths, station: str, why: str) -> dict:
+    """The station's app-server has ended (a stop): every start with no end has an outcome nobody will know,
+    and the session has ended. The conversation stays the station's (a restart carries it on): only its open
+    starts are closed. Returns {station, sent, error}; never raises. A closing that is not taken is kept
+    (`closing` in what was sent) and sent again by the next look."""
+    result = {"station": station, "sent": 0, "error": ""}
+    try:
+        sent = _load(paths, station)
+        row = state.stations_load(paths).get(station) or {}
+        sent["thread"] = sent["thread"] or str(row.get("sessionId") or "")
+        untold = _untold(paths, station, sent, row)
+        if not sent["thread"] or (not sent["starts"] and not untold and sent["state"] == "ended" and not sent.get("closing")):
+            return result
+        sent["closing"] = why
+        sent["untold"] = untold
+        _keep(paths, station, sent)
+        result["sent"] = _close(client, paths, station, sent)
+    except CrewError as e:
+        result["error"] = str(e)[:300]
+    except (OSError, ValueError) as e:
+        result["error"] = f"{type(e).__name__}: {e}"[:300]
+    return result
+
+
+def _untold(paths: CrewPaths, station: str, sent: dict, row: dict) -> list:
+    """The starts in the guard's record that no look sent: calls of the station's last turn (or of a turn a
+    look saw) let through after the last look, which nobody can read the end of once its app-server is gone."""
+    turns = set(sent.get("seen") or []) | {str(row.get("guardLastTurn") or "")}
+    out = []
+    for line in codex_guard.read_record(codex_guard.record_file(str(paths.raw), station)):
+        if not (isinstance(line, dict) and line.get("call") and line.get("said") == "allow" and line.get("tool") == "Bash"):
+            continue
+        call, tid = str(line["call"]), str(line.get("turn") or "")
+        if tid in turns and tid not in sent["closed"] and call not in sent["starts"] and call not in sent["items"]:
+            out.append({"call": call, "turn": tid, "at": line.get("at"), "command": line.get("command") or "",
+                        "cwd": line.get("cwd") or "", "cut": bool(line.get("cut"))})
+    return out
+
+
+def closing_all(sent: dict, base: dict, why: str) -> tuple:
+    """(the facts that close a conversation, the calls they settle): its session when it was never announced,
+    the start of every call a stop found that no look sent (`untold`), and the closing of those and of every
+    start with no end (`closing`). Pure."""
+    out = [] if sent.get("announced") else [_fact(base, "session")]
+    starts = dict(sent.get("starts") or {})
+    for u in sent.get("untold") or []:
+        out.append(_fact(base, "start", float(u.get("at") or time.time()), call=u["call"], turn=u["turn"], tool="Bash",
+                         command=u["command"], command_cwd=u["cwd"], **({"cut": True} if u.get("cut") else {})))
+        starts[u["call"]] = {"turn": u["turn"], "at": u.get("at")}
+    return out + closing({**sent, "starts": starts}, base, why), list(starts)
+
+
+def _close(client, paths: CrewPaths, station: str, sent: dict) -> int:
+    """Send the closing kept in `sent`; raises CrewError when Tares does not take it (it stays kept). Each
+    call closed is kept among the settled ones, so no later look sends its start again."""
+    row = state.stations_load(paths).get(station) or {}
+    base = {**stamps(paths, station, row, getattr(client, "env", None)), "sessionId": sent["thread"]}
+    out, settled = closing_all(sent, base, sent["closing"])
+    if out:
+        _post(client, out)
+    _keep(paths, station, {**sent, "announced": True, "starts": {}, "untold": [], "state": "ended", "closing": "",
+                           "items": list(sent["items"]) + [c for c in settled if c not in sent["items"]]})
+    return len(out)
+
+
 def read(paths: CrewPaths, station: str, thread: str):
     """The conversation with its turns by one visit, or None when the station cannot be read now."""
     try:
@@ -333,14 +406,23 @@ def record_station(client, paths: CrewPaths, station: str, row: dict | None = No
         about = stamps(paths, station, row, getattr(client, "env", None))
         out = []
         if sent["thread"] and sent["thread"] != thread:
-            # the conversation was given up for a new one: what it left open is closed, then the new one begins
+            # the conversation was given up for a new one: what it left open is closed, a stop's closing Tares
+            # had not taken yet among it (its starts no look sent are in `untold`), then the new one begins
             old = {**about, "sessionId": sent["thread"]}
             usage, _ = tokens(sent["path"], sent["usage"], old) if sent["path"] else ([], 0)
-            out += usage + closing(sent, old, "the conversation was given up before its end was recorded")
+            done, settled = closing_all(sent, old, sent.get("closing") or
+                                        "the conversation was given up before its end was recorded")
+            out += usage + done
             _post(client, out)
             result["sent"] += len(out)
-            sent, out = {**new_sent(), "before": sent["thread"]}, []
+            # what the old conversation's calls became is said: none of them is read again in the new one
+            gone_turns = set(sent["closed"]) | set(sent["seen"]) | {u.get("turn") for u in sent.get("untold") or []}
+            sent, out = {**new_sent(), "before": sent["thread"], "closed": sorted(t for t in gone_turns if t),
+                         "items": list(dict.fromkeys([*sent["items"], *settled]))}, []
             _keep(paths, station, sent)
+        if sent.get("closing") and sent["thread"] == thread:   # a stop's closing Tares did not take yet
+            result["sent"] += _close(client, paths, station, sent)
+            sent = _load(paths, station)
         if not thread:
             return result
         sent["thread"] = thread
@@ -385,7 +467,7 @@ def _gone(client, paths: CrewPaths, known: dict) -> list:
                 base = {"factory_station": station, "factory_crew": state.crew_name(paths),
                         "factory_machine": machine(getattr(client, "env", None)), "sessionId": sent["thread"]}
                 usage, _ = tokens(sent["path"], sent["usage"], base) if sent["path"] else ([], 0)
-                found = usage + closing(sent, base, "the station was retired")
+                found = usage + closing_all(sent, base, sent.get("closing") or "the station was retired")[0]
                 _post(client, found)
                 result["sent"] = len(found)
             _sent_file(paths, station).unlink(missing_ok=True)
