@@ -9,7 +9,9 @@ Then, through the app: the challenger's `session_ended` trigger fires on a marke
 the project page lists the session, with no claude_code row in DuckDB.
 
 One difference is expected and left out of the comparison: a line the store holds has no ingest time
-of its own, so it is read as the line's own time. The platform cell's rows are set to that.
+of its own, so it is read as the line's own time. The platform cell's rows are set to that. Nothing
+else is left out: the counter's last_ingest, the clock of each cell's own write, is checked to be
+from this run.
 
 Plain:                python tests/test_session_readers_held.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -217,7 +219,9 @@ def rows(got) -> list:
 
 
 def entity(got, stamp=True) -> list:
-    return sorted(((e["value"], e["events"], e["last_ingest"] if stamp else None) for e in got),
+    # `stamp=False`: the counter's last_ingest is the clock of the write, so each cell has its own
+    return sorted(((e["value"], e["events"],
+                    e["last_ingest"] if stamp else e["last_ingest"] >= NOW) for e in got),
                   key=repr)
 
 
