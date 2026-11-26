@@ -1,12 +1,15 @@
 import { EmptyState, Stat, WeekChart } from "../../../components/edition";
 import { formatCount, formatDecimal } from "../../../lib/number";
 import { HOUR, MIN, durationWords } from "../../../lib/time";
-import type { DeliveredData, ReportData } from "../FactoryReport.api";
+import type { DeliveredData, DeliveredFigures, ReportData } from "../FactoryReport.api";
 
 // Delivered (TR-1668): four headline figures for the range, each with its change on as many weeks just
 // before as a plain number, and merged tickets and start-to-merge week by week.
 
 const tickets = (n: number) => (n === 1 ? "ticket" : "tickets");
+
+/** No merge, no accepted milestone and no first review. */
+const nothing = (f: DeliveredFigures) => !f.merged && !f.milestones_accepted && !f.first_pass.reviewed;
 
 /** "+12 on the 4 weeks before". `say` words the size of the difference. */
 function change(now: number, then: number | null | undefined, weeks: number, say: (size: number) => string = formatCount) {
@@ -42,7 +45,8 @@ export function Delivered({ data }: { data: ReportData }) {
   const d = data.sections.delivered as DeliveredData;
   const { weeks, running_week: running } = data.range;
   const { previous, first_pass: first, rounds_per_ticket: rounds, start_to_merge: took } = d;
-  if (!d.merged && !d.milestones_accepted && !first.reviewed) {
+  // the sentence is for two empty periods: a drop to nothing shows as the change on the weeks before
+  if (nothing(d) && (!previous || nothing(previous))) {
     return <EmptyState data-testid="delivered-empty">Nothing was delivered in these weeks.</EmptyState>;
   }
   const count = (key: "merged" | "milestones_accepted" | "projects_merged") => change(d[key], previous?.[key], weeks.length);

@@ -450,8 +450,32 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          && (await count(page, "delivered-merged")) === 0 && (await page.locator("[data-week-chart]").count()) === 0,
          await text(page, "report-section-delivered"));
 
+      await view(`/report?range=dates&from=${plus(ids.monday, -7 * 4)}&to=${plus(ids.monday, -7 * 3 + 6)}`);
+      await is("delivered: nothing in these weeks after merges in the weeks before reads as the drop",
+        ["MERGED", "0", "-4 on the 2 weeks before"],
+        ["MILESTONES ACCEPTED", "0", "-2 on the 2 weeks before"],
+        ["PROJECTS WITH A MERGE", "0", "-1 on the 2 weeks before"],
+        ["START TO MERGE, P50", "no value"]);
+      ck("delivered: and the drop keeps its charts, with no sentence",
+         (await count(page, "delivered-empty")) === 0 && (await weekly("merged")).join("|") === "0|0"
+         && (await marks("p50", "[data-dot]")) === 0, await text(page, "report-section-delivered"));
+      await checkWords(page, ck, "delivered after a drop to nothing @1440");
+      await shot(page, "delivered-drop-1440");
+
       // earlier medians the seed has none of: a longer one, and one seconds away; then no merge now
       const reading = /\/api\/factory\/report\?/;
+      await page.route(reading, async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        body.sections.delivered.previous = { merged: 0, milestones_accepted: 0, projects_merged: 0,
+          start_to_merge: { p50: null, p90: null, tickets: 0 }, first_pass: { passed: 0, reviewed: 0 }, rounds_per_ticket: null };
+        await r.fulfill({ response: res, json: body });
+      });
+      await view(`/report?scope=team:${ids.Bo}`);
+      ck("delivered: earlier figures with nothing delivered still read as nothing delivered",
+         (await count(page, "delivered-empty")) === 1 && (await count(page, "delivered-merged")) === 0,
+         await text(page, "report-section-delivered"));
+      await page.unroute(reading);
       for (const [label, alter, want] of [
         ["delivered: a shorter start to merge reads as a minus", (d) => { d.previous.start_to_merge.p50 = 30.5; },
          "-1 day 3 hours on the 4 weeks before"],
