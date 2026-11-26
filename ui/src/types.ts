@@ -511,10 +511,13 @@ export interface CrewStation {
   state_reason: string | null;
   state_at: string | null;
   quiet_minutes: number | null;
-  session: string;
+  /** null when the current session worked in a private project the viewer cannot see, in another
+   *  person's crew (TR-1704); started_at, lines, claude_version, state_reason and the context's
+   *  values are null with it */
+  session: string | null;
   started_at: string | null;
   last_at: string | null;
-  lines: number;
+  lines: number | null;
   earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
   children: string[];
   /** the Claude Code version the station runs, from its status line; null before it reported */

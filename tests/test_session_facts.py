@@ -326,6 +326,11 @@ def codex():
     plain = s.recorded_commands(SRC, ["sA"])
     ck("a Claude Code row is read as before: no outcome, no exit code, no folder",
        plain == [{"at": at(1), "session": "sA", "command": "ls", "output": "a b", "is_error": False}], plain)
+    s.append([bash("sA", 3, "k2", "pytest -q && git diff")])   # a call whose result has not arrived
+    ends = s.recorded_commands(SRC, ["sA"], ends=True)
+    ck("asked for its end (the claim matcher, TR-1598), a row says whether its result arrived and its exit code",
+       [(c["command"], c["ended"], c["exit_code"]) for c in ends] == [("ls", True, 0), ("pytest -q && git diff", False, None)]
+       and all(k not in c for c in ends for k in ("outcome", "cwd")), ends)
     s.con.close()
 
 

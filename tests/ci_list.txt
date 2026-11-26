@@ -43,6 +43,7 @@ test_crew_claude
 test_crew_client
 test_crew_codex_mail
 test_crew_codex_pace
+test_crew_codex_prompts
 test_crew_codex_station
 test_crew_codex_up
 test_crew_context
@@ -106,6 +107,7 @@ test_decision_answers
 test_default_rules_in_sync
 test_degraded
 test_delete_cascade
+test_deleted_private_cost
 test_docs
 test_duckdb_memory
 test_edition

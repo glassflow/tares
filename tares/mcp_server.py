@@ -949,9 +949,11 @@ async def pick_up(project: str = "", take_over: bool = False) -> str:
                     "the starting prompt says.\n\n" + _handover(brief))
         prev = brief.get("previous_session") or {}
         if brief.get("may_be_open") and not take_over:
-            return ("STOP: the session that was building may still be open "
-                    f"(state {prev.get('state') or 'active'}, last active "
-                    f"{prev.get('quiet_minutes')} min ago). Two sessions on one branch collide. "
+            # no previous session in the hand-over: it is one this caller must not read
+            seen = (f" (state {prev.get('state') or 'active'}, last active "
+                    f"{prev.get('quiet_minutes')} min ago)") if prev else ""
+            return (f"STOP: the session that was building may still be open{seen}. "
+                    "Two sessions on one branch collide. "
                     "Ask the person whether to take over; only if they say yes, call pick_up "
                     "again with take_over=true. Read-only hand-over for context:\n\n"
                     + _handover(brief))
