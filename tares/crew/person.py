@@ -904,14 +904,27 @@ def _warn_clash(client: TaresClient, env: dict) -> None:
         client.say(f"warning: {clash_text(lines, kit, version)}")
 
 
-def on_codex(client: TaresClient) -> bool:
-    """Does this crew run on Codex (its recorded stations, else the cell's runtime slot for a crew with none)?"""
-    from . import proc
-    return proc.planned_runtime(client) == proc.CODEX
+def on_codex(client: TaresClient, env: dict | None = None) -> bool:
+    """Does this crew run on Codex? Its recorded stations say, and Tares is not asked. A crew that has recorded
+    none is on Claude Code where Claude Code is installed, as bash had it (nothing more is asked of Tares); on a
+    machine without it, the cell's runtime slot says (TR-1599)."""
+    from . import launch, proc
+    have = launch.crew_runtime(client.paths)
+    if have:
+        return have == proc.CODEX
+    try:
+        claude_bin(os.environ if env is None else env)
+        return False
+    except CrewError:
+        pass
+    try:
+        return proc.planned_runtime(client) == proc.CODEX
+    except Exception:  # noqa: BLE001 - a client that cannot ask Tares: Claude Code, as before
+        return False
 
 
-def app_name(client: TaresClient) -> str:
-    return "Codex" if on_codex(client) else "Claude"
+def app_name(client: TaresClient, env: dict | None = None) -> str:
+    return "Codex" if on_codex(client, env) else "Claude"
 
 
 def codex_prompt(prompt: str) -> str:
@@ -1015,7 +1028,7 @@ def person_claude(client: TaresClient, env: dict, cwd: str, sname: str, sfile: s
     --settings, as for stations), told the crew's Tares and MCP endpoint, and the key as a file. Returns
     Claude's exit code. `extra` is more variables for Claude's environment. On a crew that runs on Codex it
     is the person's own Codex session instead (person_codex)."""
-    if on_codex(client):
+    if on_codex(client, env):
         return person_codex(client, env, cwd, sname, sfile, prompt, extra)
     paths = client.paths
     args = ["-n", sname, "--plugin-dir", kit_dir(client, env)]
@@ -1099,7 +1112,7 @@ def cmd_spec(argv: list, env: dict) -> int:
 def _spec(args: list, env: dict) -> int:
     client = prelude(["spec", *args], env)
     with client:
-        if not on_codex(client):
+        if not on_codex(client, env):
             claude_bin(env)  # a crew on Claude Code looks for it first, as bash did
         idea = name = ""
         args = list(args)
@@ -1154,13 +1167,13 @@ def _spec(args: list, env: dict) -> int:
         if not slug:
             slug = state.slugify(os.path.basename(here))
         if contrib:
-            _err(f"{ME}: opening {app_name(client)} as {slug}-spec in {here}, as a contributor to {cproject}, which {clead} leads.\n"
+            _err(f"{ME}: opening {app_name(client, env)} as {slug}-spec in {here}, as a contributor to {cproject}, which {clead} leads.\n"
                  "         It asks you the questions for you and shows the tickets in your repos.\n")
             return person_claude(client, env, here, f"{slug}-spec", "spec",
                                  f"You are contributing to {cproject} led by {clead}. Load the spec-project skill, "
                                  "section Contributor.", {"TARES_PROJECT": cproject, "TARES_SESSION_KIND": "contributor"})
-        _err(f"{ME}: opening {app_name(client)} as {slug}-spec in {here}"
-             + (", with its spec manual.\n" if on_codex(client) else ", with /tares:spec.\n") +
+        _err(f"{ME}: opening {app_name(client, env)} as {slug}-spec in {here}"
+             + (", with its spec manual.\n" if on_codex(client, env) else ", with /tares:spec.\n") +
              "         It interviews you, one question at a time, and writes the spec, milestones and tickets\n"
              f"         into a project on Tares ({client.tares}). It ends by asking whether to hand the project to the crew.\n")
         prompt = "/tares:spec"
@@ -1238,7 +1251,7 @@ def session_idea(client: TaresClient, env: dict, idea: str) -> int:
     here = os.path.realpath(os.getcwd())
     root = git_root()
     slug = _cut_slug(_words(idea, 4)) or "new"
-    _err(f"{ME}: opening {app_name(client)} as {slug}-session in {root or here}.\n"
+    _err(f"{ME}: opening {app_name(client, env)} as {slug}-session in {root or here}.\n"
          f"         It plans \"{idea}\" lightly into a new project on Tares ({client.tares}) and builds it in the same\n"
          "         session; if it turns out big, it offers the full spec and the hand-over to the crew.\n")
     return person_claude(client, env, root or here, f"{slug}-session", "session", f"/tares:session new: {idea}",
@@ -1256,7 +1269,7 @@ def cmd_session(argv: list, env: dict) -> int:
 def _session(args: list, env: dict) -> int:
     client = prelude(["session", *args], env)
     with client:
-        if not on_codex(client):
+        if not on_codex(client, env):
             claude_bin(env)  # a crew on Claude Code looks for it first, as bash did
         if env.get("FACTORY_STATION"):
             raise CrewError("only the person runs this, in their own terminal")
