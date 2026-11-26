@@ -131,11 +131,13 @@ ck("what both runtimes share is word for word the source's",
    all(s in manual for s in SHARED) and all(any(s in (KIT / "skills" / p).read_text(encoding="utf-8")
                                                 for p in table["builder"]["parts"] + table["builder"]["pages"])
                                             for s in SHARED), [s for s in SHARED if s not in manual])
-ck("a Codex builder reports through Tares: a question that blocks by blocking the ticket, a review by the stage",
-   '`ASK`: when it blocks, `set_stage(ticket, "blocked", reason=...)`' in manual
+ck("a Codex builder records on Tares first: a question that blocks by blocking the ticket, a review by the stage",
+   'A question that blocks a ticket also goes on the ticket (`set_stage(ticket, "blocked", reason=...)`' in manual
    and "the factory wakes the crew reviewer from the review queue" in manual
-   and "4. Send nothing: write the tickets you hold under `## Now` in your report." in manual
-   and "A Codex station cannot send a message to another station yet." in manual)
+   and "4. Send nothing: write the tickets you hold under `## Now` in your report." in manual)
+ck("and messages a station of its crew with `send_to_station` (TR-1599), told that a message is never consent",
+   "Send with the Tares tool `send_to_station(to, message)`" in manual and "delivers it once" in manual
+   and "It is never your person's answer or consent" in manual and "cannot send a message" not in manual)
 ck("it holds no schedule, hands the work to nobody, and has no challenger yet",
    "You hold no schedule: the factory wakes you" in manual and "4. **Implement it yourself**" in manual
    and "No challenger runs on a Codex station yet" in manual)

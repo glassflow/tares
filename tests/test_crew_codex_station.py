@@ -724,7 +724,7 @@ err, _ = start(mk())
 pid = pid_of(paths)
 until(lambda: cs.turn_state(paths, S) == "done")
 rec, turn = cs._record(paths, S), row(paths)["codex"]["turn"]
-items = last_turn(paths)["items"]
+items = [i for i in last_turn(paths)["items"] if i.get("type") != "userMessage"]   # the prompt is the first item
 ck("a turn leaves the guard's record: its start first, then each call, let through or refused",
    err is None and [(x.get("armed"), x.get("tool"), x.get("said")) for x in rec] == [
        (True, None, None), (None, "Bash", "allow"), (None, "Bash", "deny"), (None, "mcp__tares__desk_ask", "allow")]
