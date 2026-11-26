@@ -4,14 +4,12 @@ list_connectors -> create_source -> (data flows) -> list_sources -> create_trigg
 import asyncio, os, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env, scrub_os_environ
+from _env import clean_env, scrub_os_environ, remove_db
 scrub_os_environ()
 
 DB = "/tmp/mcp_setup.duckdb"
 PORT = "8796"
-for _p in (DB, DB + ".wal"):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db(DB)
 
 env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": "/tmp/none.yaml",
        "TARES_PORT": PORT, "TARES_OTLP_GRPC_PORT": "off"}

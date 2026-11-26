@@ -12,7 +12,7 @@ import asyncio, json, os, signal, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 import httpx
 
@@ -324,9 +324,7 @@ async def part2():
             "          primary: true\n"
                 "triggers:\n  - name: incident\n    sources: [evt]\n    key_field: service\n    cooldown: 1s\n"
             "    condition:\n      aggregate: count\n      predicate: '>= 2'\n      window: 1m\n")
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
     for srv in (HTTPServer(("127.0.0.1", int(STUB_PORT)), AnthropicStub),
                 HTTPServer(("127.0.0.1", int(OTLP_PORT)), OtlpStub)):
         threading.Thread(target=srv.serve_forever, daemon=True).start()

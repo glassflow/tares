@@ -11,6 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-http-poll-test.duckdb"
 os.environ["TARES_DB"] = DB
 os.environ["TARES_CATALOG"] = "/tmp/none-http-poll.yaml"
@@ -62,9 +63,7 @@ FEED = {"meta": {"page": 1}, "data": {"items": [
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
     srv = HTTPServer(("127.0.0.1", 0), Stub)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"

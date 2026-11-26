@@ -1,7 +1,7 @@
 import asyncio, os, time
+from _env import remove_db
 os.environ["TARES_DB"]="/tmp/otlp.duckdb"; os.environ["TARES_CATALOG"]="/tmp/none.yaml"
-for p in ("/tmp/otlp.duckdb","/tmp/otlp.duckdb.wal"):
-    if os.path.exists(p): os.remove(p)
+remove_db("/tmp/otlp.duckdb")
 import httpx
 from tares.daemon import make_app
 P=F=0

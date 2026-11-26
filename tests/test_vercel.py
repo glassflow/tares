@@ -1,11 +1,10 @@
 """Vercel logs connector — map_payload mapping (deterministic) + ingest through /ingest/{source}."""
 import asyncio, os
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/vercel.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/none.yaml"
-for _p in ("/tmp/vercel.duckdb", "/tmp/vercel.duckdb.wal"):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db("/tmp/vercel.duckdb")
 import httpx
 from tares.config import _source_from_dict
 from tares.connectors import full_schema

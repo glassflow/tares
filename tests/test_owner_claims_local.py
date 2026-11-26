@@ -9,7 +9,7 @@ import asyncio, os, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 P = F = 0
 def ck(l, c, d=""):
@@ -37,9 +37,7 @@ async def _wait(url):
 
 
 def start(db, port):
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(db)
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH}
     return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],

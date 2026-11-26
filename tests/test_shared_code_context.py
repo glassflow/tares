@@ -16,6 +16,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-sharedctx-test.duckdb"
 CATALOG = "/tmp/tares-sharedctx-test.catalog.yaml"
 os.environ["TARES_DB"] = DB
@@ -107,9 +108,9 @@ API = "http://api.github.test"
 
 
 async def main():
-    for p in (DB, DB + ".wal", CATALOG):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
+    if os.path.exists(CATALOG):
+        os.remove(CATALOG)
 
     from tares.projects.registry import get_template
     from tares.projects.base import ProjectError

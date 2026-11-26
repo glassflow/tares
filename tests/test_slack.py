@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qsl
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 import httpx
 
@@ -173,9 +173,7 @@ async def _fire(cx, n=3, tag=""):
 
 async def main():
     global MODE, CH_MODE, CH_DELAY
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
 
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
