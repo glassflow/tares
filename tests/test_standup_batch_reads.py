@@ -21,6 +21,7 @@ sys.path.insert(0, ROOT)
 
 from tares import factory_owners, standup
 from tares.factory_api import project_progress
+from tares.session_store.tables import milestones as milestones_table
 from tares.session_store.tables import tickets as tickets_table
 from tares.store import Store
 
@@ -125,9 +126,10 @@ def tied(store, uid):
     by but the last: written so the order they were written in is not the order they must come out."""
     when = ago(days=2)
     for mid, name in (("ms_tie_c", "M c"), ("ms_tie_a", "M a"), ("ms_tie_b", "M b")):
-        store.sc.execute("INSERT INTO milestones (id, project, owner, external_id, name, goal, "
-                         "checks, position, created_at, updated_at) VALUES "
-                         "(?, ?, 'tares', NULL, ?, '', '[]', 1, ?, ?)", [mid, uid, name, when, when])
+        with store.sessions_db.begin() as conn:
+            conn.execute(milestones_table.insert().values(
+                id=mid, project=uid, owner="tares", external_id=None, name=name, goal="",
+                checks=[], position=1, created_at=when, updated_at=when))
     for number, mid in ((3, "ms_tie_c"), (1, "ms_tie_a"), (2, "ms_tie_b")):
         tid = ticket(store, uid, f"Ticket number {number}", "review", milestone=mid)
         with store.sessions_db.begin() as conn:

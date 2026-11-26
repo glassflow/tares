@@ -25,6 +25,7 @@ from sqlalchemy import func, select  # noqa: E402
 
 from tares import metrics  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
+from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import session_lines, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
 
@@ -82,7 +83,8 @@ def entities(s, source=SRC):
 
 
 def challenges(s):
-    return s.sc.execute("SELECT count(*) FROM challenges").fetchone()[0]
+    with s.sessions_db.read() as c:
+        return c.execute(select(func.count()).select_from(challenges_table)).scalar()
 
 
 def quiet(fn):

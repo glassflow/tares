@@ -858,7 +858,8 @@ async def main():
 
         def snapshot():
             out = {}
-            moved = ("usecases", "tickets", "ticket_history")   # in the session store (TR-1610, TR-1612)
+            # in the session store (TR-1610, TR-1612, TR-1615)
+            moved = ("usecases", "tickets", "ticket_history", "reviews", "milestones")
             with store._sread:
                 for tname in TABLES:
                     if tname not in moved:

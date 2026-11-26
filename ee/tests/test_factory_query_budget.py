@@ -121,8 +121,13 @@ DONE_EXTRA = 5
 # for one: home 164 to 171, projects 133 to 140, project 135 to 142, ticket 32 to 39, raw_ticket 17
 # to 20 (the counts are 167, 137, 139, 38 and 19, plus 2 percent). With finished projects their
 # grouped ticket read has a BEGIN of its own too: DONE_EXTRA 4 to 5. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 171, "projects": 140, "project": 142, "ticket": 39, "raw_tickets": 14,
-           "raw_ticket": 20}
+# TR-1615 (milestones, checks, reviews, findings, challenger lines and rule proposals are read through
+# the session store): the same on DuckDB, the queries are one for one and each read costs its BEGIN:
+# home 171 to 177, projects 140 to 146, project 142 to 151, ticket 39 to 45, raw_tickets 14 to 17,
+# raw_ticket 20 to 24 (the counts are 173, 143, 148, 44, 16 and 23, plus 2 percent). Crew goes 78 to
+# 80, which its budget holds. Postgres state keeps its counts.
+_DUCKDB = {**_TODAY, "home": 177, "projects": 146, "project": 151, "ticket": 45, "raw_tickets": 17,
+           "raw_ticket": 24}
 # TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
 # DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With

@@ -2,8 +2,10 @@
 
 These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`),
 the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
-`shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`) and the tickets (`tickets`,
-`ticket_history`, `ticket_numbers`), exactly as they are today in DuckDB and in the state Postgres:
+`shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`), the tickets (`tickets`,
+`ticket_history`, `ticket_numbers`) and the milestones, checks and reviews (`milestones`,
+`milestone_check_results`, `milestone_acceptances`, `ticket_checks`, `challenges`, `reviews`,
+`review_findings`, `rule_proposals`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -526,6 +528,126 @@ ticket_numbers = Table(
     Column("last", Integer),
 )
 
+# A project's milestones (factory_store.py). `owner` says where one lives (linear, github, tares);
+# `checks` is [{check, for}]
+milestones = Table(
+    "milestones", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("owner", Text),
+    Column("external_id", Text),
+    Column("name", Text),
+    Column("goal", Text),
+    Column("checks", JSONText),
+    Column("position", Double),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+)
+
+# Every recorded try of a milestone's acceptance check; the latest of an index counts
+milestone_check_results = Table(
+    "milestone_check_results", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("milestone", Text),
+    Column("idx", Integer),
+    Column("result", Text),
+    Column("note", Text),
+    Column("by_kind", Text),
+    Column("by_name", Text),
+    Column("person_id", Text),
+    Column("checked_at", UTCDateTime),
+)
+
+# A person accepted a milestone as it is: one row per milestone
+milestone_acceptances = Table(
+    "milestone_acceptances", metadata,
+    Column("milestone", Text, primary_key=True),
+    Column("project", Text),
+    Column("by_name", Text),
+    Column("person_id", Text),
+    Column("accepted_at", UTCDateTime),
+)
+
+# The checks a builder ran on a ticket
+ticket_checks = Table(
+    "ticket_checks", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("ticket", Text),
+    Column("command", Text),
+    Column("result", Text),
+    Column("commit_sha", Text),
+    Column("broke_test", Text),
+    Column("by_station", Text),
+    Column("by_session", Text),
+    Column("checked_at", UTCDateTime),
+    Column("person_id", Text),
+)
+
+# The challenger's lines, copied from the events as they arrive and looked up by branch
+challenges = Table(
+    "challenges", metadata,
+    Column("source", Text, primary_key=True),
+    Column("key_value", Text, primary_key=True),
+    Column("event_time", UTCDateTime, primary_key=True),
+    Column("event_type", Text, primary_key=True),
+    Column("branch", Text, primary_key=True),
+    Column("tares_project", Text),
+    Column("payload", JSONText),
+)
+Index("ix_challenges_branch", challenges.c.source, challenges.c.branch)
+
+# A ticket's review rounds, and each round's findings (numbered on per ticket)
+reviews = Table(
+    "reviews", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("ticket", Text),
+    Column("round", Integer),
+    Column("pr", Text),
+    Column("head", Text),
+    Column("verdict", Text),
+    Column("verified", Text),
+    Column("not_verified", Text),
+    Column("by_station", Text),
+    Column("reviewed_at", UTCDateTime),
+    Column("person_id", Text),
+)
+
+review_findings = Table(
+    "review_findings", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("ticket", Text),
+    Column("review", Text),
+    Column("number", Integer),
+    Column("severity", Text),
+    Column("file", Text),
+    Column("line", Integer),
+    Column("blocking", Boolean),
+    Column("text", Text),
+    Column("kind", Text),
+    Column("state", Text),
+    Column("fixed_in", Text),
+    Column("found_at", UTCDateTime),
+)
+
+# A rule offered because a mistake came back; `tickets` is [ticket label]
+rule_proposals = Table(
+    "rule_proposals", metadata,
+    Column("id", Text, primary_key=True),
+    Column("repo", Text),
+    Column("kind", Text),
+    Column("project", Text),
+    Column("scope", Text),
+    Column("text", Text),
+    Column("tickets", JSONText),
+    Column("state", Text),
+    Column("created_at", UTCDateTime),
+    Column("decided_at", UTCDateTime),
+)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
@@ -533,5 +655,7 @@ ticket_numbers = Table(
 MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
                 settings, people, api_keys, project_members, usecases, usecase_objects, usecase_log,
                 docs, skills, shared_skills, catalog_sources, github_credentials, model_usage,
-                tickets, ticket_history, ticket_numbers)
+                tickets, ticket_history, ticket_numbers,
+                milestones, milestone_check_results, milestone_acceptances, ticket_checks,
+                challenges, reviews, review_findings, rule_proposals)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

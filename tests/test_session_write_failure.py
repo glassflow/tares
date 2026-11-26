@@ -43,6 +43,7 @@ from sqlalchemy import delete, func, select, update  # noqa: E402
 
 from tares import session_drain, session_ingest, session_move  # noqa: E402
 from tares.envelope import Envelope, now_utc  # noqa: E402
+from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import (session_commands, session_files,  # noqa: E402
                                         session_ingest_marks, session_lines, session_messages,
                                         session_said, session_turns, sessions)
@@ -252,7 +253,14 @@ def drop_duck(s, sid=None):
 
 
 def challenges(s):
-    return s.sc.execute("SELECT count(*) FROM challenges").fetchone()[0]
+    with s.sessions_db.read() as c:
+        return c.execute(select(func.count()).select_from(challenges_table)).scalar()
+
+
+def aside(s):
+    """Challenger lines waiting because the sessions database would not take them."""
+    with s._sread:
+        return s.sc.execute("SELECT count(*) FROM pending_challenges").fetchone()[0]
 
 
 def facts(s, sid):
@@ -309,8 +317,11 @@ def unavailable(want):
     ck("no line, count or fact is stored, in either database",
        row(s, "s") is None and rows_of(s, "s") == 0 and duck(s, "s") == 0
        and not any(facts(s, "s").values()), (row(s, "s"), rows_of(s, "s"), duck(s, "s")))
-    ck("the challenger's verdict is kept all the same", challenges(s) == 1, challenges(s))
+    ck("the challenger's verdict is kept all the same, put aside",
+       challenges(s) == 0 and aside(s) == 1, (challenges(s), aside(s)))
     s.append(work("s", "ts"))
+    ck("and is in challenges once the store takes writes again",
+       challenges(s) == 1 and aside(s) == 0, (challenges(s), aside(s)))
     ck("sent again, the factory holds what a delivery with no failure holds",
        not differs(view(s, "s", "ts"), want), differs(view(s, "s", "ts"), want))
     ck("each line is stored once, in the session store alone",
