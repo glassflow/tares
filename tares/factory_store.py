@@ -19,6 +19,7 @@ from . import claude_usage_hourly as hourly
 from . import metrics, session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
+from .request_memo import kept, kept_state
 from .session_store.pr_columns import pr_columns
 from .session_store.tables import (project_sessions, session_commands, session_messages,
                                    session_states, session_stations, session_turns, session_usage,
@@ -665,6 +666,7 @@ class FactoryStore:
                                 .order_by(*self._ms_order())).fetchall()
         return [self._ms_row(r) for r in rows]
 
+    @kept
     def milestones_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
         """{project: its milestones in order} in one query (the home page)."""
         if not projects:
@@ -738,6 +740,7 @@ class FactoryStore:
             return self._crew_id((name or "").strip() or "crew", person_id or "local",
                                  (machine or "").strip(), at)
 
+    @kept
     def list_crews(self) -> list[dict]:
         """Every crew the cell has seen, with its person's name, newest activity first."""
         t = crews_table
@@ -2019,6 +2022,7 @@ class FactoryStore:
                  "by_label": by_label(refs.get(r.person_id), r.handed_by)})
         return out
 
+    @kept
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
         """The projects handed to the crew; `finished` False: only the open ones, True: only the
@@ -2061,6 +2065,7 @@ class FactoryStore:
     def get_handover(self, project: str) -> dict | None:
         return self.handovers_by_project([project]).get(project)
 
+    @kept
     def handovers_by_project(self, projects: list[str] | None = None) -> dict[str, dict]:
         """{project id: hand-over, as get_handover gives it} for the projects handed over, among
         `projects` (all of them for None), in one query plus one for the people and one for the
@@ -2150,6 +2155,7 @@ class FactoryStore:
                                              t.c.id == f"Q{int(m.group(1))}")).first()
         return self._sq_rows([r])[0] if r else None
 
+    @kept
     def list_spec_questions(self, project: str | None = None, state: str | None = None,
                             to_person_id: str | None = None) -> list[dict]:
         t = questions_table
@@ -2737,6 +2743,7 @@ class FactoryStore:
     # the slots that keep exactly one connection: connecting another replaces the old one
     ONE_CONNECTION = ("memory", "monitoring", "runtime")
 
+    @kept_state
     def _default_name(self, slot: str) -> str:
         """The name of the slot's default integration: the factory's pointer, else the built-in
         default. Lock held, or a read."""
@@ -2747,6 +2754,7 @@ class FactoryStore:
     def _connection_view(self, slot: str, name: str, raw, at, by, default: bool) -> dict:
         return {**self._integration_view(slot, name, raw, at, by), "default": default}
 
+    @kept_state
     def get_choice(self, slot: str) -> dict | None:
         """The factory's default for the slot, secrets redacted: {slot, name, settings, secrets,
         updated_at, updated_by, default}, the settings those of its connection; None when the slot
@@ -2774,6 +2782,7 @@ class FactoryStore:
             default = self._default_name(slot) == name if c else False
         return self._connection_view(slot, name, c[0], c[1], c[2], default) if c else None
 
+    @kept_state
     def list_connections(self, slot: str) -> list[dict]:
         """The slot's connections, secrets redacted, by name, each with `default` true for the one
         the slot uses. Monitoring keeps its one in the tracing settings: it is listed when
@@ -3140,6 +3149,7 @@ class FactoryStore:
                 "updated_by = excluded.updated_by", [uid, method, now_utc(), by])
         return method
 
+    @kept_state
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, as get_choice; None when it has none. Its settings
         are the project's own fields only. It never falls back to the factory's default: that is
