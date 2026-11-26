@@ -23,7 +23,7 @@ Revises: 0012_session_usage_hourly
 import sqlalchemy as sa
 from alembic import op
 
-from tares.session_store.takeover import takeover
+from tares.session_store.migrations.frozen.takeover import takeover
 
 revision = "0013_project_tables"
 down_revision = "0012_session_usage_hourly"

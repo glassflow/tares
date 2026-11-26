@@ -19,7 +19,7 @@ Revises: 0009_session_origin
 import sqlalchemy as sa
 from alembic import op
 
-from tares.session_store.takeover import takeover
+from tares.session_store.migrations.frozen.takeover import takeover
 
 revision = "0010_core_people"
 down_revision = "0009_session_origin"

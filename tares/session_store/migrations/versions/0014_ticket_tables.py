@@ -23,7 +23,7 @@ Revises: 0013_project_tables
 import sqlalchemy as sa
 from alembic import op
 
-from tares.session_store.takeover import takeover
+from tares.session_store.migrations.frozen.takeover import takeover
 
 revision = "0014_ticket_tables"
 down_revision = "0013_project_tables"

@@ -47,6 +47,8 @@ Cases:
                      methods keep their answers; deleting a project removes its rows
   reviews_takeover   Postgres: the eight tables the old DDL made are taken over, rows untouched; a
                      missing column and index are added, an extra column stops the upgrade
+  tickets_pr_guard   the fill of pr_repo and pr_number (the live one and revision 0015's frozen copy) leaves
+                     a row whose pr changes between its read and its write
 """
 import os
 import re
@@ -66,6 +68,7 @@ from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store import copy as copy_mod  # noqa: E402
 from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file  # noqa: E402
+from tares.session_store.migrations.frozen import pr_columns as frozen_pr  # noqa: E402
 from tares.session_store.pr_columns import fill_pr_columns  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
@@ -2206,6 +2209,63 @@ def reviews_takeover():
         _drop_schema(sch)
 
 
+def _fill_with_writes_between(sdb, fill, writes):
+    """Run `fill`, and after it has read the rows and before it writes, write `pr` of the rows in
+    `writes` as another writer would. On Postgres that is a transaction of its own that commits
+    while the fill's is open. SQLite has one writer at a time, so there it is the fill's own
+    connection."""
+    done = []
+
+    def between(conn, cursor, statement, parameters, context, executemany):
+        if done or not statement.startswith("UPDATE tickets SET pr_repo"):
+            return
+        done.append(statement)
+        for tid, pr_text in writes.items():
+            if sdb.dialect == "postgresql":
+                _write_pr_as_before(sdb, tid, pr_text)
+            else:
+                cursor.execute("UPDATE tickets SET pr = ? WHERE id = ?", (pr_text, tid))
+
+    with sdb.begin() as c:
+        event.listen(c, "before_cursor_execute", between)
+        fill(c)
+    return bool(done)
+
+
+def tickets_pr_guard():
+    fills = (("the fill at start", fill_pr_columns), ("revision 0015's fill", frozen_pr.fill_pr_columns))
+    for label, make in (("SQLite", None), ("Postgres", _pg_schema)):
+        print(f"== a pr written while the fill runs, on {label} ==")
+        if make and not PG:
+            print("  skip  TARES_TEST_PG is not set")
+            continue
+        sch, dsn = make() if make else (None, None)
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        try:
+            sdb.upgrade()
+            for name, fill in fills:
+                with sdb.begin() as c:
+                    c.execute(text("DELETE FROM tickets"))
+                    c.execute(text("INSERT INTO tickets (id, project, pr, pr_repo, pr_number) "
+                                   "VALUES (:i, 'p', :pr, :r, :n)"), [
+                        {"i": "tk_quiet", "pr": '{"repo": "o/r", "number": 1}', "r": None, "n": None},
+                        {"i": "tk_moved", "pr": '{"repo": "o/r", "number": 2}', "r": None, "n": None},
+                        # a pr that was NULL when read is guarded too
+                        {"i": "tk_linked", "pr": None, "r": "o/old", "n": 3}])
+                ran = _fill_with_writes_between(sdb, fill, {
+                    "tk_moved": '{"repo": "o/r", "number": 20}', "tk_linked": '{"repo": "o/r", "number": 30}'})
+                cols = _pr_cols(sdb)
+                ck(f"{name}: the writes landed between its read and its write, and a row nobody wrote is filled",
+                   ran and cols["tk_quiet"] == ("o/r", 1), (ran, cols))
+                ck(f"{name}: a row whose pr changed in between is left as it is",
+                   cols["tk_moved"] == (None, None), cols)
+                ck(f"{name}: so is one whose pr was NULL when read", cols["tk_linked"] == ("o/old", 3), cols)
+        finally:
+            sdb.close()
+            if sch:
+                _drop_schema(sch)
+
+
 if __name__ == "__main__":
     ck("settings, the accounts, the project and ticket tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
@@ -2239,5 +2299,6 @@ if __name__ == "__main__":
     tickets_pr_revision()
     reviews_methods()
     reviews_takeover()
+    tickets_pr_guard()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)
