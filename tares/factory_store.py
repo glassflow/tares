@@ -303,7 +303,7 @@ class FactoryStore:
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             bare = conn.execute(select(session_stations.c.session).where(
                 session_stations.c.crew_id.is_(None)).limit(1)).first()
         if bare:
@@ -683,7 +683,7 @@ class FactoryStore:
 
     def session_station(self, session: str) -> dict | None:
         t = session_stations
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             r = conn.execute(select(t.c.station, t.c.role, t.c.parent, t.c.project).where(
                 t.c.session == session)).first()
         return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
@@ -707,7 +707,7 @@ class FactoryStore:
         q = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
                     st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, *lines)
              .select_from(j))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(q).all()
         act = None if table else self.session_activity(source, [r[0] for r in rows])
         out = []
@@ -786,7 +786,7 @@ class FactoryStore:
             spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
                      .select_from(ss.join(u, u.c.session == ss.c.session))
                      .group_by(ss.c.crew_id, ss.c.station))
-        with self.sessions_db.snapshot() as conn:       # one snapshot: the answers agree on the stations
+        with self.sessions_db.consistent_read() as conn:    # the answers agree on the stations
             top_rows, worked_rows = conn.execute(top).all(), conn.execute(worked).all()
             sum_rows = conn.execute(sums).all() if totals else []
             spent_rows = conn.execute(spent).all() if totals else []
@@ -814,7 +814,7 @@ class FactoryStore:
         ss, ps = session_stations, project_sessions
         for i in range(0, len(sessions), 500):
             chunk = list(sessions[i:i + 500])
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 for sid, project in conn.execute(
                         select(ss.c.session, ss.c.project).where(ss.c.session.in_(chunk))):
                     if project:
@@ -883,7 +883,7 @@ class FactoryStore:
             return {"earlier_count": total, "projects": projects,
                     "sessions": page,
                     "next_before": page[-1]["last_at"] if len(rows) > len(page) else None}
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             n = conn.execute(select(func.count()).select_from(ss).where(mine)).scalar_one()
             if not n:
                 return None
@@ -1032,7 +1032,7 @@ class FactoryStore:
         out = {}
         for i in range(0, len(sessions), 500):
             chunk = sessions[i:i + 500]
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update((r[0], r[1]) for r in conn.execute(select(
                     session_stations.c.session, session_stations.c.station).where(
                     session_stations.c.session.in_(chunk))))
@@ -1045,7 +1045,7 @@ class FactoryStore:
         stored (session_ingest, TR-1477); the sender is looked up now, so a station renamed later
         shows under its new name."""
         t = session_messages.c
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.session, t.at, t.to_station, t.type, t.text).where(
                 t.source == source).order_by(t.at.desc(), t.tool_use_id.desc()).limit(limit)
             ).fetchall()
@@ -1073,7 +1073,7 @@ class FactoryStore:
                 continue
             q = select(t.c.session, t.c.coordination_calls).where(
                 t.c.source == source, t.c.session.in_(chunk), t.c.coordination_calls > 0)
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update((sid, int(n)) for sid, n in conn.execute(q))
         return out
 
@@ -1480,7 +1480,7 @@ class FactoryStore:
         t = session_commands.c
         rows = []
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code)
                                      .where(t.source == source, t.session.in_(sessions[i:i + 500]),
                                             t.command.is_not(None), t.at.is_not(None))
@@ -1591,7 +1591,7 @@ class FactoryStore:
     def station_session_ids(self, station: str) -> list[str]:
         """The sessions that played `station` or a helper it started."""
         t = session_stations
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(t.c.session).where(
                 (t.c.station == station) | (t.c.parent == station)))]
 
@@ -1845,13 +1845,13 @@ class FactoryStore:
             if not sessions:
                 return []
             q = q.where(t.session.in_(list(sessions)))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(q.order_by(t.at.desc(), t.session.desc(), t.line_key.desc())
                                 .limit(2000)).fetchall()
         return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
 
     def role_sessions(self, role: str) -> list[str]:
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(session_stations.c.session).where(
                 session_stations.c.role == role))]
 
