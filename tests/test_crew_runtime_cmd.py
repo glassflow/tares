@@ -36,6 +36,8 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE / "factory"))
 from tares.crew import codex_station, runtime_cmd, views  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
+import _crew_fake  # noqa: E402
+import fake_claude  # noqa: E402
 import launch_support as LS  # noqa: E402
 
 P = F = 0
@@ -122,6 +124,11 @@ ck("its text says it runs on Codex, with the version, and how to start the stopp
    and "revive shop-reviewer" in out and "STOPPED by the crew: it ran `git push`" in out, out[-800:])
 tares.__exit__(None, None, None)
 tares, paths, env = crew("cc", {"shop-orchestrator": {"role": "orchestrator", "status": "active"}})
+fake = _crew_fake.fake_crew_env(SCRATCH / "cc-fake")   # a Claude Code crew asks claude: the fake one, as CI has none
+fake_claude.write_agents(Path(fake["FAKE_CLAUDE_STATE"]), [])
+(Path(fake["FAKE_CLAUDE_STATE"]) / "version").write_text("2.1.310\n", encoding="utf-8")
+env = {**env, **{k: fake[k] for k in ("CLAUDE_BIN", "FAKE_CLAUDE_STATE", "PATH")}}
+os.environ.update({k: fake[k] for k in ("CLAUDE_BIN", "FAKE_CLAUDE_STATE", "PATH")})
 code, out, err = run(views.COMMANDS["status"], ["status", "--json"], env)
 doc = json.loads(out) if out.strip().startswith("{") else {}
 ck("a Claude Code crew's document says claude_code and has no stopped list", doc.get("runtime") == "claude_code"
