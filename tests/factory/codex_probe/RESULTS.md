@@ -415,6 +415,63 @@ with it: 6 of 6, 5 of 5 and 3 of 3.
 - Linux was not run. An endpoint that answers the first request and then hangs was not run: a call waits for
   the app-server's own time limit.
 
+## 9. Recording by visits (TR-1595)
+
+The question: can a station's session be recorded with nothing connected to it, by a look once a watch round?
+`probe_record.py`, three scenarios on Codex 0.171.0, the station started by the product and read by visits.
+Numbers of 25 November 2026 in `results/record.json`.
+
+What a visitor can and cannot read:
+
+- A command that runs is in no listing. `thread/read` with the turns lists a command only once it has ended.
+- An item is listed a moment after it ends, also in the middle of a turn: 0.5 s when asked twice a second,
+  3.1 s in one run, and in another a read 1 to 3 s after a command ended did not have it yet. So a listing in
+  the middle of a turn is right about what it holds and can be short of the last seconds.
+- Every item says when it started and ended (`startedAtMs`, `completedAtMs`; not in the generated schema).
+  A command's item has the id the guard's hook was given (`tool_use_id`), its real exit code, its folder and
+  what it printed. A file change's item has that id too.
+- After a kill in the middle of a command the stored turn is `interrupted` and holds no item for the command.
+  What had ended before the kill is there, under the same ids. Two reads give the same ids.
+- The guard's record holds the start of every call it let through, written before the call ran. It is the
+  one place that says a command started when the app-server then died. Its line now keeps the command and
+  the folder, and for another tool what it was asked: for `apply_patch` the tool is named `apply_patch` and
+  its input is `{"command": "*** Begin Patch\n*** Add File: <path>\n+hello\n*** End Patch"}`.
+- Tokens: `account/usage/read` with the conversation's id answers with no count for it (`threadUsage` is
+  null, in a turn and after it, on a ChatGPT plan). The count of each reply is in the conversation's own
+  file (`token_count` lines: input, cached input, cache write, output, reasoning output). The app-server
+  names that file (`thread.path`); the format of its lines is Codex's own.
+
+So: no connection has to stay open. A start comes from the guard's record, an end from the item, and a start
+whose turn has ended with no item is a command with an unknown outcome. What this cannot give: an end that
+happened in the last seconds before the app-server died is not known either (the command is then shown as
+started with an unknown outcome, which is true of what was recorded).
+
+`recorded_on_a_cell` runs the product's recorder (`tares.crew.codex_record.step`) against a real cell started
+for the run (`tares up` on a port and a data folder of its own), 15 of 15:
+
+- In the middle of a turn the station is on the crew's API (`/api/crew/<station>`): at work, in its
+  conversation, with the prompt, what it said, the two commands that had ended and the one that ran.
+- After the turn it is idle and its answer is there; a round with nothing new posts nothing.
+- A ticket the station holds, with checks claimed through the cell's own `add_check`: `echo rec-a-4949`
+  claimed passed is matched; `sh -c 'echo rec-b-4949; exit 7'` claimed passed differs; `pytest -q`, never
+  run, is not found.
+- The app-server killed in the middle of `sleep 61.4949`: the command was recorded as started before the
+  kill, the session read ended while the station was down, and after a new start the command's outcome was
+  recorded as unknown. Claimed as passed it differs, with "how it ended is not known".
+- Tokens of four replies were stored (2,806 input, 45,440 cached, 260 output). No cost: the cell has no
+  price for the model, and counts the four replies as not priced.
+
+The console itself, looked at once with the cell of a second run left up (`TARES_PROBE_KEEP_CELL=1`, a built
+console given with `TARES_UI_DIST`): the Crew page lists the station under its role, ended. Its row opens
+only for a station that has not ended, so the session was set to idle by hand, and "Show what it did" then
+showed the run as recorded: the two prompts as the factory's, what the station said, "Ran 3 tools, 1 FAILED",
+its answer, and the killed `sleep 61.4949` as a Bash call marked FAILED. The page has two marks for a call,
+failed or not, so a command with an unknown outcome reads as failed there; its output says "outcome unknown".
+
+Not done here: a station recorded by the watch itself (the step is called by hand; it is not in the watch's
+round yet), station to station messages, files a station changed as `session_files` rows (a file change is
+on the session's timeline only), and a long conversation (every look reads the whole of it).
+
 ## What was not verified
 
 - Keeping the person's own Codex setup out of a station: not verified in the spike, where a notify program of the Computer Use plugin was started at the end of each turn and was handed the turn, prompt included. Done since, in section 4.

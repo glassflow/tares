@@ -750,18 +750,26 @@ same_command = _same_command
 says_failed = _says_failed
 
 
+NOT_ENDED = {"started": "the recording shows this command started, and no end of it yet",
+             "unknown": "the recording shows this command started; how it ended is not known"}
+
+
 def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str | None]:
     """("matched" | "not_found" | "differs", what the recording shows) for a check a builder
     claimed (TR-442): the command must be in the recording between `since` (when the ticket
     went into the work) and the claim, and what it printed must agree with the claimed result
     (each pass, fail, error and skip count the claim states, and no failure where the claim
-    says it passed). A break check also needs the named test failing, then passing."""
+    says it passed). A break check also needs the named test failing, then passing. A command a
+    Codex station started and that has no recorded end differs, whatever the claim."""
     when = check.get("at")
     ran = [c for c in commands if _same_command(check.get("command"), c["command"])
            and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
     if not ran:
         return "not_found", None
     run = ran[-1]
+    # a Codex station's command says how it ended (TR-1595): one that did not end backs no claim
+    if run.get("outcome") in NOT_ENDED:
+        return "differs", NOT_ENDED[run["outcome"]]
     out = run["output"] or ""
     claim = str(check.get("result") or "")
     counts = [(n, w.lower().rstrip("s")) for n, w in _COUNT.findall(claim) if int(n) > 0]
@@ -774,7 +782,8 @@ def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str
     test = str(check.get("broke_test") or "").strip()
     if test:
         about = [c for c in commands if test.lower() in (c["command"] + " " + c["output"]).lower()
-                 and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
+                 and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)
+                 and c.get("outcome") not in NOT_ENDED]
         failed_at = next((i for i, c in enumerate(about) if c["is_error"] or _says_failed(c["output"])), None)
         passed_after = failed_at is not None and any(
             not (c["is_error"] or _says_failed(c["output"])) for c in about[failed_at + 1:])

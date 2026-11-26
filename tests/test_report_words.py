@@ -48,7 +48,7 @@ from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import metadata  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0009_report_texts"
+HEAD = "0010_session_command_outcome"   # the newest revision: an upgrade ends there
 P = F = 0
 
 
@@ -602,7 +602,7 @@ async def through_the_api(app, store, fake):
 
 # ── the revision ─────────────────────────────────────────────────────────────
 def revision():
-    print(f"== revision {HEAD} ==")
+    print("== revision 0009_report_texts ==")
     d = tempfile.mkdtemp()
     schema = dsn = None
     if PG:

@@ -422,7 +422,7 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
-HEAD = "0009_report_texts"  # the newest session store revision: an upgrade ends there
+HEAD = "0010_session_command_outcome"  # the newest session store revision: an upgrade ends there
 
 
 def migration():

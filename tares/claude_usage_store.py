@@ -173,6 +173,26 @@ class ClaudeUsageStore:
         with db.begin() as conn:
             conn.execute(stmt)
 
+    def record_reported_usage(self, session: str, message: str, at, model: str | None,
+                              project: str | None, counts: dict) -> None:
+        """One reply's tokens as a runtime reported them once (a Codex station's, TR-1595): `counts` holds
+        input_tokens, output_tokens, cache_creation_input_tokens and cache_read_input_tokens, each only
+        when it was reported. A count that is not there is stored as unknown (NULL), never as 0, and the
+        cost is the price of the model when Tares has one and every count is known, else unknown. A reply
+        already stored is left as it is: its counts were final when they were written."""
+        def n(key):
+            v = counts.get(key)
+            return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+        i, o = n("input_tokens"), n("output_tokens")
+        cw, cr = n("cache_creation_input_tokens"), n("cache_read_input_tokens")
+        cost = None if None in (i, o, cw, cr) else cost_usd(model or "", i, o, cw, cr, 0)
+        stmt = self.sessions_db.upsert(session_usage).values(
+            session=session, message=message, replied_at=at, model=model or None, project=project or None,
+            subagent=None, input_tokens=i, output_tokens=o, cache_write_tokens=cw, cache_read_tokens=cr,
+            cache_write_1h_tokens=None if cw is None else 0, cost_usd=cost)
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt.on_conflict_do_nothing(index_elements=["session", "message"]))
+
     def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
         """The status line's report and the person of the credential that sent it; an older one
         than the one stored does not win."""
