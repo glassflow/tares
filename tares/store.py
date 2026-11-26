@@ -651,6 +651,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._sess_lock = threading.Lock()
         self._archive_on = None            # whether an archive backend exists (settled at first use)
         self._factory_mode = None          # (is the edition factory, until when), see _lines_skip_duckdb
+        self._challenges_unreadable: set = set()    # challenger lines already logged as not JSON
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -1421,7 +1422,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         try:
             written = session_ingest.record_first(self, cc)
         except session_ingest.LinesNotStored:
-            # a challenger line is sent once, with no retry: keep its verdict (a repeat is skipped)
+            # a challenger line is sent once, with no retry, so its verdict is still written (a
+            # repeat is skipped). That keeps it when the database refused one session's row alone
+            # (TR-1647) or takes writes again. While it takes none, the verdict is lost, said in
+            # the log and counted: accepted (decision A9)
             self._keep_challenges(envelopes)
             raise
         held = [e for e in held if e.key_value not in written.refused]
@@ -1558,9 +1562,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._keep_challenges(envelopes)
 
     def _keep_challenges(self, envelopes) -> None:
-        # the challenger's lines also go to `challenges` (sessions database), after the events
-        # committed. One that cannot be written, or is lost to a crash in between, is copied at
-        # the next open (_challenges_fill) on a platform edition. The factory edition runs that
+        # the challenger's lines also go to `challenges` (sessions database): after the events
+        # committed, or when the batch was refused (_append_session_first). One that cannot be
+        # written, or is lost to a crash in between, is copied from `events` at the next open
+        # (_challenges_fill) on a platform edition, if it got there. The factory edition runs that
         # fill once (TR-1613) and the challenger sends a line once: there it is lost, said in the
         # log and counted (`tares_challenges_lost_total`).
         ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
@@ -1572,7 +1577,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             try:
                 with self._swrite:
                     self._record_challenges(ch)
-            except Exception as ex:          # the events are in; never fail the ingest for this
+            except Exception as ex:   # never fail an ingest, or hide why one was refused, for this
                 self._challenges_not_kept(ch, ex)
 
     def _apply_entity_deltas(self, ent: dict) -> None:
