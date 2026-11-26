@@ -209,4 +209,9 @@ async def main():
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    code = asyncio.run(main())
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # the app's daemon threads may still write while the interpreter shuts down, which Python ends with a fatal
+    # error ("could not acquire lock for <stdout>", exit -6 on the Postgres run): every check has been made
+    os._exit(code)

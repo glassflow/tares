@@ -191,7 +191,7 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
             rules = "\n".join("- " + r for r in _new_rules(client, paths, station, project))
             tried_before = state.stations_get(station, "grants_tried", paths=paths)
             state.stations_put(station, {"grants_tried": total}, paths=paths)
-            prompt = _prompt(human, rules, lifecycle.rearm_text(client))
+            prompt = _prompt(human, rules, lifecycle.rearm_text(client, station))
             client.say(f"{station} has new permissions from Tares; restarting it with them now that it's "
                        "between turns, in the same conversation")
             try:

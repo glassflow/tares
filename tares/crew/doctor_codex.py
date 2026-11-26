@@ -11,8 +11,9 @@ A crew on Codex is asked for what its stations start on and run with, and never 
                 the settings its conversation starts from for every tool call and every turn start,
                 with the hook trust the thread needs, the record the guard left of its last turn, and
                 the two marks a station carries when its guard was found not to run or its last turn
-                could not be compared; and its connection to the Tares MCP endpoint (`station_mcp`,
-                not checked yet: TR-1596 gives a station that connection).
+                could not be compared; and, while it runs, its connection to the Tares MCP endpoint
+                (`station_mcp`: asked of its app-server on its own conversation, each server connected
+                and a read going through with its identity and the crew's key).
 
 Every function returns rows `(level, id, message, fix)` with level "ok", "warn" or "fix", for
 `doctor.Doctor.add`. Nothing here starts, stops or changes a station: a doctor reports.
@@ -202,10 +203,13 @@ def guard(paths: CrewPaths, station: str, now: float | None = None) -> tuple:
 
 
 def station_mcp(paths: CrewPaths, station: str) -> tuple:
-    """The station's connection to the Tares MCP endpoint. Not checked yet: TR-1596 gives a Codex station that
-    connection, and this is the one place its check belongs (the row's id stays `codex_mcp_<station>`)."""
-    return ("warn", f"codex_mcp_{station}", f"the connection of {station} to the Tares MCP endpoint: not checked yet",
-            "nothing to do: a later version checks it")
+    """The running station's connection to the Tares MCP endpoint, asked of its app-server on its own
+    conversation (codex_station.mcp_health): each server connected, and a read going through with the station's
+    identity and the crew's key."""
+    level, said = codex_station.mcp_health(paths, station)
+    fix = {"ok": "", "warn": f"{ME} doctor again later",
+           "fix": f"{ME} doctor (the tares and mcp rows say why the endpoint refuses), then {ME} restart {station}"}
+    return (level, f"codex_mcp_{station}", said, fix[level])
 
 
 def station(paths: CrewPaths, name: str, row: dict, env: dict, installed: str, now: float | None = None) -> list:
@@ -232,5 +236,6 @@ def station(paths: CrewPaths, name: str, row: dict, env: dict, installed: str, n
         rows.append(("ok", f"codex_home_{name}", f"the Codex folder of {name} is its own "
                      f"({cx.station_home(paths, name)}), with the person's login linked and no setup of its own", ""))
     rows.append(guard(paths, name, now))
-    rows.append(station_mcp(paths, name))
+    if alive:   # a station that is not running has no connection to look at: its first row says so
+        rows.append(station_mcp(paths, name))
     return rows

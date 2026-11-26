@@ -217,7 +217,7 @@ def run_failing_restart(error):
         claude.between_turns = lambda *a, **k: True
         launch._ccfg_or = lambda *a, **k: "Kiran"
         regrant._new_rules = lambda *a, **k: ["may merge"]
-        lifecycle.rearm_text = lambda c: ""
+        lifecycle.rearm_text = lambda c, s="": ""
 
         def boom(*a, **k):
             raise error
@@ -253,7 +253,7 @@ def run_refused(prior):
         claude.between_turns = lambda *a, **k: True
         launch._ccfg_or = lambda *a, **k: "Kiran"
         regrant._new_rules = lambda *a, **k: ["may merge"]
-        lifecycle.rearm_text = lambda c: ""
+        lifecycle.rearm_text = lambda c, s="": ""
 
         def refuse(client_, paths_, args, *, claude_bin, only_between_turns=False, prompt_wait=0):
             seen.append(only_between_turns)

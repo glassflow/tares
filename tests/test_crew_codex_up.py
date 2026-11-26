@@ -18,7 +18,7 @@ the fake codex, a `tares` for the guard's hook, and nothing else. The real Codex
     the roster's shape, with `runtime` and `codex`; a station that does not run is `gone`;
  e. `doctor`: for a crew on Codex, no check of Claude Code's (no `claude`, session list, trust, plugins,
     Claude processes); the machine (codex, its version, the login, the kit's guard); each station (its
-    version, its own Codex folder, its guard, and the MCP connection, not checked yet); what it says for a
+    version, its own Codex folder, its guard, and its MCP connection asked of its app-server); what it says for a
     broken setup: no codex, an old one, a newer one, no login, a kit without its guard, a role set to a
     Claude model, a station's folder
     with a setup or a login of its own, settings that do not register the guard, a station stopped for its
@@ -400,9 +400,15 @@ ck("each station: the Codex it runs, its own folder, its guard", all(
    for s in (ORCH, REV)), [(i, by[i].level, by[i].message) for i in sorted(ids) if i.startswith("codex_")])
 ck("the guard's line says when it last ran", "ran at the start of its last turn" in by[f"codex_guard_{REV}"].message
    and "s ago" in by[f"codex_guard_{REV}"].message, by[f"codex_guard_{REV}"].message)
-ck("the MCP connection of a station is said not to be checked yet, as a warning and never as ok",
-   by[f"codex_mcp_{REV}"].level == "warn" and "not checked yet" in by[f"codex_mcp_{REV}"].message
-   and doctor_codex.station_mcp(paths, REV)[1] == f"codex_mcp_{REV}")
+ck("the MCP connection of a running station is asked of its app-server: connected, and its read goes through",
+   by[f"codex_mcp_{REV}"].level == "ok" and "connected to tares" in by[f"codex_mcp_{REV}"].message
+   and "list_crew goes through" in by[f"codex_mcp_{REV}"].message, by[f"codex_mcp_{REV}"])
+tares.world.update(token=FAKE_TOKEN, mcp_key="another-key")   # the cell no longer takes the crew's key
+level, rid, said, fix = doctor_codex.station_mcp(paths, REV)
+ck("a key the cell refuses is a fix, in the cell's words: the endpoint took the connection, the read is refused",
+   level == "fix" and rid == f"codex_mcp_{REV}" and "would work without Tares" in said and "401" in said
+   and f"restart {REV}" in fix, (level, said, fix))
+tares.world.update(token="", mcp_key=None)
 code, out, err = run(doctor.cmd_doctor, ["doctor", "--json"])
 doc = json.loads(out)
 try:

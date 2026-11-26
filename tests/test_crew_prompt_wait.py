@@ -157,7 +157,7 @@ def regrant_with(added):
         regrant.TaresClient = lambda p, e: client
         launch._ccfg_or = lambda *a, **k: "Kiran"
         regrant._new_rules = lambda *a, **k: []
-        lifecycle.rearm_text = lambda c: ""
+        lifecycle.rearm_text = lambda c, s="": ""
 
         def record(c, pth, args, *, claude_bin, only_between_turns=False, prompt_wait=0):
             restarts.append({"guard": only_between_turns, "wait": prompt_wait})

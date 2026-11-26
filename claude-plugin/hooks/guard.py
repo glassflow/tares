@@ -56,8 +56,14 @@ FACTORY_END = r"([^\w-]|$)"
 KUBECTL = r"kubectl(\s+[^\s;&|]+)*\s+(apply|rollout|delete|scale|set|patch|replace|create)(\s|$)"
 HELM = r"helm(\s+[^\s;&|]+)*\s+(install|upgrade|uninstall|rollback)(\s|$)"
 
+# git and the options it takes before its command (`git -C <dir> push`, `git -c k=v tag x`): a rule that names a git
+# command matches it however it is reached (TR-1598: `git -C <worktree> push` went past a halt).
+GIT = (r"""git(\s+(-C|-c|--git-dir|--work-tree|--namespace|--exec-path)(=|\s+)("[^"]*"|'[^']*'|[^\s;&|]+)"""
+       r"|\s+(--no-pager|-P|--bare|--no-replace-objects|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs"
+       r"|--icase-pathspecs|--no-optional-locks|-p|--paginate))*")
+
 HALTED = _re(
-    r"(gh\s+pr\s+merge|git\s+push|git\s+tag\s+[^-]|gh\s+release\s+create|" + KUBECTL + "|" + HELM
+    r"(gh\s+pr\s+merge|" + GIT + r"\s+push|" + GIT + r"\s+tag\s+[^-]|gh\s+release\s+create|" + KUBECTL + "|" + HELM
     + r"|claude\s+(--bg|--background))")
 HALTED_SESSION = _re(FACTORY_CLI + "(spawn|revive)" + FACTORY_END)
 HEAVY = _re(
@@ -74,8 +80,8 @@ GH_API = _re(r"gh\s+api")
 # which deletes it). A branch such as `vladimir/tr-1-slug` has a slash and is not one, nor is `docs-v2-notes`: a name
 # ending in `-v<digits>` is.
 TAGS = _re(
-    r"(git\s+tag\s+[^-]|git\s+tag\b[^;&|]*\s(-[a-zA-Z0-9]*[dfasumFe][a-zA-Z0-9]*|--(delete|force|annotate|sign|local-user|message|file|edit))(\s|=|$)"
-    r"|git\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9][0-9.]*(?:-?(?:rc|alpha|beta|pre|dev)[0-9.]*|[a-z])?(?![\w-])))"
+    "(" + GIT + r"\s+tag\s+[^-]|" + GIT + r"\s+tag\b[^;&|]*\s(-[a-zA-Z0-9]*[dfasumFe][a-zA-Z0-9]*|--(delete|force|annotate|sign|local-user|message|file|edit))(\s|=|$)"
+    r"|" + GIT + r"\s+push[^;&|]*[\s:+](--tags|--follow-tags|--mirror|refs/tags|v[0-9]|[\w.-]*-v[0-9][0-9.]*(?:-?(?:rc|alpha|beta|pre|dev)[0-9.]*|[a-z])?(?![\w-])))"
     r"|gh\s+release\s+(create|edit|delete)")
 DEPLOY = _re("(" + KUBECTL + "|" + HELM + ")")
 CLAUDE_STATIONS = _re(r"(^|[;&|\s])claude\s+(--bg|--background|stop|kill|rm|respawn)(\s|$)")

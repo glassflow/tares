@@ -223,17 +223,23 @@ def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float |
         sent["starts"].pop(iid, None)
         sent["items"].append(iid)
 
-    # a turn that has ended: at the look after the one that first saw it ended, a start with no item has an
-    # outcome nobody will know, and the turn is closed
+    # a turn that has ended: at the look after the one that first saw it ended, a start with no item, or with an
+    # item still in progress, has an outcome nobody will know, and the turn is closed. A turn still listed as in
+    # progress while a newer one is there has ended too: its app-server was killed under it, and the
+    # conversation went on. Even without a newer turn, idle/notLoaded says the conversation is at rest:
+    # its last stored turn can still say inProgress after a crash and a revive (TR-1598).
+    newest_turn = turns[-1]["id"] if turns else ""
     for turn in turns:
         tid = turn["id"]
-        if tid in sent["closed"] or turn.get("status") == "inProgress":
+        if tid in sent["closed"] or (turn.get("status") == "inProgress" and tid == newest_turn
+                                    and kind not in ("idle", "notLoaded")):
             continue
         if tid not in sent["ended"]:
             sent["ended"].append(tid)
             continue
+        still = {str(i.get("id")) for i in turn.get("items") or [] if isinstance(i, dict) and i.get("status") == "inProgress"}
         for call, start in list(sent["starts"].items()):
-            if start.get("turn") == tid and call not in item_ids:
+            if start.get("turn") == tid and (call not in item_ids or call in still):
                 out.append(_fact(base, "unknown", now, call=call, turn=tid,
                                  why=f"its turn ended ({turn.get('status')}) with no record of how the command ended"))
                 del sent["starts"][call]

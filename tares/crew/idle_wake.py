@@ -420,6 +420,13 @@ def _after(n: int, base: int, level: int) -> int:
     return 1800 if n == 1 else 2700
 
 
+def state_for(client: TaresClient, paths: CrewPaths, s: str) -> str:
+    """The idle_wake setting as it applies to station `s`. A Codex station holds no schedule of its own, so the
+    factory is what wakes it: for it the setting is always on (TR-1598)."""
+    st = launch.idle_wake_state(client)
+    return "on" if st == "off" and proc.on_codex(s, paths) else st
+
+
 def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=None):
     """What to tell station `s` now, or None when it is not to be woken. A dict with the station, the state
     of the setting it was decided under, the time, the reason, the prompt, the keys of what is pending, the
@@ -429,7 +436,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
         return None
     if state.halted(paths) or not state.stations_get(s, "sessionId", paths=paths):
         return None
-    st = launch.idle_wake_state(client)
+    st = state_for(client, paths, s)
     if st == "off":
         if state.wake_read(s, paths)["released"] is not True:
             return None
@@ -480,7 +487,9 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
         texts = "; ".join(p["text"] for p in new)
         out.update(work=True, n=0, reason=f"work: {texts}",
                    prompt=f"{work_prompt(role, texts)} {woke_on([p['key'] for p in new])} {note} Carry on from your report.")
-    elif scan["live"] and w["released"] is not True:
+    elif scan["live"] and w["released"] is not True and not proc.on_codex(s, paths):
+        # (a Codex station holds no tick to drop: the release below is for Claude Code's; its wake file is
+        # marked released by the send that follows any wake)
         # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
         out.update(n=0, reason="release: idle_wake was switched on, telling the station to drop its tick",
                    prompt=f"idle_wake was switched on. {note} Carry on from your report.")
@@ -501,7 +510,7 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
     try:
         if not fresh.tares_on():
             return
-        if launch.idle_wake_state(fresh) != p["state"]:
+        if state_for(fresh, paths, s) != p["state"]:
             return   # the setting changed since the round began
         if (state.halted(paths) or proc.attached(s, paths)
                 or not proc.at_rest(s, claude_bin, paths)):
