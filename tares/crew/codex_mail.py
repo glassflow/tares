@@ -7,7 +7,9 @@ no such tool, so on Codex the factory carries the message:
              and answers that it is queued; it stores nothing. The call stays in the station's own
              conversation, which is where the factory reads it.
   collecting the watch's `mail` step, once a round, reads the conversation of each Codex station that runs and
-             takes every completed `send_to_station` call it has not taken yet. The sender is the station
+             takes every completed `send_to_station` call it has not taken yet; every stop of a station (a
+             restart, a retire, crew down) takes them once more, last, while its app-server still answers,
+             so a station retired between two rounds loses nothing it sent. The sender is the station
              whose conversation holds the call: what the model writes cannot change it (the MCP endpoint's
              own identity headers are the crew's, not the model's, as well). The call's id is the message's
              id. A message to a station that is not one of the crew, is retired or is not on Codex is not
@@ -20,10 +22,12 @@ no such tool, so on Codex the factory carries the message:
              keeps it until it runs). A station in a turn, or waiting on its person, gets it at the end of
              that turn: a message never steers a running turn. A stopped station gets it after the watch
              revives it.
-  once       before the turn is handed, the ids it carries are written to stations/<to>.codex.mail.handing;
-             after, to stations/<to>.codex.mail.done. When the watch finds a `handing` left by a round that
-             did not finish, it looks for the ids in the recipient's conversation: found, they were
-             delivered; not found, they are handed again. A conversation that cannot be read now is looked
+  once       before the turn is handed, its ids and its prompt are written to stations/<to>.codex.mail.handing;
+             after, the ids to stations/<to>.codex.mail.done. When the watch finds a `handing` left by a round
+             that did not finish, it looks in the recipient's conversation for a prompt of the person's side
+             (a userMessage) that holds that whole prompt: found, the batch was delivered; not found, it is
+             handed again. An id quoted anywhere else (the station's own answer, another prompt) is not a
+             delivery. A conversation that cannot be read now is looked
              at again next round, and nothing is handed meanwhile. So a message is delivered once, also
              after a crash, and a call is taken once (the conversation keeps it; `taken` says it was).
   identity   the turn names each message's sender and says what it is: a message from another station of
@@ -193,22 +197,43 @@ def turn_text(msgs: list) -> str:
     return "\n\n".join(parts)
 
 
-def _in_conversation(paths: CrewPaths, station: str, ids: list):
-    """True when the ids are in the station's conversation, False when they are not, None when it cannot be told
-    now (the station does not run or answer, or its conversation cannot be read)."""
+def _user_texts(turns: list) -> list:
+    """The text of every prompt (userMessage item) of the turns."""
+    out = []
+    for turn in turns:
+        for item in turn.get("items") or []:
+            if isinstance(item, dict) and item.get("type") == "userMessage":
+                out.append(" ".join(str(c.get("text") or "") for c in item.get("content") or [] if isinstance(c, dict)))
+    return out
+
+
+def _in_conversation(paths: CrewPaths, station: str, prompt: str):
+    """True when a prompt of the station's conversation holds the whole of `prompt` (the batch as it was handed),
+    False when none does, None when it cannot be told now (the station does not run or answer, or its
+    conversation cannot be read)."""
     turns = _turns(paths, station)
     if turns is None:
         return None
-    text = json.dumps(turns, ensure_ascii=False)
-    return any(i in text for i in ids)   # one turn carries them all: one found is all handed
+    return any(prompt in text for text in _user_texts(turns))
+
+
+def _handing(paths: CrewPaths, station: str) -> dict:
+    got = state.read_json(paths.station_file(station, HANDING), None)
+    if not (isinstance(got, dict) and isinstance(got.get("ids"), list) and isinstance(got.get("prompt"), str)):
+        return {}
+    return {"ids": [str(i) for i in got["ids"]], "prompt": got["prompt"]}
 
 
 def _settle_handing(paths: CrewPaths, station: str) -> bool:
     """A `handing` left by a round that did not finish: settled (True) or not yet (False, look next round)."""
-    ids = _ids(paths, station, HANDING)
-    if not ids:
+    if not paths.station_file(station, HANDING).exists():
         return True
-    seen = _in_conversation(paths, station, ids)
+    h = _handing(paths, station)
+    if not h:   # a note that cannot be read names no batch: the waiting mail is handed again
+        _drop(paths.station_file(station, HANDING))
+        return True
+    ids = h["ids"]
+    seen = _in_conversation(paths, station, h["prompt"])
     if seen is None:
         return False
     if seen:
@@ -227,9 +252,10 @@ def deliver(client, paths: CrewPaths, station: str) -> int:
     if not msgs or not codex_station.is_alive(paths, station) or not codex_station.at_rest(paths, station):
         return 0
     ids = [m["id"] for m in msgs]
-    state.write_json(paths.station_file(station, HANDING), ids, mode=0o600)
+    prompt = turn_text(msgs)
+    state.write_json(paths.station_file(station, HANDING), {"ids": ids, "prompt": prompt}, mode=0o600)
     try:
-        lifecycle.restart(client, paths, [station, turn_text(msgs)], claude_bin="", only_between_turns=True)
+        lifecycle.restart(client, paths, [station, prompt], claude_bin="", only_between_turns=True)
     except (NotBetweenTurnsError, LimitHeldError) as e:
         _drop(paths.station_file(station, HANDING))
         client.say(f"{station} has {len(msgs)} message(s) waiting: {e}")
@@ -258,7 +284,7 @@ def step(paths: CrewPaths) -> None:
             collect(paths, s)
         except (CrewError, OSError) as e:
             print(f"{ME}: could not read the messages {s} sent: {e}; will look again next round", flush=True)
-    todo = [s for s in mine if waiting(paths, s) or _ids(paths, s, HANDING)]
+    todo = [s for s in mine if waiting(paths, s) or paths.station_file(s, HANDING).exists()]
     if not todo:
         return
     client = TaresClient(paths, dict(os.environ))

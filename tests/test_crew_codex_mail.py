@@ -14,8 +14,10 @@ a turn, as the model would, with the answer Tares gives.
  c. a message to a station that is not one of the crew comes back to its sender as a note; a call Tares
     refused is not taken;
  d. a stopped station keeps its mail; once it runs again it gets it, once;
- e. delivered once after a crash between the hand-over and its note: a turn found in the conversation is taken
-    as delivered and not handed again; one not found is handed again;
+ d2. a sender retired before the next round: what it sent is taken at its stop, and delivered;
+ e. delivered once after a crash between the hand-over and its note: a prompt in the conversation that holds the
+    whole batch is taken as delivered and not handed again; a batch whose prompt is not there is handed again,
+    whole, even when one of its ids is quoted in another prompt;
  f. a station held at its account's limit keeps its mail, and nothing is noted as being handed;
  g. a station's message answers nothing: the desk bridge takes only what the cell recorded as the person's.
 
@@ -244,11 +246,25 @@ turns = prompts(REV)
 ck("once it runs again it gets the message, once", err is None and len(turns) == n_back + 1
    and "[TF:REVIEW]" in turns[-1] and len(codex_mail.waiting(paths, REV)) == 0, (err, len(turns), n_back))
 
+print("d2. a sender retired before the next round")
+before = len(codex_mail.inbox(paths, REV))
+cs.hand(paths, ORCH, "Your last turn: hand over.")   # its every turn sends the reviewer a message
+rested(ORCH)
+_, err, _ = quietly(lifecycle.retire, client, paths, [ORCH], claude_bin="")
+box = codex_mail.inbox(paths, REV)
+ck("what it sent since the last round is taken at its stop, so a retired sender loses nothing",
+   err is None and not cs.is_alive(paths, ORCH) and len(box) == before + 1 and box[-1]["from"] == ORCH, (err, len(box), before))
+round_()
+rested(REV)
+round_()
+ck("and the recipient gets it", codex_mail.waiting(paths, REV) == [] and box[-1]["id"] in codex_mail.delivered(paths, REV))
+rested(REV)
+
 print("e. once, after a crash between the hand-over and its note")
 msg = {"id": "m-handed", "from": ORCH, "at": state.utc_stamp(), "text": "[TF:FYI] handed, and the watch stopped"}
 codex_mail.queue(paths, REV, msg)
 cs.hand(paths, REV, codex_mail.turn_text([msg]))     # what the round did before it stopped
-state.write_json(paths.station_file(REV, codex_mail.HANDING), [msg["id"]])
+state.write_json(paths.station_file(REV, codex_mail.HANDING), {"ids": [msg["id"]], "prompt": codex_mail.turn_text([msg])})
 rested(REV)
 n = len(prompts(REV))
 round_()
@@ -256,12 +272,20 @@ ck("a turn found in the conversation is taken as delivered, and not handed again
    len(prompts(REV)) == n and msg["id"] in codex_mail.delivered(paths, REV)
    and not paths.station_file(REV, codex_mail.HANDING).exists())
 lost = {"id": "m-lost", "from": ORCH, "at": state.utc_stamp(), "text": "[TF:FYI] noted as being handed, never handed"}
+also = {"id": "m-also", "from": ORCH, "at": state.utc_stamp(), "text": "[TF:FYI] in the same batch"}
 codex_mail.queue(paths, REV, lost)
-state.write_json(paths.station_file(REV, codex_mail.HANDING), [lost["id"]])
+codex_mail.queue(paths, REV, also)
+# another prompt quotes one of the batch's ids: that is not the batch handed over (the review of PR 983)
+cs.hand(paths, REV, "Something else entirely, which happens to mention m-lost.")
+rested(REV)
+state.write_json(paths.station_file(REV, codex_mail.HANDING), {"ids": ["m-lost", "m-also"],
+                                                               "prompt": codex_mail.turn_text([lost, also])})
+n = len(prompts(REV))
 round_()
 turns = prompts(REV)
-ck("one not found in the conversation is handed again", len(turns) == n + 1 and "m-lost" in turns[-1]
-   and "m-lost" in codex_mail.delivered(paths, REV))
+ck("a batch whose prompt is not in the conversation is handed again, whole, though one of its ids is quoted elsewhere",
+   len(turns) == n + 1 and "m-lost" in turns[-1] and "m-also" in turns[-1]
+   and {"m-lost", "m-also"} <= set(codex_mail.delivered(paths, REV)), (len(turns), n))
 rested(REV)
 
 print("f. a station held at its account's limit")
