@@ -617,9 +617,14 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     return commands, since
 
 
-def review_state(store, uid: str, t: dict, source: str) -> dict:
+def review_state(h: Host, uid: str, t: dict, source: str) -> dict:
     """What a ticket's full view adds for review (TR-440..444): its checks matched against the
-    recording, the challenger's layer, the review rounds, and whether the last verdict counts."""
+    recording, the challenger's layer, the review rounds, and whether the last verdict counts.
+
+    A check's `match` is the same for every reader, as the merge gate reads it. Its `recorded`
+    text is given only when the sessions this reader may open say the same on their own
+    (TR-1711)."""
+    store = h.store
     raw = store.ticket_checks(t["id"], 50)
     checks = []
     if raw:
@@ -628,6 +633,14 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
             state, recorded = (factory_mod.match_check(c, commands, since)
                                if commands is not None else (None, None))
             checks.append({**c, "match": state, "recorded": recorded})
+        if any(c["recorded"] for c in checks):
+            closed = unread_sessions(h, list({r["session"] for r in commands}))
+            if closed:
+                readable = [r for r in commands if r["session"] not in closed]
+                for c in checks:
+                    if c["recorded"] and (factory_mod.match_check(c, readable, since)
+                                          != (c["match"], c["recorded"])):
+                        c["recorded"] = None
     reviews = store.ticket_reviews(t["id"])
     with metrics.step("challenger"):
         layer = factory_mod.challenger_layer(

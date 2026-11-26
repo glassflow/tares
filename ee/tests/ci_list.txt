@@ -72,3 +72,4 @@ test_sre_start_team
 test_state_indexes
 test_teams_e2e
 test_ticket_assignee
+test_ticket_check_runs

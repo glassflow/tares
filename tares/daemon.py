@@ -5388,7 +5388,7 @@ def make_app() -> FastAPI:
                                       "made_by", "person", "by_label")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
-            out.update(factory_api.review_state(store, uid, t, _cc_source()))
+            out.update(factory_api.review_state(h, uid, t, _cc_source()))
             lab = out["label"]
             ds = store.list_decisions(uid, all_=True)
             out["decisions"] = ([d for d in ds if lab in d["tickets"]]
