@@ -12,7 +12,7 @@ import os
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -40,6 +40,12 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
+def done_days(since):
+    """What a project finished between `since` and now can read: two days if UTC midnight passed."""
+    now = datetime.now(timezone.utc)
+    return {"Done " + fp.plain_date(t, now) for t in (since, now)}
+
+
 def units():
     print("== the helpers ==")
     now = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
@@ -48,6 +54,13 @@ def units():
         fp.plain_date("2026-01-05T00:00:00Z", now), fp.plain_date("2025-12-31T23:00:00Z", now),
         fp.plain_date(None, now)] == ["20 Oct", "5 Jan", "31 Dec 2025", ""],
        [fp.plain_date("2025-12-31T23:00:00Z", now)])
+    # the database hands a time back in the machine's own zone; the day on the page is the UTC day
+    east, new_year = timezone(timedelta(hours=2)), "2027-01-01T00:30:00+01:00"
+    said = [fp.plain_date(datetime(2026, 10, 21, 1, 30, tzinfo=east), now),
+            fp.plain_date("2026-10-19T20:00:00-05:00", now), fp.plain_date(new_year, now),
+            fp.plain_date("2026-06-01T12:00:00Z", datetime.fromisoformat(new_year))]
+    ck("plain_date: the UTC day and year, whatever zone the time arrives in",
+       said == ["20 Oct", "20 Oct", "31 Dec", "1 Jun"], said)
     ck("the order: waiting on you, building, not started, ready to close, later, done",
        sorted(fp.ORDER, key=fp.ORDER.get) == ["waiting_on_you", "building", "not_started",
                                               "ready_to_close", "later", "done"], fp.ORDER)
@@ -95,6 +108,7 @@ async def main():
             # oldest first, so the newest activity is the project made last
             pnot = await make("project-n", "Not a factory project", kind=None)
             tickets(pnot, 2)
+            started = datetime.now(timezone.utc)
             pdone_b = await make("project-e", "Closed by hand, never handed to the crew")
             tickets(pdone_b, 1)
             await stage(pdone_b, 1, "merged")
@@ -216,11 +230,10 @@ async def main():
 
             print("== a row in words ==")
             d, e = by["project-d"], by["project-e"]
-            today = datetime.now(timezone.utc)
-            when = fp.plain_date(today, today)
+            days = done_days(started)
             ck("a finished project says when, from the day it was finished",
-               d["milestone"] == "Done " + when and e["milestone"] == "Done " + when
-               and d["meta"] == "" and d["repo_names"] == ["example-org/service-a"], (d, e))
+               d["milestone"] in days and e["milestone"] in days
+               and d["meta"] == "" and d["repo_names"] == ["example-org/service-a"], (days, d, e))
             b1 = by["project-b1"]
             ck("a building row: repo kept apart, no builders working, how long ago",
                b1["repo_names"] == ["example-org/docs-site"] and b1["repos"] == ["docs-site"]
@@ -254,7 +267,7 @@ async def main():
             by2 = {p["name"]: p for p in a2["projects"]}
             ck("project-z is done now, last in its state's place",
                by2["project-z"]["state"] == "done" and by2["project-z"]["can_close"] is False
-               and by2["project-z"]["milestone"] == "Done " + when, by2["project-z"])
+               and by2["project-z"]["milestone"] in done_days(started), by2["project-z"])
             ck("the counts follow", a2["counts"]["ready_to_close"] == 0 and a2["counts"]["done"] == 3
                and a2["counts"]["all"] == 8, a2["counts"])
             r = await cx.post(f"/api/projects/{pready}/finish", json={"words": "again"})
