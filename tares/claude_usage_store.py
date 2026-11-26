@@ -183,7 +183,7 @@ class ClaudeUsageStore:
             if not r["message"]:
                 continue
             if r["message"] != raw and db.dialect == "sqlite":
-                with db.begin() as conn:
+                with db.read() as conn:
                     if conn.execute(select(u.message).where(u.session == r["session"],
                                                             u.message == raw)).first():
                         continue

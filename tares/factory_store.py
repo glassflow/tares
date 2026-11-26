@@ -1457,7 +1457,7 @@ class FactoryStore:
         for source, key, at, typ, branch, project, payload in rows:
             if "\x00" in branch + (project or ""):
                 if "\x00" in branch and db.dialect == "sqlite":
-                    with db.begin() as conn:
+                    with db.read() as conn:
                         if conn.execute(select(t.branch).where(
                                 t.source == source, t.key_value == key, t.event_time == at,
                                 t.event_type == typ, t.branch == branch)).first():

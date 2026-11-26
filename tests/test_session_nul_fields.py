@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from sqlalchemy import delete, select  # noqa: E402
+from sqlalchemy import delete, event, select  # noqa: E402
 
 from tares import session_drain, session_ingest, session_move  # noqa: E402
 from tares.connectors import claude_code  # noqa: E402
@@ -421,7 +421,32 @@ def counted_before():
     want("the reply is counted once", got, [("good", "m41"), ("old", f"ms{Z}g1")])
     got = rows(s, challenges.c.key_value, challenges.c.branch)
     want("the challenger line is kept once", got, [("old", f"factory/TR-{Z}1")])
+    # the look for what is already there only reads: it takes no write lock, so ingest never waits
+    reply = {"session": "old", "message": f"ms{Z}g1", "model": None, "project": None,
+             "subagent": None}
+    got = begins(s, lambda: s._usage_without_nul([dict(reply)]))
+    want("the reply is looked up without a write lock", got, ["BEGIN"])
+    line = ("claude_code", "old", T0, "challenge_commit", f"factory/TR-{Z}1", None, "{}")
+    got = begins(s, lambda: s._challenges_without_nul([line]))
+    want("the challenger line is looked up without a write lock", got, ["BEGIN"])
     s.con.close()
+
+
+def begins(s, call):
+    """Each BEGIN `call` sent to the SQLite session store."""
+    seen = []
+
+    def after(conn, cursor, statement, *a):
+        if statement.startswith("BEGIN"):
+            seen.append(statement)
+
+    engine = s.sessions_db.engine
+    event.listen(engine, "after_cursor_execute", after)
+    try:
+        call()
+    finally:
+        event.remove(engine, "after_cursor_execute", after)
+    return seen
 
 
 def moved(age, target):
