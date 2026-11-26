@@ -54,9 +54,11 @@ class SessionStore:
 
     @contextlib.contextmanager
     def read(self) -> Iterator[Connection]:
-        """One read-only transaction for a single query. On SQLite it does not take the write lock,
-        so it does not queue behind a writer (WAL gives it the last committed state); Postgres has
-        no such lock. For a read that joins several queries use `snapshot()`; never write in it."""
+        """One read-only transaction; never write in it. On SQLite it does not take the write lock,
+        so it does not queue behind a writer and no writer queues behind it (WAL gives it the last
+        committed state, the same one from its first query to its end). On Postgres it is a plain
+        transaction like `begin()`, each statement seeing what had committed when it ran; a read
+        whose queries must agree uses `consistent_read()`."""
         with self._turns or contextlib.nullcontext():
             with self.engine.connect() as conn:
                 conn = conn.execution_options(deferred=True)
@@ -65,11 +67,11 @@ class SessionStore:
 
     @contextlib.contextmanager
     def snapshot(self) -> Iterator[Connection]:
-        """One transaction whose statements all see the same data, for a read that joins the answers
-        of several queries. SQLite already gives that (every transaction takes the write lock, so
-        no writer runs meanwhile). Postgres would let a row committed between two statements show
-        in the second only, so the transaction runs at REPEATABLE READ: set for this transaction
-        only, which is what PgBouncer in transaction mode allows."""
+        """One transaction whose statements all see the same data. On SQLite it takes the write
+        lock, like `begin()`, so a read-only caller uses `consistent_read()` instead. Postgres
+        would let a row committed between two statements show in the second only, so the
+        transaction runs at REPEATABLE READ: set for this transaction only, which is what
+        PgBouncer in transaction mode allows."""
         with self._turns or contextlib.nullcontext():
             with self.engine.connect() as conn:
                 if self.dialect == "postgresql":
@@ -78,7 +80,7 @@ class SessionStore:
                     yield conn
 
     def consistent_read(self):
-        """`snapshot()` without SQLite's write lock, for a page read that joins several queries and
+        """`snapshot()` without SQLite's write lock, for a read that joins several queries and
         writes nothing: SQLite's deferred transaction already sees one state from its first read to
         its end."""
         return self.snapshot() if self.dialect == "postgresql" else self.read()
