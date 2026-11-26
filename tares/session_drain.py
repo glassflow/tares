@@ -18,10 +18,14 @@ chunks first (the DuckDB lock let go between chunks), then one session-store tra
 rows and archive parts by every DuckDB line plus the lines only the store holds, recounts it from
 them and writes their facts and turns. The rows are counted before the session is marked complete.
 
-A line the store will not take is left out. So is a counted line neither store holds any more. Such a
-session stays `lines_complete` false and gets the gave-up mark, said once: it is not tried again
-until a later write of its lines is refused too. A try that fails as a whole (the database is away)
-changes nothing, goes to the back of the queue and is said once per process.
+A line of DuckDB the store will not take is left out. So is a counted line neither store holds any
+more. Such a session stays `lines_complete` false and gets the gave-up mark, said once: it is not
+tried again until a later write of its lines is refused too. A try that fails as a whole (the
+database is away, or a line only the session store holds cannot be written back) changes nothing,
+goes to the back of the queue and is said once per process.
+
+A rebuild that stored the lines but could not write their facts and turns keeps the todo mark, so
+the next pass tries again, until both are in; it is said once per process (TR-1647).
 """
 from __future__ import annotations
 
@@ -78,8 +82,9 @@ def drain(store, limit: int = BATCH, stop: threading.Event | None = None) -> int
 
 
 def _drain_session(store, sources: list, sid: str) -> str | None:
-    """Rebuild one session from DuckDB. Returns the line to log, None when nothing was done: the
-    hourly archive job holds the session (the next pass takes it), or it is gone."""
+    """Rebuild one session from DuckDB. Returns the line to log, None when there is none to say:
+    the hourly archive job holds the session (the next pass takes it), it is gone, or its facts and
+    turns are still not written and that was said before."""
     db = store.sessions_db
     with store._sess_lock, session_move._duck_lines(store, sources, sid) as (wanted, chunks):
         with db.begin() as conn:
@@ -144,8 +149,14 @@ def _rebuild(store, conn, sid: str, wanted: int, chunks) -> str | None:
         read += len(rows)
         take(rows)
     extra = session_move._extras(have, seen)
+    left_out = refused
     for i in range(0, len(extra), session_move.CHUNK):
         take(extra[i:i + session_move.CHUNK])
+    if refused > left_out:
+        # only the session store holds these lines (they are not in DuckDB): leaving one out would
+        # lose it, so nothing of this try is kept (TR-1647)
+        raise session_move.Mismatch(f"{refused - left_out} line(s) only the session store holds "
+                                    "could not be written back")
 
     written = session_move._count_rows(conn, sid)
     if read != wanted or written != seq - refused:
@@ -169,12 +180,22 @@ def _rebuild(store, conn, sid: str, wanted: int, chunks) -> str | None:
     if not complete:
         conn.execute(insert(session_ingest_marks).values(
             name=session_ingest.DRAIN_GAVE_UP + sid, at=now_utc()))
+    if unread:      # facts and turns still to be written: marked until both land (TR-1647)
+        conn.execute(insert(session_ingest_marks).values(
+            name=session_ingest.DRAIN_TODO + sid, at=now_utc()))
     said = f"taresd: M1 drain: session {sid} rebuilt from DuckDB's lines, {written} line(s) stored"
     if not complete:
         said += (f", {max(row.line_count, seq) - written} cannot be stored or are gone; the session "
-                 "stays marked incomplete and is not tried again")
+                 "stays marked incomplete" + ("" if unread else " and is not tried again"))
     if unread:
-        said += f"; some of its facts and turns were not written ({unread[0]})"
+        said += (f"; some of its facts and turns were not written ({unread[0]}); tried again at a "
+                 "later pass")
+        waiting = store.__dict__.setdefault("_drain_unread", set())   # only holds back the repeat
+        if sid in waiting:
+            return None
+        waiting.add(sid)
+    else:
+        store.__dict__.get("_drain_unread", set()).discard(sid)
     return said
 
 

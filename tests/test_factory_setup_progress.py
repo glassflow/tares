@@ -48,6 +48,11 @@ from tares import crew_onboarding as co
 from tares import factory_home as fh
 from tares import session_ingest
 from tares.envelope import Envelope
+from tares.store import Store  # noqa: E402
+
+# The "sessions table behind" states read the events, and a cell that has not caught up writes every
+# line there too. So the lines go to both stores here, as they did before the write gate opened.
+Store._lines_skip_duckdb = lambda self: False
 
 P = F = 0
 

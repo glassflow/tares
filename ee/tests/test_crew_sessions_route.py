@@ -108,6 +108,10 @@ def sizes(crew_body, factory_body):
 async def main():
     from tares import session_ingest
     from tares.daemon import make_app
+    from tares.store import Store
+    # The last part compares with a cell that has not caught up, which reads the events and writes
+    # every line there too. So the lines go to both stores here.
+    Store._lines_skip_duckdb = lambda self: False
     app = make_app()
     store = app.state.store
     root = {"Authorization": f"Bearer {TOKEN}"}

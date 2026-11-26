@@ -15,8 +15,8 @@ The ledger is `session_moves`, one row per session with its state: `pending`, `v
 - `move_recent` takes pending sessions whose last line is inside the window, oldest first, and moves
   each in one session-store transaction: every DuckDB line (read before the transaction opens, in
   chunks ordered by `event_time` then `rowid`, with the DuckDB lock let go between chunks), then
-  every line the table or the archive holds that DuckDB does not (written on RC 1 with the gate
-  shut by `HOLD_LINES_BACK`, or late). A line is matched by `(line_key, at)` as a multiset, because
+  every line the table or the archive holds that DuckDB does not (a line held back from DuckDB,
+  or one written late). A line is matched by `(line_key, at)` as a multiset, because
   `line_key` repeats. The
   session's rows in `session_lines` and its parts in `session_archive_parts` are replaced by the
   full list, numbered from 1; the archive files of the replaced parts stay where they are, unused.

@@ -28,7 +28,8 @@ AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
                         or_, select, union_all, update)
 
-from . import edition, metrics, session_archive, session_ingest, session_move, session_read, state_db
+from . import (edition, metrics, session_archive, session_events, session_ingest, session_move,
+               session_read, state_db)
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.pr_columns import fill_pr_columns, pr_columns
@@ -358,12 +359,6 @@ _MIGRATIONS = [
     # every generated sentence instead of the rule's wording. NULL = say it from the rule.
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS description TEXT",
 ]
-
-# The gate of TR-1479: whether the factory edition keeps claude_code lines out of DuckDB `events`.
-# Shut, because readers of `events` (triggers' aggregate, read_window, recent_sessions, stats,
-# recent_events and the rest) still scan those lines; TR-1647 moves them and removes this constant.
-# The tests open it themselves (`store.HOLD_LINES_BACK = True`).
-HOLD_LINES_BACK = False
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
 _FILTER_OPS = {"eq": "=", "neq": "!=", "gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
@@ -1425,8 +1420,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     _HELD_MODE_TTL = 30.0                  # seconds the edition answer of `_lines_skip_duckdb` is kept
 
     def _lines_skip_duckdb(self) -> bool:
-        """True when claude_code lines may go only to the session store: `HOLD_LINES_BACK` is on (it
-        is shut until TR-1647 moves the readers of `events`), and the edition is factory with
+        """True when claude_code lines may go only to the session store: the edition is factory with
         an archive backend (the folder archive always exists on SQLite; a Postgres cell needs
         TARES_ARCHIVE_URL; the answer is settled once per process, so a cell restarts after the URL
         is set or fixed). A factory cell on Postgres with none keeps writing to DuckDB and says so
@@ -1434,8 +1428,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         go to both: the readers scan events until then, and a line held back would be missing. Which
         sessions are held is `session_ingest.holdable`'s call. The edition is read at most every
         `_HELD_MODE_TTL` seconds: a switch applies within that time, not on the next batch."""
-        if not HOLD_LINES_BACK:
-            return False
         now = time.monotonic()
         cached = self._factory_mode
         if cached is None or now >= cached[1]:
@@ -1491,9 +1483,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         metrics.session_lines_to_duckdb(len(envelopes))
 
     def _append(self, envelopes: list[Envelope], held=()) -> None:
-        """`held`: lines of the batch that do not go to the events table (their session store write
-        follows): they still count in source_stats, but not in entity_counts. Challenges are
-        recorded for them as for any line."""
+        """`held`: lines of the batch that do not go to the events table (the session store has
+        them): they count in source_stats and entity_counts, and challenges are recorded for them,
+        as for any line."""
         # Explicit column list: the `labels` column was added by migration after first release,
         # so positional INSERT order is no longer guaranteed.
         skip = {id(e) for e in held}
@@ -1516,8 +1508,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 d[0] += 1
                 if e.ingest_time > d[1]:
                     d[1] = e.ingest_time
-            if id(e) in skip:
-                continue
             _accum_entity(ent, e.source, "key_value", e.key_value, e.ingest_time)
             for lname, lval in (e.labels or {}).items():
                 if e.event_type == "finding" and lname in _PROVENANCE_LABELS:
@@ -1634,21 +1624,37 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         esql, eparams = self._exclude(exclude, sources)
         wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
+        held = session_events.view(self, sources, since, key=key, filters=filters, where=where,
+                                   need_payload=bool(exclude) and exclude.get("shared") is None)
+        # among lines of one instant, the stored ones keep their order in the session
+        newest, oldest = (", held_ref DESC", ", held_ref") if held.held else ("", "")
         with self._lock:
             rows = self.con.execute(
                 f"SELECT * FROM ("
-                f"  SELECT {cols}, "
-                f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC) AS rn "
+                f"  SELECT {cols}, {held.ref} AS ref, "
+                f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC{newest}) AS rn "
                 # reference sources are declarative context — always surfaced for the matched
                 # entity, regardless of the read window (a project note doesn't 'age out').
-                f"  FROM events WHERE source IN ({ph}) "
+                f"  FROM {held.table} WHERE source IN ({ph}) "
                 f"    AND (source_type = 'reference' OR event_time >= ?){ksql}{fsql}{wsql}"
-                f") WHERE rn <= {int(cap)} ORDER BY event_time",
-                [*ocols, *sources, since, *kparams, *fparams, *wparams],
+                f") WHERE rn <= {int(cap)} ORDER BY event_time{oldest.replace('held_ref', 'ref')}",
+                [*ocols, *held.params, *sources, since, *kparams, *fparams, *wparams],
             ).fetchall()
+        # each row: the columns asked for, then (key, payload project) with owners, ref, rn
+        refs = [r[-2] for r in rows]
+        rows = [r[:-2] for r in rows]
+        if held.held:                     # a stored line's text and payload, for the rows returned
+            text = held.fill(refs)
+            for i, n in enumerate(refs):
+                if n is not None:
+                    row = list(rows[i])
+                    row[2] = text[n][0]
+                    if include_payload:
+                        row[4] = text[n][1]
+                    rows[i] = tuple(row)
         if owners is None:
-            return [r[:-1] for r in rows]
-        n = len(rows[0]) - 3 if rows else 0       # the columns asked for, before key, payload project, rn
+            return rows
+        n = len(rows[0]) - 2 if rows else 0       # the columns asked for, before key and payload project
         owners |= self._row_owners(rows, n)
         return [r[:n] for r in rows]
 
@@ -1717,13 +1723,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         sel_g = ", ".join(f"{e} AS g{i}" for i, e in enumerate(gexprs))
         grp_g = ", ".join(f"g{i}" for i in range(len(gexprs)))
         having = " AND ".join(f"g{i} IS NOT NULL" for i in range(len(gexprs)))
+        held = session_events.view(self, sources, since, until, filters=filters, where=where,
+                                   counted=True)
+        if held.held:                        # one row may stand for several stored lines
+            w = held.weight
+            aggexpr = {"count": f"SUM({w})::BIGINT",
+                       "sum": f"SUM({valexpr} * {w})",
+                       "avg": f"SUM({valexpr} * {w}) / SUM({w}) FILTER (WHERE {valexpr} IS NOT NULL)",
+                       }.get(agg, aggexpr)
         with self._lock:
             rows = self.con.execute(
-                f"SELECT {sel_g}, {aggexpr} FROM events "
+                f"SELECT {sel_g}, {aggexpr} FROM {held.table} "
                 f"WHERE source IN ({ph}) AND event_time >= ?"
                 f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql} "
                 f"GROUP BY {grp_g} HAVING {having}",
-                [*sources, since, *([until] if until is not None else []), *fparams, *wparams],
+                [*held.params, *sources, since, *([until] if until is not None else []), *fparams,
+                 *wparams],
             ).fetchall()
         out = {}
         for r in rows:
@@ -2306,20 +2321,23 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def recent_ingest_gaps(self, source: str, since, limit: int = 1000) -> list[float]:
         """Seconds between consecutive ingests of a source since `since`, over at most its last
         `limit` events: how often the source usually hears something (project health)."""
+        held = session_events.view(self, [source], since)
         with self._lock:
             rows = self.con.execute(
-                "SELECT epoch(ingest_time) FROM events WHERE source = ? AND ingest_time >= ? "
-                "ORDER BY ingest_time DESC LIMIT ?", [source, since, int(limit)]).fetchall()
+                f"SELECT epoch(ingest_time) FROM {held.table} WHERE source = ? AND ingest_time >= ? "
+                "ORDER BY ingest_time DESC LIMIT ?",
+                [*held.params, source, since, int(limit)]).fetchall()
         ts = sorted(float(r[0]) for r in rows if r[0] is not None)
         return [b - a for a, b in zip(ts, ts[1:])]
 
     def recent_ingest_hours(self, source: str, since) -> list:
         """The distinct hours a source received events in since `since` (project health: a
         source with a steady rhythm can go silent, a bursty one cannot)."""
+        held = session_events.view(self, [source], since)
         with self._lock:
             rows = self.con.execute(
-                "SELECT DISTINCT date_trunc('hour', ingest_time) FROM events "
-                "WHERE source = ? AND ingest_time >= ?", [source, since]).fetchall()
+                f"SELECT DISTINCT date_trunc('hour', ingest_time) FROM {held.table} "
+                "WHERE source = ? AND ingest_time >= ?", [*held.params, source, since]).fetchall()
         return [r[0] for r in rows]
 
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
@@ -4513,11 +4531,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         esql, eparams = self._exclude(exclude, list(sources))
+        held = session_events.view(self, list(sources), since, filters=filters,
+                                   need_payload=bool(exclude) and exclude.get("shared") is None)
         with self._lock:
             r = self.con.execute(
-                f"SELECT key_value, event_time FROM events WHERE source IN ({ph}) AND ingest_time >= ? "
+                f"SELECT key_value, event_time FROM {held.table} WHERE source IN ({ph}) "
+                f"AND ingest_time >= ? "
                 f"AND COALESCE(key_value, '') <> ''{fsql}{esql} ORDER BY ingest_time DESC LIMIT 1",
-                [*sources, since, *fparams, *eparams]).fetchone()
+                [*held.params, *sources, since, *fparams, *eparams]).fetchone()
         return (r[0], r[1]) if r else None
 
     def recent_events(self, source: str | None = None, limit: int = 50,
@@ -4526,16 +4547,31 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         clauses = (["source = ?"] if source else []) + ([esql[5:]] if esql else [])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         params = ([source] if source else []) + eparams + [int(limit)]
+        held = self._newest_view([source] if source else None, int(limit), exclude)
         with self._lock:
             rows = self.con.execute(
-                f"SELECT source, key_value, event_type, text, event_time, ingest_time "
-                f"FROM events {where} ORDER BY ingest_time DESC LIMIT ?", params,
+                f"SELECT source, key_value, event_type, text, event_time, ingest_time, "
+                f"{held.ref} AS ref FROM {held.table} {where} ORDER BY ingest_time DESC"
+                f"{', ref DESC' if held.held else ''} LIMIT ?", [*held.params, *params],
             ).fetchall()
+        text = held.fill([r[6] for r in rows]) if held.held else {}
         return [
-            {"source": r[0], "key": r[1], "event_type": r[2], "text": r[3],
+            {"source": r[0], "key": r[1], "event_type": r[2],
+             "text": r[3] if r[6] is None else text[r[6]][0],
              "event_time": r[4], "ingest_time": r[5]}
             for r in rows
         ]
+
+    def _newest_view(self, sources: list[str] | None, limit: int, exclude: dict | None = None):
+        """session_events.newest for a caller that cannot see some projects: their sessions and
+        lines are not among the newest it counts (the statement still applies `exclude` itself)."""
+        if not exclude or not (exclude.get("ids") or exclude.get("names")):
+            return session_events.newest(self, sources, limit)
+        ids = list(exclude.get("ids") or [])
+        hidden = set(self.sessions_of_projects(ids)) if ids else set()
+        return session_events.newest(
+            self, sources, limit, hidden,
+            lambda source, labels, payload: _line_hidden(exclude, source)(labels, payload))
 
     def key_events(self, source: str, key: str, limit: int = 200,
                    offset: int = 0) -> list[dict]:
@@ -4662,10 +4698,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """Inferred shape of a source's events, sampled from the most recent `sample` rows: the
         event types seen and the typed labels (with the type of the latest value). Number-typed
         labels are the aggregatable ones — a trigger's `field` picks from these."""
+        held = session_events.newest(self, [source], int(sample))
         with self._lock:
             rows = self.con.execute(
-                "SELECT event_type, labels FROM events WHERE source = ? "
-                "ORDER BY ingest_time DESC LIMIT ?", [source, int(sample)],
+                f"SELECT event_type, labels FROM {held.table} WHERE source = ? "
+                "ORDER BY ingest_time DESC LIMIT ?", [*held.params, source, int(sample)],
             ).fetchall()
         event_types, fields = set(), {}
         for etype, ljson in rows:
@@ -4733,17 +4770,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             raise ValueError(f"bad label name {label!r}")
         xsql, xparams = self._exclude(exclude, sources)
         if xsql:
-            with self._lock:
-                return self._list_entities_scan(label, sources, limit, xsql, xparams)
+            return self._list_entities_scan(label, sources, limit, xsql, xparams,
+                                            need_payload=exclude.get("shared") is None)
         ph = ", ".join(["?"] * len(sources)) if sources else ""
+        tq = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
+        tp: list = [label]
+        if sources:
+            tq += f" AND source IN ({ph})"
+            tp += sources
         with self._lock:
-            tq = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
-            tp: list = [label]
-            if sources:
-                tq += f" AND source IN ({ph})"
-                tp += sources
-            if self.con.execute(tq + " LIMIT 1", tp).fetchone() is not None:
-                return self._list_entities_scan(label, sources, limit)
+            truncated = self.con.execute(tq + " LIMIT 1", tp).fetchone() is not None
+        if truncated:
+            return self._list_entities_scan(label, sources, limit)
+        with self._lock:
             q = "SELECT value, SUM(events), MAX(last_ingest) FROM entity_counts WHERE label = ?"
             params: list = [label]
             if sources:
@@ -4767,9 +4806,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             return self.con.execute(q + " LIMIT 1", p).fetchone() is not None
 
     def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int,
-                            xsql: str = "", xparams: list | None = None) -> list[dict]:
+                            xsql: str = "", xparams: list | None = None,
+                            need_payload: bool = False) -> list[dict]:
         """The pre-counter implementation: scan events and GROUP BY the label. Used only as the
-        fallback for a truncated (high-cardinality) label. Caller holds the lock."""
+        fallback for a truncated (high-cardinality) label, and for a caller who cannot see some
+        projects. Takes the lock itself."""
         expr = _label_expr(label)
         where = "WHERE " + expr + " IS NOT NULL"
         params: list = []
@@ -4778,10 +4819,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             params += sources
         where += xsql
         params += xparams or []
-        rows = self.con.execute(
-            f"SELECT {expr} AS v, COUNT(*), MAX(ingest_time) FROM events {where} "
-            f"GROUP BY v ORDER BY COUNT(*) DESC LIMIT ?", [*params, int(limit)],
-        ).fetchall()
+        held = session_events.grouped(self, sources or None, need_payload=need_payload)
+        count = f"SUM({held.weight})::BIGINT" if held.held else "COUNT(*)"
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT {expr} AS v, {count}, MAX(ingest_time) FROM {held.table} {where} "
+                f"GROUP BY v ORDER BY {count} DESC LIMIT ?",
+                [*held.params, *params, int(limit)],
+            ).fetchall()
         return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
 
     def purge_dispatches(self, trigger: str) -> int:
@@ -4808,8 +4853,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # _sess_lock first, as append and the reconcile take it, so no line is counted into the
         # sessions table between the purge and the delete of its rows.
         with self._sess_lock:
+            held = session_events.held_count(self, source)    # lines the events table never got
             with self._lock:
-                n = self.con.execute(
+                n = held + self.con.execute(
                     "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
                 self.con.execute("BEGIN TRANSACTION")
                 try:
