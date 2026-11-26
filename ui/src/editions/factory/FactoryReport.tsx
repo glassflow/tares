@@ -5,8 +5,9 @@ import { Banner, Button, EmptyState, Input, ListSection, LoadingBlocks, Select }
 import { formatCount } from "../../lib/number";
 import { DAY, formatDayUTC } from "../../lib/time";
 import { usePagePolling } from "../usePagePolling";
-import { factoryReport, isRefused, type ReportData, type SectionKey } from "./FactoryReport.api";
+import { factoryReport, isRefused, type ReportData, type SectionKey, type TimeData } from "./FactoryReport.api";
 import { Delivered } from "./report/Delivered";
+import { TimeSpent } from "./report/TimeSpent";
 
 // Report (TR-1667): what the factory delivered, week by week, for a range and a scope. Both live in
 // the address (`?range=4w|8w|quarter|dates&from=&to=&scope=`), so a copied address opens the same view.
@@ -29,7 +30,7 @@ const DEFAULT_SCOPE = "factory";
 const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: ReportData) => React.ReactNode }[] = [
   { key: "delivered", title: "Delivered", body: (data) => <Delivered data={data} /> },
 
-  { key: "time", title: "Time" },
+  { key: "time", title: "Time", body: (data) => <TimeSpent data={data} /> },
 
   { key: "review", title: "Review" },
 
@@ -74,8 +75,10 @@ function DayInput({ value, onDay, ...props }: { label: string; value: string; on
 /** What one read has to show, under the pickers. */
 export function ReportView({ data }: { data: ReportData }) {
   const { from, to, merged, running_week: running } = data.range;
+  const waiting = (data.sections.time as TimeData | undefined)?.waiting_percent;
   const summary = [
     merged > 0 && `${formatCount(merged)} ${merged === 1 ? "ticket" : "tickets"} merged.`,
+    typeof waiting === "number" && `Waiting on a person: ${formatCount(waiting)}% of stage time.`,
     `${formatDayUTC(from)} to ${formatDayUTC(to)}, in weeks that start on Monday (UTC).`,
     running && "This week is not over yet.",
   ].filter(Boolean).join(" ");

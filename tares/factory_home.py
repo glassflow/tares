@@ -132,7 +132,10 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             "ask": ask, "holds_up": holds_up, "checks": checks,
             # whom it waits for (factory_owners.tag): the people, whether any admin may act, and
             # whether it fell to the admins because its project has no lead
-            "for_people": [], "for_admin": False, "no_lead": False}
+            "for_people": [], "for_admin": False, "no_lead": False,
+            # the desk questions this row stands for beside its own id, as labels (D7), so a link
+            # to one (#desk-D7) finds the row (TR-1669)
+            "desk_labels": []}
 
 
 OLDER_DAYS = 7

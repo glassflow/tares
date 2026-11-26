@@ -18,7 +18,7 @@ import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
 import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
-import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
+import { actionName, deskLabels, deskTarget, GroupHead, groupWaiting, OlderFold, QuestionChoices, standsFor } from "./waitingGroups";
 import { sampleClose } from "./projectSamples";
 import { PageHead, pageHref, ProjectShell, waitingItems, type ProjectCtx, type ProjectPage } from "./ProjectShell";
 import { formatDistance, formatStampUTC } from "../../lib/time";
@@ -149,8 +149,9 @@ function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: Home
 function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void }) {
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-row-hover")}
-         data-testid="waiting-row" data-kind={item.kind} id={`waiting-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}>
+    <div className={cn(ROW, "flex scroll-mt-16 flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-row-hover")}
+         data-testid="waiting-row" data-kind={item.kind} id={`waiting-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+         data-desk={deskLabels(item).join(" ") || undefined}>
       <div className="min-w-0 flex-[1_1_260px]">
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{item.title}</div>
@@ -181,7 +182,8 @@ function WaitingOthers({ items }: { items: HomeItem[] }) {
                    aside={<span className={MUTED} data-testid="waiting-others-count">{plural(items.length, "thing", "things")}</span>} />
       <div className={CARD}>
         {items.map((it) => (
-          <div key={it.id} className={cn(ROW, "min-w-0")} data-testid="waiting-other-row" data-kind={it.kind}>
+          <div key={it.id} className={cn(ROW, "min-w-0 scroll-mt-16 [overflow-wrap:anywhere]")} data-testid="waiting-other-row" data-kind={it.kind}
+               data-desk={deskLabels(it).join(" ") || undefined}>
             <div className={KIND} data-user-text>{it.label}</div>
             <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{it.title}</div>
             <div className="mt-0.5" data-user-text>{it.detail}</div>
@@ -194,13 +196,15 @@ function WaitingOthers({ items }: { items: HomeItem[] }) {
   );
 }
 
-function Waiting({ items, onClose, onKeep, onAllow }: {
-  items: HomeItem[]; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void;
+/** `target` is the desk item the address names: a fold that holds its row starts open. */
+function Waiting({ items, target, onClose, onKeep, onAllow }: {
+  items: HomeItem[]; target?: string; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void;
 }) {
   const [all, setAll] = React.useState(false);
   const g = groupWaiting(items);
   const count = items.length;
-  const rest = all ? g.rest : g.rest.slice(0, SHOW_WAITING);
+  const named = (i: HomeItem) => standsFor(i, target);
+  const rest = all || g.rest.slice(SHOW_WAITING).some(named) ? g.rest : g.rest.slice(0, SHOW_WAITING);
   const more = g.rest.length - rest.length;
   const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close" && !(a.do === "keep_assumptions" && onKeep) && !(a.do === "allow" && onAllow)));
   const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} onKeep={onKeep} onAllow={onAllow} />;
@@ -225,7 +229,7 @@ function Waiting({ items, onClose, onKeep, onAllow }: {
                 </Button>
               </div>
             )}
-            <OlderFold items={g.older} className="px-0">{(older) => older.map(row)}</OlderFold>
+            <OlderFold items={g.older} className="px-0" startOpen={g.older.some(named)}>{(older) => older.map(row)}</OlderFold>
           </div>
         </>
       )}
@@ -729,15 +733,17 @@ export function DeleteProject({ name, onDelete }: { name: string; onDelete: () =
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-/** "Waiting for others: 2 things", with the list behind Show. */
-function OthersLine({ items }: { items: HomeItem[] }) {
-  const [open, setOpen] = React.useState(false);
+/** "Waiting for others: 2 things", with the list behind Show; open when the address names one of
+ *  its desk items. */
+function OthersLine({ items, target }: { items: HomeItem[]; target?: string }) {
+  const [choice, setChoice] = React.useState<boolean>();
+  const open = choice ?? items.some((i) => standsFor(i, target));
   if (items.length === 0) return null;
   return (
     <div className="grid min-w-0 gap-3">
       <div className="text-[13px] text-muted-foreground" data-testid="waiting-others-line">
         Waiting for others: {plural(items.length, "thing", "things")}.{" "}
-        <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="waiting-others-toggle"
+        <button type="button" aria-expanded={open} onClick={() => setChoice(!open)} data-testid="waiting-others-toggle"
                 className={cn("border-0 bg-transparent p-0 text-[13px] font-normal shadow-none", LINK)}>
           {open ? "Hide" : "Show"}
         </button>
@@ -800,7 +806,11 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
   const [allowing, setAllowing] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [moving, setMoving] = React.useState(false);
   const finished = d.state === "finished";
-  const items = waitingItems(d, kept);
+  const target = deskTarget(useLocation().hash);
+  // a finished project lists nothing as waiting; the desk item the address names still shows
+  const named = (list: HomeItem[]) => list.filter((w) => standsFor(w, target));
+  const items = finished ? named(d.waiting) : waitingItems(d, kept);
+  const others = finished ? named(d.waiting_others ?? []) : d.waiting_others ?? [];
 
   const startNow = async () => {
     setMoving(true);
@@ -855,9 +865,9 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
         </Banner>
       )}</Collapse>
       <div className="grid min-w-0 gap-3">
-        <Waiting items={items} onClose={() => setAsking(true)} onKeep={onKeep}
+        <Waiting items={items} target={target} onClose={() => setAsking(true)} onKeep={onKeep}
                  onAllow={sample ? undefined : (item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); }} />
-        {!finished && <OthersLine items={d.waiting_others ?? []} />}
+        <OthersLine items={others} target={target} />
       </div>
       <Summary d={d} />
       <Moving d={d} />

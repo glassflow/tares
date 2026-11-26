@@ -24,6 +24,39 @@ export interface DeliveredData extends DeliveredFigures {
   weeks: { week: string; merged: number; p50: number | null }[];
 }
 
+/** The ticket stages whose time is counted. */
+export type Stage = "doing" | "review" | "changes" | "blocked";
+
+/** Something stuck: its number and label, when it started to be stuck (the question asked, the ticket
+ *  moved into its stage) and its project, null for a question of none. */
+export interface StuckRow {
+  number: number | null;
+  label: string;
+  at: string;
+  project: { id: string; name: string } | null;
+}
+
+/** `count` is all of them, `rows` the oldest five. */
+export interface StuckList<T extends StuckRow> { count: number; rows: T[] }
+
+/** `sections.time` (tares/report.py `time_spent`). Durations are in hours; percents are whole, null with
+ *  nothing to divide. */
+export interface TimeData {
+  total: number;
+  waiting_percent: number | null;
+  stages: { stage: Stage; total: number; waiting: number; agent: number;
+    share: number | null; waiting_percent: number | null; agent_percent: number | null }[];
+  weeks: { week: string; share: Record<Stage, number | null>; waiting: Record<Stage, number | null> }[];
+  /** `tickets`: how many of `merged` have a start, which the `buckets` hold. */
+  start_to_merge: { merged: number; tickets: number; buckets: number[] };
+  /** As of the cell's last pass, whatever the range; null before the first one. */
+  stuck: null | {
+    at: string;
+    questions: StuckList<StuckRow & { text: string }>;
+    tickets: StuckList<StuckRow & { title: string; stage: Stage }>;
+  };
+}
+
 export interface ReportData {
   /** The weeks the read covers: `from` is a Monday, `to` a Sunday, `weeks` the Mondays, oldest first.
    *  `running_week` is the Monday of the week that is not over, when the range holds it. */

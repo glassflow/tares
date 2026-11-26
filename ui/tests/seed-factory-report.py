@@ -9,10 +9,16 @@ from start to merge, "-" a ticket never marked doing):
     a milestone accepted 5 weeks ago;
   project-c (Bo leads it): one open ticket, nothing merged.
 So 8 weeks hold 9 merged tickets, 4 weeks 5, and the last 20 weeks and more 10.
+For the Time section (TR-1669): three of the merged tickets also passed through review, changes and
+blocked, and two answered blocking questions held them up, so 8 weeks hold 39 hours of stage time,
+5 and a half of them waiting. Stuck now: seven open blocking questions the viewer may read (six of
+project-a and project-b, one of no project) and one of no project addressed to Ada; seven open
+tickets of project-a and project-b in a stage. project-c has neither.
 Starts a daemon on the scratch data dir with TARES_EDITION=factory (so the cell settles to the
 factory edition), stops it, then writes the people, projects, tickets, reviews and milestones
 straight into the database and rolls them up into the weekly figures. Prints a JSON map of names to
-ids, with the Mondays used, on the last line.
+ids, with the Mondays used, on the last line; "questions" and "tickets" in it map the age in hours
+of each stuck candidate to its label (D7, T12).
 usage: python seed-factory-report.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.request
 from datetime import datetime, timedelta, timezone
@@ -101,6 +107,57 @@ reviewed(b, store.create_ticket(b, "tares", "Not merged"), 30, "changes")
 for uid, back in ((a, 1), (a, 5), (b, 5)):
     accepted(uid, back)
 store.create_ticket(c, "tares", "Write the plan")
+
+# ---- the Time section
+now = datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def moved(uid, tid, stage, at):
+    store.add_ticket_history(tid, uid, "stage", stage, None, None, None, at)
+
+
+def ask(uid, text, at, tid=None, closed=None, to=None):
+    """A blocking desk question of `uid` (None: of no project) asked at `at`, naming `tid`, and
+    answered at `closed` when given. Returns its label."""
+    named = [factory.label(store.get_ticket(uid, tid))] if tid else []
+    d = store.add_desk_item(uid, text, "", [], "", "", "", named, True, "builder", [], at,
+                            to_person_id=to)
+    if closed:
+        store.close_desk_item(d["id"], "answered", None, closed)
+    return d["label"]
+
+
+# stages between taken up and merged: start to merge, and so Delivered, stays as it was
+end = wednesday(1)
+moved(a, first, "review", end - timedelta(minutes=60))
+for stage, minutes in (("review", 120), ("changes", 90), ("review", 60)):
+    moved(a, second, stage, end - timedelta(minutes=minutes))
+for stage, hours in (("blocked", 20), ("doing", 10)):
+    moved(b, third, stage, wednesday(2) - timedelta(hours=hours))
+ask(a, "Is the page right?", end - timedelta(minutes=45), first, closed=end - timedelta(minutes=15))
+ask(b, "Which key signs it?", wednesday(2) - timedelta(hours=18), third,
+    closed=wednesday(2) - timedelta(hours=13))
+
+LONG = "build_artifacts_of_the_nightly_pipeline_for_the_whole_workspace_and_every_cache_it_left_behind"
+ids["questions"] = {hours: ask(uid, text, now - timedelta(hours=hours), to=to) for hours, uid, text, to in (
+    (200, None, "For Ada alone, of no project", ids["Ada"]),
+    (100, None, "May the crew rotate the signing key?", "local"),
+    (80, a, "Which database should the page read?", None),
+    (55, b, "May the crew drop the old table?", None),
+    (30, a, f"May the crew delete {LONG}?", None),
+    (10, b, "Which colour marks a late ticket?", None),
+    (5, a, "Should the list start closed?", None),
+    (3, b, "Is one retry enough?", None))}
+ids["tickets"] = {}
+for hours, uid, stage, title in (
+        (190, a, "doing", "Move the sync"), (150, b, "review", "Read the logs"),
+        (120, a, "changes", f"Remove {LONG}"), (90, b, "blocked", "Rotate the key"),
+        (50, a, "doing", "Show the totals"), (20, b, "doing", "Sort the list"),
+        (5, a, "review", "Name the columns")):
+    tid = store.create_ticket(uid, "tares", title)
+    moved(uid, tid, stage, now - timedelta(hours=hours))
+    store.update_ticket(tid, stage=stage)
+    ids["tickets"][hours] = factory.label(store.get_ticket(uid, tid))
 report.rebuild_all(store)
 store.con.close()
 
