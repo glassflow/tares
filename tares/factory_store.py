@@ -1781,16 +1781,19 @@ class FactoryStore:
         for i in range(0, len(sessions), 500):
             with self.sessions_db.begin() as conn:
                 rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code,
-                                            t.outcome, t.cwd)
+                                            t.outcome, t.cwd, t.result_at)
                                      .where(t.source == source, t.session.in_(sessions[i:i + 500]),
                                             t.command.is_not(None), t.at.is_not(None))
                                      .order_by(t.at.desc(), t.tool_use_id.desc())
                                      .limit(limit // 2)).fetchall()
         rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
+        # `ended`: its result arrived; `exit_code` is then the code it ended with (Claude Code's result says only
+        # ok or error: 0 or 1). A step of a chain backs a claim only on that proof (factory.match_check).
         return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
                  "is_error": bool(code) or outcome in ("failed", "declined"),
-                 **({"outcome": outcome, "exit_code": code, "cwd": cwd} if outcome else {})}
-                for at, sid, command, tail, code, outcome, cwd in reversed(rows)]
+                 "ended": result_at is not None, "exit_code": code,
+                 **({"outcome": outcome, "cwd": cwd} if outcome else {})}
+                for at, sid, command, tail, code, outcome, cwd, result_at in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
