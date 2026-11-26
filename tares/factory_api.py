@@ -623,7 +623,7 @@ def review_state(h: Host, uid: str, t: dict, source: str) -> dict:
 
     A check's `match` is the same for every reader, as the merge gate reads it. Its `recorded`
     text is given only when the sessions this reader may open say the same on their own
-    (TR-1711)."""
+    (TR-1711). The challenger's findings are those such sessions carry (readable_layer)."""
     store = h.store
     raw = store.ticket_checks(t["id"], 50)
     checks = []
@@ -643,8 +643,8 @@ def review_state(h: Host, uid: str, t: dict, source: str) -> dict:
                         c["recorded"] = None
     reviews = store.ticket_reviews(t["id"])
     with metrics.step("challenger"):
-        layer = factory_mod.challenger_layer(
-            store.challenge_events(source, uid, factory_mod.label(t)))
+        events = store.challenge_events(source, uid, factory_mod.label(t))
+        layer = readable_layer(h, factory_mod.challenger_layer(events), events)
     return {"checks": checks, "reviews": reviews, "challenger": layer,
             "verdict": verdict_now(t, reviews[-1] if reviews else None)}
 
@@ -710,19 +710,53 @@ def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
     return h.store.unread_among(sessions, hidden, own_crew_ids(h, h.store.list_crews()))
 
 
-def readable_offers(h: Host, offers: list[dict], hidden, projects=None) -> list[dict]:
-    """The rule offers `offers` for a caller who cannot see the projects in `hidden` (TR-1713):
-    those of the other projects, each with the tickets the caller may read. A ticket is
-    "<project name> <label>". It is left out when the name is that of a project in `hidden`, or of
-    a deleted private project while no project has the name (TR-1708). `projects` is
-    `store.list_projects()`, for a caller who has it already."""
-    if not hidden:
-        return offers
-    offers = [o for o in offers if o.get("project") not in hidden]
-    if not any(o.get("tickets") for o in offers):
-        return offers
-    if projects is None:
-        projects = h.store.list_projects()
+def readable_layer(h: Host, layer: dict, events: list[dict]) -> dict:
+    """The challenger's layer `layer`, made from all of `events`, with the findings the caller may
+    read (TR-1724): an open or fixed finding whose title a review in a session they can open
+    carries, and the waivers such sessions recorded. Rounds, verdict, clean and sha stay as all
+    the events give them."""
+    if not (layer["open"] or layer["fixed"] or layer["waived"]) or not h.hidden_ids():
+        return layer
+    closed = unread_sessions(h, list({e["session"] for e in events if e["session"]}))
+    titles: dict = {}
+    waived = []
+    for e in events:
+        if e["session"] in closed:
+            continue
+        for f in e["challenge"].get("findings") or []:
+            if e["type"] == "challenge_commit":
+                titles.setdefault(f.get("title"), []).append(f)
+            elif e["type"] == "challenge_waived":
+                waived.append(f)
+
+    def mine(findings: list[dict]) -> list[dict]:
+        # as a session the caller can open wrote it: the latest such version when this one is not
+        return [f if f in titles[f.get("title")] else titles[f.get("title")][-1]
+                for f in findings if f.get("title") in titles]
+
+    return {**layer, "open": mine(layer["open"]), "fixed": mine(layer["fixed"]), "waived": waived}
+
+
+def rule_text(repo: str, kind: str, count: int | None = None) -> str:
+    """The sentence a rule offer is worded as. `count` is the number of tickets the finding came
+    back in; None leaves that part out."""
+    start = f"In {repo}, check for {kind} before asking for review"
+    if count is None:
+        return f"{start}."
+    return f"{start}: it came back in {count} ticket{'' if count == 1 else 's'}."
+
+
+def tickets_of(tickets: list, projects: list[dict], shut) -> list:
+    """Those of a rule offer's `tickets` ("<project name> <label>") whose name is that of a current
+    project in `projects`, and of none for which `shut(project)` is true."""
+    names = {p["name"] for p in projects} - {p["name"] for p in projects if shut(p)}
+    return [t for t in tickets if str(t).rsplit(" ", 1)[0] in names]
+
+
+def root_offers(h: Host, offers: list[dict], hidden, projects: list[dict]) -> list[dict]:
+    """`offers` as the root caller reads them (TR-1713): every one, its text as stored. A ticket
+    is left out when its name is that of a project in `hidden`, or of a deleted private project
+    while no project has the name (TR-1708)."""
     names = {p["name"] for p in projects}
     closed = {p["name"] for p in projects if p["id"] in hidden}
     deleted = h.store.deleted_private_projects()
@@ -734,6 +768,36 @@ def readable_offers(h: Host, offers: list[dict], hidden, projects=None) -> list[
         return h.store.deleted_private_ref(name, deleted) is None
 
     return [{**o, "tickets": [t for t in o.get("tickets") or [] if kept(t)]} for o in offers]
+
+
+def readable_offers(h: Host, offers: list[dict], hidden, projects=None) -> list[dict]:
+    """The rule offers `offers` for a caller who cannot see the projects in `hidden` (TR-1713),
+    from those of the other projects. The root caller (the cell's root token, or auth off) reads
+    them as root_offers says. Anyone else gets each with the tickets whose recorded name is a
+    current project they can open, and its generated sentence counting those; an offer that has
+    tickets and keeps none is left out (TR-1724). `projects` is `store.list_projects()`, for a
+    caller who has it already."""
+    if not hidden:
+        return offers
+    offers = [o for o in offers if o.get("project") not in hidden]
+    if not any(o.get("tickets") for o in offers):
+        return offers
+    if projects is None:
+        projects = h.store.list_projects()
+    request = h.caller()   # None with auth off
+    if request is None or h.is_system(request):
+        return root_offers(h, offers, hidden, projects)
+    out = []
+    for o in offers:
+        had = o.get("tickets") or []
+        kept = tickets_of(had, projects, lambda p: p["id"] in hidden)
+        if had and not kept:
+            continue
+        text = o.get("text")
+        if len(kept) < len(had) and text == rule_text(o["repo"], o["kind"], len(had)):
+            text = rule_text(o["repo"], o["kind"], len(kept))
+        out.append({**o, "tickets": kept, "text": text})
+    return out
 
 
 def blank_session(row: dict) -> None:
@@ -2608,7 +2672,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
             with metrics.step("recurring"):
-                rec = recurring(pr["repo"])
+                rec = recurring(pr["repo"], h.hidden_ids())
             if rec:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
@@ -2772,8 +2836,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         for r in recurring(repo):
             scope = "all" if len(r["projects"]) > 1 else "project"
             pid = r["projects"][0] if scope == "project" else None
-            text = (f"In {repo}, check for {r['kind']} before asking for review: it came back in "
-                    f"{r['count']} tickets.")
+            text = rule_text(repo, r["kind"], r["count"])
             store.upsert_rule_proposal(repo, r["kind"], pid, scope, text, r["tickets"], now_utc())
 
     @app.get("/api/recurring-findings")
@@ -2791,14 +2854,17 @@ def register(app, store, h: Host) -> SimpleNamespace:
                           body: dict = Body(default={})):
         """accept (optionally with the text edited) adds the rule to AGENTS.md (the project's,
         or the shared one when it came back across projects); reject keeps it from being
-        offered again. A person decides: refused from any crew station."""
+        offered again. A person decides: refused from any crew station. The offer's own sentence,
+        left as it was, is written without its ticket count unless every ticket behind it is in a
+        project the whole team can open (TR-1724)."""
         if caller(request)["station"]:
             h.err(PermissionError("a rule is the person's call: accept or reject it in the "
                                   "console"), 403)
         rp = store.get_rule_proposal(pid)
         hidden = h.hidden_ids()
-        if rp is None or rp.get("project") in hidden:
-            h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # a private project's reads as none
+        mine = readable_offers(h, [rp], hidden) if rp else []
+        if not mine:
+            h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # one the caller cannot read is none
         if rp["state"] != "open":
             h.err(ValueError(f"already {rp['state']}"), 409)
 
@@ -2810,7 +2876,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
             return decided()
         if decision != "accept":
             h.err(KeyError("accept or reject"), 404)
-        text = " ".join(str(body.get("text") or rp["text"]).split())
+        text = " ".join(str(body.get("text") or "").split())
+        # nothing typed: no text, or the offer's own sentence sent back, as stored or as read
+        if not text or text in {" ".join(str(o["text"]).split()) for o in (rp, mine[0])}:
+            text = " ".join(str(rp["text"]).split())
+            tickets = rp.get("tickets") or []
+            team = tickets_of(tickets, store.list_projects(), lambda p: p.get("scope") == "private")
+            if len(team) < len(tickets) and text == rule_text(rp["repo"], rp["kind"], len(tickets)):
+                text = rule_text(rp["repo"], rp["kind"])
         if rp["scope"] == "project" and not (rp["project"] and store.get_project(rp["project"])):
             h.err(ValueError("the project this rule was for is gone; reject it"), 409)
         if rp["scope"] == "project":
