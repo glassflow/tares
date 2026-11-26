@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/setup_apply.json",
+  "title": "tares factory setup apply -: what happened to each setup operation (also setup --apply -)",
+  "description": "One document, printed with and without --json. The operations are applied in order and a failed one does not stop the rest, so `results` has one row per operation of the input. An input that cannot be run sends nothing and prints error.json (`bad_input`), as does a Tares that does not answer at the start. No settings value of a failed operation is repeated: it reads `***`.",
+  "type": "object",
+  "required": ["schema_version", "ok", "results"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ok": {"description": "True when every operation was applied (exit 0), false when one was not (exit 1).", "type": "boolean"},
+    "results": {"type": "array", "items": {"$ref": "#/$defs/result"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": ["index", "op", "slot", "name", "ok", "status", "code", "detail"],
+      "properties": {
+        "index": {"description": "The operation's place in `ops`, from 0.", "type": "integer", "minimum": 0},
+        "op": {"enum": ["save", "keep", "default"]},
+        "slot": {"description": "The step: tickets, review, ci, ...", "type": "string"},
+        "name": {"description": "The integration, as the input named it.", "type": "string"},
+        "ok": {"type": "boolean"},
+        "status": {"description": "The HTTP status of the cell's answer; 200 for an applied operation. Null when no answer settles it: none came, or what came was not Tares confirming.", "type": ["integer", "null"]},
+        "code": {"description": "Null for an applied operation. Else `admin_required`, `key_refused`, `licence_required`, `forbidden`, `cell_too_old` or `tares_error`; a caller treats a code it does not know like `tares_error`.", "type": ["string", "null"], "pattern": "^[a-z][a-z0-9_]*$"},
+        "detail": {"description": "Null for an applied operation, else a sentence for a person. Not for parsing.", "type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  }
+}

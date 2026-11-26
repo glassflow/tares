@@ -32,6 +32,7 @@ COMMANDS = (
     "factory.doctor",
     "factory.projects",
     "factory.setup",
+    "factory.setup.apply",
     "factory.settings",
     "factory.tidy",
     "factory.restart",

@@ -11,8 +11,6 @@ dotted name, and NOT_MACHINE, registry word to the reason it has no name. It fai
   - COMMANDS lacks a name MACHINE gives, or holds a name no registered command has (a stale name), or repeats one.
 
 The checks run on the real registry, and again on a copy with one thing wrong each, to show they can fail.
-`factory.setup.apply` (TR-1421) is not here: the pull request that adds it adds its registry word to MACHINE and its
-name to COMMANDS.
 
 The behaviour of `tares capabilities --json` (the document, a cell that answers or not) is in tests/test_crew_contract.py.
 
@@ -54,6 +52,7 @@ MACHINE = {
     ("doctor",): "factory.doctor",
     ("projects",): "factory.projects",
     ("setup",): "factory.setup",
+    ("setup", "apply"): "factory.setup.apply",
     ("settings",): "factory.settings",
     ("tidy",): "factory.tidy",
     ("restart",): "factory.restart",
@@ -165,8 +164,8 @@ ck("a machine command's name is `factory.` and its words, or the top-level word"
 ck("every NOT_MACHINE entry has a reason", all(r.strip() for r in list(NOT_MACHINE.values()) + list(TOP_NOT_MACHINE.values())), "")
 ck("the top-level machine commands take --json",
    all("--json" in WORDS[w]._option_string_actions for w in TOP_MACHINE if w in WORDS), "")
-ck("COMMANDS holds no TR-1421 name yet: it adds its own, and factory.setup is listed",
-   "factory.setup.apply" not in COMMANDS and "factory.setup" in COMMANDS, "")
+ck("setup and setup apply are listed, each under its own name",
+   "factory.setup.apply" in COMMANDS and "factory.setup" in COMMANDS, "")
 ck("the README tells the rule", "a new machine command" in README and "`COMMANDS`" in README, "")
 
 print("== the check fails for what it is there to catch")
