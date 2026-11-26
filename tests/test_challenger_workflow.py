@@ -12,6 +12,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-challenger-test.duckdb"
 CATALOG = "/tmp/tares-challenger-test.catalog.yaml"
 os.environ["TARES_DB"] = DB
@@ -90,9 +91,9 @@ def line(sid, typ, ts, **extra):
 
 
 def clean():
-    for p in (DB, DB + ".wal", CATALOG):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
+    if os.path.exists(CATALOG):
+        os.remove(CATALOG)
 
 
 async def main(app):

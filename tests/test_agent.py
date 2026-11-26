@@ -1,11 +1,10 @@
 """In-app agent — tool surface + the endpoint requires a key (the live LLM loop is tested manually)."""
 import asyncio, os
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/agent_t.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/none_agent.yaml"
-for _p in ("/tmp/agent_t.duckdb", "/tmp/agent_t.duckdb.wal"):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db("/tmp/agent_t.duckdb")
 import httpx
 from tares import agent
 

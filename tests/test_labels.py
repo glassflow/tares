@@ -9,6 +9,7 @@ compatibility with a pre-labels single-key catalog + DB.
 import asyncio
 import os
 import sys
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/tares-labels-test.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
@@ -38,9 +39,7 @@ def precreate_legacy_db(path):
 
 
 async def main():
-    for p in (os.environ["TARES_DB"], os.environ["TARES_DB"] + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(os.environ["TARES_DB"])
     precreate_legacy_db(os.environ["TARES_DB"])
 
     from tares.daemon import make_app

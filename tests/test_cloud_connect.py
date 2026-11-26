@@ -14,6 +14,7 @@ Covers:
 """
 import asyncio
 import os
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/tares-cloud-connect-test.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
@@ -42,9 +43,7 @@ BROKER = {"name": "cloud", "kind": "app_broker", "token_url": f"{CP}/api/github/
 
 
 async def main():
-    for p in (os.environ["TARES_DB"], os.environ["TARES_DB"] + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(os.environ["TARES_DB"])
     from tares import daemon
     app = daemon.make_app()
     root = {"Authorization": "Bearer root-secret"}

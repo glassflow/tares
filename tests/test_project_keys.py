@@ -18,6 +18,7 @@ import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from _env import remove_db
 
 DB = "/tmp/tares-project-keys.duckdb"
 OPEN_DB = "/tmp/tares-project-keys-open.duckdb"
@@ -28,9 +29,9 @@ os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
-for _p in (DB, DB + ".wal", OPEN_DB, OPEN_DB + ".wal", os.environ["TARES_CATALOG"]):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db(DB, OPEN_DB)
+if os.path.exists(os.environ["TARES_CATALOG"]):
+    os.remove(os.environ["TARES_CATALOG"])
 
 import httpx
 from fastapi.routing import APIRoute

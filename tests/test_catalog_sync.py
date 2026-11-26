@@ -5,7 +5,7 @@ import asyncio, os, signal, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 P = F = 0
 def ck(l, c, d=""):
@@ -50,9 +50,7 @@ async def boot_and_count(sync):
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
 
     write_catalog("a")
     s1 = await boot_and_count(sync=False)
