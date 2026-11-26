@@ -56,6 +56,14 @@ Cases:
                      several processes at once; deleting a project removes its rows
   crew_takeover      Postgres: the twelve tables the old DDL made are taken over, rows untouched; a new
                      database has the old defaults, constraint and index
+  integr_copy        the merge queue, integration, secret and guardrail tables (TR-1617): DuckDB's rows
+                     arrive in SQLite, a secret decrypts after the copy, and the credentials upgrade
+                     runs on the copied rows
+  integr_methods     the Store's rule, pair, integration, secret, required check, merge queue and
+                     write-back methods keep their answers, also with several processes at once;
+                     deleting a project removes its rows, its required checks too
+  integr_takeover    Postgres: the ten tables the old DDL made are taken over, rows untouched; a
+                     missing column and index are added
 """
 import copy
 import os
@@ -74,7 +82,7 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
 from old_ddl import _T, OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
-from tares import state_db  # noqa: E402
+from tares import project_secrets, state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store import copy as copy_mod  # noqa: E402
 from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file  # noqa: E402
@@ -85,6 +93,7 @@ from tares.session_store.tables import answers as answers_table  # noqa: E402
 from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
 from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import crews as crews_table  # noqa: E402
+from tares.session_store.tables import integration_connections as connections_table  # noqa: E402
 from tares.session_store.tables import desk_items as desk_table  # noqa: E402
 from tares.session_store.tables import milestones as milestones_table  # noqa: E402
 from tares.session_store.tables import people as people_table  # noqa: E402
@@ -3078,6 +3087,501 @@ def crew_takeover():
         _drop_schema(sch)
 
 
+# ── merge queue, integration, secret and guardrail tables (TR-1617) ─────────
+INTEGR = {
+    "guardrail_rules": (("id", "scope", "project", "kind", "text", "created_by", "created_at"), [
+        ("R10", "project", "uc_demo", "must", "", None, None),
+        ("R2", "factory", None, "never", "force push", "Kim", _T),
+    ]),
+    "guardrail_pairs": (("id", "scope", "project_uid", "hook", "integration", "settings", "on_fail",
+                         "created_at", "created_by"), [
+        ("GP2", "factory", None, "pre_build", "rail_a", '{"token": "g"}', None, _T, "Kim"),
+        ("GP10", "project", "uc_demo", "pre_merge", "rail_a", "", "warn", _LATER, None),
+        # the same pair as GP2 once neither holds settings: the upgrade keeps the oldest
+        ("GP11", "factory", None, "pre_build", "rail_a", None, "block", _LATER, None),
+    ]),
+    "integration_choices": (("slot", "name", "settings", "updated_at", "updated_by"), [
+        ("tickets", "tixa", '{"project": "FAC"}', _T, "Kim"),
+        ("review", "reva", None, _T, None),
+    ]),
+    "integration_connections": (("slot", "name", "settings", "updated_at", "updated_by"), [
+        ("tickets", "tixa", '{"url": "https://a", "token": "t1"}', _T, "Kim"),
+        ("ci", "cia", None, None, None),
+    ]),
+    "project_integrations": (("project_uid", "slot", "name", "settings", "updated_at", "updated_by"), [
+        ("uc_demo", "tickets", "tixa", "{}", _T, "Kim"),
+        ("uc_demo", "ci", "gone_ci", '{"url": "u"}', _LATER, None),
+        ("uc_old", "review", "reva", None, None, None),
+    ]),
+    "pending_writeback": (("ticket", "integration", "status", "attempts", "last_error", "updated_at"), [
+        ("tk_1", "linear", "done", 2, "down", _LATER),
+        ("tk_2", "linear", None, None, None, None),
+    ]),
+    "project_secrets": (("project", "name", "value", "set_by", "set_at", "used_by", "used_at"), [
+        ("uc_demo", "API_KEY", None, "Kim", _T, None, None),       # the value is sealed in the case
+        ("uc_demo", "EMPTY", "", None, None, "Kim", _LATER),
+    ]),
+    "project_required_checks": (("project", "commands", "updated_at", "updated_by"), [
+        ("uc_demo", '["make test"]', _T, "Kim"),
+        ("uc_empty", "[]", None, None),
+        ("uc_null", None, None, None),
+    ]),
+    "merge_queue": (("id", "repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
+                     "desk_item", "approved_head", "entered_at", "updated_at", "before_files",
+                     "unknown_ticks"), [
+        ("mq_1", "o/r", "main", 1, "abc", "tk_1", "uc_demo", "queued", None, None, None, _T, _T,
+         '{"head": "abc", "files": ["a"]}', 3),
+        ("mq_2", "o/r", "main", 2, "def", None, None, "merged", "", None, None, None, None, None, None),
+    ]),
+    "project_merge_method": (("project", "method", "updated_at", "updated_by"), [
+        ("uc_demo", "rebase", _T, "Kim"),
+        ("uc_null", None, None, None),
+    ]),
+}
+INTEGR_COUNTS = {t: len(rows) for t, (_, rows) in INTEGR.items()}
+INTEGR_NAMES = list(INTEGR)
+_PLAIN = "sk-live-0123456789"
+
+
+def integr_copy():
+    print("== the merge queue, integration, secret and guardrail tables are copied at the first start ==")
+    key = os.environ.get(project_secrets.KEY_ENV)
+    os.environ[project_secrets.KEY_ENV] = "k" * 32
+    try:
+        seed = copy.deepcopy(INTEGR)
+        cols, rows = seed["project_secrets"]
+        sealed = project_secrets.seal(_PLAIN)
+        rows[0] = rows[0][:2] + (sealed,) + rows[0][3:]
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "t.duckdb")
+        con = duckdb.connect(path)
+        old_ddl_duckdb(con, seed={**SEED, **seed})
+        con.execute("DROP INDEX IF EXISTS idx_merge_queue_repo")   # it holds back the ALTER
+        con.execute("ALTER TABLE merge_queue DROP COLUMN unknown_ticks")   # a file from before it
+        con.execute("CHECKPOINT")
+        con.close()
+        s = Store(path, state_dsn="")
+        sdb = s.sessions_db
+        with sdb.begin() as c:
+            ledger = {r[0]: r[1] for r in
+                      c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+        ck("the ledger counts each table as DuckDB held it",
+           {t: ledger.get(t) for t in INTEGR_NAMES} == INTEGR_COUNTS, ledger)
+
+        got = s.secret_rows("uc_demo")
+        ck("a secret decrypts after the local copy, byte for byte as sealed",
+           [r["name"] for r in got] == ["API_KEY", "EMPTY"] and got[0]["value"] == sealed
+           and project_secrets.unseal(got[0]["value"]) == _PLAIN, got)
+        ck("its times arrive; an empty value stays empty and reads as unreadable",
+           got[0]["set_at"] == _T and got[0]["used_at"] is None and got[1]["value"] == ""
+           and got[1]["used_at"] == _LATER and project_secrets.unseal(got[1]["value"]) is None, got)
+        project_secrets._cache.update(version=None, pairs=[])
+        ck("session scrubbing finds the copied secret",
+           project_secrets.scrub(f"key={_PLAIN}", project_secrets.scrub_pairs(s)) == "key=[secret API_KEY]")
+        project_secrets._cache.update(version=None, pairs=[])
+
+        ck("rules arrive by number, empty text kept",
+           [(r["id"], r["text"], r["created_at"]) for r in s.list_guardrail_rules()]
+           == [("R2", "force push", _T), ("R10", "", None)], s.list_guardrail_rules())
+        pairs = s.list_guardrail_pairs()
+        ck("the data upgrade runs on the copied pairs: settings gone, the twin removed, null on_fail is block",
+           [(p["id"], p["on_fail"], p["settings"]) for p in pairs]
+           == [("GP2", "block", {}), ("GP10", "warn", {})], pairs)
+        ck("and a pair's settings became its integration's connection",
+           s.stored_settings("guardrails", "rail_a") == {"token": "g"}, s.stored_settings("guardrails", "rail_a"))
+        ck("a connection the cell had is kept as it was",
+           s.stored_settings("tickets", "tixa") == {"url": "https://a", "token": "t1"})
+        ck("a project's secret settings moved to a new connection, and its row keeps none",
+           s.stored_settings("ci", "gone_ci") == {"url": "u"}
+           and s.get_project_choice("uc_demo", "ci")["settings"] == {}, s.stored_settings("ci", "gone_ci"))
+        ck("a choice with no settings has a connection, empty",
+           s.get_connection("review", "reva") is not None and s.stored_settings("review", "reva") == {})
+        ck("the picks arrive", s.project_choice_names("tickets", ["uc_demo", "uc_old"]) == {"uc_demo": "tixa"}
+           and s.get_project_choice("uc_old", "review")["name"] == "reva")
+        ck("required checks arrive; [] and null read as none",
+           [s.get_required_checks(u) for u in ("uc_demo", "uc_empty", "uc_null", "uc_none")]
+           == [["make test"], [], [], []])
+        q = s.merge_queue_list("o/r", "main")
+        ck("the merge queue arrives, oldest first with no time last; a column the file lacks reads 0",
+           [(r["id"], r["unknown_ticks"], r["entered_at"]) for r in q] == [("mq_1", 0, _T), ("mq_2", 0, None)]
+           and q[0]["before_files"] == '{"head": "abc", "files": ["a"]}' and q[0]["pr"] == 1
+           and q[1]["reason"] == "" and q[1]["before_files"] is None, q)
+        ck("the merge method arrives; a null one reads squash",
+           [s.get_merge_method(u) for u in ("uc_demo", "uc_null")] == ["rebase", "squash"])
+        w = s.list_pending_writebacks()
+        ck("the waiting write-backs arrive, the one with no time last",
+           [(x["ticket"], x["attempts"], x["status"]) for x in w] == [("tk_1", 2, "done"), ("tk_2", None, None)]
+           and w[0]["updated_at"] == _LATER, w)
+        with s._lock:
+            n = {t: s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in INTEGR_NAMES}
+        ck("DuckDB still has its rows: nothing is deleted there", n == INTEGR_COUNTS, n)
+        s.set_merge_method("uc_demo", "merge", "ann")
+        s.close()
+        s = Store(path, state_dsn="")
+        ck("a second start copies nothing and the upgrade changes nothing more",
+           s.get_merge_method("uc_demo") == "merge" and len(s.list_guardrail_pairs()) == 2
+           and _n(s.sessions_db, "integration_connections") == 5, _n(s.sessions_db, "integration_connections"))
+        s.close()
+    finally:
+        if key is None:
+            os.environ.pop(project_secrets.KEY_ENV, None)
+        else:
+            os.environ[project_secrets.KEY_ENV] = key
+
+
+def integr_methods():
+    print("== rules, pairs, integrations, secrets, checks, merge queue and write-backs through Core ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    sdb = s.sessions_db
+    s.create_project("uc_t", "custom", "Tee", {})
+    s.create_project("uc_u", "custom", "U", {})
+
+    def stored(sql, **args):
+        with sdb.begin() as conn:
+            return conn.execute(text(sql), args).scalar()
+
+    print("== guardrail rules ==")
+    r1 = s.add_guardrail_rule("factory", None, "must", "a", "Kim")
+    r2 = s.add_guardrail_rule("project", "uc_t", "never", "", None)
+    ck("numbered for the cell, with every field",
+       (r1["id"], r2["id"], r1["project"], r2["project"], r2["created_by"], r2["text"])
+       == ("R1", "R2", None, "uc_t", None, "") and r1["created_at"].utcoffset().total_seconds() == 0, (r1, r2))
+    ck("an id reads in any case, with spaces; null and unknown ids read as None",
+       s.get_guardrail_rule(" r1 ")["text"] == "a" and s.get_guardrail_rule(None) is None
+       and s.get_guardrail_rule("") is None and s.get_guardrail_rule("R9") is None)
+    ck("a text changes; an unknown rule gives None",
+       s.set_guardrail_rule_text("r1", "b")["text"] == "b" and s.set_guardrail_rule_text("R9", "x") is None)
+    ck("a delete says whether a rule went",
+       s.delete_guardrail_rule("r1") is True and s.delete_guardrail_rule("R1") is False
+       and s.delete_guardrail_rule(None) is False)
+    ck("the next number follows the highest left",
+       s.add_guardrail_rule("factory", None, "must", "c")["id"] == "R3")
+
+    print("== guardrail pairs ==")
+    p1, how1 = s.save_guardrail_pair("factory", None, "pre_build", "rail_a", "block", "Kim")
+    twin, how2 = s.save_guardrail_pair("factory", None, "pre_build", "rail_a", "block", "Ann")
+    p2, _ = s.save_guardrail_pair("project", "uc_t", "pre_build", "rail_b", "warn", None)
+    ck("a pair is added once; an exact twin adds nothing",
+       (p1["id"], how1, how2, twin["id"], twin["created_by"], p2["id"]) == ("GP1", "added", "twin", "GP1", "Kim",
+                                                                            "GP2"), (p1, twin, p2))
+    changed, how3 = s.save_guardrail_pair("project", "uc_t", "pre_merge", "rail_b", "block", None,
+                                          pair_id=" gp2 ")
+    ck("a pair id changes that pair only", how3 == "updated" and changed["id"] == "GP2"
+       and s.get_guardrail_pair("gp2")["hook"] == "pre_merge" and s.get_guardrail_pair("GP1")["hook"] == "pre_build",
+       changed)
+    try:
+        s.save_guardrail_pair("factory", None, "pre_build", "rail_b", "block", pair_id="GP2")
+        refused = False
+    except LookupError:
+        refused = True
+    ck("a pair id of another scope is refused", refused and s.get_guardrail_pair("GP2")["scope"] == "project")
+    s.save_guardrail_pair("project", "uc_u", "pre_merge", "rail_c", "block")
+    ck("the pairs of a run: the factory's, then the project's own",
+       [p["id"] for p in s.guardrail_pairs_for_run("pre_merge", "uc_t")] == ["GP2"]
+       and [p["id"] for p in s.guardrail_pairs_for_run("pre_build", "uc_t")] == ["GP1"]
+       and [p["id"] for p in s.guardrail_pairs_for_run("pre_build", None)] == ["GP1"])
+    ck("the lists by scope", [p["id"] for p in s.list_guardrail_pairs("project", "uc_t")] == ["GP2"]
+       and [p["id"] for p in s.list_guardrail_pairs("project", None)] == []
+       and len(s.list_guardrail_pairs()) == 3)
+    ck("get of an unknown, blank or null pair is None",
+       [s.get_guardrail_pair(x) for x in ("GP9", "", None)] == [None, None, None])
+    ck("the pair's settings are stored as an empty object",
+       stored("SELECT settings FROM guardrail_pairs WHERE id = 'GP1'") == "{}")
+
+    print("== integrations ==")
+    ck("nothing chosen: no choice, no connection",
+       s.get_choice("tickets") is None and s.get_connection("tickets", "tixa") is None
+       and s.list_connections("tickets") == [] and s.stored_settings("tickets", "tixa") == {})
+    s.set_choice("tickets", "tixa", {"token": "t1"}, "Kim")
+    s.set_choice("tickets", "tixa", {"token": "t2"}, "Ann")
+    ck("connecting again replaces the one row", _n(sdb, "integration_connections") == 1
+       and s.stored_settings("tickets", "tixa") == {"token": "t2"}
+       and s.get_choice("tickets")["updated_by"] == "Ann")
+    raw = stored("SELECT settings FROM integration_connections WHERE name = 'tixa'")
+    ck("settings are stored as one JSON object, not text inside text", raw == '{"token": "t2"}', raw)
+    s.set_project_choice("uc_t", "tickets", "tixa", None, "Kim")
+    s.set_project_choice("uc_t", "tickets", "tixa", {}, "Ann")
+    ck("a project's pick is one row per slot", _n(sdb, "project_integrations") == 1
+       and s.get_project_choice("uc_t", "tickets")["updated_by"] == "Ann"
+       and s.get_project_choice("uc_u", "tickets") is None
+       and s.projects_with_choice("tickets", ["uc_t", "uc_u", "", None]) == {"uc_t"}
+       and s.project_choice_names("tickets", []) == {})
+    many = [f"uc_{i}" for i in range(1201)] + ["uc_t"]
+    ck("a long list of projects is read in parts", s.project_choice_names("tickets", many) == {"uc_t": "tixa"})
+    ck("clearing a pick says whether there was one",
+       s.clear_project_choice("uc_t", "tickets") is True and s.clear_project_choice("uc_t", "tickets") is False)
+
+    print("== secrets ==")
+    v0 = s.secrets_version()
+    s.set_secret("uc_t", "B_KEY", "sealed-1", "Kim")
+    s.set_secret("uc_t", "A_KEY", "sealed-a", "Kim")
+    s.secrets_used("uc_t", ["B_KEY", "NOPE"], "builder")
+    used = {r["name"]: r for r in s.secret_rows("uc_t")}
+    s.set_secret("uc_t", "B_KEY", "sealed-2", "Ann")
+    now = {r["name"]: r for r in s.secret_rows("uc_t")}
+    ck("secrets by name, with every field", list(now) == ["A_KEY", "B_KEY"]
+       and set(now["A_KEY"]) == {"project", "name", "value", "set_by", "set_at", "used_by", "used_at"}
+       and now["A_KEY"]["used_at"] is None, now)
+    ck("a new value keeps who used it and when", (now["B_KEY"]["value"], now["B_KEY"]["set_by"],
+       now["B_KEY"]["used_by"], now["B_KEY"]["used_at"]) == ("sealed-2", "Ann", "builder", used["B_KEY"]["used_at"])
+       and used["B_KEY"]["used_at"] is not None, now["B_KEY"])
+    s.secrets_used("uc_t", [], "x")
+    ck("a removal says whether there was one", s.delete_secret("uc_t", "A_KEY") is True
+       and s.delete_secret("uc_t", "A_KEY") is False and [r["name"] for r in s.secret_rows("uc_t")] == ["B_KEY"]
+       and len(s.all_secret_rows()) == 1 and s.secret_rows("uc_none") == [])
+    ck("the version moves with a change", s.secrets_version() > v0)
+
+    print("== required checks and the merge method ==")
+    ck("none until set", s.get_required_checks("uc_t") == [] and s.get_merge_method("uc_t") == "squash")
+    s.set_required_checks("uc_t", ["make test", "  ", "make lint"], "Kim")
+    ck("saved cleaned and in order", s.get_required_checks("uc_t") == ["make test", "make lint"])
+    s.set_required_checks("uc_t", [], "Ann")
+    ck("an empty list is no required checks, one row", s.get_required_checks("uc_t") == []
+       and stored("SELECT commands FROM project_required_checks WHERE project = 'uc_t'") == "[]"
+       and _n(sdb, "project_required_checks") == 1)
+    s.set_merge_method("uc_t", " Rebase ", "Kim")
+    s.set_merge_method("uc_t", "merge", "Kim")
+    refused = []
+    for bad in ("", None, "ff"):
+        try:
+            s.set_merge_method("uc_t", bad, "Kim")
+        except ValueError:
+            refused.append(bad)
+    ck("one method per project; a blank, null or unknown one is refused",
+       s.get_merge_method("uc_t") == "merge" and refused == ["", None, "ff"]
+       and _n(sdb, "project_merge_method") == 1, (refused, s.get_merge_method("uc_t")))
+
+    print("== merge queue ==")
+    a = s.merge_queue_add("o/r", "main", 1, "h1", None, "uc_t")
+    again = s.merge_queue_add("o/r", "main", 1, "h9", None, "uc_t")
+    b = s.merge_queue_add("o/r", "main", 2, "h2", "tk_x", "uc_u")
+    ck("one open row per pull request, every field present", again["id"] == a["id"] and again["head"] == "h1"
+       and b["id"] != a["id"] and a["unknown_ticks"] == 0 and a["before_files"] is None
+       and a["entered_at"] == a["updated_at"] and len(a) == 15, a)
+    ck("get of an unknown row is None", s.merge_queue_get("mq_none") is None and s.merge_queue_get(None) is None)
+    ck("not claimed without the approval it needs", s.merge_queue_claim(a["id"], approved_only=True) is False)
+    s.merge_queue_update(a["id"], approved_head="other")
+    ck("an approval of another commit does not count", s.merge_queue_claim(a["id"], approved_only=True) is False)
+    s.merge_queue_update(a["id"], approved_head="h1")
+    ck("claimed once; the other waits while it is merging",
+       s.merge_queue_claim(a["id"], approved_only=True) is True and s.merge_queue_claim(a["id"]) is False
+       and s.merge_queue_claim(b["id"]) is False and s.merge_queue_claim("mq_none") is False
+       and s.merge_queue_get(a["id"])["state"] == "merging")
+    before = s.merge_queue_get(a["id"])["updated_at"]
+    s.merge_queue_update(a["id"])
+    try:
+        s.merge_queue_update(a["id"], entered_at=_T)
+        bad = False
+    except ValueError:
+        bad = True
+    ck("no field is no write; a field that is not the queue's is refused",
+       bad and s.merge_queue_get(a["id"])["updated_at"] == before)
+    s.merge_queue_update(a["id"], state="merged", reason=None, before_files='{"head": "h1"}', unknown_ticks=2)
+    got = s.merge_queue_get(a["id"])
+    ck("an update writes its fields and moves updated_at", (got["state"], got["before_files"], got["unknown_ticks"])
+       == ("merged", '{"head": "h1"}', 2) and got["updated_at"] > before, got)
+    s.merge_queue_update(b["id"], state="merged")
+    c3 = s.merge_queue_add("o/r", "main", 3, "h3", None, None)
+    s.merge_queue_update(c3["id"], state="sent_back")
+    ck("the last merged, leaving one out", s.merge_queue_last_merged("o/r", "main")["pr"] == 2
+       and s.merge_queue_last_merged("o/r", "main", not_pr=2)["pr"] == 1
+       and s.merge_queue_last_merged("o/r", "other") is None)
+    d4 = s.merge_queue_add("o/r", "main", 1, "h4", None, None)
+    ck("a pull request whose row is finished gets a new one; the open, sent back and listed rows",
+       d4["id"] != a["id"] and [r["id"] for r in s.merge_queue_open()] == [d4["id"]]
+       and [r["id"] for r in s.merge_queue_sent_back()] == [c3["id"]]
+       and [r["pr"] for r in s.merge_queue_list("o/r", "main")] == [1, 2, 3, 1])
+    s.merge_queue_delete(d4["id"])
+    ck("a deleted row is gone", s.merge_queue_get(d4["id"]) is None)
+
+    print("== write-backs ==")
+    tk = s.create_ticket("uc_t", "tares", "w")
+    other_tk = s.create_ticket("uc_u", "tares", "w")
+    n = [s.pending_writeback_fail(tk, "linear", "done", "down", _T),
+         s.pending_writeback_fail(tk, "linear", "done", "still", _LATER),
+         s.pending_writeback_fail(tk, "linear", "doing", "", _LATER),
+         s.pending_writeback_fail(tk, "github_issues", "done", None, _T),
+         s.pending_writeback_fail(other_tk, "linear", "done", "down", _T)]
+    ck("attempts count while the status wanted is the same", n == [1, 2, 1, 1, 1], n)
+    row = s.get_pending_writeback(tk, "linear")
+    ck("the row holds the newest status and error", (row["status"], row["attempts"], row["last_error"],
+       row["updated_at"]) == ("doing", 1, "", _LATER) and s.get_pending_writeback("tk_none") is None, row)
+    ck("listed oldest first, by integration and by project",
+       [(x["ticket"], x["integration"]) for x in s.list_pending_writebacks(project="uc_t")]
+       == [(tk, "github_issues"), (tk, "linear")]
+       and [x["ticket"] for x in s.list_pending_writebacks("linear", "uc_u")] == [other_tk]
+       and len(s.list_pending_writebacks()) == 3 and s.list_pending_writebacks(project="uc_none") == [])
+    ck("a ticket with one waiting is left alone", s.update_ticket(tk, unless_pending=True, title="x") is False
+       and s.get_ticket("uc_t", tk)["title"] == "w")
+    ck("clear says whether there was one", s.pending_writeback_clear(tk, "linear") is True
+       and s.pending_writeback_clear(tk, "linear") is False and s.pending_writeback_clear(tk) is True
+       and s.update_ticket(tk, unless_pending=True, title="x") is True
+       and s.get_ticket("uc_t", tk)["title"] == "x")
+    gone = s.create_ticket("uc_t", "tares", "gone")
+    s.pending_writeback_fail(gone, "linear", "done", "down", _T)
+    s.delete_ticket(gone)
+    ck("a deleted ticket takes its write-back", s.get_pending_writeback(gone) is None
+       and s.get_pending_writeback(other_tk) is not None)
+
+    print("== two processes write one after the other ==")
+    others = []
+    for _ in range(4):                     # each as another process: its own lock, the same database
+        o = copy.copy(s)
+        o._swrite = threading.RLock()
+        others.append(o)
+
+    def slow(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith(("SELECT max(", "SELECT guardrail_pairs", "SELECT merge_queue",
+                                 "SELECT pending_writeback.attempts")):
+            time.sleep(0.15)               # the read of one writer is done before the next one writes
+
+    def at_once(call):
+        got, errors = [], []
+
+        def run(o):
+            try:
+                got.append(call(o))
+            except Exception as e:
+                errors.append(f"{type(e).__name__}: {e}"[:200])
+        threads = [threading.Thread(target=run, args=(o,)) for o in others]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        return got, errors
+
+    event.listen(sdb.engine, "after_cursor_execute", slow)
+    try:
+        got, errors = at_once(lambda o: o.add_guardrail_rule("factory", None, "must", "p")["id"])
+        ck("four writers at once get four different rule numbers", not errors and len(set(got)) == 4, (got, errors))
+        got, errors = at_once(lambda o: o.save_guardrail_pair("factory", None, "pre_merge", "rail_p", "block")[1])
+        ck("four writers at once add one pair", not errors and sorted(got) == ["added"] + ["twin"] * 3,
+           (got, errors))
+        got, errors = at_once(lambda o: o.merge_queue_add("o/p", "main", 7, "h", None, None)["id"])
+        ck("four writers at once make one queue row", not errors and len(got) == 4 and len(set(got)) == 1,
+           (got, errors))
+        got, errors = at_once(lambda o: o.pending_writeback_fail("tk_par", "linear", "done", "e", _T))
+        ck("four failures at once count four attempts", not errors and sorted(got) == [1, 2, 3, 4], (got, errors))
+    finally:
+        event.remove(sdb.engine, "after_cursor_execute", slow)
+
+    print("== deleting a project ==")
+    for uid in ("uc_t", "uc_u"):
+        s.set_required_checks(uid, ["make test"], "Kim")
+        s.set_merge_method(uid, "merge", "Kim")
+        s.set_secret(uid, "KEY", "sealed", "Kim")
+        s.add_guardrail_rule("project", uid, "must", "x")
+        s.save_guardrail_pair("project", uid, "pre_build", "rail_d", "block")
+        s.set_project_choice(uid, "tickets", "tixa", {}, "Kim")
+        s.merge_queue_add("o/d", "main", 1 if uid == "uc_t" else 2, "h", None, uid)
+        s.pending_writeback_fail(s.create_ticket(uid, "tares", "d"), "linear", "done", "down", _T)
+    by_uid = {"project_required_checks": "project", "project_merge_method": "project",
+              "project_secrets": "project", "guardrail_rules": "project", "guardrail_pairs": "project_uid",
+              "project_integrations": "project_uid", "merge_queue": "project_uid"}
+
+    def of(uid):
+        out = {t: stored(f"SELECT count(*) FROM {t} WHERE {col} = :p", p=uid) for t, col in by_uid.items()}
+        out["pending_writeback"] = len(s.list_pending_writebacks(project=uid))
+        return out
+
+    mine, theirs, kept = of("uc_t"), of("uc_u"), _n(sdb, "integration_connections")
+    ck("both projects have rows in each before", all(mine.values()) and all(theirs.values()), (mine, theirs))
+    v0 = s.secrets_version()
+    s.delete_project("uc_t")
+    ck("the required checks of a deleted project go", stored(
+        "SELECT count(*) FROM project_required_checks WHERE project = 'uc_t'") == 0
+       and s.get_required_checks("uc_t") == [])
+    ck("its rows go from each table", set(of("uc_t").values()) == {0}
+       and stored("SELECT count(*) FROM pending_writeback WHERE ticket = :t", t=tk) == 0, of("uc_t"))
+    ck("another project's stay, and the factory's connections", of("uc_u") == theirs
+       and _n(sdb, "integration_connections") == kept, (of("uc_u"), theirs))
+    ck("the secrets cache is told", s.secrets_version() > v0)
+    with s._lock:
+        have = set(s._tables_of(s.con))
+    ck("DuckDB has none of the ten tables", not (have & set(INTEGR_NAMES)), sorted(have & set(INTEGR_NAMES)))
+    s.close()
+
+
+def integr_takeover():
+    print("== Postgres: the ten tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        old_ddl_postgres(dsn, seed=INTEGR)
+
+        def pg():
+            return psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}")
+
+        def snapshot():
+            out = {}
+            with pg() as c:
+                for t in INTEGR_NAMES:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable, column_default FROM "
+                                     "information_schema.columns WHERE table_schema = %s AND table_name = %s "
+                                     "ORDER BY column_name", [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT {', '.join(chr(34) + col[0] + chr(34) for col in cols)} "
+                                     f"FROM {t}").fetchall()
+                    idx = c.execute("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND "
+                                    "tablename = %s ORDER BY indexname", [sch, t]).fetchall()
+                    out[t] = (cols, sorted(tuple(map(str, r)) for r in rows), idx)
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the ten tables, with the sample rows",
+           {t: len(before[t][1]) for t in INTEGR_NAMES} == INTEGR_COUNTS)
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types, defaults, rows and indexes, is as the old code left it",
+           snapshot() == before, [t for t in before if snapshot()[t] != before[t]])
+        ck("each table's columns, types and primary key are what tables.py declares",
+           ts.shape(sdb.engine, INTEGR_NAMES) == {t: ts.declared(sdb.engine)[t] for t in INTEGR_NAMES},
+           ts.shape(sdb.engine, INTEGR_NAMES))
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        ts.step_down(sdb, "0017_crew_tables")
+        ck("a downgrade keeps the tables, rows and indexes", snapshot() == before
+           and ts.versions(sdb) == ["0017_crew_tables"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it leaves them as they are", snapshot() == before)
+        with sdb.begin() as c:
+            conns = {r.name: r.settings for r in c.execute(connections_table.select())}
+        ck("Core reads the JSON the old code wrote",
+           conns == {"tixa": {"url": "https://a", "token": "t1"}, "cia": None}, conns)
+
+        # a database from before the later columns and the index
+        ts.step_down(sdb, "0017_crew_tables")
+        with pg() as c:
+            c.execute("ALTER TABLE merge_queue DROP COLUMN before_files")
+            c.execute("ALTER TABLE merge_queue DROP COLUMN unknown_ticks")
+            c.execute("DROP INDEX idx_merge_queue_repo")
+        sdb.upgrade()
+        ck("missing columns and the missing index are added", ts.shape(sdb.engine, INTEGR_NAMES)
+           == {t: ts.declared(sdb.engine)[t] for t in INTEGR_NAMES}
+           and ts.index_columns(sdb.engine, "merge_queue", "idx_merge_queue_repo") == ["repo", "base"])
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+    # a database the revision made itself: the code before it can still write to it
+    sch, dsn = _pg_schema()
+    try:
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+            c.execute("INSERT INTO guardrail_pairs (id) VALUES ('GP1')")
+            got = c.execute("SELECT on_fail FROM guardrail_pairs").fetchone()[0]
+            idx = c.execute("SELECT count(*) FROM pg_indexes WHERE schemaname = %s AND indexname = "
+                            "'idx_merge_queue_repo'", [sch]).fetchone()[0]
+        ck("a new database has the old default and index", got == "block" and idx == 1, (got, idx))
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+
 if __name__ == "__main__":
     ck("settings, the accounts, the project and ticket tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
@@ -3087,7 +3591,10 @@ if __name__ == "__main__":
            "tickets", "ticket_history", "ticket_numbers", "milestones", "milestone_check_results",
            "milestone_acceptances", "ticket_checks", "challenges", "reviews", "review_findings",
            "rule_proposals", "assumptions", "desk_items", "decisions", "handovers", "grants", "pending_memory",
-           "crews", "spec_questions", "signoffs", "handover_overrides", "answers", "waiting_told"])
+           "crews", "spec_questions", "signoffs", "handover_overrides", "answers", "waiting_told",
+           "guardrail_rules", "guardrail_pairs", "integration_choices", "integration_connections",
+           "project_integrations", "pending_writeback", "project_secrets", "project_required_checks",
+           "merge_queue", "project_merge_method"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -3116,5 +3623,8 @@ if __name__ == "__main__":
     tickets_pr_guard()
     crew_methods()
     crew_takeover()
+    integr_copy()
+    integr_methods()
+    integr_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

@@ -839,7 +839,7 @@ class _Gen:
                          states[k % len(states)], None,
                          rng.choice(desk_ids) if k < mix["merge_queue_with_desk_item"] else None,
                          t["pr"]["head"], t["updated"] - timedelta(minutes=20), t["updated"], None, 0])
-        self.put("merge_queue", "id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
+        self.put_t("merge_queue", "id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
                                 "approved_head, entered_at, updated_at, before_files, unknown_ticks", rows)
         # a ticket page a test can ask for: the project's biggest, with reviews
         have_r = {r["ticket"] for r in reviews}
@@ -949,8 +949,8 @@ class _Gen:
                  [[self.ticket_projects[k]["uid"], self.people[(k + 1) % len(self.people)], "Ada Quill",
                    NOW - timedelta(days=k + 2), "joined"] for k in range(n)])
         n = self.need("project_required_checks")
-        self.put("project_required_checks", "project, commands, updated_at, updated_by",
-                 [[self.ticket_projects[k]["uid"], json.dumps(["npm run lint", "python tests/test_cart.py"]),
+        self.put_t("project_required_checks", "project, commands, updated_at, updated_by",
+                 [[self.ticket_projects[k]["uid"], ["npm run lint", "python tests/test_cart.py"],
                    NOW - timedelta(days=k + 1), "Ada Quill"] for k in range(n)])
         n = self.need("project_wiring")
         self.put("project_wiring", "project, kind, trigger, agent, from_agent, verdict, cooldown, enabled, created_at",
@@ -982,10 +982,10 @@ class _Gen:
         self.put_t("github_credentials", "name, kind, token, api_url, account, created_at, updated_at, config",
                  [[f"seed-github-{k}", "pat", "not-a-token", "https://api.github.com", "example-org",
                    NOW - timedelta(days=30), NOW - timedelta(days=30), "{}"] for k in range(self.need("github_credentials"))])
-        self.put("integration_choices", "slot, name, settings, updated_at, updated_by",
-                 [[f"seed_slot_{k}", "seed", "{}", NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_choices"))])
-        self.put("integration_connections", "slot, name, settings, updated_at, updated_by",
-                 [["seed_slot_0", f"seed-{k}", "{}", NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_connections"))])
+        self.put_t("integration_choices", "slot, name, settings, updated_at, updated_by",
+                 [[f"seed_slot_{k}", "seed", {}, NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_choices"))])
+        self.put_t("integration_connections", "slot, name, settings, updated_at, updated_by",
+                 [["seed_slot_0", f"seed-{k}", {}, NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_connections"))])
         self.put_t("challenges", "source, key_value, event_time, event_type, branch, tares_project, payload",
                  [["github", f"example-org/x#{k}", NOW - timedelta(days=k + 1), "challenge", "main", pr[0]["uid"], "{}"]
                   for k in range(self.need("challenges"))])

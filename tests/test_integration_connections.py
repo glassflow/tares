@@ -37,6 +37,7 @@ import logging
 import os
 import sys
 import tempfile
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -51,6 +52,7 @@ os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-connections"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
+from sqlalchemy import delete, insert, text
 
 from tares import licence
 from tares.integrations import registry
@@ -59,6 +61,10 @@ from tares.integrations.guardrails import Guardrail
 from tares.integrations.review import ReviewGate
 from tares.integrations.tickets import TicketBackend
 from tares.integrations.types import Field
+from tares.session_store.tables import guardrail_pairs as pairs_table
+from tares.session_store.tables import integration_choices as choices_table
+from tares.session_store.tables import integration_connections as connections_table
+from tares.session_store.tables import project_integrations as picks_table
 from tares.store import Store
 
 P = F = 0
@@ -224,17 +230,16 @@ ck("another integration for that project is not overlaid",
 
 # a row from before could hold a secret or an address (a restore, an older cell): stored_settings
 # reads only the plain fields from it, so the project's copy never overrides the factory's connection
-with s._swrite:
-    s.sc.execute("INSERT INTO project_integrations (project_uid, slot, name, settings, updated_at, updated_by) "
-                 "VALUES (?, ?, ?, ?, ?, ?)",
-                 ["p9", "tickets", "tixa", json.dumps({"token": SECRETS[8], "url": "https://leak.example/api",
-                                                        "project": "P9"}), "2026-01-01 00:00:00", "old"])
+with s.sessions_db.begin() as conn:
+    conn.execute(insert(picks_table).values(
+        project_uid="p9", slot="tickets", name="tixa", updated_at=datetime(2026, 1, 1), updated_by="old",
+        settings={"token": SECRETS[8], "url": "https://leak.example/api", "project": "P9"}))
 _own = s.stored_settings("tickets", "tixa", "p9")
 ck("stored_settings ignores a secret and an address left in a project row, and reads its plain field",
    _own["token"] == SECRETS[0] and _own["url"] == "https://a.example/api" and _own["project"] == "P9"
    and SECRETS[8] not in json.dumps(_own), _own)
-with s._swrite:
-    s.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", ["p9"])
+with s.sessions_db.begin() as conn:
+    conn.execute(delete(picks_table).where(picks_table.c.project_uid == "p9"))
 
 print("== deleting a connection ==")
 ck("the default cannot be deleted, and the message names why",
@@ -264,8 +269,9 @@ s.set_choice("tickets", "tixb", {"url": "https://b.example/api", "token": SECRET
 s.set_project_choice("p2", "tickets", "tixb", {}, "ann")
 e = resolve.effective("tickets", "p2", store=s)
 ck("while connected the project's choice applies", e.source == "project" and e.integration == "tixb", e)
-with s._swrite:    # as a restore or an older cell could leave it: the row without the connection
-    s.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name = ?", ["tickets", "tixb"])
+with s.sessions_db.begin() as conn:    # as a restore or an older cell could leave it: the row without the connection
+    conn.execute(delete(connections_table).where(connections_table.c.slot == "tickets",
+                                                 connections_table.c.name == "tixb"))
 e = resolve.effective("tickets", "p2", store=s)
 ck("with no connection it falls through to the factory's default, reason not connected",
    e.integration == "tixa" and e.source == "factory" and e.reason == "not connected", e)
@@ -300,34 +306,33 @@ s.delete_guardrail_pair(pair["id"])
 
 # ── the migration ──────────────────────────────────────────────────────────────
 print("== the migration of a cell from before ==")
-m = Store(os.path.join(_TMP, "old.duckdb"))
-at = "2026-01-01 00:00:00"
+m = Store(os.path.join(tempfile.mkdtemp(), "old.duckdb"))   # its own folder: its own new store
+at = datetime(2026, 1, 1)
 
 
-def put(sql, args):
-    with m._swrite:
-        m.sc.execute(sql, args)
+def put(target, **values):
+    with m.sessions_db.begin() as conn:
+        conn.execute(insert(target).values(**values))
 
 
 def old_choice(slot, name, settings):
-    put("INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)",
-        [slot, name, json.dumps(settings), at, "old-ann"])
+    put(choices_table, slot=slot, name=name, settings=settings, updated_at=at, updated_by="old-ann")
 
 
 def old_project(uid, slot, name, settings):
-    put("INSERT INTO project_integrations (project_uid, slot, name, settings, updated_at, updated_by) "
-        "VALUES (?, ?, ?, ?, ?, ?)", [uid, slot, name, json.dumps(settings), at, "old-lead"])
+    put(picks_table, project_uid=uid, slot=slot, name=name, settings=settings, updated_at=at,
+        updated_by="old-lead")
 
 
 def old_pair(pid, scope, uid, hook, name, settings, on_fail="block"):
-    put("INSERT INTO guardrail_pairs (id, scope, project_uid, hook, integration, settings, on_fail, created_at, "
-        "created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [pid, scope, uid, hook, name, json.dumps(settings), on_fail, at, "old-ann"])
+    put(pairs_table, id=pid, scope=scope, project_uid=uid, hook=hook, integration=name, settings=settings,
+        on_fail=on_fail, created_at=at, created_by="old-ann")
 
 
-def table(sql, args=()):
-    with m._sread:
-        return m.sc.execute(sql, list(args)).fetchall()
+def table(sql):
+    """The rows as stored: `text` reads past the column types, so the settings are the raw JSON text."""
+    with m.sessions_db.read() as conn:
+        return [tuple(r) for r in conn.execute(text(sql)).all()]
 
 
 def upgrade():

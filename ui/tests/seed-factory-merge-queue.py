@@ -17,6 +17,8 @@ from datetime import timedelta
 sys.path.insert(0, os.getcwd())
 from tares import factory as factory_mod  # noqa: E402
 from tares import merge_queue  # noqa: E402
+from sqlalchemy import update  # noqa: E402
+from tares.session_store.tables import merge_queue as merge_queue_table  # noqa: E402
 from tares.store import Store, now_utc  # noqa: E402
 
 home = sys.argv[1]
@@ -70,8 +72,8 @@ def answer(uid, d, tid, words, choice, mins):
 
 
 def back(row, **kw):
-    with store._swrite:
-        store.sc.execute("UPDATE merge_queue SET updated_at = ? WHERE id = ?", [ago(**kw), row["id"]])
+    with store.sessions_db.begin() as c:
+        c.execute(update(merge_queue_table).where(merge_queue_table.c.id == row["id"]).values(updated_at=ago(**kw)))
 
 
 # ── p-wait ──
