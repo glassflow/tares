@@ -2,8 +2,9 @@
 (TR-1614).
 
 `pr` (JSON text) stays the record; the two columns are what a lookup by pull request reads. This
-module is the one place that says what they hold for a `pr`, so the writes, the fill of revision
-0015, the copy from DuckDB, the repair at start and the lookup cannot disagree.
+module is the one place that says what they hold for a `pr`, so the writes, the copy from DuckDB,
+the repair at start and the lookup cannot disagree. Revision 0015 does not call it: it has its own
+copy, as it was then (migrations/frozen/pr_columns.py).
 
 `pr_repo` is the repo name in lower case, `pr_number` the number. Each is NULL when `pr` has no
 value for it that a lookup could ask for, or none the column and its index can hold.
@@ -21,7 +22,7 @@ log = logging.getLogger("tares.session_store")
 _MAX_NUMBER = 2**63 - 1          # a BigInteger column
 _MAX_REPO_BYTES = 1000           # Postgres refuses an index entry of a few thousand bytes
 
-# only the columns read and written here, so a revision that calls this does not depend on tables.py
+# only the columns read and written here
 _TICKETS = sa.table("tickets", sa.column("id", sa.Text), sa.column("pr", sa.Text),
                     sa.column("pr_repo", sa.Text), sa.column("pr_number", sa.BigInteger))
 

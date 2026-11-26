@@ -2,8 +2,9 @@
 
 `tickets.pr_repo` (lower case) and `tickets.pr_number` say what the `pr` JSON says, so the ticket
 of a pull request is found through the index `tickets_pr` and not by searching the text of every
-`pr`. The rows there are get their values here; what they are is in session_store/pr_columns.py,
-which every start also runs (a release before this one writes `pr` and not the columns).
+`pr`. The rows there are get their values here, by the fill in migrations/frozen/pr_columns.py (every
+start also fills, with the live session_store/pr_columns.py: a release before this one writes `pr`
+and not the columns).
 
 Additive only: two nullable columns, no default, and one index. A column or index that is already
 there (a second run against a database that stopped half way) is left as it is. `pr` is not
@@ -17,7 +18,7 @@ Revises: 0014_ticket_tables
 import sqlalchemy as sa
 from alembic import op
 
-from tares.session_store.pr_columns import fill_pr_columns
+from tares.session_store.migrations.frozen.pr_columns import fill_pr_columns
 
 revision = "0015_ticket_pr_columns"
 down_revision = "0014_ticket_tables"
