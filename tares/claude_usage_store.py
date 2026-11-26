@@ -130,45 +130,49 @@ class ClaudeUsageStore:
         cols = ("session", "message", "replied_at", "model", "project", "subagent", "input_tokens",
                 "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
         rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows]
+        # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
+        # another version number after the prefix is left unpriced)
+        def price(model, *tokens):
+            return cost_usd(model or "", *(t or 0 for t in tokens))
+        for r in rows:
+            r["cost_usd"] = price(r["model"], *(r[c] for c in cols[6:]))
         stmt = self.sessions_db.upsert(u).on_conflict_do_nothing(
             index_elements=["session", "message"])
         with self.sessions_db.begin() as conn:
-            touched = {r["session"] for r in rows}           # the kept hourly totals follow (TR-1632)
-            touched.update(r[0] for r in conn.execute(
-                select(u.c.session).where(u.c.model == SYNTHETIC).distinct()))
-            hourly.lock(self.sessions_db, conn, touched)
-            for i in range(0, len(rows), 1000):
-                conn.execute(stmt, rows[i:i + 1000])
-            conn.execute(u.delete().where(u.c.model == SYNTHETIC))
-            # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
-            # another version number after the prefix is left unpriced)
-            todo = conn.execute(select(
+            hourly.hold(self, conn)
+            # every session this transaction changes, found before it writes a row, so that their
+            # locks are taken in one ordered pass (TR-1661); the kept hourly totals follow (TR-1632)
+            unpriced = conn.execute(select(
                 u.c.session, u.c.message, u.c.model, u.c.input_tokens, u.c.output_tokens,
                 u.c.cache_write_tokens, u.c.cache_read_tokens, u.c.cache_write_1h_tokens
             ).where(u.c.cost_usd.is_(None), u.c.model.is_not(None))).all()
-            priced = []
-            for r in todo:
-                cost = cost_usd(r[2], r[3] or 0, r[4] or 0, r[5] or 0, r[6] or 0, r[7] or 0)
-                if cost is not None:
-                    priced.append({"b_session": r[0], "b_message": r[1], "b_cost": cost})
+            priced = [{"b_session": r[0], "b_message": r[1], "b_cost": cost} for r in unpriced
+                      if (cost := price(*r[2:])) is not None]
+            touched = {r["session"] for r in rows}
+            touched.update(p["b_session"] for p in priced)
+            touched.update(r[0] for r in conn.execute(
+                select(u.c.session).where(u.c.model == SYNTHETIC).distinct()))
+            covered = hourly.lock_covered(self, conn, touched)
+            for i in range(0, len(rows), 1000):
+                conn.execute(stmt, rows[i:i + 1000])
+            conn.execute(u.delete().where(u.c.model == SYNTHETIC))
             if priced:
                 conn.execute(update(u).where(u.c.session == bindparam("b_session"),
                                              u.c.message == bindparam("b_message"))
                              .values(cost_usd=bindparam("b_cost")), priced)
-                touched.update(p["b_session"] for p in priced)
-            hourly.after_write(self, conn, touched)
+            hourly.after_write(self, conn, covered)
         if not done:
             session_ingest.set_filled(self, session_ingest.USAGE_FILLED)
 
     def _usage_forget_project(self, uid: str) -> None:
         """A project is deleted: its replies stay, counted as the session's own."""
         with self.sessions_db.begin() as conn:
-            touched = {r[0] for r in conn.execute(select(session_usage.c.session).where(
-                session_usage.c.project == uid).distinct())}
-            hourly.lock(self.sessions_db, conn, touched)
+            hourly.hold(self, conn)
+            theirs = select(session_usage.c.session).where(session_usage.c.project == uid).distinct()
+            covered = hourly.lock_covered(self, conn, conn.execute(theirs).scalars().all())
             conn.execute(update(session_usage).where(session_usage.c.project == uid)
                          .values(project=None))
-            hourly.after_write(self, conn, touched)
+            hourly.after_write(self, conn, covered)
 
     # ── writes, from the claude_code source ───────────────────────────────────
     def record_reply_usage(self, session: str, message: str, at, model: str | None,
@@ -191,10 +195,12 @@ class ClaudeUsageStore:
             "cost_usd": db.greatest(u.c.cost_usd, x.cost_usd),
             "project": func.coalesce(u.c.project, x.project),
             "model": func.coalesce(u.c.model, x.model)})
-        with db.begin() as conn:
-            hourly.lock(db, conn, [session])         # the reply and its hour's total, one transaction
+        with db.begin() as conn:                     # the reply and its hour's total, one transaction
+            hourly.hold(self, conn)
+            covered = hourly.lock_covered(self, conn, [session])
             conn.execute(stmt)
-            hourly.after_reply(self, conn, session, message)
+            if covered:
+                hourly.after_reply(self, conn, session, message)
 
     def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
         """The status line's report and the person of the credential that sent it; an older one
