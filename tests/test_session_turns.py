@@ -40,7 +40,7 @@ PG = os.environ.get("TARES_TEST_PG")
 FAILS = []
 T0 = datetime(2026, 11, 19, 8, 0, 0, tzinfo=timezone.utc)
 SRC = "claude_code"
-HEAD = "0014_ticket_tables"
+HEAD = "0015_ticket_pr_columns"
 
 
 def ck(name, ok, detail=""):

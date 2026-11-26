@@ -37,6 +37,10 @@ Cases:
                      last, and the methods that also touch the tables still in DuckDB (deletes,
                      write-backs, reviews) change both sides
   tickets_takeover   Postgres: the three tables the old DDL made are taken over, rows untouched
+  tickets_pr_lookup  pr_repo and pr_number (TR-1614) follow every write of pr, are repaired at start
+                     when an older release left them stale, take any odd pr without failing a start,
+                     and ticket_for_pr reads their index among 1,000 tickets
+  tickets_pr_revision  revision 0015 down and up on SQLite and Postgres, filling the rows there are
 """
 import os
 import re
@@ -48,7 +52,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import duckdb  # noqa: E402
-from sqlalchemy import Column, Index, Integer, MetaData, Table, Text, inspect, text  # noqa: E402
+from sqlalchemy import Column, Index, Integer, MetaData, Table, Text, event, inspect, text  # noqa: E402
 
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
 from old_ddl import _T, OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
@@ -56,6 +60,7 @@ from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store import copy as copy_mod  # noqa: E402
 from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file  # noqa: E402
+from tares.session_store.pr_columns import fill_pr_columns  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
 from tares.session_store.tables import people as people_table  # noqa: E402
@@ -1268,7 +1273,14 @@ def tickets_copy():
     old_ddl_duckdb(con, seed={**SEED, **PROJECTS, **TICKETS})
     con.execute("CHECKPOINT")
     con.close()
-    s = Store(path, state_dsn="")
+    repair = Store._ticket_pr_columns
+    Store._ticket_pr_columns = lambda self: None          # what the copy alone leaves behind
+    try:
+        s = Store(path, state_dsn="")
+    finally:
+        Store._ticket_pr_columns = repair
+    ck("the copy itself sets pr_repo and pr_number from pr", _pr_cols(s.sessions_db)
+       == {"tk_a": ("o/r", 7), "tk_b": (None, None), "tk_null": (None, None)}, _pr_cols(s.sessions_db))
     with s.sessions_db.begin() as c:
         ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
     ck("the ledger counts each table as DuckDB held it", {t: ledger.get(t) for t in TICKET_TABLES} == TICKET_COUNTS,
@@ -1535,15 +1547,17 @@ def tickets_takeover():
     sch, dsn = _pg_schema()
     try:
         old_ddl_postgres(dsn, seed={**SEED, **TICKETS})
+        added = ("pr_repo", "pr_number")          # by 0015
 
-        def snapshot():
+        def snapshot(leave_out=()):
             out = {}
             with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
                 for t in TICKET_TABLES:
                     cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
                                      "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
                                      [sch, t]).fetchall()
-                    rows = c.execute(f"SELECT * FROM {t}").fetchall()
+                    cols = [col for col in cols if col[0] not in leave_out]
+                    rows = c.execute(f"SELECT {', '.join(col[0] for col in cols)} FROM {t}").fetchall()
                     out[t] = (cols, sorted(tuple(map(str, r)) for r in rows))
                 out["indexes"] = c.execute(
                     "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND indexname IN "
@@ -1559,16 +1573,24 @@ def tickets_takeover():
         sdb = SessionStore(tempfile.mkdtemp(), dsn)
         sdb.upgrade()
         ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
-        ck("every table, its columns, types, rows and indexes, is as the old code left it", snapshot() == before)
+        ck("every table, its old columns, types, rows and indexes, is as the old code left it",
+           snapshot(added) == before)
+        new_cols = [col for col in snapshot()["tickets"][0] if col[0] in added]
+        ck("tickets has the two new columns, nullable, and their index", new_cols
+           == [("pr_number", "bigint", "YES"), ("pr_repo", "text", "YES")]
+           and ts.index_columns(sdb.engine, "tickets", "tickets_pr") == list(added), new_cols)
+        ck("they are filled from the pr the old code wrote", _pr_cols(sdb)
+           == {"tk_a": ("o/r", 7), "tk_b": (None, None), "tk_null": (None, None)}, _pr_cols(sdb))
         ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
         with ts.capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
         ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
         ts.step_down(sdb, "0013_project_tables")
-        ck("a downgrade to the revision before keeps the tables, rows and indexes", snapshot() == before
-           and ts.versions(sdb) == ["0013_project_tables"], ts.versions(sdb))
+        ck("a downgrade to 0013 keeps the tables, rows and indexes and drops what 0015 added", snapshot() == before
+           and ts.versions(sdb) == ["0013_project_tables"]
+           and ts.index_columns(sdb.engine, "tickets", "tickets_pr") is None, ts.versions(sdb))
         sdb.upgrade()
-        ck("an upgrade after it takes them over again, rows untouched", snapshot() == before)
+        ck("an upgrade after it takes them over again, rows untouched", snapshot(added) == before)
         with sdb.begin() as c:
             rows = {r.id: r for r in c.execute(tickets_table.select())}
         ck("Core reads a ticket the old code wrote", rows["tk_a"].pr == {"repo": "o/r", "number": 7, "state": "open"}
@@ -1577,6 +1599,221 @@ def tickets_takeover():
         sdb.close()
     finally:
         _drop_schema(sch)
+
+
+def _pr_cols(sdb):
+    with sdb.begin() as c:
+        return {r[0]: (r[1], r[2]) for r in c.execute(text("SELECT id, pr_repo, pr_number FROM tickets")).all()}
+
+
+def _write_pr_as_before(sdb, tid, pr_text):
+    """What a release without the two columns does: it writes `pr` and nothing else."""
+    with sdb.begin() as c:
+        c.execute(text("UPDATE tickets SET pr = :p WHERE id = :i"), {"p": pr_text, "i": tid})
+
+
+# (name, the stored text of `pr`, what pr_repo and pr_number hold for it)
+_ODD_PR = [
+    ("sql_null", None, (None, None)),
+    ("blank", "", (None, None)),
+    ("json_null", "null", (None, None)),
+    ("empty_object", "{}", (None, None)),
+    ("array", '[{"repo": "o/odd", "number": 1}]', (None, None)),
+    ("string", '"o/odd#1"', (None, None)),
+    ("bare_number", "7", (None, None)),
+    ("no_repo", '{"number": 1}', (None, 1)),
+    ("empty_repo", '{"repo": "", "number": 2}', (None, 2)),
+    ("null_repo", '{"repo": null, "number": 2}', (None, 2)),
+    ("no_number", '{"repo": "O/Odd"}', ("o/odd", None)),
+    ("null_number", '{"repo": "o/odd", "number": null}', ("o/odd", None)),
+    ("number_as_text", '{"repo": "o/odd", "number": "3"}', ("o/odd", None)),
+    ("true_number", '{"repo": "o/odd", "number": true}', ("o/odd", None)),
+    ("fraction", '{"repo": "o/odd", "number": 4.5}', ("o/odd", None)),
+    ("whole_float", '{"repo": "o/odd", "number": 5.0}', ("o/odd", 5)),
+    ("zero", '{"repo": "o/odd", "number": 0}', ("o/odd", None)),
+    ("negative", '{"repo": "o/odd", "number": -6}', ("o/odd", None)),
+    ("past_int32", '{"repo": "o/odd", "number": 3000000000}', ("o/odd", 3000000000)),
+    ("past_int64", '{"repo": "o/odd", "number": 9223372036854775808}', ("o/odd", None)),
+    ("huge_float", '{"repo": "o/odd", "number": 1e300}', ("o/odd", None)),
+    ("infinity", '{"repo": "o/odd", "number": Infinity}', ("o/odd", None)),
+    ("nan", '{"repo": "o/odd", "number": NaN}', ("o/odd", None)),
+    ("nul_in_repo", '{"repo": "o/\\u0000", "number": 8}', (None, 8)),
+    ("surrogate_in_repo", '{"repo": "o/\\ud800", "number": 9}', (None, 9)),
+    ("long_repo", '{"repo": "o/' + "".join(uuid.uuid4().hex for _ in range(300)) + '", "number": 10}', (None, 10)),
+]
+# texts nothing can read back as JSON: reading such a ticket fails (as it did before), a start must not
+_NOT_JSON = [
+    ("not_json", '{"repo": "o/odd", "number": 11'),
+    ("too_many_digits", '{"repo": "o/odd", "number": ' + "9" * 5000 + "}"),
+    ("too_deep", "[" * 100000),
+]
+
+
+def tickets_pr_lookup():
+    print("== pr_repo and pr_number follow every write of pr ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    dsn = None if HARNESS else ""
+    s = Store(path, state_dsn=dsn)
+    s.create_project("uc_pr", "custom", "P", {})
+    a = s.create_ticket("uc_pr", "tares", "A")
+    ck("a new ticket has neither", _pr_cols(s.sessions_db)[a] == (None, None))
+    s.update_ticket(a, pr={"repo": "Acme/API", "number": 12, "state": "open"})
+    ck("update_ticket sets them, the repo in lower case", _pr_cols(s.sessions_db)[a] == ("acme/api", 12),
+       _pr_cols(s.sessions_db)[a])
+    s.update_ticket(a, title="A2", stage="review")
+    ck("a write without pr leaves them", _pr_cols(s.sessions_db)[a] == ("acme/api", 12))
+    found = s.ticket_for_pr(" ACME/api ", 12)
+    ck("no ticket read carries them", all(set(t) == set(_TICKET_COLS) for t in (
+       found, s.get_ticket("uc_pr", a), s.list_tickets("uc_pr")[0], s.tickets_by_project(["uc_pr"])["uc_pr"][0],
+       s.review_tickets()[0][1])), sorted(found))
+    for none in (None, {}):
+        s.update_ticket(a, pr={"repo": "Acme/API", "number": 12})
+        s.update_ticket(a, pr=none)
+        ck(f"pr={none!r} clears them", _pr_cols(s.sessions_db)[a] == (None, None)
+           and s.ticket_for_pr("acme/api", 12) is None, _pr_cols(s.sessions_db)[a])
+    # a pr with only half of it: an unusable argument must not match the half that is NULL
+    for half in ({"number": 12}, {"repo": "acme/api"}):
+        s.update_ticket(s.create_ticket("uc_half", "tares", "half"), pr=half)
+    for args in((None, 12), ("", 12), ("  ", 12), ("acme/api", None), ("acme/api", "x"), ("acme/api", 0),
+                 ("acme/api", -1), ("acme/api", 10 ** 30), ("acme/api", float("inf")), ("a\x00b", 12),
+                 ("a\ud800", 12), ("o" * 5000, 12)):
+        try:
+            got = s.ticket_for_pr(*args)
+        except Exception as e:          # reported by the check
+            got = repr(e)
+        ck(f"ticket_for_pr{(args[0] if args[0] is None else args[0][:12], args[1])!r} is None", got is None, got)
+
+    print("== 1,000 tickets an older release wrote are filled at the next start, and read by the index ==")
+    ids = {}
+    for n in range(1, 1001):
+        ids[n] = s.create_ticket("uc_pr", "tares", f"t{n}")
+    with s.sessions_db.begin() as c:
+        c.execute(text("UPDATE tickets SET pr = :p WHERE id = :i"), [
+            {"p": '{"url": null, "repo": "Acme/%s", "number": %d}' % ("web" if n % 2 else "api", n), "i": tid}
+            for n, tid in ids.items()])
+    ck("until then none is found", s.ticket_for_pr("acme/api", 42) is None)
+    s.close()
+    s = Store(path, state_dsn=dsn)
+
+    def found_id(repo, number):
+        return (s.ticket_for_pr(repo, number) or {}).get("id")
+    ck("after the start each of a sample is found by its repo and number", all(
+       found_id("acme/web" if n % 2 else "acme/api", n) == ids[n]
+       for n in (1, 2, 4, 40, 42, 420, 421, 999, 1000)))
+    ck("another repo, or a number no ticket has, finds nothing", s.ticket_for_pr("acme/web", 42) is None
+       and s.ticket_for_pr("acme/api", 1002) is None)
+
+    ran = []
+
+    def saw(conn, cursor, statement, parameters, context, executemany):
+        ran.append((statement, parameters))
+    event.listen(s.sessions_db.engine, "before_cursor_execute", saw)
+    s.ticket_for_pr("acme/api", 42)
+    event.remove(s.sessions_db.engine, "before_cursor_execute", saw)
+    query, params = next(r for r in ran if "FROM tickets" in r[0])
+    with s.sessions_db.begin() as c:
+        if s.sessions_db.dialect == "sqlite":
+            plan = [r[-1] for r in c.exec_driver_sql("EXPLAIN QUERY PLAN " + query, params).all()]
+        else:
+            c.execute(text("ANALYZE tickets"))
+            plan = [r[0] for r in c.exec_driver_sql("EXPLAIN " + query, params).all()]
+    ck("the query ticket_for_pr runs searches the index tickets_pr", any("tickets_pr" in line for line in plan)
+       and "LIKE" not in query, (plan, query))
+
+    print("== stale columns are repaired at start ==")
+    moved, gone, new = ids[2], ids[4], a
+    _write_pr_as_before(s.sessions_db, moved, '{"repo": "acme/api", "number": 5000}')    # another pr
+    _write_pr_as_before(s.sessions_db, gone, None)                                       # unlinked
+    _write_pr_as_before(s.sessions_db, new, '{"repo": "acme/api", "number": 5001}')      # linked
+    ck("before the start the columns still say the old thing", _pr_cols(s.sessions_db)[moved] == ("acme/api", 2)
+       and _pr_cols(s.sessions_db)[gone] == ("acme/api", 4) and _pr_cols(s.sessions_db)[new] == (None, None))
+    s.close()
+    s = Store(path, state_dsn=dsn)
+    cols = _pr_cols(s.sessions_db)
+    ck("after it they say what pr says, a NULL pr included", (cols[moved], cols[gone], cols[new])
+       == (("acme/api", 5000), (None, None), ("acme/api", 5001)), (cols[moved], cols[gone], cols[new]))
+    ck("and the lookup follows", found_id("acme/api", 5000) == moved
+       and found_id("acme/api", 2) is None and found_id("acme/api", 4) is None
+       and found_id("acme/api", 5001) == new)
+    with s.sessions_db.begin() as c:
+        ck("a start with nothing stale writes no row", fill_pr_columns(c) == 0)
+
+    print("== odd values of pr never stop a start ==")
+    odd = {name: s.create_ticket("uc_odd", "tares", name) for name, _, _ in _ODD_PR}
+    bad = {name: s.create_ticket("uc_bad", "tares", name) for name, _ in _NOT_JSON}
+    for name, pr_text, _ in _ODD_PR:
+        _write_pr_as_before(s.sessions_db, odd[name], pr_text)
+    for name, pr_text in _NOT_JSON:
+        s.update_ticket(bad[name], pr={"repo": "o/was", "number": 1})                     # columns now stale
+        _write_pr_as_before(s.sessions_db, bad[name], pr_text)
+    s.close()
+    try:
+        s = Store(path, state_dsn=dsn)
+    except Exception as e:
+        ck("the store starts", False, repr(e)[:500])
+        return
+    cols = _pr_cols(s.sessions_db)
+    wrong = {name: cols[odd[name]] for name, _, want in _ODD_PR if cols[odd[name]] != want}
+    ck("each reads into the columns as expected", not wrong, wrong)
+    wrong = {name: cols[bad[name]] for name, _ in _NOT_JSON if cols[bad[name]] != (None, None)}
+    ck("a text that is not JSON has NULL in both", not wrong, wrong)
+    ck("the lookup finds the whole float and the number past int32, and no other odd one",
+       found_id("o/odd", 5) == odd["whole_float"]
+       and found_id("o/odd", 3000000000) == odd["past_int32"]
+       and all(found_id("o/odd", n) is None for n in (1, 3, 4, 6, 7, 11)))
+    # the writer reads a value the same way (what JSON cannot hold in a column stays in pr alone)
+    for pr, want in (({"repo": "o/\x00", "number": 3}, (None, 3)), ({"repo": "o/w", "number": "3"}, ("o/w", None)),
+                     ({"repo": "o/w", "number": 10 ** 30}, ("o/w", None)), (["o/w", 3], (None, None))):
+        s.update_ticket(a, pr=pr)
+        ck(f"update_ticket takes pr={pr!r}", _pr_cols(s.sessions_db)[a] == want
+           and s.get_ticket("uc_pr", a)["pr"] == pr, _pr_cols(s.sessions_db)[a])
+    s.close()
+
+
+def tickets_pr_revision():
+    from tares.session_store.tables import tickets as declared
+    new = ["pr_repo", "pr_number"]
+    for label, make in (("SQLite", None), ("Postgres", _pg_schema)):
+        print(f"== 0015 up and down on {label} ==")
+        if make and not PG:
+            print("  skip  TARES_TEST_PG is not set")
+            continue
+        sch, dsn = make() if make else (None, None)
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        try:
+            sdb.upgrade()
+
+            def columns():
+                return [c["name"] for c in inspect(sdb.engine).get_columns("tickets")]
+            ck("at head tickets has the columns tables.py declares, and the index", columns()
+               == [c.name for c in declared.columns]
+               and ts.index_columns(sdb.engine, "tickets", "tickets_pr") == new, columns())
+            ts.step_down(sdb, "0014_ticket_tables")
+            ck("a downgrade drops the two columns and the index and keeps the rest", columns() == list(_TICKET_COLS)
+               and ts.index_columns(sdb.engine, "tickets", "tickets_pr") is None
+               and ts.index_columns(sdb.engine, "tickets", "tickets_project") == ["project"], columns())
+            with sdb.begin() as c:
+                c.execute(text("INSERT INTO tickets (id, project, pr) VALUES (:i, 'p', :pr)"), [
+                    {"i": "tk_pr", "pr": '{"repo": "O/R", "number": 7}'}, {"i": "tk_no", "pr": None},
+                    {"i": "tk_bad", "pr": "{oops"}])
+            sdb.upgrade()
+            ck("the upgrade fills them from the rows there are", _pr_cols(sdb)
+               == {"tk_pr": ("o/r", 7), "tk_no": (None, None), "tk_bad": (None, None)}
+               and ts.versions(sdb) == [ts.HEAD], _pr_cols(sdb))
+            with sdb.begin() as c:
+                kept = dict(c.execute(text("SELECT id, pr FROM tickets")).all())
+            ck("and leaves pr as it was", kept == {"tk_pr": '{"repo": "O/R", "number": 7}', "tk_no": None,
+                                                    "tk_bad": "{oops"}, kept)
+            # a column or the index left by a run that stopped half way does not stop the next one
+            with sdb.begin() as c:
+                c.execute(text("UPDATE session_store_version SET version_num = '0014_ticket_tables'"))
+            sdb.upgrade()
+            ck("a second run over columns that are there stamps head", ts.versions(sdb) == [ts.HEAD])
+        finally:
+            sdb.close()
+            if sch:
+                _drop_schema(sch)
 
 
 if __name__ == "__main__":
@@ -1605,5 +1842,7 @@ if __name__ == "__main__":
     accounts_takeover()
     projects_takeover()
     tickets_takeover()
+    tickets_pr_lookup()
+    tickets_pr_revision()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

@@ -42,6 +42,7 @@ from tares import github_credentials
 from tares.config import SourceCfg
 from tares.connectors import github_events as gh_events
 from tares.envelope import Envelope
+from tares_ee.brain import decisions as project_docs_mod
 from tares_ee.brain import decisions_repo as dr
 from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
@@ -126,6 +127,8 @@ async def main():
         await asyncio.Event().wait()
     index_mod.Indexer.run = never
     sync_mod.Syncer.run = never
+    # A repo removal wakes the project docs loop, which lists lore itself: its calls would be counted here.
+    project_docs_mod.Decisions.run = never
 
     async def readable_repos(cred, query=""):
         return [{"full_name": REPO}]
