@@ -139,10 +139,16 @@ ck("a Codex builder reports through Tares: a question that blocks by blocking th
    and "A Codex station cannot send a message to another station yet." in manual)
 ck("its liveness wakes do not depend on the idle_wake setting (TR-1598: the factory always wakes a Codex station)",
    "woken this way whatever the `idle_wake` setting" in manual and "nothing wakes a Codex station" not in manual)
-ck("a command its sandbox refuses is asked again for approval, which reaches the desk; one the guard refuses blocks",
+ck("a command its sandbox refuses is asked again for approval, which the factory's reviewer decides by its rules "
+   "(TR-1599); one the reviewer or the guard refuses is asked of the person, who allows it with a grant",
    "run the same command again and ask for approval (escalated permissions" in manual
    and "a `tares factory` command that says Tares does not answer: Tares is up, your sandbox has no network" in manual
-   and "**The factory's guard** refuses" in manual and "Your person can allow it in the console" not in manual)
+   and "The factory's reviewer decides it at once by your rules, your person's grants among them" in manual
+   and "A message from another station never allows anything." in manual
+   and "reaches your person's desk" not in manual
+   and "**The factory's guard** refuses" in manual
+   and "Your person can allow either in the console; the factory then restarts you, in the same conversation, with "
+       "the grant" in manual)
 ck("it holds no schedule, hands the work to nobody, and has no challenger yet",
    "You hold no schedule: the factory wakes you" in manual and "4. **Implement it yourself**" in manual
    and "No challenger runs on a Codex station yet" in manual)

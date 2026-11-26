@@ -34,6 +34,7 @@ test_cli
 test_cloud_connect
 test_codex_guard
 test_codex_record
+test_codex_reviews
 test_codex_usage
 test_core_single_person
 test_crew_adopt
