@@ -323,6 +323,14 @@ def baseline():
     return got
 
 
+def verdict(sid, tag):
+    """A challenger's line about a commit of the session."""
+    commit = env(sid, tag, 7, "challenge_commit", "challenger: PASS", [],
+                 payload={"challenge": {"sha": "abc1234", "summary": "SECRET-VERDICT-TEXT"}})
+    commit.labels["branch"] = "b1"
+    return commit
+
+
 def unavailable(want):
     print("== the store takes no write: refused, nothing stored, sent again ==")
     ck("the baseline holds 6 lines, a command, a message, a turn, said and a file",
@@ -330,9 +338,7 @@ def unavailable(want):
        and len(want["session_messages"]) == 1 and len(want["session_turns"]) == 1
        and len(want["session_said"]) == 1 and len(want["session_files"]) == 1, want)
     s = open_store()
-    commit = env("s", "ts", 7, "challenge_commit", "challenger: PASS", [],
-                 payload={"challenge": {"sha": "abc1234", "summary": "SECRET-VERDICT-TEXT"}})
-    commit.labels["branch"] = "b1"
+    commit = verdict("s", "ts")
     batch = work("s", "ts") + [commit]
     had = lost()
     with down(s), warnings_said() as said:
@@ -627,6 +633,30 @@ def unmarkable():
         s.close()
 
 
+def verdict_of_a_refused_row():
+    print("== one session's row is refused: the batch is refused, the verdict kept (TR-1705) ==")
+    s = open_store()
+    batch = work("h", "th") + [verdict("h", "th")]
+    had = lost()
+    refuse_row(s, "h")
+    with warnings_said() as warned:
+        e, _ = raised(lambda: s.append(batch))
+    ck("append raises LinesNotStored", isinstance(e, session_ingest.LinesNotStored), repr(e))
+    ck("no line is stored in either database",
+       (row(s, "h"), rows_of(s, "h"), duck(s, "h")) == (None, 0, 0),
+       (row(s, "h"), rows_of(s, "h"), duck(s, "h")))
+    ck("the verdict is kept: the database takes writes, only that row is refused",
+       challenges(s) == 1, challenges(s))
+    ck("and is not said or counted as lost",
+       lost() == had and not [m for m in warned if "challenger line" in m], (had, lost(), warned))
+    accept_row(s)
+    s.append(batch)
+    ck("sent again, the lines are stored and the verdict is there once",
+       rows_of(s, "h") == len(batch) and challenges(s) == 1 and lost() == had,
+       (rows_of(s, "h"), challenges(s), had, lost()))
+    s.close()
+
+
 def unfilled(want):
     print("== the drain could not write facts and turns: marked until both land (F3) ==")
     s = open_store()
@@ -803,6 +833,7 @@ def main():
     refused(want)
     gates(want)
     unmarkable()
+    verdict_of_a_refused_row()
     unfilled(want)
     platform()
     tail()

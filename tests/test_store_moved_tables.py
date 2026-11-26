@@ -83,6 +83,7 @@ from tares.session_store.pr_columns import fill_pr_columns  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.session_store.tables import answers as answers_table  # noqa: E402
 from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
+from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import crews as crews_table  # noqa: E402
 from tares.session_store.tables import desk_items as desk_table  # noqa: E402
 from tares.session_store.tables import milestones as milestones_table  # noqa: E402
@@ -1143,6 +1144,9 @@ def copy_units():
     ck("a NULL JSONText stays None", row["doc"] is None, row)
     row = _from_duckdb_row(t, (3, '"plain"', "text that is not json"), ["id", "doc", "note"])
     ck("only the JSONText column is parsed", row["note"] == "text that is not json" and row["doc"] == "plain", row)
+    row = _from_duckdb_row(challenges_table, ('{"a":1,}',), ["payload"])
+    ck("a challenger line's payload is copied as it is, so one that is no JSON cannot stop a start (TR-1705)",
+       row["payload"] == '{"a":1,}', row)
 
     con = duckdb.connect()
     con.execute("CREATE TABLE tmp_copy (id INTEGER, doc TEXT, note TEXT)")      # no 'later' column
@@ -2058,6 +2062,47 @@ def reviews_methods():
     ck("repo_findings honours since, and no repo gives none", [f["text"] for f in s.repo_findings("o/r", _LATER)]
        == ["three"] and s.repo_findings(None, _T) == []
        and s.repo_findings("o/r", datetime(2027, 1, 1, tzinfo=timezone.utc)) == [])
+
+    print("== which tickets are a repository's (TR-1705) ==")
+    # found through the index of pr_repo, which is lower case: the pr's own text still decides
+    made = []
+    for i, pr in enumerate([{"repo": "pin/Repo", "number": 1}, {"repo": "pin/repo", "number": 2},
+                            {"repo": "pin/repo2", "number": 3}, {"number": 4}, {"repo": "", "number": 5},
+                            None, {"repo": "pin/Ünï", "number": 7}, None, None]):
+        made.append(s.create_ticket("uc_pin", "tares", f"pin {i}"))
+        if pr is not None:
+            s.update_ticket(made[i], pr=pr)
+        s.add_review("uc_pin", made[i], None, "h", "changes", "t", "", "reviewer", [_finding(f"pin {i}")],
+                     {}, kind, _T)
+    with sdb.begin() as c:
+        # a pr that is no object, and one written without the columns, as an earlier release did
+        c.execute(text("UPDATE tickets SET pr = '[1]' WHERE id = :i"), {"i": made[7]})
+        c.execute(text("UPDATE tickets SET pr = :p WHERE id = :i"),
+                  {"i": made[8], "p": '{"repo": "pin/before", "number": 9}'})
+    got = lambda repo: sorted(f["text"] for f in s.repo_findings(repo, _T))
+    said_ = {r: got(r) for r in ("pin/Repo", "pin/repo", "PIN/REPO", "pin/Ünï", "pin/ünï", "pin", "pin/%")}
+    ck("a repository is the pr's text exactly, case and all", said_ == {
+        "pin/Repo": ["pin 0"], "pin/repo": ["pin 1"], "PIN/REPO": [], "pin/Ünï": ["pin 6"], "pin/ünï": [],
+        "pin": [], "pin/%": []}, said_)
+    ck("an empty name is the pr that says one: not a pr with no repo, no pr or no object",
+       got("") == ["pin 4"], got(""))
+    s._ticket_pr_columns()                       # what every start does
+    ck("a pr written without the columns is found after the next start's fill",
+       got("pin/before") == ["pin 8"], got("pin/before"))
+    if sdb.dialect == "sqlite":
+        asked = []
+
+        def keep(conn, cursor, statement, parameters, context, executemany):
+            if "FROM tickets" in statement:
+                asked.append((statement, parameters))
+
+        event.listen(sdb.engine, "before_cursor_execute", keep)
+        s.repo_findings("o/r", _T)
+        event.remove(sdb.engine, "before_cursor_execute", keep)
+        with sdb.engine.connect() as conn:
+            plan = [r[3] for st, pr_ in asked for r in conn.exec_driver_sql("EXPLAIN QUERY PLAN " + st, pr_)]
+        ck("the repository's tickets are found through the index tickets_pr",
+           len(plan) == 1 and "USING INDEX tickets_pr (pr_repo=?)" in plan[0], plan)
     n = (_n(sdb, "reviews"), _n(sdb, "review_findings"))
     try:
         s.add_review("uc_t", tid, "u", "h3", "changes", "t", "", "reviewer",
@@ -2265,7 +2310,10 @@ def tickets_pr_guard():
                         {"i": "tk_quiet", "pr": '{"repo": "o/r", "number": 1}', "r": None, "n": None},
                         {"i": "tk_moved", "pr": '{"repo": "o/r", "number": 2}', "r": None, "n": None},
                         # a pr that was NULL when read is guarded too
-                        {"i": "tk_linked", "pr": None, "r": "o/old", "n": 3}])
+                        {"i": "tk_linked", "pr": None, "r": "o/old", "n": 3},
+                        # and one that stays NULL is still NULL when written: its columns are
+                        # cleared, which a guard of `pr = NULL` would never do (TR-1705)
+                        {"i": "tk_unlinked", "pr": None, "r": "o/gone", "n": 4}])
                 ran = _fill_with_writes_between(sdb, fill, {
                     "tk_moved": '{"repo": "o/r", "number": 20}', "tk_linked": '{"repo": "o/r", "number": 30}'})
                 cols = _pr_cols(sdb)
@@ -2274,6 +2322,8 @@ def tickets_pr_guard():
                 ck(f"{name}: a row whose pr changed in between is left as it is",
                    cols["tk_moved"] == (None, None), cols)
                 ck(f"{name}: so is one whose pr was NULL when read", cols["tk_linked"] == ("o/old", 3), cols)
+                ck(f"{name}: one whose pr is NULL and stays so loses the columns it should not have",
+                   cols["tk_unlinked"] == (None, None), cols)
         finally:
             sdb.close()
             if sch:
@@ -2545,6 +2595,11 @@ def crew_methods():
        == [c2["id"], c3["id"], c1["id"]])
     ck("no project: every one", len(s.list_decisions(None)) == n_all + 4
        and c4["id"] in [x["id"] for x in s.list_decisions(None)])
+    untimed, timed = decide("uc_nd", "dk_none", None), decide("uc_nd", "dk_none", _T)
+    ck("a decision with no time comes last", [x["id"] for x in s.list_decisions("uc_nd")]
+       == [timed["id"], untimed["id"]], s.list_decisions("uc_nd"))      # TR-1705
+    with sdb.begin() as c:
+        c.execute(text("DELETE FROM decisions WHERE project = 'uc_nd'"))
 
     print("== answers ==")
     def answer(item, kind, project, person, at, via="console", choice="yes"):
@@ -2672,6 +2727,18 @@ def crew_methods():
        and h["override"]["person"] == {"id": ann, "name": "Ann"}, s.list_handover_overrides("uc_t"))
     ck("handovers_by_project: the asked ones that have one", set(s.handovers_by_project(["uc_t", "uc_u", "uc_no"]))
        == both and set(s.handovers_by_project()) >= both)
+    # an override from before the log, beside a log row with no project: NOT IN a list that holds
+    # a NULL matches nothing, so the row must be left out of it (TR-1705)
+    with sdb.begin() as c:
+        c.execute(text("INSERT INTO handover_overrides (reason) VALUES ('no project')"))
+        c.execute(text("INSERT INTO handovers (project, override_reason) VALUES ('uc_old', 'before the log')"))
+    s._first_override_entries()
+    ck("an override from before the log gets its first entry, whatever else the log holds",
+       [o["reason"] for o in s.list_handover_overrides("uc_old")] == ["before the log"],
+       s.list_handover_overrides("uc_old"))
+    with sdb.begin() as c:
+        c.execute(text("DELETE FROM handover_overrides WHERE project IS NULL OR project = 'uc_old'"))
+        c.execute(text("DELETE FROM handovers WHERE project = 'uc_old'"))
 
     def refuse(conn, cursor, statement, parameters, context, executemany):
         if statement.startswith("INSERT INTO handover_overrides"):

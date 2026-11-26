@@ -19,6 +19,7 @@ from . import claude_usage_hourly as hourly
 from . import metrics, session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
+from .session_store.pr_columns import pr_columns
 from .session_store.tables import (project_sessions, session_commands, session_messages,
                                    session_states, session_stations, session_turns, session_usage,
                                    session_usage_hourly)
@@ -1389,21 +1390,20 @@ class FactoryStore:
         if repo is None:
             return []
         f, t = findings_table, tickets_table
-        mine: dict = {}
+        # the repo is inside the ticket's `pr`. The tickets that may have it are found through the
+        # index of `pr_repo` (lower case, NULL for a name it never holds); `pr` itself decides
+        want = pr_columns({"repo": repo})[0]
         with self.sessions_db.consistent_read() as conn:
+            mine = {tk.id: tk for tk in conn.execute(
+                select(t.c.id, t.c.project, t.c.identifier, t.c.number, t.c.pr)
+                .where(t.c.pr_repo == want))
+                if isinstance(tk.pr, dict) and tk.pr.get("repo") == repo}
+            if not mine:
+                return []
             rows = conn.execute(select(
                 f.c.ticket, f.c.project, f.c.kind, f.c.text, f.c.severity, f.c.found_at)
                 .where(f.c.found_at >= since)
                 .order_by(f.c.found_at, f.c.ticket, f.c.number)).fetchall()
-            if not rows:
-                return []
-            # the repo is inside the ticket's `pr`, so it is checked here
-            ids = sorted({r.ticket for r in rows if r.ticket is not None})
-            for i in range(0, len(ids), 500):
-                for tk in conn.execute(select(t.c.id, t.c.project, t.c.identifier, t.c.number,
-                                              t.c.pr).where(t.c.id.in_(ids[i:i + 500]))):
-                    if (tk.pr or {}).get("repo") == repo:
-                        mine[tk.id] = tk
         return [{"ticket": r.ticket, "project": r.project, "kind": r.kind, "text": r.text,
                  "severity": r.severity, "at": r.found_at,
                  "ticket_project": mine[r.ticket].project,
@@ -1431,12 +1431,9 @@ class FactoryStore:
         rows = []
         with self.sessions_db.consistent_read() as conn:
             for i in range(0, len(refs), 150):
-                wanted = []
-                for ref in refs[i:i + 150]:
-                    wanted += [t.c.branch == f"factory/{ref}", t.c.branch.like(f"factory/{ref}-%")]
                 rows += conn.execute(select(
                     t.c.event_time, t.c.event_type, t.c.payload, t.c.key_value, t.c.branch,
-                    t.c.tares_project).where(t.c.source == source, or_(*wanted))
+                    t.c.tares_project).where(self._challenge_branches(source, refs[i:i + 150]))
                     .order_by(t.c.event_time, t.c.key_value, t.c.event_type,
                               t.c.branch)).fetchall()
             if not rows:
@@ -1464,21 +1461,56 @@ class FactoryStore:
                         continue
                 elif sid not in sessions.get(project, ()):
                     continue
-                o = payload if isinstance(payload, dict) else {}
+                o = self._challenge_payload(payload, source, sid, at, typ, _branch)
                 ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
                 out[(project, ref)].append({"at": at, "type": typ, "session": sid, "challenge": ch})
         return out
 
+    def _challenge_branches(self, source: str, refs: list[str]):
+        """The lines of `source` on these refs' branches, factory/<ref> and factory/<ref>-...
+        It may give more (SQLite) or other-case ones (SQLite's LIKE): the caller keeps the exact
+        branches."""
+        t = challenges_table
+        if self.sessions_db.dialect == "sqlite":
+            # a range, one for each ref, with the source in it: SQLite compares bytes, so
+            # factory/<ref> up to factory/<ref>. holds every <ref>-... branch, and both columns of
+            # ix_challenges_branch are used. Its LIKE ignores case and would use the source alone
+            return or_(*(and_(t.c.source == source, t.c.branch >= f"factory/{ref}",
+                              t.c.branch < f"factory/{ref}.") for ref in refs))
+        # not a range on Postgres: there the database's collation orders text, which need not be
+        # by bytes
+        wanted = []
+        for ref in refs:
+            wanted += [t.c.branch == f"factory/{ref}", t.c.branch.like(f"factory/{ref}-%")]
+        return and_(t.c.source == source, or_(*wanted))
+
+    def _challenge_payload(self, text, source, session, at, typ, branch) -> dict:
+        """A challenger line's stored payload as an object. {} when there is none, when it is JSON
+        but not an object, or when it is not JSON, which is also logged, once for each line while
+        this process runs, by its ids alone."""
+        if not text or not text.strip():
+            return {}
+        try:
+            o = json.loads(text)
+        except ValueError:
+            line = (source, session, at, typ, branch)
+            if line not in self._challenges_unreadable:
+                self._challenges_unreadable.add(line)
+                log.warning("a challenger line's payload is not JSON, read as empty: source %s "
+                            "session %s type %s branch %s at %s",
+                            *(_loggable(x)[:120] for x in
+                              (source, session or "unknown", typ, branch, at.isoformat())))
+            return {}
+        return o if isinstance(o, dict) else {}
+
     def _record_challenges(self, rows: list[tuple]) -> None:
         """Keep the challenger's lines (source, key, time, type, branch, project, payload as JSON
-        text) in `challenges`. Idempotent: a line already kept is skipped."""
+        text) in `challenges`, the payload as given: one that is not JSON is read as {}.
+        Idempotent: a line already kept is skipped."""
         names = ("source", "key_value", "event_time", "event_type", "branch", "tares_project",
                  "payload")
         for i in range(0, len(rows), 500):
             chunk = [dict(zip(names, r)) for r in rows[i:i + 500]]
-            for line in chunk:
-                if line["payload"] is not None:      # the column writes json.dumps itself
-                    line["payload"] = json.loads(line["payload"])
             with self.sessions_db.begin() as conn:
                 conn.execute(self.sessions_db.upsert(challenges_table).on_conflict_do_nothing(),
                              chunk)
