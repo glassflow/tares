@@ -168,6 +168,30 @@ def main():
     ck("so is the one the gate never touched", rows["old2"] == (3, True), rows["old2"])
     ck("and the new one", rows["new"] == (2, True), rows["new"])
 
+    print("== a line of another claude_code source than its session's keeps going to DuckDB ==")
+    s = open_store("factory")
+    s.upsert_catalog_source(SRC, "agent_session", SRC, "10s", {"push": True})
+    s.upsert_catalog_source("laptop", "agent_session", SRC, "10s", {"push": True})
+    s.append([line("two")])
+    s.append([line("two", source="laptop"), line("two")])
+    ck("the other source's line is in DuckDB", duck_count(s, "laptop") == 1, duck_count(s, "laptop"))
+    ck("the session's own source stays held", duck_count(s) == 0, duck_count(s))
+    s.append([line("mixed", source="laptop"), line("mixed")])
+    ck("a new session takes its first line's source", (duck_count(s, "laptop"), duck_count(s)) == (1, 1),
+       (duck_count(s, "laptop"), duck_count(s)))
+
+    print("== a session id with a NUL byte does not stop the batch it is in ==")
+    s = open_store("factory")
+    odd = "n\x00ul"
+    s.append([line("plain"), line(odd)])          # raised on every retry on Postgres
+    with s.sessions_db.begin() as c:
+        held = sorted(r[0] for r in c.execute(select(session_lines.c.session)))
+    if s.sessions_db.dialect == "postgresql":
+        ck("the other session is held", held == ["plain"], held)
+        ck("DuckDB keeps the line the session store cannot take", duck_count(s) == 1, duck_count(s))
+    else:
+        ck("SQLite takes both", held == [odd, "plain"] and duck_count(s) == 0, (held, duck_count(s)))
+
     print("== a session a failed write left incomplete keeps its lines in DuckDB ==")
     s = open_store("factory")
     s.append([line("f1") for _ in range(2)])

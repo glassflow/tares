@@ -15,7 +15,8 @@ A line in the table has no ingest time and no source of its own: its `ingest_tim
 own time, and its `source` is the session's.
 
 A part or a row of the archive that cannot be read is left out and one line says so, as a session
-page does (`session_read`). Nothing here writes.
+page does (`session_read`). Nothing here writes, and nothing takes SQLite's write lock
+(`consistent_read`), so ingest never waits for one of these reads.
 """
 from __future__ import annotations
 
@@ -236,7 +237,7 @@ def view(store, sources, since=None, until=None, key=None, filters=None, where=N
     db = store.sessions_db
     find = func.strpos if db.dialect == "postgresql" else func.instr
     t = session_lines.c
-    with db.snapshot() as c:
+    with db.consistent_read() as c:
         born = _born(c, sources, since, until, key)
         if not born:
             return PLAIN
@@ -314,7 +315,7 @@ def newest(store, sources, limit: int, hidden_sessions=frozenset(), hidden_line=
 
         mine: list = []
         start = 0
-        with db.snapshot() as c:
+        with db.consistent_read() as c:
             while len(mine) < limit:
                 got = c.execute(select(*cols).where(t.session == b.session)
                                 .order_by(t.at.desc(), t.seq.desc())
@@ -343,7 +344,7 @@ def grouped(store, sources, need_payload: bool = False) -> View:
     db = store.sessions_db
     t = session_lines.c
     rows: list = []
-    with db.snapshot() as c:
+    with db.consistent_read() as c:
         born = _born(c, sources)
         if not born:
             return PLAIN
@@ -392,7 +393,7 @@ def held_count(store, source: str) -> int:
     if short:
         sids = sorted(b.session for b in short)
         rows: list = []
-        with store.sessions_db.snapshot() as conn:
+        with store.sessions_db.consistent_read() as conn:
             for chunk in _chunks(sids):
                 for got in conn.execute(select(t.session, t.seq, t.type, t.at, t.labels, t.render,
                                                t.payload).where(t.session.in_(chunk))).all():

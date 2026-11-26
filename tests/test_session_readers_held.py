@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -392,6 +393,29 @@ def counted():
     f.close()
 
 
+def no_write_lock():
+    print("== a held read takes no write lock, so ingest never waits for it ==")
+    f = held_only()
+    with f.sessions_db.begin() as c:             # an incomplete one, so held_count loads lines
+        c.execute(update(sessions).where(sessions.c.session == "S").values(lines_complete=False))
+    reads = (("aggregate", lambda: session_events.view(f, [SRC], MONTH, counted=True)),
+             ("the newest lines", lambda: session_events.newest(f, [SRC], 10)),
+             ("the grouped labels", lambda: session_events.grouped(f, [SRC])),
+             ("the held count", lambda: session_events.held_count(f, SRC)))
+    with f.sessions_db.begin() as writer:        # a write in progress, as an ingest holds it
+        writer.execute(update(sessions).values(updated_at=NOW))
+        for name, read in reads:
+            t0, failed = time.monotonic(), None
+            try:
+                read()
+            except Exception as e:
+                failed = f"{type(e).__name__}: {e}"
+            took = time.monotonic() - t0
+            ck(f"{name}: answers while a write is open", failed is None and took < 3,
+               (round(took, 1), failed))
+    f.close()
+
+
 async def app_checks():
     print("== the challenger's trigger and page, through the app ==")
     from tares.daemon import make_app
@@ -448,6 +472,7 @@ async def main():
     parity()
     edges()
     counted()
+    no_write_lock()
     await app_checks()
     print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
     sys.exit(1 if FAILS else 0)

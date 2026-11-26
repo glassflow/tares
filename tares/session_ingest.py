@@ -174,6 +174,10 @@ def claude_code_sources(store) -> set[str]:
 def claude_code_lines(store, envelopes) -> list:
     """The envelopes of `envelopes` that are lines of a claude_code source, with a session."""
     cands = [e for e in envelopes if e.key_value]
+    if cands and store.sessions_db.dialect == "postgresql":
+        # Postgres takes no NUL in text, so such a session can never have a row: DuckDB alone
+        # keeps its lines, and the rest of the batch is stored as usual (TR-1647)
+        cands = [e for e in cands if "\x00" not in str(e.key_value)]
     if not cands:
         return []
     names = {e.source for e in cands}
