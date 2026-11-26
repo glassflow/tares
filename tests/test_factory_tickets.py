@@ -71,6 +71,12 @@ async def main():
     def ago(**kw):
         return now_utc() - timedelta(**kw)
 
+    def changed(tid, at):       # the ticket's last change, written past the methods that stamp `now`
+        from sqlalchemy import update
+        from tares.session_store.tables import tickets as tickets_t
+        with store.sessions_db.begin() as c:
+            c.execute(update(tickets_t).where(tickets_t.c.id == tid).values(updated_at=at))
+
     def project(name, factory=True):
         uid = f"uc_{name.replace('-', '')}"
         store.create_project(uid, "custom", name, {}, goal="A project for the test")
@@ -120,16 +126,14 @@ async def main():
                          [], {}, factory_mod.finding_kind, now_utc())
         # the last change of each ticket, so the sort is known
         for tid, h in ((t1, 300), (t2, 1), (t3, 2), (t4, 3), (t5, 4), (t6, 5), (t7, 50), (t8, 6), (t9, 7), (t10, 8)):
-            with store._swrite:
-                store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [ago(hours=h), tid])
+            changed(tid, ago(hours=h))
 
         # ── project-y: two tickets; project-z: only a canceled one; a draft; a platform project
         py = project("project-y")
         ty1 = ticket(py, "Export the posts")
         ty2 = ticket(py, "Import the posts", depends_on=[ty1])
         for tid, h in ((ty1, 20), (ty2, 21)):
-            with store._swrite:
-                store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [ago(hours=h), tid])
+            changed(tid, ago(hours=h))
         pz = project("project-z")
         ticket(pz, "Old idea", status="canceled")
         pd = project("project-d")

@@ -568,19 +568,19 @@ class _Gen:
                 ext, ident, url = f"lin-{lin:05d}", f"TR-{lin}", f"https://linear.example.com/issue/TR-{lin}"
             rows.append([t["id"], t["project"], t["owner"], ext, ident, url,
                          f"{rng.choice(VERB)} {rng.choice(THING)}", t["status"], t["pos"], t["doc"],
-                         t["created"], t["updated"], t["ms"], json.dumps(t["deps"]) if t["deps"] else None,
+                         t["created"], t["updated"], t["ms"], t["deps"] or None,
                          t["no"], t["holder"], t["stage"], "waiting on a decision" if t["stage"] == "blocked" else None,
-                         json.dumps(t["pr"]) if t["pr"] else None, t["repo"], t["assignee"], None])
+                         t["pr"] or None, t["repo"], t["assignee"], None])
         if len(rows) + 3 != total:
             raise RuntimeError(f"{len(rows) + 3} tickets planned, {total} in SHAPE")
-        self.put("tickets", "id, project, owner, external_id, identifier, url, title, status, position, "
-                            "working_doc, created_at, updated_at, milestone, depends_on, number, holder, stage, "
-                            "stage_reason, pr, repo, assignee_person_id, assignee_raw", rows)
+        self.put_t("tickets", "id, project, owner, external_id, identifier, url, title, status, position, "
+                              "working_doc, created_at, updated_at, milestone, depends_on, number, holder, stage, "
+                              "stage_reason, pr, repo, assignee_person_id, assignee_raw", rows)
         self.tickets = tickets
         self.ticket_projects = projects
         # the project's own times move with its tickets, as they do on the real cell
         # numbers: the next number of each project
-        self.put("ticket_numbers", "project, last", [[uid, n] for uid, n in number.items() if uid != p0["uid"]])
+        self.put_t("ticket_numbers", "project, last", [[uid, n] for uid, n in number.items() if uid != p0["uid"]])
         # history
         fields = [f for f, n in mix["ticket_history_fields"].items() for _ in range(n)]
         have_h = _have(st, "ticket_history")
@@ -615,8 +615,8 @@ class _Gen:
                     pid = self.person()
                 rows.append([t["id"], t["project"], ts, f, v,
                              "the review asked for changes" if f == "send_back" else None, holder, "builder", pid])
-        self.put("ticket_history", "ticket, project, changed_at, field, value, reason, by_station, by_role, "
-                                   "person_id", rows)
+        self.put_t("ticket_history", "ticket, project, changed_at, field, value, reason, by_station, by_role, "
+                                     "person_id", rows)
         # checks
         n = self.need("ticket_checks")
         with_pr = [t for t in tickets if t["pr"]]

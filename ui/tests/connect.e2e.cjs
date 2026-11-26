@@ -65,6 +65,9 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
   const tab = (page, name) => page.getByRole("tab", { name, exact: true });
   const selected = async (page) => (await page.getByRole("tab", { selected: true }).innerText()).trim();
   const codes = (page) => page.getByTestId("connect-code").allInnerTexts();
+  // The snippets carry no Authorization line until /health answers. The MCP checks wait for the token
+  // panel; the Webhook and REST tabs have no such panel, so wait there for the signed snippet itself.
+  const signedSnippet = (page) => page.getByTestId("connect-code").filter({ hasText: "Bearer" }).first().waitFor({ timeout: 10000 }).catch(() => {});
   const clip = (page) => page.evaluate(() => navigator.clipboard.readText());
   const settle = (page) => page.waitForTimeout(300);
   const client = async (page, name) => {
@@ -182,6 +185,7 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
     // ── Webhook ─────────────────────────────────────────────────────────────────────────────────
     {
       const { ctx, page, errors } = await open("/connect?tab=push");
+      await signedSnippet(page);
       await words(page, "webhook");
       const all = await codes(page);
       ck("webhook: a receiver sample, the shape and the add call", all.length === 3, String(all.length));
@@ -220,6 +224,7 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
     // ── REST API ────────────────────────────────────────────────────────────────────────────────
     {
       const { ctx, page } = await open("/connect?tab=rest");
+      await signedSnippet(page);
       await words(page, "rest");
       const c = (await codes(page))[0];
       ck("rest: a /read call at this origin", c.startsWith(`curl -X POST ${signed.base}/read`) && c.includes('"window": "15m"') && c.includes("Bearer ••••••••"), c);

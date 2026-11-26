@@ -1,8 +1,9 @@
 """The session store's tables, as SQLAlchemy Core declares them (P-TR-295).
 
-These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`)
-and the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
-`shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`), exactly as they are today in DuckDB and in the state Postgres:
+These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`),
+the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
+`shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`) and the tickets (`tickets`,
+`ticket_history`, `ticket_numbers`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -470,11 +471,63 @@ model_usage = Table(
 )
 Index("ix_model_usage_ts", model_usage.c.ts)
 
+# A project's list of work (store.py). `owner` says where a ticket lives (linear, github, tares);
+# `depends_on` is [ticket id], `pr` the pull request as Tares last read it
+tickets = Table(
+    "tickets", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("owner", Text),
+    Column("external_id", Text),
+    Column("identifier", Text),
+    Column("url", Text),
+    Column("title", Text),
+    Column("status", Text),
+    Column("position", Double),
+    Column("working_doc", Text),
+    Column("created_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("milestone", Text),
+    Column("depends_on", JSONText),
+    Column("number", Integer),
+    Column("holder", Text),
+    Column("stage", Text),
+    Column("stage_reason", Text),
+    Column("pr", JSONText),
+    Column("repo", Text),
+    Column("assignee_person_id", Text),
+    Column("assignee_raw", Text),
+)
+Index("tickets_project", tickets.c.project)
+
+# Every change to a ticket's holder or stage (factory_store.py). No key: two lines can be alike
+ticket_history = Table(
+    "ticket_history", metadata,
+    Column("ticket", Text),
+    Column("project", Text),
+    Column("changed_at", UTCDateTime),
+    Column("field", Text),
+    Column("value", Text),
+    Column("reason", Text),
+    Column("by_station", Text),
+    Column("by_role", Text),
+    Column("person_id", Text),
+)
+Index("ticket_history_ticket", ticket_history.c.ticket)
+
+# The last ticket number a project gave out: numbers are never given twice
+ticket_numbers = Table(
+    "ticket_numbers", metadata,
+    Column("project", Text, primary_key=True),
+    Column("last", Integer),
+)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
 # `state_db.move`. Moving a table means adding it here and a revision that takes it over.
 MOVED_TABLES = (session_stations, session_states, project_sessions, session_usage, session_meters,
                 settings, people, api_keys, project_members, usecases, usecase_objects, usecase_log,
-                docs, skills, shared_skills, catalog_sources, github_credentials, model_usage)
+                docs, skills, shared_skills, catalog_sources, github_credentials, model_usage,
+                tickets, ticket_history, ticket_numbers)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

@@ -253,6 +253,27 @@ async def main():
         await after("a project deleted", lambda: send("DELETE", f"/api/projects/{px}"),
                     lambda a, b: "project-renamed" in group_names(a) and "project-renamed" not in group_names(b))
 
+        # a desk item answered from the console: the standup stops counting it at once
+        pd = (await send("POST", "/api/projects", {"template": "custom", "name": "project-desk"}))["id"]
+        store.set_project_kind(pd, "software_factory")
+        now = datetime.now(timezone.utc)
+        store.set_handover(pd, [{"path": "/w/desk", "name": "example-org/desk"}], None, None,
+                           now - timedelta(days=2))
+        asked, allow = [store.add_desk_item(pd, q, "", [], "", "", "", [], True, "crew", [],
+                                            now - timedelta(minutes=1), command=cmd, to_person_id="local")["label"]
+                        for q, cmd in (("Which colour?", None), ("May I run it?", "make release"))]
+
+        def says(body):
+            return (body["standup"] or {}).get("text") or ""
+
+        await after("a desk question answered from the console",
+                    lambda: send("POST", f"/api/desk/{asked}/reply", {"words": "Blue."}),
+                    lambda a, b: "2 questions for you" in says(a) and "1 question for you" in says(b))
+        await after("a permission allowed from the console",
+                    lambda: send("POST", f"/api/desk/{allow}/allow",
+                                 {"words": "The crew may run make release.", "scope": "all"}),
+                    lambda a, b: "1 question for you" in says(a) and "question" not in says(b))
+
         print("== the crew's own writes wait for the window ==")
         fh.clear_cache()
         await page()

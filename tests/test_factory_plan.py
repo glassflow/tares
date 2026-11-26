@@ -275,7 +275,10 @@ async def upgrade():
     s = Store(path)
     a = s.create_ticket("p", "tares", "A", position=2)
     b = s.create_ticket("p", "tares", "B", position=1)
-    s.sc.execute("UPDATE tickets SET number = NULL")
+    from sqlalchemy import update
+    from tares.session_store.tables import tickets as tickets_t
+    with s.sessions_db.begin() as conn:
+        conn.execute(update(tickets_t).values(number=None))
     s.con.close()
     s = Store(path)
     nums = {t["title"]: t["number"] for t in s.list_tickets("p")}

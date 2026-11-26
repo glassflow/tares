@@ -25,8 +25,8 @@ from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
-from sqlalchemy import (Date, LargeBinary, and_, cast, delete, func, insert, literal, null, or_,
-                        select, update)
+from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
+                        or_, select, type_coerce, union_all, update)
 
 from . import (edition, metrics, session_archive, session_events, session_ingest, session_move,
                session_read, state_db)
@@ -47,6 +47,7 @@ from .session_store.tables import shared_skills as shared_skills_table
 from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import github_credentials as github_table
 from .session_store.tables import model_usage as usage_table
+from .session_store.tables import tickets as tickets_table
 from .session_store.tables import session_commands, session_messages
 from .session_store.tables import (session_archive_parts, session_files, session_ingest_marks,
                                    session_lines, session_said, session_turns)
@@ -217,23 +218,6 @@ CREATE TABLE IF NOT EXISTS dispatch_projects (
   project     TEXT,
   PRIMARY KEY (dispatch_id, project)
 );
--- Tickets (TR-403): a project's list of work. owner 'linear' is a record of a Linear issue, written
--- only by the Linear sync (external_id = the issue id, identifier = e.g. ENG-12). owner 'tares'
--- means the project has no Linear and Tares is the source of truth. `working_doc` is a doc id.
-CREATE TABLE IF NOT EXISTS tickets (
-  id          TEXT PRIMARY KEY,
-  project     TEXT,
-  owner       TEXT,
-  external_id TEXT,
-  identifier  TEXT,
-  url         TEXT,
-  title       TEXT,
-  status      TEXT,
-  position    DOUBLE,
-  working_doc TEXT,
-  created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ
-);
 -- Claude Code sessions that worked in a project (TR-405): the plugin tells Tares which project a
 -- session works in with a `session_project` line, and the whole session (its claude_code events,
 -- keyed by session id, the lines from before the project existed included) reads as the project's
@@ -373,26 +357,6 @@ _MIGRATIONS = [
     # A trigger's own words for what wakes it ("an alert fires in the demo service"), used by
     # every generated sentence instead of the rule's wording. NULL = say it from the rule.
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS description TEXT",
-    # The factory's plan (TR-411, TR-412): the milestone a ticket belongs to (a milestone id),
-    # the tickets it depends on ([ticket id]), and its number in the project (T1, T2, ...)
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS milestone TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS depends_on JSON",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS number INTEGER",
-    # The ledger (TR-427): the station holding the ticket, where it stands (todo, doing, review,
-    # changes, merged, shipped, blocked, with the reason when blocked), and its pull request as
-    # Tares last read it from GitHub (TR-410): {url, repo, number, head, branch, ci, verdict,
-    # verdict_head, merged, merge_commit, state, checked_at, error}
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS holder TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage_reason TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
-    # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
-    # Who a ticket is for (TR-631), wherever it lives: a people.id, or when nobody on the cell
-    # matches, the assignee as the source named them (an email, a name or a GitHub login). Not
-    # `owner`, which says where the ticket lives.
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_person_id TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_raw TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -704,10 +668,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 pg = state_db.PgState(state_dsn)
                 for stmt in state_db.state_ddl(self._ddl()):
                     pg.execute(stmt)
-                # Postgres only: DuckDB's ART indexes have broken after upgrades
-                pg.execute("CREATE INDEX IF NOT EXISTS tickets_project ON tickets(project)")
-                pg.execute("CREATE INDEX IF NOT EXISTS ticket_history_ticket "
-                           "ON ticket_history(ticket)")
                 if state_db.moved(pg):
                     self._use_pg_state(pg)        # upgrades below run on the moved state
                     if not moved_at:
@@ -833,7 +793,6 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._init_source_stats()
         self._init_entity_counts()
         self._incidents_backfill()
-        self._ticket_stage_repair()
 
     def _incidents_backfill(self) -> None:
         """Give the notes written before incidents were tracked their incidents (TR-744). Writes
@@ -2959,8 +2918,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             with_docs = set(conn.execute(select(o.c.usecase_id).where(o.c.kind == "doc")).scalars())
             with_agents = set(conn.execute(select(o.c.usecase_id).where(
                 o.c.kind == "agent")).scalars())
+            ticketed = (set(conn.execute(select(tickets_table.c.project).distinct()).scalars())
+                        if custom else set())
         if custom:
-            ticketed = {r[0] for r in self.sc.execute("SELECT project FROM tickets").fetchall()}
             hit = sorted((custom & ticketed & with_docs) - with_agents)
             if hit:
                 with self.sessions_db.begin() as conn:
@@ -2991,9 +2951,16 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 conn.execute(delete(members_table).where(members_table.c.project == uid))
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
-            self.sc.execute("DELETE FROM pending_writeback WHERE ticket IN "
-                            "(SELECT id FROM tickets WHERE project = ?)", [uid])
-            self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
+            # the write-backs waiting for its tickets go before the tickets that name them
+            with self.sessions_db.read() as conn:
+                tids = list(conn.execute(select(tickets_table.c.id).where(
+                    tickets_table.c.project == uid)).scalars())
+            for i in range(0, len(tids), 500):
+                chunk = tids[i:i + 500]
+                self.sc.execute("DELETE FROM pending_writeback WHERE ticket IN "
+                                f"({', '.join('?' for _ in chunk)})", chunk)
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(tickets_table).where(tickets_table.c.project == uid))
             self._factory_forget_project(uid)
             with self.sessions_db.begin() as conn:
                 conn.execute(delete(plog_table).where(plog_table.c.usecase_id == uid))
@@ -3295,19 +3262,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The project stops including the doc; the doc is deleted when no project includes it
         any more and it was made by a project (a doc made on the cell stays). A ticket of this
         project whose working doc it was loses the link. Returns whether the project had it."""
-        o = objects_table
-        with self._swrite:
-            # the DuckDB write first: it is safe to repeat, so a crash before the session store
-            # write leaves a remove that a second call finishes
-            self.sc.execute("UPDATE tickets SET working_doc = NULL WHERE project = ? AND "
-                            "working_doc = ?", [project, doc_id])
-            with self.sessions_db.begin() as conn:
-                had = conn.execute(select(o.c.name).where(
-                    o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id)
-                    .limit(1)).first()
-                conn.execute(delete(o).where(
-                    o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id))
-                self._forget_unused_docs(conn)
+        o, t = objects_table, tickets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.project == project, t.c.working_doc == doc_id)
+                         .values(working_doc=None))
+            had = conn.execute(select(o.c.name).where(
+                o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id).limit(1)).first()
+            conn.execute(delete(o).where(
+                o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id))
+            self._forget_unused_docs(conn)
         return had is not None
 
     def _forget_unused_docs(self, conn=None) -> None:
@@ -3322,19 +3285,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         with self.sessions_db.begin() as c:
             c.execute(stmt)
 
-    _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
-                    "working_doc, created_at, updated_at, milestone, depends_on, number, holder, "
-                    "stage, stage_reason, pr, repo, assignee_person_id, assignee_raw")
-
     @staticmethod
     def _ticket_row(r) -> dict:
-        return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3],
-                "identifier": r[4], "url": r[5], "title": r[6], "status": r[7],
-                "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
-                "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
-                "number": r[14], "holder": r[15], "stage": r[16], "stage_reason": r[17],
-                "pr": json.loads(r[18]) if r[18] else None, "repo": r[19],
-                "assignee_person_id": r[20], "assignee_raw": r[21]}
+        """A row of `select(tickets_table)` as callers read a ticket."""
+        out = dict(r._mapping)
+        out["depends_on"] = out["depends_on"] or []
+        return out
 
     def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
                       position: float | None = None, external_id: str | None = None,
@@ -3345,29 +3301,31 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                       assignee_raw: str | None = None) -> str:
         """A ticket at the end of the project's list unless `position` says where. It gets the
         project's next number (T1, T2, ...)."""
-        with self._swrite:
-            return self._insert_ticket(project, owner, title, status, position, external_id,
+        with self._swrite, self.sessions_db.begin() as conn:
+            return self._insert_ticket(conn, project, owner, title, status, position, external_id,
                                        identifier, url, working_doc, milestone, depends_on, repo,
                                        assignee_person_id, assignee_raw)
 
-    def _insert_ticket(self, project, owner, title, status, position, external_id, identifier,
-                       url, working_doc, milestone, depends_on, repo, assignee_person_id,
-                       assignee_raw) -> str:
-        """The INSERT of create_ticket. The write lock is held by the caller."""
+    def _insert_ticket(self, conn, project, owner, title, status, position, external_id,
+                       identifier, url, working_doc, milestone, depends_on, repo,
+                       assignee_person_id, assignee_raw) -> str:
+        """The INSERT of create_ticket, in the caller's transaction."""
+        t = tickets_table
         tid = "tk_" + uuid.uuid4().hex[:10]
         ts = now_utc()
+        # the number first: it holds the project's row until the transaction ends, so a second
+        # writer on Postgres waits here and then sees this ticket's position
+        num = self._next_ticket_number(conn, project)
         if position is None:
-            last = self.sc.execute("SELECT max(position) FROM tickets WHERE project = ?",
-                                    [project]).fetchone()[0]
+            last = conn.execute(select(func.max(t.c.position)).where(
+                t.c.project == project)).scalar()
             position = (last or 0) + 1
-        num = self._next_ticket_number(project)
-        self.sc.execute(
-            f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [tid, project, owner, external_id, identifier, url, title, status,
-             float(position), working_doc, ts, ts, milestone,
-             json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
-             repo, assignee_person_id or None, assignee_raw or None])
+        conn.execute(insert(t).values(
+            id=tid, project=project, owner=owner, external_id=external_id, identifier=identifier,
+            url=url, title=title, status=status, position=float(position),
+            working_doc=working_doc, created_at=ts, updated_at=ts, milestone=milestone,
+            depends_on=depends_on or None, number=num, repo=repo,
+            assignee_person_id=assignee_person_id or None, assignee_raw=assignee_raw or None))
         return tid
 
     def adopt_ticket(self, project: str, owner: str, external_id: str, title: str, status: str,
@@ -3382,24 +3340,25 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         two rows. A row found takes the identifier, the url and the fields given (a field left as
         None keeps its value). The assignee is set only on a new row. The syncs insert through here
         too, so a sync and a write_ticket never leave two rows for one issue. Returns the row's id."""
-        with self._swrite:
-            r = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND owner = ? AND "
-                                "external_id = ? ORDER BY created_at LIMIT 1",
-                                [project, owner, external_id]).fetchone()
+        t = tickets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            # no external id names no row (`== None` would read as IS NULL and match any)
+            r = None if external_id is None else conn.execute(select(t.c.id).where(
+                t.c.project == project, t.c.owner == owner, t.c.external_id == external_id
+            ).order_by(t.c.created_at.nulls_last()).limit(1)).first()
             if r is None:
-                return self._insert_ticket(project, owner, title, status, position, external_id,
-                                           identifier, url, working_doc, milestone, depends_on,
-                                           repo, assignee_person_id, assignee_raw)
+                return self._insert_ticket(conn, project, owner, title, status, position,
+                                           external_id, identifier, url, working_doc, milestone,
+                                           depends_on, repo, assignee_person_id, assignee_raw)
             tid = r[0]
-            sets, vals = ["identifier = ?", "url = ?"], [identifier, url]
+            values = {"identifier": identifier, "url": url, "updated_at": now_utc()}
             for col, v in (("working_doc", working_doc), ("milestone", milestone),
                            ("repo", repo), ("position", position)):
                 if v is not None:
-                    sets.append(f"{col} = ?"); vals.append(float(v) if col == "position" else v)
+                    values[col] = float(v) if col == "position" else v
             if depends_on is not None:
-                sets.append("depends_on = ?"); vals.append(json.dumps(depends_on) if depends_on else None)
-            sets.append("updated_at = ?"); vals.append(now_utc())
-            self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals + [tid])
+                values["depends_on"] = depends_on or None
+            conn.execute(update(t).where(t.c.id == tid).values(values))
         return tid
 
     def update_ticket(self, tid: str, touch: bool = True, why: str | None = None,
@@ -3420,73 +3379,64 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
                    "pr", "repo", "assignee_person_id", "assignee_raw"}
-        sets, vals = (["updated_at = ?"], [now_utc()]) if touch else ([], [])
+        t = tickets_table
+        values = {"updated_at": now_utc()} if touch else {}
         for col, v in fields.items():
             if col == "depends_on":
-                v = json.dumps(v) if v else None
+                v = v or None
             if col == "pr":
-                v = json.dumps(v, default=str) if v else None
+                # default=str: a value JSON cannot hold (a datetime) is kept as its text
+                v = json.loads(json.dumps(v, default=str)) if v else None
             if col in allowed:
-                sets.append(f"{col} = ?"); vals.append(v)
+                values[col] = v
         closes = fields.get("status") in DONE_STATUSES and "stage" not in fields
         if closes:
-            sets.append("stage = CASE WHEN stage IN ('merged', 'shipped') THEN stage ELSE NULL END")
-        vals.append(tid)
+            values["stage"] = case((t.c.stage.in_(("merged", "shipped")), t.c.stage), else_=None)
         with self._swrite:
             if unless_pending and self.sc.execute(
                     "SELECT 1 FROM pending_writeback WHERE ticket = ?", [tid]).fetchone():
                 return False
-            was = (self.sc.execute("SELECT project, stage FROM tickets WHERE id = ?", [tid]).fetchone()
-                   if closes else None)
-            self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
+            with self.sessions_db.begin() as conn:
+                was = (conn.execute(select(t.c.project, t.c.stage).where(t.c.id == tid)).first()
+                       if closes else None)
+                if values:
+                    conn.execute(update(t).where(t.c.id == tid).values(values))
         if was and was[1] in OPEN_STAGES:
             self.add_ticket_history(tid, was[0], "stage", None,
                                     why or f"the ticket was marked {fields['status']}",
                                     "tares", "tares", now_utc())
         return True
 
-    def _ticket_stage_repair(self) -> None:
-        """Tickets closed before TR-1008 kept their stage, so a done ticket could still sit in
-        review. Clear those stages once, with a history line; later closes do it in update_ticket.
-        Cheap on every start: one query that finds nothing."""
-        try:
-            marks = ", ".join("?" for _ in OPEN_STAGES)
-            with self._sread:
-                rows = self.sc.execute(
-                    f"SELECT id, status FROM tickets WHERE status IN ('done', 'canceled') "
-                    f"AND stage IN ({marks})", list(OPEN_STAGES)).fetchall()
-            for tid, status in rows:
-                self.update_ticket(tid, touch=False, status=status,
-                                   why=f"closed when the ticket was {status}; it had kept its stage")
-            if rows:
-                print(f"taresd: closed the stage of {len(rows)} done or canceled tickets")
-        except Exception as e:
-            print(f"taresd: ticket stage repair: {type(e).__name__}: {e}")
-
     def update_ticket_owner(self, tid: str, owner: str) -> None:
         """A project stopped using Linear or GitHub: its tickets become Tares's (TR-408)."""
-        with self._swrite:
-            self.sc.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
-                             [owner, now_utc(), tid])
+        t = tickets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == tid).values(owner=owner, updated_at=now_utc()))
+
+    @staticmethod
+    def _ticket_order():
+        """The order of a project's list. NULLs last on SQLite too, as DuckDB and Postgres sort."""
+        return (tickets_table.c.position.nulls_last(), tickets_table.c.created_at.nulls_last(),
+                tickets_table.c.number.nulls_last(), tickets_table.c.id)
 
     def list_tickets(self, project: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
-                                    "ORDER BY position, created_at", [project]).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project == project)
+                                .order_by(*self._ticket_order())).all()
         return [self._ticket_row(r) for r in rows]
 
     def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
         """{project: its tickets as list_tickets gives them} in one query (TR-659)."""
         if not projects:
             return {}
-        marks = ", ".join("?" for _ in projects)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project IN "
-                                    f"({marks}) ORDER BY position, created_at",
-                                    list(projects)).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project.in_(list(projects)))
+                                .order_by(*self._ticket_order())).all()
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
-            out[r[1]].append(self._ticket_row(r))
+            out[r.project].append(self._ticket_row(r))
         return out
 
     def done_ticket_facts(self, project_ids: list[str]) -> dict[str, dict]:
@@ -3502,27 +3452,33 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         yours" line reads."""
         if not project_ids:
             return {}
-        marks = ", ".join("?" for _ in project_ids)
-        args = list(project_ids)
         out = {p: {"merged": 0, "closed": 0, "queued": 0, "stuck": 0, "total": 0, "repos": [],
                    "repo_from_pr": 0, "assignees": {}, "exact": True} for p in project_ids}
-        with self._sread:
-            groups = self.sc.execute(
-                "SELECT project, stage, status, "
-                "CASE WHEN depends_on IS NULL OR CAST(depends_on AS VARCHAR) IN ('', 'null', '[]') "
-                "THEN 0 ELSE 1 END, "
-                "CASE WHEN (repo IS NULL OR repo = '') AND pr IS NOT NULL "
-                "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, "
-                "CASE WHEN pr IS NOT NULL AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') "
-                "THEN 1 ELSE 0 END, "
-                "assignee_person_id, COUNT(*) "
-                f"FROM tickets WHERE project IN ({marks}) "
-                "GROUP BY project, stage, status, 4, 5, 6, assignee_person_id", args).fetchall()
-            first = self.sc.execute(
-                "SELECT project, repo FROM (SELECT project, repo, position, created_at, "
-                "ROW_NUMBER() OVER (PARTITION BY project, repo ORDER BY position, created_at) AS rn "
-                f"FROM tickets WHERE project IN ({marks}) AND repo IS NOT NULL AND repo <> '') f "
-                "WHERE rn = 1 ORDER BY project, position, created_at", args).fetchall()
+        t = tickets_table
+        mine = t.c.project.in_(list(project_ids))
+        has_pr = and_(t.c.pr.is_not(None), cast(t.c.pr, Text).not_in(("", "null", "{}")))
+        no_deps = or_(t.c.depends_on.is_(None),
+                      cast(t.c.depends_on, Text).in_(("", "null", "[]")))
+        no_repo = or_(t.c.repo.is_(None), t.c.repo == "")
+        # the flags are worked out in a subquery, so the grouping names its columns: Postgres does
+        # not take two copies of an expression with bound values for the same one
+        flags = select(
+            t.c.project, t.c.stage, t.c.status,
+            case((no_deps, 0), else_=1).label("has_deps"),
+            case((and_(no_repo, has_pr), 1), else_=0).label("from_pr"),
+            case((has_pr, 1), else_=0).label("has_pr"),
+            t.c.assignee_person_id).where(mine).subquery()
+        ranked = select(
+            t.c.project, t.c.repo, t.c.position, t.c.created_at,
+            func.row_number().over(partition_by=(t.c.project, t.c.repo),
+                                   order_by=self._ticket_order()).label("rn")
+        ).where(mine, t.c.repo.is_not(None), t.c.repo != "").subquery()
+        with self.sessions_db.consistent_read() as conn:
+            groups = conn.execute(select(*flags.c, func.count()).group_by(*flags.c)).all()
+            first = conn.execute(
+                select(ranked.c.project, ranked.c.repo).where(ranked.c.rn == 1)
+                .order_by(ranked.c.project, ranked.c.position.nulls_last(),
+                          ranked.c.created_at.nulls_last())).all()
         for project, stage, status, has_deps, from_pr, has_pr, who, n in groups:
             facts = out[project]
             if status != "canceled":
@@ -3551,15 +3507,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def get_ticket(self, project: str, ref: str) -> dict | None:
         """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
         issue id, or number (T3, or 3)."""
-        m = re.match(r"^[Tt]?(\d{1,6})$", (ref or "").strip())
+        if project is None or ref is None:       # `== None` would read as IS NULL and match
+            return None
+        m = re.match(r"^[Tt]?(\d{1,6})$", ref.strip())
         num = int(m.group(1)) if m else -1
-        with self._sread:
-            r = self.sc.execute(
-                f"SELECT {self._TICKET_COLS} FROM (SELECT *, 0 AS rank FROM tickets WHERE "
-                "project = ? AND (id = ? OR upper(identifier) = upper(?) OR external_id = ?) "
-                "UNION ALL SELECT *, 1 AS rank FROM tickets WHERE project = ? AND number = ?) "
-                "ORDER BY rank LIMIT 1", [project, ref, ref, ref, project, num]
-            ).fetchone()
+        t = tickets_table
+        # a match by name is preferred to a match by number
+        found = union_all(
+            select(t, literal(0).label("preference")).where(
+                t.c.project == project,
+                or_(t.c.id == ref, func.upper(t.c.identifier) == func.upper(ref),
+                    t.c.external_id == ref)),
+            select(t, literal(1).label("preference")).where(
+                t.c.project == project, t.c.number == num)).subquery()
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(*(found.c[c.name] for c in t.c))
+                             .order_by(found.c.preference).limit(1)).first()
         return self._ticket_row(r) if r else None
 
     def ticket_for_pr(self, repo: str, number: int) -> dict | None:
@@ -3573,33 +3536,35 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         want = str(repo or "").strip().lower()
         if not want or number <= 0:
             return None
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._TICKET_COLS} FROM tickets WHERE pr LIKE ? ORDER BY position, created_at",
-                [f'%"number": {number}%']).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            # the stored text is searched: type_coerce keeps the pattern from being sent as JSON
+            rows = conn.execute(select(t).where(
+                type_coerce(t.c.pr, Text).like(f'%"number": {number}%')
+            ).order_by(*self._ticket_order())).all()
         found = []
         for r in rows:
-            t = self._ticket_row(r)
-            pr = t["pr"] or {}
+            row = self._ticket_row(r)
+            pr = row["pr"] or {}
             if str(pr.get("repo") or "").lower() == want and pr.get("number") == number:
-                found.append(t)
-        return next((t for t in found if t["stage"] not in ("merged", "shipped")), found[0] if found else None)
+                found.append(row)
+        return next((x for x in found if x["stage"] not in ("merged", "shipped")), found[0] if found else None)
 
     def delete_ticket(self, tid: str) -> None:
         """The ticket goes, and with it the other tickets' dependency on it."""
+        t = tickets_table
         with self._swrite:
-            row = self.sc.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
+            # first: it is safe to repeat, so a crash after it leaves a delete a second call finishes
             self.sc.execute("DELETE FROM pending_writeback WHERE ticket = ?", [tid])
-            self.sc.execute("DELETE FROM tickets WHERE id = ?", [tid])
-            if row:
-                for oid, deps in self.sc.execute(
-                        "SELECT id, depends_on FROM tickets WHERE project = ? AND depends_on IS "
-                        "NOT NULL", [row[0]]).fetchall():
-                    ids = json.loads(deps) if deps else []
-                    if tid in ids:
-                        ids = [d for d in ids if d != tid]
-                        self.sc.execute("UPDATE tickets SET depends_on = ? WHERE id = ?",
-                                         [json.dumps(ids) if ids else None, oid])
+            with self.sessions_db.begin() as conn:
+                row = conn.execute(select(t.c.project).where(t.c.id == tid)).first()
+                conn.execute(delete(t).where(t.c.id == tid))
+                if row:
+                    for oid, deps in conn.execute(select(t.c.id, t.c.depends_on).where(
+                            t.c.project == row[0], t.c.depends_on.is_not(None))).all():
+                        if tid in (deps or []):
+                            conn.execute(update(t).where(t.c.id == oid).values(
+                                depends_on=[d for d in deps if d != tid] or None))
 
     def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
         """The Claude Code session works in the project. True when it was not linked before."""
@@ -5328,13 +5293,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 api_keys_table.c.person_id == pid, api_keys_table.c.revoked_at.is_(None))).scalars())
         for kid in keys:
             self.revoke_api_key(kid)
-        with self._swrite:
+        t = tickets_table
+        # one transaction: the guard above answers False once removed_at is set, so a crash must
+        # not leave it set with the tickets still theirs
+        with self._swrite, self.sessions_db.begin() as conn:
             # open tickets only: a finished one keeps the name of who did it
-            self.sc.execute("UPDATE tickets SET assignee_person_id = NULL WHERE assignee_person_id = ? "
-                            "AND status NOT IN ('done', 'canceled') AND stage NOT IN ('merged', 'shipped')", [pid])
-        # last: the guard above answers False once removed_at is set, so a crash before this line
-        # leaves a person a second remove still finishes (DuckDB and the session store are two databases)
-        with self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(
+                t.c.assignee_person_id == pid, t.c.status.not_in(("done", "canceled")),
+                t.c.stage.not_in(("merged", "shipped"))).values(assignee_person_id=None))
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
             conn.execute(update(projects_table).where(
