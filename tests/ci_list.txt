@@ -255,6 +255,7 @@ test_session_lines
 test_session_move
 test_session_move_archive
 test_session_no_duckdb_write
+test_session_nul_id
 test_session_project
 test_session_readers_held
 test_session_readers_no_events

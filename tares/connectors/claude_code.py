@@ -126,6 +126,16 @@ class ClaudeCodeConnector(Connector):
         pairs = project_secrets.scrub_pairs(self.store)
         return [project_secrets.scrub(o, pairs) for o in items] if pairs else items
 
+    @staticmethod
+    def _without_nul_id(o):
+        """The line with the NULs of its session id dropped. Postgres text holds none, and SQLite
+        keeps the same id, so it is done before anything counts or stores the line (TR-1703). An id
+        of nothing but NULs is left empty, which is a line with no session."""
+        sid = o.get("sessionId") if isinstance(o, dict) else None
+        if isinstance(sid, str) and "\x00" in sid:
+            return {**o, "sessionId": sid.replace("\x00", "")}
+        return o
+
     # ── push ingestion (the Claude Code plugin posts transcript lines to /ingest) ──
     def map_payload(self, payload) -> list[Envelope]:
         """Map pushed transcript events → Envelopes. `payload` is a single JSONL object or a list of
@@ -135,7 +145,7 @@ class ClaudeCodeConnector(Connector):
         redact = c.get("redact", True)
         include_thinking = c.get("include_thinking", False)
         items = payload if isinstance(payload, list) else [payload]
-        items = self._scrub_secrets(items)
+        items = self._scrub_secrets([self._without_nul_id(o) for o in items])
         out = []
         projects: dict[str, str | None] = {}
         for o in items:
