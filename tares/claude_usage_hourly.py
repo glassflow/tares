@@ -220,7 +220,7 @@ def _next_sessions(conn, after: str | None, chunk: int) -> list[str]:
 def check(store) -> tuple[bool, str]:
     """The buckets against the raw rows, in one snapshot: reply count, the token sums, the cost sum."""
     u, h = session_usage, session_usage_hourly
-    with store.sessions_db.snapshot() as conn:
+    with store.sessions_db.consistent_read() as conn:
         raw = conn.execute(select(func.count(), func.coalesce(func.sum(u.c.input_tokens), 0),
                                   func.coalesce(func.sum(u.c.output_tokens), 0),
                                   func.coalesce(func.sum(u.c.cache_write_tokens), 0),

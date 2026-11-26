@@ -209,7 +209,7 @@ def holdable(store, lines: list) -> list:
     c = sessions.c
     todo = exists(select(session_ingest_marks.c.name).where(
         session_ingest_marks.c.name == literal(DRAIN_TODO) + c.session))
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         for i in range(0, len(sids), 500):
             for sid, source, origin, done, waits in conn.execute(
                     select(c.session, c.source, c.lines_origin, c.lines_complete, todo.label("todo"))
@@ -878,7 +878,7 @@ def set_filled(store, name: str) -> None:
 
 # ── catching up from DuckDB ──────────────────────────────────────────────────────────────────
 def _mark(store):
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == MARK)).scalar_one_or_none()
 
@@ -897,7 +897,7 @@ def caught_up(store) -> bool:
     is kept on the store (the row is never unset, and losing the answer changes nothing)."""
     if getattr(store, "_sessions_caught_up", False):
         return True
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         at = conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == CAUGHT_UP)).first()
     if at is None:
@@ -1070,7 +1070,7 @@ def lines_size(store) -> tuple[int, int]:
     its indexes on Postgres (`pg_total_relation_size`) or the whole file's size on SQLite (pages
     times page size: SQLite has no size per table without a build option)."""
     db = store.sessions_db
-    with db.begin() as conn:
+    with db.read() as conn:
         rows = conn.execute(select(func.count()).select_from(session_lines)).scalar_one()
         if db.dialect == "postgresql":
             size = conn.execute(text("SELECT pg_total_relation_size('session_lines')")).scalar_one()
@@ -1090,7 +1090,7 @@ def refresh_lines_gauges(store) -> None:
 
 
 def _facts_mark(store):
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == FACTS_MARK)).scalar_one_or_none()
 
@@ -1160,7 +1160,7 @@ def _fill_chunk(store, sources: list, sids: list, since) -> None:
 
 
 def _turns_mark(store):
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == TURNS_MARK)).scalar_one_or_none()
 

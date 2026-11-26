@@ -75,8 +75,8 @@ def make_engine(data_dir: str, state_dsn: str | None = None) -> Engine:
 
 def _sqlite_events(engine: Engine) -> None:
     # Every transaction starts with BEGIN IMMEDIATE, so a writer waits for the one before it. A
-    # plain read (`SessionStore.read()`) starts with a deferred BEGIN instead: in WAL mode it sees
-    # the last committed state and never waits for a writer.
+    # read (`SessionStore.read()`) starts with a deferred BEGIN instead: in WAL mode it sees the
+    # last committed state, never waits for a writer and holds none up.
     @event.listens_for(engine, "connect")
     def _connect(dbapi_connection, _record):
         # pysqlite's own BEGIN handling is off: SQLAlchemy's begin event below emits it

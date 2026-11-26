@@ -134,7 +134,7 @@ def _utc(t: datetime | None) -> datetime | None:
 
 # ── the plan ─────────────────────────────────────────────────────────────────────────────────
 def planned(store) -> bool:
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == PLANNED)).first() is not None
 
@@ -611,7 +611,7 @@ def due(store, limit: int = BATCH, now: datetime | None = None) -> list[str]:
     tried is left out until `RETRY_AFTER` has passed since that try."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return [r[0] for r in conn.execute(
             select(m.session).join(sessions, s.session == m.session)
             .where(m.state == PENDING, s.last_line_at >= cutoff, _ready())
@@ -623,7 +623,7 @@ def due_old(store, limit: int = BATCH, now: datetime | None = None) -> list[str]
     was tried."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return [r[0] for r in conn.execute(
             select(m.session).outerjoin(sessions, s.session == m.session)
             .where(m.state == PENDING, _older(cutoff), _ready())
@@ -634,7 +634,7 @@ def retrying(store, now: datetime | None = None, old: bool = False) -> int:
     """How many pending sessions inside the window (outside it with `old`) were tried and wait."""
     cutoff = (now or now_utc()) - timedelta(days=ARCHIVE_AFTER_DAYS)
     m, s = session_moves.c, sessions.c
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return int(conn.execute(
             select(func.count()).select_from(session_moves)
             .outerjoin(sessions, s.session == m.session)
@@ -643,7 +643,7 @@ def retrying(store, now: datetime | None = None, old: bool = False) -> int:
 
 
 def counts(store) -> dict:
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return {r[0]: int(r[1]) for r in conn.execute(
             select(session_moves.c.state, func.count()).group_by(session_moves.c.state)).all()}
 
