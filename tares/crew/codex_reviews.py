@@ -6,21 +6,24 @@ station is started with: its rule sentences, the person's grants among them
 the reviewer's notifications reach no one. Codex keeps each review as a conversation of its own in the
 station's Codex folder (`sessions/**/rollout-*.jsonl`), measured on 0.171.0:
 
-  * its turn is started by `guardian_review` (the `turn_trigger` of its `task_started` line), and its first
-    line names the station's conversation as its parent;
-  * the action it judged is in its prompt, after the text "Planned action JSON:" (for a command:
+  * its first line names the station's conversation as its parent;
+  * each review is one turn of it, started by `guardian_review` (the `turn_trigger` of its `task_started`
+    line). Codex goes on in the same review conversation for the station's later requests ("Continue the same
+    review conversation"), so one file holds as many reviews as it has such turns;
+  * the action a turn judged is in its prompt, after the text "Planned action JSON:" (for a command:
     {command: [shell, "-lc", script], cwd, justification, ...}; the guard runs the script with its standard
     input closed, `exec </dev/null` first, which is left out here);
-  * its decision is its last answer, a JSON object {outcome: allow|deny, risk_level, user_authorization,
-    rationale}.
+  * its decision is the turn's last answer, a JSON object {outcome: allow|deny, risk_level,
+    user_authorization, rationale}.
 
 Once a round (the watch's Codex round, `tares.crew.codex_round`), for every Codex station, each review not
 recorded yet becomes one event, `codex-review`, and one line from the watch: allowed or refused, the command,
 the risk and the reviewer's reason. A review without a decision yet (still running) is left for a later round;
 one whose turn ended without a decision (it timed out, or was cut off) is recorded as that: nothing was allowed.
-The names of the files looked at are kept in stations/<station>.codex.reviews.json, each for as long as its
-file is there, so a watch started again records nothing twice. They are written after the round's events: a
-watch killed in between records those again rather than never.
+What was recorded is kept in stations/<station>.codex.reviews.json as `<file>#<turn>` (and `<file>#-` for a
+conversation that is not a review), each for as long as its file is there, so a watch started again records
+nothing twice. It is written after the round's events: a watch killed in between records those again rather
+than never.
 
 Standard library and the crew's own modules.
 """
@@ -33,7 +36,7 @@ from . import codex as cx
 from . import state
 from .paths import CrewPaths
 
-KEPT = "codex.reviews.json"   # stations/<station>.codex.reviews.json: [file name, ...]
+KEPT = "codex.reviews.json"   # stations/<station>.codex.reviews.json: ["<file>#<turn>", "<file>#-", ...]
 TRIGGER = "guardian_review"
 ENDED = ("task_complete", "turn_aborted")   # a conversation's turn ended, with or without an answer
 PLANNED = "Planned action JSON:"
@@ -92,45 +95,65 @@ def _parent(path: str) -> str:
 
 
 NOT_A_REVIEW = {"outcome": ""}   # a conversation started from the station's for something else (a helper agent)
+OTHER = "-"   # the turn key that marks a file as not a review
+
+
+def reviews(path: str):
+    """The decided reviews of one review conversation, oldest first: [{file, turn, at, parent, outcome, risk,
+    authorization, why, command}]; NOT_A_REVIEW for a conversation started for something else; [] for one with
+    no decided turn yet. A turn still running is left out; one that ended without a decision has outcome
+    `none`."""
+    lines = _lines(path)
+    starts = [i for i, x in enumerate(lines) if _payload(x).get("type") == "task_started"]
+    if not starts:
+        return []
+    if not any((_payload(lines[i]).get("turn_attribution") or {}).get("turn_trigger") == TRIGGER for i in starts):
+        return NOT_A_REVIEW
+    meta = next((_payload(x) for x in lines if x.get("type") == "session_meta"), {})
+    out = []
+    for n, i in enumerate(starts):
+        head = _payload(lines[i])
+        if (head.get("turn_attribution") or {}).get("turn_trigger") != TRIGGER:
+            continue
+        turn = str(head.get("turn_id") or i)
+        part = lines[i + 1:starts[n + 1] if n + 1 < len(starts) else len(lines)]
+        action, answer = None, ""
+        for x in part:
+            p = _payload(x)
+            if p.get("type") != "message":
+                continue
+            texts = _texts(p)
+            if p.get("role") == "user":
+                for j, t in enumerate(texts):
+                    if t.strip() == PLANNED and j + 1 < len(texts):
+                        try:
+                            action = json.loads(texts[j + 1])
+                        except ValueError:
+                            action = None
+            elif p.get("role") == "assistant" and texts:
+                answer = texts[-1]
+        try:
+            decision = json.loads(answer) if answer else None
+        except ValueError:
+            decision = None
+        if not isinstance(decision, dict) or decision.get("outcome") not in ("allow", "deny"):
+            if not any(_payload(x).get("type") in ENDED for x in part):
+                continue   # still running
+            decision = {"outcome": "none"}   # it ended without one (timed out, or cut off): nothing was allowed
+        out.append({"file": os.path.basename(path), "turn": turn, "at": str(meta.get("timestamp") or ""),
+                    "parent": str(meta.get("parent_thread_id") or ""), "outcome": decision["outcome"],
+                    "risk": str(decision.get("risk_level") or ""),
+                    "authorization": str(decision.get("user_authorization") or ""),
+                    "why": " ".join(str(decision.get("rationale") or "").split()), "command": _command(action)})
+    return out
 
 
 def read(path: str):
-    """One review conversation: {file, at, parent, outcome, risk, authorization, why, command}; NOT_A_REVIEW
-    for a conversation started for something else; None for one that holds no decision yet."""
-    lines = _lines(path)
-    triggers = [(_payload(x).get("turn_attribution") or {}).get("turn_trigger") for x in lines
-                if _payload(x).get("type") == "task_started"]
-    if TRIGGER not in triggers:
-        return NOT_A_REVIEW if triggers else None
-    meta = next((_payload(x) for x in lines if x.get("type") == "session_meta"), {})
-    action = None
-    answer = ""
-    for x in lines:
-        p = _payload(x)
-        if p.get("type") != "message":
-            continue
-        texts = _texts(p)
-        if p.get("role") == "user":
-            for i, t in enumerate(texts):
-                if t.strip() == PLANNED and i + 1 < len(texts):
-                    try:
-                        action = json.loads(texts[i + 1])
-                    except ValueError:
-                        action = None
-        elif p.get("role") == "assistant" and texts:
-            answer = texts[-1]
-    try:
-        decision = json.loads(answer) if answer else None
-    except ValueError:
-        decision = None
-    if not isinstance(decision, dict) or decision.get("outcome") not in ("allow", "deny"):
-        if not any(_payload(x).get("type") in ENDED for x in lines):
-            return None   # still running
-        decision = {"outcome": "none"}   # it ended without one (it timed out, or was cut off): nothing was allowed
-    return {"file": os.path.basename(path), "at": str(meta.get("timestamp") or ""),
-            "parent": str(meta.get("parent_thread_id") or ""), "outcome": decision["outcome"],
-            "risk": str(decision.get("risk_level") or ""), "authorization": str(decision.get("user_authorization") or ""),
-            "why": " ".join(str(decision.get("rationale") or "").split()), "command": _command(action)}
+    """The last decided review of a review conversation, NOT_A_REVIEW, or None (see `reviews`)."""
+    got = reviews(path)
+    if got is NOT_A_REVIEW:
+        return got
+    return got[-1] if got else None
 
 
 def _files(home: str) -> list:
@@ -155,28 +178,34 @@ def new(paths: CrewPaths, station: str) -> list:
     """The reviews of the station not recorded yet, oldest first, each recorded now (an event), and kept as
     recorded."""
     seen = state.read_json(paths.station_file(station, KEPT), None)
-    seen = [s for s in seen if isinstance(s, str)] if isinstance(seen, list) else []
+    seen = [s for s in seen if isinstance(s, str) and "#" in s] if isinstance(seen, list) else []
     known = set(seen)
     out = []
     changed = False
     for path in _files(str(cx.station_home(paths, station))):
         name = os.path.basename(path)
-        if name in known or not _parent(path):
+        if f"{name}#{OTHER}" in known or not _parent(path):
             continue
-        review = read(path)
-        if review is None:
-            continue   # a review still running: looked at again next round
-        seen.append(name)
-        known.add(name)
-        changed = True
-        if review is NOT_A_REVIEW:
+        got = reviews(path)
+        if got is NOT_A_REVIEW:
+            seen.append(f"{name}#{OTHER}")
+            known.add(f"{name}#{OTHER}")
+            changed = True
             continue
-        state.event("codex-review", station, line_for(station, review)[:1000], paths=paths)
-        out.append(review)
+        for review in got:   # a turn still running is not among them: looked at again next round
+            key = f"{name}#{review['turn']}"
+            if key in known:
+                continue
+            seen.append(key)
+            known.add(key)
+            changed = True
+            state.event("codex-review", station, line_for(station, review)[:1000], paths=paths)
+            out.append(review)
     if changed:
-        # every name whose file is still there stays: one dropped would be read, and recorded, again
+        # every key whose file is still there stays: one dropped would be read, and recorded, again
         there = {os.path.basename(p) for p in _files(str(cx.station_home(paths, station)))}
-        state.write_json(paths.station_file(station, KEPT), [s for s in seen if s in there], mode=0o600)
+        state.write_json(paths.station_file(station, KEPT), [k for k in seen if k.split("#", 1)[0] in there],
+                         mode=0o600)
     return out
 
 

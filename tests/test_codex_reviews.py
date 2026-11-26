@@ -135,8 +135,8 @@ ck("nothing is recorded for the station's own conversation, a helper's, a broken
    got == [] and said == [] and len([e for e in events() if e["event"] == "codex-review"]) == 2, (got, said))
 kept = json.loads(paths.station_file(S, rv.KEPT).read_text())
 ck("the helper's conversation is kept as looked at; the running review is not",
-   "rollout-2026-11-26T15-03-00-helper.jsonl" in kept and "rollout-2026-11-26T15-05-00-r3.jsonl" not in kept
-   and "rollout-2026-11-26T15-00-00-main.jsonl" not in kept, kept)
+   "rollout-2026-11-26T15-03-00-helper.jsonl#-" in kept and not [k for k in kept if k.startswith("rollout-2026-11-26T15-05-00-r3")]
+   and not [k for k in kept if k.startswith("rollout-2026-11-26T15-00-00-main")], kept)
 pending.write_text("".join(json.dumps(x) + "\n" for x in review("r3", "git fetch origin", "allow", "a fetch")),
                    encoding="utf-8")
 got = rv.step(None, paths, said.append)
@@ -162,8 +162,9 @@ write(S, "rollout-2026-11-26T15-07-00-r5.jsonl", review("r5", "git push origin f
 rv.new(paths, S)
 kept = json.loads(paths.station_file(S, rv.KEPT).read_text())
 ck("every name whose file is there stays kept, however many; one whose file is gone is dropped",
-   "rollout-2026-11-26T15-02-00-r2.jsonl" not in kept and len(kept) == 5
-   and {"rollout-2026-11-26T15-01-00-r1.jsonl", "rollout-2026-11-26T15-07-00-r5.jsonl"} <= set(kept), kept)
+   not [k for k in kept if k.startswith("rollout-2026-11-26T15-02-00-r2")] and len(kept) == 5
+   and {k.split("#")[0] for k in kept} >= {"rollout-2026-11-26T15-01-00-r1.jsonl", "rollout-2026-11-26T15-07-00-r5.jsonl"},
+   kept)
 paths.station_file(S, rv.KEPT).unlink()
 again = rv.new(paths, S)
 ck("without its record a watch started again would record them again: the record is what keeps them once",
@@ -171,6 +172,24 @@ ck("without its record a watch started again would record them again: the record
 write("shop-reviewer", "rollout-2026-11-26T15-06-00-r9.jsonl", review("r9", "gh pr merge 1", "deny", "no"))
 ck("a station on Claude Code is not looked at",
    all(s != "shop-reviewer" for s, _ in rv.step(None, paths, None)))
+
+print("e. Codex goes on in the same review conversation for later requests: one file, several reviews")
+two = review("r6", "git -C /w fetch origin", "allow", "a fetch")
+two[1]["payload"]["turn_id"] = "t-1"
+more = [{"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "t-1"}},
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t-2",
+                                          "turn_attribution": {"turn_trigger": "guardian_review"}}},
+        user("Continue the same review conversation.", "Planned action JSON:\n", action("git add x && git commit -m y"))]
+f6 = write(S, "rollout-2026-11-26T15-08-00-r6.jsonl", [*two, *more])
+got = rv.new(paths, S)
+ck("the first decision is recorded while the second is still running", [r["command"] for r in got] == ["git -C /w fetch origin"], got)
+f6.write_text("".join(json.dumps(x) + "\n" for x in [*two, *more, answer(json.dumps({
+    "risk_level": "medium", "user_authorization": "low", "outcome": "deny",
+    "rationale": "It runs in the reports folder, not the worktree."}))]), encoding="utf-8")
+got = rv.new(paths, S)
+ck("the second decision in the same file is recorded too, once, and the first is not again",
+   [(r["outcome"], r["command"], r["turn"]) for r in got] == [("deny", "git add x && git commit -m y", "t-2")]
+   and rv.new(paths, S) == [], got)
 
 print("d. the watch's Codex round")
 names = [n for n, _ in codex_round.PARTS]
