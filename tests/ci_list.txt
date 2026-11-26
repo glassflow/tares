@@ -259,6 +259,7 @@ test_session_copy_start
 test_session_facts
 test_session_flow
 test_session_lines
+test_session_nul_id
 test_session_project
 test_session_store
 test_session_turns

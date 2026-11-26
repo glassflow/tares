@@ -17,6 +17,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import bindparam, case, distinct, false, func, select, update
 
+from . import session_ingest
 from .pricing import cost_usd
 from .session_store.tables import (project_sessions, session_meters, session_stations,
                                    session_usage)
@@ -120,7 +121,8 @@ class ClaudeUsageStore:
             "GROUP BY 1, 2", [*sources, SYNTHETIC, since, since]).fetchall()
         cols = ("session", "message", "replied_at", "model", "project", "subagent", "input_tokens",
                 "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
-        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows]
+        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows
+                if session_ingest.holds_session(self, r[0])]
         stmt = self.sessions_db.upsert(u).on_conflict_do_nothing(
             index_elements=["session", "message"])
         with self.sessions_db.begin() as conn:
