@@ -91,6 +91,7 @@ import os
 import re
 import shlex
 import signal
+import sys
 import time
 
 import psutil
@@ -563,7 +564,16 @@ def unknown_note(rows: list) -> str:
 def cmd_outcome(argv: list, env: dict) -> int:
     """`tares factory outcome [<call> done|not-done <what you found>]`: with nothing, list the calls of this
     station whose outcome is not known; else take one off the list (see `reconcile`). The station is
-    FACTORY_STATION, or `--station NAME` for a person."""
+    FACTORY_STATION, or `--station NAME` for a person. A refusal is said in one line, exit 1."""
+    try:
+        return _outcome(argv, env)
+    except CrewError as e:
+        sys.stdout.flush()
+        print(e.line, file=sys.stderr)
+        return 1
+
+
+def _outcome(argv: list, env: dict) -> int:
     args = list(argv)
     if args[:1] == ["outcome"]:   # the dispatcher passes the command word too (TR-1598: it was taken for the call)
         args = args[1:]

@@ -193,6 +193,12 @@ ck("a station's account takes that call off the list, and only that one", code =
    in out and left == ["call_a1"], (out, left))
 code, out = factory("outcome", "--station", CX, "call_a1", "done", "the branch is on the remote at the same head")
 ck("a person names the station with --station", code == 0 and codex_station.unknown(paths, CX) == [], out)
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    code, out = factory("outcome", "--station", CX, "call_a1", "done", "settled twice")
+ck("a call already settled (here by the station itself) is refused in one line, exit 1, not a traceback",
+   code == 1 and "has no call call_a1 with an unknown outcome" in err.getvalue() and "Traceback" not in err.getvalue(),
+   (code, err.getvalue()))
 tares.__exit__(None, None, None)
 
 print(json.dumps({"passed": P, "failed": F}) if os.environ.get("TEST_JSON") else f"{P} passed, {F} failed")
