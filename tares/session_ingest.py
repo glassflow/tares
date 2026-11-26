@@ -135,9 +135,17 @@ def claude_code_sources(store) -> set[str]:
     return {r[0] for r in rows} | {"claude_code"}
 
 
+def holds_session(store, sid) -> bool:
+    """False for a session id the sessions database cannot hold: Postgres takes no NUL in text, so
+    such a session can never have a row there. DuckDB alone keeps its lines, and the rest of a batch
+    or of a fill is stored as usual (TR-1647, TR-1703). A posted line has lost its NULs before it
+    gets here (`ClaudeCodeConnector.map_payload`); DuckDB may hold ids from before that."""
+    return store.sessions_db.dialect != "postgresql" or "\x00" not in str(sid)
+
+
 def claude_code_lines(store, envelopes) -> list:
     """The envelopes of `envelopes` that are lines of a claude_code source, with a session."""
-    cands = [e for e in envelopes if e.key_value]
+    cands = [e for e in envelopes if e.key_value and holds_session(store, e.key_value)]
     if not cands:
         return []
     names = {e.source for e in cands}
@@ -714,7 +722,7 @@ def reconcile_sessions(store, chunk: int = CHUNK) -> int:
             "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
             [*sources, since, since]).fetchall()
     newest = max((r[1] for r in found), default=None)
-    sids = sorted(r[0] for r in found)
+    sids = sorted(r[0] for r in found if holds_session(store, r[0]))
     for i in range(0, len(sids), chunk):
         _reconcile_chunk(store, sources, sids[i:i + chunk])
     if newest is not None:
@@ -850,7 +858,7 @@ def fill_facts(store, chunk: int = CHUNK) -> int:
             "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
             [*sources, since, since]).fetchall()
     newest = max((r[1] for r in found), default=None)
-    sids = sorted(r[0] for r in found)
+    sids = sorted(r[0] for r in found if holds_session(store, r[0]))
     for i in range(0, len(sids), chunk):
         _fill_chunk(store, sources, sids[i:i + chunk], since)
     if newest is not None:
@@ -913,7 +921,7 @@ def fill_turns(store, chunk: int = CHUNK) -> int:
             "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR ingest_time >= ?) GROUP BY key_value",
             [*sources, since, since]).fetchall()
     newest = max((r[1] for r in found), default=None)
-    sids = sorted(r[0] for r in found)
+    sids = sorted(r[0] for r in found if holds_session(store, r[0]))
     for i in range(0, len(sids), chunk):
         _fill_turns_chunk(store, sources, sids[i:i + chunk], since)
     if newest is not None:

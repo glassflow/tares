@@ -17,6 +17,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import bindparam, case, distinct, false, func, select, union, update
 
+from . import session_ingest
 from .pricing import cost_usd
 from .session_store.tables import (project_sessions, session_meters, session_stations,
                                    session_usage)
@@ -123,7 +124,8 @@ class ClaudeUsageStore:
         deleted = self.deleted_private_projects()   # a reply stamped with one stays its own
         for ref in {r[4] for r in rows if r[4]} - projects.keys():
             projects[ref] = self.deleted_private_ref(ref, deleted)
-        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows]
+        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows
+                if session_ingest.holds_session(self, r[0])]
         stmt = self.sessions_db.upsert(u).on_conflict_do_nothing(
             index_elements=["session", "message"])
         with self.sessions_db.begin() as conn:

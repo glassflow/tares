@@ -1858,6 +1858,7 @@ class FactoryStore:
             "json_extract_string(labels, '$.tares_project'), payload FROM events "
             "WHERE event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan')"
             ).fetchall()
+        rows = [r for r in rows if session_ingest.holds_session(self, r[1])]
         if rows:
             self._record_challenges(rows)
 
