@@ -29,14 +29,14 @@ import subprocess
 import sys
 import time
 
-from . import claude, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
+from . import claude, codex_pace, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
 from .errors import ClaudeNotFoundError, CrewError, GuardOffError, LimitHeldError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
 RESTART_USAGE = f"usage: {ME} restart <station>"
-RETIRE_USAGE = "usage: tares factory retire <station>"
+RETIRE_USAGE = "usage: tares factory retire <station> [--drop-mail]"
 
 
 # ---------- the watch (the real one is watch.py, TR-958) ----------
@@ -59,10 +59,38 @@ REPORT_READ = ("re-read your report (a short state file; for older events use `t
                "never cat or tail a file)")  # every reminder to a station says this, word for word
 
 
-def rearm_text(client: TaresClient) -> str:
+def reload_text(paths: CrewPaths, station: str, skill: str, *, may_change: bool = False) -> str:
+    """The first step a restart names: reload the skills, or, on Codex, which has none to load, that its rules
+    are in its instructions (a start gives them again; TR-1598)."""
+    tail = " (they may have changed)" if may_change else ""
+    if proc.on_codex(station, paths):
+        return f"Your rules are in your instructions{tail}"
+    return f"Reload the skills factory-protocol and station-{skill}{tail}"
+
+
+def revive_prompt(client: TaresClient, paths: CrewPaths, station: str, skill: str, fresh: bool) -> str:
+    """What a revive tells the station when it is given no prompt of its own."""
+    again = (f"{reload_text(paths, station, skill)}, {REPORT_READ} and your work on Tares, "
+             f"{rearm_text(client, station)}, then carry on where your report left off.")
+    if fresh and proc.on_codex(station, paths):
+        return ("You were started again under the same name, in a new conversation. Nothing from the last one "
+                f"carries over except your report and what is on Tares. {again}")
+    if fresh:
+        return ("You were started again under the same name, in a new conversation: the last one kept "
+                "refilling its context right after each compaction, so Claude Code stopped it. Nothing from "
+                f"it carries over except your report and what is on Tares. {again} Read big files, logs and "
+                "diffs in parts.")
+    return f"You were revived by the factory under the same name. {again}"
+
+
+
+def rearm_text(client: TaresClient, station: str = "") -> str:
     """What a restart tells a station about its schedule. The pace is read here, as bash does for a command that
     has not read it yet (a watch round has its own reading in pace.step). Bash reads it in a command substitution,
-    so a reading taken here is not remembered: a restart that read nothing before writes no pace file."""
+    so a reading taken here is not remembered: a restart that read nothing before writes no pace file. A station
+    on Codex (`station` names it) has no schedule tool and is told so."""
+    if station and proc.on_codex(station, client.paths):
+        return codex_pace.schedule_text(client)
     had = pace.has_read(client.paths)
     reading = pace.last(client.paths) if had else pace.read(client)
     if not had:
@@ -120,16 +148,7 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     model, effort, session = get("model"), get("effort"), get("sessionId")
     old_id = get("id")
     skill = launch.parent_role(parent, paths) if role == "helper" else role
-    prompt = rest[0] if rest else ""
-    again = (f"Reload the skills factory-protocol and station-{skill}, {REPORT_READ} and your work on "
-             f"Tares, {rearm_text(client)}, then carry on where your report left off.")
-    if not prompt and fresh:
-        prompt = ("You were started again under the same name, in a new conversation: the last one kept "
-                  "refilling its context right after each compaction, so Claude Code stopped it. Nothing from "
-                  f"it carries over except your report and what is on Tares. {again} Read big files, logs and "
-                  "diffs in parts.")
-    if not prompt:
-        prompt = f"You were revived by the factory under the same name. {again}"
+    prompt = (rest[0] if rest else "") or revive_prompt(client, paths, station, skill, fresh)
     locks.station_lock(station, paths)
     if get("status") == "retired":
         raise CrewError(f"{station} was retired; tares factory spawn starts it again")
@@ -326,7 +345,11 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
         raise CrewError(f"{station} is not a recorded station")
     locks.station_lock(station, paths)
     if on_codex:   # its own app-server: a running turn is interrupted, then the process is ended
-        job_id = f"codex app-server {codex_station.stop(paths, station)}"
+        # its last messages are taken once its turn is interrupted, or the retire is refused (TR-1599)
+        mail = "drop" if "--drop-mail" in args[1:] else "require"
+        job_id = f"codex app-server {codex_station.stop(paths, station, mail=mail)}"
+        from . import codex_mail
+        codex_mail.bounce(paths, station, "it was retired")   # what waited for it goes back to its senders
         codex_station.give_up_unverified(paths, station, "retire")   # retired for good: nothing waits on it
     else:
         _stop_session(job_id, claude_bin)
@@ -372,9 +395,14 @@ def down(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) 
     if not paths.stations.is_file():
         client.say("no stations recorded")
         return
+    left = []
     for name, row in list(state.stations_load(paths).items()):
         if isinstance(row, dict) and row.get("status") == "active":
-            retire(client, paths, [name], claude_bin=claude_bin)
+            try:
+                retire(client, paths, [name, *[a for a in args if a == "--drop-mail"]], claude_bin=claude_bin)
+            except CrewError as e:   # one station that cannot be retired now does not keep the others running
+                client.say(e.message)
+                left.append(name)
     # with no crew left to relay them, a finished project's questions are moot, and so is "stop the
     # crew?", asked with or without a project: it names this command (TR-599)
     for item_id in _finished_questions(client.desk_json()):
@@ -382,6 +410,9 @@ def down(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) 
     # the person's own questions only: on a shared cell another person's are not ours to withdraw (TR-1355)
     for item_id in _stop_questions(client.desk_json(mine=True)):
         _withdraw(client, item_id, "the person stopped the crew")
+    if left:
+        raise CrewError(f"still running: {', '.join(left)} (see above); run {ME} crew down again once they can stop, "
+                        f"or {ME} crew down --drop-mail to stop them and lose what they sent since it was last read")
     client.say(f"all stations stopped. Tares keeps the projects, tickets and the desk; {ME} crew up starts fresh sessions.")
 
 

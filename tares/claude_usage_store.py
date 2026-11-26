@@ -151,12 +151,14 @@ class ClaudeUsageStore:
     def _usage_forget_project(self, uid: str, private: bool = False) -> None:
         """A project is deleted. A team project's replies stay, counted as the session's own. A
         private one's stay its own, so that no total counts them (TR-1697): those that counted
-        for it through the session's link, which is about to go, are stamped with it."""
+        for it through the session's link are stamped with it."""
         u, ss, ps = session_usage, session_stations, project_sessions
         if private:
-            # as _replies_by_project picks it: the lowest project the session is linked to
-            by_link = select(ps.c.session).group_by(ps.c.session).having(
-                func.min(ps.c.project) == uid)
+            # as _replies_by_project picked it until now: the lowest project the session is
+            # linked to, an earlier deleted private one left out
+            earlier = sorted(set(self.deleted_private_projects()) - {uid})
+            by_link = select(ps.c.session).where(ps.c.project.not_in(earlier)).group_by(
+                ps.c.session).having(func.min(ps.c.project) == uid)
             # a station with a project, and a crew station, do not go by the link
             by_station = select(ss.c.session).where(
                 ss.c.project.is_not(None) | ss.c.role.in_(CREW_ROLES))
@@ -356,15 +358,17 @@ class ClaudeUsageStore:
                     found.c.session.in_(chunk))).scalars())
         return out
 
-    @staticmethod
-    def _replies_by_project():
+    def _replies_by_project(self):
         """(the replies joined to their station and the project their session worked in, the
         project each reply counts for, whether it is a crew station's). The one definition of
         which project a reply belongs to: the one it was stamped with, else the station's project,
-        else, for a session that is no crew station, the (lowest) one it worked in, else none."""
+        else, for a session that is no crew station, the (lowest) one it worked in, else none.
+        A deleted private project keeps its links, for what they hide, and no new reply counts
+        for it through one."""
         u, ss, ps = session_usage, session_stations, project_sessions
-        worked = select(ps.c.session, func.min(ps.c.project).label("project")).group_by(
-            ps.c.session).subquery()
+        deleted = sorted(self.deleted_private_projects())
+        worked = select(ps.c.session, func.min(ps.c.project).label("project")).where(
+            ps.c.project.not_in(deleted)).group_by(ps.c.session).subquery()
         is_crew = ss.c.role.in_(CREW_ROLES)
         project = func.coalesce(u.c.project, ss.c.project,
                                 case((is_crew, None), else_=worked.c.project))

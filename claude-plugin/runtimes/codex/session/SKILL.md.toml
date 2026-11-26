@@ -1,0 +1,54 @@
+# The session manual as a Codex session reads it (TR-1599): edits of ../../../skills/session/SKILL.md.
+#
+# `tares factory session` on a crew that runs on Codex opens the person's own Codex with this manual. The
+# person's session is not a crew station: it sends no message; Tares records a takeover, and the factory
+# wakes the orchestrator for it.
+
+[[edit]]
+find = '''Load the `spec-project` skill and follow its **Light mode** section.'''
+with = '''Follow the page `light-mode.md` below (the spec manual's light mode).'''
+
+[[edit]]
+find = '''If the person chose the full spec and the crew instead, the spec skill ends
+with the hand-over; this session is done after that.'''
+with = '''If the person chose the full spec and the crew instead, they plan it with `tares factory spec`,
+which ends with the hand-over; this session is done after that.'''
+
+[[edit]]
+find = '''2. Send your crew's orchestrator (the name `hand_over` gave when the project was handed over, else `list_crew(mine=true)`, or `list_crew` on an older Tares that does not take `mine`: `<crew>-orchestrator`, never another person's) one message with
+   SendMessage:
+
+   ```
+   [TF:TAKEOVER] <project> was taken over by the person
+   project: <project>
+   session: <$TARES_SESSION_NAME>
+   holders: <the holders crew_projects lists>
+   Stop its builders: push what they have, write their progress, then release_project.
+   ```
+
+   If the message does not go through (no session by that name), carry on: Tares already has
+   the takeover, and the orchestrator handles it on its next tick.'''
+with = '''2. Nothing to send: Tares has the takeover, and the factory wakes your crew's orchestrator for it. This session
+   is not a station of the crew, so no message reaches it either.'''
+
+[[edit]]
+find = '''4. Wait for `[TF:RELEASED]` from the orchestrator. If none comes within about 25 minutes (the
+   orchestrator ticks every 20), check `crew_projects` again: gone from `releasing` means released.
+   If `list_crew` shows no orchestrator working, idle or waiting, tell the person, and once they confirm
+   no builder of this project is still running (`tares factory crew status`), call
+   `release_project` yourself.'''
+with = '''4. Watch `crew_projects`: the project gone from `releasing` means released, and the orchestrator puts what
+   the builders left in progress on the desk. If it is still there after about 25 minutes and `list_crew`
+   shows no orchestrator working, idle or waiting, tell the person, and once they confirm no builder of
+   this project is still running (`tares factory crew status`), call `release_project` yourself.'''
+
+[[edit]]
+find = '''stop, and tell the person to take it over with
+   `tares factory session <project>` in their terminal, or to talk to the crew with
+   `tares factory crew attach orchestrator`.'''
+with = '''stop, and tell the person to take it over with
+   `tares factory session <project>` in their terminal, or to answer the crew on the desk.'''
+
+[[edit]]
+find = '''- Don't message crew stations other than the orchestrator, and only about the takeover.'''
+with = '''- Don't message crew stations: this session is not one of them.'''

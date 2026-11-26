@@ -623,6 +623,15 @@ def start_stations(client: TaresClient, env: dict, roles: list, claude: str | No
     from .locks import station_lock
     from .stations import station_name
     paths = client.paths
+    from .proc import CODEX, planned_runtime
+    # A Codex station's sandbox may write the folder it runs in. A crew-wide station on Codex runs in the crew's
+    # worktrees folder, not the crew home: stations.json, HALT, the stations' settings and their mail stay out of
+    # its reach (TR-1599: one could have forged another station's message). Its report folder is added to what it
+    # may write. A station on Claude Code runs in the crew home, as before.
+    cwd = paths.raw
+    if planned_runtime(client) == CODEX:
+        paths.worktrees_dir.mkdir(parents=True, exist_ok=True)
+        cwd = str(paths.worktrees_dir)
     ordered = [r for r in roles if r == "orchestrator"][:1] + [r for r in roles if r != "orchestrator"]
     _err("\nStarting the crew\n")
     for r in ordered:
@@ -633,7 +642,7 @@ def start_stations(client: TaresClient, env: dict, roles: list, claude: str | No
         if is_alive(station, "", claude, paths):
             _err(f"  \u2713 {station} is already running\n")
             continue
-        launch.launch(client, station, r, "", "", "", paths.raw,
+        launch.launch(client, station, r, "", "", "", cwd,
                       state.ccfg("stations", r, "model", paths=paths), state.ccfg("stations", r, "effort", paths=paths),
                       launch.boot_prompt(client, r), claude=claude)
         if r == "orchestrator":

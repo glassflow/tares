@@ -34,6 +34,7 @@ test_cli
 test_cloud_connect
 test_codex_guard
 test_codex_record
+test_codex_reviews
 test_codex_usage
 test_core_single_person
 test_crew_adopt
@@ -41,7 +42,10 @@ test_crew_capabilities
 test_crew_cc_update
 test_crew_claude
 test_crew_client
+test_crew_codex_mail
 test_crew_codex_pace
+test_crew_codex_planning
+test_crew_codex_prompts
 test_crew_codex_station
 test_crew_codex_up
 test_crew_context

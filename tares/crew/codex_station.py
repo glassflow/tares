@@ -91,6 +91,7 @@ import os
 import re
 import shlex
 import signal
+import sys
 import time
 
 import psutil
@@ -99,7 +100,7 @@ from . import codex as cx
 from . import codex_guard, locks, state
 from .codex_wire import Wire, WireError
 from .errors import CrewError, GuardOffError, NeverComparedError, NotBetweenTurnsError, StationLockedError
-from .paths import CrewPaths
+from .paths import ME, CrewPaths
 
 TURN_STOP_WAIT = 20   # seconds an interrupted turn may take to end before the app-server is asked to end
 BORN_SLACK = 1.0      # seconds two readings of one process's start time may differ by
@@ -325,6 +326,46 @@ def mcp_answers(wire: Wire, thread: str, check) -> str:
     return ""
 
 
+DOCTOR_WAIT = 3   # seconds the doctor waits for a server still connecting: it looks, it does not wait for a start
+
+
+def mcp_health(paths: CrewPaths, station: str) -> tuple:
+    """For the doctor (TR-1598): (level, what was found) for the station's connection to the MCP servers it is
+    started with, level ok, warn or fix. The two checks `hand` makes before a prompt, asked of the running
+    app-server on the station's own conversation: each server connected, and the read of `mcp_check` going
+    through (it carries the station's identity and the crew's key, as the model's calls do). Nothing is joined
+    or started: a conversation the app-server does not have open now is said to be checked before its next
+    prompt."""
+    try:
+        doc = settings(paths, station)
+    except CrewError as e:
+        return "fix", e.message
+    servers = doc.get("mcp_servers") if isinstance(doc.get("mcp_servers"), dict) else {}
+    if not servers:
+        return "fix", f"{station} is started with no MCP server: it would work without Tares"
+    thread = _recorded_thread(paths, station)
+    if not thread:
+        return "warn", f"{station} has no conversation yet; it is checked before its first prompt"
+    try:
+        with visit(paths, station, timeout=5) as wire:
+            kind = _where(wire, thread)
+            if kind == "notLoaded":
+                return "warn", (f"the conversation of {station} is not open in its app-server now; the connection "
+                                "is checked before its next prompt")
+            if kind == "unreadable":
+                return "warn", f"the conversation of {station} cannot be read now; look again in a moment"
+            blind = mcp_ready(wire, thread, servers, wait=DOCTOR_WAIT) or mcp_answers(wire, thread, doc.get("mcp_check"))
+    except CrewError as e:
+        return "warn", e.message
+    except WireError as e:
+        return "warn", f"{station} does not answer: {_short(e)}"
+    if blind:
+        return "fix", f"{station} would work without Tares: {blind}"
+    check = doc.get("mcp_check") if isinstance(doc.get("mcp_check"), dict) else {}
+    read = f", and {check['server']}.{check['tool']} goes through" if check.get("server") and check.get("tool") else ""
+    return "ok", f"{station} is connected to {', '.join(sorted(servers))}{read}"
+
+
 def _brought_along(wire: Wire, cwd: str, allowed) -> str:
     """What the app-server has for the station's folder that the station was not started with: a hook from
     anywhere but the conversation itself, an MCP server not among `allowed`. "" when there is nothing. An
@@ -523,8 +564,19 @@ def unknown_note(rows: list) -> str:
 def cmd_outcome(argv: list, env: dict) -> int:
     """`tares factory outcome [<call> done|not-done <what you found>]`: with nothing, list the calls of this
     station whose outcome is not known; else take one off the list (see `reconcile`). The station is
-    FACTORY_STATION, or `--station NAME` for a person."""
+    FACTORY_STATION, or `--station NAME` for a person. A refusal is said in one line, exit 1."""
+    try:
+        return _outcome(argv, env)
+    except CrewError as e:
+        sys.stdout.flush()
+        print(e.line, file=sys.stderr)
+        return 1
+
+
+def _outcome(argv: list, env: dict) -> int:
     args = list(argv)
+    if args[:1] == ["outcome"]:   # the dispatcher passes the command word too (TR-1598: it was taken for the call)
+        args = args[1:]
     station = env.get("FACTORY_STATION", "")
     if "--station" in args:
         at = args.index("--station")
@@ -546,6 +598,16 @@ def cmd_outcome(argv: list, env: dict) -> int:
     row = reconcile(paths, station, args[0], args[1], " ".join(args[2:]))
     print(f"recorded: {args[1]} for {row.get('command') or row.get('tool') or row.get('call')}")
     return 0
+
+
+def _collect_mail_now(paths: CrewPaths, station: str) -> None:
+    """Take the messages the station sent since the watch last looked into their recipients' mail (TR-1599): a
+    stop is the last time anyone can read them, and a retired station is never looked at again. Never fails."""
+    from . import codex_mail   # here: it imports this module
+    try:
+        codex_mail.final(paths, station, require=False)
+    except Exception:   # noqa: BLE001 - a stop is never kept from ending a station by its mail
+        pass
 
 
 def _record_now(paths: CrewPaths, station: str, closing: str = "") -> None:
@@ -1182,7 +1244,7 @@ def _compared_at_stop(paths: CrewPaths, station: str, thread: str) -> tuple:
 
 
 def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, grace: float = cx.STOP_GRACE,
-         sleep=time.sleep, compare: bool = True) -> str:
+         sleep=time.sleep, compare: bool = True, mail: str = "take") -> str:
     """End the station's app-server (see the module's note for the order). Returns what it took: "not running",
     "stopped" (it ended when asked) or "killed". The socket's path in the crew home goes with it, and so does
     whatever the station had started that still runs (`end_leftovers`): after a stop nothing of it is left.
@@ -1194,8 +1256,14 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     since nothing can ask it afterwards: a station that ran something the guard has no record of is marked
     (`guard_off`) and the event recorded, as when the watch finds it. When the comparison cannot be made the
     stop goes on, and the station's row says so (`unverified`): the turn is not known to be in order."""
+    # Its mail (TR-1599, codex_mail.final): `mail` "take" takes what it sent, best effort; "require" (a retire)
+    # refuses the stop (CrewError) when its last messages cannot be read, before its app-server is ended; "drop"
+    # does not look.
+    from . import codex_mail   # here: it imports this module
     rec = info(paths, station)
     sock = rec.get("socket") or str(cx.socket_path(paths, station))
+    if not _same_process(rec) and mail == "require" and not codex_mail.settled(paths, station):
+        raise CrewError(codex_mail.refusal(paths, station))
     if not _same_process(rec):
         cx.remove_socket(sock)
         end_leftovers(paths, station, grace=grace, sleep=sleep)
@@ -1206,6 +1274,17 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     thread = _recorded_thread(paths, station) if compare else ""
     why, shown, unknown = _compared_at_stop(paths, station, thread) if thread else ("", "", "")
     _record_now(paths, station)   # the last look, while the app-server still answers (TR-1595)
+    if mail == "require":   # after the interrupt: the turn is over, nothing more is sent (TR-1599)
+        # The interrupt waits a while and never fails, so the turn's end is read here, not assumed: a turn still
+        # running could send a message after the last look. While this stop holds the station's lock nothing
+        # else hands it a turn, so between turns now means between turns until it ends.
+        if turn_state(paths, station) != "done":
+            raise CrewError(f"{station} is still in a turn after it was asked to stop, or its conversation cannot be "
+                            "read: not retiring it, since a message it sends now would be lost. Try again in a "
+                            f"moment, or `{ME} retire {station} --drop-mail` to retire it and lose what it sends.")
+        codex_mail.final(paths, station, require=True)
+    elif mail == "take":
+        _collect_mail_now(paths, station)
     note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:

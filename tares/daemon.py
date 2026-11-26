@@ -1071,11 +1071,13 @@ def make_app() -> FastAPI:
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _read_exclude() -> dict | None:
-        """What event reads leave out: the rows of the projects the caller cannot see."""
-        hp = _hidden_projects()
-        if not hp:
+        """What event reads leave out: the rows of the projects the caller cannot see, the
+        deleted private ones among them for every caller."""
+        private, deleted = store.private_and_deleted()
+        hp = [p for p in private if not _can_see(p)]
+        if not hp and not deleted:
             return None
-        return {"ids": [p["id"] for p in hp], "names": [p["name"] for p in hp],
+        return {"ids": [p["id"] for p in hp] + sorted(deleted), "names": [p["name"] for p in hp],
                 "shared": sorted(n for n, c in runtime.catalog.sources.items()
                                  if c.connector in _SHARED_CONNECTORS)}
 
@@ -5386,7 +5388,7 @@ def make_app() -> FastAPI:
                                       "made_by", "person", "by_label")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
-            out.update(factory_api.review_state(store, uid, t, _cc_source()))
+            out.update(factory_api.review_state(h, uid, t, _cc_source()))
             lab = out["label"]
             ds = store.list_decisions(uid, all_=True)
             out["decisions"] = ([d for d in ds if lab in d["tickets"]]
@@ -5999,11 +6001,14 @@ def make_app() -> FastAPI:
     def list_project_sessions(uid: str):
         """The sessions that worked in the project (the spec session among them), newest activity
         first, each with its state (working, idle between turns, waiting for the person, ended) and, for a waiting
-        one, the last thing it said (`last_said`)."""
+        one, the last thing it said (`last_said`). A session that also worked in a private project
+        the caller cannot see is not listed, unless it is the caller's own station's (TR-1710)."""
         _project_or_404(uid)
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
         out = store.project_sessions(uid)
+        unread = factory_api.unread_sessions(h, [s["session"] for s in out])
+        out = [s for s in out if s["session"] not in unread]
         now = now_utc()
         for s in out:
             # a session whose end never reached Tares does not wait forever (TR-473)
@@ -6016,9 +6021,11 @@ def make_app() -> FastAPI:
     @app.get("/api/projects/{uid}/sessions/{sid}")
     def get_project_session(uid: str, sid: str, limit: int = 200, offset: int = 0):
         """One session's lines, oldest first, the ones from before it named the project
-        included."""
+        included. A session the list leaves out for this caller answers as one that did not work
+        here (TR-1710)."""
         _project_or_404(uid)
-        if not any(s["session"] == sid for s in store.project_sessions(uid)):
+        if (not any(s["session"] == sid for s in store.project_sessions(uid))
+                or factory_api.unread_sessions(h, [sid])):
             _err(KeyError(f"session {sid!r} did not work in this project"), 404)
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
@@ -6051,7 +6058,9 @@ def make_app() -> FastAPI:
                 return max(before, key=lambda s: s["last_at"] or s["started_at"])
         return live[0]
 
-    def _pickup(uid: str) -> dict:
+    def _pickup(uid: str) -> tuple[dict, dict | None]:
+        """The hand-over as the caller may see it, and the session that was on the ticket, which
+        the caller may not read (TR-1710): then `previous_session` in the hand-over is None."""
         tickets = store.list_tickets(uid)
         ready = factory_mod.readiness(tickets)
         # the ticket a session stopped on: in progress, and not waiting on someone else (in
@@ -6072,11 +6081,14 @@ def make_app() -> FastAPI:
             open_ = prev["state"] in ("idle", "waiting") or (
                 prev["state"] in (None, "working") and quiet is not None and quiet < _QUIET_MIN)
             src = _cc_source()
-            out["previous_session"] = {
-                "session": prev["session"], "repo": prev["repo"], "state": prev["state"],
-                "reason": prev["state_reason"], "last_at": prev["last_at"], "quiet_minutes": quiet,
-                "said_lately": store.said_lately(src, prev["session"], 3),
-                "files_touched": store.files_touched(src, prev["session"])}
+            # no other session takes its place: the build was on this one, readable or not
+            if not factory_api.unread_sessions(h, [prev["session"]]):
+                out["previous_session"] = {
+                    "session": prev["session"], "repo": prev["repo"], "state": prev["state"],
+                    "reason": prev["state_reason"], "last_at": prev["last_at"],
+                    "quiet_minutes": quiet,
+                    "said_lately": store.said_lately(src, prev["session"], 3),
+                    "files_touched": store.files_touched(src, prev["session"])}
             out["may_be_open"] = bool(open_)
         gmem = _global_ids().get("memory")
         mem = next((d for d in store.list_docs(uid, "memory") if d["id"] != gmem), None)
@@ -6110,33 +6122,35 @@ def make_app() -> FastAPI:
                 t["status"] == "todo" for t in tickets) else
              "Every ticket is finished." if tickets else
              "The project has no tickets yet: spec it first (/tares:spec)."])
-        return out
+        return out, prev
 
     @app.get("/api/projects/{uid}/pickup")
     def get_pickup(uid: str):
         """What a fresh session needs to pick the build up where a session stopped: the ticket in
         progress (else the next) with its working doc, the session that was on it (its state,
         last messages, files it touched, whether it may still be open), the builders' notes and
-        a checklist. Reads only."""
+        a checklist. `previous_session` is null when that session also worked in a private project
+        the caller cannot see and is not their own station's (TR-1710). Reads only."""
         _project_or_404(uid)
-        return _pickup(uid)
+        return _pickup(uid)[0]
 
     @app.post("/api/projects/{uid}/pickup")
     def take_over(uid: str, body: dict = Body(default={})):
         """A fresh session takes the build over: the previous session is marked replaced, so two
         sessions never work the same ticket. When it may still be open (waiting, or active in
-        the last minutes) this needs {"take_over": true}."""
+        the last minutes) this needs {"take_over": true}. A caller who must not read that session
+        takes the build over all the same, and is told neither its state nor its id (TR-1710)."""
         _project_or_404(uid)
-        out = _pickup(uid)
-        prev = out["previous_session"]
+        out, prev = _pickup(uid)
+        shown = out["previous_session"]
         if prev and out["may_be_open"] and not body.get("take_over"):
-            _err(ValueError("the session that was building may still be open "
-                            f"({prev['state'] or 'active'}); ask the person, then take over with "
-                            "take_over"), 409)
+            state = f" ({shown['state'] or 'active'})" if shown else ""
+            _err(ValueError(f"the session that was building may still be open{state}; ask the "
+                            "person, then take over with take_over"), 409)
         if prev:
             store.set_session_state(prev["session"], "replaced",
                                     "a fresh session picked the build up", now_utc(), force=True)
-        return {**out, "taken_over": prev["session"] if prev else None}
+        return {**out, "taken_over": shown["session"] if shown else None}
 
     # ── the crew's standup report: before factory_api, whose /api/crew/{name} would take it ──
     def _standup_range(since: str | None, until: str | None) -> tuple[datetime, datetime]:

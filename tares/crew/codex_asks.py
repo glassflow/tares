@@ -1,8 +1,12 @@
 """What a Codex station asks goes to the desk, and the person's answer goes back to it (TR-1593).
 
 A Codex turn that needs a yes stops and asks: to run a command its sandbox does not allow, to change a file
-outside its workspace, or a question in words. A Claude Code station's own classifier decides most of these
-from the role's rule sentences; Codex has none, so each one is the person's to decide. Nobody stays connected
+outside its workspace, or a question in words. Since TR-1599 a station is started with Codex's own approval
+reviewer, which decides the first two from the station's rule sentences, the person's grants among them, as a
+Claude Code station's classifier does (tares/integrations/builtin/runtime_codex.py, "Grants and approvals";
+what it decided is recorded by `tares.crew.codex_reviews`). What still reaches the crew is the person's to
+decide: a question in words, and a request of a station started before that (its next restart gives it the
+reviewer). Nobody stays connected
 to a station (`tares.crew.codex_station` says what was measured), so the watch does this once a round, for
 every Codex station, under the station's lock (`step`):
 
@@ -21,7 +25,7 @@ every Codex station, under the station's lock (`step`):
 Whose answer counts: the cell's record of answers (`/api/answers`) holds what a person gave, in the console
 or by message, or typed in their own session and found there by the cell. A station cannot write one: the
 cell refuses a station's reply to a desk item, and this module never answers an item itself. No grant
-answers a request here: a grant is a sentence for a model to read, and nothing matches one against a command.
+answers a request here: a grant is a sentence the reviewer reads, and nothing here matches one against a command.
 An item a person withdrew without answering is a no.
 
 What the crew cannot answer is left waiting, with a desk item that says so: a request of a kind it does not

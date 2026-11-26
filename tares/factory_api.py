@@ -607,7 +607,7 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     sessions = (store.station_session_ids(holder) if holder
                 else [s["session"] for s in store.project_sessions(uid)])
     with metrics.step("recorded_commands"):
-        commands = store.recorded_commands(source, sessions) if sessions else None
+        commands = store.recorded_commands(source, sessions, ends=True) if sessions else None
     # only what ran since the ticket went into the work counts for its checks
     since = next((x["at"] for x in store.ticket_history(t["id"])
                   if x["field"] == "stage" and x["value"] == "doing"), None)
@@ -617,9 +617,14 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     return commands, since
 
 
-def review_state(store, uid: str, t: dict, source: str) -> dict:
+def review_state(h: Host, uid: str, t: dict, source: str) -> dict:
     """What a ticket's full view adds for review (TR-440..444): its checks matched against the
-    recording, the challenger's layer, the review rounds, and whether the last verdict counts."""
+    recording, the challenger's layer, the review rounds, and whether the last verdict counts.
+
+    A check's `match` is the same for every reader, as the merge gate reads it. Its `recorded`
+    text is given only when the sessions this reader may open say the same on their own
+    (TR-1711)."""
+    store = h.store
     raw = store.ticket_checks(t["id"], 50)
     checks = []
     if raw:
@@ -628,6 +633,14 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
             state, recorded = (factory_mod.match_check(c, commands, since)
                                if commands is not None else (None, None))
             checks.append({**c, "match": state, "recorded": recorded})
+        if any(c["recorded"] for c in checks):
+            closed = unread_sessions(h, list({r["session"] for r in commands}))
+            if closed:
+                readable = [r for r in commands if r["session"] not in closed]
+                for c in checks:
+                    if c["recorded"] and (factory_mod.match_check(c, readable, since)
+                                          != (c["match"], c["recorded"])):
+                        c["recorded"] = None
     reviews = store.ticket_reviews(t["id"])
     with metrics.step("challenger"):
         layer = factory_mod.challenger_layer(
@@ -686,6 +699,15 @@ def own_crew_ids(h: Host, crews) -> set[str]:
         person = h.current_person(request) if request is not None else None
         me = person["id"] if person else None
     return {c["id"] for c in crews if me and c["person_id"] == me}
+
+
+def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
+    """Those of `sessions` the caller must not read (TR-1710): they worked in a project the
+    caller cannot see and belong to no crew of theirs (store.unread_among)."""
+    hidden = h.hidden_ids()
+    if not hidden:
+        return set()
+    return h.store.unread_among(sessions, hidden, own_crew_ids(h, h.store.list_crews()))
 
 
 def blank_session(row: dict) -> None:
@@ -1214,6 +1236,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         no_cost: set[str] = set()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
             no_cost = store.sessions_counting_for([st["session"] for st in out], hidden)
+            gone = hidden & set(store.deleted_private_projects())
+            if gone:   # a row's project passes over a deleted one, so the session is asked itself
+                no_cost |= store.sessions_tied_to([st["session"] for st in out], gone)
             kept = []
             for st in out:
                 if st["projects"] and set(st["projects"]) <= hidden:
@@ -1764,7 +1789,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
     @app.post("/api/crew/{name}/context")
     def ask_station_context(name: str, request: Request, crew: str | None = None):
         """Ask for a new /context reading of the station's session. The factory watch on the
-        crew's machine reads it (no model call) within a few seconds, if it runs."""
+        crew's machine reads it (no model call) within a few seconds, if it runs. `session` is
+        null for a caller who must not read that session (TR-1710); the ask is recorded all the
+        same."""
         st = pick_station(name, request, crew, whole=True)
         # the reading is taken on its owner's machine: nobody else asks it (the system credential may)
         if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
@@ -1772,14 +1799,20 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                   "asks for its context"), 403)
         at = now_utc()
         store.ask_session_context(st["session"], at)
-        return {"session": st["session"], "asked_at": at}
+        unread = unread_sessions(h, [st["session"]])
+        return {"session": None if unread else st["session"], "asked_at": at}
 
     @app.get("/api/crew/context/asks")
     def station_context_asks():
         """The stations someone asked a /context reading of that has not come in yet, for
-        `factory crew watch`."""
+        `factory crew watch`. An ask for a session the caller must not read is left out
+        (TR-1710)."""
         out = []
-        for x in store.context_asks(now_utc() - timedelta(minutes=ASK_TTL)):
+        asked = store.context_asks(now_utc() - timedelta(minutes=ASK_TTL))
+        unread = unread_sessions(h, asked)
+        for x in asked:
+            if x in unread:
+                continue
             st = store.session_station(x)
             if st:
                 out.append({"station": st["station"], "session": x})

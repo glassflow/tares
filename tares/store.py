@@ -588,6 +588,11 @@ def _name_digest(name: str) -> str:
     return hashlib.sha256((name or "").encode()).hexdigest()
 
 
+def _digest_of(record) -> str:
+    """The name's digest in one deleted private project's record (Store._deleted_records)."""
+    return record["name"] if isinstance(record, dict) else record
+
+
 def _accum_entity(ent: dict, source: str, label: str, value, ingest_time) -> None:
     """Fold one (source, label, value) observation into the batch's entity_counts deltas. Skips
     empty/null, boolean, and numeric values — a number-typed label is a *measurement* you aggregate
@@ -683,7 +688,8 @@ def _scope_sql(scope) -> tuple[str, list]:
 
 
 # Licence-independent by design (TR-915): never consult licence or team here.
-def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
+def _exclude_sql(exclude, sources=None, sessions=None, digests=None,
+                 moved=None) -> tuple[str, list]:
     """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
     {"ids": [project ids], "names": [project names], "shared": [the shared finding and
     memory sources, or None for every source]}, or None/empty for no filter (the common
@@ -692,8 +698,12 @@ def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     project_sessions, or when a shared finding or memory row was recorded in one (payload
     `project`). A row with none of those is kept. `sources` is what the query reads: the payload
     test is left out when none of them is a shared source. `sessions` is the keys linked in
-    project_sessions to those projects (Store._exclude_sql reads them from the state, which may
-    be Postgres while the events are in DuckDB)."""
+    project_sessions to those projects (Store._exclude reads them from the state, which may
+    be Postgres while the events are in DuckDB). `digests` is (digest of a name, until) for the
+    deleted private projects among them (Store._deleted_names): a row whose `tares_project`
+    label has that name is left out, when it is older than `until` if there is one. `moved` is
+    (source, until) for the sources only those deleted projects had (Store._moved_sources): the
+    source's rows older than `until` are left out."""
     if not exclude or not (exclude.get("ids") or exclude.get("names")):
         return "", []
     ids = list(exclude.get("ids") or [])
@@ -720,7 +730,19 @@ def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     sessions = list(sessions or [])
     if sessions:
         sql += f" AND NOT COALESCE(key_value IN ({ph(len(sessions))}), FALSE)"
-    return sql, [*both, *pparams, *sessions]
+    always = [d for d, until in digests or () if until is None]
+    before = [(d, until) for d, until in digests or () if until is not None]
+    digest = "sha256(json_extract_string(labels, '$.tares_project'))"
+    tests = [f"{digest} IN ({ph(len(always))})"] if always else []
+    tests += [f"({digest} = ? AND event_time < ?)"] * len(before)
+    if tests:
+        sql += f" AND NOT COALESCE({' OR '.join(tests)}, FALSE)"
+    moved = [(s, until) for s, until in moved or () if sources is None or s in sources]
+    if moved:
+        old = " OR ".join(["(source = ? AND event_time < ?)"] * len(moved))
+        sql += f" AND NOT COALESCE({old}, FALSE)"
+    return sql, [*both, *pparams, *sessions, *always, *(v for pair in before for v in pair),
+                 *(v for pair in moved for v in pair)]
 
 
 def _cgroup_mem_bytes() -> int | None:
@@ -1668,11 +1690,36 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [r[:n] for r in rows]
 
     def _exclude(self, exclude, sources=None) -> tuple[str, list]:
-        """The module's _exclude_sql, with the sessions linked to the hidden projects read from
-        the state first."""
+        """The module's _exclude_sql, with what the state knows of the hidden projects read
+        first: the sessions linked to them, and the names and sources of the deleted ones."""
         ids = list((exclude or {}).get("ids") or [])
         sessions = self.sessions_of_projects(ids) if ids else []
-        return _exclude_sql(exclude, sources, sessions)
+        records = self._deleted_records() if ids else {}
+        gone = [records[i] for i in ids if i in records]
+        return _exclude_sql(exclude, sources, sessions, self._deleted_names(gone),
+                            self._moved_sources(gone))
+
+    @staticmethod
+    def _moved_sources(gone: list) -> list[tuple]:
+        """(source, until) for the sources that only one of the deleted private projects `gone`
+        (`_deleted_records`) had: what each recorded before that delete stays unread. A record
+        made before sources were noted is the name's digest alone."""
+        until: dict[str, datetime] = {}
+        for r in gone:
+            for name in r.get("sources", ()) if isinstance(r, dict) else ():
+                at = datetime.fromisoformat(r["at"])
+                until[name] = max(at, until.get(name, at))
+        return sorted(until.items())
+
+    def _deleted_names(self, gone: list) -> list[tuple]:
+        """(digest of the name, until) for each of the deleted private projects `gone`
+        (`_deleted_records`). `until` is when the project that has the name now was made, as lines
+        from then on are its own, or None when no project has it."""
+        digests = {_digest_of(r) for r in gone}
+        if not digests:
+            return []
+        taken = {_name_digest(p["name"]): p["created_at"] for p in self.list_projects()}
+        return [(d, taken.get(d)) for d in sorted(digests)]
 
     def _row_owners(self, rows: list, n: int) -> set[str]:
         """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
@@ -2763,15 +2810,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
 
     # ── private projects that were deleted (TR-1697) ──────────────────────────
-    # Their cost counts in no total and no read names them, so Tares has to remember which they
-    # were: {id: a digest of the name}. The digest is only there to know a late line stamped
-    # with the name.
-    def deleted_private_projects(self) -> dict[str, str]:
+    # Their cost counts in no total and what they recorded stays unread (TR-1708), so Tares has
+    # to remember which they were: {id: {name: a digest of the name, at: when it was deleted,
+    # sources: the ones only it had}}. A record from before that is the digest alone. The digest
+    # is only there to know a line stamped with the name.
+    def _deleted_records(self) -> dict:
         return json.loads(self.get_setting(_DELETED_PRIVATE) or "{}")
+
+    def deleted_private_projects(self) -> dict[str, str]:
+        """{id: the digest of the name} of the deleted private projects."""
+        return {uid: _digest_of(r) for uid, r in self._deleted_records().items()}
 
     def _change_deleted_private(self, change) -> None:
         with _DELETED_PRIVATE_LOCK:
-            have = self.deleted_private_projects()
+            have = self._deleted_records()
             new = dict(have)
             change(new)
             if new != have:
@@ -2798,11 +2850,21 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         digest = _name_digest(ref)
         return next((uid for uid, d in deleted.items() if d == digest), None)
 
-    def usage_project(self, ref: str) -> str | None:
+    def usage_project(self, ref: str, session: str = "") -> str | None:
         """The project a recorded line's `tares_project` (an id or a name) stands for: the one
-        there is, else the deleted private one it named."""
-        p = self.get_project(ref) or self.get_project_by_name(ref)
-        return p["id"] if p else self.deleted_private_ref(ref, self.deleted_private_projects())
+        with that id; else the deleted private one of that name the line's `session` is tied to;
+        else the one of that name there is; else the deleted private one it named."""
+        p = self.get_project(ref)
+        if p:
+            return p["id"]
+        deleted = self.deleted_private_projects()
+        digest = _name_digest(ref)
+        named = {uid for uid, d in deleted.items() if d == digest}
+        tied = named & set(self.session_projects(session)) if named and session else set()
+        if tied:
+            return min(tied)
+        p = self.get_project_by_name(ref)
+        return p["id"] if p else self.deleted_private_ref(ref, deleted)
 
     def get_project(self, uid: str) -> dict | None:
         with self._sread:
@@ -2920,7 +2982,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         gone = self.get_project(uid)
         private = bool(gone) and gone["scope"] == "private"
         if private:   # remembered before anything goes, so its cost is never counted in between
-            self._change_deleted_private(lambda d: d.update({uid: _name_digest(gone["name"])}))
+            only = [n for n, uids in self.source_memberships().items() if uids == [uid]]
+            at = now_utc().isoformat()
+
+            def remember(d):
+                had = d.get(uid)   # a delete that stopped half way already took its sources out
+                had = had.get("sources", []) if isinstance(had, dict) else []
+                d[uid] = {"name": _name_digest(gone["name"]), "at": at,
+                          "sources": sorted({*had, *only})}
+            self._change_deleted_private(remember)
         with self._swrite:
             # the state rows first: a delete that stops half way leaves session rows with no
             # project, which every reader ignores
@@ -2939,14 +3009,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self._factory_forget_project(uid)
             self.sc.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.sc.execute("DELETE FROM usecases WHERE id = ?", [uid])
-        self._usage_forget_project(uid, private)   # before its session links go, below
+        self._usage_forget_project(uid, private)   # before a team project's links go, below
+        over = sorted({uid, *self.deleted_private_projects()})   # their links keep no state
         with self.sessions_db.begin() as conn:
-            conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
+            # a private project's session links stay (TR-1708): they mark what its sessions
+            # recorded as not to be read, by the same tests as while it was there
+            if not private:
+                conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
             # its weekly figures (report.py); a pass running now sees the project gone, above
             conn.execute(delete(report_weeks).where(report_weeks.c.project == uid))
             # a crew station's session serves every project: its state stays
+            linked = select(project_sessions.c.session).where(project_sessions.c.project.not_in(over))
             conn.execute(delete(session_states).where(
-                session_states.c.session.not_in(select(project_sessions.c.session)),
+                session_states.c.session.not_in(linked),
                 session_states.c.session.not_in(select(session_stations.c.session))))
             conn.execute(delete(report_texts).where(report_texts.c.kind == "milestone",
                                                     report_texts.c.key.in_(milestones)))

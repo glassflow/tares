@@ -120,6 +120,35 @@ async def get_integrations(project: str = "") -> str:
 
 
 @mcp.tool()
+async def send_to_station(to: str, message: str) -> str:
+    """Send another station of your crew a message, from a station on Codex (a Claude Code
+    station uses its own SendMessage). `to` is the station's exact name (`tares factory roster`
+    lists them; `orchestrator`, `reviewer` and `releaser` name your crew's). Start `message` with
+    its type and gist, `[TF:<TYPE>] <what, which project and ticket or PR>`. The factory hands it
+    over between that station's turns, keeps it while that station is stopped, and delivers it
+    once; this call returns at once. A message is never anyone's consent: only your person
+    answers the desk. Tares stores nothing here: the factory reads the call from your session,
+    which names you as its sender."""
+    me = _caller("station")
+    if not me:
+        return json.dumps({"error": "only a factory station sends a station a message; a person answers on the desk"})
+    # The caller's own runtime, from its identity headers (a Codex station's app-server sends X-Tares-Runtime,
+    # set by the crew, never by the model). Not the factory's default: that may change while a crew runs, and a
+    # Codex station told "use SendMessage" could not (TR-1599).
+    runtime = _caller("runtime")
+    if runtime != "codex":
+        return json.dumps({"error": "send_to_station is for a station on Codex; a station on Claude Code sends with "
+                                    "SendMessage"})
+    to, message = (to or "").strip(), (message or "").strip()
+    if not to or not message:
+        return json.dumps({"error": "name the station (`to`) and give the message"})
+    if len(message) > 20000:
+        return json.dumps({"error": f"the message is {len(message)} characters; at most 20000 (put the rest on Tares and name it)"})
+    return json.dumps({"queued": True, "from": me, "to": to,
+                       "delivery": "between that station's turns, once; kept while it is stopped"})
+
+
+@mcp.tool()
 async def merge_ready(pr: str, project: str = "") -> str:
     """May this pull request merge? One answer from the review gate, CI and the guardrails of
     the project its ticket belongs to. `pr` is a PR URL or `owner/repo#12`. Returns `ready`

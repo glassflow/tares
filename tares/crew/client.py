@@ -315,10 +315,31 @@ class TaresClient:
 
     def require_tares(self) -> None:
         if not self.tares_on():
+            if self._codex_station_command():
+                # a Codex station's command: its sandbox has no network, so Tares may well be up (TR-1598)
+                raise CrewError(f"no Tares answers at {self.tares} from here. If this command ran in your Codex "
+                                "sandbox, which has no network, Tares is not down: run the same command again and ask "
+                                "for approval (escalated permissions). If it already ran with approval, Tares is down: "
+                                "say so in your report.")
             cls = NotSignedInError if self._not_configured() else CrewError
             raise cls(f"no Tares answers at {self.tares}. Start one with `tares up` in another terminal, "
                       "connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where "
                       "yours runs), then try again.")
+
+    def _codex_station_command(self) -> bool:
+        """Is this a command a Codex station runs? Codex marks a sandboxed command (CODEX_SANDBOX*); without the
+        mark, a FACTORY_STATION of this crew that runs on Codex says so."""
+        env = self.env or {}
+        if env.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1" or env.get("CODEX_SANDBOX"):
+            return True
+        station = env.get("FACTORY_STATION") or ""
+        if not station:
+            return False
+        try:
+            from . import proc   # here: proc imports launch, which imports this module
+            return proc.on_codex(station, self.paths)
+        except Exception:  # noqa: BLE001 - a crew home that cannot be read is no Codex station of it
+            return False
 
     def _not_configured(self) -> bool:
         """True when no Tares was ever named: no saved login, no address in the environment or crew.json.

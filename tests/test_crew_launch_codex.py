@@ -283,6 +283,7 @@ hook = doc["thread"]["config"]["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 ck("the settings file holds the thread's settings, every placeholder filled, readable by the owner alone",
    doc["thread"]["model"] == MODEL and doc["effort"] == EFFORT and doc["thread"]["approvalPolicy"] == "on-request"
    and doc["thread"]["sandbox"] == "workspace-write" and doc["thread"]["config"]["bypass_hook_trust"] is True
+   and doc["thread"]["config"]["sandbox_workspace_write"]["writable_roots"] == [f"{paths.raw}/reports"]
    and hook.startswith("tares hook codex-guard --plugin-root ")
    and doc["thread"]["config"]["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == hook and not UNFILLED.search(json.dumps(doc)) and doc["env"]["FACTORY_STATION"] == "crew-reviewer"
    and stat.S_IMODE(settings_file.stat().st_mode) == 0o600 and r.get("settings", "").endswith("crew-reviewer.settings.json"),

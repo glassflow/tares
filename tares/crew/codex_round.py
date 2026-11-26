@@ -8,6 +8,8 @@ others. What is here:
 
   record    what each station did since the last look is sent to Tares (`codex_record`, TR-1595). First, and the
             step first in the round: nothing else starts another turn before what the last one did is recorded
+  reviews   what Codex's approval reviewer allowed or refused a station, by its rules, is recorded and said
+            (`codex_reviews`, TR-1599)
   asks      what a station asks the person goes to the desk, and their answer goes back (`codex_asks`)
   turns     a turn that failed is said, recorded and put on the desk, once: Codex leaves such a station at
             rest, where it reads like one that finished its work
@@ -20,7 +22,7 @@ import os
 import sys
 
 from . import codex as cx
-from . import codex_asks, codex_record, proc, state
+from . import codex_asks, codex_record, codex_reviews, proc, state
 from . import codex_station as cs
 from .client import TaresClient
 from .errors import CrewError
@@ -65,7 +67,8 @@ def record(client, paths: CrewPaths, say=None) -> list:
     return done
 
 
-PARTS = [("record", record), ("asks", codex_asks.step), ("turns", failed_turns)]   # (name, fn(client, paths, say))
+PARTS = [("record", record), ("reviews", codex_reviews.step), ("asks", codex_asks.step),
+         ("turns", failed_turns)]   # (name, fn(client, paths, say))
 
 
 def _say(msg: str) -> None:

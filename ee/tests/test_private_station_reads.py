@@ -404,8 +404,11 @@ async def check_writes(app, world):
     async with client(app, world["who"]["bot"]) as cx:
         asked = await cx.post(f"/api/crew/{name}/context")
         ended = await cx.post(f"/api/crew/{name}/end")
-    ck("same", "a key with no person still asks for the reading of a station of `local`",
-       asked.status_code == 200 and asked.json()["session"] == sid, (asked.status_code, asked.text))
+    ck("same", "a key with no person still asks for the reading of a station of `local`, and the "
+       "answer names no session", asked.status_code == 200
+       and asked.json().get("session", "missing") is None
+       and sid in store.context_asks(datetime.now(timezone.utc) - timedelta(minutes=15)),
+       (asked.status_code, asked.text))
     ck("same", "and still ends it, on the session the station really runs",
        ended.status_code == 200 and ended.json()["name"] == name
        and (store.session_state(sid) or {}).get("state") == "ended", (ended.status_code, ended.text))
