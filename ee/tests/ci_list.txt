@@ -52,6 +52,8 @@ test_private_raw_routes
 test_private_reads
 test_private_routes
 test_private_services
+test_private_station_reads
+test_private_station_reads_open
 test_private_writes
 test_project_access
 test_project_page_lead_items

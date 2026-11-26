@@ -1064,7 +1064,10 @@ def make_app() -> FastAPI:
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_ids() -> set[str]:
-        return {p["id"] for p in _hidden_projects()}
+        """The projects the caller cannot see: the private ones they are not on and, for every
+        caller, the private ones that were deleted (TR-1697)."""
+        private, deleted = store.private_and_deleted()
+        return {p["id"] for p in private if not _can_see(p)} | deleted
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _read_exclude() -> dict | None:
@@ -6288,6 +6291,7 @@ def make_app() -> FastAPI:
         ensure_globals=lambda uid: _ensure_globals(uid),
         tickets_out=lambda uid: _tickets_out(uid),
         caller=_CALLER.get, project_key=_pk, hidden_project=_hidden_project,
+        auth_off=lambda: not AUTH_TOKEN,
         projects=lambda: projects,
         licence_state=lambda: licence.current(store),
         licence_required=licence.licence_required)
