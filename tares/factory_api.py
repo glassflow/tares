@@ -1148,7 +1148,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # one row per station with its newest session, the few before it and the totals over all of
         # them, so a station that has had many sessions costs no more than one that has had few
         # (TR-1500); the earlier ones are read a page at a time (GET /api/factory/crew/.../sessions)
-        rollup = store.station_rollup(h.cc_source())
+        hidden = h.hidden_ids()
+        # a project the caller cannot see adds nothing to a station's usage (TR-1696)
+        rollup = store.station_rollup(h.cc_source(), hidden=hidden)
         names = {p["id"]: p["name"] for p in store.list_projects()}
         crews = {c["id"]: c for c in store.list_crews()}
         now = now_utc()
@@ -1176,8 +1178,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "machine": crew.get("machine") or "", "person": crew.get("person"),
                         "projects": g["projects"], "usage": g["usage"],
                         "coordination_calls": g["coordination_calls"]})
-        hidden = h.hidden_ids()
+        # the status line gives one cost for the whole session, so none of it is shown for a
+        # session in a hidden project or with a reply that counts for one (TR-1696)
+        no_cost: set[str] = set()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
+            no_cost = store.sessions_counting_for([st["session"] for st in out], hidden)
             kept = []
             for st in out:
                 if st["projects"] and set(st["projects"]) <= hidden:
@@ -1190,6 +1195,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
+                    no_cost.add(st["session"])
                 kept.append(st)
             out = kept
         meters = store.session_meters([st["session"] for st in out])
@@ -1200,6 +1206,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                     if x["parent"] == st["name"] and x["crew_id"] == st["crew_id"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            if st["context"] and st["session"] in no_cost:
+                st["context"]["cost_usd"] = None
             st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
             # set while the watch retries its move, else null: the crew's own marks, else those
             # of its person that name no crew

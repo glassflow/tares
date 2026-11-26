@@ -1132,15 +1132,18 @@ class FactoryStore:
                 "last_at": last or r[5], "lines": n, "state": r[6],
                 "state_reason": r[7], "state_at": r[8], "crew_id": r[10]}
 
-    def station_rollup(self, source: str, keep: int = EARLIER_KEPT) -> list[dict]:
+    def station_rollup(self, source: str, keep: int = EARLIER_KEPT,
+                       hidden=frozenset()) -> list[dict]:
         """One row per station (crew id and name), however many sessions played it (TR-1500):
         `cur` the newest session (as station_sessions gives it), `earlier` the `keep` most recent
         before it, `earlier_count` how many there are in all, and the totals over every session:
         `projects` (sorted), `usage` (None when none of them has any) and `coordination_calls`.
+        `usage` leaves out the replies that count for a project in `hidden` (the ones the caller
+        cannot see, TR-1696); the rest of the row does not read it.
         Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
         stays the size of the stations; before, the same is built from the full list."""
         if not session_ingest.caught_up(self):
-            return self._rollup_from_rows(source, keep)
+            return self._rollup_from_rows(source, keep, hidden)
         ss, sx, u = session_stations, sessions_table, session_usage
         j, named, last = self._station_join(source)
         rank = func.row_number().over(
@@ -1157,8 +1160,12 @@ class FactoryStore:
                 .select_from(j).group_by(ss.c.crew_id, ss.c.station))
         worked = select(ss.c.crew_id, ss.c.station, func.coalesce(ss.c.project, named)).distinct()
         spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
-                 .select_from(ss.join(u, u.c.session == ss.c.session))
                  .group_by(ss.c.crew_id, ss.c.station))
+        if hidden:   # that join starts at the replies, so the ones of no station are put out
+            replies, seen = self._replies_outside(hidden)
+            spent = spent.select_from(replies).where(ss.c.session.is_not(None), seen)
+        else:
+            spent = spent.select_from(ss.join(u, u.c.session == ss.c.session))
         with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
             top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
             worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
@@ -1205,10 +1212,10 @@ class FactoryStore:
                   reverse=True)
         return rows
 
-    def _rollup_from_rows(self, source: str, keep: int) -> list[dict]:
+    def _rollup_from_rows(self, source: str, keep: int, hidden=frozenset()) -> list[dict]:
         """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
         rows = self._newest_first(self.station_sessions(source))
-        spent = self.usage_by_session([r["session"] for r in rows])
+        spent = self.usage_by_session([r["session"] for r in rows], hidden)
         coord = self.coordination_calls(source, [r["session"] for r in rows])
         by: dict[tuple, list[dict]] = {}
         for r in rows:   # newest first
