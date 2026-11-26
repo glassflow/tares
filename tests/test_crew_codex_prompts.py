@@ -62,7 +62,7 @@ def ck(label, cond, detail=""):
 def named(text):
     """What a Codex station cannot do that `text` asks of it: names of CLAUDE_ONLY, and the words for them."""
     words = [n for n in rt.CLAUDE_ONLY if n.lower() in text.lower()]
-    return words + [w for w in ("skill", "Cron", "re-arm", "tick", "Claude Code", "SendMessage", "send ")
+    return words + [w for w in ("skill", "Cron", "re-arm", "tick", "Claude Code", "SendMessage")
                     if w.lower() in text.lower()]
 
 
@@ -121,9 +121,9 @@ ck("a revive and a plugin update point at its instructions", all(
 ck("a fresh revive says only what carries over", said["fresh revive"].startswith(
    "You were started again under the same name, in a new conversation. Nothing from the last one carries over except "
    "your report and what is on Tares."), said["fresh revive"])
-ck("a helper on Codex ends its report with DONE, which its parent reads, and is given its task",
-   f"end it with the line DONE, which {CX} reads" in said["helper"] and said["helper"].endswith("Your task:\nLook at X."),
-   said["helper"])
+ck("a helper on Codex sends its parent DONE with send_to_station (its report's DONE line where the tool is missing)",
+   f"send {CX} DONE with the Tares tool `send_to_station`" in said["helper"] and "end your report with the line DONE" in said["helper"]
+   and said["helper"].endswith("Your task:\nLook at X."), said["helper"])
 
 print("c. the idle wake of a Codex station")
 real_rest, real_scan = codex_station.at_rest, dict(idle_wake.SCANS)

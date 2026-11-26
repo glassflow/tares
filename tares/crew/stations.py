@@ -168,12 +168,14 @@ def _helper_plan(paths: CrewPaths, kind: str, args: list) -> dict:
 
 def helper_prompt(paths: CrewPaths, parent: str, task: str) -> str:
     """The first prompt of a helper. On Codex (the parent's runtime) its rules are in its instructions, and it
-    sends nothing: its parent reads the report it writes (TR-1598; station messages are TR-1599's)."""
+    tells its parent it is done with the Tares tool `send_to_station` (TR-1599); where that tool is missing, the
+    DONE line of its report says it."""
     from . import proc   # here: proc imports launch, which imports this module
     if proc.on_codex(parent, paths):
         return (f"Boot as a helper of the station {parent}: your rules are in your instructions (the rules of "
-                f"{parent}'s role). Do only the task below and write the results to your report; end it with the "
-                f"line DONE, which {parent} reads.\n\nYour task:\n{task}")
+                f"{parent}'s role). Do only the task below, write the results to your report, and when it is "
+                f"finished send {parent} DONE with the Tares tool `send_to_station` (with no such tool, end your "
+                f"report with the line DONE).\n\nYour task:\n{task}")
     return (f"Boot as a helper of the station {parent}: load the skills factory-protocol and "
             f"station-{launch.parent_role(parent, paths)}, do only the task below, write results to your report, "
             f"and send {parent} DONE when it is finished.\n\nYour task:\n{task}")
