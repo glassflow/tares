@@ -116,7 +116,9 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                     stack.enter_context(store._lock)
                     cols = _duckdb_columns(store, table)
                     if cols:
-                        cur = store.con.execute(f"SELECT {', '.join(cols)} FROM {table.name}")
+                        # quoted: a column may be a word of DuckDB's own (`at`)
+                        names = ", ".join(f'"{c}"' for c in cols)
+                        cur = store.con.execute(f"SELECT {names} FROM {table.name}")
                         chunks = (lambda: [_from_duckdb(table, r, cols)
                                            for r in cur.fetchmany(CHUNK)])
                     else:

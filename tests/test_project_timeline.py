@@ -335,8 +335,10 @@ async def main():
             ck("the cursor is the same instant with and without a zone, and has a zone to drop",
                nb.tzinfo is not None and datetime.fromisoformat(naive) == nb.astimezone(timezone.utc).replace(tzinfo=None), naive)
             # an override a microsecond before the cursor belongs on the page that starts there
-            store.sc.execute("INSERT INTO handover_overrides (project, \"at\", reason, handed_by) "
-                              "VALUES (?, ?, 'zone check', 'lead')", [a, nb - timedelta(microseconds=1)])
+            from tares.session_store.tables import handover_overrides as overrides_t
+            with store.sessions_db.begin() as c:
+                c.execute(overrides_t.insert().values(project=a, at=nb - timedelta(microseconds=1),
+                                                      reason="zone check", handed_by="lead"))
             pa = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": aware})).json()
             pn = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": naive})).json()
             ck("a naive before pages like the same instant with a zone: same threads, same next_before",

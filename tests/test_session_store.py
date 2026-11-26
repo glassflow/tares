@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0016_review_tables"               # the newest revision: tests that count revisions move with it
-REVISIONS = 16
+HEAD = "0017_crew_tables"                 # the newest revision: tests that count revisions move with it
+REVISIONS = 17
 FAILS = []
 
 
@@ -247,7 +247,9 @@ PROJECT_TABLES = ["usecases", "usecase_objects", "usecase_log", "docs", "skills"
 TICKET_TABLES = ["tickets", "ticket_history", "ticket_numbers"]                  # TR-1612, the same
 REVIEW_TABLES = ["milestones", "milestone_check_results", "milestone_acceptances", "ticket_checks",
                  "challenges", "reviews", "review_findings", "rule_proposals"]    # TR-1615, the same
-ACCOUNT_TABLES = ACCOUNT_TABLES + PROJECT_TABLES + TICKET_TABLES + REVIEW_TABLES
+CREW_TABLES = ["assumptions", "desk_items", "decisions", "handovers", "grants", "pending_memory", "crews",
+               "spec_questions", "signoffs", "handover_overrides", "answers", "waiting_told"]  # TR-1616
+ACCOUNT_TABLES = ACCOUNT_TABLES + PROJECT_TABLES + TICKET_TABLES + REVIEW_TABLES + CREW_TABLES
 ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts", "session_moves",

@@ -3,9 +3,11 @@
 These are the five session tables, `settings`, the accounts (`people`, `api_keys`, `project_members`),
 the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skills`,
 `shared_skills`, `catalog_sources`, `github_credentials`, `model_usage`), the tickets (`tickets`,
-`ticket_history`, `ticket_numbers`) and the milestones, checks and reviews (`milestones`,
+`ticket_history`, `ticket_numbers`), the milestones, checks and reviews (`milestones`,
 `milestone_check_results`, `milestone_acceptances`, `ticket_checks`, `challenges`, `reviews`,
-`review_findings`, `rule_proposals`), exactly as they are today in DuckDB and in the state Postgres:
+`review_findings`, `rule_proposals`) and the decisions, questions and crew tables (`assumptions`,
+`desk_items`, `decisions`, `handovers`, `grants`, `pending_memory`, `crews`, `spec_questions`,
+`signoffs`, `handover_overrides`, `answers`, `waiting_told`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -17,7 +19,7 @@ these tables, and nothing else does outside `copy.py` and the tests' own seeding
 from __future__ import annotations
 
 from sqlalchemy import (BigInteger, Boolean, Column, Double, Index, Integer, MetaData, Table, Text,
-                        false)
+                        UniqueConstraint, false)
 
 from .types import JSONText, UTCDateTime
 
@@ -648,6 +650,207 @@ rule_proposals = Table(
     Column("decided_at", UTCDateTime),
 )
 
+# What a builder assumed instead of asking, and what the person decided; `tickets` is [ticket]
+assumptions = Table(
+    "assumptions", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("number", Integer),
+    Column("question", Text),
+    Column("choice", Text),
+    Column("why", Text),
+    Column("affects", Text),
+    Column("tickets", JSONText),
+    Column("state", Text),
+    Column("words", Text),
+    Column("batch", Text),
+    Column("made_by", Text),
+    Column("made_role", Text),
+    Column("made_at", UTCDateTime),
+    Column("decided_at", UTCDateTime),
+    Column("person_id", Text),
+)
+
+# The desk: the questions waiting for a person
+desk_items = Table(
+    "desk_items", metadata,
+    Column("id", Text, primary_key=True),
+    Column("number", Integer),
+    Column("project", Text),
+    Column("question", Text),
+    Column("context", Text),
+    Column("options", JSONText),
+    Column("recommendation", Text),
+    Column("why", Text),
+    Column("blocks", Text),
+    Column("tickets", JSONText),
+    Column("blocking", Boolean),
+    Column("asked_by", Text),
+    Column("assumptions", JSONText),
+    Column("state", Text),
+    Column("reason", Text),
+    Column("created_at", UTCDateTime),
+    Column("closed_at", UTCDateTime),
+    Column("station", Text),
+    Column("command", Text),
+    Column("person_id", Text),
+    Column("to_person_id", Text),
+)
+
+# The person's answers, in their words
+decisions = Table(
+    "decisions", metadata,
+    Column("id", Text, primary_key=True),
+    Column("project", Text),
+    Column("desk_item", Text),
+    Column("question", Text),
+    Column("words", Text),
+    Column("choice", Text),
+    Column("standing", Boolean),
+    Column("scope", Text),
+    Column("matched", Boolean),
+    Column("session", Text),
+    Column("granted", Boolean),
+    Column("tickets", JSONText),
+    Column("decided_at", UTCDateTime),
+    Column("via", Text),
+    Column("person_id", Text),
+)
+
+# A project handed to the crew, and what became of it; `repos` is [{path, name}]
+handovers = Table(
+    "handovers", metadata,
+    Column("project", Text, primary_key=True),
+    Column("repo", Text),
+    Column("handed_by", Text),
+    Column("handed_at", UTCDateTime),
+    Column("repos", JSONText),
+    Column("autonomy", Text),
+    Column("finished_at", UTCDateTime),
+    Column("finished_words", Text),
+    Column("finished_decision", Text),
+    Column("finished_by", Text),
+    Column("taken_at", UTCDateTime),
+    Column("taken_words", Text),
+    Column("taken_by", Text),
+    Column("released_at", UTCDateTime),
+    Column("person_id", Text),
+    Column("finished_person_id", Text),
+    Column("taken_person_id", Text),
+    Column("crew", Text),
+    Column("override_reason", Text),
+    Column("override_at", UTCDateTime),
+    Column("override_person_id", Text),
+)
+
+# Standing permissions; `areas` and `consents` are lists. `needs_lead` keeps the default the old DDL
+# gave it, as `attempts` does below: the code before revision 0017 reads the same table
+grants = Table(
+    "grants", metadata,
+    Column("id", Text, primary_key=True),
+    Column("kind", Text),
+    Column("project", Text),
+    Column("holder_person_id", Text),
+    Column("words", Text),
+    Column("given_by", Text),
+    Column("given_at", UTCDateTime),
+    Column("areas", JSONText),
+    Column("consents", JSONText),
+    Column("state", Text),
+    Column("needs_lead", Boolean, server_default=false()),
+)
+
+# Memory lines that could not be written yet; `scope` is a project or `global`
+pending_memory = Table(
+    "pending_memory", metadata,
+    Column("id", Text, primary_key=True),
+    Column("scope", Text),
+    Column("line", Text),
+    Column("attempts", Integer, server_default="0"),
+    Column("last_error", Text),
+    Column("created_at", UTCDateTime),
+    Column("tried_at", UTCDateTime),
+)
+
+# One person's crew on one machine
+crews = Table(
+    "crews", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text),
+    Column("person_id", Text),
+    Column("machine", Text),
+    Column("first_seen", UTCDateTime),
+    Column("last_seen", UTCDateTime),
+    UniqueConstraint("person_id", "name", "machine", name="crews_person_id_name_machine_key"),
+)
+
+# Questions the spec session asks a person; numbered per project (Q1, Q2)
+spec_questions = Table(
+    "spec_questions", metadata,
+    Column("project", Text, primary_key=True),
+    Column("id", Text, primary_key=True),
+    Column("to_person_id", Text),
+    Column("repo", Text),
+    Column("text", Text),
+    Column("asked_by", Text),
+    Column("asked_at", UTCDateTime),
+    Column("answer", Text),
+    Column("answered_by", Text),
+    Column("answered_at", UTCDateTime),
+    Column("state", Text),
+    Column("via", Text),
+)
+
+# Repo owners' sign-offs. Nothing reads or writes them any more; the rows are kept
+signoffs = Table(
+    "signoffs", metadata,
+    Column("project", Text, primary_key=True),
+    Column("repo", Text, primary_key=True),
+    Column("person_id", Text),
+    Column("at", UTCDateTime),
+    Column("via", Text),
+)
+
+# Every hand-over that went ahead over a refusal, oldest kept. It has no key: two rows may be equal
+handover_overrides = Table(
+    "handover_overrides", metadata,
+    Column("project", Text),
+    Column("at", UTCDateTime),
+    Column("reason", Text),
+    Column("person_id", Text),
+    Column("handed_by", Text),
+)
+
+# The answers given to what waited for a person
+answers = Table(
+    "answers", metadata,
+    Column("id", Text, primary_key=True),
+    Column("item", Text),
+    Column("kind", Text),
+    Column("project", Text),
+    Column("ask", Text),
+    Column("choice", Text),
+    Column("said", Text),
+    Column("via", Text),
+    Column("person_id", Text),
+    Column("answered_at", UTCDateTime),
+)
+Index("idx_answers_at", answers.c.answered_at)
+
+# Which waiting items each person was told of, and the Slack message that told them
+waiting_told = Table(
+    "waiting_told", metadata,
+    Column("person_id", Text, primary_key=True),
+    Column("item", Text, primary_key=True),
+    Column("told_at", UTCDateTime),
+    Column("sent", Boolean),
+    Column("ask", Text),
+    Column("channel", Text),
+    Column("ts", Text),
+    Column("seq", Integer),
+    Column("closed", Text),
+)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
@@ -657,5 +860,7 @@ MOVED_TABLES = (session_stations, session_states, project_sessions, session_usag
                 docs, skills, shared_skills, catalog_sources, github_credentials, model_usage,
                 tickets, ticket_history, ticket_numbers,
                 milestones, milestone_check_results, milestone_acceptances, ticket_checks,
-                challenges, reviews, review_findings, rule_proposals)
+                challenges, reviews, review_findings, rule_proposals,
+                assumptions, desk_items, decisions, handovers, grants, pending_memory, crews,
+                spec_questions, signoffs, handover_overrides, answers, waiting_told)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

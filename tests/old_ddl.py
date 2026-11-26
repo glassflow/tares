@@ -1049,7 +1049,9 @@ def _insert(execute, seed) -> dict:
     for table, (cols, rows) in (seed or {}).items():
         marks = ", ".join("?" * len(cols))
         for row in rows:
-            execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({marks})", list(row))
+            # quoted: a column may be a word of DuckDB's own (`at`)
+            names = ", ".join(f'"{c}"' for c in cols)
+            execute(f"INSERT INTO {table} ({names}) VALUES ({marks})", list(row))
         done[table] = [tuple(r) for r in rows]
     return done
 
