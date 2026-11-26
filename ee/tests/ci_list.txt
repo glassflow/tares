@@ -42,6 +42,7 @@ test_licence_cloud
 test_mcp_brain
 test_mcp_editions_ee
 test_my_work
+test_offer_and_brief_reads
 test_owner_claims_local_team
 test_people_seats
 test_people_team
