@@ -42,6 +42,7 @@ from tares import github_credentials
 from tares.config import SourceCfg
 from tares.connectors import github_events as gh_events
 from tares.envelope import Envelope
+from tares_ee.brain import decisions as project_docs_mod
 from tares_ee.brain import decisions_repo as dr
 from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
@@ -142,6 +143,9 @@ async def main():
         await asyncio.Event().wait()
     index_mod.Indexer.run = never
     sync_mod.Syncer.run = never
+    # A removal wakes the project docs loop, which lists lore at a time of its own; a late listing would be
+    # counted against a later step, or take a failure meant for the importer. Nothing here needs its passes.
+    project_docs_mod.Decisions.run = never
 
     async def readable_repos(cred, query=""):
         return [{"full_name": r} for r in gh.repos]
