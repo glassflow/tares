@@ -30,7 +30,9 @@ from test_session_readers_held import (  # noqa: E402
 
 from sqlalchemy import func, insert, select, update  # noqa: E402
 
-from tares import session_archive, session_digest, session_drain, session_ingest, session_move  # noqa: E402
+from tares import (session_archive, session_digest, session_drain, session_events,  # noqa: E402
+                   session_ingest, session_move)
+from tares.envelope import Envelope  # noqa: E402
 from tares.session_store.tables import session_lines, sessions  # noqa: E402
 from tares.store import Store  # noqa: E402
 
@@ -46,7 +48,8 @@ def _spy(name, real):
     def read(*args):
         try:
             got = real(*args)
-        except ValueError:                          # a value DuckDB cannot sum: the old path's too
+        except session_digest.NotANumber:           # answered: the statement fails on that value
+            USED[name, True] += 1
             raise
         except Exception as e:
             BROKE.append(f"{name}: {type(e).__name__}: {e}")
@@ -418,8 +421,10 @@ def writers():
     after(s, "a line for an archived session", lambda: s.append([one("old", ago=6, repo="back")]))
     after(s, "a purge", lambda: s.purge_events(SRC))
     session_digest.sweep(s, force=True)
-    ck("a purge: the sweep drops what is gone", digest(s).entries == {} and digest(s).bytes == 0,
-       (len(digest(s).entries), digest(s).bytes))
+    d = digest(s)                       # what a query made of a pair stays: it is no session's
+    ck("a purge: the sweep drops what is gone", not d.entries and d.bytes == d.query_bytes
+       and not any(q.sessions for q in d.queries.values()),
+       (len(d.entries), d.bytes, d.query_bytes))
     after(s, "the same sessions shipped again", lambda: s.append(many_lines()))
     s.close()
 
@@ -613,6 +618,313 @@ def bounded():
     s.close()
 
 
+@contextlib.contextmanager
+def loads():
+    """Counts the stored lines a read loads, and the builds of each session's entry."""
+    seen = Counter()
+    load, publish = session_events.load, session_digest.Digest.publish
+
+    def counted(*args, **kw):
+        rows, parts = load(*args, **kw)
+        seen["lines"] += len(rows)
+        return rows, parts
+
+    def built(self, session, entry, read):
+        seen[session] += 1
+        publish(self, session, entry, read)
+
+    with patched(session_events, "load", counted), \
+            patched(session_digest.Digest, "publish", built):
+        yield seen
+
+
+def answer(read) -> str:
+    """A read's answer, or its failure, as text: NaN equals nothing, its text does."""
+    try:
+        got = read()
+    except Exception as e:
+        return f"{type(e).__name__}: {str(e).splitlines()[0]}"
+    return repr(sorted(got.items(), key=repr) if isinstance(got, dict) else got)
+
+
+# what one value beside a 5 sums to, as v1.61.0-rc.1 answered (None: it raised)
+NO_NUMBER = ["abc", "", True, False, "true", "0x10", "1,5", "12abc", " ", {"a": 1}, [1], [], {}]
+NUMBERS = [(None, 5.0), ("1e3", 1005.0), (" 12 ", 17.0), ("\t12\n", 17.0), ("+5", 10.0),
+           (".5", 5.5), ("1_000", 1005.0), (7, 12.0), (2.5, 7.5), ("NaN", float("nan")),
+           ("nan", float("nan")), ("inf", float("inf")), ("-inf", float("-inf")),
+           ("Infinity", float("inf")), ("1e999", float("inf")), ("1e308", 1e308)]
+
+
+def not_numbers():
+    print("== a value that is no number (TR-1706) ==")
+    values = NO_NUMBER + [v for v, _ in NUMBERS]
+    s = open_store("factory")
+    # per value two labels: `in<i>` has it on a line 60 s old, `out<i>` on one two hours old
+    good = one("good", ago=30)
+    inside, outside = one("recent", ago=60), one("past", ago=7200)
+    for i, v in enumerate(values):
+        good.labels.update({"g": "g", f"in{i}": 5, f"out{i}": 5})
+        inside.labels.update({"g": "g", f"in{i}": v})
+        outside.labels.update({"g": "g", f"out{i}": v})
+    web = Envelope(source="web", source_type="webhook", key_value="k", event_type="deploy",
+                   text="x", event_time=NOW - timedelta(seconds=50), payload={},
+                   labels={"g": "g", "web": "abc"})
+    s.append([good, inside, outside, web])
+
+    def ask(field, how, sources=(SRC,)):
+        return answer(lambda: s.aggregate(list(sources), field, how, HOUR, group_by="g"))
+
+    wrong, loaded = [], 0
+    out = io.StringIO()
+    for i, v in enumerate(values):
+        for field in (f"in{i}", f"out{i}"):
+            for how in ("count", "sum", "avg", "max", "min", "any"):
+                with raw(s):
+                    want = ask(field, how)
+                with loads() as seen, contextlib.redirect_stdout(out):
+                    got = ask(field, how)
+                loaded += seen["lines"]
+                if got != want:
+                    wrong.append((v, field, how, got, want))
+    ck("every value, in the window and outside it: the answer is the lines'", not wrong, wrong[:4])
+    ck("and no read loaded a line for it", loaded == 0 and not out.getvalue(),
+       (loaded, out.getvalue()[:300]))
+    n = len(NO_NUMBER)
+    got = [ask(f"in{i}", "sum") for i in range(n)]
+    ck("inside the window a text that is no number fails the read",
+       all(g.startswith("ConversionException: Conversion Error: Could not convert") for g in got),
+       got[:3])
+    got = [ask(f"out{i}", "sum") for i in range(n)]
+    ck("and outside it changes nothing", got == ["[('g', 5.0)]"] * n, got[:3])
+    got = [ask(f"in{n + i}", "sum") for i in range(len(NUMBERS))]
+    want = [repr([("g", total)]) for _, total in NUMBERS]
+    ck("what DuckDB reads as a number counts as one", got == want,
+       [(v, g, w) for (v, _), g, w in zip(NUMBERS, got, want) if g != w])
+    with raw(s):
+        want = [ask("web", how, (SRC, "web")) for how in ("count", "sum")]
+    with loads() as seen:
+        got = [ask("web", how, (SRC, "web")) for how in ("count", "sum")]
+    ck("a DuckDB row's text fails it the same way, no stored line loaded",
+       got == want and "ConversionException" in got[1] and seen["lines"] == 0,
+       (got, want, seen["lines"]))
+    # a line without the group's label is in no group: the statement never casts its value
+    loose = one("loose", ago=60)
+    loose.labels.update({f"in{n}": "abc"})
+    s.append([loose])
+    with raw(s):
+        want = ask(f"in{n}", "sum")
+    with loads() as seen:
+        got = ask(f"in{n}", "sum")
+    ck("a bad value on a line in no group changes nothing, as in the lines",
+       got == want == repr([("g", 5.0)]) and seen["lines"] == 0, (got, want, seen["lines"]))
+    s.close()
+
+    # NaN and the infinities, added up across sessions in either order
+    s = open_store("factory")
+    groups = {"a": ("nan", 3), "b": (3, "nan"), "c": ("inf", "-inf"), "d": ("inf", 1),
+              "e": (1, "-inf"), "f": ("-inf", "nan"), "g": (1e308, 1e308)}
+    lines = []
+    for group, pair in groups.items():
+        for i, v in enumerate(pair):
+            e = one(f"{group}{i}", ago=60 + i)
+            e.labels.update({"g": group, "n": v})
+            lines.append(e)
+    s.append(lines)
+    for how in ("sum", "avg", "max", "min", "any"):
+        with raw(s):
+            want = answer(lambda: s.aggregate([SRC], "n", how, HOUR, group_by="g"))
+        with loads() as seen:
+            got = answer(lambda: s.aggregate([SRC], "n", how, HOUR, group_by="g"))
+        ck(f"{how} over NaN and the infinities is the lines'", got == want and seen["lines"] == 0,
+           (got, want, seen["lines"]))
+    s.close()
+
+
+def edges():
+    print("== the quarter hour `since` cuts, a type in another case (TR-1706) ==")
+    s = open_store("factory")
+    top = (NOW - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
+
+    def ago(minutes):
+        return (NOW - top - timedelta(minutes=minutes)).total_seconds()
+
+    caps = one("caps", ago=30)
+    caps.event_type = "Assistant"
+    s.append([one("q", ago=ago(5)), one("q", ago=ago(125)), caps, one("plain", "user", ago=20)])
+
+    def hours(minutes):
+        return sorted(s.recent_ingest_hours(SRC, top + timedelta(minutes=minutes)))
+
+    for minutes, n, what in ((10, 2, "only lines before `since` in its quarter: no such hour"),
+                             (4, 3, "a line after `since` in its quarter: that hour")):
+        with raw(s):
+            want = hours(minutes)
+        got = hours(minutes)
+        ck(what, got == want and len(got) == n, (got, want))
+
+    for op, value in (("in", ["assistant"]), ("eq", "Assistant")):
+        def window():
+            return [(str(r[0]), r[2]) for r in s.read_window(
+                [SRC], None, NOW - timedelta(seconds=600), cap=100,
+                filters=[f("event_type", op, value)])]
+        with raw(s):
+            want = window()
+        got = window()
+        ck(f"a stored type in another case is found: event_type {op}",
+           got == want and len(got) == 1, (got, want))
+    s.close()
+
+
+def sound(s) -> tuple:
+    """The digest's count of itself is what it holds, within its limits, and no share keeps an
+    entry that is no longer its session's."""
+    d = digest(s)
+    queries = list(d.queries.values())
+    kept = sum(e.bytes for e in d.entries.values())
+    return (d.bytes == kept + d.query_bytes,
+            d.query_bytes == sum(q.bytes for q in queries),
+            all(q.memo_bytes >= session_digest._MEMO_BYTES * len(q.memo) for q in queries),
+            all(q.bytes == q.memo_bytes + sum(v[2] for v in q.sessions.values()) for q in queries),
+            all(v[0] is d.entries.get(sid) for q in queries for sid, v in q.sessions.items()),
+            kept <= session_digest.MAX_BYTES - session_digest.MAX_BYTES // 4,
+            d.query_bytes <= session_digest.MAX_BYTES // 4)
+
+
+def full_cache():
+    print("== at the size limit (TR-1706) ==")
+    ok = (True,) * 7
+    s = open_store("factory")
+    s.upsert_catalog_source(OTHER, "agent_session", SRC, "10s", {"push": True})
+    mine = [f"m{i:02d}" for i in range(20)]
+    s.append([one(sid, ago=100 + i, repo="shop") for i, sid in enumerate(mine)])
+    s.append([one(f"o{i:02d}", ago=100 + i, source=OTHER, repo="shop") for i in range(20)])
+
+    def count(source=SRC, **kw):
+        return s.aggregate([source], None, "count", HOUR, **kw)
+
+    def only(*sids):
+        return [count(where={"key_value": sid}) for sid in sids]
+
+    count(), count(group_by="repo"), s._list_entities_scan("repo", [SRC], 10)
+    q = list(digest(s).queries.values())
+    ck("the queries' memos and shares are counted", digest(s).query_bytes > 0
+       and any(x.memo for x in q) and any(x.sessions for x in q) and sound(s) == ok, sound(s))
+    s.append([one("m00", ago=50, repo="shop")])
+    count(where={"key_value": "m00"})                    # one shape reads the new entry
+    ck("a replaced entry takes its shares with it", sound(s) == ok, sound(s))
+    size = max(e.bytes for e in digest(s).entries.values())
+    with patched(session_digest, "MAX_BYTES", size * 8):         # room for about six entries
+        forget(s)
+        with raw(s):
+            want, theirs = count(), count(OTHER)
+        ck("a read over more sessions than fit answers as the lines do", count() == want)
+        held_now = set(digest(s).entries)
+        ck("and keeps what fits", 3 <= len(held_now) < len(mine) and sound(s) == ok,
+           (len(held_now), sound(s)))
+        with loads() as seen:
+            again = count()
+        ck("and again: what it kept is not built again, nothing is put out for the rest",
+           again == want and set(digest(s).entries) == held_now
+           and not any(seen[sid] for sid in held_now), (dict(seen), held_now))
+        hot = next(sid for sid in mine if sid not in digest(s).entries)
+        with loads() as seen:
+            got = [only(hot) for _ in range(6)]
+        ck("a session read again and again in a full cache is built once",
+           seen[hot] == 1 and got == [[{hot: want[hot]}]] * 6 and hot in digest(s).entries,
+           (seen[hot], got[:2]))
+        warmest = [hot, sorted(set(digest(s).entries) - {hot})[0]]
+        only(*warmest)
+        got = count(OTHER)                               # a wide read that takes none of them
+        ck("a wide read of other sessions answers, and leaves the ones just read",
+           got == theirs and set(warmest) <= set(digest(s).entries) and sound(s) == ok,
+           (warmest, sorted(digest(s).entries), sound(s)))
+        with loads() as seen:
+            only(*warmest)
+        ck("which are not built again", not any(seen[sid] for sid in warmest), dict(seen))
+        for i in range(30):                              # many shapes
+            count(where={"repo": "shop"}, group_by="repo",
+                  filters=[f("branch", "neq", f"b{i}")])
+            s._list_entities_scan("repo", [SRC], 10 + i)
+        ck("many query shapes stay within their room", sound(s) == ok, sound(s))
+        forget(s)
+        session_digest.warm(s)
+        newest = {"m00", "m01"}
+        ck("the warm-up stops when full and keeps the newest",
+           newest <= set(digest(s).entries) and len(digest(s).entries) < 40 and sound(s) == ok,
+           (sorted(digest(s).entries), sound(s)))
+
+        failed, stop = [], threading.Event()
+
+        def reader(n):
+            try:
+                while not stop.is_set():
+                    count(), only(mine[n], hot), count(OTHER)
+                    s._list_entities_scan("repo", [SRC], 10)
+            except Exception as e:
+                failed.append(f"{type(e).__name__}: {e}")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            readers = [threading.Thread(target=reader, args=(n,)) for n in range(4)]
+            for th in readers:
+                th.start()
+            for i in range(30):
+                s.append([one(mine[i % 5], ago=40 - i, repo="live")])
+                session_digest.sweep(s, force=True)
+            stop.set()
+            for th in readers:
+                th.join(60)
+        ck("readers beside an ingest in a full cache: none failed, the count holds",
+           not failed and "digest could not answer" not in out.getvalue() and sound(s) == ok,
+           (failed[:2], out.getvalue()[:300], sound(s)))
+        with raw(s):
+            want = count(), count(OTHER), count(group_by="repo")
+        ck("and the answers are the lines'",
+           (count(), count(OTHER), count(group_by="repo")) == want)
+    s.close()
+
+
+def published_meanwhile():
+    print("== an entry published while a read is under way (TR-1706) ==")
+    s = cell()
+    assert session_archive.archive_pass(s) >= 1
+    count = lambda: s.aggregate([SRC], None, "count", LONG, group_by=["key_value"])
+    want = count()
+    forget(s)
+    decoded: Counter = Counter()
+    read_part, finish, first = session_archive.read_part, session_digest.finish, [True]
+
+    def counted(backend, part):
+        decoded[part.key] += 1
+        return read_part(backend, part)
+
+    def beside(store, plan):
+        if first.pop() if first else False:      # another read builds them all, after the load
+            count()
+        return finish(store, plan)
+
+    with patched(session_archive, "read_part", counted), \
+            patched(session_digest, "_old", lambda *_: False), \
+            patched(session_digest, "finish", beside):        # kept with their lines' times
+        got = count()
+    ck("its archive parts are not read a second time",
+       got == want and decoded and set(decoded.values()) == {1}, dict(decoded))
+
+    def evicting(store, plan):                       # another read evicts them all, after the load
+        forget(store)
+        return finish(store, plan)
+
+    s.append([one("old", ago=40 * DAY, repo="shop")])         # its entry is out of date
+    decoded.clear()
+    with patched(session_archive, "read_part", counted), \
+            patched(session_digest, "_old", lambda *_: False), \
+            patched(session_digest, "finish", evicting):
+        got = count()
+    ck("nor those of an entry evicted after the read held it",
+       got != want and not decoded, (dict(decoded), got, want))
+    s.close()
+
+
 def threads():
     print("== reads while lines arrive ==")
     s = cell()
@@ -693,6 +1005,10 @@ def main():
     two_sources()
     cold_and_warm()
     bounded()
+    not_numbers()
+    edges()
+    full_cache()
+    published_meanwhile()
     threads()
     two_processes()
     ck("no read fell back because the digest raised", not BROKE, BROKE[:3])

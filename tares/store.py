@@ -1733,8 +1733,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         if field and not re.match(r"^[A-Za-z0-9_.]+$", str(field)):
             raise ValueError(f"bad aggregate field {field!r}")
         # quoted JSON path so dotted field names (http.status_code) resolve as one flat key
-        valexpr = (f"CAST(json_extract_string(labels, '$.\"{field}\"') AS DOUBLE)"
-                   if field else "1")
+        raw = f"json_extract_string(labels, '$.\"{field}\"')" if field else None
+        valexpr = f"CAST({raw} AS DOUBLE)" if field else "1"
         aggexpr = {
             "count": "COUNT(*)",
             "sum": f"SUM({valexpr})",
@@ -1748,7 +1748,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         having = " AND ".join(f"g{i} IS NOT NULL" for i in range(len(gexprs)))
         # the stored lines are counted from the digest where it can (TR-1695)
         acc = self._from_digest(session_digest.aggregate, sources, since, until, filters, where,
-                                names, gexprs, valexpr, scope, conditions)
+                                names, gexprs, None if agg == "count" else raw, scope,
+                                conditions)
         if acc is not None:
             return {(g[0] if isinstance(group_by, str) else g): _aggregated(agg, a)
                     for g, a in acc.items()}
@@ -1781,6 +1782,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         then the caller reads the lines. A failure of the cache is said once and fails no read."""
         try:
             return read(self, *args)
+        except session_digest.NotANumber as e:
+            raise e.__cause__ from None      # the answer: the statement fails on that value too
         except Exception as e:
             if not self.__dict__.get("_digest_said"):
                 self._digest_said = True

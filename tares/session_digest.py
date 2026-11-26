@@ -22,12 +22,19 @@ Memory. Sessions with a line in the last `HORIZON_DAYS` (or the longest claude_c
 when that is longer) keep their times: 8 bytes a line, plus the labels text once per group. An older
 session keeps only a count and the newest time per labels text, which is what a list of label values
 needs (it reads without a window); a window that reaches such a session reads its lines again and
-does not keep them. Past `MAX_BYTES` nothing more is kept, and reads build what they need each time.
+does not keep them.
+
+`MAX_BYTES` (estimated sizes) covers everything kept between reads: three quarters for the entries,
+one quarter for what the query shapes remember (memos and per-session shares). An entry that does
+not fit takes the room of the least recently used ones, so a session that is read stays. A read
+takes no room from what it, or a later read, has used, and at most half of the entries' room, so one
+wide read does not empty the cache. What does not fit is built for the read that needs it. A
+replaced or dropped entry takes its shares with it. Not counted: what a read holds until it returns.
 """
 from __future__ import annotations
 
+import itertools
 import json
-import math
 import sys
 import threading
 import time
@@ -36,13 +43,14 @@ from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
+import duckdb
 from sqlalchemy import BigInteger, Integer, case, cast, func, select
 
 from . import session_archive, session_read
 from .session_store.tables import session_archive_parts, session_lines, sessions
 
 HORIZON_DAYS = 31                  # the longest window anything reads is 30 days, plus a day
-MAX_BYTES = 256 * 1024 * 1024      # past this nothing more is kept
+MAX_BYTES = 256 * 1024 * 1024      # everything kept between reads
 CHUNK = 500                        # sessions one statement names
 WARM_BATCH = 50                    # sessions the warm-up reads in one transaction
 SWEEP_SECONDS = 600                # how often gone and aged sessions are dropped
@@ -54,6 +62,9 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _US = timedelta(microseconds=1)
 _GROUP_BYTES = 250                 # a group's key, tuple and array objects, about
 _ENTRY_BYTES = 600
+_MEMO_BYTES = 200                  # one remembered evaluation, its texts apart
+_SHARE_BYTES = 200                 # a session's share of a query, its values apart
+_VALUE_BYTES = 250                 # one value of a share
 _MISS = object()                   # a (type, labels) pair the query's conditions leave out
 
 
@@ -69,10 +80,10 @@ def _moment(us: int | None):
 
 class Entry:
     """One session's lines, as grouped times (`full`) or as counts per labels text (a rollup).
-    Never changed once built."""
+    Never changed once built, except `used`: the last read that took it."""
 
     __slots__ = ("version", "segments", "parts", "lo", "hi", "quarters", "by_labels", "lines",
-                 "bytes", "partial")
+                 "bytes", "partial", "used")
 
     @property
     def full(self) -> bool:
@@ -134,44 +145,146 @@ def _rollup(e: Entry) -> Entry:
 class _Query:
     """What one query's conditions make of each (type, labels) pair, and each session's share."""
 
-    __slots__ = ("memo", "sessions")
+    __slots__ = ("memo", "sessions", "memo_bytes", "bytes", "live")
 
     def __init__(self):
         self.memo: dict = {}
-        self.sessions: dict = {}                 # {session: (entry, share)}
+        self.sessions: dict = {}                 # {session: (entry, share, bytes)}
+        self.memo_bytes = 0
+        self.bytes = 0                           # the memo and the shares
+        self.live = True                         # still one of the digest's
+
+
+class _Read:
+    """One read's turn at the cache: its place in line, and what it has evicted."""
+
+    __slots__ = ("tick", "evicted", "warm", "refused")
+
+    def __init__(self, tick: int, warm: bool):
+        self.tick = tick
+        self.warm = warm                         # the warm-up: evicts nothing
+        self.evicted = 0
+        self.refused = False                     # an entry of it did not fit
 
 
 class Digest:
     def __init__(self):
-        self.entries: dict = {}
-        self.bytes = 0
+        self.entries: OrderedDict = OrderedDict()    # least recently used first
+        self.bytes = 0                           # everything kept
+        self.query_bytes = 0                     # of which the queries'
         self.lock = threading.Lock()             # held to publish or drop, never while reading
         self.queries: OrderedDict = OrderedDict()
+        self.ticks = itertools.count(1)
         self.horizon = timedelta(days=HORIZON_DAYS)
         self.swept = None
 
-    def publish(self, session: str, entry: Entry) -> None:
-        with self.lock:
-            old = self.entries.get(session)
-            size = self.bytes - (old.bytes if old else 0) + entry.bytes
-            if entry.partial or size > MAX_BYTES:
-                if old is not None:
-                    del self.entries[session]
-                    self.bytes -= old.bytes
-                return
-            self.entries[session] = entry
-            self.bytes = size
+    def turn(self, warm: bool = False) -> _Read:
+        return _Read(next(self.ticks), warm)
 
+    def use(self, read: _Read, sessions_taken) -> None:
+        with self.lock:
+            for sid in sessions_taken:
+                e = self.entries.get(sid)
+                if e is not None:
+                    e.used = read.tick
+                    self.entries.move_to_end(sid)
+
+    def publish(self, session: str, entry: Entry, read: _Read) -> None:
+        with self.lock:
+            self.drop(session)
+            if entry.partial:
+                return
+            if not self._room(entry.bytes, read):
+                read.refused = True
+                return
+            entry.used = read.tick
+            self.entries[session] = entry
+            self.bytes += entry.bytes
+            if read.warm:                        # warmed newest first: the newest stays longest
+                self.entries.move_to_end(session, last=False)
+
+    def _room(self, need: int, read: _Read) -> bool:
+        """Evict least recently used entries until `need` bytes more fit, as far as `read` may."""
+        limit = MAX_BYTES - MAX_BYTES // 4
+        if need > limit:
+            return False
+        while self.bytes - self.query_bytes + need > limit:
+            sid = next(iter(self.entries), None)
+            if (sid is None or read.warm or self.entries[sid].used >= read.tick
+                    or read.evicted >= limit // 2):
+                return False
+            read.evicted += self.entries[sid].bytes
+            self.drop(sid)
+        return True
+
+    # the lock is held for the rest
+    def drop(self, session: str) -> None:
+        old = self.entries.pop(session, None)
+        if old is not None:
+            self.bytes -= old.bytes
+            self.unshare(session)
+
+    def unshare(self, session: str) -> None:
+        """No share keeps an entry that is no longer the session's."""
+        for q in self.queries.values():
+            had = q.sessions.pop(session, None)
+            if had is not None:
+                self._count(q, -had[2])
+
+    def _count(self, query: _Query, n: int) -> None:
+        query.bytes += n
+        if query.live:
+            self.bytes += n
+            self.query_bytes += n
+
+    def _forget_oldest_query(self) -> None:
+        _signature, q = self.queries.popitem(last=False)
+        q.live = False
+        self.bytes -= q.bytes
+        self.query_bytes -= q.bytes
+
+    def _bound_queries(self) -> None:
+        while self.queries and self.query_bytes > MAX_BYTES // 4:
+            self._forget_oldest_query()
+
+    # these take it themselves
     def query(self, signature) -> _Query:
         with self.lock:
             q = self.queries.get(signature)
             if q is None:
                 q = self.queries[signature] = _Query()
                 while len(self.queries) > QUERIES:
-                    self.queries.popitem(last=False)
+                    self._forget_oldest_query()
             else:
                 self.queries.move_to_end(signature)
             return q
+
+    def learn(self, query: _Query, found: dict) -> None:
+        """Remember what the conditions make of these pairs."""
+        with self.lock:
+            if len(query.memo) > MEMO_MAX:
+                self._count(query, -query.memo_bytes)
+                query.memo, query.memo_bytes = {}, 0
+            size = 0
+            for pair, got in found.items():
+                if pair not in query.memo:
+                    query.memo[pair] = got
+                    size += _MEMO_BYTES + len(pair[1] or "") + (
+                        0 if got is _MISS else sum(len(v) for v in got if isinstance(v, str)))
+            query.memo_bytes += size
+            self._count(query, size)
+            self._bound_queries()
+
+    def keep(self, query: _Query, shares: list) -> None:
+        """Keep these [(session, entry, share, bytes)], of the entries still the session's."""
+        with self.lock:
+            for sid, entry, share, size in shares:
+                if self.entries.get(sid) is not entry:
+                    continue
+                had = query.sessions.get(sid)
+                query.sessions[sid] = (entry, share, size)
+                self._count(query, size - (had[2] if had is not None else 0))
+            self._bound_queries()
 
 
 _creating = threading.Lock()
@@ -219,43 +332,47 @@ def sweep(store, force: bool = False) -> None:
     digest.horizon = _horizon(store)
     from .session_ingest import TABLE
     with store.sessions_db.read() as c:
-        before = list(digest.entries)            # taken first: a session born meanwhile stays
+        with digest.lock:
+            before = list(digest.entries)        # taken first: a session born meanwhile stays
         live = set(c.execute(select(sessions.c.session).where(
             sessions.c.lines_origin == TABLE)).scalars())
     gone = [s for s in before if s not in live]
     with digest.lock:
         for sid in gone:
-            old = digest.entries.pop(sid, None)
-            if old is not None:
-                digest.bytes -= old.bytes
+            digest.drop(sid)
         for sid, entry in list(digest.entries.items()):
             if entry.full and _old(digest, entry):
                 small = _rollup(entry)
-                digest.entries[sid] = small
+                small.used = entry.used
+                digest.entries[sid] = small      # in its place in line
                 digest.bytes += small.bytes - entry.bytes
-        for q in digest.queries.values():
-            q.sessions = {s: v for s, v in list(q.sessions.items())
-                          if s in digest.entries and v[0] is digest.entries[s]}
+                digest.unshare(sid)
 
 
 # ── reading the lines ────────────────────────────────────────────────────────
 class _Plan:
-    __slots__ = ("born", "have", "stale", "table", "parts", "need_full")
+    __slots__ = ("born", "have", "stale", "table", "parts", "need_full", "read", "old")
 
 
-def load(store, conn, born: list, need_full: bool = True) -> _Plan:
+def load(store, conn, born: list, need_full: bool = True, read: _Read | None = None) -> _Plan:
     """The part of a read that needs `conn`, the transaction `born` was read in: which entries are
     still current, and the rows and part records of the rest. `finish` does the others."""
     digest = of(store)
     plan = _Plan()
     plan.born, plan.need_full = born, need_full
+    plan.read = read or digest.turn()
     plan.have, plan.stale, plan.table, plan.parts = {}, [], {}, {}
+    plan.old = {}                    # held here: a read beside this one may evict them
     for b in born:
         e = digest.entries.get(b.session)
         if e is not None and e.version == tuple(b) and (e.full or not need_full):
             plan.have[b.session] = e
         else:
             plan.stale.append(b)
+            plan.old[b.session] = e
+    if not plan.read.warm:
+        # all of them, before this read may evict: it never puts out what it is reading
+        digest.use(plan.read, [b.session for b in born])
     if not plan.stale:
         return plan
     t = session_lines.c
@@ -281,6 +398,16 @@ def load(store, conn, born: list, need_full: bool = True) -> _Plan:
     return plan
 
 
+def _read_parts(digest: Digest, plan: _Plan, session: str) -> dict:
+    """{(key, md5): segment} already read for this session: by the entry `load` held (a read beside
+    this one may evict it) and by the one published since (the warm-up)."""
+    parts: dict = {}
+    for e in (plan.old.get(session), digest.entries.get(session)):
+        if e is not None and e.full:
+            parts.update(e.parts)
+    return parts
+
+
 def finish(store, plan: _Plan) -> dict:
     """{session: entry} for every session of the plan, reading the archive parts not read before."""
     digest = of(store)
@@ -296,11 +423,11 @@ def finish(store, plan: _Plan) -> dict:
             labels = shared.setdefault(labels, labels)
             table[(kind if kind is None else sys.intern(kind), labels)] = [got or [], int(none or 0)]
         table = _segment(table)
-        old = digest.entries.get(sid)
+        known = _read_parts(digest, plan, sid)
         parts: dict = {}
         partial = False
         for p in plan.parts.get(sid, ()):
-            seg = old.parts.get((p.key, p.md5)) if old is not None and old.full else None
+            seg = known.get((p.key, p.md5))
             if seg is None:
                 try:
                     if backend is None:
@@ -329,7 +456,7 @@ def finish(store, plan: _Plan) -> dict:
             parts[(p.key, p.md5)] = seg
         entry = _make(tuple(b), table, parts, partial)
         out[sid] = entry
-        digest.publish(sid, _rollup(entry) if _old(digest, entry) else entry)
+        digest.publish(sid, _rollup(entry) if _old(digest, entry) else entry, plan.read)
     plan.stale = []
     return out
 
@@ -346,7 +473,7 @@ def matching(store, conn, born: list, since, types, needles: list) -> list:
     # counts as one that may match
     unread = set()
     for b in plan.stale:
-        old = digest.entries.get(b.session)
+        old = plan.old.get(b.session)
         had = old.parts if old is not None and old.full else {}
         if any((p.key, p.md5) not in had for p in plan.parts.get(b.session, ())):
             unread.add(b.session)
@@ -397,8 +524,6 @@ def _evaluate(store, query: _Query, pairs: set, select_sql: str, where_sql: str,
     DuckDB, so the conditions mean what they mean for a row of `events`. A pair is
     (type, labels, session or None, source or None)."""
     memo = query.memo
-    if len(memo) > MEMO_MAX:
-        memo = query.memo = {}
     out = {p: memo[p] for p in pairs if p in memo}
     todo = [p for p in pairs if p not in out]
     for i in range(0, len(todo), EVAL_CHUNK):
@@ -414,18 +539,35 @@ def _evaluate(store, query: _Query, pairs: set, select_sql: str, where_sql: str,
         with store._lock:
             got = store.con.execute(sql, [*args, *params]).fetchall()
         found = {r[0]: r[1:] for r in got}
-        for n, pair in enumerate(chunk):
-            out[pair] = memo[pair] = found.get(n, _MISS)
+        new = {pair: found.get(n, _MISS) for n, pair in enumerate(chunk)}
+        out.update(new)
+        of(store).learn(query, new)
     return out
 
 
 # ── the reads ────────────────────────────────────────────────────────────────
+class NotANumber(Exception):
+    """A value in the window is not a number: the statement over the lines fails on it, with the
+    DuckDB error kept as the cause."""
+
+
+def _not_a_number(store, text: str):
+    try:
+        with store._lock:
+            store.con.execute("SELECT CAST(? AS DOUBLE)", [text])
+    except duckdb.ConversionException as e:
+        raise NotANumber(str(e)) from e
+
+
 def aggregate(store, sources, since, until, filters, where, names: list, gexprs: list,
-              value: str, scope, sql: tuple) -> dict | None:
+              raw: str | None, scope, sql: tuple) -> dict | None:
     """What `Store.aggregate` needs, as {group values: [lines, lines with a value, sum, max, min]}.
-    None when this is not a read the digest answers. `gexprs` and `value` are the statement's own
-    SQL for the group labels `names` and the value, and `sql` its conditions:
-    (filter SQL, its params, where SQL, its params, scope SQL, its params)."""
+    None when this is not a read the digest answers. `gexprs` is the statement's own SQL for the
+    group labels `names`, `raw` that for the text of the value it casts to a number (None: it only
+    counts lines), and `sql` its conditions:
+    (filter SQL, its params, where SQL, its params, scope SQL, its params). Raises `NotANumber`
+    where the statement itself would fail on a value."""
+    value = "1" if raw is None else f"CAST({raw} AS DOUBLE)"
     if any(f.get("field") == "text" for f in filters or []):
         return None
     if since is None or since.tzinfo is None or (until is not None and until.tzinfo is None):
@@ -442,9 +584,6 @@ def aggregate(store, sources, since, until, filters, where, names: list, gexprs:
     acc: dict = {}
 
     def add(group, lines, n_value, total, high, low):
-        if total is not None and any(isinstance(x, float) and not math.isfinite(x)
-                                     for x in (total, high, low)):
-            raise ValueError("a value that is not a number")        # the plain read handles it
         a = acc.get(group)
         if a is None:
             acc[group] = [lines, n_value, total, high, low]
@@ -453,30 +592,37 @@ def aggregate(store, sources, since, until, filters, where, names: list, gexprs:
         if n_value:
             a[1] += n_value
             a[2] = total if a[2] is None else a[2] + total
-            a[3] = high if a[3] is None else max(a[3], high)
-            a[4] = low if a[4] is None else min(a[4], low)
+            # as DuckDB orders them: NaN is above every number
+            if a[3] is None or high > a[3] or high != high:
+                a[3] = high
+            if a[4] is None or low < a[4] or a[4] != a[4]:
+                a[4] = low
 
     # everything the digest does not hold: DuckDB's rows and the incomplete sessions
     marks = ", ".join(["?"] * len(sources))
     w = rest.weight
     sel = ", ".join(f"{e} AS g{i}" for i, e in enumerate(gexprs))
     with store._lock:
-        rows = store.con.execute(
-            f"SELECT {sel}, SUM({w})::BIGINT, SUM({w}) FILTER (WHERE {value} IS NOT NULL)::BIGINT, "
-            f"SUM({value} * {w}), MAX({value}), MIN({value}) FROM {rest.table} "
-            f"WHERE source IN ({marks}) AND event_time >= ?"
-            f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql}{ssql} "
-            f"GROUP BY {', '.join(f'g{i}' for i in range(len(gexprs)))} "
-            f"HAVING {' AND '.join(f'g{i} IS NOT NULL' for i in range(len(gexprs)))}",
-            [*rest.params, *sources, since, *([until] if until is not None else []), *fparams,
-             *wparams, *sparams]).fetchall()
+        try:
+            rows = store.con.execute(
+                f"SELECT {sel}, SUM({w})::BIGINT, "
+                f"SUM({w}) FILTER (WHERE {value} IS NOT NULL)::BIGINT, "
+                f"SUM({value} * {w}), MAX({value}), MIN({value}) FROM {rest.table} "
+                f"WHERE source IN ({marks}) AND event_time >= ?"
+                f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql}{ssql} "
+                f"GROUP BY {', '.join(f'g{i}' for i in range(len(gexprs)))} "
+                f"HAVING {' AND '.join(f'g{i} IS NOT NULL' for i in range(len(gexprs)))}",
+                [*rest.params, *sources, since, *([until] if until is not None else []), *fparams,
+                 *wparams, *sparams]).fetchall()
+        except duckdb.ConversionException as e:
+            raise NotANumber(str(e)) from e      # its rows are among the statement's own
     for r in rows:
         lines, n_value, total, high, low = r[len(gexprs):]
         add(tuple(r[:len(gexprs)]), lines, n_value or 0, total, high, low)
 
     refs = {f.get("field") for f in filters or []} | set(where or {})
     by_session, by_source = "key_value" in refs, "source" in refs
-    query = of(store).query(("agg", value, tuple(gexprs), fsql, tuple(fparams), wsql,
+    query = of(store).query(("agg", raw, tuple(gexprs), fsql, tuple(fparams), wsql,
                              tuple(wparams)))
     shares: dict = {}
     stale = []
@@ -495,27 +641,34 @@ def aggregate(store, sources, since, until, filters, where, names: list, gexprs:
 
     if stale:
         pairs = {pair(b, *k) for b, e in stale for seg in e.segments for k in seg}
-        seen = _evaluate(store, query, pairs, f"({value}), " + ", ".join(gexprs), fsql + wsql,
+        # TRY_CAST: a line outside the window may hold a text that is no number, and the statement
+        # never casts that one. The text is kept, and fails the read only if the window has it.
+        number = "1, NULL" if raw is None else (
+            f"TRY_CAST({raw} AS DOUBLE), CASE WHEN TRY_CAST({raw} AS DOUBLE) IS NULL THEN {raw} END")
+        seen = _evaluate(store, query, pairs, f"{number}, " + ", ".join(gexprs), fsql + wsql,
                          [*fparams, *wparams])
+        kept = []
         for b, e in stale:
-            share: dict = {}                     # {(group, value): [lines with a time, arrays]}
+            share: dict = {}           # {(group, value, bad text): [lines with a time, arrays]}
             for seg in e.segments:
                 for k, (times, _nulls) in seg.items():
                     res = seen[pair(b, *k)]
                     if res is _MISS or not times:
                         continue
                     group = tuple(b.session if n == "key_value" else g
-                                  for n, g in zip(names, res[1:]))
+                                  for n, g in zip(names, res[2:]))
                     if any(g is None for g in group):
                         continue
-                    s = share.get((group, res[0]))
+                    key = (group, res[0], res[1])
+                    s = share.get(key)
                     if s is None:
-                        s = share[(group, res[0])] = [0, []]
+                        s = share[key] = [0, []]
                     s[0] += len(times)
                     s[1].append(times)
             shares[b.session] = share
-            if e is of(store).entries.get(b.session):
-                query.sessions[b.session] = (e, share)
+            kept.append((b.session, e, share, _SHARE_BYTES + sum(
+                _VALUE_BYTES + len(k[2] or "") + 8 * len(v[1]) for k, v in share.items())))
+        of(store).keep(query, kept)
 
     lo = _micros(since)
     hi = None if until is None else _micros(until)
@@ -524,13 +677,15 @@ def aggregate(store, sources, since, until, filters, where, names: list, gexprs:
         if not share or e.hi < lo or (hi is not None and e.lo >= hi):
             continue
         whole = e.lo >= lo and (hi is None or e.hi < hi)
-        for (group, v), (n, arrays) in share.items():
+        for (group, v, bad), (n, arrays) in share.items():
             if not whole:
                 n = 0
                 for times in arrays:
                     n += (len(times) if hi is None else bisect_left(times, hi)) - bisect_left(times, lo)
                 if n <= 0:
                     continue
+            if bad is not None:
+                _not_a_number(store, bad)
             if v is None:
                 add(group, n, 0, None, None, None)
             else:
@@ -646,6 +801,7 @@ def entities(store, label: str, expr: str, sources, limit: int, xsql: str, xpara
         pairs = {(None, labels, None, None) for _b, e in stale for labels in e.by_labels}
         seen = _evaluate(store, query, pairs, expr, f" AND {expr} IS NOT NULL{base_sql}",
                          list(base_params))
+        kept = []
         for b, e in stale:
             share: dict = {}                     # {value: (lines, newest time or None)}
             for labels, (n, last) in e.by_labels.items():
@@ -660,8 +816,9 @@ def entities(store, label: str, expr: str, sources, limit: int, xsql: str, xpara
                         last = had[1]
                 share[v] = (n, last)
             shares[b.session] = share
-            if e is of(store).entries.get(b.session):
-                query.sessions[b.session] = (e, share)
+            kept.append((b.session, e, share, _SHARE_BYTES + sum(
+                _VALUE_BYTES + len(str(v)) for v in share)))
+        of(store).keep(query, kept)
     acc: dict = {}
     for share in shares.values():
         for v, (n, last) in share.items():
@@ -698,12 +855,15 @@ def warm(store, stop: threading.Event | None = None) -> dict | None:
     todo = [b.session for b in sorted(born, key=lambda b: str(b.last_line_at or ""), reverse=True)
             if b.lines_complete]
     lines = 0
+    turn = digest.turn(warm=True)
     for i in range(0, len(todo), WARM_BATCH):
-        if (stop is not None and stop.is_set()) or digest.bytes >= MAX_BYTES:
+        if (stop is not None and stop.is_set()) or turn.refused:      # refused: it is full
             break
+        keys = todo[i:i + WARM_BATCH]
         with store.sessions_db.consistent_read() as c:
-            batch = session_events._born(store, c, None, keys=todo[i:i + WARM_BATCH])
-            plan = load(store, c, [b for b in batch if b.lines_complete], need_full=False)
+            batch = session_events._born(store, c, None, keys=keys)
+            batch.sort(key=lambda b: keys.index(b.session))       # newest first, as `todo`
+            plan = load(store, c, [b for b in batch if b.lines_complete], False, turn)
         lines += sum(e.lines for e in finish(store, plan).values())
         time.sleep(0.001)                        # let a waiting request in
     if stop is not None and stop.is_set():
