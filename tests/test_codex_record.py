@@ -202,6 +202,22 @@ stopped, _ = rec.facts(None, record, sent1, BASE, False, NOW + 5, stopped="it ra
 ck("one the crew stopped has ended, and the reason says the crew stopped it, and why (TR-1600)",
    [f["reason"] for f in stopped if f["kind"] == "state"]
    == ["the crew stopped it: it ran `git push` with no guard record"], stopped)
+# the stop records its end before the crew marks why it stopped the station: the next look sends the reason
+dead1, s_dead1 = rec.facts(None, record, sent1, BASE, False, NOW + 5)
+marked, s_marked = rec.facts(None, record, s_dead1, BASE, False, NOW + 6, stopped="its guard was not running")
+ck("a stop recorded as ended is sent again once the crew marks why it stopped it, and only once (TR-1600)",
+   [f["reason"] for f in dead1 if f["kind"] == "state"] == ["the station is not running"]
+   and [(f["state"], f["reason"]) for f in marked if f["kind"] == "state"]
+   == [("ended", "the crew stopped it: its guard was not running")]
+   and [f for f in rec.facts(None, record, s_marked, BASE, False, NOW + 7, stopped="its guard was not running")[0]
+        if f["kind"] == "state"] == [], (dead1, marked))
+old_sent = {**sent1, "announced": True}
+old_sent.pop("reason", None)
+again, s_again = rec.facts(thread([]), [], old_sent, BASE, True, NOW + 8)
+ck("a conversation announced before the cell kept a session's runtime is announced once more, then not again (TR-1600)",
+   [f["kind"] for f in again].count("session") == 1 and s_again["announced"] == rec.ANNOUNCED
+   and [f for f in rec.facts(thread([]), [], s_again, BASE, True, NOW + 9)[0] if f["kind"] == "session"] == [],
+   kinds(again))
 unseen = [*record, allow("exec-4", "make", turn="01a2-turn-2", at=NOW + 3)]
 held, s_held = rec.facts(None, unseen, sent1, BASE, False, NOW + 5)
 ck("a start in a turn no look has listed waits while the station cannot be read",

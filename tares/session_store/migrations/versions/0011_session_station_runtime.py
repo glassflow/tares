@@ -7,6 +7,10 @@
 - `model`: the model a Codex station was started on. Empty when it runs on its account's default, and for a
   Claude Code session, whose model the console reads from its status line.
 
+A session already recorded from a Codex station gets `runtime` = `codex` here: one with a command row of a Codex
+line (`session_commands.tool_use_id` is `codex:<conversation>:<call>`). One that ran no command is filled when its
+crew's recorder announces it again, which it does once after this change (`tares/crew/codex_record.py`).
+
 A column that is already there (a second run against a database that stopped half way) is left alone.
 The columns are written out here, not imported from tables.py: a revision is a record of what ran.
 
@@ -31,6 +35,8 @@ def upgrade() -> None:
     for name in COLUMNS:
         if name not in have:
             op.add_column("session_stations", sa.Column(name, sa.Text))
+    op.execute(sa.text("UPDATE session_stations SET runtime = 'codex' WHERE runtime IS NULL AND session IN "
+                       "(SELECT session FROM session_commands WHERE tool_use_id LIKE 'codex:%')"))
 
 
 def downgrade() -> None:

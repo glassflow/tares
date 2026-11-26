@@ -279,6 +279,26 @@ def step_down(sessions_db, revision):
         command.downgrade(cfg, revision)
 
 
+def runtime_backfill():
+    """0011 (TR-1600): a session already recorded from a Codex station is marked codex, by its command rows."""
+    print("== 0011 marks the sessions recorded from Codex stations ==")
+    sdb = SessionStore(tempfile.mkdtemp())
+    sdb.upgrade()
+    step_down(sdb, "0010_session_command_outcome")
+    with sdb.begin() as c:
+        for sid, st in (("cx", "crew-builder"), ("cc", "crew-reviewer"), ("quiet", "crew-releaser")):
+            c.execute(text("INSERT INTO session_stations (session, station, role) VALUES (:s, :st, 'builder')"),
+                      {"s": sid, "st": st})
+        c.execute(text("INSERT INTO session_commands (tool_use_id, source, session, command) VALUES "
+                       "('codex:cx:exec-1', 'claude_code', 'cx', 'make'), ('toolu_01', 'claude_code', 'cc', 'make')"))
+    sdb.upgrade()
+    with sdb.begin() as c:
+        got = dict(c.execute(text("SELECT session, runtime FROM session_stations")).all())
+    ck("a session with a Codex command row is codex; a Claude Code one, and one with no command, stay empty",
+       got == {"cx": "codex", "cc": None, "quiet": None}, got)
+    sdb.close()
+
+
 def session_tables():
     print("== the session tables on SQLite ==")
     d = tempfile.mkdtemp()
@@ -864,6 +884,7 @@ if __name__ == "__main__":
     dsn_rewrite()
     upgrade_failure()
     session_tables()
+    runtime_backfill()
     copy_sqlite()
     copy_at_start()
     copy_on_postgres()

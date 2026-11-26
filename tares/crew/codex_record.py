@@ -63,6 +63,9 @@ STATES = {"active": "working", "waiting": "waiting", "idle": "idle", "notLoaded"
 WAITING_FOR = {"waitingOnApproval": "waiting for an approval", "waitingOnUserInput": "waiting for an answer"}
 NOT_RUNNING = "the station is not running"
 STOPPED = "the crew stopped it: "   # the reason of an end the crew caused, before why (TR-1600)
+# what `announced` holds once a conversation's session fact went out with its runtime and model: a record that
+# holds less (True, from before TR-1600) is announced once more, so the cell learns them (TR-1600)
+ANNOUNCED = 2
 
 
 def machine(env=None) -> str:
@@ -97,7 +100,7 @@ def new_sent(thread: str = "") -> dict:
     the turns all of whose items were sent; `usage` the replies whose tokens were sent; `path` its own
     file; `before` the conversation the station had before this one; `closing` why a stop closed its open
     starts, while Tares has not taken that closing yet, with `untold` the starts it found that no look sent."""
-    return {"thread": thread, "before": "", "announced": False, "state": "", "starts": {}, "items": [],
+    return {"thread": thread, "before": "", "announced": False, "state": "", "reason": "", "starts": {}, "items": [],
             "closed": [], "ended": [], "seen": [], "usage": 0, "path": "", "closing": "", "untold": []}
 
 
@@ -145,14 +148,14 @@ def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float |
     sent = json.loads(json.dumps(sent))   # the caller keeps the old one until the post is taken
     out = []
     turns = [t for t in (found or {}).get("turns") or [] if isinstance(t, dict) and t.get("id")]
-    if not sent["announced"]:
+    if sent["announced"] != ANNOUNCED:   # never, or before the cell kept a session's runtime and model (TR-1600)
         # dated at the conversation's own start when that is known, so it comes before what was said in it
         try:
             born = float((found or {}).get("createdAt") or 0)
         except (TypeError, ValueError):
             born = 0.0
         out.append(_fact(base, "session", born or now))
-        sent["announced"] = True
+        sent["announced"] = ANNOUNCED
 
     listed = {t["id"]: t for t in turns}
     for tid in listed:
@@ -256,12 +259,14 @@ def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float |
         sent["ended"].remove(tid)
 
     said = "ended" if not alive else STATES.get(kind or "", "")
-    if said and said != sent["state"]:
-        why = ((STOPPED + stopped if stopped else NOT_RUNNING) if said == "ended" else
-               ", ".join(WAITING_FOR.get(str(f), str(f)) for f in status.get("activeFlags") or [])
-               if said == "waiting" else "")
+    why = ((STOPPED + stopped if stopped else NOT_RUNNING) if said == "ended" else
+           ", ".join(WAITING_FOR.get(str(f), str(f)) for f in status.get("activeFlags") or [])
+           if said == "waiting" else "")
+    # sent again for the crew's own stop: the crew marks a station it stopped (its guard was off) after the stop
+    # recorded its end, and that reason is what the console shows (TR-1600). No other change of words is sent.
+    if said and (said != sent["state"] or (why.startswith(STOPPED) and why != sent.get("reason"))):
         out.append(_fact(base, "state", now, state=said, reason=why))
-        sent["state"] = said
+        sent["state"], sent["reason"] = said, why
     return out, sent
 
 
@@ -394,7 +399,7 @@ def _close(client, paths: CrewPaths, station: str, sent: dict) -> int:
     out, settled = closing_all(sent, base, sent["closing"])
     if out:
         _post(client, out)
-    _keep(paths, station, {**sent, "announced": True, "starts": {}, "untold": [], "state": "ended", "closing": "",
+    _keep(paths, station, {**sent, "announced": ANNOUNCED, "starts": {}, "untold": [], "state": "ended", "closing": "",
                            "items": list(sent["items"]) + [c for c in settled if c not in sent["items"]]})
     return len(out)
 
