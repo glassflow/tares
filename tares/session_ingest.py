@@ -270,7 +270,7 @@ def _text(v, limit: int | None = None, tail: bool = False) -> str:
 
 def _fact_id(block: dict, session: str, at: datetime, n: int) -> str:
     """A call's id: its tool_use id, or, for a block without one, a stand-in from the line."""
-    return str(block["id"]) if block.get("id") else f"{session}:{at.isoformat()}:{n}"
+    return _text(block.get("id")) or f"{session}:{at.isoformat()}:{n}"
 
 
 def message_facts(event_type: str, text: str | None, payload, session: str, at: datetime,
@@ -317,12 +317,13 @@ def result_facts(event_type: str, payload, at: datetime) -> list[dict]:
         return []
     out = []
     for b in _blocks(payload):
-        if b.get("type") != "tool_result" or not b.get("tool_use_id"):
+        tool_use_id = _text(b.get("tool_use_id"))
+        if b.get("type") != "tool_result" or not tool_use_id:
             continue
         c = b.get("content")
         if isinstance(c, list):
             c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
-        out.append({"tool_use_id": str(b["tool_use_id"]), "exit_code": 1 if b.get("is_error") else 0,
+        out.append({"tool_use_id": tool_use_id, "exit_code": 1 if b.get("is_error") else 0,
                     "output_tail": _text(c, OUTPUT_TAIL, tail=True), "result_at": at})
     return out
 

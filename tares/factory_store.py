@@ -1441,10 +1441,31 @@ class FactoryStore:
             "json_extract_string(labels, '$.tares_project'), payload FROM events "
             "WHERE event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan')"
             ).fetchall()
-        rows = [r for r in rows if session_ingest.holds_session(self, r[1])]
+        rows = self._challenges_without_nul(
+            [r for r in rows if session_ingest.holds_session(self, r[1])])
         if rows:
             self._record_challenges(rows)
         session_ingest.set_filled(self, session_ingest.CHALLENGES_FILLED)
+
+    def _challenges_without_nul(self, rows: list[tuple]) -> list[tuple]:
+        """The fill's rows (`_record_challenges`' shape) with the branch and project a posted line
+        has now: without NULs. DuckDB may hold lines from before they were dropped (TR-1707), and
+        Postgres takes none in text. On SQLite an older version could keep a line under its branch
+        as it was: that one is not kept a second time."""
+        db, t = self.sessions_db, challenges_table.c
+        out = []
+        for source, key, at, typ, branch, project, payload in rows:
+            if "\x00" in branch + (project or ""):
+                if "\x00" in branch and db.dialect == "sqlite":
+                    with db.read() as conn:
+                        if conn.execute(select(t.branch).where(
+                                t.source == source, t.key_value == key, t.event_time == at,
+                                t.event_type == typ, t.branch == branch)).first():
+                            continue
+                branch = branch.replace("\x00", "")
+                project = (project or "").replace("\x00", "") or None
+            out.append((source, key, at, typ, branch, project, payload))
+        return out
 
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it

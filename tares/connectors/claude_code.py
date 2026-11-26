@@ -52,6 +52,46 @@ def _redact_obj(o):
     return o
 
 
+def _holds_nul(o) -> bool:
+    """Whether any string in `o` holds a NUL, dict keys included."""
+    stack = [o]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            if "\x00" in v:
+                return True
+        elif isinstance(v, dict):
+            if "\x00" in "".join(v):
+                return True
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+    return False
+
+
+def _without_nul(o):
+    """`o` with every NUL dropped from every string, dict keys included, so no later reader meets
+    one: Postgres text takes none, and SQLite must store the same text (TR-1707). A line without
+    one, which is nearly every line, is returned as it is. No recursion, so a deeply nested line
+    does not fail its batch here. Keys that differ only in NULs become one, the later value wins."""
+    if not _holds_nul(o):
+        return o
+    top = [o]
+    stack = [(top, 0)]                  # (a new container, where in it a value is still to clean)
+    while stack:
+        box, at = stack.pop()
+        v = box[at]
+        if isinstance(v, str):
+            box[at] = v.replace("\x00", "")
+        elif isinstance(v, dict):
+            box[at] = new = {k.replace("\x00", ""): x for k, x in v.items()}
+            stack.extend((new, k) for k in new)
+        elif isinstance(v, list):
+            box[at] = new = list(v)
+            stack.extend((new, i) for i in range(len(new)))
+    return top[0]
+
+
 def _short(v, n: int = 80) -> str:
     s = v if isinstance(v, str) else json.dumps(v, default=str)
     return s if len(s) <= n else s[:n] + "…"
@@ -126,16 +166,6 @@ class ClaudeCodeConnector(Connector):
         pairs = project_secrets.scrub_pairs(self.store)
         return [project_secrets.scrub(o, pairs) for o in items] if pairs else items
 
-    @staticmethod
-    def _without_nul_id(o):
-        """The line with the NULs of its session id dropped. Postgres text holds none, and SQLite
-        keeps the same id, so it is done before anything counts or stores the line (TR-1703). An id
-        of nothing but NULs is left empty, which is a line with no session."""
-        sid = o.get("sessionId") if isinstance(o, dict) else None
-        if isinstance(sid, str) and "\x00" in sid:
-            return {**o, "sessionId": sid.replace("\x00", "")}
-        return o
-
     # ── push ingestion (the Claude Code plugin posts transcript lines to /ingest) ──
     def map_payload(self, payload) -> list[Envelope]:
         """Map pushed transcript events → Envelopes. `payload` is a single JSONL object or a list of
@@ -145,7 +175,9 @@ class ClaudeCodeConnector(Connector):
         redact = c.get("redact", True)
         include_thinking = c.get("include_thinking", False)
         items = payload if isinstance(payload, list) else [payload]
-        items = self._scrub_secrets([self._without_nul_id(o) for o in items])
+        # NULs first, before anything counts or stores a line (TR-1703, TR-1707), and before the
+        # secrets are looked for, so one with a NUL inside it is found once it is whole again
+        items = self._scrub_secrets([_without_nul(o) for o in items])
         out = []
         projects: dict[str, str | None] = {}
         for o in items:
