@@ -210,8 +210,6 @@ class _Result:
 class PgState:
     """A DuckDB-connection lookalike over Postgres: one connection per thread."""
 
-    watched = True      # every statement passes request_memo, so its reads may be kept (TR-1631)
-
     def __init__(self, dsn: str, wait: float | None = None):
         import psycopg                                     # optional: only a cloud cell needs it
         from psycopg.types.string import TextLoader

@@ -52,7 +52,7 @@ class CopyMismatch(RuntimeError):
 
 
 def _in_ledger(sessions_db, table) -> bool:
-    with sessions_db.begin() as conn:
+    with sessions_db.read() as conn:
         return conn.execute(select(session_store_copies.c.table_name).where(
             session_store_copies.c.table_name == table.name)).first() is not None
 
@@ -116,7 +116,7 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
             # so the table is never held in memory whole
             with contextlib.ExitStack() as stack:
                 if from_local:
-                    src = stack.enter_context(local.begin())
+                    src = stack.enter_context(local.read())
                     result = src.execution_options(stream_results=True).execute(select(table))
                     chunks = (lambda: [dict(r._mapping) for r in result.fetchmany(CHUNK)])
                 else:

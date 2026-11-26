@@ -47,6 +47,7 @@ for k in list(os.environ):
         del os.environ[k]
 
 import httpx
+from sqlalchemy import text
 
 from tares.integrations import registry
 from tares.integrations.builtin import monitoring_tares as mon
@@ -287,9 +288,10 @@ async def main():
                                                            "endpoint": "", "headers": ""})
 
             print("== a choice row left in the slot is dropped ==")
-            with store._swrite:
-                store.sc.execute("INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) "
-                                 "VALUES ('monitoring', 'otlp', '{}', now(), 'test') ON CONFLICT (slot) DO NOTHING")
+            with store.sessions_db.begin() as conn:
+                conn.execute(text("INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) "
+                                  "VALUES ('monitoring', 'otlp', '{}', CURRENT_TIMESTAMP, 'test') "
+                                  "ON CONFLICT (slot) DO NOTHING"))
             ck("the row is there", store.get_choice("monitoring") is not None)
             r = ru(await root.put("/api/factory/integrations/monitoring", json={"name": "rius", "settings": {}}))
             ck("a save drops it", r.status_code == 200 and store.get_choice("monitoring") is None,

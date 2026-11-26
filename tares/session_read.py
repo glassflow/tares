@@ -123,7 +123,7 @@ def _fetch(store, source: str, session: str, tool_needle: str | None, limit: int
     db = store.sessions_db
     t = session_lines.c
     cols = [t.seq, t.at, t.type, t.labels, t.render, t.payload]
-    with db.snapshot() as c:
+    with db.consistent_read() as c:
         head = c.execute(select(sessions.c.lines_complete, sessions.c.line_count, sessions.c.source,
                                 sessions.c.lines_origin)
                          .where(sessions.c.session == session)).first()
