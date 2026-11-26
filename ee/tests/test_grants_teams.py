@@ -50,6 +50,13 @@ def H(tok):
     return {"Authorization": f"Bearer {tok}"}
 
 
+def own_db(name: str) -> str:
+    """A cell of its own: the session store (`tares.sqlite`) sits next to the DuckDB file, so two
+    cells in one folder would share their grants."""
+    os.makedirs(os.path.join(TMP, name), exist_ok=True)
+    return os.path.join(TMP, name, name + ".duckdb")
+
+
 def start(db, auth):
     port = free_port()
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
@@ -72,7 +79,7 @@ def words(rows):
 async def migration():
     print("== the old grants docs become rows, once ==")
     from tares.store import Store
-    db = os.path.join(TMP, "migrate.duckdb")
+    db = own_db("migrate")
     s = Store(db)
     gid = s.create_doc(None, "grants", "Grants (all projects)",
                        "# Grants\n\n- \"run the tests\" (2026-10-01)\n- \"open pull requests\" (2026-10-02)\n",
@@ -120,7 +127,7 @@ async def migration():
 
 async def auth_on():
     print("== who may add, waiting and consent (auth on) ==")
-    proc, B = start(os.path.join(TMP, "on.duckdb"), True)
+    proc, B = start(own_db("on"), True)
     ROOT = H(AUTH)
     try:
         if not await _wait(f"{B}/health"):
@@ -471,7 +478,7 @@ async def old_doc_lines():
 
 async def auth_off():
     print("== auth off: one person, as before ==")
-    proc, B = start(os.path.join(TMP, "off.duckdb"), False)
+    proc, B = start(own_db("off"), False)
     try:
         if not await _wait(f"{B}/health"):
             ck("daemon up (auth off)", False); return

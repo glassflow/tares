@@ -40,6 +40,7 @@ os.environ["TARES_EDITION"] = "factory"
 import httpx
 
 from session_helpers import rows as session_rows
+from tares.session_store.tables import crews as crews_table
 from tares.session_store.tables import session_stations
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -126,9 +127,10 @@ async def main():
         with store._swrite:
             old = store._crew_id("crew", pid["adam"], "", datetime.now(timezone.utc) - timedelta(days=3))
             new = "c_adamnew001"
-            store.sc.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) VALUES "
-                             "(?, 'crew', ?, 'adam-mbp', ?, ?)", [new, pid["adam"], datetime.now(timezone.utc),
-                                                                 datetime.now(timezone.utc)])
+            with store.sessions_db.begin() as c:
+                c.execute(crews_table.insert().values(
+                    id=new, name="crew", person_id=pid["adam"], machine="adam-mbp",
+                    first_seen=datetime.now(timezone.utc), last_seen=datetime.now(timezone.utc)))
         store.set_session_station("d-old", "crew-orchestrator", "orchestrator", "", None,
                                   datetime.now(timezone.utc) - timedelta(days=3), old)
         store.set_session_station("d-new", "crew-orchestrator", "orchestrator", "", None, datetime.now(timezone.utc), new)

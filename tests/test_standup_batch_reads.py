@@ -21,6 +21,7 @@ sys.path.insert(0, ROOT)
 
 from tares import factory_owners, standup
 from tares.factory_api import project_progress
+from tares.session_store.tables import desk_items as desk_table
 from tares.session_store.tables import milestones as milestones_table
 from tares.session_store.tables import tickets as tickets_table
 from tares.store import Store
@@ -138,7 +139,8 @@ def tied(store, uid):
     base = 900
     for offset in (3, 1, 2):
         d = ask(store, uid, f"Question {offset}", at=when)
-        store.sc.execute("UPDATE desk_items SET number = ? WHERE id = ?", [base + offset, d["id"]])
+        with store.sessions_db.begin() as conn:
+            conn.execute(desk_table.update().where(desk_table.c.id == d["id"]).values(number=base + offset))
 
 
 def seed(store):

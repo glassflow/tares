@@ -393,7 +393,7 @@ class _Gen:
         for j in range(nb):
             c = self.crews[j % len(self.crews)]
             c["builders"].append(f"{c['name']}-build-m{len(c['builders']) + 1}")
-        self.put("crews", "id, name, person_id, machine, first_seen, last_seen", rows)
+        self.put_t("crews", "id, name, person_id, machine, first_seen, last_seen", rows)
         # keys
         rows = []
         for i in range(self.need("api_keys")):
@@ -697,11 +697,11 @@ class _Gen:
                 self.desk.append(row)
                 number += 1
                 rows.append([did, number, p["uid"], rng.choice(QUESTIONS), "Raised while building " + rng.choice(THING) + ".",
-                             json.dumps(["yes", "no"]), "yes", "The simpler choice.", "blocks",
-                             json.dumps(row["tickets"]), state == "open", self.station_of(p["crew"], "builder"),
-                             "[]", state, "no longer needed" if state == "withdrawn" else None, created, closed,
+                             ["yes", "no"], "yes", "The simpler choice.", "blocks",
+                             row["tickets"], state == "open", self.station_of(p["crew"], "builder"),
+                             [], state, "no longer needed" if state == "withdrawn" else None, created, closed,
                              self.station_of(p["crew"], "builder"), None, pid, None])
-        self.put("desk_items", "id, number, project, question, context, options, recommendation, why, blocks, "
+        self.put_t("desk_items", "id, number, project, question, context, options, recommendation, why, blocks, "
                                "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at, "
                                "station, command, person_id, to_person_id", rows)
         # decisions: one per answered item
@@ -713,9 +713,9 @@ class _Gen:
             scope_all = k < mix["decisions_scope_all"]
             rows.append([self.id("dc"), None if scope_all else d["project"], d["id"], rng.choice(QUESTIONS),
                          "Yes, keep it simple.", "yes", scope_all, "all" if scope_all else "project", False,
-                         rng.choice(self.session_ids), False, json.dumps(d["tickets"]), d["closed"],
+                         rng.choice(self.session_ids), False, d["tickets"], d["closed"],
                          "session" if rng.random() < 0.55 else "console", d["person"]])
-        self.put("decisions", "id, project, desk_item, question, words, choice, standing, scope, matched, session, "
+        self.put_t("decisions", "id, project, desk_item, question, words, choice, standing, scope, matched, session, "
                               "granted, tickets, decided_at, via, person_id", rows)
         # assumptions
         n = self.need("assumptions")
@@ -730,10 +730,10 @@ class _Gen:
                 k += 1
                 made = _between(rng, p["created"], p["updated"])
                 rows.append([self.id("as"), p["uid"], j + 1, rng.choice(QUESTIONS), "Keep the current way.",
-                             "It is the smallest change.", rng.choice(THING), json.dumps([rng.choice(tix)["id"]]),
+                             "It is the smallest change.", rng.choice(THING), [rng.choice(tix)["id"]],
                              s, None, f"batch-{j // 5}", self.station_of(p["crew"], "builder"), "builder", made,
                              None if s == "open" else made + timedelta(hours=3), self.person()])
-        self.put("assumptions", "id, project, number, question, choice, why, affects, tickets, state, words, "
+        self.put_t("assumptions", "id, project, number, question, choice, why, affects, tickets, state, words, "
                                 "batch, made_by, made_role, made_at, decided_at, person_id", rows)
         # answers, spec questions, waiting
         n = self.need("answers")
@@ -743,16 +743,16 @@ class _Gen:
             d = answered[k]
             rows.append([self.id("an"), d["id"], kinds[k % len(kinds)], d["project"], rng.choice(QUESTIONS), "yes",
                          None, "session" if k < 11 else "console", d["person"], d["closed"]])
-        self.put("answers", "id, item, kind, project, ask, choice, said, via, person_id, answered_at", rows)
+        self.put_t("answers", "id, item, kind, project, ask, choice, said, via, person_id, answered_at", rows)
         rows = [[p["uid"], "Q1", self.person(), p["repo"], "Which repo holds the shared client?",
                  self.crews[p["crew"]]["orchestrator"], NOW - timedelta(days=1 + i), None, None, None, "open", "session"]
                 for i, p in enumerate(projects[:self.need("spec_questions")])]
-        self.put("spec_questions", "project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
+        self.put_t("spec_questions", "project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
                                    "answered_at, state, via", rows)
         n = self.need("waiting_told")
         rows = [[self.people[k % len(self.people)], self.desk[k]["id"], NOW - timedelta(hours=k * 3), True, None,
                  None, None, None, None] for k in range(n)]
-        self.put("waiting_told", "person_id, item, told_at, sent, ask, channel, ts, seq, closed", rows)
+        self.put_t("waiting_told", "person_id, item, told_at, sent, ask, channel, ts, seq, closed", rows)
 
     # ── reviews ────────────────────────────────────────────────────────────────────────────────
     def reviews_group(self):
@@ -929,11 +929,11 @@ class _Gen:
             done = p["status"] == "done"
             c = self.crews[p["crew"]]
             rows.append([p["uid"], f"/work/{p['repo'].split('/')[1]}", "Ada Quill", at,
-                         json.dumps([{"path": f"/work/{p['repo'].split('/')[1]}", "name": p["repo"]}]), "L3",
+                         [{"path": f"/work/{p['repo'].split('/')[1]}", "name": p["repo"]}], "L3",
                          p["updated"] if done else None, "All tickets merged." if done else None,
                          "done" if done else None, "crew" if done else None, None, None, None, None, p["lead"],
                          None, None, c["name"], None, None, None])
-        self.put("handovers", "project, repo, handed_by, handed_at, repos, autonomy, finished_at, finished_words, "
+        self.put_t("handovers", "project, repo, handed_by, handed_at, repos, autonomy, finished_at, finished_words, "
                               "finished_decision, finished_by, taken_at, taken_words, taken_by, released_at, "
                               "person_id, finished_person_id, taken_person_id, crew, override_reason, override_at, "
                               "override_person_id", rows)
@@ -941,8 +941,8 @@ class _Gen:
         top = _have(st, "grants")
         rows = [[f"G{k + 1 + top}", "project" if k < n - 1 else "personal", self.ticket_projects[k]["uid"] if k < n - 1 else None,
                  self.people[k % len(self.people)], "May push the branches of this project.", "Ada Quill", NOW - timedelta(days=k),
-                 "[]", "[]", "active", False] for k in range(n)]
-        self.put("grants", "id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, state, "
+                 [], [], "active", False] for k in range(n)]
+        self.put_t("grants", "id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, state, "
                            "needs_lead", rows)
         n = self.need("project_members")
         self.put_t("project_members", "project, person_id, added_by, added_at, reason",

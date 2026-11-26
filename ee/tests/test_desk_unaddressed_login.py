@@ -32,6 +32,7 @@ import httpx
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
+from tares.session_store.tables import desk_items as desk_table
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -86,9 +87,9 @@ async def main():
         async def add(question, to=None, **kw):
             out = await mf.desk_add(question, "yes", "because", project="shop", **kw)
             d = json.loads(out)
-            with store._lock:
-                store.sc.execute("UPDATE desk_items SET to_person_id = ? WHERE number = ?",
-                                 [to, int(d["label"][1:])])
+            with store.sessions_db.begin() as c:
+                c.execute(desk_table.update().where(desk_table.c.number == int(d["label"][1:]))
+                          .values(to_person_id=to))
             return d
 
         def state(item):
@@ -159,9 +160,9 @@ async def main():
         ck("a non-lead ingest key cannot allow one: 403", r.status_code == 403,
            f"{r.status_code} {r.text}")
         ck("and it is still open", state(b2) == "open")
-        with store._lock:
-            store.sc.execute("UPDATE desk_items SET project = ? WHERE number = ?",
-                             [lead_uid, int(b1["label"][1:])])
+        with store.sessions_db.begin() as c:
+            c.execute(desk_table.update().where(desk_table.c.number == int(b1["label"][1:]))
+                      .values(project=lead_uid))
         r = await call("kimi", "POST", f"/api/desk/{b1['label']}/reply", {"words": "yes"})
         ck("the project's lead (ingest key) replies: 200", r.status_code == 200,
            f"{r.status_code} {r.text}")

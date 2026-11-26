@@ -126,8 +126,15 @@ DONE_EXTRA = 5
 # home 171 to 177, projects 140 to 146, project 142 to 151, ticket 39 to 45, raw_tickets 14 to 17,
 # raw_ticket 20 to 24 (the counts are 173, 143, 148, 44, 16 and 23, plus 2 percent). Crew goes 78 to
 # 80, which its budget holds. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 177, "projects": 146, "project": 151, "ticket": 45, "raw_tickets": 17,
-           "raw_ticket": 24}
+# TR-1616 (the crew's tables: assumptions, decisions, the desk, hand-overs, grants, crews and the
+# rest are read through the session store): the same on DuckDB, the queries are one for one and each
+# read costs its BEGIN: home 177 to 190, projects 146 to 159, project 151 to 166, ticket 45 to 49,
+# raw_ticket 24 to 26 (the counts are 186, 155, 162, 48 and 25, plus 2 percent), and Crew 80 to 87
+# (85). Setup and its progress go 126 to 128 and 118 to 120, which their budgets hold. The hard cap
+# on Home and the Projects list at 25 projects goes 180 to 200, for the BEGINs alone. Postgres state
+# keeps its counts.
+_DUCKDB = {**_TODAY, "home": 190, "projects": 159, "project": 166, "ticket": 49, "raw_tickets": 17,
+           "raw_ticket": 26}
 # TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
 # DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With
@@ -137,7 +144,7 @@ _DUCKDB = {**_TODAY, "home": 177, "projects": 146, "project": 151, "ticket": 45,
 # projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
 # 2 percent. With TR-1612, Crew's three ticket reads (the tickets twice, their history once) are each a
 # SQLite transaction on DuckDB: 75 to 78, so 80.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121, "crew": 80},
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121, "crew": 87},
           "postgres": {**_TODAY, "setup": 88, "setup_progress": 84, "crew": 45}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
@@ -551,7 +558,7 @@ async def main():
            str(built[name]))
     ck("home builds it (the counter sees a build)", built["home"]["read"] == 1, str(built["home"]))
     for name in ("home", "projects"):
-        ck(f"{name} runs under 180 statements at 25 projects", counts[name] < 180, counts[name])
+        ck(f"{name} runs under 200 statements at 25 projects", counts[name] < 200, counts[name])
 
 
     print("== the budget ==")

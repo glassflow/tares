@@ -666,8 +666,10 @@ async def main():
             as_station()
             label = json.loads(out)["label"]
             # the store directly: addressing an item to someone else over HTTP needs a licence
-            store.sc.execute("UPDATE desk_items SET to_person_id = ? WHERE id = ?",
-                             [to, store.get_desk_item(label)["id"]])
+            from tares.session_store.tables import desk_items as desk_table
+            did = store.get_desk_item(label)["id"]
+            with store.sessions_db.begin() as conn:
+                conn.execute(desk_table.update().where(desk_table.c.id == did).values(to_person_id=to))
             return label
 
         async def ann_allows(label, token=key, words="The builder may merge pull request 7", scope="project"):
