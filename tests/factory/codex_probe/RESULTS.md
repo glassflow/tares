@@ -415,7 +415,55 @@ with it: 6 of 6, 5 of 5 and 3 of 3.
 - Linux was not run. An endpoint that answers the first request and then hangs was not run: a call waits for
   the app-server's own time limit.
 
-## 9. Recording by visits (TR-1595)
+## 9. What a station asks (TR-1593, approvals and questions)
+
+A Codex turn that needs a yes stops and asks whoever is connected to its conversation. The crew keeps nobody
+connected, so what an approval needs was measured first, on 0.171.0, in a station's own Codex folder.
+
+### What Codex does with a request nobody answers
+
+| Question | Result |
+|---|---|
+| Does anything run? | No. The conversation reads `active` with `waitingOnApproval`, and no item is listed for the call. |
+| Is a visitor that only reads asked? | No. It is told nothing. |
+| Is a visitor that joins (`thread/resume`) asked? | Yes, each time, with the same turn, item and `startedAtMs`. The request's own id is the connection's (0 on a new one). |
+| Can it answer and leave at once? | Yes. `serverRequest/resolved` follows, and the turn goes on and ends with nobody connected. |
+| Is anyone asked again after an answer? | No. |
+| What does a file change's request hold? | Only the conversation, turn, item and start time. The change itself (`changes`) was told to whoever was connected when the item started, and to nobody after. The guard's hook saw the call before Codex asked, so its record is where the crew can read what the change is. |
+
+A command and a file change were run this way (`touch` in a folder the sandbox does not cover, and
+`apply_patch` on a file there; a first try with a file under TMPDIR asked nothing, since the sandbox lets a
+station write there). A question in words (`item/tool/requestUserInput`) could not be produced on purpose and
+is tested against the stand-in only.
+
+### Decided
+
+No connected controller. The watch's Codex round reads what a station asks on one visit, files a desk item,
+and on a later visit gives the person's answer to that same request, found again by its turn, item and start
+time. An answer is taken only from the cell's record of what people answered; the cell refuses a station's
+reply to a desk item, and the crew never answers one itself. No grant answers a request: a grant is a
+sentence for a model to read, and nothing matches one against a command. A request the station no longer
+asks has its item withdrawn.
+
+### `probe_asks.py`
+
+Real Codex, a real cell (`cell.py`), the product's own start, no `claude` on PATH. The probe plays the person
+through the console's own route.
+
+| Scenario | Result |
+|---|---|
+| `approved` | Pass. One item on the real desk with the station and the command as it was asked (without the guard's line and the shell around it). Nothing ran while it waited; a second round filed nothing more. The cell refused an answer sent in the station's name (403). The person's Approve reached the station on the next round, the command ran, and the turn ended with nobody connected. |
+| `declined` | Pass. The person's Decline reached the station, the command did not run, and the turn went on to its end. |
+| `no_longer_asked` | Pass. The station was stopped with its item open: the item was withdrawn on the cell, and an Approve given after that was refused by the cell (409). Nothing was handed on or run. |
+
+### What this does not do
+
+- Each request is the person's to answer. Nothing is answered from a grant, and an approval covers one call.
+- A request of a kind the crew does not know, and a question marked secret, are put on the desk as something
+  the crew cannot answer; the station waits until it is stopped or restarted.
+- An answered item also wakes the orchestrator, as any desk answer does. It has nothing to do for it.
+
+## 10. Recording by visits (TR-1595)
 
 The question: can a station's session be recorded with nothing connected to it, by a look once a watch round?
 `probe_record.py`, three scenarios on Codex 0.171.0, the station started by the product and read by visits.
@@ -468,9 +516,19 @@ showed the run as recorded: the two prompts as the factory's, what the station s
 its answer, and the killed `sleep 61.4949` as a Bash call marked FAILED. The page has two marks for a call,
 failed or not, so a command with an unknown outcome reads as failed there; its output says "outcome unknown".
 
-Not done here: a station recorded by the watch itself (the step is called by hand; it is not in the watch's
-round yet), station to station messages, files a station changed as `session_files` rows (a file change is
-on the session's timeline only), and a long conversation (every look reads the whole of it).
+In the watch since (PR 947): the recorder is the first part of the watch's Codex step, and that step is the
+first of the round, so what a turn did is recorded before any other step can start another turn. Every stop
+records last, once while the app-server answers and once after it has ended (`codex_record.close_station`),
+so a restart, a retire, `crew down` and a station stopped for its guard keep the commands that ended and close
+the ones still running as outcome unknown. Tested against the stand-in Codex and the real cell code
+(`tests/test_crew_codex_station.py`, section o), and once on the real Codex 0.171.0 against a cell of the run's
+own (`probe_record.py`, scenario `through_the_watch`, 5 of 5): a watch round in the middle of a turn put the
+station on the cell at work, with the command that had ended and the one that ran; the stop alone, with no
+round after it, ended the session and recorded the command it cut off (`sleep 61.4949`) as outcome unknown;
+a round after the stop changed nothing.
+
+Not done here: station to station messages, files a station changed as `session_files` rows (a file change
+is on the session's timeline only), and a long conversation (every look reads the whole of it).
 
 ## What was not verified
 

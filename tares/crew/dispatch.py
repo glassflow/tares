@@ -154,6 +154,14 @@ def _mcp_url(argv: list[str], env: dict) -> int:
 PORTED[("_mcp-url",)] = _mcp_url
 
 
+def _outcome(argv: list[str], env: dict) -> int:
+    from .codex_station import cmd_outcome  # imported when used (TR-1593)
+    return cmd_outcome(argv, env)
+
+
+PORTED[("outcome",)] = _outcome  # new in Python (TR-1593): what a call cut off by a crash was found to have done
+
+
 def _parse_bg_id(argv: list[str], env: dict) -> int:
     from .claude import cmd_parse_bg_id  # imported when used
     return cmd_parse_bg_id(argv, env)

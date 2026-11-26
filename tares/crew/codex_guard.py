@@ -27,6 +27,12 @@ needs and a Claude Code station does not:
     wrong in here (a kit without its guard, a record that cannot be written) ends with 2, which blocks the
     call: a Codex station whose guard cannot run does no work.
 
+  * No repeat of a call whose outcome is not known (TR-1593). A turn cut off by a crash can leave a command
+    that was let through and never reported an end: it may have pushed, or opened a pull request, or done
+    nothing. The crew writes such calls to stations/<station>.codex.unknown.json
+    (`tares.crew.codex_station`), and this hook refuses the same command again until the station has looked
+    at what it left and said so (`tares factory outcome`). Looking is not refused: only the same command is.
+
 What the guard does not stop, on Codex as on Claude Code: it reads the text of a command, for a station that
 cooperates. A script file with a push in it is not read. On Codex, a command that opens the terminal for
 itself (`bash </dev/tty`) gets around the closed input; a station has no terminal (its app-server is started
@@ -48,6 +54,7 @@ from pathlib import Path
 CLOSE_STDIN = "exec </dev/null\n"   # the line put in front of a command that is let through
 RECORD = "codex.guard"              # stations/<station>.codex.guard in the crew home
 BLOCK = 2                           # the exit code that blocks the call (1 would let it through)
+UNKNOWN = "codex.unknown.json"      # stations/<station>.codex.unknown.json: calls whose outcome is not known
 KEPT = 4096                         # characters of a command, or of another tool's input, the record keeps
 
 
@@ -141,6 +148,42 @@ def _text(value) -> str:
     return value if isinstance(value, str) else ""
 
 
+def unknown_file(home: str, station: str) -> str:
+    return os.path.join(home, "stations", f"{station}.{UNKNOWN}")
+
+
+def read_unknown(path) -> list:
+    """The calls whose outcome is not known, [] for no file or one that cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def repeats(env, command: str):
+    """The unknown call (its row) when `command` is one whose earlier run never reported an end, else None."""
+    home, station = env.get("FACTORY_HOME", ""), env.get("FACTORY_STATION", "")
+    want = " ".join(asked(command).split())
+    if not home or not station or not want:
+        return None
+    for row in read_unknown(unknown_file(home, station)):
+        if row.get("command") and row.get("call") and " ".join(str(row["command"]).split()) == want:
+            return row
+    return None
+
+
+def repeat_reason(call: str) -> str:
+    """What a station is told when a repeat is refused. The call is named by its own id, which does not
+    change when another call is settled first (a place in a list would)."""
+    return (f"This command was started in a turn that was cut off, and what it did is not known (call {call}). "
+            "Running it again could do it twice. Look at what it left first (git status and git log, the remote, the "
+            "pull requests, the ticket), then say what you found: "
+            f"`tares factory outcome {call} done \"<what you found>\"` when it had done its work, or "
+            f"`tares factory outcome {call} not-done \"<what you found>\"` when it had not. After that it is let through.")
+
+
 def started(tool: str, cmd, cwd, tool_input=None) -> dict:
     """What the record keeps of a call that is let through, besides who and when: the folder (`cwd`), and
     what was asked. For a shell command that is `command`, as the station asked for it; for any other tool
@@ -191,6 +234,12 @@ def run(guard_py, env, raw: str, out) -> int:
         out.write(rules.deny_output(reason))
         out.flush()
         rules.log_deny(env, tool, reason)
+        return 0
+    again = repeats(env, cmd) if tool == "Bash" and cmd else None
+    if again:
+        note(env, {"turn": turn, "call": call, "tool": tool, "said": "deny"})
+        out.write(rules.deny_output(repeat_reason(again["call"])))
+        out.flush()
         return 0
     note(env, {"turn": turn, "call": call, "tool": tool, "said": "allow", **started(tool, cmd, rules.payload_cwd(raw), data.get("tool_input"))})
     if tool == "Bash" and cmd and not cmd.startswith(CLOSE_STDIN):

@@ -104,6 +104,7 @@ import psutil  # noqa: E402
 from tares import status_words  # noqa: E402
 from tares.crew import claude, cc_update, idle_wake, lifecycle, pace, proc, regrant, state, views, watch_revive  # noqa: E402
 from tares.crew import codex_station as cs  # noqa: E402
+from tares.crew import codex_asks, codex_round  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew import codex_guard as cg  # noqa: E402
@@ -161,7 +162,7 @@ def calls(pid=None, method=None) -> list:
         return []
     # the read asked of Tares before a prompt (TR-1596) is listed only when asked for: its own cases look at it
     return [(r["method"], r["params"]) for r in rows if (pid is None or r["pid"] == pid)
-            and (r["method"] == method if method else r["method"] != "mcpServer/tool/call")]
+            and (r["method"] == method if method else r["method"] not in ("mcpServer/tool/call", "answer"))]
 
 
 def quietly(fn, *args, **kw):
@@ -1376,6 +1377,577 @@ started = cs._thread_start({"model": "m", "config": {"hooks": {}}}, "/w", {"tare
 ck("a conversation's start names its MCP servers next to its hooks, and none when the station has none",
    started["config"]["mcp_servers"] == {"tares": {"url": "http://c/mcp", "required": True}} and "hooks" in started["config"]
    and "mcp_servers" not in cs._thread_start({"model": "m"}, "/w")["config"], started)
+
+# ---------------------------------------------------------------------------------------------
+print("l. what a station asks goes to the desk, and the person's answer back (TR-1593)")
+
+
+def codex_step(paths, tares):
+    """One round of the watch's Codex step; what it said."""
+    env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "TARESD_URL": tares.url, "TARES_FACTORY_MCP_URL": tares.url + "/mcp"}
+    os.environ.update(FACTORY_CREW_HOME=str(paths.home), TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp")
+    out = io.StringIO()
+    with redirect_stderr(out), redirect_stdout(out):
+        codex_round.step(paths, env)
+    return out.getvalue()
+
+
+def asking(*commands, **switches):
+    """A station whose first turn stops on what it asks: (tares, paths, mk, pid, thread)."""
+    tares_, paths_, _, mk_ = crew()
+    model_runs(*commands, **switches)
+    start(mk_())
+    until(lambda: cs.turn_state(paths_, S) == "blocked")
+    return tares_, paths_, mk_, pid_of(paths_), row(paths_)["sessionId"]
+
+
+def answers_given(pid):
+    return [p["result"] for _, p in calls(pid, "answer")]
+
+
+def to_the_person(tares):
+    """The requests the fake cell took that only a person may make: an answer to a desk item."""
+    return [e["path"] for e in tares.log if e.get("post") and e["path"].rsplit("/", 1)[-1] in ("reply", "allow", "answer")]
+
+
+marker = SCRATCH / "asked-and-allowed"
+tares, paths, mk, pid, thread = asking({"ask": "command", "command": f"/usr/bin/touch {marker}", "reason": "it writes outside"})
+said_1 = codex_step(paths, tares)
+desk = tares.world["desk"]
+kept = codex_asks.kept(paths, S)
+key = next(iter(kept), "")
+ck("a command the station asks for is put on the desk, once, with the station, the command as it was asked and its folder",
+   len(desk) == 1 and desk[0]["station"] == S and desk[0]["options"] == ["Approve", "Decline"] and desk[0]["blocking"] is True
+   and f"`/usr/bin/touch {marker}`" in desk[0]["question"] and "exec </dev/null" not in json.dumps(desk[0])
+   and "Its reason: it writes outside" in desk[0]["question"] and f"Folder: {paths.home}" in desk[0]["context"]
+   and "D1 on the desk" in said_1, (desk, said_1))
+ck("the item names the request itself: the conversation, the turn, the call and when it was first asked",
+   len(kept) == 1 and kept[key]["state"] == "open" and kept[key]["label"] == "D1"
+   and all(text in desk[0]["context"] for text in (f"conversation {thread}", f"turn {kept[key]['ask']['turn']}",
+                                                  f"call {kept[key]['ask']['item']}", f"Request {key}."))
+   and kept[key]["ask"]["thread"] == thread and isinstance(kept[key]["ask"]["started"], int), (kept, desk[0]["context"]))
+ck("what was filed is kept in a file of the owner's alone, and an event records it",
+   stat.S_IMODE(paths.station_file(S, codex_asks.KEPT).stat().st_mode) == 0o600
+   and [e for e in events(paths, "asked") if "D1 command" in str(e)], events(paths, "asked"))
+ck("nothing ran, and the station still waits", not marker.exists() and cs.turn_state(paths, S) == "blocked")
+codex_step(paths, tares)
+codex_step(paths, tares)
+ck("later rounds, each asked the same thing again, file nothing more", len(tares.world["desk"]) == 1
+   and list(codex_asks.kept(paths, S)) == [key], tares.world["desk"])
+paths.station_file(S, codex_asks.KEPT).unlink()
+codex_step(paths, tares)
+ck("a watch that lost what it wrote down finds the open item by the request's name, and files no second one",
+   len(tares.world["desk"]) == 1 and codex_asks.kept(paths, S)[key]["label"] == "D1", tares.world["desk"])
+tares.world["answers"].append({"id": "question:D1", "kind": "question", "choice": None, "said": "Approve",
+                               "via": "station", "by": None})
+codex_step(paths, tares)
+ck("an answer that is not a person's is not one: nothing is given to the station, and nothing runs",
+   answers_given(pid) == [] and not marker.exists() and codex_asks.kept(paths, S)[key]["state"] == "open")
+tares.world["answers"].clear()
+tares.reply("D1", "Approve")
+said_2 = codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("the person's Approve lets that one call through: the station is told, the command runs and the turn ends by itself",
+   answers_given(pid) == [{"decision": "accept"}] and marker.exists() and cs.turn_state(paths, S) == "done"
+   and codex_asks.kept(paths, S)[key]["state"] == "answered" and "was given the answer to D1 (accept)" in said_2
+   and [e for e in events(paths, "ask-answered") if "D1 accept" in str(e)], (answers_given(pid), said_2))
+ck("the crew itself answered no desk item: only what a person gave was read", to_the_person(tares) == [], to_the_person(tares))
+codex_step(paths, tares)
+ck("an answer is given once", answers_given(pid) == [{"decision": "accept"}])
+end(pid)
+
+for words, why in (("Decline", "the person's Decline"), ("not now, ask me tomorrow", "words that pick neither option")):
+    marker.unlink(missing_ok=True)
+    tares, paths, mk, pid, thread = asking({"ask": "command", "command": f"/usr/bin/touch {marker}"})
+    codex_step(paths, tares)
+    tares.reply("D1", words)
+    codex_step(paths, tares)
+    until(lambda: cs.turn_state(paths, S) == "done")
+    ck(f"{why} is a no: the station is told so, nothing runs and its turn goes on",
+       answers_given(pid) == [{"decision": "decline"}] and not marker.exists() and cs.turn_state(paths, S) == "done",
+       answers_given(pid))
+    end(pid)
+
+tares, paths, mk, pid, thread = asking({"ask": "command", "command": f"/usr/bin/touch {marker}"})
+codex_step(paths, tares)
+tares.world["desk"][0]["state"] = "withdrawn"
+codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("an item withdrawn without an answer is a no", answers_given(pid) == [{"decision": "decline"}] and not marker.exists())
+end(pid)
+
+# the station stops asking before the person answers: the item goes, and a late answer reaches nothing
+tares, paths, mk, pid, thread = asking({"ask": "command", "command": f"/usr/bin/touch {marker}"})
+codex_step(paths, tares)
+key = next(iter(codex_asks.kept(paths, S)))
+err, kind, _ = quietly(lifecycle.restart, mk(), paths, [S], claude_bin="")
+note(paths)
+pid2 = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "blocked")
+said_3 = codex_step(paths, tares)
+kept = codex_asks.kept(paths, S)
+key2 = next(k for k in kept if k != key)
+ck("a station started again no longer asks what its old turn asked: that item is withdrawn",
+   err is None and pid2 != pid and kept[key]["state"] == "gone" and tares.world["desk"][0]["state"] == "withdrawn"
+   and "no longer asks" in tares.world["desk"][0]["reason"] and "D1; the item is withdrawn" in said_3, (err, kept, said_3))
+ck("what its new turn asks is another request, with an item of its own",
+   key2 != key and kept[key2]["label"] == "D2" and kept[key2]["state"] == "open" and kept[key2]["ask"]["turn"] != kept[key]["ask"]["turn"],
+   kept)
+tares.reply("D1", "Approve")
+codex_step(paths, tares)
+ck("a yes given late to the old item is handed to nobody: the new request still waits",
+   answers_given(pid2) == [] and not marker.exists() and cs.turn_state(paths, S) == "blocked"
+   and codex_asks.kept(paths, S)[key2]["state"] == "open", answers_given(pid2))
+ck("an answer kept for one request is not given to another, whoever asks",
+   cs.answer(paths, S, key, {"decision": "accept"}) == "gone" and answers_given(pid2) == [] and not marker.exists())
+tares.reply("D2", "Approve")
+cs.stop(paths, S)
+said_4 = codex_step(paths, tares)
+ck("a yes for a station that was stopped meanwhile is not given either; the request is closed as gone",
+   codex_asks.kept(paths, S)[key2]["state"] == "gone" and not marker.exists() and "no longer asks D2" in said_4, said_4)
+
+# what the station changes, and what it asks in words
+out_file = SCRATCH / "outside-the-workspace.txt"
+tares, paths, mk, pid, thread = asking({"ask": "file", "path": str(out_file)})
+codex_step(paths, tares)
+item = tares.world["desk"][0]
+ck("a file change is put on the desk with what the change is, as the guard's record of the call holds it",
+   "asks to change files outside its workspace" in item["question"] and f"Add File: {out_file}" in item["context"]
+   and item["options"] == ["Approve", "Decline"], item)
+unseen = {**next(iter(codex_asks.kept(paths, S).values()))["ask"], "item": "exec-the-guard-never-saw"}
+ck("without the guard's record of the call, the item says plainly that the crew did not see the change",
+   "did not see what the change is" in codex_asks.item_for(paths, S, unseen)["context"])
+tares.reply("D1", "Approve")
+codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("approved, the change is made", out_file.exists() and answers_given(pid) == [{"decision": "accept"}])
+end(pid)
+
+question = {"id": "q1", "header": "Branch", "question": "Which branch do I start from?",
+            "options": [{"label": "main", "description": "the default"}, {"label": "release", "description": "the last release"}]}
+tares, paths, mk, pid, thread = asking({"ask": "question", "questions": [question]})
+codex_step(paths, tares)
+item = tares.world["desk"][0]
+ck("a question in words goes to the desk with its own options", item["question"].endswith("asks: Which branch do I start from?")
+   and item["options"] == ["main", "release"] and "Branch: Which branch" in item["context"], item)
+tares.reply("D1", "release, and rebase first")
+codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("the person's words are handed to the station as they gave them",
+   answers_given(pid) == [{"answers": {"q1": {"answers": ["release, and rebase first"]}}}], answers_given(pid))
+end(pid)
+
+two = [{"id": "q1", "header": "Branch", "question": "Which branch?", "options": [{"label": "main", "description": ""}]},
+       {"id": "q2", "header": "Region", "question": "Which region?", "options": [{"label": "eu-west", "description": ""},
+                                                                              {"label": "us-east", "description": ""}]}]
+tares, paths, mk, pid, thread = asking({"ask": "question", "questions": two})
+codex_step(paths, tares)
+items = tares.world["desk"]
+ck("a request with several questions gets one desk item for each, with its own options",
+   [d["question"] for d in items] == [f"{S} asks (question 1 of 2): Which branch?", f"{S} asks (question 2 of 2): Which region?"]
+   and items[0]["options"] == ["main"] and items[1]["options"] == ["eu-west", "us-east"]
+   and "question q1." in items[0]["context"] and "question q2." in items[1]["context"], items)
+codex_step(paths, tares)
+ck("a later round files none of them again", len(tares.world["desk"]) == 2)
+tares.reply("D1", "main, from the last tag")
+codex_step(paths, tares)
+ck("one answered and one not: nothing is given yet", answers_given(pid) == [] and cs.turn_state(paths, S) == "blocked")
+tares.reply("D2", "eu-west")
+codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("once each has its answer, each question gets its own",
+   answers_given(pid) == [{"answers": {"q1": {"answers": ["main, from the last tag"]}, "q2": {"answers": ["eu-west"]}}}],
+   answers_given(pid))
+end(pid)
+tares, paths, mk, pid, thread = asking({"ask": "question", "questions": two})
+codex_step(paths, tares)
+cs.stop(paths, S)
+codex_step(paths, tares)
+ck("a request that is no longer asked has every one of its items withdrawn",
+   [d["state"] for d in tares.world["desk"]] == ["withdrawn", "withdrawn"], tares.world["desk"])
+q_ask = {"kind": "question", "questions": two}
+ck("a single answer is never copied to several questions",
+   codex_asks.result_for(q_ask, "main") == {"answers": {"q1": {"answers": [codex_asks.WITHDRAWN]}, "q2": {"answers": [codex_asks.WITHDRAWN]}}}
+   and codex_asks.result_for({"kind": "question", "questions": two[:1]}, "main") == {"answers": {"q1": {"answers": ["main"]}}}
+   and codex_asks.result_for(q_ask, {"q1": "main", "q2": None})["answers"]["q2"] == {"answers": [codex_asks.WITHDRAWN]})
+
+for asked_, shown in (({"ask": "question", "questions": [{**question, "isSecret": True}]}, "asks for a secret, which the crew does not pass on"),
+                      ({"ask": "other"}, "waits on a request the crew cannot answer (item/permissions/requestApproval)")):
+    tares, paths, mk, pid, thread = asking(asked_)
+    codex_step(paths, tares)
+    item = tares.world["desk"][0]
+    tares.reply("D1", "Approve")
+    codex_step(paths, tares)
+    ck(f"what the crew cannot answer ({asked_['ask']}) is on the desk as that, with how to stop the station, and is never answered",
+       shown in item["question"] and item["options"] == [] and f"tares factory restart {S}" in item["recommendation"]
+       and answers_given(pid) == [] and cs.turn_state(paths, S) == "blocked", (item, answers_given(pid)))
+    end(pid)
+
+# a round that cannot look changes nothing
+tares, paths, mk, pid, thread = asking({"ask": "command", "command": f"/usr/bin/touch {marker}"})
+codex_step(paths, tares)
+real_asked = cs.asked
+cs.asked = lambda *a, **k: None
+codex_step(paths, tares)
+cs.asked = real_asked
+ck("a station that could not be asked this round keeps its open item: not asking and not answering are not the same",
+   tares.world["desk"][0]["state"] == "open" and next(iter(codex_asks.kept(paths, S).values()))["state"] == "open")
+held = subprocess.Popen([sys.executable, "-c", "import sys, time\nsys.path.insert(0, sys.argv[1])\n"
+                         "from tares.crew import locks\nfrom tares.crew.paths import CrewPaths\n"
+                         "locks.station_lock(sys.argv[3], CrewPaths.at(sys.argv[2]))\nprint('held', flush=True)\ntime.sleep(30)\n",
+                         str(ROOT), str(paths.home), S], stdout=subprocess.PIPE, text=True)
+held.stdout.readline()
+tares.reply("D1", "Approve")
+codex_step(paths, tares)
+ck("a station another command holds is left for the next round", answers_given(pid) == [] and not marker.exists())
+held.kill()
+held.wait()
+codex_step(paths, tares)
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("and gets its answer then", answers_given(pid) == [{"decision": "accept"}] and marker.exists())
+end(pid)
+
+same = {"threadId": "t", "turnId": "u", "itemId": "i", "startedAtMs": 5, "command": "/bin/zsh -lc 'exec </dev/null\ntouch x'", "cwd": "/w"}
+a1 = cs.ask_of({"id": 0, "method": "item/commandExecution/requestApproval", "params": same})
+a2 = cs.ask_of({"id": 7, "method": "item/commandExecution/requestApproval", "params": dict(same)})
+ck("a request has one name on every connection, and another turn, call or time is another request",
+   a1["key"] == a2["key"] and a1["command"] == "touch x" and a1["kind"] == "command"
+   and len({cs.ask_of({"method": "item/commandExecution/requestApproval", "params": {**same, k: "other"}})["key"]
+            for k in ("threadId", "turnId", "itemId", "startedAtMs")} | {a1["key"]}) == 5, (a1, a2))
+ck("only Approve, as the person gave it, is a yes",
+   [codex_asks.result_for(a1, w)["decision"] for w in ("Approve", " approve. ", "APPROVE", "Approve all of them", "yes", "", None)]
+   == ["accept", "accept", "accept", "decline", "decline", "decline", "decline"])
+long = cs.ask_of({"method": "item/commandExecution/requestApproval", "params": {**same, "command": "x" * 5000, "reason": "r" * 900}})
+body = codex_asks.item_for(paths, S, long, "uc_1")
+ck("an item fits what the desk takes, whatever the station asked", len(body["question"]) <= 1000 and len(body["context"]) <= 1500
+   and body["project"] == "uc_1" and len(body["recommendation"]) <= 500 and len(body["why"]) <= 1000, {k: len(str(v)) for k, v in body.items()})
+
+fake(turn=0.2, fail="The 'opus' model is not supported when using Codex with a ChatGPT account.")
+tares, paths, said, mk = crew()
+err, _ = start(mk())
+pid = pid_of(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+said_f = codex_step(paths, tares)
+items = [d for d in tares.world["desk"] if "failed" in d["question"]]
+ck("a turn that failed is told of: Codex leaves the station at rest, where it reads like one that finished",
+   err is None and cs.turn_state(paths, S) == "done" and cs.failed_turn(paths, S)[1].startswith("The 'opus' model is not supported")
+   and f"the last turn of {S} failed: The 'opus' model" in said_f and len(items) == 1 and items[0]["station"] == S
+   and f"tares factory restart {S}" in items[0]["recommendation"] and len(events(paths, "turn-failed")) == 1, (said_f, items))
+said_f2 = codex_step(paths, tares)
+ck("once for a turn", "failed" not in said_f2 and len([d for d in tares.world["desk"] if "failed" in d["question"]]) == 1
+   and len(events(paths, "turn-failed")) == 1, said_f2)
+end(pid)
+tares, paths, said, mk = crew(world={"runtime": "claude_code"})
+before = len(tares.log)
+codex_step(paths, tares)
+ck("a crew on Claude Code is left alone by the Codex round", len(tares.log) == before, tares.log[before:])
+
+# ---------------------------------------------------------------------------------------------
+print("m. a conversation that can no longer be loaded (TR-1593)")
+LISTING["as"] = ""
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true")
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+until(lambda: cs.turn_state(paths, S) == "done")
+ck("a turn the crew started is written on the station's row, and is not yet one that was compared",
+   row(paths)[cs.LAST_TURN] == row(paths)["codex"]["turn"] and not cs.last_turn_compared(paths, S), row(paths))
+watch_round(paths, tares)
+ck("the watch's look at the ended turn writes that it was found in order",
+   row(paths).get(cs.COMPARED) == row(paths)[cs.LAST_TURN] and cs.last_turn_compared(paths, S), row(paths))
+end(pid, signal.SIGKILL)
+(paths.station_file(S, "codex") / "fake-threads.json").unlink()   # the conversation can no longer be loaded
+n = conversations()
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+note(paths)
+ck("a lost conversation whose last turn was compared is replaced by a new one, with an event, as before",
+   err is None and conversations() == n + 1 and row(paths)["sessionId"] != thread and cs.is_alive(paths, S)
+   and len(events(paths, "conversation-replaced")) == 1 and cs.unverified(paths, S) == {}, (err, out))
+end(pid_of(paths), signal.SIGKILL)
+
+tares, paths, said, mk = crew()
+model_runs("/usr/bin/true")
+fake(turn="hang", think=0.05, commands=json.dumps(["/usr/bin/true"]))
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+end(pid, signal.SIGKILL)   # it dies in its turn: nobody looked at what the turn ran
+(paths.station_file(S, "codex") / "fake-threads.json").unlink()
+n = conversations()
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+ck("a lost conversation whose last turn was never compared is not replaced: the station stays down, and is marked",
+   kind is not None and "cannot be loaded" in (err or "") and "never compared with the guard's record" in err
+   and f"`tares factory revive {S} --fresh`" in err and conversations() == n and not cs.is_alive(paths, S)
+   and cs.unverified(paths, S).get("thread") == thread and row(paths)["sessionId"] == thread
+   and not events(paths, "conversation-replaced") and len(events(paths, "guard-unverified")) == 1, (err, kind, row(paths)))
+watch_revive._guard_told.discard(S)
+said_w = watch_round(paths, tares)
+ck("the watch does not start it in a new conversation either", conversations() == n and not cs.is_alive(paths, S)
+   and cs.unverified(paths, S).get("thread") == thread, said_w)
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S, "--fresh"], claude_bin="")
+note(paths)
+ck("a person's `revive --fresh` gives the conversation up and starts the station in a new one",
+   err is None and conversations() == n + 1 and cs.is_alive(paths, S) and cs.unverified(paths, S) == {}
+   and row(paths)["sessionId"] != thread and len(events(paths, "guard-unverified-given-up")) == 1, (err, out))
+end(pid_of(paths), signal.SIGKILL)
+
+print("n. a call whose outcome is not known (TR-1593)")
+tares, paths, said, mk = crew()
+again = SCRATCH / "ran-again.log"
+again.unlink(missing_ok=True)
+command = f"echo started >> {again}; {sys.executable} -c 'import time; time.sleep(6)'"   # PATH here has no sleep
+fake(turn=0.2, think=0.05, commands=json.dumps([command]))
+err, _ = start(mk())
+pid, thread = pid_of(paths), row(paths)["sessionId"]
+until(lambda: again.exists())
+end(pid, signal.SIGKILL)   # the app-server dies while the command runs: the guard let it through, no item says it ended
+line = [r for r in cs._record(paths, S) if r.get("call")][-1]
+ck("the guard's line for a call it lets through keeps the command as it was asked, and its folder",
+   line.get("said") == "allow" and line.get("command") == command and line.get("cwd") == str(paths.home), line)
+err, kind, out = quietly(lifecycle.revive, mk(), paths, [S], claude_bin="")
+note(paths)
+pid2 = pid_of(paths)
+rows = cs.unknown(paths, S)
+prompt = calls(pid2, "turn/start")[-1][1]["input"][0]["text"] if calls(pid2, "turn/start") else ""
+ck("started again in its conversation, the call that was cut off is written down as one whose outcome is not known",
+   err is None and row(paths)["sessionId"] == thread and len(rows) == 1 and rows[0]["command"] == command
+   and rows[0]["call"] == line["call"] and stat.S_IMODE(paths.station_file(S, cg.UNKNOWN).stat().st_mode) == 0o600
+   and len(events(paths, "outcome-unknown")) == 1, (err, rows))
+ck("its first prompt names the call, says not to run it again yet, and how to say what was found",
+   "Before anything else" in prompt and f"- call {line['call']}: `{command}`" in prompt and "tares factory outcome <call> done" in prompt
+   and rows[0].get("told") is True, prompt[-700:])
+until(lambda: cs.turn_state(paths, S) == "done")
+last = [r for r in cs._record(paths, S) if r.get("call")][-1]
+ck("the same command, asked again by the new turn, is refused by the guard and does not run",
+   last.get("said") == "deny" and last["call"] != line["call"] and again.read_text().count("started") == 1, (last, again.read_text()))
+got = cs.hand(paths, S, "Carry on.")
+ck("a later prompt does not tell of it a second time, and the call stays refused",
+   "Before anything else" not in calls(pid2, "turn/start")[-1][1]["input"][0]["text"] and len(cs.unknown(paths, S)) == 1)
+until(lambda: cs.turn_state(paths, S) == "done")
+env_s = {"FACTORY_STATION": S, "FACTORY_CREW_HOME": str(paths.home), "FACTORY_HOME": str(paths.home), "FACTORY_ROLE": "reviewer"}
+out_l = io.StringIO()
+with redirect_stdout(out_l):
+    code_l = cs.cmd_outcome([], env_s)
+call_id = line["call"]
+bad = [quietly(cs.cmd_outcome, argv, env_s)[0] for argv in ([call_id], [call_id, "maybe", "x"], ["exec-nothing", "done", "x"],
+                                                            [call_id, "done", " "], ["1", "done", "a place in the list"])]
+ck("`tares factory outcome` lists it by its call id, and takes no answer that says nothing or names a place in the list",
+   code_l == 0 and out_l.getvalue().startswith(f"{call_id}  {command}") and all(bad) and "name it by its call id" in bad[4]
+   and len(cs.unknown(paths, S)) == 1, (out_l.getvalue(), bad))
+out_r = io.StringIO()
+with redirect_stdout(out_r):
+    cs.cmd_outcome([call_id, "not-done", "the", "log", "has", "one", "line", "and", "no", "process", "is", "left"], env_s)
+ck("the station's account of what it found takes the call off the list, and an event keeps the account",
+   cs.unknown(paths, S) == [] and "recorded: not-done" in out_r.getvalue()
+   and [e for e in events(paths, "outcome-reconciled") if "not-done:" in str(e) and "the log has one line" in str(e)],
+   events(paths, "outcome-reconciled"))
+cs.hand(paths, S, "Now run it.")
+until(lambda: again.read_text().count("started") == 2, 8)
+ck("after that the command is let through again", again.read_text().count("started") == 2, again.read_text())
+end(pid2, signal.SIGKILL)
+
+turn_items = [{"id": "c1", "status": "completed"}, {"id": "c2", "status": "inProgress"}, {"id": "c4", "status": "failed"}]
+rec = [{"turn": "t1", "armed": True}, {"turn": "t1", "call": "c1", "tool": "Bash", "said": "allow", "command": "true"},
+       {"turn": "t1", "call": "c2", "tool": "Bash", "said": "allow", "command": "git push", "cwd": "/w"},
+       {"turn": "t1", "call": "c3", "tool": "mcp__tares__set_stage", "said": "allow"},
+       {"turn": "t1", "call": "c4", "tool": "Bash", "said": "allow", "command": "false"},
+       {"turn": "t1", "call": "c5", "tool": "Bash", "said": "deny", "command": "gh pr merge 3"},
+       {"turn": "t0", "call": "c0", "tool": "Bash", "said": "allow", "command": "old"}]
+ck("unknown is a call of that turn that was let through and has no item saying it ended: not a denied one, not an older turn's",
+   [r["call"] for r in cs.unknown_of("t1", turn_items, rec)] == ["c2", "c3"]
+   and cs.unknown_of("t1", turn_items, rec)[0] == {"call": "c2", "turn": "t1", "tool": "Bash", "command": "git push", "cwd": "/w", "at": None}
+   and [r["call"] for r in cs.unknown_of("t1", None, rec)] == ["c1", "c2", "c3", "c4"] and cs.unknown_of("", None, rec) == [])
+tares, paths, said, mk = crew()
+paths.stations_dir.mkdir(parents=True, exist_ok=True)
+(paths.stations_dir / f"{S}.{cg.UNKNOWN}").write_text(json.dumps([{"call": "c2", "command": "git push  origin HEAD"}]))
+env_g = {"FACTORY_STATION": S, "FACTORY_HOME": str(paths.home), "FACTORY_ROLE": "builder"}
+ck("the guard refuses that command however it is spaced or wrapped, and no other",
+   cg.repeats(env_g, "git push origin HEAD")["call"] == "c2" and cg.repeats(env_g, cg.CLOSE_STDIN + "git push origin HEAD") is not None
+   and cg.repeats(env_g, "git push origin main") is None and cg.repeats(env_g, "git status") is None
+   and cg.repeats({**env_g, "FACTORY_STATION": "another"}, "git push origin HEAD") is None
+   and "tares factory outcome c2 done" in cg.repeat_reason("c2"))
+# three calls of unknown outcome, settled one after the other (the review of b52f7f01): each answer lands on the
+# call it names, whatever was settled before it
+(paths.stations_dir / f"{S}.{cg.UNKNOWN}").write_text(json.dumps(
+    [{"call": "exec-a", "command": "git push"}, {"call": "exec-b", "command": "gh pr create"}, {"call": "exec-c", "command": "make deploy"}]))
+first_ = cs.reconcile(paths, S, "exec-a", "done", "the branch is on the remote")
+second_ = cs.reconcile(paths, S, "exec-c", "not-done", "nothing was deployed")
+ck("settling one call does not move the others: the second answer settles the call it names, not the one after it",
+   (first_["command"], second_["command"]) == ("git push", "make deploy")
+   and [r["call"] for r in cs.unknown(paths, S)] == ["exec-b"], cs.unknown(paths, S))
+ck("the prompt and the guard name each call by its id, never by a place in the list",
+   "- call exec-b: `gh pr create`" in cs.unknown_note(cs.unknown(paths, S)) and "1." not in cs.unknown_note(cs.unknown(paths, S))
+   and "(call exec-b)" in cg.repeat_reason(cg.repeats(env_g, "gh pr create")["call"]))
+
+# ---------------------------------------------------------------------------------------------
+print("o. the session is recorded by the watch's rounds and at every stop (TR-1595 wired in by TR-1593)")
+from types import SimpleNamespace  # noqa: E402
+
+from tares.connectors import codex as cell_codex  # noqa: E402
+from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
+from tares.store import Store  # noqa: E402
+from tares.crew import codex_record, watch  # noqa: E402
+
+
+def rows_on_the_cell(tares, source="claude_code"):   # the session source /ingest/codex stores into
+    """What the real cell makes of every post the fake cell took: the session store's command rows, by command."""
+    s = Store(str(SCRATCH / f"cell-{len(os.listdir(SCRATCH))}.duckdb"))
+    conn = ClaudeCodeConnector(SimpleNamespace(name=source, type="agent_session", config={}), s)
+    for i in range(0, len(tares.world["ingested"]), 50):
+        s.append(conn.map_payload(cell_codex.session_lines(tares.world["ingested"][i:i + 50])))
+    sessions = sorted({f.get("sessionId") for f in tares.world["ingested"] if f.get("sessionId")})
+    got = s.recorded_commands(source, sessions)
+    s.con.close()
+    return got
+
+
+def posted(tares, kind, **match):
+    return [f for f in tares.world["ingested"] if f.get("kind") == kind
+            and all(f.get(k) == v or (isinstance(f.get("item"), dict) and f["item"].get(k) == v) for k, v in match.items())]
+
+
+ck("the Codex step comes first in a round, and records before it does anything else",
+   watch.STEP_NAMES[0] == "codex" and [n for n, _ in codex_round.PARTS][0] == "record", (watch.STEP_NAMES, codex_round.PARTS))
+done_file, slow_file = SCRATCH / "o-done", SCRATCH / "o-slow"
+tares, paths, said, mk = crew()
+fake(turn=0.2, think=0.05, unread=0, commands=json.dumps(
+    [f"echo built > {done_file}", "/bin/sh -c 'echo boom; exit 7'",
+     f"echo started > {slow_file}; {sys.executable} -c 'import time; time.sleep(30)'"]))
+err, _ = start(mk())
+pid, thread = pid_of(paths, S), row(paths)["sessionId"]
+until(lambda: slow_file.exists(), 8)
+time.sleep(0.3)
+said_1 = codex_step(paths, tares)
+starts = {f["command"]: f for f in posted(tares, "start")}
+ck("a round in the middle of a turn posts what started, with the command as it was asked, and the state",
+   err is None and set(starts) >= {f"echo built > {done_file}", "/bin/sh -c 'echo boom; exit 7'"}
+   and any(c.endswith("time.sleep(30)'") for c in starts) and posted(tares, "state", state="working")
+   and all(f["sessionId"] == thread and f["factory_station"] == S for f in tares.world["ingested"]), (said_1, sorted(starts)))
+ended_1 = {f["item"]["id"] for f in posted(tares, "item") if f["item"].get("type") == "commandExecution"}
+ck("and the ends of the two commands that have ended, with their real exit codes",
+   len(ended_1) == 2 and sorted(f["item"]["exitCode"] for f in posted(tares, "item") if f["item"].get("type") == "commandExecution") == [0, 7],
+   ended_1)
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+codex_step(paths, tares)
+ck("later rounds with nothing new post nothing", len(tares.world["ingested"]) == n, tares.world["ingested"][n:])
+
+# the stop: a command still runs when the station is stopped
+err, kind, _ = quietly(cs.stop, paths, S)
+unknown = posted(tares, "unknown")
+ck("a stop records last: the command still running is closed as one whose outcome nobody knows",
+   len(unknown) == 1 and starts[next(c for c in starts if c.endswith("time.sleep(30)'"))]["call"] == unknown[0]["call"]
+   and "stopped while the command ran" in unknown[0]["why"] and posted(tares, "state", state="ended"), unknown)
+got = {c["command"]: c for c in rows_on_the_cell(tares)}
+slow = next(c for c in got if c.endswith("time.sleep(30)'"))
+ck("on the cell the finished commands keep their end, and the unfinished one is unknown, not a failure and not missing",
+   got[f"echo built > {done_file}"]["outcome"] == "ended" and got[f"echo built > {done_file}"]["exit_code"] == 0
+   and got["/bin/sh -c 'echo boom; exit 7'"]["exit_code"] == 7 and got[slow]["outcome"] == "unknown"
+   and got[slow]["exit_code"] is None and len(got) == 3, got)
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+ck("a round after the stop sends nothing again", len(tares.world["ingested"]) == n, tares.world["ingested"][n:])
+
+# replay: the cell took a post but its answer was lost, so the recorder sends the same facts again
+before = rows_on_the_cell(tares)
+tares.world["ingested"].extend(list(tares.world["ingested"]))
+ck("the same facts posted twice make the same rows on the cell: no duplicate", rows_on_the_cell(tares) == before)
+end(pid)
+
+tares, paths, said, mk = crew()
+fake(turn=0.2, think=0.05, unread=0, commands=json.dumps(["echo one", "echo two"]))
+start(mk())
+pid = pid_of(paths, S)
+until(lambda: cs.turn_state(paths, S) == "done")
+tares.world["ingest_fail"] = 1   # taken, and the answer lost
+codex_step(paths, tares)
+codex_step(paths, tares)
+calls_once = [f["call"] for f in posted(tares, "start")]
+ck("a post whose answer was lost is sent again whole, and the cell keeps each command once",
+   len(calls_once) == 4 and len(set(calls_once)) == 2 and sorted(c["command"] for c in rows_on_the_cell(tares)) == ["echo one", "echo two"],
+   (calls_once, rows_on_the_cell(tares)))
+n = len(tares.world["ingested"])
+watch_revive.last = watch_revive.Round()
+codex_step(paths, tares)
+ck("a watch started again (what was sent is kept on disk) sends nothing twice", len(tares.world["ingested"]) == n)
+
+# restart, retire and crew down all record last
+err, kind, _ = quietly(lifecycle.restart, mk(), paths, [S, "Carry on."], claude_bin="")
+note(paths)
+ck("a restart in the same conversation goes on, and its new turn is recorded by the next round",
+   err is None and row(paths)["sessionId"] == thread or err is None, err)
+until(lambda: cs.turn_state(paths, S) == "done")
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+ck("the next round records the new turn's commands", len(posted(tares, "start")) > len(calls_once), tares.world["ingested"][n:])
+end(pid_of(paths, S))
+tares, paths, said, mk = crew()
+# a stop records with the cell its process names, as `tares factory retire` and `crew down` do
+os.environ.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp", FACTORY_CREW_HOME=str(paths.home))
+fake(turn="hang", think=0.05, unread=0, commands=json.dumps(["echo first", f"{sys.executable} -c 'import time; time.sleep(30)'"]))
+start(mk())
+until(lambda: any("time.sleep(30)" in str(r.get("command")) for r in cs._record(paths, S)))
+time.sleep(0.3)
+err, kind, _ = quietly(lifecycle.retire, mk(), paths, [S], claude_bin="")
+ck("a retire records last, with no round between: the command it cut off is unknown on the cell",
+   err is None and not cs.is_alive(paths, S)
+   and sorted(("sleep" if c["command"].endswith("time.sleep(30)'") else c["command"], c["outcome"])
+              for c in rows_on_the_cell(tares)) == [("echo first", "ended"), ("sleep", "unknown")], (err, rows_on_the_cell(tares)))
+n = len(tares.world["ingested"])
+codex_step(paths, tares)
+ck("and nothing more is sent for it", len(tares.world["ingested"]) == n, tares.world["ingested"][n:])
+
+tares, paths, said, mk = crew()
+os.environ.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp", FACTORY_CREW_HOME=str(paths.home))
+fake(turn="hang", think=0.05, unread=0, commands=json.dumps([f"{sys.executable} -c 'import time; time.sleep(30)'"]))
+start(mk())
+until(lambda: any("time.sleep(30)" in str(r.get("command")) for r in cs._record(paths, S)))
+time.sleep(0.3)
+tares.world["health"] = True
+tares.world["ingest_fail"] = 0
+real_post = codex_record._post
+codex_record._post = lambda client, found: (_ for _ in ()).throw(CrewError("Tares is down"))
+err, kind, _ = quietly(lifecycle.down, mk(), paths, [], claude_bin="")
+codex_record._post = real_post
+ck("crew down with Tares down, before any round looked at the station: it still ends, and its closing is kept",
+   not cs.is_alive(paths, S) and codex_record._load(paths, S).get("closing")
+   and [u["command"].endswith("time.sleep(30)'") for u in codex_record._load(paths, S)["untold"]] == [True],
+   (err, codex_record._load(paths, S)))
+codex_step(paths, tares)
+ck("and sent by the next look once Tares answers: the unfinished command is unknown",
+   [c["outcome"] for c in rows_on_the_cell(tares)] == ["unknown"] and not codex_record._load(paths, S).get("closing"),
+   rows_on_the_cell(tares))
+
+# the same, but the station is started in a new conversation before any look could send the closing (the
+# review of b52f7f01): the closing kept from the stop is sent with the old conversation's end, not dropped
+tares, paths, said, mk = crew()
+os.environ.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.url + "/mcp", FACTORY_CREW_HOME=str(paths.home))
+fake(turn="hang", think=0.05, unread=0, commands=json.dumps([f"{sys.executable} -c 'import time; time.sleep(30)'"]))
+start(mk())
+old_thread = row(paths)["sessionId"]
+until(lambda: any("time.sleep(30)" in str(r.get("command")) for r in cs._record(paths, S)))
+time.sleep(0.3)
+codex_record._post = lambda client, found: (_ for _ in ()).throw(CrewError("Tares is down"))
+quietly(cs.stop, paths, S)
+codex_record._post = real_post
+kept_ = codex_record._load(paths, S)
+fake(turn=0.2, think=0.05, unread=0, commands=json.dumps(["echo fresh"]))
+err, kind, _ = quietly(lifecycle.revive, mk(), paths, [S, "--fresh"], claude_bin="")
+note(paths)
+until(lambda: cs.turn_state(paths, S) == "done")
+codex_step(paths, tares)
+cell_rows = rows_on_the_cell(tares)
+ck("a stop's closing kept while Tares was down is sent when the station moves to a new conversation: nothing is lost",
+   kept_.get("closing") and kept_.get("untold") and err is None and row(paths)["sessionId"] != old_thread
+   and sorted((r["session"] == old_thread, "sleep" if "time.sleep(30)" in r["command"] else r["command"], r["outcome"])
+              for r in cell_rows) == [(False, "echo fresh", "ended"), (True, "sleep", "unknown")]
+   and not codex_record._load(paths, S).get("untold"), (kept_, cell_rows))
+end(pid_of(paths))
+
+tares, paths, said, mk = crew(world={"runtime": "claude_code"})
+before = len(tares.log)
+codex_step(paths, tares)
+ck("a crew on Claude Code is left alone: nothing is recorded or asked by the Codex step",
+   len(tares.log) == before and tares.world["ingested"] == [], tares.log[before:])
 
 # ---------------------------------------------------------------------------------------------
 for pid in STARTED:

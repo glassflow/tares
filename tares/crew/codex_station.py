@@ -16,8 +16,9 @@ What a turn state means here, in the words the crew already uses for Claude Code
   blocked   in a turn that waits on an approval or on an answer
   ""        not alive
 A blocked station is never "between turns" here, however long it has waited. Claude Code's wait rule lets a
-restart replace a prompt nobody answered; on Codex nothing answers an approval yet (the desk is the next step
-of TR-1593), and a second prompt into a waiting turn would steer it, not replace it. So it is left alone.
+restart replace a prompt nobody answered; on Codex a second prompt into a waiting turn would steer it, not
+replace it. So it takes no prompt, and what it asks goes to the person's desk (`asked` and `answer` below, and
+`tares.crew.codex_asks`, which the watch runs once a round).
 
 Handing over a prompt (`hand`) is a turn start, only on a station that is done; one in a turn is refused with
 NotBetweenTurnsError, as a wake that finds a Claude Code station in a turn is. A second turn start into a
@@ -85,8 +86,10 @@ psutil and the standard library.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import shlex
 import signal
 import time
 
@@ -95,7 +98,7 @@ import psutil
 from . import codex as cx
 from . import codex_guard, locks, state
 from .codex_wire import Wire, WireError
-from .errors import CrewError, GuardOffError, NotBetweenTurnsError, StationLockedError
+from .errors import CrewError, GuardOffError, NeverComparedError, NotBetweenTurnsError, StationLockedError
 from .paths import CrewPaths
 
 TURN_STOP_WAIT = 20   # seconds an interrupted turn may take to end before the app-server is asked to end
@@ -441,21 +444,179 @@ def _audit(wire: Wire, thread: str, paths: CrewPaths, station: str, ended: bool 
     if turn is None:
         return "", ""
     if turn.get("id") and turn.get("id") == state.stations_get(station, SEEN, paths=paths):
+        _note_compared(paths, station, str(turn["id"]))
         return "", str(turn["id"])   # the station was stopped for this turn, and a person started it again
     found = unguarded(turn.get("items"), _record(paths, station))
     if ended and not found and turn.get("status") == "inProgress":
         raise NotCompared("its newest turn had not ended")
+    if not found and turn.get("id") and turn.get("status") != "inProgress":
+        _note_compared(paths, station, str(turn["id"]))   # all of it was there to see, and nothing was found
     why = found[0] + (f", and {len(found) - 1} more" if len(found) > 1 else "") if found else ""
     return why, str(turn.get("id") or "")
 
 
+# A conversation that can no longer be loaded (TR-1593). An app-server started again loads a conversation from
+# the station's own Codex folder; when that fails the station used to get a new conversation, and whatever its
+# last turn ran was then never compared. So the row keeps two turn ids: the last turn the crew started
+# (LAST_TURN, written by `hand`) and the last one found in order after it had ended (COMPARED, written by
+# `_audit`: the watch every round, `hand` before the next turn, a stop). Only when they are the same is a lost
+# conversation replaced. Otherwise the station is marked like one whose stop could not compare (`unverified`),
+# and a person gives the conversation up.
+LAST_TURN = "guardLastTurn"
+COMPARED = "guardCompared"
+
+
+def _note_compared(paths: CrewPaths, station: str, turn: str) -> None:
+    if turn and state.stations_get(station, COMPARED, paths=paths) != turn:
+        state.stations_put(station, {COMPARED: turn}, paths)
+
+
+def last_turn_compared(paths: CrewPaths, station: str) -> bool:
+    """Was the last turn the crew started on the station compared with the guard's record after it ended?
+    True for a station no turn was started on (there is nothing to compare)."""
+    row = state.stations_load(paths).get(station)
+    last = row.get(LAST_TURN) if isinstance(row, dict) else ""
+    return not last or row.get(COMPARED) == last
+
+
+# A call whose outcome is not known (TR-1593). The guard's hook writes a line before a call runs; Codex lists
+# the call as an item once it has ended. A turn cut off in between (the app-server died, or was ended in the
+# middle of a command) leaves a line with no ended item: the command may have done all of its work, part of
+# it, or none. Such calls are found when the conversation is loaded again by an app-server started anew
+# (`hand`), and when a person gives up a conversation that was never compared (`give_up_unverified`: then
+# every call of its last turn is one). They are kept in stations/<station>.codex.unknown.json, named in the
+# station's next prompt, and refused by the guard as a repeat (`codex_guard.repeats`) until the station has
+# looked and said what it found (`reconcile`, `tares factory outcome`).
+ENDED = ("completed", "failed", "declined")
+ASKS_KEPT = "codex.asks.json"   # what the station asked the person (tares.crew.codex_asks keeps it)
+
+
+def never_let_run(paths: CrewPaths, station: str) -> set:
+    """The calls that stopped on a question to the person and were never given a yes: they did not run, so
+    their outcome is known even with no item. A call that was given a yes may have run, and is not here."""
+    rows = state.read_json(paths.station_file(station, ASKS_KEPT), None)
+    return {str((r.get("ask") or {}).get("item")) for r in (rows.values() if isinstance(rows, dict) else [])
+            if isinstance(r, dict) and isinstance(r.get("ask"), dict) and r.get("gave") != "accept"}
+
+
+def unknown(paths: CrewPaths, station: str) -> list:
+    return codex_guard.read_unknown(paths.station_file(station, codex_guard.UNKNOWN))
+
+
+def unknown_of(turn: str, items, record: list) -> list:
+    """The calls of `turn` the guard let through that no item says have ended. `items` None: the turn's items
+    cannot be had at all, and every call it was let through is one. Pure."""
+    ended = {i.get("id") for i in items or [] if isinstance(i, dict) and i.get("status") in ENDED}
+    return [{"call": r["call"], "turn": turn, "tool": str(r.get("tool") or ""), "command": str(r.get("command") or ""),
+             "cwd": str(r.get("cwd") or ""), "at": r.get("at")}
+            for r in record if isinstance(r, dict) and turn and r.get("turn") == turn and r.get("call")
+            and r.get("said") == "allow" and r["call"] not in ended]
+
+
+def note_unknown(paths: CrewPaths, station: str, found: list) -> list:
+    """Add `found` to the station's unknown calls (one row a call); the rows that are new."""
+    rows = unknown(paths, station)
+    new = [r for r in found if r["call"] not in {x.get("call") for x in rows}]
+    if new:
+        state.write_json(paths.station_file(station, codex_guard.UNKNOWN), rows + new, mode=0o600)
+        for r in new:
+            state.event("outcome-unknown", station, (r["command"] or r["tool"] or r["call"])[:300], paths=paths)
+    return new
+
+
+def reconcile(paths: CrewPaths, station: str, ref: str, verdict: str, words: str) -> dict:
+    """Take one call off the station's unknown calls: `ref` is its call id, as the prompt and the list name it
+    (never a place in the list: settling one call would move the others, and a second answer would land on
+    the wrong one). `verdict` is what was found (done, not-done), `words` the station's own account. Records
+    the event and returns the row. Dies when there is no such call, or the account is empty."""
+    rows = unknown(paths, station)
+    at = next((i for i, r in enumerate(rows) if r.get("call") and r.get("call") == str(ref)), -1)
+    if at < 0:
+        named = ", ".join(str(r.get("call")) for r in rows) or "none"
+        raise CrewError(f"{station} has no call {ref} with an unknown outcome; name it by its call id ({named})")
+    if verdict not in ("done", "not-done"):
+        raise CrewError("say what you found: done (it had done its work) or not-done (it had not)")
+    if not str(words or "").strip():
+        raise CrewError("say what you looked at and what you found, in a sentence")
+    row = rows.pop(at)
+    state.write_json(paths.station_file(station, codex_guard.UNKNOWN), rows, mode=0o600)
+    state.event("outcome-reconciled", station,
+                f"{verdict}: {row.get('command') or row.get('tool') or row.get('call')} | {' '.join(str(words).split())}"[:500],
+                paths=paths)
+    return row
+
+
+def unknown_note(rows: list) -> str:
+    """What a station is told, in its next prompt, of the calls whose outcome is not known."""
+    if not rows:
+        return ""
+    lines = [f"- call {r.get('call')}: `{r.get('command') or r.get('tool') or 'a call'}`" + (f" (in {r['cwd']})" if r.get("cwd") else "")
+             for r in rows]
+    return ("\n\nBefore anything else: your last turn was cut off, and these calls of it were started and never "
+            "reported an end. What each did is not known: all of its work, part of it, or none.\n" + "\n".join(lines) +
+            "\nDo not run any of them again yet. For each, look at what it left (git status and git log, the remote, "
+            "the pull requests, the ticket and its checks), then say what you found with `tares factory outcome <call> "
+            "done \"<what you found>\"` or `tares factory outcome <call> not-done \"<what you found>\"`, naming the call "
+            "as it is written here. The guard refuses a repeat of one until you have.")
+
+
+def cmd_outcome(argv: list, env: dict) -> int:
+    """`tares factory outcome [<call> done|not-done <what you found>]`: with nothing, list the calls of this
+    station whose outcome is not known; else take one off the list (see `reconcile`). The station is
+    FACTORY_STATION, or `--station NAME` for a person."""
+    args = list(argv)
+    station = env.get("FACTORY_STATION", "")
+    if "--station" in args:
+        at = args.index("--station")
+        station = args[at + 1] if at + 1 < len(args) else ""
+        del args[at:at + 2]
+    if not station:
+        raise CrewError("name the station: tares factory outcome --station <name> ...")
+    home = env.get("FACTORY_CREW_HOME") or env.get("FACTORY_HOME")
+    paths = CrewPaths.at(home) if home else CrewPaths.from_env()
+    if not args:
+        rows = unknown(paths, station)
+        for r in rows:
+            print(f"{r.get('call')}  {r.get('command') or r.get('tool') or ''}" + (f"  (in {r['cwd']})" if r.get("cwd") else ""))
+        if not rows:
+            print(f"{station} has no call with an unknown outcome")
+        return 0
+    if len(args) < 3:
+        raise CrewError("usage: tares factory outcome <call> done|not-done \"<what you found>\"")
+    row = reconcile(paths, station, args[0], args[1], " ".join(args[2:]))
+    print(f"recorded: {args[1]} for {row.get('command') or row.get('tool') or row.get('call')}")
+    return 0
+
+
+def _record_now(paths: CrewPaths, station: str, closing: str = "") -> None:
+    """Record the station's session now (TR-1595): one look, or with `closing` (its app-server has ended) the
+    closing of its open starts. Never fails: a recording Tares does not take is sent again later."""
+    from . import codex_record   # here: it imports this module
+    from .client import TaresClient
+    client = TaresClient(paths, dict(os.environ))
+    try:
+        if closing:
+            codex_record.close_station(client, paths, station, closing)
+        else:
+            codex_record.record_station(client, paths, station)
+    except Exception:   # noqa: BLE001 - a stop is never kept from ending a station by its recording
+        pass
+    finally:
+        try:
+            client.close()
+        except Exception:   # noqa: BLE001
+            pass
+
+
 def _trim_record(paths: CrewPaths, station: str, keep_turn: str) -> None:
     """Drop the lines of older turns from a record that grew large, keeping the newest turn's (a look by the
-    watch may still compare it). Only between turns, when no hook of the station writes. Never fails."""
+    watch may still compare it). Only between turns, when no hook of the station writes. Never fails. The
+    session is recorded first: the lines dropped are where the starts of those turns' commands are read."""
     file = paths.station_file(station, codex_guard.RECORD)
     try:
         if file.stat().st_size <= RECORD_MAX:
             return
+        _record_now(paths, station)
         kept = [r for r in codex_guard.read_record(file) if keep_turn and r.get("turn") == keep_turn]
         tmp = file.with_name(file.name + ".tmp")
         tmp.write_text("".join(state.dumps_compact(r) + "\n" for r in kept), encoding="utf-8")
@@ -528,12 +689,14 @@ def unverified(paths: CrewPaths, station: str) -> dict:
     return mark if isinstance(mark, dict) and mark.get("thread") else {}
 
 
-def mark_unverified(paths: CrewPaths, station: str, thread: str, why: str) -> None:
-    """Write on the station's row that the last turn of `thread` could not be compared, and record the event."""
+def mark_unverified(paths: CrewPaths, station: str, thread: str, why: str, event: bool = True) -> None:
+    """Write on the station's row that the last turn of `thread` could not be compared, and record the event
+    (`event` False: only the row, for a mark written again after the row was put back)."""
     row = state.stations_load(paths).get(station)
     if isinstance(row, dict):
         state.stations_put(station, {UNVERIFIED: {"at": state.utc_stamp(), "thread": thread, "why": why[:300]}}, paths)
-        state.event("guard-unverified", station, why[:300], paths=paths)
+        if event:
+            state.event("guard-unverified", station, why[:300], paths=paths)
 
 
 def _clear_unverified(paths: CrewPaths, station: str) -> None:
@@ -551,6 +714,9 @@ def give_up_unverified(paths: CrewPaths, station: str, how: str) -> None:
     if pending:
         _clear_unverified(paths, station)
         state.event("guard-unverified-given-up", station, f"{how}: {pending.get('thread')}"[:300], paths=paths)
+        # nobody will list that turn's items now: whatever it was let through has an outcome nobody knows
+        last, held = state.stations_get(station, LAST_TURN, paths=paths), never_let_run(paths, station)
+        note_unknown(paths, station, [r for r in unknown_of(last, None, _record(paths, station)) if r["call"] not in held])
 
 
 def guard_off(paths: CrewPaths, station: str) -> str:
@@ -602,6 +768,150 @@ def check_guard(paths: CrewPaths, station: str) -> str:
         return why if why and _stop_unguarded(paths, station, why, rec, turn) else ""
 
 
+def failed_turn(paths: CrewPaths, station: str) -> tuple:
+    """(the id of the station's newest turn, why it failed) when that turn failed, ("", "") when it did not
+    or cannot be read. A turn that fails (a model the account cannot use, a limit, an error of Codex's own)
+    leaves the conversation at rest: `turn_state` says "done", and the station did nothing."""
+    thread = _recorded_thread(paths, station)
+    if not thread:
+        return "", ""
+    try:
+        with visit(paths, station) as wire:
+            found, _ = _thread(wire, thread, turns=True)
+    except CrewError:
+        return "", ""
+    turns = found.get("turns") if isinstance(found, dict) else None
+    last = turns[-1] if isinstance(turns, list) and turns and isinstance(turns[-1], dict) else {}
+    if last.get("status") != "failed":
+        return "", ""
+    error = last.get("error")
+    why = error.get("message") if isinstance(error, dict) else error
+    return str(last.get("id") or ""), " ".join(str(why or "Codex gave no reason").split())[:300]
+
+
+# ---- what a station asks (TR-1593: approvals and questions) ----
+#
+# A turn that needs a yes stops and asks: Codex sends a request of its own to whoever is connected to the
+# conversation, and the turn waits ("waiting" above). Measured on 0.171.0 with nobody connected: nothing runs;
+# a visitor that only reads is asked nothing and sees no item for the call; a visitor that joins the
+# conversation is asked again, with the same turn, item and start time, and a request id of its own
+# connection; when one answers and leaves at once, the turn goes on by itself; after an answer nobody is
+# asked again. So an approval needs nobody to stay connected: one visit reads what is asked, and a later one
+# gives the answer, to that same request only.
+
+ASKS = {"item/commandExecution/requestApproval": "command", "item/fileChange/requestApproval": "file",
+        "item/tool/requestUserInput": "question"}
+ASK_LISTEN = 2.0   # seconds a visit listens for what the station asks, after joining its conversation
+ASK_DONE = 5.0     # seconds an answer may take to be taken (the app-server says so)
+
+
+def _plain_command(command) -> str:
+    """A command as the model asked for it: without the shell Codex wraps it in and without the line the
+    guard put in front (`codex_guard.asked`)."""
+    text = str(command or "")
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = []
+    if len(words) == 3 and words[1] in ("-lc", "-c") and os.path.basename(words[0]) in ("zsh", "bash", "sh"):
+        text = words[2]
+    return codex_guard.asked(text)
+
+
+def ask_of(doc: dict) -> dict:
+    """What a request of the app-server's own asks, in the crew's words: {kind, method, thread, turn, item,
+    started, approval, key, command, cwd, reason, root, questions}. `kind` is command, file, question or
+    other (a request the crew has no answer for). `key` names the request whichever connection it came on;
+    two visits that are asked the same thing get the same key."""
+    method = str(doc.get("method") or "")
+    p = doc.get("params") if isinstance(doc.get("params"), dict) else {}
+    ask = {"kind": ASKS.get(method, "other"), "method": method, "thread": str(p.get("threadId") or ""),
+           "turn": str(p.get("turnId") or ""), "item": str(p.get("itemId") or ""), "started": p.get("startedAtMs"),
+           "approval": p.get("approvalId")}
+    name = state.dumps_compact([ask[k] for k in ("method", "thread", "turn", "item", "started", "approval")])
+    ask["key"] = hashlib.sha256(name.encode("utf-8")).hexdigest()[:24]
+    ask.update(command=_plain_command(p.get("command")) if p.get("command") else "", cwd=str(p.get("cwd") or ""),
+               reason=str(p.get("reason") or ""), root=str(p.get("grantRoot") or ""),
+               questions=p.get("questions") if isinstance(p.get("questions"), list) else [])
+    return ask
+
+
+def _asked_now(wire: Wire, start: dict, thread: str, listen: float) -> list:
+    """Join the conversation and read what it asks: [(the request's id on this connection, ask)]. A request
+    arrives right after the join; reading stops when none came for `listen` seconds."""
+    wire.request("thread/resume", {**start, "threadId": thread})
+    found = []
+    while True:
+        doc = wire.asked(listen if not found else min(listen, 0.5))
+        if doc is None:
+            return found
+        found.append((doc.get("id"), ask_of(doc)))
+
+
+def _join(paths: CrewPaths, station: str) -> tuple:
+    doc = settings(paths, station)
+    cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
+    servers = doc.get("mcp_servers") if isinstance(doc.get("mcp_servers"), dict) else {}
+    return _thread_start(doc["thread"], cwd, servers), _recorded_thread(paths, station)
+
+
+def asked(paths: CrewPaths, station: str, listen: float = ASK_LISTEN):
+    """What the station waits for an answer to: a list of asks (`ask_of`), [] when it waits for nothing, None
+    when it could not be asked now (it does not answer, or its conversation cannot be read: nothing is known).
+    One visit that joins the conversation only when it waits, reads and leaves; nothing is answered.
+
+    The caller holds the station's lock."""
+    try:
+        start, thread = _join(paths, station)
+        if not thread:
+            return []
+        with visit(paths, station) as wire:
+            kind = _where(wire, thread)
+            if kind == "unreadable":
+                return None
+            if kind != "waiting":
+                return []
+            return [ask for _, ask in _asked_now(wire, start, thread, listen)]
+    except (CrewError, WireError):
+        return None
+
+
+def answer(paths: CrewPaths, station: str, key: str, result: dict, listen: float = ASK_LISTEN) -> str:
+    """Give the station the answer to one thing it asked. Returns "answered", or why not: "gone" when the
+    station no longer asks it (the turn ended, somebody else answered, the station was started again), or
+    "unreachable" when it could not be asked now (try again later).
+
+    The request is looked for again on this visit and answered only when it is the same one (`key`: the same
+    conversation, turn, item and start time). An answer kept for a request that is no longer asked is never
+    given to another one. The caller holds the station's lock, and has checked the process is the one it
+    looked at."""
+    try:
+        start, thread = _join(paths, station)
+        if not thread:
+            return "gone"
+        with visit(paths, station) as wire:
+            kind = _where(wire, thread)
+            if kind in ("unreadable", "active"):   # active: between two asks of one turn; nothing to answer now
+                return "unreachable" if kind == "unreadable" else "gone"
+            if kind != "waiting":
+                return "gone"
+            for request_id, ask in _asked_now(wire, start, thread, listen):
+                if ask["key"] != key:
+                    continue
+                wire.answer(request_id, result)
+                deadline = time.monotonic() + ASK_DONE
+                while time.monotonic() < deadline:   # leaving before it is taken could lose it
+                    told = wire.next(deadline - time.monotonic())
+                    if told is None:
+                        break
+                    if told.get("method") == "serverRequest/resolved":
+                        return "answered"
+                return "answered" if _where(wire, thread) != "waiting" else "unreachable"
+            return "gone"
+    except (CrewError, WireError):
+        return "unreachable"
+
+
 def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) -> dict:
     """Hand the station a prompt: one turn start on its conversation. Returns {thread, turn, replaced}.
 
@@ -623,6 +933,8 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
     allowed = set(servers)
     recorded = _recorded_thread(paths, station)
     thread, replaced, turn, off, shown = ("" if fresh else recorded), False, "", "", ""
+    anew = False   # the conversation was loaded again by an app-server that did not have it open
+    untold = []    # the calls with an unknown outcome this prompt tells the station of
     with visit(paths, station) as wire:
         try:
             last = ""
@@ -634,6 +946,7 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                     raise CrewError(f"the conversation of {station} cannot be read now; not handing it a prompt")
                 try:
                     wire.request("thread/resume", {**start, "threadId": thread})
+                    anew = kind == "notLoaded"
                 except WireError as e:
                     if mcp_refused(e):   # Tares did not answer: the conversation is there, and is kept
                         raise CrewError(f"{station} cannot reach an MCP server it is started with "
@@ -645,6 +958,9 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                             f"the conversation of {station} cannot be loaded ({e}), and what its last turn ran was "
                             f"never compared with the guard's record ({pending.get('why')}); `tares factory revive "
                             f"{station} --fresh` starts it in a new conversation without that") from None
+                    if not last_turn_compared(paths, station):   # never compared, and now it cannot be
+                        mark_unverified(paths, station, thread, f"its conversation cannot be loaded ({e})"[:300])
+                        raise NeverComparedError(station, thread, str(e)[:200]) from None
                     thread, replaced = "", True   # the app-server was started again since and cannot load it
             if pending and thread != pending.get("thread"):   # a turn anywhere else would leave it never compared
                 raise CrewError(
@@ -674,6 +990,17 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
                 blind = mcp_ready(wire, thread, servers) or mcp_answers(wire, thread, doc.get("mcp_check"))
                 if blind:
                     raise CrewError(f"{station} would work without Tares: {blind}; not handing it a prompt")
+                if anew:   # what the turn that was cut off started and never ended (see `unknown_of`)
+                    try:
+                        cut = _last_turn(wire, thread) or {}
+                    except NotCompared as e:
+                        raise CrewError(f"what the last turn of {station} left unfinished cannot be listed now "
+                                        f"({e}); not handing it a prompt") from None
+                    held = never_let_run(paths, station)
+                    note_unknown(paths, station, [r for r in unknown_of(str(cut.get("id") or ""), cut.get("items"),
+                                                                       _record(paths, station)) if r["call"] not in held])
+                untold = [r for r in unknown(paths, station) if not r.get("told")]
+                prompt += unknown_note(untold)
                 _trim_record(paths, station, last)
                 params = {"threadId": thread, "input": [{"type": "text", "text": prompt}]}
                 if doc.get("effort"):
@@ -691,10 +1018,13 @@ def hand(paths: CrewPaths, station: str, prompt: str, *, fresh: bool = False) ->
         if not _stop_unguarded(paths, station, off, rec, shown):
             raise CrewError(f"{station} was started again while it was handed a prompt; try again")
         raise GuardOffError(station, off, shown)
-    state.stations_put(station, {"sessionId": thread, "codex": {**info(paths, station), "turn": turn,
-                                                              "turn_at": state.utc_stamp()}}, paths)
+    state.stations_put(station, {"sessionId": thread, LAST_TURN: turn,
+                                 "codex": {**info(paths, station), "turn": turn, "turn_at": state.utc_stamp()}}, paths)
     if pending:   # the same conversation, compared above before its turn was started
         _clear_unverified(paths, station)
+    if untold:   # named in the prompt that was just taken
+        rows = unknown(paths, station)
+        state.write_json(paths.station_file(station, codex_guard.UNKNOWN), [{**r, "told": True} for r in rows], mode=0o600)
     if recorded and thread != recorded:
         state.event("conversation-replaced" if replaced else "conversation-fresh", station, recorded, paths=paths)
     return {"thread": thread, "turn": turn, "replaced": replaced}
@@ -897,6 +1227,9 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     "stopped" (it ended when asked) or "killed". The socket's path in the crew home goes with it, and so does
     whatever the station had started that still runs (`end_leftovers`): after a stop nothing of it is left.
 
+    Its session is recorded last (TR-1595): one look while the app-server answers, then, once it has ended,
+    every command that started and has no end is recorded as one whose outcome nobody will know.
+
     Before the app-server is ended its newest turn is compared with the guard's record once more (`compare`),
     since nothing can ask it afterwards: a station that ran something the guard has no record of is marked
     (`guard_off`) and the event recorded, as when the watch finds it. When the comparison cannot be made the
@@ -906,11 +1239,13 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     if not _same_process(rec):
         cx.remove_socket(sock)
         end_leftovers(paths, station, grace=grace, sleep=sleep)
+        _record_now(paths, station, closing="the station was not running when it was stopped")
         return "not running"
     pid = rec["pid"]
     _interrupt(paths, station, turn_wait, sleep)
     thread = _recorded_thread(paths, station) if compare else ""
     why, shown, unknown = _compared_at_stop(paths, station, thread) if thread else ("", "", "")
+    _record_now(paths, station)   # the last look, while the app-server still answers (TR-1595)
     note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:
@@ -926,6 +1261,7 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
         _gone(pid, grace, sleep)
     cx.remove_socket(sock)
     end_leftovers(paths, station, grace=grace, sleep=sleep)
+    _record_now(paths, station, closing="the station was stopped while the command ran; how it ended was not recorded")
     if why:
         mark_off(paths, station, why, shown)
         state.event("guard-off", station, why[:300], paths=paths)
