@@ -50,6 +50,7 @@ from tares import (claude_usage, claude_usage_store, factory_home, session_inges
                    session_move, session_read)
 from tares.envelope import Envelope, now_utc  # noqa: E402
 from tares.factory_store import FactoryStore  # noqa: E402
+from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import (session_archive_parts, session_ingest_marks,  # noqa: E402
                                         session_lines, session_moves, session_usage, sessions)
 from tares.store import Store  # noqa: E402
@@ -583,12 +584,14 @@ def fills():
         def counts():
             with s.sessions_db.begin() as c:
                 replies = len(c.execute(select(session_usage.c.message)).all())
-            return replies, s.sc.execute("SELECT count(*) FROM challenges").fetchone()[0]
+            with s.sessions_db.read() as c:
+                kept = len(c.execute(select(challenges_table.c.branch)).all())
+            return replies, kept
 
         def empty():
             with s.sessions_db.begin() as c:
                 c.execute(delete(session_usage))
-            s.sc.execute("DELETE FROM challenges")
+                c.execute(delete(challenges_table))
 
         def fill():
             with spying(s) as read:

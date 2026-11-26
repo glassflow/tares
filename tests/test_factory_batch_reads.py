@@ -28,10 +28,13 @@ os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
+from sqlalchemy import select
+
 from tares import factory_api
 from tares.daemon import make_app
 from tares.integrations import registry
 from tares.integrations.review import ReviewGate
+from tares.session_store.tables import challenges as challenges_table
 
 
 class FakeGate(ReviewGate):
@@ -60,20 +63,23 @@ def ck(label, cond, detail=""):
 
 
 def old_challenge_events(store, source, project, ref):
-    """What challenge_events ran before TR-1472."""
-    linked = store.sessions_of_projects([project])      # the session store's rows
+    """What challenge_events ran before TR-1472: one name lookup and one select per ticket. The
+    branch, name and session conditions are applied here, with the case rules the old DuckDB query
+    had (the branch exact, the stamp in any case)."""
+    linked = set(store.sessions_of_projects([project]))      # the session store's rows
     name = (store.get_project(project) or {}).get("name") or project
-    with store._sread:
-        rows = store.sc.execute(
-            "SELECT event_time, event_type, payload, key_value FROM challenges "
-            "WHERE source = ? AND (branch = ? OR branch LIKE ?) "
-            "AND (lower(tares_project) IN (lower(?), lower(?)) "
-            f"     OR (tares_project IS NULL AND key_value IN ({', '.join('?' * len(linked)) or 'NULL'}))) "
-            "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
-                                    name, project, *linked]).fetchall()
+    t = challenges_table
+    with store.sessions_db.read() as conn:
+        found = conn.execute(select(t.c.event_time, t.c.event_type, t.c.payload, t.c.key_value,
+                                    t.c.branch, t.c.tares_project)
+                             .where(t.c.source == source).order_by(t.c.event_time)).fetchall()
+    rows = [r[:4] for r in found
+            if (r.branch == f"factory/{ref}" or r.branch.startswith(f"factory/{ref}-"))
+            and (r.key_value in linked if r.tares_project is None
+                 else r.tares_project.lower() in (name.lower(), project.lower()))]
     out = []
     for at, typ, pj, sid in rows:
-        o = json.loads(pj) if isinstance(pj, str) else (pj or {})
+        o = pj or {}
         ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
         out.append({"at": at, "type": typ, "session": sid, "challenge": ch})
     return out

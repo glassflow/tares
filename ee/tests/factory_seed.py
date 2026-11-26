@@ -512,8 +512,8 @@ class _Gen:
                           for c in range(rng.randint(2, 4))]
                 mrows.append([mid, p["uid"], "tares", None, f"M{k + 1}: {VERB[k % len(VERB)]} {THING[(k * 3) % len(THING)]}",
                               f"{VERB[k % len(VERB)]} {THING[(k * 3) % len(THING)]} and ship it.",
-                              json.dumps(checks), float(k + 1), t, t])
-        self.put("milestones", "id, project, owner, external_id, name, goal, checks, position, created_at, "
+                              checks, float(k + 1), t, t])
+        self.put_t("milestones", "id, project, owner, external_id, name, goal, checks, position, created_at, "
                                "updated_at", mrows)
         # ticket rows
         pool = {"done": [("done", "merged", 465), ("done", None, 177), ("done", "shipped", 94), ("canceled", None, 32)],
@@ -640,7 +640,7 @@ class _Gen:
                              "tests/test_cart.py::test_total" if bad else None,
                              self.station_of(t["p"]["crew"], "builder"), self.rng.choice(self.session_ids),
                              _between(rng, t["created"], t["updated"]), self.person()])
-        self.put("ticket_checks", "id, project, ticket, command, result, commit_sha, broke_test, by_station, "
+        self.put_t("ticket_checks", "id, project, ticket, command, result, commit_sha, broke_test, by_station, "
                                   "by_session, checked_at, person_id", rows)
         # milestone checks
         ms_all = [(p, m) for p in projects for m in self.milestones[p["uid"]]]
@@ -653,7 +653,7 @@ class _Gen:
                          None, "crew" if crew else "person",
                          self.crews[p["crew"]]["reviewer"] if crew else "Ada Quill", None if crew else self.person(),
                          _between(rng, p["created"], p["updated"])])
-        self.put("milestone_check_results", "id, project, milestone, idx, result, note, by_kind, by_name, "
+        self.put_t("milestone_check_results", "id, project, milestone, idx, result, note, by_kind, by_name, "
                                             "person_id, checked_at", rows)
 
     # ── the desk ───────────────────────────────────────────────────────────────────────────────
@@ -790,7 +790,7 @@ class _Gen:
                 rows.append([rid, t["project"], t["id"], r + 1, str(t["pr"]["number"]), _sha(rng), v,
                              "Ran the checks and read the diff.", "Did not run the app.",
                              self.crews[t["p"]["crew"]]["reviewer"], ts, pid])
-        self.put("reviews", "id, project, ticket, round, pr, head, verdict, verified, not_verified, by_station, "
+        self.put_t("reviews", "id, project, ticket, round, pr, head, verdict, verified, not_verified, by_station, "
                             "reviewed_at, person_id", rows)
         # findings: on every review that asked for changes, and on some that passed
         n = self.need("review_findings")
@@ -815,16 +815,16 @@ class _Gen:
                 rows.append([self.id("rf"), r["project"], r["ticket"], r["id"], j + 1, sev,
                              f"src/{rng.choice(NOUN).replace(' ', '_')}.py", rng.randint(3, 400), b, rng.choice(FINDINGS),
                              rng.choice(KINDS), state, _sha(rng)[:12] if state == "fixed" else None, r["at"]])
-        self.put("review_findings", "id, project, ticket, review, number, severity, file, line, blocking, text, kind, "
+        self.put_t("review_findings", "id, project, ticket, review, number, severity, file, line, blocking, text, kind, "
                                     "state, fixed_in, found_at", rows)
         # rule proposals
         n = self.need("rule_proposals")
         rrepos = sorted({t["repo"] for t in tickets})
         rows = [[self.id("rp"), rrepos[k % len(rrepos)].lower(), KINDS[(k // len(rrepos)) % len(KINDS)], None, "repo",
-                 f"Every {KINDS[k % len(KINDS)]} finding gets a test first.", "[]",
+                 f"Every {KINDS[k % len(KINDS)]} finding gets a test first.", [],
                  ["open", "accepted", "rejected"][k % 3], NOW - timedelta(days=k),
                  None if k % 3 == 0 else NOW - timedelta(days=k - 1)] for k in range(n)]
-        self.put("rule_proposals", "id, repo, kind, project, scope, text, tickets, state, created_at, decided_at", rows)
+        self.put_t("rule_proposals", "id, repo, kind, project, scope, text, tickets, state, created_at, decided_at", rows)
         # the merge queue: one row per merged ticket
         n = self.need("merge_queue")
         merged = [t for t in tickets if t["pr"] and t["pr"]["merged"]]
@@ -986,8 +986,8 @@ class _Gen:
                  [[f"seed_slot_{k}", "seed", "{}", NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_choices"))])
         self.put("integration_connections", "slot, name, settings, updated_at, updated_by",
                  [["seed_slot_0", f"seed-{k}", "{}", NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_connections"))])
-        self.put("challenges", "source, key_value, event_time, event_type, branch, tares_project, payload",
-                 [["github", f"example-org/x#{k}", NOW - timedelta(days=k + 1), "challenge", "main", pr[0]["uid"], "{}"]
+        self.put_t("challenges", "source, key_value, event_time, event_type, branch, tares_project, payload",
+                 [["github", f"example-org/x#{k}", NOW - timedelta(days=k + 1), "challenge", "main", pr[0]["uid"], {}]
                   for k in range(self.need("challenges"))])
         self.put("ask_sessions", "id, title, state, created_at, updated_at, person_id",
                  [[self.id("ask"), "A question about exports", "open", NOW - timedelta(days=2), NOW - timedelta(days=2),

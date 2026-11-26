@@ -41,6 +41,12 @@ Cases:
                      when an older release left them stale, take any odd pr without failing a start,
                      and ticket_for_pr reads their index among 1,000 tickets
   tickets_pr_revision  revision 0015 down and up on SQLite and Postgres, filling the rows there are
+  reviews_copy       milestones, checks, reviews, findings, challenger lines and rule proposals
+                     (TR-1615): DuckDB's rows arrive in SQLite, null and empty kept
+  reviews_methods    the Store's milestone, check, review, finding, challenger and rule proposal
+                     methods keep their answers; deleting a project removes its rows
+  reviews_takeover   Postgres: the eight tables the old DDL made are taken over, rows untouched; a
+                     missing column and index are added, an extra column stops the upgrade
 """
 import os
 import re
@@ -63,6 +69,7 @@ from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_le
 from tares.session_store.pr_columns import fill_pr_columns  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
+from tares.session_store.tables import milestones as milestones_table  # noqa: E402
 from tares.session_store.tables import people as people_table  # noqa: E402
 from tares.session_store.tables import project_members as members_table  # noqa: E402
 from tares.session_store.tables import settings as settings_table  # noqa: E402
@@ -1816,13 +1823,398 @@ def tickets_pr_revision():
                 _drop_schema(sch)
 
 
+REVIEW_TABLES = ["milestones", "milestone_check_results", "milestone_acceptances", "ticket_checks",
+                 "challenges", "reviews", "review_findings", "rule_proposals"]
+_LATER = datetime(2026, 11, 21, 12, 0, 0, tzinfo=timezone.utc)
+REVIEWS = {
+    "milestones": (("id", "project", "owner", "external_id", "name", "goal", "checks", "position",
+                    "created_at", "updated_at"), [
+        ("ms_b", "uc_demo", "tares", None, "Second", "", None, 2.0, _T, _T),
+        ("ms_a", "uc_demo", "linear", "ext-ms", "Éclair", "ship it",
+         '[{"text": "p95 under 1s", "kind": "command"}]', 1.0, _T, _T),
+        ("ms_null", "uc_demo", "tares", None, None, None, "null", None, None, None),
+    ]),
+    "milestone_check_results": (("id", "project", "milestone", "idx", "result", "note", "by_kind",
+                                 "by_name", "person_id", "checked_at"), [
+        ("mc_1", "uc_demo", "ms_a", 0, "fail", "slow", "station", "builder", None, _T),
+        ("mc_2", "uc_demo", "ms_a", 0, "pass", None, "person", None, "p_kim", _LATER),
+    ]),
+    "milestone_acceptances": (("milestone", "project", "by_name", "person_id", "accepted_at"),
+                              [("ms_a", "uc_demo", None, "p_kim", _T)]),
+    "ticket_checks": (("id", "project", "ticket", "command", "result", "commit_sha", "broke_test",
+                       "by_station", "by_session", "checked_at", "person_id"), [
+        ("ck_1", "uc_demo", "tk_a", "make test", "pass", None, "", "builder", None, _T, None),
+    ]),
+    "challenges": (("source", "key_value", "event_time", "event_type", "branch", "tares_project",
+                    "payload"), [
+        ("claude_code", "s1", _T, "challenge_commit", "factory/ENG-1", "uc_demo",
+         '{"challenge": {"verdict": "PASS"}}'),
+        ("claude_code", "", _T, "challenge_plan", "", None, None),
+    ]),
+    "reviews": (("id", "project", "ticket", "round", "pr", "head", "verdict", "verified",
+                 "not_verified", "by_station", "reviewed_at", "person_id"), [
+        ("rv_1", "uc_demo", "tk_a", 1, None, "abc", "changes", "tests", None, "reviewer", _T, None),
+    ]),
+    "review_findings": (("id", "project", "ticket", "review", "number", "severity", "file", "line",
+                         "blocking", "text", "kind", "state", "fixed_in", "found_at"), [
+        ("rf_1", "uc_demo", "tk_a", "rv_1", 1, "P1", None, None, None, "no test", "tests", "open",
+         None, _T),
+    ]),
+    "rule_proposals": (("id", "repo", "kind", "project", "scope", "text", "tickets", "state",
+                        "created_at", "decided_at"), [
+        ("rp_1", "o/r", "tests", "uc_demo", "project", "Write the test", '["ENG-1"]', "open", _T,
+         None),
+        ("rp_2", "o/r", "docs", None, "repo", "", None, "dismissed", _T, _LATER),
+    ]),
+}
+REVIEW_COUNTS = {t: len(rows) for t, (_, rows) in REVIEWS.items()}
+
+
+def reviews_copy():
+    print("== the milestone, check and review tables are copied from DuckDB at the first start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old_ddl_duckdb(con, seed={**SEED, **PROJECTS, **TICKETS, **REVIEWS})
+    # a file from before TR-436: no person on a check or a review
+    con.execute("ALTER TABLE reviews DROP COLUMN person_id")
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    with s.sessions_db.begin() as c:
+        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger counts each table as DuckDB held it", {t: ledger.get(t) for t in REVIEW_TABLES} == REVIEW_COUNTS,
+       ledger)
+    ck("the rows are there", {t: _n(s.sessions_db, t) for t in REVIEW_TABLES} == REVIEW_COUNTS)
+    ms = s.list_milestones("uc_demo")
+    ck("milestones come in position order, one with no position last, checks parsed, null as []",
+       [(m["id"], m["goal"], m["checks"]) for m in ms]
+       == [("ms_a", "ship it", [{"text": "p95 under 1s", "kind": "command"}]), ("ms_b", "", []),
+           ("ms_null", "", [])], ms)
+    ck("times arrive as UTC datetimes, a missing one as None", ms[0]["created_at"] == _T
+       and ms[2]["created_at"] is None and ms[2]["name"] is None, ms)
+    res = s.milestone_check_results(["ms_a", "ms_b"])
+    ck("the latest result of a check stands", res == {"ms_a": {0: {"result": "pass", "note": None,
+       "by_kind": "person", "by_name": None, "person_id": "p_kim", "at": _LATER}}}, res)
+    ck("the acceptance arrives", s.milestone_acceptances(["ms_a"])
+       == {"ms_a": {"by": None, "person_id": "p_kim", "at": _T}}, s.milestone_acceptances(["ms_a"]))
+    chk = s.ticket_checks("tk_a")
+    ck("the check arrives, null commit and empty broke_test kept", (chk[0]["commit"], chk[0]["broke_test"],
+       chk[0]["at"]) == (None, "", _T), chk)
+    rv = s.ticket_reviews("tk_a")
+    ck("the review and its finding arrive; a column the old file lacks is None, a null flag is False",
+       rv[0]["pr"] is None and rv[0]["person"] is None and rv[0]["findings"][0]["blocking"] is False
+       and rv[0]["findings"][0]["label"] == "F1", rv)
+    ev = s.challenge_events("claude_code", "uc_demo", "ENG-1")
+    ck("the challenger's line arrives with its payload parsed",
+       [(e["type"], e["session"], e["challenge"], e["at"]) for e in ev]
+       == [("challenge_commit", "s1", {"verdict": "PASS"}, _T)], ev)
+    props = {p["id"]: p for p in s.list_rule_proposals(None)}
+    ck("rule proposals arrive, tickets parsed and null as []", props["rp_1"]["tickets"] == ["ENG-1"]
+       and props["rp_2"]["tickets"] == [] and props["rp_2"]["decided_at"] == _LATER, props)
+    with s._lock:
+        n = [s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in REVIEW_TABLES]
+    ck("DuckDB still has its rows: nothing is deleted there", n == [REVIEW_COUNTS[t] for t in REVIEW_TABLES], n)
+    later = s.create_milestone("uc_demo", "after the copy")
+    s.close()
+    s = Store(path, state_dsn="")
+    ck("a second start copies nothing: a milestone made after the copy is kept",
+       s.get_milestone("uc_demo", later) is not None and _n(s.sessions_db, "milestones") == 4)
+    s.close()
+
+
+def _finding(text_, severity="P2", blocking=False, file=None, line=None):
+    return {"severity": severity, "file": file, "line": line, "blocking": blocking, "text": text_}
+
+
+def reviews_methods():
+    print("== milestones ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    sdb = s.sessions_db
+    s.create_project("uc_t", "custom", "Tee", {})
+    s.create_project("uc_u", "custom", "U", {})
+    base = {t: _n(sdb, t) for t in REVIEW_TABLES}
+    m1 = s.create_milestone("uc_t", "First", "goal one", [{"text": "a"}])
+    m2 = s.create_milestone("uc_t", "Éclair")
+    m0 = s.create_milestone("uc_t", "Zero", position=0.5)
+    ms = s.list_milestones("uc_t")
+    ck("a milestone without a position goes after the last, one with a position where it says",
+       [(m["id"], m["position"]) for m in ms] == [(m0, 0.5), (m1, 1.0), (m2, 2.0)], ms)
+    ck("each row has every column, goal '' and checks [] when none were given",
+       sorted(ms[0]) == sorted(REVIEWS["milestones"][0]) and ms[2]["goal"] == "" and ms[2]["checks"] == []
+       and ms[2]["owner"] == "tares" and ms[2]["external_id"] is None, ms)
+    ck("get_milestone by id and by name in any case, non-ASCII too",
+       s.get_milestone("uc_t", m2)["id"] == m2 and s.get_milestone("uc_t", " éCLAIR ")["id"] == m2)
+    ck("get_milestone: another project, blank and unknown give None", s.get_milestone("uc_u", m1) is None
+       and s.get_milestone("uc_t", "  ") is None and s.get_milestone("uc_t", None) is None
+       and s.get_milestone("uc_t", "nope") is None)
+    got = s.adopt_milestone("uc_t", "linear", "L-1", "éclair", "from linear")
+    row = s.get_milestone("uc_t", "L-1")
+    ck("adopt takes the Tares milestone of the same name (any case), keeping its name and checks",
+       got == m2 and (row["owner"], row["external_id"], row["name"], row["goal"], row["checks"], row["position"])
+       == ("linear", "L-1", "Éclair", "from linear", [], 2.0), row)
+    again = s.adopt_milestone("uc_t", "linear", "L-1", "renamed there", None, [{"text": "c"}], 3, "unused")
+    row = s.get_milestone("uc_t", "L-1")
+    ck("adopt finds it by owner and external id; None leaves the goal, checks and position given change",
+       again == m2 and (row["goal"], row["checks"], row["position"]) == ("from linear", [{"text": "c"}], 3.0), row)
+    new = s.adopt_milestone("uc_t", "github", "G-9", "New one", None, new_goal="from the tracker")
+    ck("adopt makes a new one with new_goal", s.get_milestone("uc_t", new)["goal"] == "from the tracker"
+       and s.get_milestone("uc_t", new)["position"] == 4.0, s.get_milestone("uc_t", new))
+    none_a = s.adopt_milestone("uc_u", "linear", None, "N1", "g")
+    none_b = s.adopt_milestone("uc_u", "linear", None, "N2", "g")
+    ck("no external id matches no row by external id", none_a != none_b, (none_a, none_b))
+    before = s.get_milestone("uc_t", m1)["updated_at"]
+    s.update_milestone(m1, name="First!", checks=None, nonsense="x", position=9)
+    row = s.get_milestone("uc_t", m1)
+    ck("update_milestone sets the known columns, None checks as [], and moves updated_at",
+       (row["name"], row["checks"], row["position"]) == ("First!", [], 9.0) and row["updated_at"] > before, row)
+    by = s.milestones_by_project(["uc_t", "uc_u", "uc_none"])
+    ck("milestones_by_project: every asked project, in order", [m["id"] for m in by["uc_t"]] == [m0, m2, new, m1]
+       and [m["id"] for m in by["uc_u"]] == [none_a, none_b] and by["uc_none"] == [], by)
+    ck("empty lists ask for nothing", s.milestones_by_project([]) == {} and s.milestone_check_results([]) == {}
+       and s.milestone_acceptances([]) == {})
+    s.record_milestone_check("uc_t", m1, 0, "fail", "", "station", "", "", _T)
+    s.record_milestone_check("uc_t", m1, 0, "pass", "ok", "person", "Kim", "p_kim", _LATER)
+    s.record_milestone_check("uc_t", m1, 1, "fail", None, "station", "builder", None, _T)
+    res = s.milestone_check_results([m1, m2])
+    ck("check results: the latest per index, empty strings stored as None",
+       res == {m1: {0: {"result": "pass", "note": "ok", "by_kind": "person", "by_name": "Kim",
+                        "person_id": "p_kim", "at": _LATER},
+                    1: {"result": "fail", "note": None, "by_kind": "station", "by_name": "builder",
+                        "person_id": None, "at": _T}}}, res)
+    s.accept_milestone("uc_t", m1, "Kim", "", _T)
+    s.accept_milestone("uc_t", m1, "", "p_kim", _LATER)
+    ck("accepting again replaces the acceptance", s.milestone_acceptances([m1, m2])
+       == {m1: {"by": None, "person_id": "p_kim", "at": _LATER}}, s.milestone_acceptances([m1]))
+    tid = s.create_ticket("uc_t", "tares", "T1", milestone=m1)
+    s.delete_milestone(m1)
+    ck("delete_milestone removes it and leaves its ticket without one", s.get_milestone("uc_t", m1) is None
+       and s.get_ticket("uc_t", tid)["milestone"] is None)
+
+    print("== ticket checks ==")
+    kim = s.create_person("Kim")
+    ids = [s.add_check("uc_t", tid, f"cmd {i}", "pass", "" if i else "abc", "", "builder", "sess", at,
+                       person_id=kim["id"] if i == 2 else None)
+           for i, at in enumerate([_T, _LATER, datetime(2026, 11, 22, tzinfo=timezone.utc)])]
+    chk = s.ticket_checks(tid)
+    ck("checks come oldest first, with commit, by, at and the person", [(c["id"], c["command"]) for c in chk]
+       == [(ids[0], "cmd 0"), (ids[1], "cmd 1"), (ids[2], "cmd 2")] and chk[0]["commit"] == "abc"
+       and chk[1]["commit"] is None and chk[1]["broke_test"] is None and chk[1]["by"] == "builder"
+       and chk[2]["person"]["name"] == "Kim" and chk[0]["person"] is None, chk)
+    ck("a limit keeps the newest", [c["id"] for c in s.ticket_checks(tid, limit=2)] == ids[1:])
+
+    print("== reviews and findings ==")
+    s.update_ticket(tid, pr={"repo": "o/r", "number": 3})
+    other = s.create_ticket("uc_t", "linear", "T2", identifier="ENG-2")
+    s.update_ticket(other, pr={"repo": "o/other", "number": 4})
+    kind = lambda t_: "k:" + t_
+    one = s.add_review("uc_t", tid, "u", "h1", "changes", "tests", "", "reviewer",
+                       [_finding("one", blocking=True, file="a.py", line=3), _finding("two", file="", line=0)],
+                       {}, kind, _T)
+    first = s.ticket_reviews(tid)[0]
+    ck("round 1: findings numbered F1, F2, empty values as None",
+       one["round"] == 1 and first["not_verified"] is None
+       and [(f["label"], f["blocking"], f["file"], f["line"], f["state"], f["kind"]) for f in first["findings"]]
+       == [("F1", True, "a.py", 3, "open", "k:one"), ("F2", False, None, None, "open", "k:two")], first)
+    two_id = first["findings"][1]["id"]
+    two = s.add_review("uc_t", tid, "u", "h2", "changes", "tests", "perf", "reviewer",
+                       [_finding("three")], {"F1": "fixed", two_id: "open", "nonsense": "fixed"}, kind, _LATER,
+                       person_id=kim["id"])
+    revs = s.ticket_reviews(tid)
+    ck("round 2 marks F1 fixed in it, F2 stays open, the new one is F3",
+       two["round"] == 2 and revs[1]["fixed"] == ["F1"] and [f["label"] for f in revs[1]["findings"]] == ["F3"]
+       and [(f["label"], f["state"], f["fixed_in"]) for f in revs[0]["findings"]]
+       == [("F1", "fixed", two["id"]), ("F2", "open", None)] and revs[1]["person"]["name"] == "Kim", revs)
+    ck("open_findings is the open ones of every round", [f["label"] for f in s.open_findings(tid)] == ["F2", "F3"])
+    s.add_review("uc_t", tid, "u", "h2", "pass", "queue", "", "merge-queue", [], {}, kind, _LATER)
+    last = s.last_reviews([tid, other, "tk_none"])
+    ck("a merge queue pass over a reviewer's changes leaves the reviewer's round standing",
+       list(last) == [tid] and last[tid]["id"] == two["id"] and last[tid]["fixed"] == ["F1"]
+       and [f["label"] for f in last[tid]["findings"]] == ["F3"] and "ticket" not in last[tid], last)
+    ck("no tickets, no read", s.last_reviews([]) == {})
+    s.add_review("uc_t", other, None, "h", "changes", "t", "", "reviewer", [_finding("elsewhere")], {}, kind, _T)
+    found = s.repo_findings("o/r", _T)
+    ck("repo_findings: this repo's tickets only, oldest first, with the ticket's label parts",
+       [(f["text"], f["ticket"], f["ticket_project"], f["ticket_number"], f["at"]) for f in found]
+       == [("one", tid, "uc_t", 1, _T), ("two", tid, "uc_t", 1, _T), ("three", tid, "uc_t", 1, _LATER)], found)
+    ck("repo_findings honours since, and no repo gives none", [f["text"] for f in s.repo_findings("o/r", _LATER)]
+       == ["three"] and s.repo_findings(None, _T) == []
+       and s.repo_findings("o/r", datetime(2027, 1, 1, tzinfo=timezone.utc)) == [])
+    n = (_n(sdb, "reviews"), _n(sdb, "review_findings"))
+    try:
+        s.add_review("uc_t", tid, "u", "h3", "changes", "t", "", "reviewer",
+                     [_finding("fine"), {"text": "no severity"}], {"F2": "fixed"}, kind, _LATER)
+        ck("a bad finding raises", False)
+    except KeyError:
+        ck("a round that fails half way stores nothing and marks nothing",
+           (_n(sdb, "reviews"), _n(sdb, "review_findings")) == n
+           and [f["label"] for f in s.open_findings(tid)] == ["F2", "F3"], s.open_findings(tid))
+    ck("add_review and add_check wait for the process's write lock", _waits_for_write_lock(s, lambda: s.add_check(
+       "uc_u", "tk_u", "c", "pass", "", "", "b", "", _T)) and _waits_for_write_lock(s, lambda: s.add_review(
+       "uc_u", "tk_u", None, "h", "pass", "t", "", "reviewer", [_finding("u")], {}, kind, _T)))
+    if sdb.dialect == "sqlite":
+        ck("the reads do not queue behind a writer", all(_runs_under_the_write_lock(s, call) for call in (
+           lambda: s.list_milestones("uc_t"), lambda: s.milestones_by_project(["uc_t"]),
+           lambda: s.milestone_check_results([m2]), lambda: s.milestone_acceptances([m2]),
+           lambda: s.ticket_checks(tid), lambda: s.ticket_reviews(tid), lambda: s.last_reviews([tid]),
+           lambda: s.repo_findings("o/r", _T), lambda: s.challenge_events("claude_code", "uc_t", "X"),
+           lambda: s.list_rule_proposals(), lambda: s.get_rule_proposal("rp_x"))))
+
+    print("== challenger lines ==")
+    line = ("claude_code", "sess-a", _T, "challenge_commit", "factory/ENG-2", "TEE",
+            '{"challenge": {"verdict": "FAIL"}}')
+    lines = [line,
+             ("claude_code", "sess-b", _LATER, "challenge_waived", "factory/ENG-2-fix", None, '{"challenge": 3}'),
+             ("claude_code", "sess-c", _T, "challenge_plan", "factory/ENG-20", "uc_t", None),
+             ("claude_code", "sess-d", _T, "challenge_plan", "factory/ENG-2", "uc_u", "{}")]
+    s._record_challenges(lines)
+    s._record_challenges(lines[:2])
+    ck("a line already kept is skipped", _n(sdb, "challenges") == base["challenges"] + 4)
+    ev = s.challenge_events("claude_code", "uc_t", "ENG-2")
+    ck("stamped with the project's name counts; the unstamped one of an untied session, the longer ref and "
+       "another project's do not", [(e["session"], e["challenge"], e["at"]) for e in ev]
+       == [("sess-a", {"verdict": "FAIL"}, _T)], ev)
+    s.link_session("uc_t", "sess-b")
+    ev = s.challenge_events("claude_code", "uc_t", "ENG-2")
+    ck("once its session is tied, oldest first; a challenge that is no object reads as {}",
+       [(e["session"], e["type"], e["challenge"]) for e in ev]
+       == [("sess-a", "challenge_commit", {"verdict": "FAIL"}), ("sess-b", "challenge_waived", {})], ev)
+    many = s.challenge_events_many("claude_code", [("uc_t", "ENG-2"), ("uc_u", "ENG-2"), ("uc_t", "NONE")])
+    ck("challenge_events_many gives each pair its own", len(many[("uc_t", "ENG-2")]) == 2
+       and [e["session"] for e in many[("uc_u", "ENG-2")]] == ["sess-d"] and many[("uc_t", "NONE")] == [], many)
+    ck("another source has none", s.challenge_events("other", "uc_t", "ENG-2") == [])
+
+    print("== rule proposals ==")
+    a = s.upsert_rule_proposal("o/r", "tests", "uc_t", "project", "Write it", ["ENG-1"], _LATER)
+    b = s.upsert_rule_proposal("o/r", "docs", None, "repo", "Say it", [], _T)
+    ck("a new offer is open, with every column", sorted(a) == sorted(REVIEWS["rule_proposals"][0])
+       and (a["state"], a["tickets"], a["created_at"], a["decided_at"]) == ("open", ["ENG-1"], _LATER, None)
+       and b["tickets"] == [], (a, b))
+    c_ = s.upsert_rule_proposal("o/r", "tests", "uc_u", "repo", "Write them", ["ENG-1", "ENG-2"], _LATER)
+    ck("offering it again refreshes the open one and keeps when it was made", c_["id"] == a["id"]
+       and (c_["tickets"], c_["scope"], c_["project"], c_["text"], c_["created_at"])
+       == (["ENG-1", "ENG-2"], "repo", "uc_u", "Write them", _LATER), c_)
+    ck("list_rule_proposals: open ones, oldest first", [p["id"] for p in s.list_rule_proposals()] == [b["id"], a["id"]])
+    s.decide_rule_proposal(a["id"], "accepted", None, _LATER)
+    s.decide_rule_proposal(b["id"], "dismissed", "Reworded", _LATER)
+    ck("deciding without text keeps it, with text replaces it", s.get_rule_proposal(a["id"])["text"] == "Write them"
+       and s.get_rule_proposal(b["id"])["text"] == "Reworded"
+       and s.get_rule_proposal(a["id"])["decided_at"] == _LATER)
+    ck("a decided rule is never offered again", s.upsert_rule_proposal(
+       "o/r", "tests", "uc_t", "project", "again", [], _LATER) is None)
+    ck("by state, all of them, and an unknown id", [p["id"] for p in s.list_rule_proposals("accepted")] == [a["id"]]
+       and s.list_rule_proposals() == [] and len(s.list_rule_proposals(None)) == 2
+       and s.get_rule_proposal("rp_none") is None)
+
+    print("== deleting a project ==")
+    s.record_milestone_check("uc_t", m2, 0, "pass", "", "person", "", "", _T)
+    s.accept_milestone("uc_t", m2, "Kim", None, _T)
+    s.delete_project("uc_t")
+    mine = {}
+    for t in ("milestones", "milestone_check_results", "milestone_acceptances", "ticket_checks", "reviews",
+              "review_findings"):
+        with sdb.begin() as conn:
+            mine[t] = conn.execute(text(f"SELECT count(*) FROM {t} WHERE project = 'uc_t'")).scalar()
+    ck("its milestones, results, acceptances, checks, reviews and findings go", set(mine.values()) == {0}, mine)
+    ck("another project's stay", len(s.list_milestones("uc_u")) == 2 and len(s.ticket_checks("tk_u")) == 1
+       and len(s.ticket_reviews("tk_u")) == 1 and len(s.open_findings("tk_u")) == 1)
+    ck("challenger lines and rule proposals are kept, as before", _n(sdb, "challenges") == base["challenges"] + 4
+       and len(s.list_rule_proposals(None)) == 2)
+    with s._lock:
+        have = set(s._tables_of(s.con))
+    ck("DuckDB has none of the eight tables", not (have & set(REVIEW_TABLES)), sorted(have & set(REVIEW_TABLES)))
+    s.close()
+
+
+def reviews_takeover():
+    print("== Postgres: the eight tables the old DDL made are taken over ==")
+    import ast
+    from tares import session_store
+    rev = os.path.join(os.path.dirname(session_store.__file__), "migrations", "versions",
+                       "0016_review_tables.py")
+    imported = [(getattr(n, "module", None) or "") + "|" + ",".join(a.name for a in n.names)
+                for n in ast.walk(ast.parse(open(rev).read())) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    ck("revision 0016 imports nothing from tares", not [i for i in imported if "tares" in i or i.startswith(".")]
+       and len(imported) >= 3, imported)
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        old_ddl_postgres(dsn, seed={**SEED, **REVIEWS})
+
+        def snapshot():
+            out = {}
+            with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+                for t in REVIEW_TABLES:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                                     "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
+                                     [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT {', '.join(col[0] for col in cols)} FROM {t}").fetchall()
+                    out[t] = (cols, sorted(tuple(map(str, r)) for r in rows))
+                out["indexes"] = c.execute(
+                    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND "
+                    "indexname = 'ix_challenges_branch'", [sch]).fetchall()
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the eight tables, with the sample rows, and the index",
+           {t: len(before[t][1]) for t in REVIEW_TABLES} == REVIEW_COUNTS and len(before["indexes"]) == 1,
+           before["indexes"])
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types, rows and index, is as the old code left it", snapshot() == before,
+           [t for t in before if snapshot()[t] != before[t]])
+        ck("each table's columns, types and primary key are what tables.py declares",
+           ts.shape(sdb.engine, REVIEW_TABLES) == {t: ts.declared(sdb.engine)[t] for t in REVIEW_TABLES},
+           ts.shape(sdb.engine, REVIEW_TABLES))
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        ts.step_down(sdb, "0015_ticket_pr_columns")
+        ck("a downgrade keeps the tables, rows and index", snapshot() == before
+           and ts.versions(sdb) == ["0015_ticket_pr_columns"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it leaves them as they are", snapshot() == before)
+        with sdb.begin() as c:
+            ms = {r.id: r.checks for r in c.execute(milestones_table.select())}
+        ck("Core reads the JSON the old code wrote", ms["ms_a"][0]["kind"] == "command" and ms["ms_b"] is None
+           and ms["ms_null"] is None, ms)
+
+        # a database from before the person columns and the index
+        ts.step_down(sdb, "0015_ticket_pr_columns")
+        with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+            c.execute("ALTER TABLE reviews DROP COLUMN person_id")
+            c.execute("ALTER TABLE ticket_checks DROP COLUMN person_id")
+            c.execute("DROP INDEX ix_challenges_branch")
+        sdb.upgrade()
+        ck("a missing column and the missing index are added", ts.shape(sdb.engine, REVIEW_TABLES)
+           == {t: ts.declared(sdb.engine)[t] for t in REVIEW_TABLES}
+           and ts.index_columns(sdb.engine, "challenges", "ix_challenges_branch") == ["source", "branch"])
+        ts.step_down(sdb, "0015_ticket_pr_columns")
+        with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+            c.execute("ALTER TABLE rule_proposals ADD COLUMN surprise TEXT")
+        try:
+            sdb.upgrade()
+            ck("a column the revision does not define stops the upgrade", False, ts.versions(sdb))
+        except Exception as e:
+            ck("a column the revision does not define stops the upgrade", "rule_proposals" in str(e)
+               and "surprise" in str(e) and ts.versions(sdb) == ["0015_ticket_pr_columns"], e)
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+
 if __name__ == "__main__":
     ck("settings, the accounts, the project and ticket tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
        == ["session_stations", "session_states", "project_sessions", "session_usage", "session_meters",
            "settings", "people", "api_keys", "project_members", "usecases", "usecase_objects", "usecase_log",
            "docs", "skills", "shared_skills", "catalog_sources", "github_credentials", "model_usage",
-           "tickets", "ticket_history", "ticket_numbers"])
+           "tickets", "ticket_history", "ticket_numbers", "milestones", "milestone_check_results",
+           "milestone_acceptances", "ticket_checks", "challenges", "reviews", "review_findings",
+           "rule_proposals"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -1835,6 +2227,7 @@ if __name__ == "__main__":
     accounts_copy()
     projects_copy()
     tickets_copy()
+    reviews_copy()
     accounts_methods()
     projects_methods()
     tickets_methods()
@@ -1844,5 +2237,7 @@ if __name__ == "__main__":
     tickets_takeover()
     tickets_pr_lookup()
     tickets_pr_revision()
+    reviews_methods()
+    reviews_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)
