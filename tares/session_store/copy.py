@@ -77,6 +77,13 @@ def _from_duckdb(table, row: tuple, cols: list[str]) -> dict:
     return out
 
 
+def _without_nul(row: dict) -> dict:
+    """The row without the NULs in its text, which Postgres takes none of: DuckDB and SQLite hold
+    the ones a claude_code line carried before they were dropped on the way in (TR-1707). A value
+    kept as a JSON object or list is written escaped and is left as it is."""
+    return {k: v.replace("\x00", "") if isinstance(v, str) else v for k, v in row.items()}
+
+
 def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                      local_dir: str | None = None) -> dict[str, int]:
     """Copy each session table not yet in the ledger. Returns {table: rows copied} for the tables
@@ -134,12 +141,26 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                         session_store_copies.c.table_name == table.name))
                 before = conn.execute(select(func.count()).select_from(table)).scalar_one()
                 read = 0
+                held: list[dict] = []             # rows that held a NUL, written without it
                 while True:
                     chunk = chunks()
                     if not chunk:
                         break
                     read += len(chunk)
-                    conn.execute(insert(table), chunk)
+                    if state_move:                # the one way another database's rows reach Postgres
+                        stripped = [_without_nul(r) for r in chunk]
+                        held += [s for r, s in zip(chunk, stripped) if s != r]
+                        chunk = [s for r, s in zip(chunk, stripped) if s == r]
+                    if chunk:
+                        conn.execute(insert(table), chunk)
+                # Last, so a row already here under the same key wins: SQLite may hold a reply or
+                # a command both with its NUL and without, and Postgres takes the key once.
+                for row in held:
+                    added = conn.execute(sessions_db.upsert(table).values(row)
+                                         .on_conflict_do_nothing()
+                                         .returning(*list(table.columns)[:1])).first()
+                    if added is None:
+                        read -= 1
                 if table.name == "tickets":
                     fill_pr_columns(conn)        # DuckDB has `pr` and not the two columns (TR-1614)
                 inserted = conn.execute(

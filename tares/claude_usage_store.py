@@ -129,8 +129,10 @@ class ClaudeUsageStore:
             "GROUP BY 1, 2", [*sources, SYNTHETIC, since, since]).fetchall()
         cols = ("session", "message", "replied_at", "model", "project", "subagent", "input_tokens",
                 "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
-        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows
-                if session_ingest.holds_session(self, r[0])]
+        rows = self._usage_without_nul([dict(zip(cols, r)) for r in rows
+                                        if session_ingest.holds_session(self, r[0])])
+        for r in rows:
+            r["project"] = projects.get(r["project"])
         # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
         # another version number after the prefix is left unpriced)
         def price(model, *tokens):
@@ -164,6 +166,28 @@ class ClaudeUsageStore:
             hourly.after_write(self, conn, covered)
         if not done:
             session_ingest.set_filled(self, session_ingest.USAGE_FILLED)
+
+    def _usage_without_nul(self, rows: list[dict]) -> list[dict]:
+        """The fill's replies as a posted line reads now: without NULs. DuckDB may hold lines from
+        before they were dropped (TR-1707), and Postgres takes none in text. A reply with an empty
+        id, or one of nothing but NULs, is left out, as ingest leaves it out. On SQLite an older
+        version could count a reply under its id as it was: that one is not counted a second time."""
+        db, u = self.sessions_db, session_usage.c
+        out = []
+        for r in rows:
+            raw = r["message"]
+            for k in ("message", "model", "project", "subagent"):
+                if r[k] and "\x00" in r[k]:
+                    r[k] = r[k].replace("\x00", "") or None
+            if not r["message"]:
+                continue
+            if r["message"] != raw and db.dialect == "sqlite":
+                with db.begin() as conn:
+                    if conn.execute(select(u.message).where(u.session == r["session"],
+                                                            u.message == raw)).first():
+                        continue
+            out.append(r)
+        return out
 
     def _usage_forget_project(self, uid: str) -> None:
         """A project is deleted: its replies stay, counted as the session's own."""
