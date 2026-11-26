@@ -1071,11 +1071,13 @@ def make_app() -> FastAPI:
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _read_exclude() -> dict | None:
-        """What event reads leave out: the rows of the projects the caller cannot see."""
-        hp = _hidden_projects()
-        if not hp:
+        """What event reads leave out: the rows of the projects the caller cannot see, the
+        deleted private ones among them for every caller."""
+        private, deleted = store.private_and_deleted()
+        hp = [p for p in private if not _can_see(p)]
+        if not hp and not deleted:
             return None
-        return {"ids": [p["id"] for p in hp], "names": [p["name"] for p in hp],
+        return {"ids": [p["id"] for p in hp] + sorted(deleted), "names": [p["name"] for p in hp],
                 "shared": sorted(n for n, c in runtime.catalog.sources.items()
                                  if c.connector in _SHARED_CONNECTORS)}
 

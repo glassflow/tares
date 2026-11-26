@@ -87,7 +87,12 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # queue once more, and the project page reads it twice more, plus its hand-over twice more and two
 # settings once more (home and ticket keep their counts): projects 81 to 82, project 80 to 85 on
 # Postgres, 85 to 88 on DuckDB. Reading each of them once per request is a saving for a later ticket.
-_TODAY = {"home": 105, "projects": 82, "project": 85, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1708: each read that picks a station's or a reply's project reads the deleted project ids
+# first, one statement each. On Postgres home goes 105 to 108 (the station rows twice, the replies by
+# project once), projects 82 to 84 (the station rows twice) and project 85 to 87 (the station rows
+# and the station roles). On DuckDB only the two counts that pass their budget move: project 88 to
+# 90 and ticket 27 to 28 (the ticket's station sessions).
+_TODAY = {"home": 108, "projects": 84, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
@@ -96,7 +101,7 @@ DONE_EXTRA = 4
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 88}
+_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 90, "ticket": 28}
 BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
