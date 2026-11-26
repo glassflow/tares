@@ -147,6 +147,10 @@ try:
         lifecycle.restart = real_restart
     ck("and the send step lets it through: the setting it checks again is the station's", sent == [[CX, p["prompt"]]], sent)
     ck("the station's wake file says it holds no tick", state.wake_read(CX, paths)["released"] is True)
+    state.wake_update(CX, {"released": False, "clock": 0, "n": 0}, paths)   # a station started before this version
+    old = idle_wake.plan(client, paths, CX, now=10 ** 6)
+    ck("a Codex station started before, with its wake file not released, is not told idle_wake was switched on",
+       old is not None and old["reason"].startswith("liveness") and "switched on" not in old["prompt"], old)
     L.iw_launch_note(client, CX)
     ck("a start on Codex with the setting off releases the tick it does not hold", state.wake_read(CX, paths)["released"] is True)
     real_cc = proc.at_rest

@@ -487,7 +487,9 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
         texts = "; ".join(p["text"] for p in new)
         out.update(work=True, n=0, reason=f"work: {texts}",
                    prompt=f"{work_prompt(role, texts)} {woke_on([p['key'] for p in new])} {note} Carry on from your report.")
-    elif scan["live"] and w["released"] is not True:
+    elif scan["live"] and w["released"] is not True and not proc.on_codex(s, paths):
+        # (a Codex station holds no tick to drop: the release below is for Claude Code's; its wake file is
+        # marked released by the send that follows any wake)
         # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
         out.update(n=0, reason="release: idle_wake was switched on, telling the station to drop its tick",
                    prompt=f"idle_wake was switched on. {note} Carry on from your report.")

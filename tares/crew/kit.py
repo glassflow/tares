@@ -474,6 +474,9 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
     idle any more or the crew froze since the round began, 1 it could not be restarted. Says what happened."""
     from . import lifecycle
     skill = state.stations_get(station, "role", paths=paths)
+    if skill == "helper":   # a helper works under its parent's role: its skill is that role's (as revive says)
+        from . import launch
+        skill = launch.parent_role(state.stations_get(station, "parent", paths=paths), paths)
     rc = 0
     with TaresClient(paths, client.env, client.say) as fresh:   # Tares and the settings are asked again, as in bash's subshell
         try:
