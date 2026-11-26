@@ -41,14 +41,16 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
-from . import codex_station, proc, state
+from . import codex_station, locks, proc, state
 from .errors import CrewError, LimitHeldError, NotBetweenTurnsError
 from .paths import ME, CrewPaths
 
 TOOL = "send_to_station"
 SERVER = "tares"
 MAIL, HANDING, DONE, TAKEN = "codex.mail.jsonl", "codex.mail.handing", "codex.mail.done", "codex.mail.taken"
+READ = "codex.mail.read"   # {at, idle}: the last time the station's conversation was read whole for its mail
 FACTORY = "the factory"   # the sender of a note about a message that could not be delivered
 
 
@@ -117,9 +119,16 @@ def _turns(paths: CrewPaths, station: str):
     thread = state.stations_get(station, "sessionId", paths=paths)
     if not thread or not codex_station.is_alive(paths, station):
         return None
+    found = None
     try:
         with codex_station.visit(paths, station) as wire:
-            found, _why = codex_station._thread(wire, thread, turns=True)
+            # for a moment after a turn starts a conversation cannot be read (0.171.0): look again, as _where does
+            for i in range(codex_station.READ_TRIES):
+                found, _why = codex_station._thread(wire, thread, turns=True)
+                if found is not None:
+                    break
+                if i + 1 < codex_station.READ_TRIES:
+                    time.sleep(codex_station.READ_PAUSE)
     except CrewError:
         return None
     return None if found is None else (found.get("turns") or [])
@@ -161,12 +170,15 @@ def _recipient(paths: CrewPaths, word: str) -> tuple:
     return to, ""
 
 
-def collect(paths: CrewPaths, station: str) -> int:
-    """Take the station's new `send_to_station` calls into the recipients' mail. The number taken; 0 when there
-    are none or the conversation cannot be read now (looked at again next round)."""
+def collect(paths: CrewPaths, station: str):
+    """Take the station's new `send_to_station` calls into the recipients' mail. The number taken, or None when the
+    conversation cannot be read now (looked at again next round). The caller holds the station's lock: the watch
+    and a stop never take the same call at once (a call is noted in `taken` before the next look)."""
+    if not state.stations_get(station, "sessionId", paths=paths):
+        return 0   # no conversation yet: it has sent nothing
     turns = _turns(paths, station)
     if turns is None:
-        return 0
+        return None
     taken = set(_ids(paths, station, TAKEN))
     new = [c for c in calls(turns) if c["id"] not in taken]
     for c in new:
@@ -179,7 +191,37 @@ def collect(paths: CrewPaths, station: str) -> int:
                                    "text": f"Your message {c['id']} was not delivered: {why}. "
                                            f"`{ME} roster` lists the stations of your crew."})
         _note_ids(paths, station, TAKEN, [c["id"]])
+    idle = not any(t.get("status") == "inProgress" for t in turns)
+    state.write_json(paths.station_file(station, READ), {"at": state.utc_stamp(), "idle": idle}, mode=0o600)
     return len(new)
+
+
+def settled(paths: CrewPaths, station: str) -> bool:
+    """Has everything the station could have sent been read? True when its conversation was last read whole while
+    no turn ran, after the last prompt it was handed: it has sent nothing since (it only sends in a turn)."""
+    read = state.read_json(paths.station_file(station, READ), None)
+    if not (isinstance(read, dict) and read.get("idle") is True and isinstance(read.get("at"), str)):
+        return False
+    row = state.stations_load(paths).get(station)
+    rec = row.get("codex") if isinstance(row, dict) else None
+    turn_at = rec.get("turn_at") if isinstance(rec, dict) else None
+    # strictly after: both are to the second, and a read in the second of the last prompt may have come before it
+    return not turn_at or read["at"] > str(turn_at)
+
+
+def before_retire(paths: CrewPaths, station: str) -> None:
+    """Take the station's last messages before it is retired, or refuse the retire: a retired station is never
+    read again, so a message it sent that is not taken now would be lost. Refused when its conversation cannot be
+    read now and it may have sent something since it was last read whole (see `settled`). The caller holds the
+    station's lock."""
+    if collect(paths, station) is not None or settled(paths, station):
+        return
+    running = codex_station.is_alive(paths, station)
+    raise CrewError(f"the messages {station} sent since the factory last read them cannot be read now "
+                    f"({'its conversation does not answer' if running else 'it is not running'}), and a retired "
+                    f"station is never read again: not retiring it. "
+                    + ("Try again in a moment" if running else f"`{ME} revive {station}`, then retire it again")
+                    + f", or `{ME} retire {station} --drop-mail` to retire it and lose them.")
 
 
 # ---------- delivery ----------
@@ -271,7 +313,6 @@ def deliver(client, paths: CrewPaths, station: str) -> int:
 
 def step(paths: CrewPaths) -> None:
     """The watch's mail step: collect from every running Codex station, then deliver to each with mail."""
-    from . import locks
     from .client import TaresClient
     if not paths.stations.is_file():
         return
@@ -279,9 +320,13 @@ def step(paths: CrewPaths) -> None:
     mine = [s for s, r in rows.items() if isinstance(r, dict) and r.get("status") != "retired" and proc.on_codex(s, paths)]
     if not mine:
         return
+    from .errors import StationLockedError
     for s in mine:
         try:
-            collect(paths, s)
+            with locks.held_station_lock(s, paths):   # a stop of it takes its calls under the same lock
+                collect(paths, s)
+        except StationLockedError:
+            continue   # another command is starting or stopping it, and takes its calls itself
         except (CrewError, OSError) as e:
             print(f"{ME}: could not read the messages {s} sent: {e}; will look again next round", flush=True)
     todo = [s for s in mine if waiting(paths, s) or paths.station_file(s, HANDING).exists()]

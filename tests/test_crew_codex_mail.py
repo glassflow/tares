@@ -15,6 +15,9 @@ a turn, as the model would, with the answer Tares gives.
     refused is not taken;
  d. a stopped station keeps its mail; once it runs again it gets it, once;
  d2. a sender retired before the next round: what it sent is taken at its stop, and delivered;
+ d3. a retire whose last read fails is refused, and the station kept; a station that is down is retired only
+    when everything it sent was read after its last prompt, else the person revives it or says --drop-mail;
+ d4. two rounds at once (two processes) take a call once: collection runs under the sender's lock;
  e. delivered once after a crash between the hand-over and its note: a prompt in the conversation that holds the
     whole batch is taken as delivered and not handed again; a batch whose prompt is not there is handed again,
     whole, even when one of its ids is quoted in another prompt;
@@ -29,6 +32,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -258,6 +262,66 @@ round_()
 rested(REV)
 round_()
 ck("and the recipient gets it", codex_mail.waiting(paths, REV) == [] and box[-1]["id"] in codex_mail.delivered(paths, REV))
+rested(REV)
+
+print("d3. a retire never loses what its station sent (the review of PR 983)")
+SND, SND2 = "shop-build-m2", "shop-build-m3"
+err = start_with(SND, "builder", sends(("reviewer", "[TF:DONE] shop T9: handed over", QUEUED)))
+rested(SND)
+round_()   # its boot turn's message is taken, while it is idle: everything it sent so far is read
+rested(REV)
+cs.hand(paths, SND, "Your last turn: hand over.")   # one more message, not read yet
+rested(SND)
+before = len(codex_mail.inbox(paths, REV))
+real_turns = codex_mail._turns
+codex_mail._turns = lambda *_a: None   # its conversation cannot be read now
+try:
+    _, refused, _ = quietly(lifecycle.retire, client, paths, [SND], claude_bin="")
+finally:
+    codex_mail._turns = real_turns
+row = state.stations_load(paths)[SND]
+ck("a final read that fails refuses the retire: the station stays, and says how to go on",
+   err is None and refused and "not retiring it" in refused and "--drop-mail" in refused
+   and row.get("status") != "retired" and cs.is_alive(paths, SND) and len(codex_mail.inbox(paths, REV)) == before, refused)
+_, err, _ = quietly(lifecycle.retire, client, paths, [SND], claude_bin="")
+box = codex_mail.inbox(paths, REV)
+ck("once it can be read, the retire takes the last message first", err is None and len(box) == before + 1
+   and box[-1]["from"] == SND and state.stations_load(paths)[SND].get("status") == "retired", (err, len(box), before))
+err = start_with(SND2, "builder", sends(("reviewer", "[TF:FYI] from m3", QUEUED)))
+rested(SND2)
+time.sleep(1.1)   # a read in the second of its last prompt does not count as after it
+round_()
+os.kill(state.stations_load(paths)[SND2]["codex"]["pid"], signal.SIGKILL)   # down, after everything it sent was read
+until(lambda: not cs.is_alive(paths, SND2))
+_, err, _ = quietly(lifecycle.retire, client, paths, [SND2], claude_bin="")
+ck("a station that is down is retired when everything it sent was read after its last prompt", err is None
+   and state.stations_load(paths)[SND2].get("status") == "retired", err)
+state.stations_put(SND2, {"status": "active"}, paths)
+state.stations_put(SND2, {"codex": {**state.stations_load(paths)[SND2]["codex"], "turn_at": "2999-01-01T00:00:00Z"}}, paths)
+_, refused, _ = quietly(lifecycle.retire, client, paths, [SND2], claude_bin="")
+_, err, _ = quietly(lifecycle.retire, client, paths, [SND2, "--drop-mail"], claude_bin="")
+ck("one that is down and was handed a prompt after its last read is refused, unless the person says --drop-mail",
+   refused and "revive" in refused and err is None and state.stations_load(paths)[SND2].get("status") == "retired",
+   (refused, err))
+round_()
+rested(REV)
+round_()
+
+print("d4. the watch and a stop never take the same call twice")
+SND3 = "shop-build-m4"
+start_with(SND3, "builder", sends(("reviewer", "[TF:FYI] taken once", QUEUED)))
+rested(SND3)
+prog = ("import sys, json; sys.path.insert(0, %r)\n"
+        "from tares.crew import codex_mail\nfrom tares.crew.paths import CrewPaths\n"
+        "codex_mail.step(CrewPaths.at(%r))\n") % (str(ROOT), str(paths.home))
+procs = [subprocess.Popen([sys.executable, "-c", prog], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ)
+         for _ in range(2)]
+for pr in procs:
+    pr.wait(120)
+ids = [m["id"] for m in codex_mail.inbox(paths, REV) if m["from"] == SND3]
+ck("two rounds at once (two processes) queue its message once", len(ids) == 1 and len(set(ids)) == 1, ids)
+rested(REV)
+round_()
 rested(REV)
 
 print("e. once, after a crash between the hand-over and its note")
