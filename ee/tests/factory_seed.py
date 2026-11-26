@@ -66,7 +66,7 @@ SHAPE = {
         "agent_runs", "brain_repo_folders", "cursors", "dispatch_deliveries", "dispatch_log",
         "dispatch_projects", "finding_feedback", "guardrail_pairs", "guardrail_rules",
         "handover_overrides", "incident_log", "incident_notes", "incidents", "mcp_servers",
-        "milestone_acceptances", "pending_challenges", "pending_memory", "pending_writeback", "project_integrations",
+        "milestone_acceptances", "pending_memory", "pending_writeback", "project_integrations",
         "project_merge_method", "project_secrets", "run_projects", "services",
         "session_archive_parts", "session_store_copies", "shared_skills", "signoffs", "skills",
         "subscriptions", "trigger_state", "watch_state",

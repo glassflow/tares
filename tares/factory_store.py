@@ -15,7 +15,7 @@ from sqlalchemy import (Text, and_, case, delete, func, insert, null, or_, selec
                         update)
 
 from . import claude_usage_hourly as hourly
-from . import session_ingest
+from . import metrics, session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
 from .session_store.tables import (project_sessions, session_commands, session_messages,
@@ -56,17 +56,6 @@ FACTORY_SCHEMA = [
       parent      TEXT,
       project     TEXT,
       seen_at     TIMESTAMPTZ
-    )""",
-    # Challenger lines the sessions database would not take (TR-1615): `challenges` is there, and
-    # the challenger sends a line once, so it waits here until that database takes writes again.
-    """CREATE TABLE IF NOT EXISTS pending_challenges (
-      source        TEXT,
-      key_value     TEXT,
-      event_time    TIMESTAMPTZ,
-      event_type    TEXT,
-      branch        TEXT,
-      tares_project TEXT,
-      payload       JSON
     )""",
     # Assumptions a builder made so it did not block (TR-433): numbered per project, never
     # reused; open until the orchestrator confirms them with the person (kept or overturned).
@@ -1685,38 +1674,30 @@ class FactoryStore:
                 conn.execute(self.sessions_db.upsert(challenges_table).on_conflict_do_nothing(),
                              chunk)
 
-    _challenges_waiting = False          # True once a line was put aside; the next open looks anyway
-
-    def _challenges_put_aside(self, rows: list[tuple]) -> None:
-        """Keep lines `_record_challenges` could not write, in the old state database."""
-        with self._swrite:
-            self.sc.executemany(
-                "INSERT INTO pending_challenges (source, key_value, event_time, event_type, "
-                "branch, tares_project, payload) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
-        self._challenges_waiting = True
-
-    def _challenges_drain(self) -> None:
-        """Write the lines put aside into `challenges`. Raises when that database still takes no
-        write, and the lines stay."""
-        with self._swrite:
-            rows = self.sc.execute(
-                "SELECT source, key_value, event_time, event_type, branch, tares_project, "
-                "payload FROM pending_challenges").fetchall()
-            if rows:
-                self._record_challenges(rows)
-                self.sc.execute("DELETE FROM pending_challenges")
-        self._challenges_waiting = False
+    def _challenges_not_kept(self, rows: list[tuple], ex: Exception) -> None:
+        """Say that `_record_challenges` could not write `rows` (its shape): session and commit
+        ids and the error's type only, never the payload or the error's text, which can quote the
+        verdict. On the factory edition they are lost and counted."""
+        if not self._factory_writes():
+            print(f"taresd: keeping {len(rows)} challenger line(s) failed ({type(ex).__name__}); "
+                  "they are copied at the next start", flush=True)
+            return
+        named = []
+        for row in rows[:20]:
+            try:
+                sha = json.loads(row[6])["challenge"].get("sha")
+            except (ValueError, TypeError, KeyError, AttributeError):
+                sha = None
+            named.append(f"session {_loggable(row[1] or 'unknown')[:80]} commit "
+                         f"{_loggable(sha or 'none')[:40]}")
+        metrics.challenges_lost(len(rows))
+        log.warning("%d challenger line(s) lost, the sessions database did not take them (%s): %s",
+                    len(rows), type(ex).__name__, "; ".join(named))
 
     def _challenges_fill(self) -> None:
         """Copy challenger lines stored before `challenges` existed, or while a write to it
         failed. One scan of the events at open, then only the lines `append` records. The factory
-        edition scans once and records it (`challenges_filled`, TR-1613). Lines put aside are
-        written first, at every open."""
-        try:
-            self._challenges_drain()
-        except Exception as ex:
-            self._challenges_waiting = True
-            log.warning("the challenger lines put aside are still waiting: %s", ex)
+        edition scans once and records it (`challenges_filled`, TR-1613)."""
         if session_ingest.filled_once(self, session_ingest.CHALLENGES_FILLED):
             return
         rows = self.con.execute(

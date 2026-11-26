@@ -45,7 +45,6 @@ Cases:
                      (TR-1615): DuckDB's rows arrive in SQLite, null and empty kept
   reviews_methods    the Store's milestone, check, review, finding, challenger and rule proposal
                      methods keep their answers; deleting a project removes its rows
-  reviews_put_aside  a challenger line put aside is written at the next start
   reviews_takeover   Postgres: the eight tables the old DDL made are taken over, rows untouched; a
                      missing column and index are added, an extra column stops the upgrade
 """
@@ -2128,33 +2127,6 @@ def reviews_methods():
     s.close()
 
 
-def reviews_put_aside():
-    print("== a challenger line put aside is written at the next start ==")
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.duckdb")
-    s = Store(path, state_dsn="" if not HARNESS else None)
-    if HARNESS:                       # a second Store here would be a schema of its own
-        reopen = None
-    else:
-        reopen = path
-    s.set_setting("edition", "factory")
-    line = ("claude_code", "s1", _T, "challenge_commit", "factory/X-1", None, '{"challenge": {"v": 1}}')
-    s._challenges_put_aside([line, line])
-    with s._sread:
-        waiting = s.sc.execute("SELECT count(*) FROM pending_challenges").fetchone()[0]
-    ck("it waits in the old state database, not in challenges", waiting == 2 and _n(s.sessions_db, "challenges") == 0)
-    if reopen:
-        s.close()
-        s = Store(reopen, state_dsn="")
-    else:
-        s._challenges_fill()
-    with s._sread:
-        waiting = s.sc.execute("SELECT count(*) FROM pending_challenges").fetchone()[0]
-    ck("the start writes it once, though the factory's one-time fill has run", waiting == 0
-       and _n(s.sessions_db, "challenges") == 1, (waiting, _n(s.sessions_db, "challenges")))
-    s.close()
-
-
 def reviews_takeover():
     print("== Postgres: the eight tables the old DDL made are taken over ==")
     import ast
@@ -2266,7 +2238,6 @@ if __name__ == "__main__":
     tickets_pr_lookup()
     tickets_pr_revision()
     reviews_methods()
-    reviews_put_aside()
     reviews_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)
