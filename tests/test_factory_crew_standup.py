@@ -59,9 +59,10 @@ async def main():
         with store.sessions_db.begin() as c:
             for t in tickets:
                 c.execute(update(history_t).where(history_t.c.ticket == ids[t]).values(changed_at=long_ago))
-        with store._swrite:
+        from tares.session_store.tables import desk_items as desk_t
+        with store.sessions_db.begin() as c:
             for q in desk_questions:
-                store.sc.execute("UPDATE desk_items SET created_at = ? WHERE question = ?", [long_ago, q])
+                c.execute(update(desk_t).where(desk_t.c.question == q).values(created_at=long_ago))
         factory_home.clear_cache()   # written to the store directly, past the page's 5 s (TR-1630)
 
     async def standup(cx):

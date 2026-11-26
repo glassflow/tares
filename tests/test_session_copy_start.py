@@ -23,6 +23,8 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import duckdb
+
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
@@ -189,17 +191,18 @@ def split_crews_after_a_failed_start():
         print("  skip  TARES_TEST_PG is not set")
         return
     d, path = older_cell()
-    s = Store(path, state_dsn="")
     t = datetime(2026, 11, 19, 9, 0, 0, tzinfo=timezone.utc)
-    with s._lock:
-        # one person's crew recorded without its machine and again with one: one crew (TR-1223)
-        s.con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
-        s.con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
-                      [t + timedelta(days=1), t + timedelta(days=2)])
-    with s.sessions_db.begin() as c:                   # the station is in the session store, as a cell
-        c.execute(text("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', "
-                       "'crew-orch', 'p1', :t, 'cb')"), {"t": t})   # that ran on SQLite has it
-    close(s)
+    con = duckdb.connect(path)                          # the file as an older release left it
+    for stmt in ts._old_ddl(["crews"]):                 # a Store no longer makes crews in DuckDB
+        con.execute(stmt)
+    # one person's crew recorded without its machine and again with one: one crew (TR-1223)
+    con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
+    con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
+                [t + timedelta(days=1), t + timedelta(days=2)])
+    con.execute("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', ?, 'cb')",
+                [t])
+    con.execute("CHECKPOINT")
+    con.close()
     with pg_schema() as dsn:
         orig = state_db.move
         state_db.move = _fail_move

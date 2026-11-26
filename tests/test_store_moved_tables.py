@@ -49,18 +49,28 @@ Cases:
                      missing column and index are added, an extra column stops the upgrade
   tickets_pr_guard   the fill of pr_repo and pr_number (the live one and revision 0015's frozen copy) leaves
                      a row whose pr changes between its read and its write
+  crew_copy          the decision, question and crew tables (TR-1616): DuckDB's rows arrive in SQLite
+                     with lists parsed (null and blank read as []), and numbering goes on from them
+  crew_methods       the Store's assumption, desk, decision, answer, told, hand-over, question, grant,
+                     memory line and crew methods keep their answers and number once each, also with
+                     several processes at once; deleting a project removes its rows
+  crew_takeover      Postgres: the twelve tables the old DDL made are taken over, rows untouched; a new
+                     database has the old defaults, constraint and index
 """
+import copy
 import os
 import re
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import duckdb  # noqa: E402
 from sqlalchemy import Column, Index, Integer, MetaData, Table, Text, event, inspect, text  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
 from old_ddl import _T, OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
@@ -71,7 +81,10 @@ from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_le
 from tares.session_store.migrations.frozen import pr_columns as frozen_pr  # noqa: E402
 from tares.session_store.pr_columns import fill_pr_columns  # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
+from tares.session_store.tables import answers as answers_table  # noqa: E402
 from tares.session_store.tables import api_keys as api_keys_table  # noqa: E402
+from tares.session_store.tables import crews as crews_table  # noqa: E402
+from tares.session_store.tables import desk_items as desk_table  # noqa: E402
 from tares.session_store.tables import milestones as milestones_table  # noqa: E402
 from tares.session_store.tables import people as people_table  # noqa: E402
 from tares.session_store.tables import project_members as members_table  # noqa: E402
@@ -80,6 +93,7 @@ from tares.session_store.tables import ticket_history as history_table  # noqa: 
 from tares.session_store.tables import ticket_numbers as numbers_table  # noqa: E402
 from tares.session_store.tables import tickets as tickets_table  # noqa: E402
 from tares.session_store.tables import usecases as projects_table  # noqa: E402
+from tares.session_store.tables import waiting_told as told_table  # noqa: E402
 from tares.session_store.takeover import TakeoverError, takeover  # noqa: E402
 from tares.session_store.types import JSONText  # noqa: E402
 from tares.store import Store  # noqa: E402
@@ -2266,6 +2280,737 @@ def tickets_pr_guard():
                 _drop_schema(sch)
 
 
+# ── decisions, questions and crew tables (TR-1616) ──────────────────────────
+_LATEST = datetime(2026, 11, 22, 9, 0, 0, tzinfo=timezone.utc)
+
+CREW = {
+    "assumptions": (("id", "project", "number", "question", "choice", "why", "affects", "tickets", "state",
+                     "words", "batch", "made_by", "made_role", "made_at", "decided_at", "person_id"), [
+        ("as_1", "uc_demo", 1, "q1", "c", "w", None, '["ENG-1"]', "open", None, None, "builder", "builder",
+         _LATER, None, "p_kim"),
+        ("as_2", "uc_demo", 2, "q2", "c", "w", "", None, "kept", "yes", "b1", None, None, _T, _LATER, None),
+        ("as_3", "uc_demo", None, "q3", None, None, None, "[]", "open", None, None, None, None, None, None, None),
+    ]),
+    "desk_items": (("id", "number", "project", "question", "context", "options", "recommendation", "why",
+                    "blocks", "tickets", "blocking", "asked_by", "assumptions", "state", "reason", "created_at",
+                    "closed_at", "station", "command", "person_id", "to_person_id"), [
+        ("dk_1", 1, "uc_demo", "ship?", None, '["yes", "no"]', "yes", "because", None, '["ENG-1"]', True, "orch",
+         '["A1"]', "open", None, _T, None, None, None, "p_kim", None),
+        ("dk_2", 2, None, "cell wide", None, None, None, None, None, None, None, None, None, "answered", "ok",
+         _T, _LATER, "st", "ls", None, "p_kim"),
+    ]),
+    "decisions": (("id", "project", "desk_item", "question", "words", "choice", "standing", "scope", "matched",
+                   "session", "granted", "tickets", "decided_at", "via", "person_id"), [
+        ("dc_1", "uc_demo", "dk_1", "ship?", "yes", "yes", True, "project", True, "s1", False, '["ENG-1"]', _T,
+         None, "p_kim"),
+        ("dc_2", None, None, "q", "w", None, None, "factory", None, None, None, None, _LATER, "console", None),
+        ("dc_3", "uc_demo", "dk_gone", "q", "w", None, False, "project", False, None, False, "[]", None, None, None),
+    ]),
+    "handovers": (("project", "repo", "handed_by", "handed_at", "repos", "autonomy", "person_id", "crew",
+                   "override_reason", "override_at", "override_person_id"), [
+        ("uc_demo", "o/r", "spec", _T, '[{"path": "o/r", "name": null}, {"path": "o/s", "name": "s"}]', "ask",
+         "p_kim", "crew", "late", _T, None),
+        ("uc_old", "o/old", None, None, None, None, None, None, None, None, None),
+    ]),
+    "grants": (("id", "kind", "project", "holder_person_id", "words", "given_by", "given_at", "areas",
+                "consents", "state", "needs_lead"), [
+        ("G2", "project", "uc_demo", None, "push", "Kim", _T, '["o/r"]', '[{"person_id": "p_kim", "at": "x"}]',
+         "waiting", True),
+        ("G10", "team", None, None, "read", "Kim", _LATER, "", None, "active", None),
+    ]),
+    "pending_memory": (("id", "scope", "line", "attempts", "last_error", "created_at", "tried_at"), [
+        ("pm_1", "factory", "- line", 3, "down", _T, _LATER),
+    ]),
+    "crews": (("id", "name", "person_id", "machine", "first_seen", "last_seen"), [
+        ("cr_1", "crew", "p_kim", "laptop", _T, _LATER),
+        ("cr_2", "crew", "p_null", "", _T, None),
+    ]),
+    "spec_questions": (("project", "id", "to_person_id", "repo", "text", "asked_by", "asked_at", "answer",
+                        "answered_by", "answered_at", "state", "via"), [
+        ("uc_demo", "Q1", "p_kim", "o/r", "why?", None, _T, "because", "p_kim", _LATER, "answered", "console"),
+        ("uc_demo", "Q2", "p_kim", "o/r", "how?", "p_kim", _LATER, None, None, None, "open", None),
+    ]),
+    "signoffs": (("project", "repo", "person_id", "at", "via"), [("uc_demo", "o/r", "p_kim", _T, None)]),
+    "handover_overrides": (("project", "at", "reason", "person_id", "handed_by"), [
+        ("uc_demo", _T, "late", "p_kim", "spec"),
+        ("uc_demo", None, "older", None, None),
+    ]),
+    "answers": (("id", "item", "kind", "project", "ask", "choice", "said", "via", "person_id", "answered_at"), [
+        ("an_1", "question:D1", "question", "uc_demo", "ship?", "yes", "yes", "console", "p_kim", _LATER),
+        ("an_2", "grant:G2", "grant", None, "push", None, "ok", "feed", None, _T),
+    ]),
+    "waiting_told": (("person_id", "item", "told_at", "sent", "ask", "channel", "ts", "seq", "closed"), [
+        ("p_kim", "*", _T, False, None, None, None, None, None),
+        ("p_kim", "question:D1", _T, True, "ship?", "C1", "1.5", 0, None),
+    ]),
+}
+CREW_COUNTS = {t: len(rows) for t, (_, rows) in CREW.items()}
+CREW_NAMES = list(CREW)
+
+
+def crew_copy():
+    print("== the decision, question and crew tables are copied from DuckDB at the first start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old_ddl_duckdb(con, seed={**SEED, **ACCOUNTS, **CREW})
+    # a file from before the later columns
+    con.execute("ALTER TABLE grants DROP COLUMN needs_lead")
+    con.execute("ALTER TABLE spec_questions DROP COLUMN via")
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    with s.sessions_db.begin() as c:
+        ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger counts each table as DuckDB held it", {t: ledger.get(t) for t in CREW_NAMES} == CREW_COUNTS,
+       ledger)
+    ck("the rows are there", {t: _n(s.sessions_db, t) for t in CREW_NAMES} == CREW_COUNTS,
+       {t: _n(s.sessions_db, t) for t in CREW_NAMES})
+    a = s.list_assumptions("uc_demo")
+    ck("assumptions: by number, one with none last; tickets parsed, null and [] as []; affects null as ''",
+       [(x["id"], x["tickets"], x["affects"]) for x in a]
+       == [("as_1", ["ENG-1"], ""), ("as_2", [], ""), ("as_3", [], "")], a)
+    ck("their times are UTC datetimes and their person is named", a[0]["made_at"] == _LATER
+       and a[0]["made_at"].utcoffset().total_seconds() == 0 and a[0]["person"]["name"] == "Kim", a[0])
+    dk = {x["id"]: x for x in s.list_desk(state=None)}
+    ck("desk items: lists parsed, null as [], null flag False, null text ''",
+       (dk["dk_1"]["options"], dk["dk_1"]["assumptions"], dk["dk_1"]["blocking"], dk["dk_1"]["context"])
+       == (["yes", "no"], ["A1"], True, "")
+       and (dk["dk_2"]["options"], dk["dk_2"]["tickets"], dk["dk_2"]["assumptions"], dk["dk_2"]["blocking"],
+            dk["dk_2"]["blocks"]) == ([], [], [], False, ""), dk)
+    ck("a closed item keeps its closing time", dk["dk_2"]["closed_at"] == _LATER and dk["dk_1"]["closed_at"] is None)
+    dc = s.list_decisions(None)
+    ck("decisions: newest first, one with no time last; label from its desk item only",
+       [(x["id"], x["label"], x["standing"], x["tickets"]) for x in dc]
+       == [("dc_2", None, False, []), ("dc_1", "D1", True, ["ENG-1"]), ("dc_3", None, False, [])], dc)
+    h = s.get_handover("uc_demo")
+    ck("the hand-over arrives with its repos parsed and its override log, the entry with no time last",
+       h["repos"] == [{"path": "o/r", "name": None}, {"path": "o/s", "name": "s"}] and h["at"] == _T
+       and h["overridden"] and [o["reason"] for o in h["overrides"]] == ["late", "older"], h)
+    ck("a hand-over from before `repos` reads its one repo", s.get_handover("uc_old")["repos"]
+       == [{"path": "o/old", "name": None}])
+    g = s.all_grant_rows()
+    ck("grants: by number (G10 after G2), blank and null lists as [], a column the file lacks is False",
+       [(x["id"], x["areas"], x["consents"], x["needs_lead"]) for x in g]
+       == [("G2", ["o/r"], [{"person_id": "p_kim", "at": "x"}], False), ("G10", [], [], False)], g)
+    ck("the waiting memory line arrives", [(x["id"], x["attempts"], x["created_at"], x["tried_at"])
+       for x in s.list_pending_memory()] == [("pm_1", 3, _T, _LATER)])
+    cr = s.list_crews()
+    ck("crews: newest activity first, one never seen again last", [(x["id"], x["machine"]) for x in cr]
+       == [("cr_1", "laptop"), ("cr_2", "")] and cr[0]["person"]["name"] == "Kim", cr)
+    q = s.list_spec_questions("uc_demo")
+    ck("questions arrive; a column the file lacks is None",
+       [(x["id"], x["state"], x["via"], x["answered_at"]) for x in q]
+       == [("Q1", "answered", None, _LATER), ("Q2", "open", None, None)], q)
+    ck("the answers and what was told arrive", s.last_answer(["question:D1"])["choice"] == "yes"
+       and s.told_items("p_kim") == {"*", "question:D1"}
+       and s.open_told("p_kim") == [{"item": "question:D1", "channel": "C1", "ts": "1.5"}],
+       (s.told_items("p_kim"), s.open_told("p_kim")))
+    with s._lock:
+        n = [s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in CREW_NAMES]
+    ck("DuckDB still has its rows: nothing is deleted there", n == [CREW_COUNTS[t] for t in CREW_NAMES], n)
+    later = s.add_desk_item(None, "after the copy", "", [], "", "", "", [], False, "", [], _LATEST)
+    ck("numbering goes on from the copied rows", later["number"] == 3
+       and s.add_grant_row("team", "w")["id"] == "G11"
+       and s.add_assumption("uc_demo", "q", "c", "w", "", [], "", "", _T)["number"] == 3
+       and s.add_spec_question("uc_demo", "p_kim", "o/r", "t", None, _T)["id"] == "Q3", later)
+    s.close()
+    s = Store(path, state_dsn="")
+    ck("a second start copies nothing: what was made after the copy is kept",
+       s.get_desk_item("D3") is not None and _n(s.sessions_db, "desk_items") == 3
+       and _n(s.sessions_db, "handover_overrides") == 2)
+    s.close()
+
+
+def _tz(name):
+    if name is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = name
+    if hasattr(time, "tzset"):
+        time.tzset()
+
+
+def crew_methods():
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    sdb = s.sessions_db
+    s.create_project("uc_t", "custom", "Tee", {})
+    s.create_project("uc_u", "custom", "U", {})
+    base = {t: _n(sdb, t) for t in CREW_NAMES}
+    kim = s.create_person("Kim")["id"]
+    ann = s.create_person("Ann")["id"]
+
+    print("== assumptions ==")
+    a1 = s.add_assumption("uc_t", "q1", "c1", "w1", "", [], "", "", _LATER, person_id="")
+    a2 = s.add_assumption("uc_t", "q2", "c2", "w2", "api", ["ENG-1"], "builder-1", "builder", _T, person_id=kim)
+    b1 = s.add_assumption("uc_u", "qu", "c", "w", "", ["ENG-1"], "b", "builder", _T)
+    ck("numbered per project, with every field; empty values read as empty or None",
+       [(a1["number"], a1["label"]), (a2["number"], a2["label"]), (b1["number"], b1["label"])]
+       == [(1, "A1"), (2, "A2"), (1, "A1")] and (a1["affects"], a1["tickets"], a1["state"], a1["made_by"],
+       a1["made_role"], a1["person"], a1["words"], a1["batch"], a1["decided_at"])
+       == ("", [], "open", None, None, None, None, None, None)
+       and a2["person"] == {"id": kim, "name": "Kim"} and a2["by_label"] == "Kim (builder-1)"
+       and a2["made_at"] == _T, (a1, a2, b1))
+    ck("list_assumptions by number, by state, by ticket (exact), of one project",
+       [x["id"] for x in s.list_assumptions("uc_t")] == [a1["id"], a2["id"]]
+       and [x["id"] for x in s.list_assumptions("uc_t", ticket="ENG-1")] == [a2["id"]]
+       and s.list_assumptions("uc_t", ticket="eng-1") == [] and s.list_assumptions("uc_t", state="kept") == [])
+    ck("open_assumptions: oldest first, ties by project then number, without the person looked up",
+       [x["id"] for x in s.open_assumptions() if x["project"] in ("uc_t", "uc_u")]
+       == [a2["id"], b1["id"], a1["id"]] and "person_id" in s.open_assumptions()[0])
+    ck("get_assumption by A2, a2, 2 and id, in its project only",
+       [s.get_assumption("uc_t", r)["id"] for r in ("A2", "a2", " 2 ", a2["id"])] == [a2["id"]] * 4
+       and s.get_assumption("uc_u", a2["id"]) is None and s.get_assumption("uc_t", "A9") is None
+       and s.get_assumption("uc_t", None) is None and s.get_assumption("uc_t", "") is None)
+    s.decide_assumption(a1["id"], "kept", "fine", "b7", _LATEST)
+    got = s.get_assumption("uc_t", "A1")
+    ck("decide_assumption changes that one", (got["state"], got["words"], got["batch"], got["decided_at"])
+       == ("kept", "fine", "b7", _LATEST) and [x["id"] for x in s.list_assumptions("uc_t", "open")] == [a2["id"]],
+       got)
+
+    print("== the desk ==")
+    n0 = max([x["number"] for x in s.list_desk(state=None)], default=0)
+
+    def desk(project, question, blocking, at, **more):
+        return s.add_desk_item(project, question, more.pop("context", ""), more.pop("options", None),
+                               "rec", "why", more.pop("blocks", ""), more.pop("tickets", None), blocking,
+                               more.pop("asked_by", ""), more.pop("assumptions", None), at, **more)
+
+    d1 = desk("uc_t", "one", False, _T)
+    d2 = desk("uc_u", "two", True, _LATER, options=["a", "b"], tickets=["ENG-1"], assumptions=["A1"],
+              person_id=kim, to_person_id=ann, station="st", command="ls", asked_by="orch", context="ctx",
+              blocks="all")
+    d3 = desk(None, "three", True, _T, station="", command="", person_id="", to_person_id="")
+    d4 = desk("uc_t", "four", False, _T)
+    ck("numbered once for the cell", [x["number"] for x in (d1, d2, d3, d4)] == [n0 + 1, n0 + 2, n0 + 3, n0 + 4]
+       and d1["label"] == f"D{n0 + 1}")
+    ck("an item with nothing given: empty lists, '' texts, None the rest",
+       (d1["options"], d1["tickets"], d1["assumptions"], d1["context"], d1["blocks"], d1["asked_by"],
+        d1["blocking"], d1["state"], d1["reason"], d1["closed_at"], d1["to_person"], d1["person"])
+       == ([], [], [], "", "", None, False, "open", None, None, None, None)
+       and (d3["station"], d3["command"], d3["to_person_id"]) == (None, None, None), d1)
+    ck("an item with everything", (d2["options"], d2["tickets"], d2["assumptions"], d2["context"], d2["blocks"],
+       d2["blocking"], d2["station"], d2["command"], d2["to_person"], d2["person"], d2["to_person_id"],
+       d2["created_at"]) == (["a", "b"], ["ENG-1"], ["A1"], "ctx", "all", True, "st", "ls",
+       {"id": ann, "name": "Ann"}, {"id": kim, "name": "Kim"}, ann, _LATER), d2)
+    ck("get_desk_item by id, D3, d3 and 3; unknown, blank and None give None",
+       [s.get_desk_item(r)["id"] for r in (d3["id"], f"D{n0 + 3}", f"d{n0 + 3}", str(n0 + 3))] == [d3["id"]] * 4
+       and s.get_desk_item("D999") is None and s.get_desk_item("") is None and s.get_desk_item(None) is None)
+    ck("list_desk: blocking first, then oldest, ties by number",
+       [x["id"] for x in s.list_desk()] == [d3["id"], d2["id"], d1["id"], d4["id"]],
+       [x["question"] for x in s.list_desk()])
+    ck("by project", [x["id"] for x in s.list_desk(project="uc_t")] == [d1["id"], d4["id"]])
+    try:
+        _tz("Asia/Kolkata")
+        s.close_desk_item(d1["id"], "withdrawn", "moot", _LATER)
+        s.close_desk_item(d4["id"], "answered", None, _LATEST)
+        got = s.get_desk_item(d1["id"])
+        hours = got["closed_at"].utcoffset().total_seconds() / 3600
+        if sdb.dialect == "sqlite":
+            ck("closed_at reads in this machine's zone, as DuckDB gave it: the crew compares it as text",
+               hours == 5.5 and str(got["closed_at"]).startswith("2026-11-21 17:30:00+05:30"),
+               str(got["closed_at"]))
+        ck("and it is the same instant", got["closed_at"] == _LATER and got["created_at"] == _T,
+           (got["closed_at"], got["created_at"]))
+    finally:
+        _tz(None)
+    ck("close_desk_item sets state, reason and time", (got["state"], got["reason"]) == ("withdrawn", "moot"), got)
+    ck("by state; state None is every item", [x["id"] for x in s.list_desk("withdrawn")] == [d1["id"]]
+       and len(s.list_desk(state=None, project="uc_t")) == 2 and len(s.list_desk()) == 2)
+    ck("closed_since keeps what closed at or after it",
+       [x["id"] for x in s.list_desk(None, closed_since=_LATER)] == [d1["id"], d4["id"]]
+       and [x["id"] for x in s.list_desk(None, closed_since=_LATEST)] == [d4["id"]])
+    unsaid, said = desk("uc_n", "unsaid", None, _T), desk("uc_n", "said", False, _LATER)
+    ck("an item that does not say whether it blocks comes last and reads as not blocking",
+       [x["id"] for x in s.list_desk(project="uc_n")] == [said["id"], unsaid["id"]]
+       and unsaid["blocking"] is False, [x["question"] for x in s.list_desk(project="uc_n")])
+
+    print("== decisions ==")
+    def decide(project, item, at, choice="yes", **more):
+        return s.add_decision(project, item, "q", "w", choice, True, "project", False, None, True,
+                              more.pop("tickets", None), at, **more)
+    n_all = len(s.list_decisions(None))
+    c1 = decide("uc_t", d1["id"], _T, choice="", tickets=["ENG-1"], via="console", person_id=kim)
+    c2 = decide("uc_t", "dk_none", _LATEST)
+    c3 = decide(None, d2["id"], _LATER)
+    c4 = decide("uc_u", d2["id"], _LATER)
+    ck("add_decision returns it with its desk label, person and values",
+       (c1["label"], c1["choice"], c1["tickets"], c1["via"], c1["at"], c1["standing"], c1["matched"],
+        c1["granted"], c1["person"], c2["label"], c2["person"], c3["label"])
+       == (f"D{n0 + 1}", None, ["ENG-1"], "console", _T, True, False, True, {"id": kim, "name": "Kim"}, None, None,
+           f"D{n0 + 2}") and "person_id" not in c1 and c3["project"] is None, (c1, c2, c3))
+    ck("a project's decisions, newest first", [x["id"] for x in s.list_decisions("uc_t")] == [c2["id"], c1["id"]])
+    ck("all_ adds the cell-wide ones", [x["id"] for x in s.list_decisions("uc_t", all_=True)]
+       == [c2["id"], c3["id"], c1["id"]])
+    ck("no project: every one", len(s.list_decisions(None)) == n_all + 4
+       and c4["id"] in [x["id"] for x in s.list_decisions(None)])
+
+    print("== answers ==")
+    def answer(item, kind, project, person, at, via="console", choice="yes"):
+        return s.add_answer(item, kind, project, "ask", choice, "said", via, person, at)
+    for bad in (("maybe", "console"), ("yes", "email")):
+        try:
+            s.add_answer("i", "k", None, "a", bad[0], "s", bad[1], None, _T)
+            ck(f"{bad} is refused", False)
+        except ValueError:
+            ck(f"{bad} is refused and not stored", _n(sdb, "answers") == base["answers"])
+    x1 = answer("question:D1", "question", "uc_t", kim, _T)
+    x2 = answer("question:D1", "question", "uc_t", ann, _LATER, via="feed", choice=None)
+    x3 = answer("grant:G1", "grant", "uc_u", kim, _LATER)
+    x4 = answer("question:D2", "question", "uc_u", kim, _LATEST)
+    x5 = answer("message:1", "message", None, "", _T)
+    ck("add_answer returns it with the person", x1["person"] == {"id": kim, "name": "Kim"} and x5["person"] is None
+       and x1["at"] == _T and x2["choice"] is None, x1)
+    last = s.last_answer(["question:D1", "question:nope"])
+    ck("last_answer: the newest of the items", last == {"item": "question:D1", "choice": None, "said": "said",
+       "via": "feed", "at": _LATER, "person": {"id": ann, "name": "Ann"}}, last)
+    ck("no answer and no items give None", s.last_answer(["nope"]) is None and s.last_answer([]) is None)
+    got = s.list_answers(_T)
+    ck("list_answers: newest first, since included, with the person",
+       got[0]["id"] == x4["id"] and {x["id"] for x in got[1:3]} == {x2["id"], x3["id"]}
+       and {x["id"] for x in got[3:]} == {x1["id"], x5["id"]} and got[0]["person"]["name"] == "Kim"
+       and "person_id" not in got[0] and got[0]["at"] == _LATEST, got)
+    ck("since cuts the older ones", {x["id"] for x in s.list_answers(_LATER)} == {x2["id"], x3["id"], x4["id"]})
+    ck("hidden projects are left out, an answer with no project stays",
+       {x["id"] for x in s.list_answers(_T, hidden=["uc_u"])} == {x1["id"], x2["id"], x5["id"]})
+    ck("own: the caller's grant answer in a hidden project stays, no other kind",
+       {x["id"] for x in s.list_answers(_T, hidden=["uc_u"], own=kim)} == {x1["id"], x2["id"], x3["id"], x5["id"]}
+       and {x["id"] for x in s.list_answers(_T, hidden=["uc_u"], own=ann)} == {x1["id"], x2["id"], x5["id"]})
+    ck("by person and by items", {x["id"] for x in s.list_answers(_T, person=kim)} == {x1["id"], x3["id"], x4["id"]}
+       and [x["id"] for x in s.list_answers(_T, items=["grant:G1"])] == [x3["id"]])
+    with sdb.begin() as c:
+        c.execute(answers_table.insert(), [{"id": f"an_{i:04d}", "item": "bulk", "kind": "k", "answered_at": _LATEST,
+                                            "person_id": ann} for i in range(505)])
+    ck("500 at most, filtered before the cut", len(s.list_answers(_T)) == 500
+       and {x["id"] for x in s.list_answers(_T, person=kim)} == {x1["id"], x3["id"], x4["id"]})
+
+    print("== what a person was told ==")
+    s.mark_waiting_told(kim, [], True, _T)
+    ck("nothing told: empty", s.told_items(kim) == set() and _n(sdb, "waiting_told") == base["waiting_told"])
+    s.mark_waiting_told(kim, ["*", "a", "b", "a"], False, _T)
+    s.mark_waiting_told(kim, ["a", "c"], True, _LATER)
+    s.mark_waiting_told(ann, ["a"], True, _T)
+    with sdb.begin() as c:
+        rows = {r.item: (r.sent, r.told_at) for r in
+                c.execute(told_table.select().where(told_table.c.person_id == kim))}
+    ck("each item once, the first row kept", s.told_items(kim) == {"*", "a", "b", "c"}
+       and rows["a"] == (False, _T) and rows["c"] == (True, _LATER), rows)
+    s.set_told_message(kim, [("c", "ask c"), ("a", "ask a")], "C1", "9.1")
+    s.set_told_message(ann, [("a", "ask a")], "C1", "9.1")
+    ck("open_told: the person's items with a message", sorted((x["item"], x["channel"], x["ts"])
+       for x in s.open_told(kim)) == [("a", "C1", "9.1"), ("c", "C1", "9.1")] and
+       sorted(s.open_told(kim)[0]) == ["channel", "item", "ts"], s.open_told(kim))
+    ck("told_message: in the message's order, with the ask", s.told_message(kim, "C1", "9.1")
+       == [{"item": "c", "ask": "ask c", "closed": None}, {"item": "a", "ask": "ask a", "closed": None}],
+       s.told_message(kim, "C1", "9.1"))
+    ck("no channel or no ts names no message", s.told_message(kim, None, None) == []
+       and s.told_message(kim, "C1", None) == [] and s.told_message(kim, "C1", "0") == [])
+    s.forget_waiting_told(kim, ["a", "b", "zzz"])
+    s.forget_waiting_told(kim, [])
+    ck("forget_waiting_told drops an item with no message, keeps one with", s.told_items(kim) == {"*", "a", "c"})
+    s.close_told(kim, {"c": "answered by Ann", "zzz": "x"})
+    ck("close_told: no longer open, the line kept", [x["item"] for x in s.open_told(kim)] == ["a"]
+       and s.told_message(kim, "C1", "9.1")[0]["closed"] == "answered by Ann"
+       and [x["item"] for x in s.open_told(ann)] == ["a"])
+
+    print("== hand-overs ==")
+    repos = [{"path": "", "name": "n"}, {"path": "o/r", "name": None}]
+    ck("none yet", s.get_handover("uc_t") is None and s.handovers_by_project([]) == {}
+       and s.handovers_by_project([None, ""]) == {})
+    s.set_handover("uc_t", repos, "", "", _T, person_id="", crew="")
+    h = s.get_handover("uc_t")
+    ck("a first hand-over: the first named repo, empty values None, nothing else",
+       h == {"repo": "o/r", "repos": repos, "autonomy": None, "by": None, "at": _T, "person": None,
+             "by_label": None, "handed_by_person": None, "crew": None, "override": None, "overridden": False,
+             "overrides": [], "finished": None, "takeover": None}, h)
+    s.set_handover("uc_u", [], None, "spec", _T)
+    ck("no repos is an empty list", s.get_handover("uc_u")["repos"] == [] and s.get_handover("uc_u")["repo"] is None)
+    s._set_handover_fields("uc_u", repo="o/x")
+    ck("an empty list stays a list beside a `repo`", s.get_handover("uc_u")["repos"] == [])
+    s._set_handover_fields("uc_u", repos=None)
+    ck("a hand-over with no `repos` falls back to `repo`",
+       s.get_handover("uc_u")["repos"] == [{"path": "o/x", "name": None}])
+    s._set_handover_fields("uc_u", repos=[], repo=None)
+    s.set_handover("uc_t", repos, "ask", "spec", _LATER, person_id=kim, crew="c1", override_reason="deadline")
+    h = s.get_handover("uc_t")
+    ck("one with an override", h["overridden"] and h["override"] == {"reason": "deadline", "at": _LATER,
+       "person": {"id": kim, "name": "Kim"}, "by_label": "Kim"} and h["crew"] == "c1" and h["autonomy"] == "ask"
+       and h["handed_by_person"] == {"id": kim, "name": "Kim"}, h)
+    s.finish_handover("uc_t", "done", "dc_x", "orch", _LATER, person_id=kim)
+    s.take_over("uc_t", "mine", "session", _LATER, person_id=ann)
+    s.release_takeover("uc_t", _LATEST)
+    h = s.get_handover("uc_t")
+    ck("finished and taken over",
+       h["finished"] == {"at": _LATER, "words": "done", "decision": "dc_x", "by": "orch",
+                         "person": {"id": kim, "name": "Kim"}, "by_label": "Kim (orch)"}
+       and h["takeover"] == {"at": _LATER, "words": "mine", "by": "session", "released_at": _LATEST,
+                             "person": {"id": ann, "name": "Ann"}, "by_label": "Ann (session)"}, h)
+    ck("another project's is untouched", s.get_handover("uc_u")["finished"] is None
+       and s.get_handover("uc_u")["takeover"] is None)
+    both = {"uc_t", "uc_u"}
+    pick = lambda **kw: both & set(s.handed_over_projects(**kw))
+    ck("handed_over_projects by finished and taken", pick() == both and pick(finished=True) == {"uc_t"}
+       and pick(finished=False) == {"uc_u"} and pick(taken=True) == {"uc_t"} and pick(taken=False) == {"uc_u"}
+       and pick(finished=False, taken=True) == set() and pick(finished=True, taken=True) == {"uc_t"})
+    s.take_over("uc_t", "again", None, _LATEST)
+    ck("taking over again clears the release", s.get_handover("uc_t")["takeover"]["released_at"] is None)
+    s.set_handover("uc_t", [{"path": "o/s", "name": None}], None, "spec2", _LATEST, person_id=ann)
+    h = s.get_handover("uc_t")
+    ck("a later clean hand-over replaces it, clears finished and taken, keeps the override, not overridden",
+       (h["repo"], h["by"], h["at"], h["autonomy"], h["crew"], h["finished"], h["takeover"], h["overridden"])
+       == ("o/s", "spec2", _LATEST, None, None, None, None, False)
+       and h["override"]["reason"] == "deadline" and h["override"]["at"] == _LATER
+       and h["override"]["person"]["name"] == "Kim", h)
+    s.set_handover("uc_t", repos, None, "zed", _T, person_id=ann, override_reason="again")
+    s.set_handover("uc_t", repos, None, "amy", _T, override_reason="again")
+    h = s.get_handover("uc_t")
+    ck("every override stays in the log, oldest first, ties by who handed it",
+       [(o["reason"], o["at"], o["by_label"]) for o in s.list_handover_overrides("uc_t")]
+       == [("again", _T, "amy"), ("again", _T, "Ann (zed)"), ("deadline", _LATER, "Kim (spec)")]
+       and h["overrides"] == s.list_handover_overrides("uc_t") and h["override"]["at"] == _T
+       and h["override"]["person"] == {"id": ann, "name": "Ann"}, s.list_handover_overrides("uc_t"))
+    ck("handovers_by_project: the asked ones that have one", set(s.handovers_by_project(["uc_t", "uc_u", "uc_no"]))
+       == both and set(s.handovers_by_project()) >= both)
+
+    def refuse(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO handover_overrides"):
+            raise RuntimeError("boom")
+
+    before = (s.get_handover("uc_u"), _n(sdb, "handover_overrides"))
+    event.listen(sdb.engine, "before_cursor_execute", refuse)
+    try:
+        s.set_handover("uc_u", repos, None, "x", _LATEST, override_reason="r")
+        ck("a refused log entry raises", False)
+    except Exception:
+        ck("the hand-over and its log entry are saved together or not at all",
+           (s.get_handover("uc_u"), _n(sdb, "handover_overrides")) == before, s.get_handover("uc_u"))
+    finally:
+        event.remove(sdb.engine, "before_cursor_execute", refuse)
+
+    print("== questions to an area owner ==")
+    q1 = s.add_spec_question("uc_t", ann, "o/r", "one", "", _LATER)
+    for i in range(2, 11):
+        s.add_spec_question("uc_t", ann, "o/r", str(i), kim, _T)
+    qu = s.add_spec_question("uc_u", kim, "o/r", "u", kim, _T)
+    ck("numbered per project, with the people", q1["id"] == "Q1" and qu["id"] == "Q1"
+       and (q1["to_person"], q1["asked_by"], q1["asked_by_person"], q1["answered_by_person"], q1["state"],
+            q1["answer"], q1["via"], q1["asked_at"]) == ({"id": ann, "name": "Ann"}, None, None, None, "open", None,
+                                                      None, _LATER), q1)
+    ids = [x["id"] for x in s.list_spec_questions("uc_t")]
+    ck("by when asked, then by number (Q10 after Q9), past Q9 the next is Q11",
+       ids == [f"Q{i}" for i in range(2, 11)] + ["Q1"]
+       and s.add_spec_question("uc_t", ann, "o/r", "next", kim, _LATEST)["id"] == "Q11", ids)
+    mine = [(x["project"], x["id"]) for x in s.list_spec_questions(to_person_id=kim)]
+    ck("by person and by state", mine == [("uc_u", "Q1")]
+       and len(s.list_spec_questions("uc_t", state="open")) == 11
+       and s.list_spec_questions("uc_t", state="answered") == [])
+    ck("get_spec_question by q2, 2 and Q2; an unreadable ref and another project's give None",
+       [s.get_spec_question("uc_t", r)["id"] for r in ("q2", "2", " Q2 ")] == ["Q2"] * 3
+       and s.get_spec_question("uc_u", "Q2") is None and s.get_spec_question("uc_t", "two") is None
+       and s.get_spec_question("uc_t", None) is None)
+    ck("answering an open question once", s.answer_spec_question("uc_t", "Q2", "yes", ann, _LATEST, via="console")
+       is True and s.answer_spec_question("uc_t", "Q2", "no", kim, _LATEST) is False
+       and s.answer_spec_question("uc_t", "Q99", "no", kim, _LATEST) is False)
+    q = s.get_spec_question("uc_t", "Q2")
+    ck("the first answer stands", (q["answer"], q["answered_by"], q["answered_at"], q["state"], q["via"],
+       q["answered_by_person"]["name"]) == ("yes", ann, _LATEST, "answered", "console", "Ann")
+       and s.get_spec_question("uc_u", "Q1")["state"] == "open", q)
+
+    print("== grants ==")
+    top = max([int(x["id"][1:]) for x in s.all_grant_rows()], default=0)
+    g = [s.add_grant_row("project", f"w{i}", project="uc_t", state="waiting", given_at=_T) for i in range(11)]
+    gp = s.add_grant_row("personal", "p", holder=kim, given_by="Kim", areas=["o/r"],
+                         consents=[{"person_id": kim}], needs_lead=True)
+    ck("numbered for the cell, with defaults", [x["id"] for x in g] == [f"G{top + i + 1}" for i in range(11)]
+       and (g[0]["areas"], g[0]["consents"], g[0]["needs_lead"], g[0]["holder_person_id"], g[0]["given_at"])
+       == ([], [], False, None, _T) and (gp["areas"], gp["consents"], gp["needs_lead"], gp["holder_person_id"],
+       gp["state"]) == (["o/r"], [{"person_id": kim}], True, kim, "active") and gp["given_at"] is not None, gp)
+    ck("all_grant_rows by number", [int(x["id"][1:]) for x in s.all_grant_rows()]
+       == sorted(int(x["id"][1:]) for x in s.all_grant_rows()))
+    ck("get_grant_row in any case, spaces off; unknown and None give None",
+       s.get_grant_row(f" g{top + 1} ")["words"] == "w0" and s.get_grant_row("G999") is None
+       and s.get_grant_row(None) is None)
+    a, b, c_ = g[0]["id"], g[1]["id"], g[2]["id"]
+    ck("consent keeps it waiting", s.consent_waiting_grant(a, [{"person_id": ann}]) is True
+       and (s.get_grant_row(a)["state"], s.get_grant_row(a)["consents"]) == ("waiting", [{"person_id": ann}]))
+    ck("activate with areas and needs_lead", s.activate_waiting_grant(a, areas=["o/x"], needs_lead=True) is True
+       and (s.get_grant_row(a)["state"], s.get_grant_row(a)["areas"], s.get_grant_row(a)["needs_lead"])
+       == ("active", ["o/x"], True))
+    ck("activate without them keeps what it had", s.consent_waiting_grant(b, []) is True
+       and s.activate_waiting_grant(b) is True and s.get_grant_row(b)["areas"] == []
+       and s.get_grant_row(b)["needs_lead"] is False and s.get_grant_row(b)["state"] == "active")
+    ck("decline ends it", s.decline_waiting_grant(c_, [{"no": kim}]) is True
+       and (s.get_grant_row(c_)["state"], s.get_grant_row(c_)["consents"]) == ("revoked", [{"no": kim}]))
+    before = s.get_grant_row(a)
+    ck("none of the three touches a grant that no longer waits, or an unknown one",
+       s.consent_waiting_grant(a, []) is False and s.activate_waiting_grant(a, areas=[]) is False
+       and s.decline_waiting_grant(a, []) is False and s.decline_waiting_grant("G999", []) is False
+       and s.get_grant_row(a) == before)
+    d_ = g[3]["id"]
+    s.update_grant_row(d_)
+    s.update_grant_row(d_, areas=[], needs_lead=False)
+    ck("update_grant_row with nothing or empty values", s.get_grant_row(d_)["state"] == "waiting"
+       and s.get_grant_row(d_)["areas"] == [])
+    s.update_grant_row(d_, state="revoked", consents=[{"a": 1}], areas=["z"], needs_lead=True)
+    got = s.get_grant_row(d_)
+    ck("update_grant_row sets the given ones", (got["state"], got["consents"], got["areas"], got["needs_lead"])
+       == ("revoked", [{"a": 1}], ["z"], True) and s.get_grant_row(g[4]["id"])["state"] == "waiting", got)
+
+    print("== memory lines waiting ==")
+    p1 = s.add_pending_memory("uc_t", "- a", "x" * 600)
+    p2 = s.add_pending_memory("factory", "- b")
+    rows = s.list_pending_memory()
+    rows = [r for r in rows if r["id"] in (p1, p2)]
+    ck("oldest first, one attempt, the error cut at 500", [r["id"] for r in rows] == [p1, p2]
+       and sorted(rows[0]) == ["attempts", "created_at", "id", "last_error", "line", "scope", "tried_at"]
+       and rows[0]["attempts"] == 1 and len(rows[0]["last_error"]) == 500 and rows[1]["last_error"] == ""
+       and rows[0]["created_at"] == rows[0]["tried_at"], rows)
+    ck("by scope; an empty scope matches none", [r["id"] for r in s.list_pending_memory("factory")] == [p2]
+       and s.list_pending_memory("") == [])
+    time.sleep(0.01)
+    s.retried_pending_memory(p1, "y" * 600)
+    r = s.list_pending_memory("uc_t")[0]
+    ck("a retry counts and moves tried_at", r["attempts"] == 2 and r["last_error"] == "y" * 500
+       and r["tried_at"] > r["created_at"], r)
+    ck("delete says whether it removed one", s.delete_pending_memory(p2) is True
+       and s.delete_pending_memory(p2) is False and s.list_pending_memory("factory") == [])
+
+    print("== crews ==")
+    n = _n(sdb, "crews")
+    c1 = s.resolve_crew(" ", None, None, _LATER)
+    same = s.resolve_crew("crew", "local", "", _T)
+    ck("no name, person or machine is the local person's `crew`; an older line does not move last_seen",
+       c1 == same and _n(sdb, "crews") == n + 1
+       and [(x["name"], x["person_id"], x["machine"], x["first_seen"], x["last_seen"])
+            for x in s.list_crews() if x["id"] == c1] == [("crew", "local", "", _LATER, _LATER)], s.list_crews())
+    ck("a machine joins the bare crew", s.resolve_crew("crew", "local", "box", _LATEST) == c1
+       and [(x["machine"], x["last_seen"]) for x in s.list_crews() if x["id"] == c1] == [("box", _LATEST)])
+    ck("a line without a machine joins the person's one named crew",
+       s.resolve_crew("crew", "local", "", _T) == c1 and _n(sdb, "crews") == n + 1)
+    c2 = s.resolve_crew("crew", "local", "other", _T)
+    c3 = s.resolve_crew("crew", "local", "", None)
+    ck("a second machine is a second crew; with two, a bare line makes its own", len({c1, c2, c3}) == 3)
+    c4 = s.resolve_crew("Crew", kim, "box", _LATEST)
+    got = s.list_crews()
+    ck("newest activity first, ties by id, never seen last; the name's case matters",
+       [x["id"] for x in got] == [x["id"] for x in sorted(got, key=lambda x: (
+           x["last_seen"] is None, -(x["last_seen"] or _T).timestamp(), x["id"]))]
+       and got[-1]["id"] in (c3,) and c4 not in (c1, c2, c3)
+       and [x["person"] for x in got if x["id"] == c4] == [{"id": kim, "name": "Kim"}]
+       and [x["person"] for x in got if x["id"] == c1] == [{"id": "local", "name": "You"}], got)
+    try:
+        with sdb.begin() as conn:
+            conn.execute(crews_table.insert().values(id="c_dup", name="Crew", person_id=kim, machine="box"))
+        ck("one crew per person, name and machine", False)
+    except IntegrityError:
+        ck("one crew per person, name and machine", True)
+
+    # one named crew and a bare one of the same person: merged, its sessions move (TR-1223)
+    with sdb.begin() as conn:
+        conn.execute(crews_table.insert(), [
+            {"id": cid, "name": name, "person_id": ann, "machine": machine, "first_seen": first, "last_seen": last}
+            for cid, name, machine, first, last in (
+                ("c_named", "m", "box", _LATER, _LATER), ("c_bare", "m", "", _T, None),
+                ("c_two1", "n", "a", None, None), ("c_two2", "n", "b", None, None),
+                ("c_two0", "n", "", None, None))])
+    s.set_session_station("s-bare", "crew-builder", "builder", "", "uc_t", _T, "c_bare")
+    s._merge_split_crews()
+    left = {x["id"]: x for x in s.list_crews()}
+    with sdb.begin() as conn:
+        moved = conn.execute(text("SELECT crew_id FROM session_stations WHERE session = 's-bare'")).scalar()
+    ck("the bare one is gone, the named one spans both, the station moved", "c_bare" not in left
+       and (left["c_named"]["first_seen"], left["c_named"]["last_seen"]) == (_T, _LATER) and moved == "c_named",
+       (left.get("c_named"), moved))
+    ck("with two named crews nothing is merged", {"c_two0", "c_two1", "c_two2"} <= set(left))
+
+    print("== the reads do not queue behind a writer ==")
+    ck("the writes wait for the process's write lock", all(_waits_for_write_lock(s, call) for call in (
+       lambda: s.add_assumption("uc_t", "w", "c", "w", "", [], "", "", _T),
+       lambda: s.decide_assumption("as_none", "kept", None, None, _T),
+       lambda: s.add_desk_item(None, "w", "", [], "", "", "", [], False, "", [], _T),
+       lambda: s.close_desk_item("dk_none", "answered", None, _T),
+       lambda: s.set_handover("uc_w", [], None, "x", _T), lambda: s.release_takeover("uc_w", _T),
+       lambda: s.add_spec_question("uc_w", kim, "o/r", "t", None, _T),
+       lambda: s.add_grant_row("team", "w"), lambda: s.update_grant_row("G1", state="active"),
+       lambda: s.consent_waiting_grant("G999", []), lambda: s.add_pending_memory("w", "l"),
+       lambda: s.mark_waiting_told(kim, ["w"], True, _T), lambda: s.close_told(kim, {"w": "x"}),
+       lambda: s.resolve_crew("w", kim, "w", _T))))
+    if sdb.dialect == "sqlite":
+        ck("the reads run while a transaction holds the write lock", all(_runs_under_the_write_lock(s, call)
+           for call in (
+           lambda: s.list_assumptions("uc_t"), lambda: s.open_assumptions(),
+           lambda: s.get_assumption("uc_t", "A1"), lambda: s.get_desk_item("D1"), lambda: s.list_desk(),
+           lambda: s.list_decisions(None), lambda: s.last_answer(["a"]), lambda: s.list_answers(_T),
+           lambda: s.told_items(kim), lambda: s.open_told(kim), lambda: s.told_message(kim, "C", "1"),
+           lambda: s.list_handover_overrides("uc_t"), lambda: s.handed_over_projects(),
+           lambda: s.handovers_by_project(["uc_t"]), lambda: s.get_spec_question("uc_t", "Q1"),
+           lambda: s.list_spec_questions(), lambda: s.get_grant_row("G1"), lambda: s.all_grant_rows(),
+           lambda: s.list_pending_memory(), lambda: s.list_crews())))
+
+    print("== two processes number one after the other ==")
+    other = []
+    for _ in range(4):                     # each as another process: its own lock, the same database
+        o = copy.copy(s)
+        o._swrite = threading.RLock()
+        other.append(o)
+
+    def slow(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith(("SELECT max(", "SELECT crews.id, crews.last_seen")):
+            time.sleep(0.15)               # the read of one writer is done before the next one writes
+
+    def at_once(call):
+        got, errors = [], []
+
+        def run(o):
+            try:
+                got.append(call(o))
+            except Exception as e:
+                errors.append(f"{type(e).__name__}: {e}"[:200])
+        threads = [threading.Thread(target=run, args=(o,)) for o in other]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        return got, errors
+
+    event.listen(sdb.engine, "after_cursor_execute", slow)
+    try:
+        for label, call in (
+                ("assumption numbers", lambda o: o.add_assumption("uc_p", "q", "c", "w", "", [], "", "", _T)["number"]),
+                ("desk numbers", lambda o: o.add_desk_item(None, "p", "", [], "", "", "", [], False, "", [], _T)["number"]),
+                ("grant numbers", lambda o: o.add_grant_row("team", "p")["id"]),
+                ("question numbers", lambda o: o.add_spec_question("uc_p", kim, "o/r", "p", None, _T)["id"])):
+            got, errors = at_once(call)
+            ck(f"four writers at once get four different {label}", not errors and len(set(got)) == 4, (got, errors))
+        got, errors = at_once(lambda o: o.resolve_crew("par", kim, "box", _T))
+        ck("four writers at once make one crew", not errors and len(got) == 4 and len(set(got)) == 1, (got, errors))
+    finally:
+        event.remove(sdb.engine, "after_cursor_execute", slow)
+
+    print("== deleting a project ==")
+    s.add_pending_memory("uc_t", "- t")
+    s.add_pending_memory("uc_u", "- u")
+    with sdb.begin() as conn:
+        conn.execute(text("INSERT INTO signoffs (project, repo) VALUES ('uc_t', 'o/r'), ('uc_u', 'o/r')"))
+    kept = {t: _n(sdb, t) for t in ("answers", "waiting_told", "crews")}
+    by_project = ("assumptions", "desk_items", "decisions", "grants", "handovers", "handover_overrides",
+                  "spec_questions", "signoffs")
+
+    def of(uid):
+        with sdb.begin() as conn:
+            out = {t: conn.execute(text(f"SELECT count(*) FROM {t} WHERE project = :p"), {"p": uid}).scalar()
+                   for t in by_project}
+            out["pending_memory"] = conn.execute(text("SELECT count(*) FROM pending_memory WHERE scope = :p"),
+                                                 {"p": uid}).scalar()
+        return out
+
+    others = of("uc_u")
+    ck("both projects have rows in each before", all(of("uc_t").values()) and all(
+       others[t] for t in ("assumptions", "desk_items", "decisions", "handovers", "spec_questions", "signoffs",
+                           "pending_memory")), (of("uc_t"), others))
+    s.delete_project("uc_t")
+    ck("its rows go from each table", set(of("uc_t").values()) == {0}, of("uc_t"))
+    ck("another project's stay", of("uc_u") == others, (of("uc_u"), others))
+    ck("answers, what was told and crews are kept, as before",
+       {t: _n(sdb, t) for t in kept} == kept)
+    with s._lock:
+        have = set(s._tables_of(s.con))
+    ck("DuckDB has none of the twelve tables", not (have & set(CREW_NAMES)), sorted(have & set(CREW_NAMES)))
+    s.close()
+
+
+def crew_takeover():
+    print("== Postgres: the twelve tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        old_ddl_postgres(dsn, seed=CREW)
+
+        def pg():
+            return psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}")
+
+        def snapshot():
+            out = {}
+            with pg() as c:
+                for t in CREW_NAMES:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable, column_default FROM "
+                                     "information_schema.columns WHERE table_schema = %s AND table_name = %s "
+                                     "ORDER BY column_name", [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT {', '.join(chr(34) + col[0] + chr(34) for col in cols)} "
+                                     f"FROM {t}").fetchall()
+                    idx = c.execute("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND "
+                                    "tablename = %s ORDER BY indexname", [sch, t]).fetchall()
+                    out[t] = (cols, sorted(tuple(map(str, r)) for r in rows), idx)
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the twelve tables, with the sample rows",
+           {t: len(before[t][1]) for t in CREW_NAMES} == CREW_COUNTS)
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types, defaults, rows and indexes, is as the old code left it",
+           snapshot() == before, [t for t in before if snapshot()[t] != before[t]])
+        ck("each table's columns, types and primary key are what tables.py declares",
+           ts.shape(sdb.engine, CREW_NAMES) == {t: ts.declared(sdb.engine)[t] for t in CREW_NAMES},
+           ts.shape(sdb.engine, CREW_NAMES))
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        ts.step_down(sdb, "0016_review_tables")
+        ck("a downgrade keeps the tables, rows and indexes", snapshot() == before
+           and ts.versions(sdb) == ["0016_review_tables"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it leaves them as they are", snapshot() == before)
+        with sdb.begin() as c:
+            dk = {r.id: r.options for r in c.execute(desk_table.select())}
+        ck("Core reads the JSON the old code wrote", dk == {"dk_1": ["yes", "no"], "dk_2": None}, dk)
+
+        # a database from before the later columns, the defaults and the index
+        ts.step_down(sdb, "0016_review_tables")
+        with pg() as c:
+            c.execute("ALTER TABLE grants DROP COLUMN needs_lead")
+            c.execute("ALTER TABLE waiting_told DROP COLUMN closed")
+            c.execute("ALTER TABLE handovers DROP COLUMN override_person_id")
+            c.execute("DROP INDEX idx_answers_at")
+        sdb.upgrade()
+        ck("missing columns and the missing index are added", ts.shape(sdb.engine, CREW_NAMES)
+           == {t: ts.declared(sdb.engine)[t] for t in CREW_NAMES}
+           and ts.index_columns(sdb.engine, "answers", "idx_answers_at") == ["answered_at"])
+        with pg() as c:
+            lead = c.execute("SELECT id, needs_lead FROM grants ORDER BY id").fetchall()
+        ck("rows already there read needs_lead false", lead == [("G10", False), ("G2", False)], lead)
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+    # a database the revision made itself: the code before it (rc.1) can still write to it
+    sch, dsn = _pg_schema()
+    try:
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+            c.execute("INSERT INTO grants (id) VALUES ('G1')")
+            c.execute("INSERT INTO pending_memory (id) VALUES ('pm')")
+            got = (c.execute("SELECT needs_lead FROM grants").fetchone()[0],
+                   c.execute("SELECT attempts FROM pending_memory").fetchone()[0])
+            c.execute("INSERT INTO crews (id, name, person_id, machine) VALUES ('a', 'n', 'p', '')")
+            try:
+                c.execute("INSERT INTO crews (id, name, person_id, machine) VALUES ('b', 'n', 'p', '')")
+                twice = True
+            except psycopg.errors.UniqueViolation:
+                twice = False
+            idx = c.execute("SELECT count(*) FROM pg_indexes WHERE schemaname = %s AND indexname IN "
+                            "('idx_answers_at', 'crews_person_id_name_machine_key')", [sch]).fetchone()[0]
+        ck("a new database has the old defaults, the crew's unique constraint and the index",
+           got == (False, 0) and not twice and idx == 2, (got, twice, idx))
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+
 if __name__ == "__main__":
     ck("settings, the accounts, the project and ticket tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
@@ -2274,7 +3019,8 @@ if __name__ == "__main__":
            "docs", "skills", "shared_skills", "catalog_sources", "github_credentials", "model_usage",
            "tickets", "ticket_history", "ticket_numbers", "milestones", "milestone_check_results",
            "milestone_acceptances", "ticket_checks", "challenges", "reviews", "review_findings",
-           "rule_proposals"])
+           "rule_proposals", "assumptions", "desk_items", "decisions", "handovers", "grants", "pending_memory",
+           "crews", "spec_questions", "signoffs", "handover_overrides", "answers", "waiting_told"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -2288,6 +3034,7 @@ if __name__ == "__main__":
     projects_copy()
     tickets_copy()
     reviews_copy()
+    crew_copy()
     accounts_methods()
     projects_methods()
     tickets_methods()
@@ -2300,5 +3047,7 @@ if __name__ == "__main__":
     reviews_methods()
     reviews_takeover()
     tickets_pr_guard()
+    crew_methods()
+    crew_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

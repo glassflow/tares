@@ -124,8 +124,10 @@ def unit():
     ck("store: take_over keeps its person", (ho["takeover"]["person"] or {}).get("id") == ben, str(ho))
     ck("store: finish_handover keeps its person", (ho["finished"]["person"] or {}).get("id") == ann, str(ho))
     s.set_handover("proj", [{"path": "/w/x"}], None, "", at, ben)
-    left = s.sc.execute("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
-                         "WHERE project = 'proj'").fetchone()
+    from sqlalchemy import text
+    with s.sessions_db.begin() as c:
+        left = c.execute(text("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
+                              "WHERE project = 'proj'")).fetchone()
     ho = s.get_handover("proj")
     ck("store: handing over again clears the finished and taken persons",
        tuple(left) == (ben, None, None) and ho["finished"] is None and ho["takeover"] is None,
