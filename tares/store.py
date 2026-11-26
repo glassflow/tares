@@ -652,7 +652,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._sess_lock = threading.Lock()
         self._archive_on = None            # whether an archive backend exists (settled at first use)
         self._factory_mode = None          # (is the edition factory, until when), see _lines_skip_duckdb
-        self._challenges_unreadable: set = set()    # challenger lines already logged as not JSON
+        self._challenges_unreadable: set = set()    # challenger lines already logged as unreadable
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the

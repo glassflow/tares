@@ -284,6 +284,7 @@ def recent_sessions(store) -> list[dict]:
     """The challenger sessions of the last SESSION_DAYS, newest first: who and where, what Codex
     said about the plan and each commit, and the challenge thread (only the challenge events, so
     the Claude/Codex exchange reads on its own; the full session stays on the source)."""
+    from ..factory_store import challenge_json
     from ..reads import _labels
     since = datetime.now(timezone.utc) - timedelta(days=SESSION_DAYS)
     rows = store.read_window([SOURCE], None, since, cap=5000, where={"flow": FLOW},
@@ -291,7 +292,7 @@ def recent_sessions(store) -> list[dict]:
     by_session: dict[str, dict] = {}
     for event_time, _source, text, labels, payload in rows:
         try:
-            raw = json.loads(payload) if isinstance(payload, (str, bytes)) else (payload or {})
+            raw = challenge_json(payload) if isinstance(payload, (str, bytes)) else (payload or {})
         except (TypeError, ValueError):
             raw = {}
         sid = str(raw.get("sessionId") or "")

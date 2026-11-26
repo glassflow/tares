@@ -60,6 +60,28 @@ def _loggable(x) -> str:
     stored row cannot start a forged line."""
     return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group())[1:-1], str(x))
 
+
+# A real challenger line nests a few levels. The bound is far under where the parser, a copy or the
+# response encoder raises RecursionError, which varies with the Python version and the call stack.
+CHALLENGE_MAX_DEPTH = 100
+
+
+def challenge_json(text):
+    """`json.loads` for a challenger line's payload. One nested more than CHALLENGE_MAX_DEPTH
+    objects and lists deep raises ValueError, as text that is not JSON does (TR-1712)."""
+    try:
+        o = json.loads(text)
+    except RecursionError:
+        raise ValueError("nested too deeply") from None
+    level = [o]
+    for _ in range(CHALLENGE_MAX_DEPTH + 1):     # level by level: no recursion here
+        level = [x for x in level if isinstance(x, (dict, list))]
+        if not level:
+            return o
+        level = [v for x in level for v in (x.values() if isinstance(x, dict) else x)]
+    raise ValueError("nested too deeply")
+
+
 FACTORY_SCHEMA = [
     # Which station a Claude Code session plays (TR-418, TR-420), from the plugin's
     # `session_station` line: the station's stable name, its role, the station that started it
@@ -1489,18 +1511,18 @@ class FactoryStore:
 
     def _challenge_payload(self, text, source, session, at, typ, branch) -> dict:
         """A challenger line's stored payload as an object. {} when there is none, when it is JSON
-        but not an object, or when it is not JSON, which is also logged, once for each line while
-        this process runs, by its ids alone."""
+        but not an object, or when it is not JSON or is nested too deeply (`challenge_json`), which
+        is also logged, once for each line while this process runs, by its ids alone."""
         if not text or not text.strip():
             return {}
         try:
-            o = json.loads(text)
+            o = challenge_json(text)
         except ValueError:
             line = (source, session, at, typ, branch)
             if line not in self._challenges_unreadable:
                 self._challenges_unreadable.add(line)
-                log.warning("a challenger line's payload is not JSON, read as empty: source %s "
-                            "session %s type %s branch %s at %s",
+                log.warning("a challenger line's payload is not JSON or is nested too deeply, read "
+                            "as empty: source %s session %s type %s branch %s at %s",
                             *(_loggable(x)[:120] for x in
                               (source, session or "unknown", typ, branch, at.isoformat())))
             return {}
@@ -1508,7 +1530,8 @@ class FactoryStore:
 
     def _record_challenges(self, rows: list[tuple]) -> None:
         """Keep the challenger's lines (source, key, time, type, branch, project, payload as JSON
-        text) in `challenges`, the payload as given: one that is not JSON is read as {}.
+        text) in `challenges`, the payload as given: one that is not JSON, or is nested too deeply,
+        is read as {}.
         Idempotent: a line already kept is skipped."""
         names = ("source", "key_value", "event_time", "event_type", "branch", "tares_project",
                  "payload")
@@ -1529,7 +1552,7 @@ class FactoryStore:
         named = []
         for row in rows[:20]:
             try:
-                sha = json.loads(row[6])["challenge"].get("sha")
+                sha = challenge_json(row[6])["challenge"].get("sha")
             except (ValueError, TypeError, KeyError, AttributeError):
                 sha = None
             named.append(f"session {_loggable(row[1] or 'unknown')[:80]} commit "
