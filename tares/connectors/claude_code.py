@@ -179,7 +179,7 @@ class ClaudeCodeConnector(Connector):
         except DocError:
             return
         ref = str(o.get("tares_project") or "").strip()
-        p = (self.store.get_project(ref) or self.store.get_project_by_name(ref)) if ref else None
+        project = self.store.usage_project(ref) if ref else None
         at = self._ts(o)
         # the crew (TR-628): this recording's person, the crew's name and the machine; a line
         # with no person (the system credential) joins the crew of `local`
@@ -188,8 +188,7 @@ class ClaudeCodeConnector(Connector):
             str(o.get("factory_crew") or o.get("crew") or ""), self.person_id,
             str(o.get("factory_machine") or o.get("machine") or ""))
         crew_id = self.store.resolve_crew(crew_name, self.person_id, machine, at)
-        self.store.set_session_station(sid, name, role, parent, p["id"] if p else None, at,
-                                       crew_id)
+        self.store.set_session_station(sid, name, role, parent, project, at, crew_id)
 
     def _link_project(self, o: dict) -> bool:
         """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
@@ -245,8 +244,7 @@ class ClaudeCodeConnector(Connector):
             return
         ref = str(o.get("tares_project") or "").strip()
         if ref and ref not in projects:
-            p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
-            projects[ref] = p["id"] if p else None
+            projects[ref] = self.store.usage_project(ref)
         self.store.record_reply_usage(
             str(sid), str(mid), self._ts(o), msg.get("model"), projects.get(ref) if ref else None,
             str(o.get("subagent") or o.get("agentId") or "") or None
