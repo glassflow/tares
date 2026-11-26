@@ -379,10 +379,11 @@ def _untold(paths: CrewPaths, station: str, sent: dict, row: dict) -> list:
 
 
 def closing_all(sent: dict, base: dict, why: str) -> tuple:
-    """(the facts that close a conversation, the calls they settle): its session when it was never announced,
-    the start of every call a stop found that no look sent (`untold`), and the closing of those and of every
-    start with no end (`closing`). Pure."""
-    out = [] if sent.get("announced") else [_fact(base, "session")]
+    """(the facts that close a conversation, the calls they settle): its session when it was not announced as
+    `facts` announces it now (never, or before its runtime and model were sent: `ANNOUNCED`), the start of every
+    call a stop found that no look sent (`untold`), and the closing of those and of every start with no end
+    (`closing`). Pure."""
+    out = [] if sent.get("announced") == ANNOUNCED else [_fact(base, "session")]
     starts = dict(sent.get("starts") or {})
     for u in sent.get("untold") or []:
         out.append(_fact(base, "start", float(u.get("at") or time.time()), call=u["call"], turn=u["turn"], tool="Bash",
@@ -398,8 +399,10 @@ def _close(client, paths: CrewPaths, station: str, sent: dict) -> int:
     base = {**stamps(paths, station, row, getattr(client, "env", None)), "sessionId": sent["thread"]}
     out, settled = closing_all(sent, base, sent["closing"])
     if out:
-        _post(client, out)
-    _keep(paths, station, {**sent, "announced": ANNOUNCED, "starts": {}, "untold": [], "state": "ended", "closing": "",
+        _post(client, out)   # raises when Tares does not take it: nothing below is kept, and it is sent again
+    _keep(paths, station, {**sent, "announced": ANNOUNCED, "starts": {}, "untold": [], "state": "ended",
+                           "reason": sent["closing"] if sent.get("state") != "ended" else sent.get("reason", ""),
+                           "closing": "",
                            "items": list(sent["items"]) + [c for c in settled if c not in sent["items"]]})
     return len(out)
 

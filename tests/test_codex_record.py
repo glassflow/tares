@@ -411,6 +411,36 @@ got = rec.step(tares)
 ck("a station that was retired: its session has ended, and its file is removed",
    [r["station"] for r in got] == [S] and kinds(tares.posts[0][2]) == [("state", "ended")] and not kept.exists(), (got, tares.posts))
 ck("a crew with no Codex station posts nothing", rec.step(tares) == [] and len(tares.posts) == 1)
+# an old record (announced before the cell kept a session's runtime and model) closed by a stop before any round
+# of this recorder looked at it: the closing announces it, once, and only once Tares took it (TR-1600)
+S2 = "crew-old"
+(home / "stations.json").write_text(json.dumps({S2: {"runtime": "codex", "role": "builder", "cwd": "/w",
+                                                     "model": "gpt-5.6-luna", "sessionId": "01a2-old"}}))
+(home / "stations" / f"{S2}.codex.sent").write_text(json.dumps(
+    {**{k: v for k, v in rec.new_sent("01a2-old").items() if k != "reason"}, "announced": True, "state": "working"}))
+tares.posts.clear()
+tares.fail = True
+r1 = rec.close_station(tares, paths, S2, "the station was stopped")
+old_kept = json.loads((home / "stations" / f"{S2}.codex.sent").read_text())
+ck("a closing Tares does not take is an error, and the old announcement is kept as it was",
+   "503" in r1["error"] and old_kept["announced"] is True and old_kept["closing"] == "the station was stopped", (r1, old_kept))
+tares.fail = False
+r2 = rec.close_station(tares, paths, S2, "the station was stopped")
+closed = [f for _, _, body in tares.posts for f in body]
+lines = cell.session_lines(closed)
+st_line = next((x for x in lines if x.get("type") == "session_station"), {})
+ck("taken on the retry: the session is announced with its runtime and model, then the end",
+   r2["error"] == "" and [f["kind"] for f in closed] == ["session", "state"]
+   and st_line.get("runtime") == "codex" and st_line.get("model") == "gpt-5.6-luna" and st_line.get("station") == S2,
+   (r2, kinds(closed), st_line))
+ck("and the new announcement is kept only now",
+   json.loads((home / "stations" / f"{S2}.codex.sent").read_text())["announced"] == rec.ANNOUNCED)
+tares.posts.clear()
+LOOK.update(found=None, alive=False)
+rec.step(tares)
+ck("a later round does not announce it again",
+   not [f for _, _, body in tares.posts for f in body if f["kind"] == "session"], tares.posts)
+
 (home / "stations.json").write_text("not json")
 ck("a crew file that cannot be read gives nothing and does not raise", rec.step(tares) == [])
 
