@@ -361,7 +361,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       };
       /** A chart's value for each week, oldest first; "-" for a week with none. */
       const weekly = (id) => page.getByTestId(`delivered-${id}-weeks`).locator("tr[data-series] td")
-        .evaluateAll((cells) => cells.map((c) => (c.querySelector(".sr-only") ? "-" : c.textContent.trim())));
+        .evaluateAll((cells) => cells.map((c) => (c.querySelector(".sr-only") ? "-" : c.textContent.replace(/\s+/g, " ").trim())));
       const marks = (id, mark) => page.getByTestId(`delivered-${id}-weeks`).locator(`[data-plot] ${mark}`).count();
       const view = async (to) => {
         await open(page, to);
@@ -381,13 +381,11 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          && (await page.locator("[data-change]").count()) === 4);
       ck("delivered: the four tiles sit in one row", new Set(await Promise.all(TILES.map(async (id) =>
         Math.round((await page.getByTestId(`delivered-${id}`).boundingBox()).y)))).size === 1);
-      ck("delivered: with nothing to compare, no word about the unfinished week under the tiles",
-         (await count(page, "delivered-unfinished")) === 0);
       ck("delivered: merged per week, 0 in a week without a merge",
          (await weekly("merged")).join("|") === "0|4|0|0|0|2|3|0" && (await marks("merged", "[data-bar]")) === 3,
          `${await weekly("merged")} ${await marks("merged", "[data-bar]")}`);
       ck("delivered: start to merge per week, no point in a week without a merge",
-         (await weekly("p50")).join("|") === "-|1 hour|-|-|-|1 day|3 hours|-" && (await marks("p50", "[data-dot]")) === 3,
+         (await weekly("p50")).join("|") === "-|1 hour|-|-|-|1 day 2 hours|3 hours|-" && (await marks("p50", "[data-dot]")) === 3,
          `${await weekly("p50")} ${await marks("p50", "[data-dot]")}`);
       const charts = await page.getByTestId("report-section-delivered").locator("[data-week-chart]")
         .evaluateAll((els) => els.map((e) => `${e.dataset.weekChart}:${e.querySelector("figcaption").textContent}`));
@@ -405,8 +403,10 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
         ["PROJECTS WITH A MERGE", "2", "+1 on the 4 weeks before"],
         ["START TO MERGE, P50", "3 hours 30 minutes", "p90 19 hours 24 minutes", "from 4 of 5 merged tickets",
          "+2 hours 30 minutes on the 4 weeks before", "1.3 review rounds per ticket reviewed"]);
-      ck("delivered: the running week in range is said to be unfinished",
-         (await count(page, "delivered-unfinished")) === 1 && (await text(page, "delivered-unfinished")) === "This week is not over yet.");
+      ck("delivered: the running week is said to be unfinished once, in the summary",
+         (await text(page, "report-summary")).endsWith("This week is not over yet.")
+         && (await page.getByText("This week is not over yet.").count()) === 1,
+         `${await page.getByText("This week is not over yet.").count()} times`);
       await checkWords(page, ck, "delivered @1440");
       await shot(page, "delivered-4w-1440");
 
@@ -430,7 +430,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       ck("delivered: one week against the one before it",
          (await tiles())[0][2] === "+1 on the week before", JSON.stringify((await tiles())[0]));
       ck("delivered: a past range says nothing about this week",
-         (await count(page, "delivered-unfinished")) === 0 && !(await text(page, "report-section-delivered")).includes("so far"));
+         (await page.getByText("This week is not over yet.").count()) === 0 && !(await text(page, "report-section-delivered")).includes("so far"));
 
       await view(days(30));
       await is("delivered: reviews and no merge read 0 and no value",
@@ -492,7 +492,14 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       ck("390: 8 weeks of charts scroll inside their own box, not the page",
          await page.locator('[data-week-chart] [role="region"]').evaluateAll((els) => els.length === 2 && els.every((e) => e.scrollWidth > e.clientWidth))
          && (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      ck("390: a start-to-merge value in two units takes two lines and fits its column",
+         await page.getByTestId("delivered-p50-weeks").locator("tr[data-series] td").evaluateAll((cells) => {
+           const long = cells.find((c) => c.textContent.replace(/\s/g, " ") === "1 day 2 hours");
+           return !!long && long.innerText.trim() === "1 day\n2 hours" && cells.every((c) => c.scrollWidth <= c.clientWidth);
+         }));
       await shot(page, "delivered-8w-390");
+      await page.getByTestId("delivered-p50-weeks").locator('[role="region"]').evaluate((e) => { e.scrollLeft = e.scrollWidth; });
+      if (SHOTS) await page.getByTestId("delivered-p50-weeks").screenshot({ path: path.join(SHOTS, "report-p50-390-end.png") });
       await open(page, "/report?range=4w");
       await checkWords(page, ck, "frame @390");
       await shot(page, "frame-390");

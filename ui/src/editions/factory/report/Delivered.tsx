@@ -1,6 +1,6 @@
 import { EmptyState, Stat, WeekChart } from "../../../components/edition";
 import { formatCount, formatDecimal } from "../../../lib/number";
-import { HOUR, MIN, durationWords, spanWords } from "../../../lib/time";
+import { HOUR, MIN, durationWords } from "../../../lib/time";
 import type { DeliveredData, ReportData } from "../FactoryReport.api";
 
 // Delivered (TR-1668): four headline figures for the range, each with its change on as many weeks just
@@ -20,6 +20,8 @@ function change(now: number, then: number | null | undefined, weeks: number, say
 const ms = (hours: number) => Math.round(hours * HOUR);
 /** Hours as the console's duration words. */
 const length = (hours: number) => durationWords(ms(hours));
+/** The same words in a narrow column: a second unit takes its own line. */
+const column = (hours: number) => length(hours).replace(/ (?=\d)/, "\n");
 /** A length in whole minutes, so two lengths that read the same are the same. */
 const minutes = (hours: number) => Math.floor(ms(hours) / MIN);
 
@@ -65,11 +67,10 @@ export function Delivered({ data }: { data: ReportData }) {
               changed={startChange}
               pair={round !== "" && `${round} review ${round === "1" ? "round" : "rounds"} per ticket reviewed`} />
       </div>
-      {previous && running && <p className="m-0 text-xs text-muted-foreground" data-testid="delivered-unfinished">This week is not over yet.</p>}
       <WeekChart caption="Merged per week" weeks={weeks} soFar={running} data-testid="delivered-merged-weeks"
                  series={[{ label: "Merged", values: d.weeks.map((w) => w.merged) }]} format={formatCount} />
       <WeekChart caption="Start to merge, p50 per week" kind="lines" weeks={weeks} soFar={running} data-testid="delivered-p50-weeks"
-                 series={[{ label: "p50", values: d.weeks.map((w) => w.p50) }]} format={(hours) => spanWords(ms(hours))} />
+                 series={[{ label: "p50", values: d.weeks.map((w) => w.p50) }]} format={column} />
     </div>
   );
 }
