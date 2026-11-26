@@ -226,11 +226,13 @@ def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float |
     # a turn that has ended: at the look after the one that first saw it ended, a start with no item, or with an
     # item still in progress, has an outcome nobody will know, and the turn is closed. A turn still listed as in
     # progress while a newer one is there has ended too: its app-server was killed under it, and the
-    # conversation went on (TR-1598: after a crash and a revive, the cut-off command kept its start for good)
+    # conversation went on. Even without a newer turn, idle/notLoaded says the conversation is at rest:
+    # its last stored turn can still say inProgress after a crash and a revive (TR-1598).
     newest_turn = turns[-1]["id"] if turns else ""
     for turn in turns:
         tid = turn["id"]
-        if tid in sent["closed"] or (turn.get("status") == "inProgress" and tid == newest_turn):
+        if tid in sent["closed"] or (turn.get("status") == "inProgress" and tid == newest_turn
+                                    and kind not in ("idle", "notLoaded")):
             continue
         if tid not in sent["ended"]:
             sent["ended"].append(tid)

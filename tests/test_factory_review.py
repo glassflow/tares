@@ -208,6 +208,16 @@ def unit():
            and factory.match_check(check("python3 test_calc.py", "ok"), [failing, row(shell, 4)])[0] == "differs")
     ck("a && inside a quoted argument is not a step",
        factory.match_check(check("git diff", "ok"), [row('git commit -m "x && git diff" && git status', 4)])[0] == "not_found")
+    for quoted in ("printf '%s' '&&' python3 test_calc.py '&&' git diff",
+                   'printf "%s" "&&" python3 test_calc.py "&&" git diff',
+                   "printf '%s' '&&' python3 test_calc.py && git diff",
+                   r"printf %s \&\& python3 test_calc.py && git diff",
+                   "echo ok # ignored && python3 test_calc.py && git diff"):
+        ck(f"quoted operators are arguments, not proof that a claimed step ran: {quoted!r}",
+           factory.match_check(check("python3 test_calc.py", "ok"), [row(quoted, 4)])[0] == "not_found")
+    ck("a real chain preserves a quoted operator inside a command's arguments",
+       factory.match_check(check("printf '%s' '&&'", "ok"),
+                           [row("printf '%s' '&&' && git diff", 4)])[0] == "matched")
     ck("the step must be the claimed command, with its arguments",
        factory.match_check(check("python3 test_calc.py -v", "ok"), [row(CHAIN, 4)])[0] == "not_found"
        and factory.match_check(check("python3", "ok"), [row(CHAIN, 4)])[0] == "not_found")
