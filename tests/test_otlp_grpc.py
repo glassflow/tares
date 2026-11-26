@@ -1,11 +1,10 @@
 """OTLP gRPC receiver test. Skips cleanly if the optional [otlp-grpc] deps aren't installed."""
 import asyncio, os, time
+from _env import remove_db
 os.environ["TARES_DB"] = "/tmp/otlpg.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/none.yaml"
 os.environ["TARES_OTLP_GRPC_PORT"] = "14317"
-for _p in ("/tmp/otlpg.duckdb", "/tmp/otlpg.duckdb.wal"):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db("/tmp/otlpg.duckdb")
 try:
     import grpc
     from opentelemetry.proto.collector.logs.v1 import logs_service_pb2 as lpb, logs_service_pb2_grpc as lgrpc

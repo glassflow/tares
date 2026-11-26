@@ -10,7 +10,7 @@ import asyncio, json, os, signal, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 import httpx
 
@@ -102,9 +102,7 @@ async def _until(fn, tries=60):
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
 
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
@@ -415,9 +413,7 @@ async def main():
     os.environ["TARES_DB"] = "/tmp/agents_rerun.duckdb"
     os.environ.pop("TARES_CATALOG", None)
     os.environ.pop("ANTHROPIC_API_KEY", None)
-    for pth in ("/tmp/agents_rerun.duckdb", "/tmp/agents_rerun.duckdb.wal"):
-        if os.path.exists(pth):
-            os.remove(pth)
+    remove_db("/tmp/agents_rerun.duckdb")
     from tares.daemon import make_app
     app = make_app()
     async with app.router.lifespan_context(app):

@@ -6,13 +6,14 @@ Run: .venv/bin/python tests/test_agent_runs_filter.py
 """
 import asyncio
 import os
+from _env import remove_db
 
 DB = "/tmp/tares-runs-filter.duckdb"
 os.environ["TARES_DB"] = DB
 os.environ["TARES_CATALOG"] = "/tmp/tares-runs-filter.catalog.yaml"
-for _p in (DB, DB + ".wal", os.environ["TARES_CATALOG"]):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db(DB)
+if os.path.exists(os.environ["TARES_CATALOG"]):
+    os.remove(os.environ["TARES_CATALOG"])
 
 import httpx
 

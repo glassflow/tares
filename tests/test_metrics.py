@@ -10,14 +10,10 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 
 DB = "/tmp/metrics_test.duckdb"
-# The settings live in tares.sqlite beside the DuckDB file (TR-1480): clear them too, or a test that ran
-# earlier in /tmp leaves its providers behind.
-_SQLITE = os.path.join(os.path.dirname(DB), "tares.sqlite")
-for pth in (DB, DB + ".wal", _SQLITE, _SQLITE + "-wal", _SQLITE + "-shm"):
-    if os.path.exists(pth):
-        os.remove(pth)
+remove_db(DB)
 os.environ["TARES_DB"] = DB
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = "metrics-test-token"

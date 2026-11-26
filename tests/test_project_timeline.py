@@ -13,6 +13,7 @@ Run: .venv/bin/python tests/test_project_timeline.py
 import asyncio
 import json
 import os
+from _env import remove_db
 
 DB = "/tmp/tares-timeline.duckdb"
 OLD_DB = "/tmp/tares-timeline-old.duckdb"
@@ -22,9 +23,9 @@ os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 # enable checks that a key resolves; the stand-in loop below never calls a model
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
-for _p in (DB, DB + ".wal", OLD_DB, OLD_DB + ".wal", os.environ["TARES_CATALOG"]):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db(DB, OLD_DB)
+if os.path.exists(os.environ["TARES_CATALOG"]):
+    os.remove(os.environ["TARES_CATALOG"])
 
 import duckdb
 import httpx

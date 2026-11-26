@@ -8,6 +8,7 @@ Run: .venv/bin/python tests/test_normalize.py
 import asyncio
 import os
 import sys
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/tares-normalize-test.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
@@ -27,9 +28,7 @@ def check(label, cond, detail=""):
 
 
 async def main():
-    for p in (os.environ["TARES_DB"], os.environ["TARES_DB"] + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(os.environ["TARES_DB"])
 
     from tares.connectors import normalize_config, full_schema, REGISTRY
     from tares.config import CatalogError

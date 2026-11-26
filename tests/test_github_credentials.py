@@ -10,6 +10,7 @@ picking up a rotation), discover through a credential, MCP server headers stored
 import asyncio
 import json
 import os
+from _env import remove_db
 
 os.environ["TARES_DB"] = "/tmp/tares-ghcred-test.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
@@ -83,9 +84,7 @@ API = "http://api.github.test"
 
 
 async def main():
-    for p in (os.environ["TARES_DB"], os.environ["TARES_DB"] + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(os.environ["TARES_DB"])
     from tares.daemon import make_app
     app = make_app()
     async with app.router.lifespan_context(app):

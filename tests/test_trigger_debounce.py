@@ -8,6 +8,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-trigger-debounce-test.duckdb"
 CATALOG = "/tmp/tares-trigger-debounce-test.catalog.yaml"
 os.environ["TARES_DB"] = DB
@@ -50,9 +51,7 @@ triggers:
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
     open(CATALOG, "w").write(CATALOG_YAML)
     from tares.daemon import make_app
     app = make_app()
