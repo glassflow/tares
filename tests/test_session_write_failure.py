@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import sys
@@ -41,8 +42,9 @@ os.environ["TARES_ARCHIVE_URL"] = "file://" + tempfile.mkdtemp(prefix="tares-wri
 import httpx  # noqa: E402
 from sqlalchemy import delete, func, select, update  # noqa: E402
 
-from tares import session_drain, session_ingest, session_move  # noqa: E402
+from tares import metrics, session_drain, session_ingest, session_move  # noqa: E402
 from tares.envelope import Envelope, now_utc  # noqa: E402
+from tares.session_store.tables import challenges as challenges_table  # noqa: E402
 from tares.session_store.tables import (session_commands, session_files,  # noqa: E402
                                         session_ingest_marks, session_lines, session_messages,
                                         session_said, session_turns, sessions)
@@ -252,7 +254,35 @@ def drop_duck(s, sid=None):
 
 
 def challenges(s):
-    return s.sc.execute("SELECT count(*) FROM challenges").fetchone()[0]
+    with s.sessions_db.read() as c:
+        return c.execute(select(func.count()).select_from(challenges_table)).scalar()
+
+
+def lost():
+    """What `tares_challenges_lost_total` says (None without the prometheus library)."""
+    if not metrics.AVAILABLE:
+        return None
+    return metrics.CHALLENGES_LOST._value.get()
+
+
+class Said(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+@contextlib.contextmanager
+def warnings_said():
+    h = Said()
+    log = logging.getLogger("tares.factory_store")
+    log.addHandler(h)
+    try:
+        yield h.lines
+    finally:
+        log.removeHandler(h)
 
 
 def facts(s, sid):
@@ -300,23 +330,35 @@ def unavailable(want):
        and len(want["session_messages"]) == 1 and len(want["session_turns"]) == 1
        and len(want["session_said"]) == 1 and len(want["session_files"]) == 1, want)
     s = open_store()
-    commit = env("s", "ts", 7, "challenge_commit", "challenger: PASS", [])
+    commit = env("s", "ts", 7, "challenge_commit", "challenger: PASS", [],
+                 payload={"challenge": {"sha": "abc1234", "summary": "SECRET-VERDICT-TEXT"}})
     commit.labels["branch"] = "b1"
     batch = work("s", "ts") + [commit]
-    with down(s):
+    had = lost()
+    with down(s), warnings_said() as said:
         e, _ = raised(lambda: s.append(batch))
     ck("append raises LinesNotStored", isinstance(e, session_ingest.LinesNotStored), repr(e))
     ck("no line, count or fact is stored, in either database",
        row(s, "s") is None and rows_of(s, "s") == 0 and duck(s, "s") == 0
        and not any(facts(s, "s").values()), (row(s, "s"), rows_of(s, "s"), duck(s, "s")))
-    ck("the challenger's verdict is kept all the same", challenges(s) == 1, challenges(s))
+    mine = [m for m in said if "challenger line" in m]
+    ck("the lost verdict is said once, naming the session and the commit",
+       challenges(s) == 0 and len(mine) == 1 and mine[0].startswith("1 challenger line(s) lost")
+       and "session s commit abc1234" in mine[0], (challenges(s), said))
+    ck("the warning holds no verdict text", "SECRET-VERDICT-TEXT" not in " ".join(said), said)
+    ck("and is counted in tares_challenges_lost_total", had is not None and lost() == had + 1,
+       (had, lost()))
     s.append(work("s", "ts"))
+    ck("it is not brought back once the store takes writes again", challenges(s) == 0, challenges(s))
     ck("sent again, the factory holds what a delivery with no failure holds",
        not differs(view(s, "s", "ts"), want), differs(view(s, "s", "ts"), want))
     ck("each line is stored once, in the session store alone",
        rows_of(s, "s") == 6 and duck(s, "s") == 0, (rows_of(s, "s"), duck(s, "s")))
+    had = lost()
     s.append([commit])
-    ck("the challenger's line sent again is not counted twice", challenges(s) == 1, challenges(s))
+    s.append([commit])
+    ck("the challenger's line sent again is kept once, and not counted as lost",
+       challenges(s) == 1 and lost() == had, (challenges(s), had, lost()))
     ck("nothing is left to drain", session_drain.drain(s) == 0 and marks(s) == [], marks(s))
     with patched(session_ingest, "_write_whole", lambda *a: (_ for _ in ()).throw(AssertionError())):
         e, _ = raised(lambda: s.append([]))

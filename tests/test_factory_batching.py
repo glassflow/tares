@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -131,7 +132,7 @@ def build(store, name: str, n: int) -> str:
                                  [{"severity": "major", "file": "a.py", "line": rnd + 1,
                                    "blocking": rnd == 0, "text": f"finding {i}.{rnd}"}],
                                  {"F1": "fixed"} if rnd else {}, lambda t: "bug",
-                                 "2026-10-22T10:00:00Z")
+                                 datetime(2026, 10, 22, 10, tzinfo=timezone.utc))
     return uid
 
 

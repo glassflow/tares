@@ -1559,9 +1559,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._keep_challenges(envelopes)
 
     def _keep_challenges(self, envelopes) -> None:
-        # the challenger's lines also go to `challenges` (state), after the events committed. One
-        # lost to a crash in between is copied at the next open (_challenges_fill) on a platform
-        # edition; the factory edition runs that fill once (TR-1613), so there it is not copied.
+        # the challenger's lines also go to `challenges` (sessions database), after the events
+        # committed. One that cannot be written, or is lost to a crash in between, is copied at
+        # the next open (_challenges_fill) on a platform edition. The factory edition runs that
+        # fill once (TR-1613) and the challenger sends a line once: there it is lost, said in the
+        # log and counted (`tares_challenges_lost_total`).
         ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
                str((e.labels or {}).get("branch") or ""),
                None if (e.labels or {}).get("tares_project") is None
@@ -1572,9 +1574,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 with self._swrite:
                     self._record_challenges(ch)
             except Exception as ex:          # the events are in; never fail the ingest for this
-                print(f"taresd: keeping {len(ch)} challenger line(s) failed ({ex}); they are "
-                      "copied at the next start, except on a factory cell that has already run "
-                      "that fill", flush=True)
+                self._challenges_not_kept(ch, ex)
 
     def _apply_entity_deltas(self, ent: dict) -> None:
         """Fold this batch's (source, label, value) deltas into entity_counts. Already-truncated

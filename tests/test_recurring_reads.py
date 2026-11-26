@@ -32,9 +32,11 @@ os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-recurring"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
+from sqlalchemy import func, select, update
 
 from tares import factory as factory_mod
 from tares.envelope import now_utc
+from tares.session_store.tables import review_findings as findings_table
 
 P = F = 0
 BUDGET = 4
@@ -168,17 +170,19 @@ async def main():
         tickets = seed(store)
         # a finding that is not on its ticket's project, one older than the window
         first = next(t["id"] for t in store.list_tickets("uc_rec1") if t["number"] == 1)
-        old = store.sc.execute("SELECT id FROM review_findings WHERE ticket = ?", [first]).fetchone()[0]
-        store.sc.execute("UPDATE review_findings SET project = 'uc_gone' WHERE id = ?", [old])
-        older = store.sc.execute("SELECT id FROM review_findings WHERE project = 'uc_rec2' LIMIT 1").fetchone()[0]
-        store.sc.execute("UPDATE review_findings SET found_at = ? WHERE id = ?",
-                         [now_utc() - timedelta(days=90), older])
-        total = store.sc.execute("SELECT count(*) FROM review_findings").fetchone()[0]
+        f = findings_table
+        with store.sessions_db.begin() as conn:
+            old = conn.execute(select(f.c.id).where(f.c.ticket == first)).scalar()
+            conn.execute(update(f).where(f.c.id == old).values(project="uc_gone"))
+            older = conn.execute(select(f.c.id).where(f.c.project == "uc_rec2").limit(1)).scalar()
+            conn.execute(update(f).where(f.c.id == older)
+                         .values(found_at=now_utc() - timedelta(days=90)))
+            total = conn.execute(select(func.count()).select_from(f)).scalar()
         print(f"== {total} findings over {tickets} tickets in 5 projects ==")
-        # the findings are in DuckDB, the tickets in the session store (TR-1612)
         here = {t["id"] for i in range(5) for t in store.list_tickets(f"uc_rec{i}")
                 if (t["pr"] or {}).get("repo") == REPO}
-        found = store.sc.execute("SELECT ticket FROM review_findings").fetchall()
+        with store.sessions_db.read() as conn:
+            found = conn.execute(select(f.c.ticket)).fetchall()
         ck("the cell holds 200 findings on the repo and 3 on another",
            sum(1 for r in found if r[0] in here) == 200 and total == 203, total)
 

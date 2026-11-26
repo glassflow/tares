@@ -356,8 +356,9 @@ async def main():
         store.accept_milestone(pw, mws["M2"], "Vladimir", None, now_utc())
         mc2 = next(i for i in (await get_home())["waiting_for_you"] if i["kind"] == "milestone_to_check")
         ck("a milestone accepted already is not the one held up", mc2["holds_up"] == "M3: dropped", mc2["holds_up"])
-        with store._swrite:
-            store.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [mws["M2"]])
+        with store.sessions_db.begin() as conn:
+            conn.execute(text("DELETE FROM milestone_acceptances WHERE milestone = :m"),
+                         {"m": mws["M2"]})
         ck("a refused command holds its station's work",
            px_perm["holds_up"] == "the builder's work", px_perm["holds_up"])
         ck("calls and a question that names nothing hold nothing",

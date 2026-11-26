@@ -11,10 +11,11 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import Text, and_, delete, func, insert, null, or_, select, type_coerce, update
+from sqlalchemy import (Text, and_, case, delete, func, insert, null, or_, select, type_coerce,
+                        update)
 
 from . import claude_usage_hourly as hourly
-from . import session_ingest
+from . import metrics, session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
 from .session_store.tables import (project_sessions, session_commands, session_messages,
@@ -26,6 +27,14 @@ from .session_store.tables import people as people_table
 from .session_store.tables import ticket_history as history_table
 from .session_store.tables import ticket_numbers as numbers_table
 from .session_store.tables import tickets as tickets_table
+from .session_store.tables import milestones as milestones_table
+from .session_store.tables import milestone_check_results as milestone_results_table
+from .session_store.tables import milestone_acceptances as acceptances_table
+from .session_store.tables import ticket_checks as checks_table
+from .session_store.tables import challenges as challenges_table
+from .session_store.tables import reviews as reviews_table
+from .session_store.tables import review_findings as findings_table
+from .session_store.tables import rule_proposals as proposals_table
 
 log = logging.getLogger("tares.factory_store")
 
@@ -36,35 +45,6 @@ def _loggable(x) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group())[1:-1], str(x))
 
 FACTORY_SCHEMA = [
-    # The Codex challenger's reviews and waivers (TR-719), copied from the events as they arrive
-    # so the review queue, the ticket detail and the merge gate look a ticket's up by branch
-    # instead of scanning every event for them.
-    """CREATE TABLE IF NOT EXISTS challenges (
-      source        TEXT,
-      key_value     TEXT,
-      event_time    TIMESTAMPTZ,
-      event_type    TEXT,
-      branch        TEXT,
-      tares_project TEXT,
-      payload       JSON,
-      PRIMARY KEY (source, key_value, event_time, event_type, branch)
-    )""",
-    "CREATE INDEX IF NOT EXISTS ix_challenges_branch ON challenges(source, branch)",
-    # A factory project's milestones (TR-411): each ships something a person can check, its
-    # acceptance checks ([{check, expect}]). owner 'linear' when it mirrors a Linear project
-    # milestone (external_id), written by the sync; the checks stay Tares's either way.
-    """CREATE TABLE IF NOT EXISTS milestones (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      owner       TEXT,
-      external_id TEXT,
-      name        TEXT,
-      goal        TEXT,
-      checks      JSON,
-      position    DOUBLE,
-      created_at  TIMESTAMPTZ,
-      updated_at  TIMESTAMPTZ
-    )""",
     # Which station a Claude Code session plays (TR-418, TR-420), from the plugin's
     # `session_station` line: the station's stable name, its role, the station that started it
     # (builders and helpers), and the project it was started for (TARES_PROJECT, builders).
@@ -94,88 +74,6 @@ FACTORY_SCHEMA = [
       made_by     TEXT,
       made_role   TEXT,
       made_at     TIMESTAMPTZ,
-      decided_at  TIMESTAMPTZ
-    )""",
-    # Checks a builder ran on a ticket (TR-435): the command, what it showed, the commit, the test
-    # proven to bite. Also a line in the ticket's working doc; kept here so they can be matched
-    # against the recording (TR-442).
-    # A milestone's acceptance checks, run and recorded (TR-1017): one row per run, the latest per
-    # (milestone, index) counts. by_kind is crew (a station ran it) or person (they tried it).
-    """CREATE TABLE IF NOT EXISTS milestone_check_results (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      milestone   TEXT,
-      idx         INTEGER,
-      result      TEXT,
-      note        TEXT,
-      by_kind     TEXT,
-      by_name     TEXT,
-      person_id   TEXT,
-      checked_at  TIMESTAMPTZ
-    )""",
-    # A milestone the person accepted as a whole, without (or before) its checks' results.
-    """CREATE TABLE IF NOT EXISTS milestone_acceptances (
-      milestone   TEXT PRIMARY KEY,
-      project     TEXT,
-      by_name     TEXT,
-      person_id   TEXT,
-      accepted_at TIMESTAMPTZ
-    )""",
-    """CREATE TABLE IF NOT EXISTS ticket_checks (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      ticket      TEXT,
-      command     TEXT,
-      result      TEXT,
-      commit_sha  TEXT,
-      broke_test  TEXT,
-      by_station  TEXT,
-      by_session  TEXT,
-      checked_at  TIMESTAMPTZ
-    )""",
-    # The reviewer's verdicts (TR-441), one row per round, on the commit it was given on.
-    """CREATE TABLE IF NOT EXISTS reviews (
-      id           TEXT PRIMARY KEY,
-      project      TEXT,
-      ticket       TEXT,
-      round        INTEGER,
-      pr           TEXT,
-      head         TEXT,
-      verdict      TEXT,
-      verified     TEXT,
-      not_verified TEXT,
-      by_station   TEXT,
-      reviewed_at  TIMESTAMPTZ
-    )""",
-    # Findings of a review (F1, F2... per ticket), each open until a later round marks it fixed.
-    """CREATE TABLE IF NOT EXISTS review_findings (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      ticket      TEXT,
-      review      TEXT,
-      number      INTEGER,
-      severity    TEXT,
-      file        TEXT,
-      line        INTEGER,
-      blocking    BOOLEAN,
-      text        TEXT,
-      kind        TEXT,
-      state       TEXT,
-      fixed_in    TEXT,
-      found_at    TIMESTAMPTZ
-    )""",
-    # Rules offered from findings that keep coming back (TR-443): nothing is kept until the person
-    # accepts one; a rejected one is never offered again (its key stays).
-    """CREATE TABLE IF NOT EXISTS rule_proposals (
-      id          TEXT PRIMARY KEY,
-      repo        TEXT,
-      kind        TEXT,
-      project     TEXT,
-      scope       TEXT,
-      text        TEXT,
-      tickets     JSON,
-      state       TEXT,
-      created_at  TIMESTAMPTZ,
       decided_at  TIMESTAMPTZ
     )""",
     # A map of one GitHub repo (TR-681), shared by every project that names it, with a dated line
@@ -271,8 +169,6 @@ FACTORY_SCHEMA = [
     # found in their own recorded sessions answer it. NULL for an item from before this.
     "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS to_person_id TEXT",
     "ALTER TABLE assumptions ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE ticket_checks ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_person_id TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_person_id TEXT",
@@ -812,16 +708,12 @@ class FactoryStore:
 
     def _factory_forget_project(self, uid: str) -> None:
         """A project is deleted: its factory rows go. Lock held."""
-        self.sc.execute("DELETE FROM milestones WHERE project = ?", [uid])
         with self.sessions_db.begin() as conn:
             conn.execute(delete(numbers_table).where(numbers_table.c.project == uid))
-            conn.execute(delete(history_table).where(history_table.c.project == uid))
+            for t in (history_table, milestones_table, checks_table, milestone_results_table,
+                      acceptances_table, reviews_table, findings_table):
+                conn.execute(delete(t).where(t.c.project == uid))
         self.sc.execute("DELETE FROM assumptions WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM milestone_check_results WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM milestone_acceptances WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM reviews WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
@@ -839,29 +731,39 @@ class FactoryStore:
         self._secrets_changed()
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
-    _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
-
     @staticmethod
     def _ms_row(r) -> dict:
-        return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3], "name": r[4],
-                "goal": r[5] or "", "checks": json.loads(r[6]) if r[6] else [],
-                "position": r[7], "created_at": r[8], "updated_at": r[9]}
+        return {**r._mapping, "goal": r.goal or "", "checks": r.checks or []}
+
+    @staticmethod
+    def _ms_order():
+        t = milestones_table
+        return (t.c.position.asc().nulls_last(), t.c.created_at.asc().nulls_last(), t.c.id)
+
+    @staticmethod
+    def _insert_milestone(conn, project: str, name: str, goal: str, checks: list[dict] | None,
+                          position: float | None, owner: str, external_id: str | None) -> str:
+        """A new row, after the project's last when no position is given. In the caller's
+        transaction."""
+        t = milestones_table
+        if position is None:
+            last = conn.execute(select(func.max(t.c.position)).where(
+                t.c.project == project)).scalar()
+            position = (last or 0) + 1
+        mid = "ms_" + uuid.uuid4().hex[:10]
+        ts = now_utc()
+        conn.execute(insert(t).values(
+            id=mid, project=project, owner=owner, external_id=external_id, name=name,
+            goal=goal or "", checks=checks or [], position=float(position), created_at=ts,
+            updated_at=ts))
+        return mid
 
     def create_milestone(self, project: str, name: str, goal: str = "",
                          checks: list[dict] | None = None, position: float | None = None,
                          owner: str = "tares", external_id: str | None = None) -> str:
-        mid = "ms_" + uuid.uuid4().hex[:10]
-        ts = now_utc()
-        with self._swrite:
-            if position is None:
-                last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
-                                        [project]).fetchone()[0]
-                position = (last or 0) + 1
-            self.sc.execute(
-                f"INSERT INTO milestones ({self._MS_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [mid, project, owner, external_id, name, goal or "",
-                 json.dumps(checks or []), float(position), ts, ts])
-        return mid
+        with self._swrite, self.sessions_db.begin() as conn:
+            return self._insert_milestone(conn, project, name, goal, checks, position, owner,
+                                          external_id)
 
     def adopt_milestone(self, project: str, owner: str, external_id: str, name: str,
                         goal: str | None, checks: list[dict] | None = None,
@@ -873,112 +775,107 @@ class FactoryStore:
         given (a position only when given). `new_goal` is the goal of a new row when `goal` is None,
         so a sync can fill a new row from the tracker without touching a found one. The syncs
         insert through here too. Returns the row's id."""
-        with self._swrite:
-            r = self.sc.execute("SELECT id FROM milestones WHERE project = ? AND owner = ? AND "
-                                "external_id = ? LIMIT 1", [project, owner, external_id]).fetchone()
-            if r is None:
-                r = self.sc.execute("SELECT id FROM milestones WHERE project = ? AND owner = "
-                                    "'tares' AND lower(name) = lower(?) LIMIT 1",
-                                    [project, name]).fetchone()
-            if r is None:
-                mid = "ms_" + uuid.uuid4().hex[:10]
-                ts = now_utc()
-                if position is None:
-                    last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
-                                           [project]).fetchone()[0]
-                    position = (last or 0) + 1
-                self.sc.execute(
-                    f"INSERT INTO milestones ({self._MS_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [mid, project, owner, external_id, name,
-                     (goal if goal is not None else new_goal) or "",
-                     json.dumps(checks or []), float(position), ts, ts])
-                return mid
-            sets, vals = ["owner = ?", "external_id = ?", "updated_at = ?"], [owner, external_id,
-                                                                                now_utc()]
+        t = milestones_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            found = None
+            if external_id is not None:      # `== None` would match every row without one
+                found = conn.execute(select(t.c.id).where(
+                    t.c.project == project, t.c.owner == owner,
+                    t.c.external_id == external_id).order_by(*self._ms_order()).limit(1)).scalar()
+            if found is None:
+                # the name is compared here: SQLite's lower() changes ASCII letters only
+                low = name.lower()
+                found = next((r.id for r in conn.execute(select(t.c.id, t.c.name).where(
+                    t.c.project == project, t.c.owner == "tares").order_by(*self._ms_order()))
+                    if r.name is not None and r.name.lower() == low), None)
+            if found is None:
+                return self._insert_milestone(conn, project, name,
+                                              goal if goal is not None else new_goal, checks,
+                                              position, owner, external_id)
+            values: dict = {"owner": owner, "external_id": external_id, "updated_at": now_utc()}
             if goal is not None:
-                sets.append("goal = ?"); vals.append(goal)
+                values["goal"] = goal
             if checks is not None:
-                sets.append("checks = ?"); vals.append(json.dumps(checks))
+                values["checks"] = checks
             if position is not None:
-                sets.append("position = ?"); vals.append(float(position))
-            self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals + [r[0]])
-            return r[0]
+                values["position"] = float(position)
+            conn.execute(update(t).where(t.c.id == found).values(values))
+            return found
 
     def update_milestone(self, mid: str, **fields) -> None:
         allowed = {"name", "goal", "checks", "position", "owner", "external_id"}
-        sets, vals = ["updated_at = ?"], [now_utc()]
+        values: dict = {"updated_at": now_utc()}
         for col, v in fields.items():
             if col not in allowed:
                 continue
-            if col == "checks":
-                v = json.dumps(v or [])
-            sets.append(f"{col} = ?"); vals.append(v)
-        vals.append(mid)
-        with self._swrite:
-            self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals)
+            values[col] = (v or []) if col == "checks" else v
+        t = milestones_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == mid).values(values))
 
     def record_milestone_check(self, project: str, milestone: str, idx: int, result: str,
                                note: str | None, by_kind: str, by_name: str | None,
                                person_id: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO milestone_check_results (id, project, milestone, idx, result, note, "
-                "by_kind, by_name, person_id, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ["mc_" + uuid.uuid4().hex[:10], project, milestone, int(idx), result,
-                 note or None, by_kind, by_name or None, person_id or None, at])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(milestone_results_table).values(
+                id="mc_" + uuid.uuid4().hex[:10], project=project, milestone=milestone,
+                idx=int(idx), result=result, note=note or None, by_kind=by_kind,
+                by_name=by_name or None, person_id=person_id or None, checked_at=at))
 
     def milestone_check_results(self, milestones: list[str]) -> dict[str, dict[int, dict]]:
         """{milestone: {index: the latest result {result, note, by_kind, by_name, at}}}."""
         if not milestones:
             return {}
-        marks = ", ".join("?" for _ in milestones)
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT milestone, idx, result, note, by_kind, by_name, person_id, checked_at FROM "
-                f"milestone_check_results WHERE milestone IN ({marks}) ORDER BY checked_at, id",
-                list(milestones)).fetchall()
+        t = milestone_results_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                t.c.milestone, t.c.idx, t.c.result, t.c.note, t.c.by_kind, t.c.by_name,
+                t.c.person_id, t.c.checked_at).where(t.c.milestone.in_(list(milestones)))
+                .order_by(t.c.checked_at.asc().nulls_last(), t.c.id)).fetchall()
         out: dict[str, dict[int, dict]] = {}
         for r in rows:
-            out.setdefault(r[0], {})[int(r[1])] = {"result": r[2], "note": r[3], "by_kind": r[4],
-                                                   "by_name": r[5], "person_id": r[6], "at": r[7]}
+            out.setdefault(r.milestone, {})[int(r.idx)] = {
+                "result": r.result, "note": r.note, "by_kind": r.by_kind, "by_name": r.by_name,
+                "person_id": r.person_id, "at": r.checked_at}
         return out
 
     def accept_milestone(self, project: str, milestone: str, by_name: str | None,
                          person_id: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [milestone])
-            self.sc.execute("INSERT INTO milestone_acceptances (milestone, project, by_name, "
-                             "person_id, accepted_at) VALUES (?, ?, ?, ?, ?)",
-                             [milestone, project, by_name or None, person_id or None, at])
+        t = acceptances_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.milestone == milestone))
+            conn.execute(insert(t).values(
+                milestone=milestone, project=project, by_name=by_name or None,
+                person_id=person_id or None, accepted_at=at))
 
     def milestone_acceptances(self, milestones: list[str]) -> dict[str, dict]:
         if not milestones:
             return {}
-        marks = ", ".join("?" for _ in milestones)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT milestone, by_name, person_id, accepted_at FROM "
-                                    f"milestone_acceptances WHERE milestone IN ({marks})",
-                                    list(milestones)).fetchall()
-        return {r[0]: {"by": r[1], "person_id": r[2], "at": r[3]} for r in rows}
+        t = acceptances_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.milestone, t.c.by_name, t.c.person_id, t.c.accepted_at)
+                                .where(t.c.milestone.in_(list(milestones)))).fetchall()
+        return {r.milestone: {"by": r.by_name, "person_id": r.person_id, "at": r.accepted_at}
+                for r in rows}
 
     def list_milestones(self, project: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? "
-                                    "ORDER BY position, created_at, id", [project]).fetchall()
+        t = milestones_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project == project)
+                                .order_by(*self._ms_order())).fetchall()
         return [self._ms_row(r) for r in rows]
 
     def milestones_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
         """{project: its milestones in order} in one query (the home page)."""
         if not projects:
             return {}
-        marks = ", ".join("?" for _ in projects)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project IN "
-                                    f"({marks}) ORDER BY position, created_at, id",
-                                    list(projects)).fetchall()
+        t = milestones_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project.in_(list(projects)))
+                                .order_by(*self._ms_order())).fetchall()
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
-            out[r[1]].append(self._ms_row(r))
+            out[r.project].append(self._ms_row(r))
         return out
 
     def get_milestone(self, project: str, ref: str) -> dict | None:
@@ -986,12 +883,11 @@ class FactoryStore:
         ref = (ref or "").strip()
         if not ref:
             return None
-        with self._sread:
-            r = self.sc.execute(
-                f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? AND (id = ? OR "
-                "external_id = ? OR lower(name) = lower(?)) ORDER BY position LIMIT 1",
-                [project, ref, ref, ref]).fetchone()
-        return self._ms_row(r) if r else None
+        # matched here, not in SQL: SQLite's lower() changes ASCII letters only
+        low = ref.lower()
+        return next((m for m in self.list_milestones(project)
+                     if m["id"] == ref or m["external_id"] == ref
+                     or (m["name"] is not None and m["name"].lower() == low)), None)
 
     # ── crews (TR-628) ────────────────────────────────────────────────────────
     def _crew_id(self, name: str, person_id: str, machine: str, at) -> str:
@@ -1549,24 +1445,24 @@ class FactoryStore:
                   broke_test: str, by_station: str, by_session: str, at,
                   person_id: str | None = None) -> str:
         cid = "ck_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO ticket_checks (id, project, ticket, command, result, commit_sha, "
-                "broke_test, by_station, by_session, checked_at, person_id) VALUES (?, ?, ?, ?, ?, "
-                "?, ?, ?, ?, ?, ?)", [cid, project, ticket, command, result, commit or None,
-                                      broke_test or None, by_station or None, by_session or None,
-                                      at, person_id or None])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(checks_table).values(
+                id=cid, project=project, ticket=ticket, command=command, result=result,
+                commit_sha=commit or None, broke_test=broke_test or None,
+                by_station=by_station or None, by_session=by_session or None, checked_at=at,
+                person_id=person_id or None))
         return cid
 
     def ticket_checks(self, ticket: str, limit: int = 50) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT id, command, result, commit_sha, broke_test, by_station, checked_at, person_id "
-                "FROM ticket_checks WHERE ticket = ? ORDER BY checked_at DESC LIMIT ?",
-                [ticket, limit]).fetchall()
-        return self._with_people([{"id": r[0], "command": r[1], "result": r[2], "commit": r[3],
-                                   "broke_test": r[4], "by": r[5], "at": r[6], "person_id": r[7]}
-                                  for r in reversed(rows)])
+        t = checks_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                t.c.id, t.c.command, t.c.result, t.c.commit_sha.label("commit"), t.c.broke_test,
+                t.c.by_station.label("by"), t.c.checked_at.label("at"), t.c.person_id)
+                .where(t.c.ticket == ticket)
+                .order_by(t.c.checked_at.desc().nulls_last(), t.c.id.desc())
+                .limit(limit)).fetchall()
+        return self._with_people([dict(r._mapping) for r in reversed(rows)])
 
     # ── reviews (TR-441) ──────────────────────────────────────────────────────
     def add_review(self, project: str, ticket: str, pr: str | None, head: str, verdict: str,
@@ -1575,53 +1471,64 @@ class FactoryStore:
         """A review round: earlier findings marked fixed or still open as `resolved` says
         ({F<n> or id: fixed|open}), the new findings numbered on from the ticket's last."""
         rid = "rv_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            rnd = (self.sc.execute("SELECT max(round) FROM reviews WHERE ticket = ?",
-                                    [ticket]).fetchone()[0] or 0) + 1
-            self.sc.execute(
-                "INSERT INTO reviews (id, project, ticket, round, pr, head, verdict, verified, "
-                "not_verified, by_station, reviewed_at, person_id) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [rid, project, ticket, rnd, pr, head, verdict, verified, not_verified or None,
-                 by or None, at, person_id or None])
+        r, f = reviews_table, findings_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            rnd = (conn.execute(select(func.max(r.c.round)).where(
+                r.c.ticket == ticket)).scalar() or 0) + 1
+            conn.execute(insert(r).values(
+                id=rid, project=project, ticket=ticket, round=rnd, pr=pr, head=head,
+                verdict=verdict, verified=verified, not_verified=not_verified or None,
+                by_station=by or None, reviewed_at=at, person_id=person_id or None))
             for ref, st in (resolved or {}).items():
                 m = re.match(r"^[Ff]?(\d{1,6})$", str(ref).strip())
-                self.sc.execute(
-                    "UPDATE review_findings SET state = ?, fixed_in = ? WHERE ticket = ? AND "
-                    "(id = ? OR number = ?)", [st, rid if st == "fixed" else None, ticket, ref,
-                                               int(m.group(1)) if m else -1])
-            n = self.sc.execute("SELECT max(number) FROM review_findings WHERE ticket = ?",
-                                 [ticket]).fetchone()[0] or 0
-            for f in findings:
-                n += 1
-                self.sc.execute(
-                    "INSERT INTO review_findings (id, project, ticket, review, number, severity, "
-                    "file, line, blocking, text, kind, state, fixed_in, found_at) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?)",
-                    ["rf_" + uuid.uuid4().hex[:10], project, ticket, rid, n, f["severity"],
-                     f["file"] or None, f["line"] or None, f["blocking"], f["text"],
-                     kind_of(f["text"]), at])
+                conn.execute(update(f).where(
+                    f.c.ticket == ticket,
+                    or_(f.c.id == str(ref), f.c.number == (int(m.group(1)) if m else -1))
+                ).values(state=st, fixed_in=rid if st == "fixed" else None))
+            n = conn.execute(select(func.max(f.c.number)).where(f.c.ticket == ticket)).scalar() or 0
+            new = [{"id": "rf_" + uuid.uuid4().hex[:10], "project": project, "ticket": ticket,
+                    "review": rid, "number": n + i, "severity": x["severity"],
+                    "file": x["file"] or None, "line": x["line"] or None,
+                    "blocking": x["blocking"], "text": x["text"], "kind": kind_of(x["text"]),
+                    "state": "open", "fixed_in": None, "found_at": at}
+                   for i, x in enumerate(findings, 1)]
+            if new:
+                conn.execute(insert(f), new)
         return {"id": rid, "round": rnd}
 
+    @staticmethod
+    def _review_cols():
+        r = reviews_table.c
+        return (r.id, r.round, r.pr, r.head, r.verdict, r.verified, r.not_verified,
+                r.by_station.label("by"), r.reviewed_at.label("at"))
+
+    @staticmethod
+    def _finding_cols():
+        f = findings_table.c
+        return (f.id, f.review, f.number, f.severity, f.file, f.line, f.blocking, f.text, f.kind,
+                f.state, f.fixed_in)
+
+    @staticmethod
+    def _finding_row(f) -> dict:
+        return {"id": f.id, "review": f.review, "label": f"F{f.number}", "severity": f.severity,
+                "file": f.file, "line": f.line, "blocking": bool(f.blocking), "text": f.text,
+                "kind": f.kind, "state": f.state, "fixed_in": f.fixed_in}
+
     def ticket_reviews(self, ticket: str) -> list[dict]:
-        with self._sread:
-            revs = self.sc.execute(
-                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
-                "reviewed_at, person_id FROM reviews WHERE ticket = ? ORDER BY round", [ticket]).fetchall()
-            fs = self.sc.execute(
-                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
-                "fixed_in FROM review_findings WHERE ticket = ? ORDER BY number",
-                [ticket]).fetchall()
-        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
-                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
-                  "state": f[9], "fixed_in": f[10]} for f in fs]
+        r, f = reviews_table, findings_table
+        # one snapshot: a round recorded between the two reads must not show half
+        with self.sessions_db.consistent_read() as conn:
+            revs = conn.execute(select(*self._review_cols(), r.c.person_id)
+                                .where(r.c.ticket == ticket)
+                                .order_by(r.c.round.asc().nulls_last(), r.c.id)).fetchall()
+            fs = conn.execute(select(*self._finding_cols()).where(f.c.ticket == ticket)
+                              .order_by(f.c.number.asc().nulls_last(), f.c.id)).fetchall()
+        finds = [self._finding_row(x) for x in fs]
         out = []
-        for r in revs:
-            mine = [f for f in finds if f["review"] == r[0]]
-            fixed_here = [f["label"] for f in finds if f["fixed_in"] == r[0]]
-            out.append({"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
-                        "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
-                        "person_id": r[9], "findings": mine, "fixed": fixed_here})
+        for rv in revs:
+            mine = [x for x in finds if x["review"] == rv.id]
+            fixed_here = [x["label"] for x in finds if x["fixed_in"] == rv.id]
+            out.append({**rv._mapping, "findings": mine, "fixed": fixed_here})
         return self._with_people(out)
 
     def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
@@ -1631,35 +1538,36 @@ class FactoryStore:
         if not tickets:
             return {}
         from .factory import MERGE_QUEUE, standing_round
-        marks = ", ".join("?" for _ in tickets)
-        with self._sread:
-            revs = self.sc.execute(
-                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
-                "reviewed_at, ticket FROM (SELECT *, row_number() OVER (PARTITION BY ticket, "
-                "CASE WHEN by_station = ? THEN 1 ELSE 0 END ORDER BY round DESC) AS rn "
-                f"FROM reviews WHERE ticket IN ({marks})) r WHERE rn = 1 ORDER BY round",
-                [MERGE_QUEUE, *tickets]).fetchall()
+        r, f = reviews_table, findings_table
+        ranked = select(
+            *self._review_cols(), r.c.ticket,
+            func.row_number().over(
+                partition_by=[r.c.ticket, case((r.c.by_station == MERGE_QUEUE, 1), else_=0)],
+                order_by=r.c.round.desc().nulls_last()).label("rn")
+        ).where(r.c.ticket.in_(list(tickets))).subquery()
+        cols = [c for c in ranked.c if c.name != "rn"]
+        with self.sessions_db.consistent_read() as conn:
+            revs = conn.execute(select(*cols).where(ranked.c.rn == 1)
+                                .order_by(ranked.c.round.asc().nulls_last(),
+                                          ranked.c.id)).fetchall()
             # per ticket the newest round of the merge queue and the newest of everyone else, so
             # the one that stands is among them
             newest: dict[str, list[dict]] = {}
-            for r in revs:
-                newest.setdefault(r[9], []).append({"id": r[0], "by": r[7], "verdict": r[4]})
+            for rv in revs:
+                newest.setdefault(rv.ticket, []).append(
+                    {"id": rv.id, "by": rv.by, "verdict": rv.verdict})
             standing = {standing_round(v)["id"] for v in newest.values()}
-            revs = [r for r in revs if r[0] in standing]
-            ids = [r[0] for r in revs]
-            fs = self.sc.execute(
-                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
-                f"fixed_in FROM review_findings WHERE review IN ({', '.join('?' for _ in ids)}) "
-                f"OR fixed_in IN ({', '.join('?' for _ in ids)}) ORDER BY number",
-                ids + ids).fetchall() if ids else []
-        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
-                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
-                  "state": f[9], "fixed_in": f[10]} for f in fs]
-        return {r[9]: {"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
-                       "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
-                       "findings": [f for f in finds if f["review"] == r[0]],
-                       "fixed": [f["label"] for f in finds if f["fixed_in"] == r[0]]}
-                for r in revs}
+            revs = [rv for rv in revs if rv.id in standing]
+            ids = [rv.id for rv in revs]
+            fs = conn.execute(select(*self._finding_cols())
+                              .where(or_(f.c.review.in_(ids), f.c.fixed_in.in_(ids)))
+                              .order_by(f.c.number.asc().nulls_last(), f.c.id)
+                              ).fetchall() if ids else []
+        finds = [self._finding_row(x) for x in fs]
+        return {rv.ticket: {**{k: v for k, v in rv._mapping.items() if k != "ticket"},
+                            "findings": [x for x in finds if x["review"] == rv.id],
+                            "fixed": [x["label"] for x in finds if x["fixed_in"] == rv.id]}
+                for rv in revs}
 
     def open_findings(self, ticket: str) -> list[dict]:
         return [f for r in self.ticket_reviews(ticket) for f in r["findings"] if f["state"] == "open"]
@@ -1667,29 +1575,31 @@ class FactoryStore:
     def repo_findings(self, repo: str, since) -> list[dict]:
         """Every reviewer finding on tickets whose PR lives in `repo` since `since`, with the
         ticket and project (TR-443). Each row also carries the ticket's own project, identifier and
-        number (what factory.label needs), so a caller names the tickets without reading each."""
+        number (what factory.label needs), so a caller names the tickets without reading each.
+        Oldest first."""
         if repo is None:
             return []
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, project, kind, text, severity, found_at FROM review_findings "
-                "WHERE found_at >= ?", [since]).fetchall()
-        if not rows:
-            return []
-        # the findings are in DuckDB, the tickets in the session store: the join is made here
-        t = tickets_table
-        ids = sorted({r[0] for r in rows if r[0] is not None})
+        f, t = findings_table, tickets_table
         mine: dict = {}
-        with self.sessions_db.read() as conn:
+        with self.sessions_db.consistent_read() as conn:
+            rows = conn.execute(select(
+                f.c.ticket, f.c.project, f.c.kind, f.c.text, f.c.severity, f.c.found_at)
+                .where(f.c.found_at >= since)
+                .order_by(f.c.found_at, f.c.ticket, f.c.number)).fetchall()
+            if not rows:
+                return []
+            # the repo is inside the ticket's `pr`, so it is checked here
+            ids = sorted({r.ticket for r in rows if r.ticket is not None})
             for i in range(0, len(ids), 500):
                 for tk in conn.execute(select(t.c.id, t.c.project, t.c.identifier, t.c.number,
                                               t.c.pr).where(t.c.id.in_(ids[i:i + 500]))):
                     if (tk.pr or {}).get("repo") == repo:
                         mine[tk.id] = tk
-        return [{"ticket": r[0], "project": r[1], "kind": r[2], "text": r[3], "severity": r[4],
-                 "at": r[5], "ticket_project": mine[r[0]].project,
-                 "ticket_identifier": mine[r[0]].identifier,
-                 "ticket_number": mine[r[0]].number} for r in rows if r[0] in mine]
+        return [{"ticket": r.ticket, "project": r.project, "kind": r.kind, "text": r.text,
+                 "severity": r.severity, "at": r.found_at,
+                 "ticket_project": mine[r.ticket].project,
+                 "ticket_identifier": mine[r.ticket].identifier,
+                 "ticket_number": mine[r.ticket].number} for r in rows if r.ticket in mine]
 
     # ── what the recording says (TR-440, TR-442) ──────────────────────────────
     CHALLENGE_TYPES = ("challenge_commit", "challenge_waived", "challenge_plan")
@@ -1708,27 +1618,27 @@ class FactoryStore:
         pairs = list(dict.fromkeys(tickets))
         out: dict[tuple[str, str], list[dict]] = {p: [] for p in pairs}
         refs = sorted({ref for _, ref in pairs})
+        t = challenges_table
         rows = []
-        with self._sread:
+        with self.sessions_db.consistent_read() as conn:
             for i in range(0, len(refs), 150):
-                chunk = refs[i:i + 150]
-                where = " OR ".join("branch = ? OR branch LIKE ?" for _ in chunk)
-                args = [x for ref in chunk for x in (f"factory/{ref}", f"factory/{ref}-%")]
-                rows += self.sc.execute(
-                    "SELECT event_time, event_type, payload, key_value, branch, tares_project "
-                    f"FROM challenges WHERE source = ? AND ({where}) ORDER BY event_time",
-                    [source, *args]).fetchall()
+                wanted = []
+                for ref in refs[i:i + 150]:
+                    wanted += [t.c.branch == f"factory/{ref}", t.c.branch.like(f"factory/{ref}-%")]
+                rows += conn.execute(select(
+                    t.c.event_time, t.c.event_type, t.c.payload, t.c.key_value, t.c.branch,
+                    t.c.tares_project).where(t.c.source == source, or_(*wanted))
+                    .order_by(t.c.event_time, t.c.key_value, t.c.event_type,
+                              t.c.branch)).fetchall()
             if not rows:
                 return out
             # a line can match refs in two chunks: keep it once, oldest first as before
             rows = list({(r[0], r[1], r[3], r[4], r[5]): r for r in rows}.values())
             rows.sort(key=lambda r: r[0])
             projects = sorted({p for p, _ in pairs})
-        with self.sessions_db.read() as conn:
             names = dict(conn.execute(select(projects_table.c.id, projects_table.c.name).where(
                 projects_table.c.id.in_(projects))).all())
-        sessions: dict[str, set] = {}
-        with self.sessions_db.begin() as conn:
+            sessions: dict[str, set] = {}
             for project, session in conn.execute(select(
                     project_sessions.c.project, project_sessions.c.session).where(
                     project_sessions.c.project.in_(projects))):
@@ -1739,28 +1649,50 @@ class FactoryStore:
                            or (r[4] or "").startswith(f"factory/{ref}-")]
         for project, ref in pairs:
             stamps = {str(project).lower(), str(names.get(project, project)).lower()}
-            for at, typ, pj, sid, _branch, stamped in by_ref[ref]:
+            for at, typ, payload, sid, _branch, stamped in by_ref[ref]:
                 if stamped is not None:
                     if str(stamped).lower() not in stamps:
                         continue
                 elif sid not in sessions.get(project, ()):
                     continue
-                try:
-                    o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-                except ValueError:
-                    o = {}
+                o = payload if isinstance(payload, dict) else {}
                 ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
                 out[(project, ref)].append({"at": at, "type": typ, "session": sid, "challenge": ch})
         return out
 
     def _record_challenges(self, rows: list[tuple]) -> None:
-        """Keep the challenger's lines (source, key, time, type, branch, project, payload) in
-        `challenges`. Idempotent: a line already kept is skipped."""
+        """Keep the challenger's lines (source, key, time, type, branch, project, payload as JSON
+        text) in `challenges`. Idempotent: a line already kept is skipped."""
+        names = ("source", "key_value", "event_time", "event_type", "branch", "tares_project",
+                 "payload")
         for i in range(0, len(rows), 500):
-            self.sc.executemany(
-                "INSERT INTO challenges (source, key_value, event_time, event_type, branch, "
-                "tares_project, payload) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                rows[i:i + 500])
+            chunk = [dict(zip(names, r)) for r in rows[i:i + 500]]
+            for line in chunk:
+                if line["payload"] is not None:      # the column writes json.dumps itself
+                    line["payload"] = json.loads(line["payload"])
+            with self.sessions_db.begin() as conn:
+                conn.execute(self.sessions_db.upsert(challenges_table).on_conflict_do_nothing(),
+                             chunk)
+
+    def _challenges_not_kept(self, rows: list[tuple], ex: Exception) -> None:
+        """Say that `_record_challenges` could not write `rows` (its shape): session and commit
+        ids and the error's type only, never the payload or the error's text, which can quote the
+        verdict. On the factory edition they are lost and counted."""
+        if not self._factory_writes():
+            print(f"taresd: keeping {len(rows)} challenger line(s) failed ({type(ex).__name__}); "
+                  "they are copied at the next start", flush=True)
+            return
+        named = []
+        for row in rows[:20]:
+            try:
+                sha = json.loads(row[6])["challenge"].get("sha")
+            except (ValueError, TypeError, KeyError, AttributeError):
+                sha = None
+            named.append(f"session {_loggable(row[1] or 'unknown')[:80]} commit "
+                         f"{_loggable(sha or 'none')[:40]}")
+        metrics.challenges_lost(len(rows))
+        log.warning("%d challenger line(s) lost, the sessions database did not take them (%s): %s",
+                    len(rows), type(ex).__name__, "; ".join(named))
 
     def _challenges_fill(self) -> None:
         """Copy challenger lines stored before `challenges` existed, or while a write to it
@@ -1852,46 +1784,50 @@ class FactoryStore:
                              text: str, tickets: list[str], at) -> dict | None:
         """Offer a rule for (repo, kind) unless one was already offered; an open offer gets its
         ticket list refreshed. None when it was decided before (never offered again)."""
-        with self._swrite:
-            cur = self.sc.execute("SELECT id, state FROM rule_proposals WHERE repo = ? AND "
-                                   "kind = ?", [repo, kind]).fetchone()
-            if cur and cur[1] != "open":
+        t = proposals_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            cur = conn.execute(select(t.c.id, t.c.state).where(
+                t.c.repo == repo, t.c.kind == kind)
+                .order_by(t.c.created_at.asc().nulls_last(), t.c.id)).first()
+            if cur and cur.state != "open":
                 return None
             if cur:
-                self.sc.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ?, "
-                                 "text = ? WHERE id = ?",
-                                 [json.dumps(tickets), scope, project, text, cur[0]])
-                pid = cur[0]
+                conn.execute(update(t).where(t.c.id == cur.id).values(
+                    tickets=tickets, scope=scope, project=project, text=text))
+                pid = cur.id
             else:
                 pid = "rp_" + uuid.uuid4().hex[:10]
-                self.sc.execute(
-                    "INSERT INTO rule_proposals (id, repo, kind, project, scope, text, tickets, "
-                    "state, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, NULL)",
-                    [pid, repo, kind, project, scope, text, json.dumps(tickets), at])
+                conn.execute(insert(t).values(
+                    id=pid, repo=repo, kind=kind, project=project, scope=scope, text=text,
+                    tickets=tickets, state="open", created_at=at, decided_at=None))
         return self.get_rule_proposal(pid)
 
+    @staticmethod
+    def _proposal_row(r) -> dict:
+        return {**r._mapping, "tickets": r.tickets or []}
+
     def get_rule_proposal(self, pid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute("SELECT id, repo, kind, project, scope, text, tickets, state, "
-                                 "created_at, decided_at FROM rule_proposals WHERE id = ?",
-                                 [pid]).fetchone()
-        return ({"id": r[0], "repo": r[1], "kind": r[2], "project": r[3], "scope": r[4],
-                 "text": r[5], "tickets": json.loads(r[6]) if r[6] else [], "state": r[7],
-                 "created_at": r[8], "decided_at": r[9]} if r else None)
+        t = proposals_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == pid)).first()
+        return self._proposal_row(r) if r else None
 
     def list_rule_proposals(self, state: str | None = "open") -> list[dict]:
-        q = "SELECT id FROM rule_proposals"
-        vals: list = []
+        t = proposals_table
+        q = select(t).order_by(t.c.created_at.asc().nulls_last(), t.c.id)
         if state:
-            q += " WHERE state = ?"; vals.append(state)
-        with self._sread:
-            ids = [r[0] for r in self.sc.execute(q + " ORDER BY created_at", vals).fetchall()]
-        return [self.get_rule_proposal(i) for i in ids]
+            q = q.where(t.c.state == state)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).fetchall()
+        return [self._proposal_row(r) for r in rows]
 
     def decide_rule_proposal(self, pid: str, state: str, text: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE rule_proposals SET state = ?, text = coalesce(?, text), "
-                             "decided_at = ? WHERE id = ?", [state, text, at, pid])
+        t = proposals_table
+        values: dict = {"state": state, "decided_at": at}
+        if text is not None:
+            values["text"] = text
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == pid).values(values))
 
     def station_session_ids(self, station: str) -> list[str]:
         """The sessions that played `station` or a helper it started."""
@@ -2621,13 +2557,10 @@ class FactoryStore:
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""
-        t = tickets_table
-        with self._swrite:
-            # the tickets first: safe to repeat, so a crash after it leaves a delete a second call
-            # finishes
-            with self.sessions_db.begin() as conn:
-                conn.execute(update(t).where(t.c.milestone == mid).values(milestone=None))
-            self.sc.execute("DELETE FROM milestones WHERE id = ?", [mid])
+        t, m = tickets_table, milestones_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.milestone == mid).values(milestone=None))
+            conn.execute(delete(m).where(m.c.id == mid))
 
     # ── grants by kind (TR-630) ───────────────────────────────────────────────
     _GRANT_COLS = ("id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, "

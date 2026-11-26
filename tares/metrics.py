@@ -83,6 +83,9 @@ if AVAILABLE:
                                       "Batches of claude_code lines the sessions table could not "
                                       "take (the lines are stored; the next start catches the "
                                       "table up)")
+    CHALLENGES_LOST = Counter("tares_challenges_lost_total",
+                              "Challenger lines a factory cell could not write to the sessions "
+                              "database: they are sent once, so they are lost")
     SESSION_LINES_TO_DUCKDB = Counter("tares_session_lines_to_duckdb_total",
                                       "claude_code lines written to the DuckDB events table (stays 0 "
                                       "on a factory cell with an archive)")
@@ -119,6 +122,11 @@ _licence_probe = None
 def events_ingested(source: str, n: int) -> None:
     if AVAILABLE and n:
         EVENTS.labels(source=source).inc(n)
+
+
+def challenges_lost(n: int) -> None:
+    if AVAILABLE and n:
+        CHALLENGES_LOST.inc(n)
 
 
 def session_lines_to_duckdb(n: int) -> None:
