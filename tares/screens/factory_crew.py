@@ -21,7 +21,7 @@ from .. import factory as factory_mod
 from .. import factory_owners as owners_mod
 from .. import standup as standup_mod
 from ..envelope import now_utc
-from ..factory_api import project_progress
+from ..factory_api import own_crew_ids, project_progress
 from ..factory_home import (_STALE_MINUTES, _caller, _count, _dt, _how_far, _minutes, _plan,
                             _resets, crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
@@ -310,7 +310,9 @@ def register(app, store, h, ctx):
         than `limit`. The station's current session is not listed; it is on the row GET
         /api/factory/crew gives. A project the caller cannot see is left out of `projects` and
         `sessions[].projects`; a station that only worked in such projects, or does not exist,
-        answers 404. Same auth as GET /api/factory/crew."""
+        answers 404. A session that worked in such a project is not counted or listed, also one
+        that worked in other projects too, unless the station is in the caller's own crew
+        (TR-1704). Same auth as GET /api/factory/crew."""
         if not 1 <= limit <= 200:
             h.err(ValueError("limit is 1 to 200"))
         at = None
@@ -322,8 +324,9 @@ def register(app, store, h, ctx):
             if at.tzinfo is None:
                 at = at.replace(tzinfo=timezone.utc)
         hidden = h.hidden_ids()
+        own = own_crew_ids(h, store.list_crews()) if hidden else set()
         res = store.station_earlier(h.cc_source(), None if crew_id == "-" else crew_id, station,
-                                    limit, at)
+                                    limit, at, hidden=hidden, own=own)
         if res is None or (res["projects"] and set(res["projects"]) <= hidden):
             raise HTTPException(404, "no such station")
         by = store.projects_by_session([s["session"] for s in res["sessions"]])
