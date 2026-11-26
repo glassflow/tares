@@ -16,6 +16,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-bypass-cooldown-test.duckdb"
 # each a cell of its own, in its own folder: tares.sqlite sits beside the DuckDB file
 GROUP_DB = os.path.join(tempfile.mkdtemp(prefix="tares-bypass-group-"), "group.duckdb")
@@ -45,9 +46,9 @@ def check(label, cond, detail=""):
 
 def fresh_app(db: str, auth_token: str = ""):
     """A daemon on its own database. The auth token is read at import, so the module is reloaded."""
-    for p in (db, db + ".wal", CATALOG):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(db)
+    if os.path.exists(CATALOG):
+        os.remove(CATALOG)
     os.environ["TARES_DB"] = db
     os.environ["TARES_AUTH_TOKEN"] = auth_token
     import tares.daemon as daemon

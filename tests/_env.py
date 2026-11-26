@@ -7,6 +7,8 @@ Passed on, they make the plugin's shipper report the test's fake sessions to the
 Tares as that station. clean_env() and scrub_os_environ() drop them and point TARES_HOME at an
 empty temp dir.
 
+remove_db() is the fresh start for a test that keeps its database at a fixed path.
+
 Use: sys.path.insert(0, os.path.dirname(__file__)); from _env import clean_env
 """
 import os
@@ -37,6 +39,17 @@ def clean_env(**overrides) -> dict:
         else:
             env[k] = v
     return env
+
+
+def remove_db(*dbs: str) -> None:
+    """Remove each DuckDB file for a fresh start: the file, its .wal, and the tares.sqlite files in
+    the same folder, where the cell keeps its settings and projects (TR-1480). Call it only where a
+    test starts over, never between the two halves of a restart."""
+    for db in dbs:
+        side = os.path.join(os.path.dirname(db), "tares.sqlite")
+        for f in (db, db + ".wal", side, side + "-wal", side + "-shm"):
+            if os.path.exists(f):
+                os.remove(f)
 
 
 def scrub_os_environ() -> None:

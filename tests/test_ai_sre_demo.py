@@ -10,6 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 DB = "/tmp/tares-ai-sre-demo-test.duckdb"
 CATALOG = "/tmp/tares-ai-sre-demo-test.catalog.yaml"
 os.environ["TARES_DB"] = DB
@@ -73,9 +74,9 @@ class FakeStack(BaseHTTPRequestHandler):
 
 
 async def main():
-    for p in (DB, DB + ".wal", CATALOG):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
+    if os.path.exists(CATALOG):
+        os.remove(CATALOG)
     srv = HTTPServer(("127.0.0.1", 0), FakeApi)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     api_url = f"http://127.0.0.1:{srv.server_port}"

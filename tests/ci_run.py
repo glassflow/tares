@@ -70,12 +70,14 @@ def shard(all_items, n, of):
 def forget_settings_file():
     """A cell's settings live in tares.sqlite beside its DuckDB file (TR-1480), and 31 tests keep that
     file at a fixed place in the temp folder, so every one of them shares one tares.sqlite there. Each
-    test starts without what the one before it saved (a seed marker, a provider, an edition)."""
-    for f in glob.glob(os.path.join(tempfile.gettempdir(), "tares.sqlite*")):
-        try:
-            os.remove(f)
-        except OSError:
-            pass
+    test starts without what the one before it saved (a seed marker, a provider, an edition).
+    /tmp is cleared too: on macOS it is not the temp folder, and many tests keep their files there."""
+    for folder in (tempfile.gettempdir(), "/tmp"):
+        for f in glob.glob(os.path.join(folder, "tares.sqlite*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
 
 def run(t, suite="duckdb"):

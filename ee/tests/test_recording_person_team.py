@@ -12,7 +12,7 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # puts the repo and tests/ on sys.path
-from _env import clean_env
+from _env import clean_env, remove_db
 
 P = F = 0
 def ck(l, c, d=""):
@@ -41,9 +41,7 @@ def H(tok):
 
 
 def start(db, port):
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(db)
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
     return subprocess.Popen(licensed.daemon_argv(), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

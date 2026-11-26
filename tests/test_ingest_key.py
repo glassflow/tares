@@ -5,7 +5,7 @@ import asyncio, os, signal, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 P = F = 0
 def ck(l, c, d=""):
@@ -28,9 +28,7 @@ async def _wait(url):
 
 
 async def main():
-    for p in (DB, DB + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(DB)
     env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": "/tmp/none_ik.yaml",
            "TARES_PORT": PORT, "TARES_OTLP_GRPC_PORT": "off"}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
