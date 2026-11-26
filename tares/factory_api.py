@@ -607,7 +607,7 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     sessions = (store.station_session_ids(holder) if holder
                 else [s["session"] for s in store.project_sessions(uid)])
     with metrics.step("recorded_commands"):
-        commands = store.recorded_commands(source, sessions) if sessions else None
+        commands = store.recorded_commands(source, sessions, ends=True) if sessions else None
     # only what ran since the ticket went into the work counts for its checks
     since = next((x["at"] for x in store.ticket_history(t["id"])
                   if x["field"] == "stage" and x["value"] == "doing"), None)
@@ -672,6 +672,39 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
             break
     return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
             "milestone": current, "progress": factory_mod.progress(tickets)}
+
+
+def own_crew_ids(h: Host, crews) -> set[str]:
+    """The ids of those of `crews` (rows of store.list_crews) that are the caller's own (TR-1704):
+    a station's owner reads every session of it. They are the crews of the caller's person; a
+    credential with no person owns none, not even those filed under `local`. With auth off there
+    is no credential and the one person using the cell is `local`, so those crews are theirs."""
+    if h.auth_off():
+        me = "local"
+    else:
+        request = h.caller()
+        person = h.current_person(request) if request is not None else None
+        me = person["id"] if person else None
+    return {c["id"] for c in crews if me and c["person_id"] == me}
+
+
+def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
+    """Those of `sessions` the caller must not read (TR-1710): they worked in a project the
+    caller cannot see and belong to no crew of theirs (store.unread_among)."""
+    hidden = h.hidden_ids()
+    if not hidden:
+        return set()
+    return h.store.unread_among(sessions, hidden, own_crew_ids(h, h.store.list_crews()))
+
+
+def blank_session(row: dict) -> None:
+    """Take a station row's current session off it, for a caller who must not read it (TR-1704):
+    which session it is, when it started, its lines, context window, Claude Code version and the
+    reason of its state, which the session wrote. The station's state and when it was last heard
+    stay, so the row still says whether the station works."""
+    row.update(session=None, started_at=None, lines=None, claude_version=None, state_reason=None)
+    if row["context"]:
+        row["context"] = dict.fromkeys(row["context"])
 
 
 def register(app, store, h: Host) -> SimpleNamespace:
@@ -1142,21 +1175,28 @@ def register(app, store, h: Host) -> SimpleNamespace:
         out.update(marks.get(prefix, {}))
         return out
 
-    def stations(project: str | None = None) -> list[dict]:
+    def stations(project: str | None = None, whole: bool = False) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
-        never merge. Each row names its crew, machine and person."""
+        never merge. Each row names its crew, machine and person. A current session the caller must
+        not read is taken off its row (`blank_session`, TR-1704); `whole` leaves it on, for a write
+        that acts on that session."""
         # one row per station with its newest session, the few before it and the totals over all of
         # them, so a station that has had many sessions costs no more than one that has had few
         # (TR-1500); the earlier ones are read a page at a time (GET /api/factory/crew/.../sessions)
         hidden = h.hidden_ids()
-        # a project the caller cannot see adds nothing to a station's usage (TR-1696)
-        rollup = store.station_rollup(h.cc_source(), hidden=hidden)
-        names = {p["id"]: p["name"] for p in store.list_projects()}
         crews = {c["id"]: c for c in store.list_crews()}
+        own = own_crew_ids(h, crews.values()) if hidden else set()
+        # a project the caller cannot see adds nothing to a station's usage (TR-1696), and a
+        # session that worked in one is not among its earlier sessions or calls (TR-1704)
+        rollup = store.station_rollup(h.cc_source(), hidden=hidden, own=own)
+        names = {p["id"]: p["name"] for p in store.list_projects()}
         now = now_utc()
         out = []
+        unread: set[str] = set()   # the current sessions the caller must not read
         for g in rollup:
             cid, name, cur = g["crew_id"], g["station"], g["cur"]
+            if g["cur_hidden"]:
+                unread.add(cur["session"])
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
             state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
@@ -1214,6 +1254,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
             pid = (crews.get(st["crew_id"]) or {}).get("person_id")
             st["claude_retry"] = (retry.get(retry_key(pid, st["crew"]), {}).get(st["name"])
                                   or retry.get(retry_key(pid, None), {}).get(st["name"]))
+            if st["session"] in unread and not whole:
+                blank_session(st)
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
@@ -1323,10 +1365,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         out.sort(key=lambda c: (-_ts(c["last_seen"]), c["id"] or ""))
         return out
 
-    def pick_station(name: str, request: Request, crew: str | None = None) -> dict:
+    def pick_station(name: str, request: Request, crew: str | None = None,
+                     whole: bool = False) -> dict:
         """The station called `name`. Crews can repeat a name: `crew` (a crew id or name) narrows
-        it down, and of several that remain the caller's own crew's wins, then the newest."""
-        rows = [s for s in stations() if s["name"] == name]
+        it down, and of several that remain the caller's own crew's wins, then the newest.
+        `whole` as in `stations`."""
+        rows = [s for s in stations(whole=whole) if s["name"] == name]
         if crew:
             rows = [s for s in rows if crew in (s["crew_id"], s["crew"])]
         if not rows:
@@ -1342,7 +1386,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         current session and state, `earlier_count` and the 5 most recent earlier sessions that
         played it as `earlier`, the stations it started; `usage`, `coordination_calls` and
         `projects` cover every session; the rest of the earlier ones are paged by GET
-        /api/factory/crew/{crew_id}/{station}/sessions), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
+        /api/factory/crew/{crew_id}/{station}/sessions), the crews' settings, and the shared grants.
+        In another person's crew, a session that worked in a private project the caller cannot see
+        is not in `earlier`, `earlier_count` or `coordination_calls`, and when it is the current
+        one its row has no session, `started_at`, `lines`, `claude_version` or `state_reason`, and
+        a `context` of nulls (TR-1704). `mine=1` keeps the caller's own
         crews. `stations` is the same rows flat, for a client that does not group by crew yet. `pace`
         is the crew's pace as GET /api/crew/pace gives it. `claude_retry` maps each station the
         caller's person's crews are retrying onto a newer Claude Code to {target, fails, next_at};
@@ -1664,11 +1712,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         n = min(max(recent, 0), 200)
         read = []       # where each read of the session's lines came from (TR-1507)
         lines = []
-        if n:
+        if n and st["session"]:   # none on the row: the caller must not read it (TR-1704)
             lines, where = store.key_events_from(h.cc_source(), st["session"], limit=n,
                                                  offset=max((st["lines"] or 0) - n, 0))
             read.append(where)
-        m = store.session_meters([st["session"]]).get(st["session"]) or {}
+        m = (store.session_meters([st["session"]]).get(st["session"]) or {}) if st["session"] else {}
         convo = {}
         c = min(max(conversation, 0), 500)
         if c and st["session"]:
@@ -1707,7 +1755,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         lines are kept. The orchestrator or the person (unlabeled, such as `factory retire`) may.
         A session that is still alive turns the row back with its next line."""
         deny(request, "end_station")
-        st = pick_station(name, request, crew)
+        st = pick_station(name, request, crew, whole=True)
         # `crew` narrows the name; with none, pick_station falls back to another person's station
         # of that name, which a caller must not end (the system credential may)
         if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
@@ -1716,7 +1764,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         reason = " ".join(str((body or {}).get("reason") or "").split())[:100] or "marked ended"
         if (store.session_state(st["session"]) or {}).get("state") != "ended":
             store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)
-        return next(s for s in stations() if s["session"] == st["session"])
+        row = (st["crew_id"], st["name"])
+        return next(s for s in stations() if (s["crew_id"], s["name"]) == row)
 
     # ── a station's context by category: asked from the console, read on the crew's machine ──
     ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
@@ -1724,22 +1773,30 @@ def register(app, store, h: Host) -> SimpleNamespace:
     @app.post("/api/crew/{name}/context")
     def ask_station_context(name: str, request: Request, crew: str | None = None):
         """Ask for a new /context reading of the station's session. The factory watch on the
-        crew's machine reads it (no model call) within a few seconds, if it runs."""
-        st = pick_station(name, request, crew)
+        crew's machine reads it (no model call) within a few seconds, if it runs. `session` is
+        null for a caller who must not read that session (TR-1710); the ask is recorded all the
+        same."""
+        st = pick_station(name, request, crew, whole=True)
         # the reading is taken on its owner's machine: nobody else asks it (the system credential may)
         if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
             h.err(PermissionError(f"{name} belongs to another person's crew: only its owner "
                                   "asks for its context"), 403)
         at = now_utc()
         store.ask_session_context(st["session"], at)
-        return {"session": st["session"], "asked_at": at}
+        unread = unread_sessions(h, [st["session"]])
+        return {"session": None if unread else st["session"], "asked_at": at}
 
     @app.get("/api/crew/context/asks")
     def station_context_asks():
         """The stations someone asked a /context reading of that has not come in yet, for
-        `factory crew watch`."""
+        `factory crew watch`. An ask for a session the caller must not read is left out
+        (TR-1710)."""
         out = []
-        for x in store.context_asks(now_utc() - timedelta(minutes=ASK_TTL)):
+        asked = store.context_asks(now_utc() - timedelta(minutes=ASK_TTL))
+        unread = unread_sessions(h, asked)
+        for x in asked:
+            if x in unread:
+                continue
             st = store.session_station(x)
             if st:
                 out.append({"station": st["station"], "session": x})

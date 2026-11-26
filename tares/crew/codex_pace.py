@@ -151,13 +151,8 @@ def forget() -> None:
 
 def schedule_text(client: TaresClient) -> str:
     """What a restart tells a Codex station about its schedule, in place of lifecycle.rearm_text (which names
-    Claude Code's Cron tools)."""
-    from . import launch
-    if not client.tares_on():
-        return "keep the schedule you had, if you had one"
-    if launch.idle_wake_on(client):
-        return "keep no schedule of your own (idle_wake is on: the factory wakes you when there is work)"
-    return "keep the schedule you had, if you had one"
+    Claude Code's Cron tools). It holds none: the factory wakes it whatever the idle_wake setting."""
+    return "keep no schedule of your own (the factory wakes you when there is work)"
 
 
 def resume_prompt(client: TaresClient) -> str:

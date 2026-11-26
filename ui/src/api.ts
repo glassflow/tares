@@ -714,7 +714,7 @@ export const api = {
     request<CrewStation>(`/api/crew/${encodeURIComponent(name)}/end${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`,
       { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   askStationContext: (name: string, crew?: string | null) =>
-    request<{ session: string; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`, { method: "POST" }),
+    request<{ session: string | null; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`, { method: "POST" }),
   claudeCodeUsage: (days = 7) => request<ClaudeCodeUsage>(`/api/claude-code/usage?days=${days}`),
   projectRepos: (id: string) =>
     request<{ repos: ProjectRepo[] }>(`/api/projects/${encodeURIComponent(id)}/repos`),

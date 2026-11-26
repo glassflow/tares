@@ -91,6 +91,7 @@ import os
 import re
 import shlex
 import signal
+import sys
 import time
 
 import psutil
@@ -325,6 +326,46 @@ def mcp_answers(wire: Wire, thread: str, check) -> str:
     return ""
 
 
+DOCTOR_WAIT = 3   # seconds the doctor waits for a server still connecting: it looks, it does not wait for a start
+
+
+def mcp_health(paths: CrewPaths, station: str) -> tuple:
+    """For the doctor (TR-1598): (level, what was found) for the station's connection to the MCP servers it is
+    started with, level ok, warn or fix. The two checks `hand` makes before a prompt, asked of the running
+    app-server on the station's own conversation: each server connected, and the read of `mcp_check` going
+    through (it carries the station's identity and the crew's key, as the model's calls do). Nothing is joined
+    or started: a conversation the app-server does not have open now is said to be checked before its next
+    prompt."""
+    try:
+        doc = settings(paths, station)
+    except CrewError as e:
+        return "fix", e.message
+    servers = doc.get("mcp_servers") if isinstance(doc.get("mcp_servers"), dict) else {}
+    if not servers:
+        return "fix", f"{station} is started with no MCP server: it would work without Tares"
+    thread = _recorded_thread(paths, station)
+    if not thread:
+        return "warn", f"{station} has no conversation yet; it is checked before its first prompt"
+    try:
+        with visit(paths, station, timeout=5) as wire:
+            kind = _where(wire, thread)
+            if kind == "notLoaded":
+                return "warn", (f"the conversation of {station} is not open in its app-server now; the connection "
+                                "is checked before its next prompt")
+            if kind == "unreadable":
+                return "warn", f"the conversation of {station} cannot be read now; look again in a moment"
+            blind = mcp_ready(wire, thread, servers, wait=DOCTOR_WAIT) or mcp_answers(wire, thread, doc.get("mcp_check"))
+    except CrewError as e:
+        return "warn", e.message
+    except WireError as e:
+        return "warn", f"{station} does not answer: {_short(e)}"
+    if blind:
+        return "fix", f"{station} would work without Tares: {blind}"
+    check = doc.get("mcp_check") if isinstance(doc.get("mcp_check"), dict) else {}
+    read = f", and {check['server']}.{check['tool']} goes through" if check.get("server") and check.get("tool") else ""
+    return "ok", f"{station} is connected to {', '.join(sorted(servers))}{read}"
+
+
 def _brought_along(wire: Wire, cwd: str, allowed) -> str:
     """What the app-server has for the station's folder that the station was not started with: a hook from
     anywhere but the conversation itself, an MCP server not among `allowed`. "" when there is nothing. An
@@ -523,8 +564,19 @@ def unknown_note(rows: list) -> str:
 def cmd_outcome(argv: list, env: dict) -> int:
     """`tares factory outcome [<call> done|not-done <what you found>]`: with nothing, list the calls of this
     station whose outcome is not known; else take one off the list (see `reconcile`). The station is
-    FACTORY_STATION, or `--station NAME` for a person."""
+    FACTORY_STATION, or `--station NAME` for a person. A refusal is said in one line, exit 1."""
+    try:
+        return _outcome(argv, env)
+    except CrewError as e:
+        sys.stdout.flush()
+        print(e.line, file=sys.stderr)
+        return 1
+
+
+def _outcome(argv: list, env: dict) -> int:
     args = list(argv)
+    if args[:1] == ["outcome"]:   # the dispatcher passes the command word too (TR-1598: it was taken for the call)
+        args = args[1:]
     station = env.get("FACTORY_STATION", "")
     if "--station" in args:
         at = args.index("--station")

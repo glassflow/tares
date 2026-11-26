@@ -175,6 +175,54 @@ def unit():
                           "is_error": False, "outcome": "ended", "exit_code": 0}]
     ck("a command with an unknown outcome is not the failing run of a break check",
        factory.match_check(check("pytest tests/test_cart.py", "1 passed", broke="test_cart"), unknown_then_pass)[0] == "differs")
+    # a step of a plain && chain (TR-1598): the Builder ran `python3 test_calc.py && git diff --check && git diff`,
+    # and the claim was compared with its earlier failing run
+    def row(command, minutes, *, code=0, ended=True, output="", outcome=None):
+        r = {"at": t0 - timedelta(minutes=minutes), "command": command, "output": output, "ended": ended,
+             "exit_code": code if ended else None, "is_error": bool(code) if ended else False}
+        if outcome:   # a Codex station's row
+            r.update(outcome=outcome, is_error=bool(code) or outcome in ("failed", "declined"))
+        return r
+    CHAIN = "python3 test_calc.py && git diff --check && git diff"
+    failing = row("python3 test_calc.py", 6, code=1, output="AssertionError")
+    for runtime, extra in (("Claude Code", {}), ("Codex", {"outcome": "ended"})):
+        ck(f"{runtime}: the reported example: a passing chain newer than a failing run backs the claim",
+           factory.match_check(check("python3 test_calc.py", "ok"), [failing, row(CHAIN, 4, **extra)])[0] == "matched")
+        st, rec = factory.match_check(check("python3 test_calc.py", "ok"), [row("python3 test_calc.py", 6, **extra),
+                                                                            row(CHAIN, 4, code=1, **extra)])
+        ck(f"{runtime}: a newer chain that failed does not fall back to the older pass: which step failed is not known",
+           st == "differs" and "which step failed is not known" in rec, rec)
+    cut = factory.match_check(check("python3 test_calc.py", "ok"),
+                              [row("python3 test_calc.py", 6), row(CHAIN, 4, code=None, ended=False)])
+    ck("Claude Code: a chain whose result has not arrived proves nothing, and the older pass is not used",
+       cut[0] == "differs", cut)
+    for outcome in ("started", "unknown"):
+        got = factory.match_check(check("python3 test_calc.py", "ok"),
+                                  [row("python3 test_calc.py", 6, outcome="ended"), row(CHAIN, 4, code=None, outcome=outcome)])
+        ck(f"Codex: an interrupted chain ({outcome}) proves nothing", got[0] == "differs", got)
+    for shell in ("python3 test_calc.py | tee log && git diff", "python3 test_calc.py || true && git diff",
+                  "(python3 test_calc.py) && git diff", "python3 test_calc.py > log && git diff",
+                  "python3 test_calc.py && echo $(git diff)", "python3 test_calc.py & git diff"):
+        ck(f"not a plain chain, never split: {shell!r}",
+           factory.match_check(check("python3 test_calc.py", "ok"), [row(shell, 4)])[0] == "not_found"
+           and factory.match_check(check("python3 test_calc.py", "ok"), [failing, row(shell, 4)])[0] == "differs")
+    ck("a && inside a quoted argument is not a step",
+       factory.match_check(check("git diff", "ok"), [row('git commit -m "x && git diff" && git status', 4)])[0] == "not_found")
+    for quoted in ("printf '%s' '&&' python3 test_calc.py '&&' git diff",
+                   'printf "%s" "&&" python3 test_calc.py "&&" git diff',
+                   "printf '%s' '&&' python3 test_calc.py && git diff",
+                   r"printf %s \&\& python3 test_calc.py && git diff",
+                   "echo ok # ignored && python3 test_calc.py && git diff"):
+        ck(f"quoted operators are arguments, not proof that a claimed step ran: {quoted!r}",
+           factory.match_check(check("python3 test_calc.py", "ok"), [row(quoted, 4)])[0] == "not_found")
+    ck("a real chain preserves a quoted operator inside a command's arguments",
+       factory.match_check(check("printf '%s' '&&'", "ok"),
+                           [row("printf '%s' '&&' && git diff", 4)])[0] == "matched")
+    ck("the step must be the claimed command, with its arguments",
+       factory.match_check(check("python3 test_calc.py -v", "ok"), [row(CHAIN, 4)])[0] == "not_found"
+       and factory.match_check(check("python3", "ok"), [row(CHAIN, 4)])[0] == "not_found")
+    ck("the counts a claim states are still looked for in the chain's output",
+       factory.match_check(check("python3 test_calc.py", "3 passed"), [row(CHAIN, 4, output="2 passed")])[0] == "differs")
     ck("finding kinds use whole words: blocking is not a lock",
        factory.finding_kind("this is a blocking issue") != "concurrency"
        and factory.finding_kind("the author field") != "security")
