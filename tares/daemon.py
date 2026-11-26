@@ -1064,7 +1064,10 @@ def make_app() -> FastAPI:
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_ids() -> set[str]:
-        return {p["id"] for p in _hidden_projects()}
+        """The projects the caller cannot see: the private ones they are not on and, for every
+        caller, the private ones that were deleted (TR-1697)."""
+        private, deleted = store.private_and_deleted()
+        return {p["id"] for p in private if not _can_see(p)} | deleted
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _read_exclude() -> dict | None:
