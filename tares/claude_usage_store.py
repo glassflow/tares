@@ -129,7 +129,8 @@ class ClaudeUsageStore:
             "GROUP BY 1, 2", [*sources, SYNTHETIC, since, since]).fetchall()
         cols = ("session", "message", "replied_at", "model", "project", "subagent", "input_tokens",
                 "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
-        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows]
+        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows
+                if session_ingest.holds_session(self, r[0])]
         # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
         # another version number after the prefix is left unpriced)
         def price(model, *tokens):
