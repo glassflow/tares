@@ -1223,6 +1223,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         no_cost: set[str] = set()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
             no_cost = store.sessions_counting_for([st["session"] for st in out], hidden)
+            gone = hidden & set(store.deleted_private_projects())
+            if gone:   # a row's project passes over a deleted one, so the session is asked itself
+                no_cost |= store.sessions_tied_to([st["session"] for st in out], gone)
             kept = []
             for st in out:
                 if st["projects"] and set(st["projects"]) <= hidden:
