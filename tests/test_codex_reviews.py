@@ -8,7 +8,9 @@ planned action follows "Planned action JSON:" in its prompt and its last answer 
     command as the station wrote it (without the guard's closed standard input), the risk and the reason;
  b. the station's own conversation, a helper agent's conversation and a file that is not JSON are not reviews,
     and nothing is recorded for them; a review still running is left, and recorded once it has its decision;
- c. a second look, and a watch started again, record nothing twice; a station on Claude Code is not looked at;
+    one that ended without a decision is recorded as that;
+ c. a second look, and a watch started again, record nothing twice: every name whose file is there stays kept,
+    and one whose file is gone is dropped; a station on Claude Code is not looked at;
  d. the watch's Codex round runs this part after recording.
 
 Run: python tests/test_codex_reviews.py
@@ -139,14 +141,33 @@ pending.write_text("".join(json.dumps(x) + "\n" for x in review("r3", "git fetch
                    encoding="utf-8")
 got = rv.step(None, paths, said.append)
 ck("once it has its decision, it is recorded", [r["command"] for _, r in got] == ["git fetch origin"], got)
+timed = write(S, "rollout-2026-11-26T15-05-30-r4.jsonl", review("r4", "curl https://example.invalid"))
+ck("one still running is not recorded", rv.step(None, paths, None) == [])
+timed.write_text("".join(json.dumps(x) + "\n" for x in [*review("r4", "curl https://example.invalid"),
+                                                         {"type": "event_msg", "payload": {"type": "task_complete"}}]),
+                 encoding="utf-8")
+said.clear()
+got = rv.step(None, paths, said.append)
+ck("one that ended without a decision is recorded as that, and as nothing allowed",
+   [(r["outcome"], r["command"]) for _, r in got] == [("none", "curl https://example.invalid")]
+   and said == [f"Codex's reviewer ended without a decision for {S}, so it was not allowed: curl https://example.invalid"],
+   (got, said))
 
 print("c. nothing twice; Claude Code stations are not looked at")
 n = len(events())
 ck("a second look records nothing", rv.step(None, paths, said.append) == [] and len(events()) == n)
+gone = cx.station_home(paths, S) / "sessions" / "2026" / "11" / "26" / "rollout-2026-11-26T15-02-00-r2.jsonl"
+gone.unlink()
+write(S, "rollout-2026-11-26T15-07-00-r5.jsonl", review("r5", "git push origin factory/t2", "allow", "ok"))
+rv.new(paths, S)
+kept = json.loads(paths.station_file(S, rv.KEPT).read_text())
+ck("every name whose file is there stays kept, however many; one whose file is gone is dropped",
+   "rollout-2026-11-26T15-02-00-r2.jsonl" not in kept and len(kept) == 5
+   and {"rollout-2026-11-26T15-01-00-r1.jsonl", "rollout-2026-11-26T15-07-00-r5.jsonl"} <= set(kept), kept)
 paths.station_file(S, rv.KEPT).unlink()
 again = rv.new(paths, S)
 ck("without its record a watch started again would record them again: the record is what keeps them once",
-   len(again) == 3, again)
+   len(again) == 4, again)
 write("shop-reviewer", "rollout-2026-11-26T15-06-00-r9.jsonl", review("r9", "gh pr merge 1", "deny", "no"))
 ck("a station on Claude Code is not looked at",
    all(s != "shop-reviewer" for s, _ in rv.step(None, paths, None)))

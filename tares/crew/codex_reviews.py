@@ -16,9 +16,11 @@ station's Codex folder (`sessions/**/rollout-*.jsonl`), measured on 0.171.0:
 
 Once a round (the watch's Codex round, `tares.crew.codex_round`), for every Codex station, each review not
 recorded yet becomes one event, `codex-review`, and one line from the watch: allowed or refused, the command,
-the risk and the reviewer's reason. A review without a decision yet (still running) is left for a later round.
-The names of the files recorded are kept in stations/<station>.codex.reviews.json, so a watch started again
-records nothing twice.
+the risk and the reviewer's reason. A review without a decision yet (still running) is left for a later round;
+one whose turn ended without a decision (it timed out, or was cut off) is recorded as that: nothing was allowed.
+The names of the files looked at are kept in stations/<station>.codex.reviews.json, each for as long as its
+file is there, so a watch started again records nothing twice. They are written after the round's events: a
+watch killed in between records those again rather than never.
 
 Standard library and the crew's own modules.
 """
@@ -32,8 +34,8 @@ from . import state
 from .paths import CrewPaths
 
 KEPT = "codex.reviews.json"   # stations/<station>.codex.reviews.json: [file name, ...]
-KEEP = 1000                   # names kept per station, newest last
 TRIGGER = "guardian_review"
+ENDED = ("task_complete", "turn_aborted")   # a conversation's turn ended, with or without an answer
 PLANNED = "Planned action JSON:"
 STDIN_CLOSED = "exec </dev/null\n"   # what the guard puts before every command it lets through
 
@@ -122,7 +124,9 @@ def read(path: str):
     except ValueError:
         decision = None
     if not isinstance(decision, dict) or decision.get("outcome") not in ("allow", "deny"):
-        return None
+        if not any(_payload(x).get("type") in ENDED for x in lines):
+            return None   # still running
+        decision = {"outcome": "none"}   # it ended without one (it timed out, or was cut off): nothing was allowed
     return {"file": os.path.basename(path), "at": str(meta.get("timestamp") or ""),
             "parent": str(meta.get("parent_thread_id") or ""), "outcome": decision["outcome"],
             "risk": str(decision.get("risk_level") or ""), "authorization": str(decision.get("user_authorization") or ""),
@@ -137,6 +141,9 @@ def _files(home: str) -> list:
 
 
 def line_for(station: str, review: dict) -> str:
+    if review["outcome"] == "none":
+        return (f"Codex's reviewer ended without a decision for {station}, so it was not allowed: "
+                f"{review['command'] or 'an action'}")
     what = "allowed" if review["outcome"] == "allow" else "refused"
     text = f"Codex's reviewer {what} for {station}, by its rules: {review['command'] or 'an action'}"
     if review["risk"]:
@@ -167,7 +174,9 @@ def new(paths: CrewPaths, station: str) -> list:
         state.event("codex-review", station, line_for(station, review)[:1000], paths=paths)
         out.append(review)
     if changed:
-        state.write_json(paths.station_file(station, KEPT), seen[-KEEP:], mode=0o600)
+        # every name whose file is still there stays: one dropped would be read, and recorded, again
+        there = {os.path.basename(p) for p in _files(str(cx.station_home(paths, station)))}
+        state.write_json(paths.station_file(station, KEPT), [s for s in seen if s in there], mode=0o600)
     return out
 
 
