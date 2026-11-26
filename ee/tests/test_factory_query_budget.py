@@ -90,7 +90,14 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
 # home 105 to 98 on Postgres, 127 to 117 on DuckDB (its counts are 96 and 115, plus 2 percent; the 127 is
 # TR-1480's, which the base brought in).
-_TODAY = {"home": 98, "projects": 84, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1631 (Home, the Projects list, Crew, Setup and its progress keep the small reads they repeat for
+# the length of the request: who is on the cell, settings, the projects, their tickets and milestones;
+# and the Projects list reads the stations roll-up once). On Postgres, where each is a round trip:
+# home 97 to 51, projects 83 to 42, setup 86 to 52, setup progress 82 to 50, crew 44 to 28. On DuckDB:
+# home 186 to 94, projects 155 to 76, setup 128 to 94, setup progress 120 to 90, crew 85 to 53 (Setup
+# keeps its state-table reads there: they cost no round trip and their writes are not watched). The
+# budgets are those counts plus 2 percent. The project and ticket pages keep no reads yet.
+_TODAY = {"home": 53, "projects": 43, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
@@ -133,7 +140,7 @@ DONE_EXTRA = 5
 # (85). Setup and its progress go 126 to 128 and 118 to 120, which their budgets hold. The hard cap
 # on Home and the Projects list at 25 projects goes 180 to 200, for the BEGINs alone. Postgres state
 # keeps its counts.
-_DUCKDB = {**_TODAY, "home": 190, "projects": 159, "project": 166, "ticket": 49, "raw_tickets": 17,
+_DUCKDB = {**_TODAY, "home": 96, "projects": 78, "project": 166, "ticket": 49, "raw_tickets": 17,
            "raw_ticket": 26}
 # TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
@@ -144,8 +151,8 @@ _DUCKDB = {**_TODAY, "home": 190, "projects": 159, "project": 166, "ticket": 49,
 # projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
 # 2 percent. With TR-1612, Crew's three ticket reads (the tickets twice, their history once) are each a
 # SQLite transaction on DuckDB: 75 to 78, so 80.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 129, "setup_progress": 121, "crew": 87},
-          "postgres": {**_TODAY, "setup": 88, "setup_progress": 84, "crew": 45}}
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 96, "setup_progress": 92, "crew": 55},
+          "postgres": {**_TODAY, "setup": 54, "setup_progress": 51, "crew": 29}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
@@ -547,6 +554,8 @@ async def main():
     th.HomeRead.__init__, th._team_home = real_init, real_home
     store.station_rollup = real_rollup
     ck("Home reads the stations roll-up once (TR-1629)", built["home"]["rollup"] == 1, str(built["home"]))
+    ck("Projects reads the stations roll-up once (TR-1631)", built["projects"]["rollup"] == 1,
+       str(built["projects"]))
     for name, _ in SETUP_ROUTES:
         b = built[name]
         ck(f"{name} reads who runs once, with no totals, and no team home (TR-1634)",

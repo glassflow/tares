@@ -18,6 +18,7 @@ from fastapi import HTTPException, Request
 
 from .. import claude_usage
 from .. import factory as factory_mod
+from .. import request_memo
 from .. import standup as standup_mod
 from ..envelope import now_utc
 from ..factory_api import project_progress
@@ -257,6 +258,7 @@ def register(app, store, h, ctx):
                 "standup": standup(now, hidden), "now": now.isoformat()}
 
     @app.get("/api/factory/crew")
+    @request_memo.page
     def get_crew_page(request: Request):
         """The Crew page in one read. `talk_to`, `reviewer` and `releaser` are a member or null
         (not started, or no releaser by choice); `builders` are grouped by project, running ones
