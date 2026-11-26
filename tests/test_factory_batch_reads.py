@@ -10,7 +10,9 @@ keeps its own. `autonomy_of`'s memo is checked for two people with different cre
 
 A challenger line whose payload is not JSON, or is JSON but not an object, reads as {} among good
 ones: the review queue and the ticket still answer, and the one that is not JSON is logged once, by
-its ids alone (TR-1705).
+its ids alone (TR-1705). A payload nested past `CHALLENGE_MAX_DEPTH` reads the same way, there, in
+the lost-lines warning and in the challenger workflow's sessions. A read of one source's lines
+gives none of another source's on the same refs (TR-1712).
 
 Run: .venv/bin/python tests/test_factory_batch_reads.py
 """
@@ -36,12 +38,16 @@ os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import event, select
 
 from tares import factory_api
 from tares.daemon import make_app
+from tares.envelope import Envelope
+from tares.factory_store import CHALLENGE_MAX_DEPTH
 from tares.integrations import registry
 from tares.integrations.review import ReviewGate
+from tares.projects.challenger_workflow import recent_sessions
 from tares.session_store.tables import challenges as challenges_table
 
 
@@ -93,10 +99,23 @@ def old_challenge_events(store, source, project, ref):
     return out
 
 
-# a challenger line's payload as stored: (what it is, the text, what reads back). Not JSON first
+def nested(levels, inner="1"):
+    """JSON text of `inner` inside `levels` objects, built as text: no recursion here."""
+    return '{"a": ' * levels + inner + "}" * levels
+
+
+# past the bound; past what a response encoder walks; past what the parser takes. The middle one is
+# a failed review's finding, which the ticket's page would list as fixed
+TOO_DEEP = [("one level past the bound", '{"challenge": ' + nested(CHALLENGE_MAX_DEPTH) + "}"),
+            ("a finding nested 1500 deep", '{"challenge": {"verdict": "FAIL", "findings": [{"title": '
+             '"SECRETVERDICT", "priority": "P1", "extra": ' + nested(1500) + "}]}}"),
+            ("nested past what the parser takes", '{"challenge": ' + nested(100_000, '"SECRETVERDICT"') + "}")]
+
+
+# a challenger line's payload as stored: (what it is, the text). Not JSON, or too deep, first
 UNREADABLE = [("not JSON", "SECRETVERDICT not json"),
               ("a trailing comma, which DuckDB's JSON column takes", '{"challenge": {"title": "SECRETVERDICT"},}'),
-              ("cut off", '{"challenge": {"title": "SECRETVERDICT')]
+              ("cut off", '{"challenge": {"title": "SECRETVERDICT')] + TOO_DEEP
 NOT_AN_OBJECT = [("a list", '[1, 2]'), ("a number", "7"), ("a string", '"SECRETVERDICT"'), ("null", "null"),
                  ("true", "true"), ("NaN", "NaN"), ("no payload", None), ("empty", ""), ("blank", "   "),
                  ("an object whose challenge is a list", '{"challenge": [1]}')]
@@ -154,7 +173,7 @@ def payloads_that_are_not_objects(app, store, t0):
         for (what, _), e in zip(odd, got[1:-1]):
             ck(f"{what} reads as {{}}", e["challenge"] == {}, e)
         read()      # read() holds a failure back, so the pages below are still asked
-        ck("each line that is not JSON is logged once, however often it is read",
+        ck("each line that is not JSON or too deep is logged once, however often it is read",
            len(said) == len(UNREADABLE), said)
         ck("the log names the line by its ids",
            all(all(x in line for x in ("claude_code", "s-odd", "challenge_commit", "factory/ODD-1"))
@@ -180,6 +199,101 @@ def payloads_that_are_not_objects(app, store, t0):
     ck("with the challenger's rounds: the last review's finding open, the first one's fixed",
        (layer.get("rounds"), [f["title"] for f in layer.get("open", [])], [f["title"] for f in layer.get("fixed", [])])
        == (len(rows), ["the last finding"], ["the first finding"]), layer)
+
+
+def depth_bound(store, t0):
+    """TR-1712: a payload at the bound reads as it is, one past it as {}."""
+    print("== how deep a challenger payload may nest ==")
+    # the payload object is level 1, `challenge` and what is in it the rest
+    at_bound = '{"challenge": ' + nested(CHALLENGE_MAX_DEPTH - 1) + "}"
+    past = '{"challenge": ' + nested(CHALLENGE_MAX_DEPTH - 1, "[]") + "}"
+    store._record_challenges([("deep", "s-d", t0 + timedelta(minutes=i), "challenge_commit", "factory/DEEP-1",
+                               "uc_a", text) for i, text in enumerate((at_bound, past))])
+    got = store.challenge_events("deep", "uc_a", "DEEP-1")
+    ck("nested to the bound reads as it is",
+       len(got) == 2 and got[0]["challenge"] == json.loads(at_bound)["challenge"], str(got)[:300])
+    ck("one list deeper reads as {}", len(got) == 2 and got[1]["challenge"] == {}, str(got)[-300:])
+
+
+def lost_deep_lines(store, t0):
+    """TR-1712: the warning for lines the sessions database did not take parses their payload."""
+    print("== lost challenger lines with a deep payload ==")
+    good = json.dumps({"challenge": {"sha": "feed123"}})
+    rows = [("claude_code", f"s-lost{i}", t0, "challenge_commit", "factory/L-1", "uc_a", text)
+            for i, text in enumerate([text for _, text in TOO_DEEP] + [good])]
+    said: list[str] = []
+
+    class Said(logging.Handler):
+        def emit(self, record):
+            said.append(record.getMessage())
+
+    handler, real, raised = Said(level=logging.WARNING), store._factory_writes, None
+    logging.getLogger("tares.factory_store").addHandler(handler)
+    store._factory_writes = lambda: True
+    try:
+        store._challenges_not_kept(rows, RuntimeError("down"))
+    except Exception as ex:
+        raised = type(ex).__name__
+    finally:
+        store._factory_writes = real
+        logging.getLogger("tares.factory_store").removeHandler(handler)
+    ck("saying they are lost does not raise", raised is None, raised)
+    line = said[0] if said else ""
+    ck("every line is named, the deep ones with no commit, the good one with its",
+       len(said) == 1 and all(f"session s-lost{i} commit none" in line for i in range(len(TOO_DEEP)))
+       and f"session s-lost{len(TOO_DEEP)} commit feed123" in line, str(said)[:600])
+
+
+def deep_workflow_session(store):
+    """TR-1712: the challenger workflow's sessions are built from the lines' stored payloads."""
+    print("== the challenger workflow with a deep line ==")
+    now = datetime.now(timezone.utc)
+
+    def envelope(sid, minutes, title):
+        return Envelope(source="claude_code", source_type="claude_code", key_value=sid,
+                        event_type="challenge_plan", text="plan", event_time=now - timedelta(minutes=minutes),
+                        ingest_time=now,
+                        payload={"sessionId": sid, "type": "challenge_plan", "cwd": "/w/shop",
+                                 "challenge": {"findings": [{"priority": "P1", "title": title}]}},
+                        labels={"flow": "challenger"})
+
+    deep = "x"
+    for _ in range(300):                    # past the bound; Python 3.11 cannot dump much more
+        deep = {"a": deep}
+    store.append([envelope("wf-good", 2, "a good finding"), envelope("wf-deep", 1, deep)])
+    try:
+        got = recent_sessions(store)
+        jsonable_encoder(got)               # what the project page's response does with them
+    except Exception as ex:
+        got = type(ex).__name__
+    ck("the deep line is read as {}, so only the good session is listed",
+       isinstance(got, list) and [x["session"] for x in got] == ["wf-good"], str(got)[:300])
+    ck("with its finding", isinstance(got, list) and bool(got) and
+       [f["title"] for t in got[0]["thread"] for f in t.get("findings", [])] == ["a good finding"],
+       str(got)[:300])
+
+
+def one_source_only(store, t0):
+    """TR-1712: two sources with lines on the same refs, project and branches."""
+    print("== a read gives the named source's lines only ==")
+    branches = ("factory/SRC-1", "factory/SRC-1-fix", "factory/SRC-2")
+    # their times differ: two lines alike but for the source would be kept once
+    rows = [(source, "s-src", t0 + timedelta(minutes=10 * n + i), "challenge_commit", branch, "uc_a",
+             json.dumps({"challenge": {"from": source}}))
+            for n, source in enumerate(("src-a", "src-b")) for i, branch in enumerate(branches)]
+    store._record_challenges(rows)
+    asks = [("uc_a", "SRC-1"), ("uc_a", "SRC-2")]
+    t = challenges_table
+    for source in ("src-a", "src-b"):
+        got = store.challenge_events_many(source, asks)
+        froms = {ref: [e["challenge"].get("from") for e in got[(uid, ref)]] for uid, ref in asks}
+        ck(f"challenge_events_many of {source} gives its lines alone",
+           froms == {"SRC-1": [source] * 2, "SRC-2": [source]}, str(froms))
+        with store.sessions_db.read() as conn:
+            found = conn.execute(select(t.c.source, t.c.branch).where(
+                store._challenge_branches(source, ["SRC-1", "SRC-2"]))).fetchall()
+        ck(f"_challenge_branches of {source} selects its lines alone",
+           sorted(tuple(r) for r in found) == sorted((source, b) for b in branches), str(found))
 
 
 def main():
@@ -371,6 +485,10 @@ def main():
     ck("without a memo or a read of the hand-overs the levels are the same",
        [merge_queue.autonomy_of(store, u) for u in ("uc_a", "uc_b")] == ["L4-ship", "L3-review"])
     payloads_that_are_not_objects(app, store, t0)
+    depth_bound(store, t0)
+    lost_deep_lines(store, t0)
+    deep_workflow_session(store)
+    one_source_only(store, t0)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 
