@@ -86,7 +86,7 @@ from . import timeline
 from . import goal as goal_mod
 from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_slack_token
 from .tracing import PROVIDERS as tracing_providers, status as tracing_status
-from .store import Store, StoreUnavailable
+from .store import ReadExclude, Store, StoreUnavailable
 from .projects import Engine as ProjectEngine, ProjectError
 from .reads import resolve_read
 
@@ -1073,13 +1073,14 @@ def make_app() -> FastAPI:
     def _read_exclude() -> dict | None:
         """What event reads leave out: the rows of the projects the caller cannot see, the
         deleted private ones among them for every caller."""
-        private, deleted = store.private_and_deleted()
+        private, deleted, records = store.private_and_records()
         hp = [p for p in private if not _can_see(p)]
         if not hp and not deleted:
             return None
-        return {"ids": [p["id"] for p in hp] + sorted(deleted), "names": [p["name"] for p in hp],
-                "shared": sorted(n for n, c in runtime.catalog.sources.items()
-                                 if c.connector in _SHARED_CONNECTORS)}
+        return ReadExclude(
+            {"ids": [p["id"] for p in hp] + sorted(deleted), "names": [p["name"] for p in hp],
+             "shared": sorted(n for n, c in runtime.catalog.sources.items()
+                              if c.connector in _SHARED_CONNECTORS)}, records)
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_sources(hidden: set[str]) -> set[str]:
@@ -4895,6 +4896,7 @@ def make_app() -> FastAPI:
                                                         exclude=exclude)
                 if not count:
                     await _practice_ingest(w["name"], w["sample"])
+                    exclude = _read_exclude()   # again: the lines just sent may change it
                 break
         if not key:
             # the newest event the wake-up would count (its filters) in the last day, with the

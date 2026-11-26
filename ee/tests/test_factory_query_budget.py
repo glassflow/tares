@@ -10,6 +10,10 @@ counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc
 sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
 its BUDGET fails the test.
 
+Then a private project is made and deleted, and the event reads and the entities page are counted
+again (TR-1716): each may run at most DELETED_EXTRA statements more than before there was one, and
+a warm entities read does not scan the events table.
+
 The pages answer the same thing on every run: the clock is frozen, ids are numbered in the order they
 appear, and the bodies are compared with ee/tests/fixtures/factory_pages_golden.json. A later change
 that must move a body re-records it with `--write-golden` and says why in its PR.
@@ -98,6 +102,22 @@ _TODAY = {"home": 108, "projects": 84, "project": 87, "ticket": 27, "raw_tickets
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
 DONE_EXTRA = 4
+# TR-1716: an event read and the entities pages, after a private project was deleted, against the same
+# read on the same cell before any private project existed. A delete adds at most a fixed number of
+# statements to a request, however many labels the page reads. A read of event rows or fields runs
+# that many more: the caller's hidden sources (one), the sessions of the deleted project (one, and on
+# SQLite the BEGIN before it) and the project records (one). A warm describe or entities page answers
+# from saved counts, so it stays within the same limit.
+DELETED_EXTRA = {"duckdb": 4, "postgres": 3}
+EVENT_READS = [
+    ("read", "POST", "/read"),
+    ("source_events", "GET", "/api/sources/evts/events"),
+    ("source_fields", "GET", "/api/sources/evts/fields"),
+    ("describe", "GET", "/catalog/source:evts"),
+    ("entities", "GET", "/api/entities"),
+    ("entities_service", "GET", "/api/entities?label=service"),
+    ("entities_project", "GET", "/api/entities?label=tares_project"),
+]
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
@@ -127,12 +147,20 @@ def ck(label, cond, detail=""):
 
 # ── the counting stand-in ────────────────────────────────────────────────────────────────────
 _COUNTER: contextvars.ContextVar = contextvars.ContextVar("query_counter", default=None)
+_TEXTS: contextvars.ContextVar = contextvars.ContextVar("query_texts", default=None)
 
 
 def _hit(n: int = 1) -> None:
     c = _COUNTER.get()
     if c is not None:
         c[0] += n
+
+
+def _text(args) -> None:
+    """Keep the SQL of a statement on the DuckDB connection, where the events table is."""
+    texts = _TEXTS.get()
+    if texts is not None and args:
+        texts.append(str(args[0]))
 
 
 class CountingCon:
@@ -147,10 +175,12 @@ class CountingCon:
 
     def execute(self, *a, **kw):
         _hit()
+        _text(a)
         return self._real.execute(*a, **kw)
 
     def executemany(self, *a, **kw):
         _hit()
+        _text(a)
         return self._real.executemany(*a, **kw)
 
     def __getattr__(self, name):
@@ -352,6 +382,114 @@ async def done_projects(store, sam, call, base):
        before_rows - after_rows == DONE_PROJECTS * 5, (after_rows, before_rows))
 
 
+_EVENTS_SCAN = re.compile(r"\bFROM\s+events\b", re.IGNORECASE)
+
+
+async def deleted_private_reads(app, store, backend, root, sam):
+    """A private project with a session and rows of its own is made and deleted (TR-1716). The event
+    reads and the entities page then run at most DELETED_EXTRA statements more than on the same cell
+    before it, for the system credential, a person who was its member and a person who was not, and
+    a warm entities read takes its counts without a scan of the events table, also after new events
+    arrive."""
+    async def send(hdr, method, path, **kw):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                     headers=hdr, timeout=60) as cx:
+            return await cx.request(method, path, **kw)
+
+    labels = [{"name": "service", "field": "service", "primary": True}] + [
+        {"name": n, "field": n} for n in ("env", "region", "tares_project")]
+    r = await send(root, "POST", "/api/sources", json={"name": "evts", "connector": "webhook",
+                                                       "config": {"labels": labels}})
+    assert r.status_code < 300, r.text
+    r = await send(root, "POST", "/api/keys", json={
+        "name": "mia-laptop", "scopes": ["read"],
+        "person": {"email": "mia-budget@example.com", "name": "Mia"}})
+    assert r.status_code < 300, r.text
+    mia, mia_id = {"Authorization": f"Bearer {r.json()['secret']}"}, r.json()["person"]["id"]
+    callers = {"root": root, "not a member": sam, "a member": mia}
+
+    def rows(mark, project=None, key="shop"):
+        out = []
+        for i in range(3):
+            named = {"service": "shop" if i == 0 else f"{mark}-svc{i}", "env": f"{mark}-env",
+                     "region": "eu", **({"tares_project": project} if project else {})}
+            t = ago(minutes=5, seconds=i)
+            out.append(Envelope("evts", "event_stream", key, "evt", f"{mark} line {i}", t,
+                                {"text": f"{mark} line {i}"}, named, t))
+        return out
+
+    async def counted(hdr, method, path):
+        counter, texts = [0], []
+        token, kept = _COUNTER.set(counter), _TEXTS.set(texts)
+        body = {"json": {"selector": {"service": "shop"}, "window": "6h"}} if method == "POST" else {}
+        try:
+            resp = await send(hdr, method, path, **body)
+        finally:
+            _COUNTER.reset(token)
+            _TEXTS.reset(kept)
+        return resp, counter[0], sum(1 for t in texts if _EVENTS_SCAN.search(t))
+
+    async def every_read():
+        out = {}
+        for caller, hdr in callers.items():
+            for route, method, path in EVENT_READS:
+                await counted(hdr, method, path)   # the first read fills what is saved
+                out[caller, route] = await counted(hdr, method, path)
+        return out
+
+    most = DELETED_EXTRA[backend]
+    store.append(rows("open"))
+    before = await every_read()
+    for (caller, route), (resp, _, scans) in before.items():
+        ck(f"before, {caller}, {route}: answers 200", resp.status_code == 200,
+           f"{resp.status_code} {resp.text[:200]}")
+        if route.startswith("entities"):
+            ck(f"before, {caller}, {route}: a warm read does not scan the events", scans == 0, scans)
+
+    uid = "uc_budgetgone"
+    store.create_project(uid, "custom", "Budget gone", {})
+    store.set_project_scope(uid, "private")
+    store.add_project_member(uid, mia_id)
+    store.link_session(uid, "hidden-session", None)
+    store.append(rows("zz-hidden", uid) + rows("zz-hidden-linked", key="hidden-session"))
+    r = await send(root, "DELETE", f"/api/projects/{uid}")
+    assert r.status_code < 300 and store.get_project(uid) is None, r.text
+    store.append(rows("later"))
+
+    first = await counted(sam, "GET", "/api/entities")
+    ck("the first entities read after the delete scans the events (the check below sees a scan)",
+       first[2] > 0, first[2])
+    after = await every_read()
+    for (caller, route), (resp, n, scans) in after.items():
+        was = before[caller, route][1]
+        print(f"  {caller:<13} {route:<17} {was:>3} before, {n:>3} after the delete")
+        ck(f"after, {caller}, {route}: answers 200, nothing of the deleted project",
+           resp.status_code == 200 and "zz-hidden" not in resp.text and uid not in resp.text,
+           f"{resp.status_code} {resp.text[:200]}")
+        ck(f"after, {caller}, {route}: {n - was} statements more than before it, at most {most}",
+           n - was <= most, f"{was} before, {n} after")
+        if route.startswith("entities"):
+            ck(f"after, {caller}, {route}: a warm read does not scan the events", scans == 0, scans)
+
+    for round_ in ("newer", "newest"):   # twice: what is saved stays saved
+        store.append(rows(round_) + rows(f"zz-hidden-{round_}", uid)
+                     + rows(f"zz-hidden-linked-{round_}", key="hidden-session"))
+        for caller, hdr in callers.items():
+            for route, method, path in EVENT_READS:
+                if not route.startswith("entities"):
+                    continue
+                resp, n, scans = await counted(hdr, method, path)
+                was = before[caller, route][1]
+                ck(f"{round_} events, {caller}, {route}: counted without a scan, at most "
+                   f"{most} statements more ({n - was}, {scans} scans)",
+                   scans == 0 and n - was <= most, f"{was} before, {n} after, {scans} scans")
+                seen = (f"{round_}-env" if route == "entities"
+                        else f"{round_}-svc1" if route == "entities_service" else None)
+                ck(f"{round_} events, {caller}, {route}: the new values are there, nothing of the "
+                   "deleted project", resp.status_code == 200 and (seen is None or seen in resp.text)
+                   and "zz-hidden" not in resp.text and uid not in resp.text, resp.text[:300])
+
+
 async def main():
     from tares.daemon import make_app
     freeze_clock()
@@ -409,6 +547,8 @@ async def main():
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
         print("== finished projects on a team cell (TR-1503) ==")
         await done_projects(store, sam, call, counts["projects"])
+        print("== event reads after a private project is deleted (TR-1716) ==")
+        await deleted_private_reads(app, store, backend, root, sam)
 
     print("== the team home is built once per request ==")
     th.HomeRead.__init__, th._team_home = real_init, real_home
