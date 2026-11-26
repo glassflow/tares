@@ -9,6 +9,9 @@ not read from DuckDB on a factory cell and still is on a platform one; the passe
 tables up from DuckDB stop; the usage and challenger fills read the events once; and
 `recent_payloads` reads `session_lines`, leaving out what a hidden project owns.
 
+The lines are written to both stores here, as they were before the write gate opened (TR-1647);
+tests/test_session_readers_held.py covers lines that were never in DuckDB.
+
 Plain:                python tests/test_session_readers_no_events.py
 With the Postgres harness (every Store keeps its state in Postgres):
     TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres PYTHONPATH=tests/pg_harness:. \\
@@ -695,11 +698,12 @@ def payloads():
 
 
 async def main():
-    await pages()
-    reading()
-    passes()
-    fills()
-    payloads()
+    with patched(Store, "_lines_skip_duckdb", lambda self: False):     # DuckDB gets every line
+        await pages()
+        reading()
+        passes()
+        fills()
+        payloads()
     print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
     sys.exit(1 if FAILS else 0)
 

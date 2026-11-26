@@ -8,8 +8,9 @@ away, from its parts, merged by `(at, seq)`. The answer is the one DuckDB gives;
 where it came from: `table`, `archive` (every line is in parts), `both`, or `events` (DuckDB, the
 fallback). Anything else reads DuckDB: a session the table does not hold in full, a part that
 cannot be fetched or does not check out (size, MD5, lines), a row that does not parse. A fallback
-logs one line, at most once a minute per session. Nothing is removed in M1, so DuckDB still holds
-every line.
+logs one line, at most once a minute per session. Nothing is removed from DuckDB in M1. In the
+factory edition with an archive the lines of new sessions are not written there at all (TR-1647), so
+for them the table and the parts are the only copy.
 
 In the factory edition a session born in the table (`lines_origin = 'table'`, which a verified move
 sets too) is never read from DuckDB (TR-1613). It is answered with what the table and the readable

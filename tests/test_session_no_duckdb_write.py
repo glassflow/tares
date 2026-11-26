@@ -3,11 +3,9 @@
 `Store.append` leaves the lines of a claude_code source out of the DuckDB events table when the cell's
 edition is factory and an archive backend exists (the folder archive always does on SQLite; a Postgres
 cell needs TARES_ARCHIVE_URL). The lines are still counted in `source_stats`, a challenger line is
-still kept in `challenges`, and `entity_counts` is left alone for them. Every other case writes to
-DuckDB as before, and a factory cell on Postgres with no archive says so once and keeps writing there.
-
-In the code the gate is shut (`store.HOLD_LINES_BACK = False`) until TR-1647 moves the readers of
-`events`; this test opens it, and checks that shut it writes to DuckDB.
+still kept in `challenges`, and counted in `entity_counts` as a line written to DuckDB is: the readers
+of `events` answer from the session store for them (TR-1647). Every other case writes to DuckDB as
+before, and a factory cell on Postgres with no archive says so once and keeps writing there.
 
 Plain:                python tests/test_session_no_duckdb_write.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -28,10 +26,7 @@ from sqlalchemy import func, select  # noqa: E402
 from tares import metrics  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store.tables import session_lines, sessions  # noqa: E402
-from tares import store as store_mod  # noqa: E402
 from tares.store import Store  # noqa: E402
-
-store_mod.HOLD_LINES_BACK = True        # shut in code until TR-1647; this test is about what it does open
 
 FAILS = []
 T0 = datetime(2026, 11, 24, 8, 0, 0, tzinfo=timezone.utc)
@@ -82,7 +77,8 @@ def stats(s, source=SRC):
 
 def entities(s, source=SRC):
     with s._lock:
-        return s.con.execute("SELECT count(*) FROM entity_counts WHERE source = ?", [source]).fetchone()[0]
+        return sorted(s.con.execute("SELECT * EXCLUDE (source) FROM entity_counts WHERE source = ?",
+                                    [source]).fetchall(), key=repr)
 
 
 def challenges(s):
@@ -101,14 +97,6 @@ def counter():
 
 
 def main():
-    print("== the gate is shut in the code ==")
-    store_mod.HOLD_LINES_BACK = False
-    s = open_store("factory")
-    s.append([line("g1") for _ in range(3)])
-    ck("shut, a factory cell writes the lines to DuckDB", duck_count(s) == 3, duck_count(s))
-    ck("and to session_lines", table_count(s) == 3, table_count(s))
-    store_mod.HOLD_LINES_BACK = True
-
     print("== the factory edition, with an archive ==")
     s = open_store("factory")
     batch = [line("s1") for _ in range(49)] + [line("s1", "challenge_commit", labels={"branch": "b1"})]
@@ -124,8 +112,11 @@ def main():
     st = stats(s)
     ck("source_stats counts 50 for claude_code", st is not None and st[0] == 50, st)
     ck("source_stats has the newest ingest time", st is not None and st[1] is not None, st)
-    ck("entity_counts holds nothing for the held lines", entities(s) == 0, entities(s))
     ck("the DuckDB counter did not move", counter() == before, (before, counter()))
+    plat = open_store("platform")
+    plat.append(batch)
+    ck("entity_counts counts the held lines as a platform cell counts them",
+       entities(s) and entities(s) == entities(plat) and duck_count(plat) == 50, (entities(s), entities(plat)))
     s.append([line("s1") for _ in range(5)])
     st = stats(s)
     ck("a second batch adds to source_stats", st[0] == 55, st)

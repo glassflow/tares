@@ -24,8 +24,12 @@ facts and turns in one transaction. When the store takes no write, `LinesNotStor
 DuckDB gets nothing and `/ingest` answers 503, so the sender sends the same lines again. When the
 store is up but will not take a session's lines, the session is counted and marked
 `lines_complete` false, DuckDB keeps the lines, and the M1 drain (`session_drain.py`) copies them
-over later; the request is acknowledged, so one bad line blocks nothing behind it. A DuckDB write
-that fails after the store's takes the store's back (`take_back`).
+over later; the request is acknowledged, so one bad line blocks nothing behind it. When even the
+session's counts and mark cannot be written, the batch is refused like the first case (TR-1647). A
+DuckDB write that fails after the store's takes the store's back (`take_back`).
+
+With an archive, the factory edition does not write DuckDB at all for the sessions `holdable` names
+(TR-1479, TR-1647); the readers of DuckDB `events` read those from here (`session_events.py`).
 
 In the factory edition, once the one-time move out of DuckDB is complete (`session_move.complete`:
 planned, no session `pending`), `reconcile_sessions` reads nothing from DuckDB, nor do `fill_facts`
@@ -36,7 +40,7 @@ The readers know the table has caught up from one row in `session_ingest_marks`,
 is set by the first complete `reconcile_sessions`, or at once by `Store.__init__` on a cell whose
 events hold no claude_code line (nothing to catch up on). It is never unset.
 
-Nothing here changes DuckDB: `Store.append` keeps writing every line there.
+Nothing here changes DuckDB: `Store.append` alone decides what is written there.
 
 The same two writers keep the facts the factory reads (TR-1477): the crew's protocol messages in
 `session_messages` and the shell commands sessions ran, with what they printed, in
@@ -98,7 +102,7 @@ import time
 import weakref
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import bindparam, delete, func, insert, select, text, update
+from sqlalchemy import bindparam, delete, exists, func, insert, literal, select, text, update
 
 from . import edition, metrics
 from .envelope import now_utc
@@ -127,7 +131,7 @@ MESSAGE_TEXT = 4000                  # characters of a protocol message kept
 TABLE = "table"                      # `sessions.lines_origin` of a session born in session_lines (TR-1606)
 CYCLE = 600.0                        # seconds between the reconcile passes after the first (TR-1478)
 # names in session_ingest_marks, each followed by a session id (TR-1665, `session_drain`)
-DRAIN_TODO = "session_drain_todo:"   # a complete session the drain still has to refill
+DRAIN_TODO = "session_drain_todo:"   # a session the drain still has to refill, or to write facts of
 DRAIN_GAVE_UP = "session_drain_gave_up:"   # the drain could not store all its lines: not tried again
 PROBE_SESSION = "tares:write-probe"  # the row a probe writes and removes in one transaction
 
@@ -182,20 +186,30 @@ def claude_code_lines(store, envelopes) -> list:
 def holdable(store, lines: list) -> list:
     """The claude_code `lines` the session store may hold alone, without a copy in DuckDB
     (TR-1479): those of a session with no row yet, or whose row was born in the table and is
-    complete. A session from before `lines_origin` (null), one the reconcile made, or one a failed
-    write left incomplete keeps getting its lines in DuckDB too: it is judged against DuckDB's
-    count, and a read of it falls back to DuckDB, so a line held back would be missing there.
+    complete. A session from before `lines_origin` (null), one the reconcile made, one a failed
+    write left incomplete, or one with the drain's todo mark keeps getting its lines in DuckDB too:
+    it is judged against DuckDB's count, and a read of it falls back to DuckDB, so a line held back
+    would be missing there.
+    `session_lines` keeps no source of a line: a stored line's source is its session's (TR-1647),
+    so a line of another claude_code source than the session's keeps going to DuckDB.
     Called under `Store._sess_lock`, so no `record` changes a row meanwhile."""
-    sids = sorted({e.key_value for e in lines})
+    own: dict = {}                      # a session with no row yet takes its first line's source
+    for e in lines:
+        own.setdefault(e.key_value, e.source)
+    sids = sorted(own)
     ok = set(sids)
     c = sessions.c
+    todo = exists(select(session_ingest_marks.c.name).where(
+        session_ingest_marks.c.name == literal(DRAIN_TODO) + c.session))
     with store.sessions_db.begin() as conn:
         for i in range(0, len(sids), 500):
-            for sid, origin, done in conn.execute(select(c.session, c.lines_origin, c.lines_complete)
-                                                   .where(c.session.in_(sids[i:i + 500]))).all():
-                if not (origin == TABLE and done):
+            for sid, source, origin, done, waits in conn.execute(
+                    select(c.session, c.source, c.lines_origin, c.lines_complete, todo.label("todo"))
+                    .where(c.session.in_(sids[i:i + 500]))).all():
+                own[sid] = source
+                if waits or not (origin == TABLE and done):
                     ok.discard(sid)
-    return [e for e in lines if e.key_value in ok]
+    return [e for e in lines if e.key_value in ok and e.source == own[e.key_value]]
 
 
 def _utc(t: datetime) -> datetime:
@@ -725,7 +739,10 @@ def _write_whole(store, envelopes, written: Written) -> None:
 def _write_refused(store, sid: str, envelopes, written: Written) -> None:
     """A session whose lines the store will not take: its counts, with the durable mark that its
     lines are missing (`lines_complete` false, which `session_drain` reads), in one transaction;
-    then its facts and turns, as far as they go. DuckDB keeps the lines."""
+    then its facts and turns, as far as they go. DuckDB keeps the lines.
+
+    When that transaction does not go through either, nothing would ever say the lines are missing,
+    so they are not acknowledged: `LinesNotStored`, and the sender sends them again (TR-1647)."""
     folded = _fold(envelopes)
 
     def mark(conn):
@@ -740,10 +757,12 @@ def _write_refused(store, sid: str, envelopes, written: Written) -> None:
             break
         except Exception as e:
             _probe(store)          # down: the whole batch is refused and sent again
-            if last_try:           # the store is up and will never take this session's row
-                print(f"taresd: {len(envelopes)} claude_code line(s) can never be stored in the "
-                      f"sessions database ({type(e).__name__}: {e}); they are only in DuckDB",
-                      flush=True)
+            if last_try:           # up, and still neither counted nor marked
+                print(f"taresd: the sessions database does not take the row of session {sid} "
+                      f"({type(e).__name__}: {e}); {len(envelopes)} claude_code line(s) are not "
+                      "acknowledged, the sender sends them again", flush=True)
+                raise LinesNotStored(f"the sessions database does not take the row of session "
+                                     f"{sid} ({type(e).__name__}: {e}); send the lines again") from e
     for what, write in (
             ("facts", lambda: _add_facts(store, facts_of(
                 (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
@@ -783,10 +802,11 @@ def record_first(store, envelopes) -> Written:
                     _write_whole(store, mine, written)
                 except Exception as e:
                     _probe(store)
-                    print(f"taresd: the sessions database refused {len(mine)} claude_code line(s) "
-                          f"of session {sid} ({type(e).__name__}: {e}); counted, and copied from "
-                          "DuckDB by the background repair", flush=True)
+                    why = f"{type(e).__name__}: {e}"
                     _write_refused(store, sid, mine, written)
+                    print(f"taresd: the sessions database refused {len(mine)} claude_code line(s) "
+                          f"of session {sid} ({why}); counted, and copied from DuckDB by the "
+                          "background repair", flush=True)
         except LinesNotStored:
             take_back(store, written)
             metrics.session_ingest(time.perf_counter() - t0, False)
