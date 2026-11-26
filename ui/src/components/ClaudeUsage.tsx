@@ -251,7 +251,8 @@ const FRESH_MS = 10 * 60000;
 
 /** A station's context window, on its detail: one line and a bar, the details in their title. */
 export function StationUsage({ s, onAsked, mine }: { s: StationDetail; onAsked: () => void; mine: boolean }) {
-  const ctx = s.context;
+  // a session the viewer must not read comes with no session and a context of nulls (TR-1704)
+  const ctx = s.session ? s.context : null;
   const tip = ctx ? `${contextTitle(ctx)}${ctx.at ? `; reported ${formatRelative(Date.parse(ctx.at), Date.now())}` : ""}` : undefined;
   return (
     <div>
@@ -267,9 +268,9 @@ export function StationUsage({ s, onAsked, mine }: { s: StationDetail; onAsked: 
           <Meter pct={ctx.compact_pct ?? ctx.pct} title={tip} />
         </>
       ) : (
-        <p className="dim" style={{ margin: 0 }}>No report yet. A station reports after each reply once it runs on this version of the plugin; the watch moves idle stations onto it.</p>
+        <p className="dim" style={{ margin: 0 }}>{s.session ? "No report yet. A station reports after each reply once it runs on this version of the plugin; the watch moves idle stations onto it." : "You cannot see the current session."}</p>
       )}
-      <ContextFold s={s} onAsked={onAsked} mine={mine} />
+      {s.session && <ContextFold s={s} onAsked={onAsked} mine={mine} />}
     </div>
   );
 }

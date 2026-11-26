@@ -332,7 +332,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                     {/* the crew's own stations serve every project: their session lives on the Crew page */}
                     {onCrewSide(s.name, crew.stations)
                       ? <Link to={`/crew?member=${encodeURIComponent(s.name)}`}>{s.name}</Link>
-                      : <VLink v={{ kind: "claude", name: s.session }}>{s.name}</VLink>}
+                      : s.session ? <VLink v={{ kind: "claude", name: s.session }}>{s.name}</VLink> : s.name}
                     <small> {s.role}</small>
                     <CrewState s={s} />
                   </span>

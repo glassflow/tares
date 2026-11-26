@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 
-from sqlalchemy import bindparam, case, distinct, false, func, select, update
+from sqlalchemy import bindparam, case, distinct, false, func, select, union, update
 
 from .pricing import cost_usd
 from .session_store.tables import (project_sessions, session_meters, session_stations,
@@ -327,6 +327,31 @@ class ClaudeUsageStore:
         for i in range(0, len(sessions), 500):
             with self.sessions_db.begin() as conn:
                 out.update(conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).scalars())
+        return out
+
+    def _sessions_in(self, projects):
+        """A query of the sessions that worked in one of `projects` (TR-1704): the station's
+        project, any project the session is linked to, or the project one of its replies counts
+        for (`_replies_by_project`). Inside another query it goes in as a CTE: it reads the
+        station table itself, so as a plain subquery it would be correlated with the outer one."""
+        ss, ps, u = session_stations, project_sessions, session_usage
+        ids = sorted(projects)
+        replies, project, _ = self._replies_by_project()
+        return union(select(ss.c.session).where(ss.c.project.in_(ids)),
+                     select(ps.c.session).where(ps.c.project.in_(ids)),
+                     select(u.c.session).select_from(replies).where(project.in_(ids)))
+
+    def sessions_in(self, sessions: list[str], projects) -> set[str]:
+        """Those of `sessions` that worked in one of `projects` (`_sessions_in`)."""
+        if not projects:
+            return set()
+        found = self._sessions_in(projects).cte("worked_in")
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            chunk = list(sessions[i:i + 500])
+            with self.sessions_db.begin() as conn:
+                out.update(conn.execute(select(found.c.session).where(
+                    found.c.session.in_(chunk))).scalars())
         return out
 
     @staticmethod
