@@ -271,11 +271,19 @@ def _have(store, table: str) -> int:
 def counts(store, shape=SHAPE) -> dict:
     """Rows now by table (`events` by source as `events/<source>`), for every table SHAPE names."""
     out = {t: _have(store, t) for t in shape["tables"]}
-    with store._lock:
-        for src in shape["events"]:
-            out[f"events/{src}"] = store.con.execute(
-                "SELECT count(*) FROM events WHERE source = ?", [src]).fetchone()[0]
+    for src in shape["events"]:
+        out[f"events/{src}"] = _events(store, src)
     return out
+
+
+def _events(store, source) -> int:
+    """The lines of `source`: the events rows, and those only the session store holds (the anchor
+    sessions' lines, written through the app, in a factory cell with an archive)."""
+    from tares import session_events
+    held = session_events.held_count(store, source)
+    with store._lock:
+        return held + store.con.execute(
+            "SELECT count(*) FROM events WHERE source = ?", [source]).fetchone()[0]
 
 
 def expected(shape=SHAPE) -> dict:
@@ -1319,9 +1327,9 @@ class _Gen:
     def event_counts_group(self):
         rng, st = self.rng, self.store
         sh = self.shape
+        totals = {s: _events(st, s) for s in sh["events"]}
         with st._lock:
             con = st.con
-            totals = {s: con.execute("SELECT count(*) FROM events WHERE source = ?", [s]).fetchone()[0] for s in sh["events"]}
             for s, n in totals.items():
                 con.execute("INSERT INTO source_stats (source, events, last_ingest) VALUES (?, ?, ?) "
                             "ON CONFLICT (source) DO UPDATE SET events = excluded.events, last_ingest = excluded.last_ingest",
