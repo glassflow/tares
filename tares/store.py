@@ -6,6 +6,7 @@ through here; the MCP server never touches the DB directly.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -577,6 +578,14 @@ _ENTITY_CARDINALITY_CAP = int(os.getenv("TARES_ENTITY_CARDINALITY_CAP", "10000")
 # A finding's labels name the run and firing it came from (TR-330). They are for tracing a
 # finding back, one value per run, so they are never counted as an entity axis.
 _PROVENANCE_LABELS = {"run_id", "dispatch_id"}
+
+# the setting that remembers the deleted private projects (Store.deleted_private_projects)
+_DELETED_PRIVATE = "deleted_private_projects"
+_DELETED_PRIVATE_LOCK = threading.Lock()   # two deletes at once must not lose one
+
+
+def _name_digest(name: str) -> str:
+    return hashlib.sha256((name or "").encode()).hexdigest()
 
 
 def _accum_entity(ent: dict, source: str, label: str, value, ingest_time) -> None:
@@ -2677,6 +2686,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team', ?)",
                 [uid, template, name, json.dumps(params), status, ts, ts, goal or None,
                  lead_person_id or None, icon or None])
+        # an id made again (a setup that was undone puts its draft back) is no deleted project
+        self._change_deleted_private(lambda d: d.pop(uid, None))
 
     def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
                        last_error: str | None = "", name: str | None = None,
@@ -2750,6 +2761,48 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             rows = self.sc.execute(
                 "SELECT id, name FROM usecases WHERE scope = 'private'").fetchall()
         return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
+
+    # ── private projects that were deleted (TR-1697) ──────────────────────────
+    # Their cost counts in no total and no read names them, so Tares has to remember which they
+    # were: {id: a digest of the name}. The digest is only there to know a late line stamped
+    # with the name.
+    def deleted_private_projects(self) -> dict[str, str]:
+        return json.loads(self.get_setting(_DELETED_PRIVATE) or "{}")
+
+    def _change_deleted_private(self, change) -> None:
+        with _DELETED_PRIVATE_LOCK:
+            have = self.deleted_private_projects()
+            new = dict(have)
+            change(new)
+            if new != have:
+                self.set_setting(_DELETED_PRIVATE, json.dumps(new, sort_keys=True) if new else None)
+
+    # Licence-independent by design (TR-915): never consult licence or team here.
+    def private_and_deleted(self) -> tuple[list[dict], set[str]]:
+        """`private_projects()` and the ids of the deleted private projects, in one query."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT id, name FROM usecases WHERE scope = 'private' UNION ALL "
+                "SELECT NULL, value FROM settings WHERE key = ?", [_DELETED_PRIVATE]).fetchall()
+        private = [{"id": r[0], "name": r[1], "scope": "private"} for r in rows if r[0] is not None]
+        deleted = next((json.loads(r[1]) for r in rows if r[0] is None), {})
+        # one that is still there (its delete stopped half way) is still its members' to see
+        return private, set(deleted) - {p["id"] for p in private}
+
+    @staticmethod
+    def deleted_private_ref(ref: str, deleted: dict[str, str]) -> str | None:
+        """The one of `deleted` (`deleted_private_projects`) that `ref`, an id or a name, stood
+        for."""
+        if ref in deleted:
+            return ref
+        digest = _name_digest(ref)
+        return next((uid for uid, d in deleted.items() if d == digest), None)
+
+    def usage_project(self, ref: str) -> str | None:
+        """The project a recorded line's `tares_project` (an id or a name) stands for: the one
+        there is, else the deleted private one it named."""
+        p = self.get_project(ref) or self.get_project_by_name(ref)
+        return p["id"] if p else self.deleted_private_ref(ref, self.deleted_private_projects())
 
     def get_project(self, uid: str) -> dict | None:
         with self._sread:
@@ -2864,6 +2917,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def delete_project(self, uid: str) -> None:
         milestones = [m["id"] for m in self.list_milestones(uid)]
+        gone = self.get_project(uid)
+        private = bool(gone) and gone["scope"] == "private"
+        if private:   # remembered before anything goes, so its cost is never counted in between
+            self._change_deleted_private(lambda d: d.update({uid: _name_digest(gone["name"])}))
         with self._swrite:
             # the state rows first: a delete that stops half way leaves session rows with no
             # project, which every reader ignores
@@ -2882,7 +2939,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self._factory_forget_project(uid)
             self.sc.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.sc.execute("DELETE FROM usecases WHERE id = ?", [uid])
-        self._usage_forget_project(uid)
+        self._usage_forget_project(uid, private)   # before its session links go, below
         with self.sessions_db.begin() as conn:
             conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
             # its weekly figures (report.py); a pass running now sees the project gone, above
