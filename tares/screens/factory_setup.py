@@ -48,6 +48,7 @@ from fastapi import Body, HTTPException, Request
 from .. import licence
 from .. import linear as linear_mod
 from .. import github_credentials
+from .. import request_memo
 from ..factory_api import caller
 from ..factory_store import PROJECT_SLOTS, FactoryStore
 from ..integrations import registry, resolve
@@ -728,6 +729,7 @@ def register(app, store, h, ctx):
         return shown([step_of(slot, i + 1, lic, allowed) for i, slot in enumerate(STEPS)])
 
     @app.get("/api/factory/setup/progress")
+    @request_memo.page
     def get_setup_progress(request: Request):
         """How far the factory is set up: the count the console's Setup menu entry shows, and how many
         factory projects the cell has (the console opens on Setup while it has none and setup is not done)."""
@@ -736,6 +738,7 @@ def register(app, store, h, ctx):
         return {**progress_of(all_steps(), around(request)), "projects": projects}
 
     @app.get("/api/factory/setup")
+    @request_memo.page
     def get_setup(request: Request):
         guard(request)
         st = licence.current(store)         # ee_allowed() is False until the first check
