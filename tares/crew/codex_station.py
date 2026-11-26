@@ -565,6 +565,8 @@ def cmd_outcome(argv: list, env: dict) -> int:
     station whose outcome is not known; else take one off the list (see `reconcile`). The station is
     FACTORY_STATION, or `--station NAME` for a person."""
     args = list(argv)
+    if args[:1] == ["outcome"]:   # the dispatcher passes the command word too (TR-1598: it was taken for the call)
+        args = args[1:]
     station = env.get("FACTORY_STATION", "")
     if "--station" in args:
         at = args.index("--station")

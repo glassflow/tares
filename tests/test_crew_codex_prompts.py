@@ -11,7 +11,9 @@ Claude Code's words stay as they were.
  c. the idle wake: a Codex station holds no tick, so the factory wakes it whatever the idle_wake setting.
     With the setting off it is planned as with the setting on (a liveness wake, with the Codex note), never
     told to re-arm a tick; the send step checks the setting the same way, so the wake goes through; a
-    station on Claude Code with the setting off is planned as before.
+    station on Claude Code with the setting off is planned as before;
+ d. `tares factory outcome` as the dispatcher calls it (the command word first): it lists the calls with an
+    unknown outcome, and takes one off by its call id, for the station or a person naming it.
 
 Run: python tests/test_crew_codex_prompts.py
 """
@@ -160,6 +162,37 @@ finally:
     codex_station.at_rest = real_rest
     idle_wake.SCANS.clear()
     idle_wake.SCANS.update(real_scan)
+tares.__exit__(None, None, None)
+
+print("d. `tares factory outcome`, as the dispatcher calls it")
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+from tares.crew import codex_guard, dispatch  # noqa: E402
+
+tares, paths, client = crew()
+state.write_json(paths.station_file(CX, codex_guard.UNKNOWN), [
+    {"call": "call_a1", "command": "git push origin factory/T1", "cwd": "/w"},
+    {"call": "call_b2", "command": "sleep 60", "cwd": "/w"}], mode=0o600)
+env = {**os.environ, "FACTORY_CREW_HOME": str(paths.home), "FACTORY_STATION": CX}
+
+
+def factory(*argv):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = dispatch.find(list(argv))(list(argv), env)
+    return code, out.getvalue()
+
+
+code, out = factory("outcome")
+ck("with nothing after it, it lists the station's calls by call id", code == 0 and "call_a1  git push" in out
+   and "call_b2  sleep 60" in out, out)
+code, out = factory("outcome", "call_b2", "not-done", "the sleep was killed with its app-server")
+left = [r.get("call") for r in codex_station.unknown(paths, CX)]
+ck("a station's account takes that call off the list, and only that one", code == 0 and "recorded: not-done for sleep 60"
+   in out and left == ["call_a1"], (out, left))
+code, out = factory("outcome", "--station", CX, "call_a1", "done", "the branch is on the remote at the same head")
+ck("a person names the station with --station", code == 0 and codex_station.unknown(paths, CX) == [], out)
 tares.__exit__(None, None, None)
 
 print(json.dumps({"passed": P, "failed": F}) if os.environ.get("TEST_JSON") else f"{P} passed, {F} failed")
