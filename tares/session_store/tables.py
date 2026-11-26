@@ -7,7 +7,10 @@ the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skill
 `milestone_check_results`, `milestone_acceptances`, `ticket_checks`, `challenges`, `reviews`,
 `review_findings`, `rule_proposals`) and the decisions, questions and crew tables (`assumptions`,
 `desk_items`, `decisions`, `handovers`, `grants`, `pending_memory`, `crews`, `spec_questions`,
-`signoffs`, `handover_overrides`, `answers`, `waiting_told`), exactly as they are today in DuckDB and in the state Postgres:
+`signoffs`, `handover_overrides`, `answers`, `waiting_told`) and the merge queue, integration,
+secret and guardrail tables (`merge_queue`, `project_merge_method`, `project_required_checks`,
+`integration_choices`, `integration_connections`, `project_integrations`, `pending_writeback`,
+`project_secrets`, `guardrail_rules`, `guardrail_pairs`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -853,6 +856,145 @@ waiting_told = Table(
     Column("closed", Text),
 )
 
+# Your own deny rules for the crew's guardrails (TR-862): a sentence a station's soft_deny list
+# gets, for every project (scope factory, project NULL) or one project. Allow rules are the
+# grants (the `grants` table), read in place; there is no allow row here.
+guardrail_rules = Table(
+    "guardrail_rules", metadata,
+    Column("id", Text, primary_key=True),
+    Column("scope", Text),
+    Column("project", Text),
+    Column("kind", Text),
+    Column("text", Text),
+    Column("created_by", Text),
+    Column("created_at", UTCDateTime),
+)
+
+# Guardrail pairs (TR-863): a hook point paired with a guardrail integration, for every project
+# (scope factory, project_uid NULL) or one project. `settings` is not used any more (it is {},
+# TR-1380): a pair runs with the integration's connection at the factory. on_fail says whether a
+# guardrail that denies, or does not answer, blocks or only warns.
+guardrail_pairs = Table(
+    "guardrail_pairs", metadata,
+    Column("id", Text, primary_key=True),
+    Column("scope", Text),
+    Column("project_uid", Text),
+    Column("hook", Text),
+    Column("integration", Text),
+    Column("settings", JSONText),
+    Column("on_fail", Text, server_default="block"),
+    Column("created_at", UTCDateTime),
+    Column("created_by", Text),
+)
+
+# The default integration of each slot (TR-839, TR-1380): one row per slot, a pointer to one of
+# the slot's connections (below). No row means the slot's built-in default. `settings` is not used
+# any more (it is {}): an earlier version kept the integration settings here, and the upgrade moves
+# them to a connection.
+integration_choices = Table(
+    "integration_choices", metadata,
+    Column("slot", Text, primary_key=True),
+    Column("name", Text),
+    Column("settings", JSONText),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
+# The integrations the factory has connected (TR-1380): one row per slot and integration, with its
+# integration settings, secrets included. Credentials live only here. memory, monitoring and
+# runtime keep one connection each.
+integration_connections = Table(
+    "integration_connections", metadata,
+    Column("slot", Text, primary_key=True),
+    Column("name", Text, primary_key=True),
+    Column("settings", JSONText),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
+# A project's own choice for the tickets, review and ci slots: the name of a connected integration
+# plus the project's own fields. It holds no secret and no address (TR-1380); those come from the
+# factory's connection.
+project_integrations = Table(
+    "project_integrations", metadata,
+    Column("project_uid", Text, primary_key=True),
+    Column("slot", Text, primary_key=True),
+    Column("name", Text),
+    Column("settings", JSONText),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
+# A status change a ticket system refused or could not be reached for (TR-845). One row per ticket
+# and integration, the status wanted last; the row is retried on each refresh and goes when the
+# write lands. While a row exists a sync leaves the ticket's status alone.
+pending_writeback = Table(
+    "pending_writeback", metadata,
+    Column("ticket", Text, primary_key=True),
+    Column("integration", Text, primary_key=True),
+    Column("status", Text),
+    Column("attempts", Integer),
+    Column("last_error", Text),
+    Column("updated_at", UTCDateTime),
+)
+
+# A project's secrets (TR-775): the value sealed with the cell's TARES_SECRETS_KEY, never in the
+# clear; who set it and when; who last fetched it for a command and when.
+project_secrets = Table(
+    "project_secrets", metadata,
+    Column("project", Text, primary_key=True),
+    Column("name", Text, primary_key=True),
+    Column("value", Text),
+    Column("set_by", Text),
+    Column("set_at", UTCDateTime),
+    Column("used_by", Text),
+    Column("used_at", UTCDateTime),
+)
+
+# The commands a project's local ci integration wants recorded as passing on a pull request's head
+# (TR-854): one row per project, the commands as a JSON list.
+project_required_checks = Table(
+    "project_required_checks", metadata,
+    Column("project", Text, primary_key=True),
+    Column("commands", JSONText),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
+# The merge queue (TR-856): one row per pull request Tares itself will merge, in order per
+# (repo, base). state: queued, waiting_ci, waiting_approval, merging, merged, sent_back, blocked.
+# before_files (TR-858) is the files (and head) the pull request had before its branch was last
+# brought up to date, as JSON text the caller writes and reads; unknown_ticks is how many ticks in
+# a row GitHub could not say whether it merges.
+merge_queue = Table(
+    "merge_queue", metadata,
+    Column("id", Text, primary_key=True),
+    Column("repo", Text),
+    Column("base", Text),
+    Column("pr", Integer),
+    Column("head", Text),
+    Column("ticket", Text),
+    Column("project_uid", Text),
+    Column("state", Text),
+    Column("reason", Text),
+    Column("desk_item", Text),
+    Column("approved_head", Text),
+    Column("entered_at", UTCDateTime),
+    Column("updated_at", UTCDateTime),
+    Column("before_files", Text),
+    Column("unknown_ticks", Integer),
+)
+Index("idx_merge_queue_repo", merge_queue.c.repo, merge_queue.c.base)
+
+# How a project's pull requests are merged: squash, merge or rebase. No row means squash.
+project_merge_method = Table(
+    "project_merge_method", metadata,
+    Column("project", Text, primary_key=True),
+    Column("method", Text),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
@@ -864,5 +1006,8 @@ MOVED_TABLES = (session_stations, session_states, project_sessions, session_usag
                 milestones, milestone_check_results, milestone_acceptances, ticket_checks,
                 challenges, reviews, review_findings, rule_proposals,
                 assumptions, desk_items, decisions, handovers, grants, pending_memory, crews,
-                spec_questions, signoffs, handover_overrides, answers, waiting_told)
+                spec_questions, signoffs, handover_overrides, answers, waiting_told,
+                guardrail_rules, guardrail_pairs, integration_choices, integration_connections,
+                project_integrations, pending_writeback, project_secrets, project_required_checks,
+                merge_queue, project_merge_method)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

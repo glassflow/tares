@@ -50,6 +50,7 @@ from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import github_credentials as github_table
 from .session_store.tables import model_usage as usage_table
 from .session_store.tables import tickets as tickets_table
+from .session_store.tables import pending_writeback as writeback_table
 from .session_store.tables import session_commands, session_messages
 from .session_store.tables import (session_archive_parts, session_files, session_ingest_marks,
                                    session_lines, session_said, session_turns)
@@ -3014,15 +3015,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 conn.execute(delete(members_table).where(members_table.c.project == uid))
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
-            # the write-backs waiting for its tickets go before the tickets that name them
-            with self.sessions_db.read() as conn:
-                tids = list(conn.execute(select(tickets_table.c.id).where(
-                    tickets_table.c.project == uid)).scalars())
-            for i in range(0, len(tids), 500):
-                chunk = tids[i:i + 500]
-                self.sc.execute("DELETE FROM pending_writeback WHERE ticket IN "
-                                f"({', '.join('?' for _ in chunk)})", chunk)
             with self.sessions_db.begin() as conn:
+                # the write-backs waiting for its tickets go before the tickets that name them
+                conn.execute(delete(writeback_table).where(writeback_table.c.ticket.in_(
+                    select(tickets_table.c.id).where(tickets_table.c.project == uid))))
                 conn.execute(delete(tickets_table).where(tickets_table.c.project == uid))
             self._factory_forget_project(uid)
             with self.sessions_db.begin() as conn:
@@ -3458,10 +3454,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         if closes:
             values["stage"] = case((t.c.stage.in_(("merged", "shipped")), t.c.stage), else_=None)
         with self._swrite:
-            if unless_pending and self.sc.execute(
-                    "SELECT 1 FROM pending_writeback WHERE ticket = ?", [tid]).fetchone():
-                return False
             with self.sessions_db.begin() as conn:
+                if unless_pending and conn.execute(select(writeback_table.c.ticket).where(
+                        writeback_table.c.ticket == tid)).first() is not None:
+                    return False
                 was = (conn.execute(select(t.c.project, t.c.stage).where(t.c.id == tid)).first()
                        if closes else None)
                 if values:
@@ -3614,9 +3610,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The ticket goes, and with it the other tickets' dependency on it."""
         t = tickets_table
         with self._swrite:
-            # first: it is safe to repeat, so a crash after it leaves a delete a second call finishes
-            self.sc.execute("DELETE FROM pending_writeback WHERE ticket = ?", [tid])
             with self.sessions_db.begin() as conn:
+                conn.execute(delete(writeback_table).where(writeback_table.c.ticket == tid))
                 row = conn.execute(select(t.c.project).where(t.c.id == tid)).first()
                 conn.execute(delete(t).where(t.c.id == tid))
                 if row:
