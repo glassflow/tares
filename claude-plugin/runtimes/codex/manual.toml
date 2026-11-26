@@ -32,3 +32,19 @@ pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "stati
 [roles.releaser]
 parts = ["factory-protocol/SKILL.md", "station-releaser/SKILL.md"]
 pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md"]
+
+[roles.spec]
+opening = '''
+You run on Codex as the person's own planning session, started with `tares factory spec`: not a station of the crew. The person is here: ask them. Tares (the project, its docs, tickets and the desk) is reached through the tools of the MCP server `tares`. Your rules follow: the spec manual, then the pages it names. They are part of your instructions: nothing has to be loaded.
+'''
+parts = ["spec-project/SKILL.md"]
+pages = ["spec-project/light-mode.md", "spec-project/contributor.md", "spec-project/write-out.md",
+         "spec-project/area-owners.md"]
+
+[roles.session]
+opening = '''
+You run on Codex as the person's own project session, started with `tares factory session`: not a station of the crew. The person is here: ask them. Tares is reached through the tools of the MCP server `tares`. Your rules follow: the session manual, then the pages it names. They are part of your instructions: nothing has to be loaded.
+'''
+parts = ["session/SKILL.md"]
+pages = ["spec-project/light-mode.md", "spec-project/write-out.md", "spec-project/area-owners.md"]
+

@@ -1,0 +1,64 @@
+# The spec manual as a Codex session reads it (TR-1599): edits of ../../../skills/spec-project/SKILL.md.
+#
+# `tares factory spec` on a crew that runs on Codex opens the person's own Codex with this manual. Nothing is
+# loaded; the pages follow the manual. The second look at the plan is a separate fresh Codex session
+# (`tares factory second-look`), and a hand-over needs no message: the factory wakes the orchestrator.
+
+[[edit]]
+find = '''Your job ends when a fresh Claude Code session, or a tares-factory'''
+with = '''Your job ends when a fresh Codex session, or a tares-factory'''
+
+[[edit]]
+find = '''(the `session` skill sends you here for'''
+with = '''(the session manual sends you here for'''
+
+[[edit]]
+find = '''Read `light-mode.md` in this skill's folder before'''
+with = '''Follow the page `light-mode.md` below before'''
+
+[[edit]]
+find = '''Read `contributor.md` in this skill's folder before'''
+with = '''Follow the page `contributor.md` below before'''
+
+[[edit]]
+find = '''`area-owners.md` in this skill's folder:'''
+with = '''the page `area-owners.md` below:'''
+
+[[edit]]
+find = '''## 4. Have a second model attack the plan'''
+with = '''## 4. Have a fresh session attack the plan'''
+
+[[edit]]
+find = '''Before writing anything to Tares, give a subagent on a **different model from yours** (`model:
+"sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the spec, the plan with its checks,
+and every ticket with its working doc, and ask it to find:'''
+with = '''Before writing anything to Tares, give a separate, fresh Codex session the spec, the plan with its checks,
+and every ticket with its working doc: write them and the questions below to a file, and run
+`tares factory second-look --file <that file>`. It runs one `codex exec` session of its own, read-only, and
+prints its answer; it is the same model as yours unless the crew names another, and it says which (say so
+to the person). Ask it to find:'''
+
+[[edit]]
+find = '''5. Read `write-out.md` in this skill's folder, then follow its items 5 to 7'''
+with = '''5. Follow the page `write-out.md` below, its items 5 to 7'''
+
+[[edit]]
+find = '''the stations' own skills say how to work'''
+with = '''the stations' own manuals say how to work'''
+
+[[edit]]
+find = '''2. Send that orchestrator (`list_crew` names it: `<crew>-orchestrator`) the `[TF:SHIP]` message the tool returns,
+   with SendMessage, so it starts now rather than on its next tick.
+3. Tell the user the orchestrator has it and will start the builders; they talk to it with
+   `tares factory crew attach orchestrator`, and watch the crew on the Crew page.'''
+with = '''2. Nothing to send: the factory wakes the orchestrator for a project handed over on Tares.
+3. Tell the user the orchestrator has it and will start the builders; it asks them its questions on the
+   desk, in the Tares console, and they watch the crew on the Crew page.'''
+
+[[edit]]
+find = '''Read `contributor.md` in this skill's folder and follow it instead of steps 1 to 9.'''
+with = '''Follow the page `contributor.md` below instead of steps 1 to 9.'''
+
+[[edit]]
+find = '''Read `light-mode.md` in this skill's folder and follow it instead of steps 1 to 9.'''
+with = '''Follow the page `light-mode.md` below instead of steps 1 to 9.'''

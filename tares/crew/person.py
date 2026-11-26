@@ -904,11 +904,119 @@ def _warn_clash(client: TaresClient, env: dict) -> None:
         client.say(f"warning: {clash_text(lines, kit, version)}")
 
 
+def on_codex(client: TaresClient) -> bool:
+    """Does this crew run on Codex (its recorded stations, else the cell's runtime slot for a crew with none)?"""
+    from . import proc
+    return proc.planned_runtime(client) == proc.CODEX
+
+
+def app_name(client: TaresClient) -> str:
+    return "Codex" if on_codex(client) else "Claude"
+
+
+def codex_prompt(prompt: str) -> str:
+    """A planning session's first prompt as a Codex session takes it: Claude Code's slash command becomes words
+    (a Codex session has its manual in its instructions, and no slash commands of the plugin)."""
+    if prompt.startswith("/tares:spec"):
+        rest = prompt[len("/tares:spec"):].strip()
+        return "Plan a project with me, as your spec manual says." + (f" {rest}" if rest else "")
+    if prompt.startswith("/tares:session"):
+        return prompt[len("/tares:session"):].strip()
+    return prompt.replace("Load the spec-project skill, section Contributor.",
+                          "Follow the page `contributor.md` of your spec manual.")
+
+
+def _toml_str(value: str) -> str:
+    """A TOML basic string (JSON's escapes are TOML's)."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def person_codex(client: TaresClient, env: dict, cwd: str, sname: str, sfile: str, prompt: str,
+                 extra: dict | None = None) -> int:
+    """The person's own Codex session for planning (TR-1599), the `spec` or `session` manual as its developer
+    instructions and the crew's Tares MCP endpoint with the crew's key (through the plugin's headers helper, as a
+    station's), all given on the command line: the person's own ~/.codex is neither read for them nor changed.
+    In a terminal it is Codex's own interactive session, in the foreground in `cwd`; with no terminal
+    (`TARES_PLANNING_EXEC` set, or no tty) it is one `codex exec` run that takes the first prompt as the whole
+    brief. Returns Codex's exit code. `extra` is more variables for its environment."""
+    from . import codex as cx
+    from . import role_text
+    from .launch import shell_word
+    paths = client.paths
+    role = "spec" if sfile == "spec" else "session"
+    kit = kit_dir(client, env)
+    try:
+        manual = role_text.manual(kit, role_text.CODEX, role)
+    except role_text.RenderError as e:
+        raise CrewError(f"cannot give the {role} session its rules on Codex: {e}") from None
+    if not manual:
+        raise CrewError(f"the kit at {kit} has no {role} manual for Codex")
+    child = {k: v for k, v in env.items() if k not in ("TARES_AUTH_TOKEN", "TARES_FACTORY_SOURCE", "TARES_FACTORY_KEY_SOURCE")}
+    if env.get("TARES_AUTH_TOKEN") and not env.get("FACTORY_STATION"):
+        paths.home.mkdir(parents=True, exist_ok=True)
+        client.keep_token()
+    tares = client.tares or client.tares_url()
+    child.update(TARES_FACTORY_URL=tares, TARESD_URL=tares, TARES_FACTORY_MCP_URL=client.mcp_url())
+    if not child.get("FACTORY_CREW"):
+        try:
+            child["FACTORY_CREW"] = state.crew_name(paths)
+        except CrewError:
+            pass
+    child.update(extra or {})
+    if not os.path.isdir(cwd):
+        raise CrewError(f"cannot open Codex in {cwd}: no such folder")
+    helper = (f"TARES_FACTORY_CRED_FILE={shell_word(str(paths.token_file))} tares hook mcp-headers "
+              f"--plugin-root {shell_word(kit)}")
+    overrides = {
+        "developer_instructions": _toml_str(manual),
+        "mcp_servers.tares.url": _toml_str(client.mcp_url()),
+        "mcp_servers.tares.required": "true",
+        "mcp_servers.tares.default_tools_approval_mode": _toml_str("approve"),
+        "mcp_servers.tares.http_headers_helper": _toml_str(helper),
+        "mcp_servers.tares.env_http_headers": '{"X-Tares-Crew" = "FACTORY_CREW", "X-Tares-Project" = "TARES_PROJECT"}',
+    }
+    flags = [a for k, v in overrides.items() for a in ("-c", f"{k}={v}")]
+    codex = cx.codex_bin(env)
+    first = codex_prompt(prompt)
+    interactive = not env.get("TARES_PLANNING_EXEC") and sys.stdin.isatty() and sys.stdout.isatty()
+    if interactive:
+        cmd = [codex, *flags, first]
+    else:
+        first = (first + "\n\nNobody answers questions in this run: take this prompt as the whole brief, decide what "
+                 "it leaves open yourself and record each such decision as an assumption, and finish without waiting.")
+        cmd = [codex, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", *flags, first]
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    old = None
+    try:
+        old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError):
+        pass
+    try:
+        code = subprocess.run(cmd, cwd=cwd, env=child).returncode
+    except FileNotFoundError:
+        print(f"{ME}: {codex}: command not found", file=sys.stderr)
+        return 127
+    finally:
+        if old is not None:
+            try:
+                signal.signal(signal.SIGINT, old)
+            except (ValueError, OSError):
+                pass
+    return 128 - code if code < 0 else code
+
+
 def person_claude(client: TaresClient, env: dict, cwd: str, sname: str, sfile: str, prompt: str,
                   extra: dict | None = None) -> int:
     """The person's own Claude Code session, in the foreground in `cwd`, with this plugin turned on (its own
     --settings, as for stations), told the crew's Tares and MCP endpoint, and the key as a file. Returns
-    Claude's exit code. `extra` is more variables for Claude's environment."""
+    Claude's exit code. `extra` is more variables for Claude's environment. On a crew that runs on Codex it
+    is the person's own Codex session instead (person_codex)."""
+    if on_codex(client):
+        return person_codex(client, env, cwd, sname, sfile, prompt, extra)
     paths = client.paths
     args = ["-n", sname, "--plugin-dir", kit_dir(client, env)]
     child = {k: v for k, v in env.items() if k not in ("TARES_AUTH_TOKEN", "TARES_FACTORY_SOURCE", "TARES_FACTORY_KEY_SOURCE")}
@@ -989,9 +1097,10 @@ def cmd_spec(argv: list, env: dict) -> int:
 
 
 def _spec(args: list, env: dict) -> int:
-    claude_bin(env)  # bash looks for Claude Code before anything else
     client = prelude(["spec", *args], env)
     with client:
+        if not on_codex(client):
+            claude_bin(env)  # a crew on Claude Code looks for it first, as bash did
         idea = name = ""
         args = list(args)
         while args:
@@ -1045,12 +1154,13 @@ def _spec(args: list, env: dict) -> int:
         if not slug:
             slug = state.slugify(os.path.basename(here))
         if contrib:
-            _err(f"{ME}: opening Claude as {slug}-spec in {here}, as a contributor to {cproject}, which {clead} leads.\n"
+            _err(f"{ME}: opening {app_name(client)} as {slug}-spec in {here}, as a contributor to {cproject}, which {clead} leads.\n"
                  "         It asks you the questions for you and shows the tickets in your repos.\n")
             return person_claude(client, env, here, f"{slug}-spec", "spec",
                                  f"You are contributing to {cproject} led by {clead}. Load the spec-project skill, "
                                  "section Contributor.", {"TARES_PROJECT": cproject, "TARES_SESSION_KIND": "contributor"})
-        _err(f"{ME}: opening Claude as {slug}-spec in {here}, with /tares:spec.\n"
+        _err(f"{ME}: opening {app_name(client)} as {slug}-spec in {here}"
+             + (", with its spec manual.\n" if on_codex(client) else ", with /tares:spec.\n") +
              "         It interviews you, one question at a time, and writes the spec, milestones and tickets\n"
              f"         into a project on Tares ({client.tares}). It ends by asking whether to hand the project to the crew.\n")
         prompt = "/tares:spec"
@@ -1128,7 +1238,7 @@ def session_idea(client: TaresClient, env: dict, idea: str) -> int:
     here = os.path.realpath(os.getcwd())
     root = git_root()
     slug = _cut_slug(_words(idea, 4)) or "new"
-    _err(f"{ME}: opening Claude as {slug}-session in {root or here}.\n"
+    _err(f"{ME}: opening {app_name(client)} as {slug}-session in {root or here}.\n"
          f"         It plans \"{idea}\" lightly into a new project on Tares ({client.tares}) and builds it in the same\n"
          "         session; if it turns out big, it offers the full spec and the hand-over to the crew.\n")
     return person_claude(client, env, root or here, f"{slug}-session", "session", f"/tares:session new: {idea}",
@@ -1144,9 +1254,10 @@ def cmd_session(argv: list, env: dict) -> int:
 
 
 def _session(args: list, env: dict) -> int:
-    claude_bin(env)  # bash looks for Claude Code before anything else
     client = prelude(["session", *args], env)
     with client:
+        if not on_codex(client):
+            claude_bin(env)  # a crew on Claude Code looks for it first, as bash did
         if env.get("FACTORY_STATION"):
             raise CrewError("only the person runs this, in their own terminal")
         target, new = "", False

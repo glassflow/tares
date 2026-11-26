@@ -1,0 +1,9 @@
+# The spec manual's light mode as a Codex session reads it (TR-1599).
+
+[[edit]]
+find = '''"follow the `session` skill"'''
+with = '''"follow the session manual (`tares factory session <project>`)"'''
+
+[[edit]]
+find = '''go back to the `session` skill to build it here.'''
+with = '''go back to the session manual to build it here.'''

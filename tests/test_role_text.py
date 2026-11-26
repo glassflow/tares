@@ -202,7 +202,7 @@ ck("the builder's is untouched by it", rt.manual(kit, rt.CODEX, "builder") == ma
 print("e. every crew role on Codex (TR-1599), and a role with no rendering")
 roles = {r: rt.manual(KIT, rt.CODEX, r) for r in ("orchestrator", "reviewer", "releaser")}
 ck("the orchestrator, the reviewer and the releaser have a manual on Codex, naming nothing of CLAUDE_ONLY",
-   sorted(table) == ["builder", "orchestrator", "releaser", "reviewer"]
+   sorted(table) == ["builder", "orchestrator", "releaser", "reviewer", "session", "spec"]
    and all(len(m) > 5000 and named(m) == [] for m in roles.values()), {r: named(m) for r, m in roles.items()})
 ck("none holds a schedule; each is woken by the factory",
    all("You hold no schedule" in m and "CronCreate" not in m for m in roles.values()))
@@ -210,9 +210,19 @@ ck("the orchestrator: the person answers on the desk in the console, which recor
    "they answer on the desk, in the Tares console" in roles["orchestrator"] and "Never record an answer yourself" in roles["orchestrator"]
    and "crew attach orchestrator" not in roles["orchestrator"] and "PushNotification" not in roles["orchestrator"]
    and "The console records their answer." in roles["orchestrator"])
-ck("the reviewer: a station of its own, and no second model, said in what it did not verify",
-   "a conversation of your own" in roles["reviewer"] and "no second-model check: one Codex reviewer" in roles["reviewer"]
-   and "subagent" not in roles["reviewer"].lower())
+ck("the reviewer: a station of its own, and its second look a separate fresh Codex session, said as what it is",
+   "a conversation of your own" in roles["reviewer"] and "tares factory second-look --file" in roles["reviewer"]
+   and "second look: a separate Codex session on <model>" in roles["reviewer"] and "subagent" not in roles["reviewer"].lower())
+plan = {r: rt.manual(KIT, rt.CODEX, r) for r in ("spec", "session")}
+ck("the spec and session manuals on Codex: the person's own session, not a station, naming nothing of CLAUDE_ONLY",
+   all(m.startswith("You run on Codex as the person's own") and named(m) == [] and len(m) > 5000 for m in plan.values()),
+   {r: (named(m), m[:80]) for r, m in plan.items()})
+ck("the spec manual: a fresh session attacks the plan, and a hand-over sends nothing (the factory wakes the orchestrator)",
+   "## 4. Have a fresh session attack the plan" in plan["spec"] and "tares factory second-look --file" in plan["spec"]
+   and "Nothing to send: the factory wakes the orchestrator" in plan["spec"] and "crew attach orchestrator" not in plan["spec"])
+ck("the session manual: a takeover sends nothing, and it messages no station",
+   "Nothing to send: Tares has the takeover" in plan["session"] and "this session is not one of them" in plan["session"]
+   and "[TF:TAKEOVER]" not in plan["session"])
 ck("the orchestrator asks for approval to run a `tares factory` command that reaches Tares (its sandbox has no network)",
    "this command reaches Tares: run it asking for approval (escalated permissions" in roles["orchestrator"])
 ck("it settles a batch of assumptions with decide_assumption, never by recording the answer itself",

@@ -1,8 +1,8 @@
 # The reviewer's manual as a Codex station reads it: edits of ../../../skills/station-reviewer/SKILL.md (TR-1599).
 #
 # A Codex reviewer is its own station, in a conversation of its own: never the builder's. It has no schedule
-# (the factory wakes it from the review queue), no subagent and no LSP tool, and no second model checks its
-# review: it says so in what it did not verify. It sends VERDICT with send_to_station (the factory protocol).
+# (the factory wakes it from the review queue), no subagent and no LSP tool; its second look is a separate fresh
+# Codex session (`tares factory second-look`), same model unless the crew names another, and said so. It sends VERDICT with send_to_station (the factory protocol).
 
 [[edit]]
 find = '''You are the second layer: builders send `REVIEW` only after their own Codex challenger layer is clean, and your bar is stricter.'''
@@ -26,7 +26,7 @@ with = '''Follow the page `design-check.md` below, every step of it.'''
 
 [[edit]]
 find = '''7. **Second-model challenge.** Give a subagent on a different Claude model from yours (`model: "sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the diff, the ticket and your draft findings, and ask it to find what you missed and to argue against each finding. Keep what survives. `crew.json` → `review.challenge = false` skips this for trivial PRs.'''
-with = '''7. **No second model.** A Codex station has nobody to hand the diff to, so no second model checks your findings. Argue against each of your own findings once before you keep it, and put in `not_verified`: "no second-model check: one Codex reviewer". When the builder runs on the same model as you (`$FACTORY_HOME/crew.json` → `stations` names each role's model), say that too: the code and its review come from the same model, in separate conversations.'''
+with = '''7. **Second look, in a fresh session.** Write the diff (`git diff <base>...<sha>` in your worktree), the ticket's goal and your draft findings to a file, and run `tares factory second-look --file <that file> --dir <your worktree>`, asking for approval (it reaches the model over the network). It is a separate Codex session that starts from nothing but that file, read-only: ask it to find what you missed and to argue against each finding, and keep what survives. It is the same model as yours unless the crew names another (`stations.reviewer.second_look_model`); its answer says which. Write in the review what it was ("second look: a separate Codex session on <model>"), never a second model's when it was not. `crew.json` → `review.challenge = false` skips this for trivial PRs.'''
 
 [[edit]]
 find = '''You run in the crew home, where `gh` can't fill `{owner}/{repo}` for you.'''
