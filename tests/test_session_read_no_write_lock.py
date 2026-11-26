@@ -21,14 +21,15 @@ import uuid
 from datetime import timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from sqlalchemy import event, func, select  # noqa: E402
+from sqlalchemy import event, func, insert, select  # noqa: E402
+from sqlalchemy.engine import Engine  # noqa: E402
 
 from tares import claude_usage_hourly as hourly  # noqa: E402
 from tares import session_archive, session_ingest, session_move, session_read  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
-from tares.session_store import copy as store_copy  # noqa: E402
+from tares.session_store import SessionStore, copy as store_copy  # noqa: E402
 from tares.session_store.tables import (session_archive_parts, session_lines,  # noqa: E402
-                                        session_stations)
+                                        session_stations, session_store_copies)
 from tares.store import Store, now_utc  # noqa: E402
 
 FAILS = []
@@ -336,12 +337,69 @@ def transactions(s):
             ck(f"{name} reads at the default isolation", set(seen) == {"default"}, seen)
 
 
+def first_reads(s):
+    """{name: call} of the functions that read and then write: their first transaction is the read."""
+    return {
+        "_factory_upgrade": s._factory_upgrade,
+        "_claude_usage_fill": s._claude_usage_fill,
+        "_archive_session": lambda: session_archive._archive_session(
+            s.sessions_db, session_archive.backend_of(s), "old", now_utc()),
+    }
+
+
+def first_transactions(s):
+    sqlite = s.sessions_db.dialect == "sqlite"
+    for name, call in first_reads(s).items():
+        try:
+            seen = opened(s, call)
+        except Exception as e:
+            ck(f"{name} runs", False, f"{type(e).__name__}: {e}")
+            continue
+        if sqlite:
+            ck(f"{name} reads with no write lock", seen[:1] == ["BEGIN"], seen)
+        else:
+            ck(f"{name} reads at the default isolation", set(seen) == {"default"}, seen)
+
+
+def local_copy_source():
+    print("== the first start with a state database reads the local file with no write lock ==")
+    s = open_store()
+    seed(s)
+    local_dir = tempfile.mkdtemp()
+    local = SessionStore(local_dir)
+    local.upgrade()
+    with local.begin() as c:    # its ledger says this table was copied, so the file is its source
+        c.execute(insert(session_store_copies).values(table_name=session_stations.name, rows=0,
+                                                      copied_at=now_utc()))
+    local.close()
+    began, read_in = {}, []
+
+    def after(conn, cursor, statement, *a):
+        if not str(conn.engine.url.database or "").startswith(local_dir):
+            return
+        key = id(conn.connection.dbapi_connection)
+        if statement.startswith("BEGIN"):
+            began[key] = statement
+        elif f"FROM {session_stations.name}" in statement:
+            read_in.append(began.get(key))
+
+    event.listen(Engine, "after_cursor_execute", after)
+    try:
+        store_copy.copy_from_duckdb(s, s.sessions_db, state_move=True, local_dir=local_dir)
+    finally:
+        event.remove(Engine, "after_cursor_execute", after)
+    ck("copy_from_duckdb reads the local file's table with no write lock", read_in == ["BEGIN"],
+       read_in)
+    s.close()
+
+
 def every_read_function():
     print("== what each read function opens ==")
     s = open_store()
     seed(s)
     print("  on " + s.sessions_db.dialect)
     transactions(s)
+    first_transactions(s)
     s.close()
 
 
@@ -350,6 +408,7 @@ def in_memory():
     s = open_store(":memory:")
     seed(s)
     transactions(s)
+    first_transactions(s)
     if s.sessions_db.dialect == "sqlite":
         with held(s, lambda: s.station_rollup(SRC), "row_number") as out:
             ok, detail, t, errors = beside(lambda: s.append([line("s1")]), wait=0.5)
@@ -365,6 +424,7 @@ def in_memory():
 if __name__ == "__main__":
     held_reads()
     every_read_function()
+    local_copy_source()
     in_memory()
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else 0)

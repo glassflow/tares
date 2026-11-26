@@ -329,11 +329,24 @@ def move(duck, pg: PgState, tables: list[str]) -> dict:
                 quoted = ", ".join(f'"{col}"' for col in cols)
                 rows = duck.execute(f"SELECT {quoted} FROM {t}").fetchall()
                 cur.execute(f"TRUNCATE {t}")
+                # a firing or a read can hold a NUL from a posted line (TR-1707), which DuckDB
+                # keeps and Postgres text does not take: it is dropped. Those rows go in last,
+                # so one that now has the key of a row already there is left out.
+                nul = []
                 with cur.copy(f"COPY {t} ({quoted}) FROM STDIN") as cp:
                     for r in rows:
-                        cp.write_row(r)
+                        if any(isinstance(v, str) and "\x00" in v for v in r):
+                            nul.append(r)
+                        else:
+                            cp.write_row(r)
+                left_out = 0
+                for r in nul:
+                    cur.execute(f"INSERT INTO {t} ({quoted}) VALUES "
+                                f"({', '.join(['%s'] * len(cols))}) ON CONFLICT DO NOTHING",
+                                [v.replace("\x00", "") if isinstance(v, str) else v for v in r])
+                    left_out += 1 - cur.rowcount
                 n = cur.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                if n != len(rows):
+                if n != len(rows) - left_out:
                     raise RuntimeError(f"state table {t}: {len(rows)} rows read, {n} written")
                 counts[t] = n
             cur.execute("INSERT INTO tares_state_meta (key, value) VALUES "
