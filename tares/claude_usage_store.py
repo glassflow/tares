@@ -265,16 +265,32 @@ class ClaudeUsageStore:
                 "cache_read_tokens": int(r[4] or 0), "cost_usd": float(r[5] or 0),
                 "unpriced_replies": int(r[6] or 0)}
 
-    def usage_by_session(self, sessions: list[str]) -> dict[str, dict]:
+    def usage_by_session(self, sessions: list[str], hidden=frozenset()) -> dict[str, dict]:
+        """What each session's replies add up to. A reply that counts for a project in `hidden`
+        (the ones the caller cannot see) is not in it; a session with no other is left out."""
         if not sessions:
             return {}
         u = session_usage
+        q = select(u.c.session, *self._total_cols(u)).group_by(u.c.session)
+        if hidden:
+            replies, seen = self._replies_outside(hidden)
+            q = q.select_from(replies).where(seen)
         out: dict[str, dict] = {}
         for i in range(0, len(sessions), 500):
             with self.sessions_db.begin() as conn:
-                rows = conn.execute(select(u.c.session, *self._total_cols(u)).where(
-                    u.c.session.in_(list(sessions[i:i + 500]))).group_by(u.c.session)).all()
+                rows = conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).all()
             out.update({r[0]: self._totals(r[1:]) for r in rows})
+        return out
+
+    def sessions_counting_for(self, sessions: list[str], projects) -> set[str]:
+        """Those of `sessions` with a reply that counts for one of `projects`."""
+        u = session_usage
+        replies, project, _ = self._replies_by_project()
+        q = select(u.c.session).select_from(replies).where(project.in_(sorted(projects))).distinct()
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.begin() as conn:
+                out.update(conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).scalars())
         return out
 
     @staticmethod
@@ -292,6 +308,12 @@ class ClaudeUsageStore:
         replies = (u.outerjoin(ss, ss.c.session == u.c.session)
                    .outerjoin(worked, worked.c.session == u.c.session))
         return replies, project, is_crew
+
+    def _replies_outside(self, projects):
+        """(`_replies_by_project`'s join, the condition that keeps the replies that count for no
+        one of `projects`)."""
+        replies, project, _ = self._replies_by_project()
+        return replies, project.is_(None) | project.not_in(sorted(projects))
 
     def usage_by_week(self, since=None, until=None) -> list[dict]:
         """Replies in [since, until) (all when None) grouped by the project they count for (as
