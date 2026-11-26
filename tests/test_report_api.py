@@ -4,8 +4,9 @@ The weeks a range covers (as a function, with a fixed day, and over HTTP), the s
 a cell with nothing on it, a cell of one person, and each scope: which weekly rows reach a section,
 which projects and teams are named and counted. A private project is in no scope of a caller who
 cannot open it, and asked for by name it is unknown, like an id that names nothing. Who may read at
-all, bad input, that no raw record is read on page load, and the time of the read on a large cell
-(20 projects, 12 weeks, 600 merged tickets).
+all, bad input, that no raw record is read on page load, the Delivered section's figures against
+numbers worked out by hand, with those of the weeks before (TR-1668), and the time of the read on a
+large cell (20 projects, 12 weeks, 600 merged tickets).
 
 Run: python tests/test_report_api.py
 """
@@ -35,7 +36,8 @@ os.environ.update({"TARES_DB": os.path.join(HOME, "import.duckdb"),
 
 import httpx
 
-from tares import daemon, report
+from tares import daemon, merge_queue, report
+from tares import factory as factory_mod
 from session_helpers import seed_usage
 
 P = F = 0
@@ -110,11 +112,12 @@ async def get(cx, who=None, headers=None, **params):
     return await cx.get("/api/factory/report", params=params, headers=h)
 
 
-def probe(rows, weeks):
+def probe(rows, weeks, before=()):
     """A section that says what it was handed."""
     return {"projects": sorted({r["project"] for r in rows}),
             "weeks": [w.isoformat() for w in weeks],
-            "merged": sum(r["merged"] for r in rows)}
+            "merged": sum(r["merged"] for r in rows),
+            "before": sorted({r["project"] for r in before})}
 
 
 # ── the weeks of a range ──────────────────────────────────────────────────────
@@ -189,7 +192,15 @@ async def scopes():
         ck("what it cannot see: three sentences, work outside Tares, pushes past the queue, list prices",
            len(lines) == 3 and lines[0] == SEEN and "merge queue" in lines[1]
            and "API-equivalent" in lines[2], lines)
-        ck("no section is built yet", body.get("sections") == {}, body.get("sections"))
+        built = body.get("sections") or {}
+        ck("only Delivered is built, with nothing delivered and nothing earlier",
+           built == {"delivered": {
+               "merged": 0, "milestones_accepted": 0, "projects_merged": 0,
+               "start_to_merge": {"p50": None, "p90": None, "tickets": 0},
+               "first_pass": {"passed": 0, "reviewed": 0}, "rounds_per_ticket": None,
+               "previous": None,
+               "weeks": [{"week": week(n).isoformat(), "merged": 0, "p50": None}
+                         for n in range(7, -1, -1)]}}, built)
         ck("the fixed section keys, in the page's order", list(report.SECTIONS) == FIXED,
            list(report.SECTIONS))
 
@@ -261,6 +272,9 @@ async def scopes():
                    and b["range"]["merged"] == merged and b["scope"]["count"] == len(ids)
                    and b["scope"]["name"] == name and b["scope"]["value"] == scope,
                    (handed, b["range"]["merged"], b["scope"]))
+                # only Alpha has anything in the 8 weeks before the default range
+                ck(f"{label}: the weeks before are of the same scope",
+                   handed.get("before") == [i for i in ids if i == "uc_alpha"], handed)
 
             print("== the whole factory ==")
             await reads("the cell's own token", None, "factory", every, 31)
@@ -435,6 +449,119 @@ async def scopes():
             report.SECTIONS["delivered"] = real
 
 
+def moved(s, uid, back, hours=None) -> str:
+    """A ticket merged at noon on the Monday `back` weeks ago, `hours` after it was taken up
+    (None: it was never marked doing)."""
+    tid = s.create_ticket(uid, "tares", "t")
+    when = noon(week(back))
+    if hours is not None:
+        s.add_ticket_history(tid, uid, "stage", "doing", None, None, None,
+                             when - timedelta(hours=hours))
+    s.add_ticket_history(tid, uid, "stage", "merged", None, None, None, when)
+    return tid
+
+
+def reviewed(s, uid, tid, back, verdict, minute=0, by="crew-reviewer"):
+    s.add_review(uid, tid, "7", "abc1234", verdict, "read the diff", "", by, [], {},
+                 factory_mod.finding_kind, noon(week(back)) + timedelta(minutes=minute))
+
+
+def accepted(s, uid, back):
+    mid = s.create_milestone(uid, f"m{back}")
+    s.accept_milestone(uid, mid, "Ada", None, noon(week(back)))
+
+
+def close(got, want) -> bool:
+    """Equal, with hours and averages equal to a millionth."""
+    if isinstance(want, dict):
+        return (isinstance(got, dict) and got.keys() == want.keys()
+                and all(close(got[k], v) for k, v in want.items()))
+    if isinstance(want, list):
+        return (isinstance(got, list) and len(got) == len(want)
+                and all(close(g, w) for g, w in zip(got, want)))
+    if isinstance(want, float):
+        return isinstance(got, (int, float)) and abs(got - want) < 1e-6
+    return got == want
+
+
+def figures(merged, milestones, projects, p50, p90, tickets, passed, first, rounds) -> dict:
+    return {"merged": merged, "milestones_accepted": milestones, "projects_merged": projects,
+            "start_to_merge": {"p50": p50, "p90": p90, "tickets": tickets},
+            "first_pass": {"passed": passed, "reviewed": first}, "rounds_per_ticket": rounds}
+
+
+async def delivered():
+    async with cell() as (s, root, bare):
+        print("== the Delivered section ==")
+        ada, pat = (s.create_person(n, f"{n.lower()}@example.com")["id"] for n in ("Ada", "Pat"))
+        project(s, "uc_one", "One", lead=ada)
+        project(s, "uc_two", "Two", lead=ada)
+        project(s, "uc_hid", "Hidden", lead=pat, private=True)
+        # the range: the 4 weeks to this one
+        a, b = moved(s, "uc_one", 1, 1), moved(s, "uc_one", 1, 3)
+        moved(s, "uc_one", 1)                                   # no start
+        c = moved(s, "uc_one", 3, 5)
+        moved(s, "uc_two", 1, 7)
+        moved(s, "uc_hid", 1, 50)
+        reviewed(s, "uc_one", a, 1, "changes")
+        reviewed(s, "uc_one", a, 1, "pass", minute=5)           # a second round
+        reviewed(s, "uc_one", b, 1, "pass")
+        reviewed(s, "uc_one", b, 1, "pass", minute=5, by=merge_queue.BY)    # no round
+        reviewed(s, "uc_one", c, 3, "pass")
+        for uid, back in (("uc_one", 2), ("uc_two", 0), ("uc_two", 0), ("uc_hid", 1)):
+            accepted(s, uid, back)
+        # the 4 weeks before it, from its first week to its last
+        d = moved(s, "uc_one", 4, 10)
+        moved(s, "uc_one", 7, 20)
+        moved(s, "uc_hid", 5, 40)
+        reviewed(s, "uc_one", d, 4, "pass")
+        for uid, back in (("uc_one", 6), ("uc_one", 7), ("uc_hid", 5)):
+            accepted(s, uid, back)
+        # one week more, in neither
+        moved(s, "uc_one", 8, 100)
+        accepted(s, "uc_one", 8)
+        # long ago: a review with no merge, and cost nothing claims in the week before it
+        e = s.create_ticket("uc_two", "tares", "open")
+        reviewed(s, "uc_two", e, 30, "changes")
+        seed_usage(s, "s-nobody", "m1", replied_at=noon(week(31)), cost_usd=1.5)
+        report.rebuild_all(s)
+        k_ada = key(s, "kdada", ["read"], person=ada)
+
+        async def read(who=None, **params):
+            params.setdefault("from_", week(3).isoformat())
+            r = await get(root, who, **params)
+            return r.json()["sections"]["delivered"] if r.status_code == 200 else {"error": r.text}
+
+        def weekly(*values):
+            return [{"week": week(3 - i).isoformat(), "merged": n, "p50": p}
+                    for i, (n, p) in enumerate(values)]
+
+        got = await read(k_ada)
+        want = figures(5, 3, 2, 4.0, 6.4, 4, 2, 3, 4 / 3)
+        ck("the range: merged, milestones, projects, start to merge, first pass and rounds",
+           close({k: got.get(k) for k in want}, want), got)
+        ck("the weeks before: the same figures for the 4 weeks just before, and no further",
+           close(got.get("previous"), figures(2, 2, 1, 15.0, 19.0, 2, 1, 1, 1.0)),
+           got.get("previous"))
+        ck("week by week: merged, and the median of the week, none in a week without a merge",
+           close(got.get("weeks"), weekly((1, 5.0), (0, None), (4, 3.0), (0, None))),
+           got.get("weeks"))
+        got = await read()
+        ck("a reader who sees Hidden has it in the range and in the weeks before",
+           close({k: got.get(k) for k in want}, figures(6, 4, 3, 5.0, 32.8, 5, 2, 3, 4 / 3))
+           and close(got.get("previous"), figures(3, 3, 2, 20.0, 36.0, 3, 1, 1, 1.0)), got)
+        got = await read(k_ada, scope="project:uc_two")
+        ck("one project: every figure is its own, and it has no earlier week",
+           close(got, {**figures(1, 2, 1, 7.0, 7.0, 1, 0, 0, None), "previous": None,
+                       "weeks": weekly((0, None), (0, None), (1, 7.0), (0, None))}), got)
+        got = await read(from_=week(30).isoformat(), to=week(30).isoformat())
+        ck("a review with no merge: nothing merged, no start to merge, the review counted",
+           close({k: got.get(k) for k in want}, figures(0, 0, 0, None, None, 0, 0, 1, 1.0))
+           and got.get("weeks") == [{"week": week(30).isoformat(), "merged": 0, "p50": None}], got)
+        ck("cost nothing claims in the week before is nothing earlier", got.get("previous", 0) is None,
+           got.get("previous"))
+
+
 async def large():
     print("== a large cell: 20 projects, 12 weeks, 600 merged tickets ==")
     async with cell() as (s, root, bare):
@@ -472,6 +599,7 @@ async def large():
 def main():
     ranges()
     asyncio.run(scopes())
+    asyncio.run(delivered())
     asyncio.run(large())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

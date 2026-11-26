@@ -20,7 +20,7 @@ export interface WeekChartProps extends Omit<React.HTMLAttributes<HTMLElement>, 
   series: WeekSeries[];
   /** "bars" (default) for a count or a sum; "lines" for a figure that moves, such as a median. */
   kind?: "bars" | "lines";
-  /** A value with its unit, short enough for a column. Default: grouped, at most one decimal. */
+  /** A value with its unit, short enough for a column; a newline starts a second line. Default: grouped, at most one decimal. */
   format?: (value: number) => string;
   /** The Monday of the week still running: its column says "so far". */
   soFar?: string | null;
@@ -127,7 +127,7 @@ export function WeekChart({ caption, weeks, series, kind = "bars", format = (v) 
                     </span>
                   </th>
                   {s.values.map((v, w) => (
-                    <td key={weeks[w]} className="whitespace-nowrap border-0 px-0 py-1 text-center align-top tabular-nums">
+                    <td key={weeks[w]} className="whitespace-pre border-0 px-0 py-1 text-center align-top tabular-nums">
                       {v === null ? <><span aria-hidden="true">-</span><span className="sr-only">no value</span></> : format(v)}
                     </td>
                   ))}

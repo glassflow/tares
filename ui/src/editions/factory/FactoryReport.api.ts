@@ -6,6 +6,24 @@ import { ApiError, request } from "../../api";
 
 export type SectionKey = "delivered" | "time" | "review" | "cost" | "merges" | "architecture";
 
+/** What was delivered in some weeks. Durations are in hours, null with no ticket to say them from. */
+export interface DeliveredFigures {
+  merged: number;
+  milestones_accepted: number;
+  projects_merged: number;
+  /** `tickets`: how many of `merged` have a start, which p50 and p90 are said from. */
+  start_to_merge: { p50: number | null; p90: number | null; tickets: number };
+  first_pass: { passed: number; reviewed: number };
+  rounds_per_ticket: number | null;
+}
+
+/** `sections.delivered` (tares/report.py `delivered`). `previous` holds the figures of as many weeks
+ *  just before the range, null when nothing is there. */
+export interface DeliveredData extends DeliveredFigures {
+  previous: DeliveredFigures | null;
+  weeks: { week: string; merged: number; p50: number | null }[];
+}
+
 export interface ReportData {
   /** The weeks the read covers: `from` is a Monday, `to` a Sunday, `weeks` the Mondays, oldest first.
    *  `running_week` is the Monday of the week that is not over, when the range holds it. */
