@@ -106,13 +106,18 @@ halt.mkdir()
 (halt / "HALT").write_bytes('{"reason":"test"}'.encode("utf-8"))
 for cmd in ("factory spawn x", "/abs/bin/factory spawn x", "/abs/bin/factory revive x", "factory spawn;ls",
             "(factory revive x)", "tares factory spawn builder x", "gh pr merge 3", "git push origin HEAD",
-            "kubectl apply -f x.yaml", "claude --bg"):
+            "kubectl apply -f x.yaml", "claude --bg",
+            # git's own options before its command (TR-1598: a Codex builder's `git -C <worktree> push` went past)
+            "git -C /w/T1 push --dry-run origin HEAD", "git -c user.name=x push", 'git -C "/a b" push origin x',
+            "git --no-pager tag v2"):
     r = guard(bash(cmd), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
     ck(f"halted: {cmd!r} is refused with the halt reason", b"crew is halted (test)" in r.stdout, r.stdout[-200:])
 r = guard(bash("ls"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
 ck("halted: a harmless command still passes", r.stdout == b"", r.stdout)
 r = guard(bash("git commit -m 'git push later'"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
 ck("halted: a commit message that mentions a push still passes", r.stdout == b"", r.stdout)
+r = guard(bash("git -C /w/T1 status --short"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted: git with -C and a command that is not a push still passes", r.stdout == b"", r.stdout)
 (halt / "HALT").write_bytes("{}".encode("utf-8"))
 r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
 ck("halted without a reason: says so", b"crew is halted (no reason given)" in r.stdout, r.stdout)
@@ -300,6 +305,7 @@ ck("git push --mirror: refused", tag_call("git push --mirror origin") == "deny")
 ck("a branch that only has -v2 in the middle is not a tag push", tag_call("git push origin docs-v2-notes") == "allow")
 ck("...and one that ends in -v2 is", tag_call("git push origin docs-v2") == "deny")
 ck("git push --tags: refused", tag_call("git push --tags") == "deny")
+ck("a tag pushed with git's -C before push: refused (TR-1598)", tag_call("git -C /w push origin v1.2.0") == "deny")
 ck("git push origin --tags: refused", tag_call("git push origin --tags") == "deny")
 ck("--follow-tags: refused", tag_call("git push --follow-tags origin") == "deny")
 ck("a tag with the push of every tag: refused", tag_call(f"git tag paper-kit-v8 {SHA} && git push origin paper-kit-v8 --tags") == "deny")
