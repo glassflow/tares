@@ -1,0 +1,6 @@
+# The orchestrator's page on a takeover, as a Codex station reads it (TR-1599): the person's own session is not a
+# station, so send_to_station cannot reach it; the list goes on the desk.
+
+[[edit]]
+find = '''5. Reply to the session named in the `TAKEOVER` (its `session:` line) with `[TF:RELEASED]`, listing each ticket the builders left in progress with its branch and pull request. Log it (`tares factory report log`). Tell the person nothing else about it unless they ask.'''
+with = '''5. The person's own session is not a station of the crew, so no message reaches it: put the list of each ticket the builders left in progress, with its branch and pull request, on the desk as one item for the person (not blocking), and in your report. Log it (`tares factory report log`). Tell the person nothing else about it unless they ask.'''

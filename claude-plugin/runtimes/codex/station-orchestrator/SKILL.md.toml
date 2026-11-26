@@ -76,3 +76,7 @@ with = '''8. Stay silent unless something changed: on a quiet tick print nothing
 [[edit]]
 find = '''When the person asks "status" (or attaches after a while): under ten lines, per project, milestone and tickets by stage, what each station is doing, with PR and ticket links. End with the block of the item you are asking (it doesn't count toward the ten).'''
 with = '''Your person reads the status in the console and in your report: keep `## Now` under ten lines, per project, milestone and tickets by stage, what each station is doing, with PR and ticket links.'''
+
+[[edit]]
+find = '''With one repo the slug is `m<k>`. It starts `<project>-build-<slug>` with `TARES_PROJECT` set.'''
+with = '''With one repo the slug is `m<k>`. It starts `<project>-build-<slug>` with `TARES_PROJECT` set. Your sandbox has no network, and this command reaches Tares: run it asking for approval (escalated permissions, with a one-line reason), as every `tares factory` command that reaches Tares (revive, retire, roster). Told that no Tares answers, Tares is up: ask for approval.'''

@@ -213,6 +213,13 @@ ck("the orchestrator: the person answers on the desk in the console, which recor
 ck("the reviewer: a station of its own, and no second model, said in what it did not verify",
    "a conversation of your own" in roles["reviewer"] and "no second-model check: one Codex reviewer" in roles["reviewer"]
    and "subagent" not in roles["reviewer"].lower())
+ck("the orchestrator asks for approval to run a `tares factory` command that reaches Tares (its sandbox has no network)",
+   "this command reaches Tares: run it asking for approval (escalated permissions" in roles["orchestrator"])
+ck("it settles a batch of assumptions with decide_assumption, never by recording the answer itself",
+   "decide_assumption(A<n>" in roles["orchestrator"] and "`kept=[...]`" not in roles["orchestrator"])
+ck("a takeover's list goes on the desk: the person's own session is not a station",
+   "no message reaches it" in roles["orchestrator"] and "Reply to the session named in the `TAKEOVER`" not in roles["orchestrator"])
+ck("the reviewer knows it runs outside any repository", "You run outside any repository" in roles["reviewer"])
 ck("the releaser: woken for a RELEASE, which is kept while it is stopped",
    "the factory wakes you when a `RELEASE` reaches you" in roles["releaser"])
 bare = kit_copy()

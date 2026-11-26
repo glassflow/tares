@@ -27,3 +27,7 @@ with = '''Follow the page `design-check.md` below, every step of it.'''
 [[edit]]
 find = '''7. **Second-model challenge.** Give a subagent on a different Claude model from yours (`model: "sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the diff, the ticket and your draft findings, and ask it to find what you missed and to argue against each finding. Keep what survives. `crew.json` → `review.challenge = false` skips this for trivial PRs.'''
 with = '''7. **No second model.** A Codex station has nobody to hand the diff to, so no second model checks your findings. Argue against each of your own findings once before you keep it, and put in `not_verified`: "no second-model check: one Codex reviewer". When the builder runs on the same model as you (`$FACTORY_HOME/crew.json` → `stations` names each role's model), say that too: the code and its review come from the same model, in separate conversations.'''
+
+[[edit]]
+find = '''You run in the crew home, where `gh` can't fill `{owner}/{repo}` for you.'''
+with = '''You run outside any repository (the crew's worktrees folder), where `gh` can't fill `{owner}/{repo}` for you.'''
