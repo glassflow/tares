@@ -2,8 +2,9 @@
 
 Postgres text holds no NUL. A posted line loses every NUL, dict keys included, before anything
 counts or stores it, so SQLite and Postgres keep the same text. DuckDB may hold lines from before:
-the fills, the one-time move and the first start with a state database drop their NULs on the way
-into the sessions tables. Both engines are checked against the same expected rows.
+the fills, the one-time move, the drain and the first start with a state database drop their NULs
+on the way into the sessions tables and the state tables. Both engines are checked against the same
+expected rows.
 
 Plain:                python tests/test_session_nul_fields.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -23,16 +24,16 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
 
-from tares import session_ingest, session_move  # noqa: E402
+from tares import session_drain, session_ingest, session_move  # noqa: E402
 from tares.connectors import claude_code  # noqa: E402
 from tares.session_store.tables import (challenges, crews, metadata,  # noqa: E402
                                         project_sessions, session_archive_parts,
-                                        session_commands, session_files,
+                                        session_commands, session_files, session_ingest_marks,
                                         session_lines, session_messages, session_meters,
                                         session_moves, session_said, session_states,
-                                        session_stations, session_turns, session_usage)
+                                        session_stations, session_turns, session_usage, sessions)
 from tares.store import Store  # noqa: E402
 
 SRC = "claude_code"
@@ -423,8 +424,19 @@ def counted_before():
     s.con.close()
 
 
-def moved():
-    print("== the one-time move of a factory cell that holds them ==")
+def moved(age, target):
+    """The move writes a session whose last line is inside the archive window into `session_lines`,
+    an older one into the archive: both with lines `age` old, taken from now."""
+    global T0
+    print(f"== the one-time move of a factory cell that holds them, to the {target} ==")
+    was, T0 = T0, (datetime.now(timezone.utc) - age).replace(microsecond=0)
+    try:
+        _moved(target)
+    finally:
+        T0 = was
+
+
+def _moved(target):
     s = new_store("platform")
     envs = hold_in_duckdb(s)
     s.set_setting("edition", "factory")
@@ -443,12 +455,35 @@ def moved():
     ck("both sessions are moved and verified",
        got == [("good", session_move.VERIFIED), ("old", session_move.VERIFIED)],
        (got, out.getvalue()))
-    # these lines are more than a week old, so the move writes them to the archive
-    got = len(rows(s, session_lines.c.session, session_lines.c.seq)) + sum(
-        r[1] for r in rows(s, session_archive_parts.c.session, session_archive_parts.c.lines))
-    ck("with every line", got == len(envs), (got, len(envs)))
+    got = rows(s, session_moves.c.session, session_moves.c.target)
+    ck(f"to the {target}", got == [("good", target), ("old", target)], got)
+    in_table = len(rows(s, session_lines.c.session, session_lines.c.seq))
+    archived = sum(r[1] for r in rows(s, session_archive_parts.c.session,
+                                      session_archive_parts.c.lines))
+    expected = (len(envs), 0) if target == session_move.TARGET else (0, len(envs))
+    ck("with every line", (in_table, archived) == expected, (in_table, archived, len(envs)))
     check_old_facts(s, "")
+    if target == session_move.TARGET:
+        drained(s, len(envs))
     s.con.close()
+
+
+def drained(s, n):
+    """The M1 drain reads the same DuckDB lines again for a session with the todo mark."""
+    with s.sessions_db.begin() as c:
+        for table in (session_lines, session_turns, session_said, session_commands,
+                      session_messages, session_files):
+            c.execute(delete(table))
+    session_ingest.mark_drain_todo(s, ["good", "old"])
+    ck("the drain takes both sessions", attempt("the drain runs",
+                                                lambda: session_drain.drain(s)) == 2)
+    got = len(rows(s, session_lines.c.session, session_lines.c.seq))
+    ck("every line is back", got == n, (got, n))
+    got = rows(s, sessions.c.session, sessions.c.lines_complete, sessions.c.line_count)
+    ck("and the sessions are complete", got == [("good", True, 2), ("old", True, 7)], got)
+    got = rows(s, session_ingest_marks.c.name)
+    ck("with no drain mark left", not [r for r in got if r[0].startswith("session_drain")], got)
+    check_old_facts(s, "after the drain, ")
 
 
 def first_state_start():
@@ -472,6 +507,12 @@ def first_state_start():
     for station in (f"tw{Z}in", "twin"):
         s.record_reply_usage("old", station.replace("tw", "msg-tw"), T0, "claude-sonnet-4-5",
                              None, None, {"input_tokens": 1, "output_tokens": 1})
+    # the state tables DuckDB holds: a firing and a read of a line with a NUL carry it
+    s.set_fired("on_branch", f"br{Z}anch", T0)
+    s.set_fired("on_branch", f"tw{Z}in", T0)      # one key with its NUL and without
+    s.set_fired("on_branch", "twin", T0)
+    s.log_dispatch("d_nul", "on_branch", f"br{Z}anch", "threshold", 0, 0, f"tu{Z}rn one")
+    s.log_query("r_nul", "(read)", f"branch=br{Z}anch", "1h", 0, "http")
     s.close()
     s.con.close()
 
@@ -497,6 +538,16 @@ def first_state_start():
     t = challenges.c
     want("the challenger line once", rows(s, t.key_value, t.branch, t.tares_project),
          [("old", "factory/TR-1", "proj")])
+
+    def state(sql):
+        return sorted(tuple(r) for r in s.sc.execute(sql).fetchall())
+
+    want("the trigger's keys, the twins once",
+         state("SELECT trigger, key_value FROM trigger_state"),
+         [("on_branch", "branch"), ("on_branch", "twin")])
+    want("the firing", state("SELECT key_value, payload FROM dispatch_log"),
+         [("branch", "turn one")])
+    want("the read", state("SELECT key_value FROM query_log"), [("branch=branch",)])
     s.con.close()
 
 
@@ -519,7 +570,8 @@ def main():
         posted(edition)
     held_by_duckdb()
     counted_before()
-    moved()
+    moved(timedelta(hours=1), session_move.TARGET)
+    moved(timedelta(days=30), session_move.ARCHIVE)
     first_state_start()
     print(f"\n{P} passed, {F} failed")
     raise SystemExit(1 if F else 0)
