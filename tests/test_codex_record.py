@@ -148,6 +148,26 @@ f2, s2 = rec.facts(cut, record, s1, BASE, True, NOW + 40)
 ck("the look after says the command's outcome is unknown, once",
    kinds(f2) == [("unknown", "exec-2")] and "interrupted" in f2[0]["why"] and s2["starts"] == {} and s2["closed"] == [TURN], f2)
 ck("and never again", rec.facts(cut, record, s2, BASE, True, NOW + 50)[0] == [])
+# after a crash and a revive Codex may list the cut-off command with its item still in progress, in a turn that
+# has ended, or leave that turn in progress under a newer one (TR-1598: the start was never closed)
+open_item = thread([said("u1", "Run it.", "userMessage"), command("exec-2", "sleep 40", status="inProgress")],
+                   status="interrupted", kind="idle")
+g1, t1 = rec.facts(open_item, record, sent1, BASE, True, NOW + 30)
+g2, t2 = rec.facts(open_item, record, t1, BASE, True, NOW + 40)
+ck("a command whose item is still in progress in an ended turn: its outcome is unknown, at the look after",
+   [k for k in kinds(g2) if k[0] == "unknown"] == [("unknown", "exec-2")] and t2["starts"] == {}, kinds(g1) + kinds(g2))
+stale = thread([said("u2", "Next.", "userMessage")], status="completed", kind="idle", turn="01a2-turn-2",
+               more=({"id": TURN, "status": "inProgress", "itemsView": "full", "startedAt": int(NOW - 20),
+                      "items": [said("u1", "Run it.", "userMessage")]},))
+h1, u1 = rec.facts(stale, record, sent1, BASE, True, NOW + 30)
+h2, u2 = rec.facts(stale, record, u1, BASE, True, NOW + 40)
+ck("a turn left in progress under a newer one has ended: its command's outcome is unknown",
+   ("unknown", "exec-2") in kinds(h2) and "exec-2" not in u2["starts"], kinds(h1) + kinds(h2))
+running_now = thread([said("u1", "Run it.", "userMessage"), command("exec-2", "sleep 40", status="inProgress")])
+r1, v1 = rec.facts(running_now, record, sent1, BASE, True, NOW + 30)
+r2, _ = rec.facts(running_now, record, v1, BASE, True, NOW + 40)
+ck("the newest turn in progress, with its command running, is left alone",
+   not [k for k in kinds(r1) + kinds(r2) if k[0] == "unknown"], kinds(r1) + kinds(r2))
 late = thread([*cut["turns"][0]["items"], command("exec-2", "sleep 40", 0, "")], status="completed", kind="idle")
 f_late, _ = rec.facts(late, record, s1, BASE, True, NOW + 40)
 ck("an item that is listed by the second look is the command's end, not an unknown outcome",
