@@ -14,23 +14,89 @@ lines DuckDB does not hold.
 A line in the table has no ingest time and no source of its own: its `ingest_time` is the line's
 own time, and its `source` is the session's.
 
+One session id under two claude_code sources has one row and its stored lines carry no source:
+the lines of the other source go to DuckDB too. Such a born session (DuckDB has its id under another
+source, `_duck_sources`) is read as one not marked complete, so each line is counted once and a read
+of one source gives that source's lines.
+
 A part or a row of the archive that cannot be read is left out and one line says so, as a session
 page does (`session_read`). Nothing here writes, and nothing takes SQLite's write lock
-(`consistent_read`), so ingest never waits for one of these reads.
+(`consistent_read`), so ingest never waits for one of these reads. The reads that only count and
+ask for times are answered from `session_digest`, a cache.
 """
 from __future__ import annotations
 
 import json
-from collections import Counter
+import threading
+from collections import Counter, namedtuple
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
-from . import session_archive, session_read
-from .session_ingest import TABLE
-from .session_store.tables import session_archive_parts, session_lines, sessions
+from . import edition, session_archive, session_digest, session_read
+from .session_ingest import TABLE, claude_code_sources
+from .session_store.tables import session_archive_parts, session_lines, sessions, settings
 
 CHUNK = 500                   # sessions, or line numbers, one statement names
 _MIN = session_read._MIN
+# the columns of a born session's row: what a read needs, and all a change of its lines changes
+_BORN = ("session", "source", "started_at", "last_line_at", "line_count", "tool_calls",
+         "coordination_calls", "lines_complete", "updated_at", "lines_origin")
+Born = namedtuple("Born", _BORN)
+_creating = threading.Lock()
+
+
+def _duck_state(store) -> dict:
+    got = store.__dict__.get("_duck_sources")
+    if got is None:
+        with _creating:
+            got = store.__dict__.setdefault(
+                "_duck_sources", {"loaded": False, "by": {}, "lock": threading.Lock()})
+    return got
+
+
+def _add_pairs(state: dict, pairs) -> None:
+    by = state["by"]
+    with state["lock"]:
+        for source, sid in pairs:
+            had = by.get(sid)
+            if had is None:
+                by[sid] = frozenset((source,))
+            elif source not in had:
+                by[sid] = had | {source}
+
+
+def note(store, envelopes) -> None:
+    """Remember the claude_code sources of these lines' sessions, before any of them can reach
+    DuckDB. More than DuckDB holds only sends a session down the line by line read."""
+    _add_pairs(_duck_state(store), ((e.source, str(e.key_value)) for e in envelopes))
+
+
+def _duck_sources(store) -> dict:
+    """{session: the claude_code sources DuckDB has (or was given) lines of it under}. Read from
+    DuckDB once per process, then kept by `note`. Call it outside a session store transaction."""
+    state = _duck_state(store)
+    if not state["loaded"]:
+        names = sorted(claude_code_sources(store))
+        marks = ", ".join("?" * len(names))
+        with store._lock:
+            got = store.con.execute(
+                "SELECT DISTINCT source, key_value FROM events WHERE key_value IS NOT NULL "
+                f"AND (source IN ({marks}) OR source_type = 'claude_code')", names).fetchall()
+        _add_pairs(state, got)
+        state["loaded"] = True
+    return state["by"]
+
+
+def _marked(store, born: list) -> list:
+    """`born`, with a session whose id DuckDB has under another source marked not complete."""
+    seen = _duck_state(store)["by"]
+    out = []
+    for b in born:
+        sources = seen.get(b.session)
+        if sources and b.lines_complete and (len(sources) > 1 or b.source not in sources):
+            b = Born(*b)._replace(lines_complete=False)
+        out.append(b)
+    return out
 
 
 def _chunks(values: list):
@@ -79,18 +145,21 @@ class View:
             "event_time, ingest_time, NULL::BIGINT AS held_ref, 1::BIGINT AS held_w FROM events "
             "WHERE NOT EXISTS (SELECT 1 FROM (SELECT unnest(?::VARCHAR[]) AS s, "
             "unnest(?::VARCHAR[]) AS k) born WHERE born.s = events.source "
-            "AND born.k = events.key_value) "
-            "UNION ALL SELECT unnest(?::VARCHAR[]), '', unnest(?::VARCHAR[]), "
-            "unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), unnest(?::VARCHAR[])::JSON, "
-            "unnest(?::VARCHAR[])::JSON, unnest(?::TIMESTAMPTZ[]), unnest(?::TIMESTAMPTZ[]), "
-            "unnest(?::BIGINT[]), unnest(?::BIGINT[])) AS events")
-        at = [r["at"] for r in self.rows]
-        self.params = [
-            [p[0] for p in pairs], [p[1] for p in pairs],
-            [r["source"] for r in self.rows], [r["session"] for r in self.rows],
-            [r["type"] for r in self.rows], [r["text"] for r in self.rows],
-            [r["payload"] for r in self.rows], [r["labels"] for r in self.rows],
-            at, at, list(range(len(self.rows))), [r["w"] for r in self.rows]]
+            "AND born.k = events.key_value)")
+        self.params = [[p[0] for p in pairs], [p[1] for p in pairs]]
+        if self.rows:                    # with none, DuckDB would still pay to plan the empty half
+            self.table += (
+                " UNION ALL SELECT unnest(?::VARCHAR[]), '', unnest(?::VARCHAR[]), "
+                "unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), unnest(?::VARCHAR[])::JSON, "
+                "unnest(?::VARCHAR[])::JSON, unnest(?::TIMESTAMPTZ[]), unnest(?::TIMESTAMPTZ[]), "
+                "unnest(?::BIGINT[]), unnest(?::BIGINT[])")
+            at = [r["at"] for r in self.rows]
+            self.params += [
+                [r["source"] for r in self.rows], [r["session"] for r in self.rows],
+                [r["type"] for r in self.rows], [r["text"] for r in self.rows],
+                [r["payload"] for r in self.rows], [r["labels"] for r in self.rows],
+                at, at, list(range(len(self.rows))), [r["w"] for r in self.rows]]
+        self.table += ") AS events"
 
     def fill(self, refs) -> dict:
         """{ref: (text, payload)} for the stored lines a statement returned. The payloads a read
@@ -121,9 +190,18 @@ class View:
 PLAIN = View()
 
 
-def _born(conn, sources, since=None, until=None, key=None) -> list:
+def _born(store, conn, sources, since=None, until=None, key=None, keys=None,
+          factory: bool = False) -> list:
+    """The rows (`_BORN`) of the born sessions a read touches. `_duck_sources` comes first.
+    With `factory`, none unless the cell's edition is factory: `session_read._factory` asked in the
+    same statement, so it costs no round trip of its own."""
     c = sessions.c
-    q = select(c.session, c.source, c.lines_complete, c.last_line_at).where(c.lines_origin == TABLE)
+    q = select(*(c[name] for name in _BORN)).where(c.lines_origin == TABLE)
+    if factory:
+        q = q.where(exists().where(settings.c.key == edition.EDITION_SETTING,
+                                   func.lower(func.trim(settings.c.value)) == "factory"))
+    if keys is not None:
+        q = q.where(c.session.in_(keys))
     if sources is not None:
         q = q.where(c.source.in_(sorted({s for s in sources if s})))
     if since is not None:
@@ -132,7 +210,7 @@ def _born(conn, sources, since=None, until=None, key=None) -> list:
         q = q.where(c.started_at < until)
     if key is not None:
         q = q.where(c.session == str(key))
-    return conn.execute(q).all()
+    return _marked(store, conn.execute(q).all())
 
 
 def _parts(conn, sids: list, since) -> list:
@@ -234,46 +312,67 @@ def view(store, sources, since=None, until=None, key=None, filters=None, where=N
     pushed, types, needles = _pushdown(filters, where)
     key = key if key is not None else pushed
     need_text = need_text or any(f.get("field") == "text" for f in filters or [])
-    db = store.sessions_db
-    find = func.strpos if db.dialect == "postgresql" else func.instr
-    t = session_lines.c
-    with db.consistent_read() as c:
-        born = _born(c, sources, since, until, key)
+    _duck_sources(store)
+    full = need_text or need_payload
+    with store.sessions_db.consistent_read() as c:
+        born = _born(store, c, sources, since, until, key)
         if not born:
             return PLAIN
-        source_of = {b.session: b.source for b in born}
-        short = {b.session for b in born if not b.lines_complete}
-        full = need_text or need_payload
-        rows: list = []
+        mine = born
+        if (types is not None or needles) and key is None and since is not None and not counted:
+            # a read narrowed by type or label loads no session that has no such line
+            mine = (session_digest.matching(store, c, [b for b in born if b.lines_complete],
+                                            since, types, needles)
+                    + [b for b in born if not b.lines_complete])
+        rows, parts = load(store, c, mine, since, until, types, needles, full, counted)
+    rows = finish(store, mine, rows, parts, since, until, types, needles)
+    return View(store, born, rows, need_text)
 
-        def narrow(q):
-            if since is not None:
-                q = q.where(t.at >= since)
-            if until is not None:
-                q = q.where(t.at < until)
-            if types is not None:
-                q = q.where(func.lower(t.type).in_(sorted(types)))
-            for n in needles:
-                q = q.where(find(t.labels, n) > 0)
-            return q
 
-        whole = [s for s in source_of if s not in short]
-        if counted and not full:
-            by = [t.session, t.type, t.labels]
-            for chunk in _chunks(whole):
-                q = select(*by, func.count(), func.max(t.at)).where(t.session.in_(chunk))
-                for sid, kind, labels, n, at in c.execute(narrow(q).group_by(*by)).all():
-                    rows.append(_row(sid, source_of[sid], 0, kind, at, labels, weight=n))
-            whole = []
-        # a session read from both stores is matched line by line, which takes the payload
-        for sids, load in ((whole, full), (sorted(short), True)):
-            cols = [t.session, t.seq, t.type, t.at, t.labels]
-            if load:
-                cols += [t.render, t.payload]
-            for chunk in _chunks(sids):
-                for got in c.execute(narrow(select(*cols).where(t.session.in_(chunk)))).all():
-                    rows.append(_row(got[0], source_of[got[0]], *got[1:]))
-        parts = _parts(c, sorted(source_of), since)
+def load(store, c, born: list, since=None, until=None, types=None, needles=(), full: bool = False,
+         counted: bool = False) -> tuple[list, list]:
+    """The part of `view` that needs `c`: the rows of the `born` sessions from the table and the
+    records of their archive parts. `finish` does the rest, outside the transaction."""
+    find = func.strpos if store.sessions_db.dialect == "postgresql" else func.instr
+    t = session_lines.c
+    source_of = {b.session: b.source for b in born}
+    short = {b.session for b in born if not b.lines_complete}
+    rows: list = []
+
+    def narrow(q):
+        if since is not None:
+            q = q.where(t.at >= since)
+        if until is not None:
+            q = q.where(t.at < until)
+        if types is not None:
+            q = q.where(func.lower(t.type).in_(sorted(types)))
+        for n in needles:
+            q = q.where(find(t.labels, n) > 0)
+        return q
+
+    whole = [s for s in source_of if s not in short]
+    if counted and not full:
+        by = [t.session, t.type, t.labels]
+        for chunk in _chunks(whole):
+            q = select(*by, func.count(), func.max(t.at)).where(t.session.in_(chunk))
+            for sid, kind, labels, n, at in c.execute(narrow(q).group_by(*by)).all():
+                rows.append(_row(sid, source_of[sid], 0, kind, at, labels, weight=n))
+        whole = []
+    # a session read from both stores is matched line by line, which takes the payload
+    for sids, with_payload in ((whole, full), (sorted(short), True)):
+        cols = [t.session, t.seq, t.type, t.at, t.labels]
+        if with_payload:
+            cols += [t.render, t.payload]
+        for chunk in _chunks(sids):
+            for got in c.execute(narrow(select(*cols).where(t.session.in_(chunk)))).all():
+                rows.append(_row(got[0], source_of[got[0]], *got[1:]))
+    return rows, _parts(c, sorted(source_of), since)
+
+
+def finish(store, born: list, rows: list, parts: list, since=None, until=None, types=None,
+           needles=()) -> list:
+    """The rows of `load` with the archived lines, without those DuckDB holds, oldest first."""
+    source_of = {b.session: b.source for b in born}
     for r in _archived(store, parts):
         if (r["at"] is None or (since is not None and r["at"] < since)
                 or (until is not None and r["at"] >= until)
@@ -284,7 +383,7 @@ def view(store, sources, since=None, until=None, key=None, filters=None, where=N
                          r["labels"], r["render"], r["payload"]))
     rows = _not_in_duckdb(store, born, rows, since)
     rows.sort(key=lambda r: (r["at"] or _MIN, r["session"], r["seq"]))
-    return View(store, born, rows, need_text)
+    return rows
 
 
 def newest(store, sources, limit: int, hidden_sessions=frozenset(), hidden_line=None,
@@ -296,8 +395,9 @@ def newest(store, sources, limit: int, hidden_sessions=frozenset(), hidden_line=
     if (sources is not None and not sources) or not session_read._factory(store):
         return PLAIN
     db = store.sessions_db
+    _duck_sources(store)
     with db.read() as c:
-        born = _born(c, sources)
+        born = _born(store, c, sources)
     if not born:
         return PLAIN
     t = session_lines.c
@@ -341,30 +441,40 @@ def grouped(store, sources, need_payload: bool = False) -> View:
     statement looks into it) come as one row with their number in `View.weight`."""
     if (sources is not None and not sources) or not session_read._factory(store):
         return PLAIN
-    db = store.sessions_db
-    t = session_lines.c
-    rows: list = []
-    with db.consistent_read() as c:
-        born = _born(c, sources)
+    _duck_sources(store)
+    with store.sessions_db.consistent_read() as c:
+        born = _born(store, c, sources)
         if not born:
             return PLAIN
-        source_of = {b.session: b.source for b in born}
-        short = {b.session for b in born if not b.lines_complete}
-        by = [t.session, t.labels] + ([t.payload] if need_payload else [])
-        for chunk in _chunks([s for s in source_of if s not in short]):
-            for got in c.execute(select(*by, func.count(), func.max(t.at))
-                                 .where(t.session.in_(chunk)).group_by(*by)).all():
-                rows.append(_row(got[0], source_of[got[0]], 0, None, got[-1], got[1],
-                                 payload=got[2] if need_payload else None, weight=got[-2]))
-        for chunk in _chunks(sorted(short)):
-            for got in c.execute(select(t.session, t.seq, t.type, t.at, t.labels, t.render,
-                                        t.payload).where(t.session.in_(chunk))).all():
-                rows.append(_row(got[0], source_of[got[0]], *got[1:]))
-        parts = _parts(c, sorted(source_of), None)
+        rows, parts = load_grouped(c, born, need_payload)
+    return View(store, born, finish_grouped(store, born, rows, parts))
+
+
+def load_grouped(c, born: list, need_payload: bool = False) -> tuple[list, list]:
+    """The part of `grouped` that needs `c`: rows and archive part records of the `born` sessions."""
+    t = session_lines.c
+    source_of = {b.session: b.source for b in born}
+    short = {b.session for b in born if not b.lines_complete}
+    rows: list = []
+    by = [t.session, t.labels] + ([t.payload] if need_payload else [])
+    for chunk in _chunks([s for s in source_of if s not in short]):
+        for got in c.execute(select(*by, func.count(), func.max(t.at))
+                             .where(t.session.in_(chunk)).group_by(*by)).all():
+            rows.append(_row(got[0], source_of[got[0]], 0, None, got[-1], got[1],
+                             payload=got[2] if need_payload else None, weight=got[-2]))
+    for chunk in _chunks(sorted(short)):
+        for got in c.execute(select(t.session, t.seq, t.type, t.at, t.labels, t.render,
+                                    t.payload).where(t.session.in_(chunk))).all():
+            rows.append(_row(got[0], source_of[got[0]], *got[1:]))
+    return rows, _parts(c, sorted(source_of), None)
+
+
+def finish_grouped(store, born: list, rows: list, parts: list) -> list:
+    source_of = {b.session: b.source for b in born}
     for r in _archived(store, parts):
         rows.append(_row(r["session"], source_of[r["session"]], r["seq"], r["type"], r["at"],
                          r["labels"], r["render"], r["payload"]))
-    return View(store, born, _not_in_duckdb(store, born, rows, None))
+    return _not_in_duckdb(store, born, rows, None)
 
 
 def held_count(store, source: str) -> int:
@@ -372,11 +482,10 @@ def held_count(store, source: str) -> int:
     the lines DuckDB has of the same sessions."""
     if not session_read._factory(store):
         return 0
-    c = sessions.c
     t = session_lines.c
+    _duck_sources(store)
     with store.sessions_db.read() as conn:
-        born = conn.execute(select(c.session, c.source, c.line_count, c.lines_complete).where(
-            c.source == source, c.lines_origin == TABLE)).all()
+        born = _born(store, conn, [source])
     counts = {b.session: b.line_count or 0 for b in born if b.lines_complete}
     for chunk in _chunks(list(counts)):
         marks = ", ".join("?" * len(chunk))

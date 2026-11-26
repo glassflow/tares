@@ -28,8 +28,8 @@ AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
                         or_, select, union_all, update)
 
-from . import (edition, metrics, session_archive, session_events, session_ingest, session_move,
-               session_read, state_db)
+from . import (edition, metrics, session_archive, session_digest, session_events, session_ingest,
+               session_move, session_read, state_db)
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.pr_columns import fill_pr_columns, pr_columns
@@ -408,6 +408,15 @@ def _label_expr(name: str) -> str:
     return f"json_extract_string(labels, '$.{name}')"
 
 
+def _aggregated(agg: str, sums: list):
+    """The value of `Store.aggregate` for one group of `session_digest.aggregate`'s
+    [lines, lines with a value, sum, max, min]."""
+    lines, with_value, total, high, low = sums
+    value = {"count": lines, "sum": total, "avg": total / with_value if with_value else None,
+             "max": high, "min": low, "any": high}[agg]
+    return value if value is not None else 0.0
+
+
 def _where_sql(where) -> tuple[str, list]:
     """{label: value} -> ('AND ...' equality SQL, params). Matches on key_value or any label."""
     clauses, params = [], []
@@ -721,6 +730,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def close(self) -> None:
         """Let go of the session store's connections. The DuckDB and Postgres state connections are
         left to the process, as before."""
+        warm_stop = getattr(self, "_digest_stop", None)
+        if warm_stop is not None:
+            warm_stop.set()     # the digest warm-up (session_digest.start) stops between batches
+        th = getattr(self, "_digest_thread", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(60)
         stop = getattr(self, "_reconcile_stop", None)
         if stop is not None:
             stop.set()          # the ten minute reconcile (session_ingest._cycle) ends
@@ -1366,6 +1381,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         cc = session_ingest.claude_code_lines(self, envelopes)
         if not cc:
             return self._append(envelopes)
+        session_events.note(self, cc)       # before any of them reaches DuckDB (TR-1695)
         # In the factory edition with an archive, the claude_code lines of a session the session
         # store answers for alone go only there (TR-1479); anywhere else they are written to DuckDB
         # as before. The reconcile at start holds the same lock, so a line is never counted by both.
@@ -1706,6 +1722,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
         ssql, sparams = _scope_sql(scope)   # a project's view of the shared sources
+        conditions = (fsql, fparams, wsql, wparams, ssql, sparams)
         wsql, wparams = wsql + ssql, wparams + sparams
         if field and not re.match(r"^[A-Za-z0-9_.]+$", str(field)):
             raise ValueError(f"bad aggregate field {field!r}")
@@ -1723,6 +1740,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         sel_g = ", ".join(f"{e} AS g{i}" for i, e in enumerate(gexprs))
         grp_g = ", ".join(f"g{i}" for i in range(len(gexprs)))
         having = " AND ".join(f"g{i} IS NOT NULL" for i in range(len(gexprs)))
+        # the stored lines are counted from the digest where it can (TR-1695)
+        acc = self._from_digest(session_digest.aggregate, sources, since, until, filters, where,
+                                names, gexprs, valexpr, scope, conditions)
+        if acc is not None:
+            return {(g[0] if isinstance(group_by, str) else g): _aggregated(agg, a)
+                    for g, a in acc.items()}
         held = session_events.view(self, sources, since, until, filters=filters, where=where,
                                    counted=True)
         if held.held:                        # one row may stand for several stored lines
@@ -1746,6 +1769,18 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             key = gvals[0] if isinstance(group_by, str) else tuple(gvals)
             out[key] = val if val is not None else 0.0
         return out
+
+    def _from_digest(self, read, *args):
+        """A read answered by `session_digest`, a cache over the stored transcript lines, or None:
+        then the caller reads the lines. A failure of the cache is said once and fails no read."""
+        try:
+            return read(self, *args)
+        except Exception as e:
+            if not self.__dict__.get("_digest_said"):
+                self._digest_said = True
+                print(f"taresd: a read counts the stored lines one by one, the digest could not "
+                      f"answer it ({type(e).__name__}: {e})", flush=True)
+            return None
 
     # ── cursors (incremental connectors) ──────────────────────────────────────
     def get_cursor(self, source: str):
@@ -2321,18 +2356,24 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def recent_ingest_gaps(self, source: str, since, limit: int = 1000) -> list[float]:
         """Seconds between consecutive ingests of a source since `since`, over at most its last
         `limit` events: how often the source usually hears something (project health)."""
-        held = session_events.view(self, [source], since)
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT epoch(ingest_time) FROM {held.table} WHERE source = ? AND ingest_time >= ? "
-                "ORDER BY ingest_time DESC LIMIT ?",
-                [*held.params, source, since, int(limit)]).fetchall()
-        ts = sorted(float(r[0]) for r in rows if r[0] is not None)
+        newest = self._from_digest(session_digest.newest_times, source, since, int(limit))
+        if newest is None:
+            held = session_events.view(self, [source], since)
+            with self._lock:
+                rows = self.con.execute(
+                    f"SELECT epoch(ingest_time) FROM {held.table} "
+                    "WHERE source = ? AND ingest_time >= ? ORDER BY ingest_time DESC LIMIT ?",
+                    [*held.params, source, since, int(limit)]).fetchall()
+            newest = [float(r[0]) for r in rows if r[0] is not None]
+        ts = sorted(newest)
         return [b - a for a, b in zip(ts, ts[1:])]
 
     def recent_ingest_hours(self, source: str, since) -> list:
         """The distinct hours a source received events in since `since` (project health: a
         source with a steady rhythm can go silent, a bursty one cannot)."""
+        hours = self._from_digest(session_digest.hours, source, since)
+        if hours is not None:
+            return hours
         held = session_events.view(self, [source], since)
         with self._lock:
             rows = self.con.execute(
@@ -4768,10 +4809,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         value that only a hidden project's rows carry must not list."""
         if not _FIELD_RE.match(label):
             raise ValueError(f"bad label name {label!r}")
-        xsql, xparams = self._exclude(exclude, sources)
+        ids = list((exclude or {}).get("ids") or [])
+        hidden = self.sessions_of_projects(ids) if ids else []
+        xsql, xparams = _exclude_sql(exclude, sources, hidden)
         if xsql:
             return self._list_entities_scan(label, sources, limit, xsql, xparams,
-                                            need_payload=exclude.get("shared") is None)
+                                            need_payload=exclude.get("shared") is None,
+                                            exclude=exclude, hidden=hidden)
         ph = ", ".join(["?"] * len(sources)) if sources else ""
         tq = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
         tp: list = [label]
@@ -4807,7 +4851,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int,
                             xsql: str = "", xparams: list | None = None,
-                            need_payload: bool = False) -> list[dict]:
+                            need_payload: bool = False, exclude: dict | None = None,
+                            hidden=()) -> list[dict]:
         """The pre-counter implementation: scan events and GROUP BY the label. Used only as the
         fallback for a truncated (high-cardinality) label, and for a caller who cannot see some
         projects. Takes the lock itself."""
@@ -4817,6 +4862,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         if sources:
             where += f" AND source IN ({', '.join(['?'] * len(sources))})"
             params += sources
+        rows = None
+        if not need_payload:        # a test that looks into a payload takes the lines themselves
+            rows = self._from_digest(
+                session_digest.entities, label, expr, sources, int(limit), xsql, list(xparams or []),
+                _exclude_sql(exclude, sources), set(hidden),
+                set((exclude or {}).get("shared") or []))
+        if rows is not None:
+            return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
         where += xsql
         params += xparams or []
         held = session_events.grouped(self, sources or None, need_payload=need_payload)
