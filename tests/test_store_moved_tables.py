@@ -2595,6 +2595,11 @@ def crew_methods():
        == [c2["id"], c3["id"], c1["id"]])
     ck("no project: every one", len(s.list_decisions(None)) == n_all + 4
        and c4["id"] in [x["id"] for x in s.list_decisions(None)])
+    untimed, timed = decide("uc_nd", "dk_none", None), decide("uc_nd", "dk_none", _T)
+    ck("a decision with no time comes last", [x["id"] for x in s.list_decisions("uc_nd")]
+       == [timed["id"], untimed["id"]], s.list_decisions("uc_nd"))      # TR-1705
+    with sdb.begin() as c:
+        c.execute(text("DELETE FROM decisions WHERE project = 'uc_nd'"))
 
     print("== answers ==")
     def answer(item, kind, project, person, at, via="console", choice="yes"):
@@ -2722,6 +2727,18 @@ def crew_methods():
        and h["override"]["person"] == {"id": ann, "name": "Ann"}, s.list_handover_overrides("uc_t"))
     ck("handovers_by_project: the asked ones that have one", set(s.handovers_by_project(["uc_t", "uc_u", "uc_no"]))
        == both and set(s.handovers_by_project()) >= both)
+    # an override from before the log, beside a log row with no project: NOT IN a list that holds
+    # a NULL matches nothing, so the row must be left out of it (TR-1705)
+    with sdb.begin() as c:
+        c.execute(text("INSERT INTO handover_overrides (reason) VALUES ('no project')"))
+        c.execute(text("INSERT INTO handovers (project, override_reason) VALUES ('uc_old', 'before the log')"))
+    s._first_override_entries()
+    ck("an override from before the log gets its first entry, whatever else the log holds",
+       [o["reason"] for o in s.list_handover_overrides("uc_old")] == ["before the log"],
+       s.list_handover_overrides("uc_old"))
+    with sdb.begin() as c:
+        c.execute(text("DELETE FROM handover_overrides WHERE project IS NULL OR project = 'uc_old'"))
+        c.execute(text("DELETE FROM handovers WHERE project = 'uc_old'"))
 
     def refuse(conn, cursor, statement, parameters, context, executemany):
         if statement.startswith("INSERT INTO handover_overrides"):
