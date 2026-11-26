@@ -710,6 +710,32 @@ def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
     return h.store.unread_among(sessions, hidden, own_crew_ids(h, h.store.list_crews()))
 
 
+def readable_offers(h: Host, offers: list[dict], hidden, projects=None) -> list[dict]:
+    """The rule offers `offers` for a caller who cannot see the projects in `hidden` (TR-1713):
+    those of the other projects, each with the tickets the caller may read. A ticket is
+    "<project name> <label>". It is left out when the name is that of a project in `hidden`, or of
+    a deleted private project while no project has the name (TR-1708). `projects` is
+    `store.list_projects()`, for a caller who has it already."""
+    if not hidden:
+        return offers
+    offers = [o for o in offers if o.get("project") not in hidden]
+    if not any(o.get("tickets") for o in offers):
+        return offers
+    if projects is None:
+        projects = h.store.list_projects()
+    names = {p["name"] for p in projects}
+    closed = {p["name"] for p in projects if p["id"] in hidden}
+    deleted = h.store.deleted_private_projects()
+
+    def kept(ticket) -> bool:
+        name = str(ticket).rsplit(" ", 1)[0]
+        if name in names:
+            return name not in closed
+        return h.store.deleted_private_ref(name, deleted) is None
+
+    return [{**o, "tickets": [t for t in o.get("tickets") or [] if kept(t)]} for o in offers]
+
+
 def blank_session(row: dict) -> None:
     """Take a station row's current session off it, for a caller who must not read it (TR-1704):
     which session it is, when it started, its lines, context window, Claude Code version and the
@@ -2014,7 +2040,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if not (m["to"] in builders or m["from"] in builders or name.search(text)):
                 continue
             out.append(m)
-        return out
+        # of those, the messages of the sessions the caller may read (TR-1713); a message
+        # recorded with no session stays
+        sids = sorted({m["session"] for m in out if m["session"]})
+        closed = unread_sessions(h, sids) if sids else set()
+        return [m for m in out if m["session"] not in closed]
 
     # ── the build, recorded (TR-433, TR-435, TR-436) ──────────────────────────
     def ticket_ids(uid: str, refs) -> list[str]:
@@ -2752,17 +2782,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     @app.get("/api/rule-proposals")
     def list_rule_proposals(state: str = "open"):
-        hidden = h.hidden_ids()
-        names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
-        out = []
-        for rp in store.list_rule_proposals(state.strip() or None):
-            if rp.get("project") in hidden:
-                continue
-            # a rule that came back across projects lists the tickets it came from
-            rp = {**rp, "tickets": [t for t in rp.get("tickets") or []
-                                    if not any(str(t).startswith(n + " ") for n in names)]}
-            out.append(rp)
-        return {"proposals": out}
+        # a rule that came back across projects lists the tickets it came from
+        return {"proposals": readable_offers(
+            h, store.list_rule_proposals(state.strip() or None), h.hidden_ids())}
 
     @app.post("/api/rule-proposals/{pid}/{decision}")
     def decide_rule(pid: str, decision: str, request: Request,
@@ -2774,13 +2796,18 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(PermissionError("a rule is the person's call: accept or reject it in the "
                                   "console"), 403)
         rp = store.get_rule_proposal(pid)
-        if rp is None or rp.get("project") in h.hidden_ids():
+        hidden = h.hidden_ids()
+        if rp is None or rp.get("project") in hidden:
             h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # a private project's reads as none
         if rp["state"] != "open":
             h.err(ValueError(f"already {rp['state']}"), 409)
+
+        def decided() -> dict:   # the offer as it is now, as this caller may read it
+            return readable_offers(h, [store.get_rule_proposal(pid)], hidden)[0]
+
         if decision == "reject":
             store.decide_rule_proposal(pid, "rejected", None, now_utc())
-            return store.get_rule_proposal(pid)
+            return decided()
         if decision != "accept":
             h.err(KeyError("accept or reject"), 404)
         text = " ".join(str(body.get("text") or rp["text"]).split())
@@ -2797,7 +2824,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         new, _ = docs_mod.append_line(cur, text)
         store.update_doc(doc_id, body=new, by="console")
         store.decide_rule_proposal(pid, "accepted", text, now_utc())
-        return {**store.get_rule_proposal(pid), "doc": doc_id}
+        return {**decided(), "doc": doc_id}
 
     # ── the desk: questions for the person, and their answers (TR-449..452) ────
     def desk_out(d: dict) -> dict:

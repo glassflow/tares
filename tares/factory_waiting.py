@@ -682,11 +682,18 @@ def projects_to_close(store, fx, now, handovers: dict | None = None) -> list[dic
 def rules_to_decide(store, fx, now) -> list[dict]:
     """Each open rule proposal (TR-443): a finding that kept coming back in review, offered as a
     rule. Accept and Reject live on the Crew page; Home says one waits (TR-1275). A proposal about
-    one project carries it, so a private project's proposal stays with that project's people. The
-    tickets it came from are not named here: the Crew page leaves out the ones a caller may not see."""
+    one project carries it, so a private project's proposal stays with that project's people, and
+    one about a private project that was deleted is left out (TR-1713). The tickets it came from
+    are not named here: the Crew page leaves out the ones a caller may not see."""
     names = {p["id"]: p["name"] for p in store.list_projects()}
+    offers = store.list_rule_proposals("open")
+    gone = set()
+    if any(rp.get("project") and rp["project"] not in names for rp in offers):
+        gone = store.private_and_deleted()[1]
     out = []
-    for rp in store.list_rule_proposals("open"):
+    for rp in offers:
+        if rp.get("project") in gone:
+            continue
         pid = rp.get("project") if rp.get("project") in names else None
         out.append(fh.home_item(
             "rule", label="Rule proposed", title=names[pid] if pid else "Every project",

@@ -21,7 +21,7 @@ from .. import factory as factory_mod
 from .. import factory_owners as owners_mod
 from .. import standup as standup_mod
 from ..envelope import now_utc
-from ..factory_api import own_crew_ids, project_progress
+from ..factory_api import own_crew_ids, project_progress, readable_offers
 from ..factory_home import (_STALE_MINUTES, _caller, _count, _dt, _how_far, _minutes, _plan,
                             _resets, crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
@@ -253,15 +253,12 @@ def register(app, store, h, ctx):
         plan["by_project"] = by_project(names, hidden, now)
         # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
         # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
-        hidden_names = [p["name"] for p in store.list_projects(ids=hidden)]
-        all_names = {p["id"]: p["name"] for p in store.list_projects()}
+        projects = store.list_projects()
+        all_names = {p["id"]: p["name"] for p in projects}
         questions = questions_for(request, [d for d in open_desk if d.get("project") not in all_names])
         proposals = []
-        for r in store.list_rule_proposals("open"):
-            if r.get("project") in hidden:
-                continue
-            tickets = [str(t) for t in r.get("tickets") or []
-                       if not any(str(t).startswith(n + " ") for n in hidden_names)]
+        for r in readable_offers(h, store.list_rule_proposals("open"), hidden, projects):
+            tickets = [str(t) for t in r.get("tickets") or []]
             where = ("For every project" if r.get("scope") != "project"
                      else f"For {all_names.get(r.get('project'), 'its project')}")
             proposals.append({"id": r["id"], "text": r["text"], "from": "the reviewer",
