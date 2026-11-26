@@ -472,7 +472,8 @@ model_usage = Table(
 Index("ix_model_usage_ts", model_usage.c.ts)
 
 # A project's list of work (store.py). `owner` says where a ticket lives (linear, github, tares);
-# `depends_on` is [ticket id], `pr` the pull request as Tares last read it
+# `depends_on` is [ticket id], `pr` the pull request as Tares last read it, `pr_repo` and `pr_number`
+# its repo and number as columns (pr_columns.py), never part of the ticket a caller reads
 tickets = Table(
     "tickets", metadata,
     Column("id", Text, primary_key=True),
@@ -497,8 +498,11 @@ tickets = Table(
     Column("repo", Text),
     Column("assignee_person_id", Text),
     Column("assignee_raw", Text),
+    Column("pr_repo", Text),
+    Column("pr_number", BigInteger),
 )
 Index("tickets_project", tickets.c.project)
+Index("tickets_pr", tickets.c.pr_repo, tickets.c.pr_number)
 
 # Every change to a ticket's holder or stage (factory_store.py). No key: two lines can be alike
 ticket_history = Table(

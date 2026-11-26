@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0014_ticket_tables"               # the newest revision: tests that count revisions move with it
-REVISIONS = 14
+HEAD = "0015_ticket_pr_columns"               # the newest revision: tests that count revisions move with it
+REVISIONS = 15
 FAILS = []
 
 
