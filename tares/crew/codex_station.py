@@ -99,7 +99,7 @@ from . import codex as cx
 from . import codex_guard, locks, state
 from .codex_wire import Wire, WireError
 from .errors import CrewError, GuardOffError, NeverComparedError, NotBetweenTurnsError, StationLockedError
-from .paths import CrewPaths
+from .paths import ME, CrewPaths
 
 TURN_STOP_WAIT = 20   # seconds an interrupted turn may take to end before the app-server is asked to end
 BORN_SLACK = 1.0      # seconds two readings of one process's start time may differ by
@@ -1223,6 +1223,13 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     why, shown, unknown = _compared_at_stop(paths, station, thread) if thread else ("", "", "")
     _record_now(paths, station)   # the last look, while the app-server still answers (TR-1595)
     if mail == "require":   # after the interrupt: the turn is over, nothing more is sent (TR-1599)
+        # The interrupt waits a while and never fails, so the turn's end is read here, not assumed: a turn still
+        # running could send a message after the last look. While this stop holds the station's lock nothing
+        # else hands it a turn, so between turns now means between turns until it ends.
+        if turn_state(paths, station) != "done":
+            raise CrewError(f"{station} is still in a turn after it was asked to stop, or its conversation cannot be "
+                            "read: not retiring it, since a message it sends now would be lost. Try again in a "
+                            f"moment, or `{ME} retire {station} --drop-mail` to retire it and lose what it sends.")
         codex_mail.final(paths, station, require=True)
     elif mail == "take":
         _collect_mail_now(paths, station)
