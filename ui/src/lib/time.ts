@@ -88,6 +88,15 @@ export function formatDayUTC(value: string | number): string {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
 }
 
+/** "Nov 16": a day without its year, UTC, for a column or a tick where the year is said nearby. A
+ *  value that does not parse passes through untouched. */
+export function formatDayShortUTC(value: string | number): string {
+  const ms = toMs(value);
+  if (!Number.isFinite(ms)) return String(value);
+  const d = new Date(ms);
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
 // --- an instant, in a sentence --------------------------------------------------
 
 /** "14:20", UTC. A missing or bad time gives "", never "NaN". */

@@ -70,6 +70,7 @@ from urllib.parse import unquote
 
 from . import claude as cl
 from . import codex as cx
+from . import role_text
 from . import pace, state
 from .client import TaresClient, TaresHTTPError, cksum, uri
 from .errors import CrewError
@@ -300,7 +301,12 @@ def idle_wake_on(client: TaresClient) -> bool:
         return False
 
 
-def idle_wake_note() -> str:
+def idle_wake_note(runtime: str = "") -> str:
+    """What a station is told when idle_wake is on. A Codex station (`runtime` "codex") holds no schedule of
+    its own, so it is told only that it is woken."""
+    if runtime == cx.RUNTIME:
+        return ("idle_wake is on: the factory wakes you when there is work, so end your turn when there is "
+                "nothing to do.")
     return ("idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a "
             "CronCreate tick (if you hold one, delete it: CronList, then CronDelete).")
 
@@ -425,6 +431,18 @@ def allow_lists(paths: CrewPaths, role: str, parent: str = "") -> tuple:
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
 
 
+def role_manual(client: TaresClient, role: str, runtime: str = cx.RUNTIME) -> str:
+    """What fills `{ROLE_MANUAL}` in a launch spec: the operating rules of a `role` station on `runtime`,
+    rendered from the kit the station starts on (tares.crew.role_text), after a blank line; "" for a role the
+    kit has no rendering for on that runtime. Dies when the kit's rules cannot be rendered: a station is not
+    started on rules that are half Claude Code's."""
+    try:
+        text = role_text.manual(kit_dir(client), runtime, role)
+    except role_text.RenderError as e:
+        raise CrewError(f"cannot give a {role} station its rules on {RUNTIME_TITLES.get(runtime, runtime)}: {e}") from None
+    return f"\n\n{text.rstrip()}" if text else ""
+
+
 def _valid_spec(doc) -> bool:
     return (isinstance(doc, dict) and isinstance(doc.get("command"), list)
             and isinstance(doc.get("env"), dict) and isinstance(doc.get("settings"), dict))
@@ -528,6 +546,29 @@ def crew_runtime(paths: CrewPaths) -> str:
     for row in data.values():
         if isinstance(row, dict) and row.get("role"):
             return str(row.get("runtime") or RUNTIME_DEFAULT)
+    return ""
+
+
+RUNTIME_SLOT = "/api/factory/integrations/effective"
+
+
+def planned_runtime(client: TaresClient) -> str:
+    """The runtime the crew's stations run on, or will: its recorded stations', else, for a crew that has
+    started none yet, the one the cell's runtime slot holds now (its first station's launch is built by it).
+    "" when neither says. Never raises for what Tares does."""
+    have = crew_runtime(client.paths)
+    if have:
+        return have
+    try:
+        if not client.tares_on():
+            return ""
+        doc = state.loads_json(client.tares_http("GET", RUNTIME_SLOT))
+    except (CrewError, ValueError):
+        return ""
+    slots = doc.get("slots") if isinstance(doc, dict) else None
+    for row in slots if isinstance(slots, list) else []:
+        if isinstance(row, dict) and row.get("slot") == "runtime":
+            return str(row.get("integration") or "")
     return ""
 
 
@@ -816,7 +857,9 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
         tares_bin = None
     if spec_runtime(spec) == cx.RUNTIME:
         # nothing of Claude Code's is added: no flags, no settings of the person's, no MCP servers of theirs
-        return cx.plan(spec, {**values, **cx.machine_values(paths, station)}, _forward(tares_bin) if tares_bin else "")
+        values = {**values, **cx.machine_values(paths, station),
+                  "ROLE_MANUAL": role_manual(client, parent_role(parent, paths) if role == "helper" else role)}
+        return cx.plan(spec, values, _forward(tares_bin) if tares_bin else "")
     env = fill_placeholders(spec["env"], values)
     if tares_bin:
         env["FACTORY_TARES"] = _forward(tares_bin)
@@ -875,6 +918,13 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
     settings = write_settings(client, station, role, parent, project, repo, plan)
     if plan.get("runtime") == cx.RUNTIME:
         kd = kit_dir(client)
+        # what the station really starts on: a Claude model's name in crew.json is not handed to Codex
+        thread = plan["settings"].get("thread") if isinstance(plan["settings"].get("thread"), dict) else {}
+        if model and not thread.get("model") and cx.claude_model(model):
+            print(f"  note: {station} is set to {model}, a Claude model: on Codex it runs on the model and effort "
+                  f"the account gives by default. Set stations.{role}.model in crew.json to a Codex model to "
+                  "choose one.", file=sys.stderr)
+            model, effort = "", str(plan["settings"].get("effort") or "")
         cx.start(client, station, plan, cwd, prompt, {
             "role": role, "parent": parent, "project": project, "repo": repo, "cwd": cwd, "sessionId": resume,
             "model": model, "effort": effort, "settings": settings, "kit": kit_version(kd), "plugin": kd,
@@ -948,9 +998,20 @@ def _pause(env) -> float:
         return 2.0
 
 
-def boot_prompt(client: TaresClient, role: str, task: str = "") -> str:
+def boot_prompt(client: TaresClient, role: str, task: str = "", runtime: str | None = None) -> str:
     """The first prompt of a station: its boot instructions, the idle-wake note when that is on, and the task.
-    Trailing newlines are dropped, as `$(boot_prompt ...)` drops them in bash."""
+    Trailing newlines are dropped, as `$(boot_prompt ...)` drops them in bash.
+
+    `runtime` is the runtime the station starts on; left out, it is the crew's recorded one, and for a crew that
+    has recorded no station yet the one the cell's runtime slot holds (`planned_runtime`): the first start of a
+    Codex crew is a Codex start. A Codex station is
+    told nothing of skills or of a READY message: its rules are in its instructions already (role_manual), and
+    it sends no messages. It is also told of a halt here, which a Claude Code station hears from its
+    session-start hook."""
+    if runtime is None:
+        runtime = planned_runtime(client)
+    if runtime == cx.RUNTIME:
+        return _codex_boot_prompt(client, role, task)
     orchestrator = state.crew_orchestrator(client.paths)
     p = (f"Boot as the {role} station: load the skills factory-protocol and station-{role}, follow their Boot "
          f"sections, and send {orchestrator} READY when you are set.")
@@ -959,6 +1020,27 @@ def boot_prompt(client: TaresClient, role: str, task: str = "") -> str:
              "follow the Boot section. The other stations will send you READY.")
     if idle_wake_on(client):
         p = f"{p} {idle_wake_note()}"
+    if task:
+        p = f"{p}\n\nYour task:\n{task}"
+    return p.rstrip("\n")
+
+
+def _codex_boot_prompt(client: TaresClient, role: str, task: str) -> str:
+    paths = client.paths
+    try:
+        has_manual = role in role_text.roles(kit_dir(client), cx.RUNTIME)
+    except role_text.RenderError:   # the start itself says what is wrong with the kit (role_manual)
+        has_manual = False
+    if has_manual:
+        p = (f"Boot as the {role} station: your operating rules are in your instructions (the factory protocol, "
+             f"the {role} manual and their pages). Follow their Boot sections.")
+    else:
+        p = (f"Boot as the {role} station. There is no operating manual for your role on Codex yet: do only what "
+             "this prompt and the ones after it ask.")
+    if idle_wake_on(client):
+        p = f"{p} {idle_wake_note(cx.RUNTIME)}"
+    if state.halted(paths):
+        p = f"{p} The crew is halted ({state.halt_reason(paths)}): start nothing new until it is resumed."
     if task:
         p = f"{p}\n\nYour task:\n{task}"
     return p.rstrip("\n")

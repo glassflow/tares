@@ -212,6 +212,10 @@ class FakeTares:
                 if u.path == "/api/answers":
                     item = (parse_qs(u.query).get("item") or [""])[0]
                     return self._send(200, {"answers": [a for a in w["answers"] if a["id"] == item]})
+                if u.path == "/api/factory/integrations/effective":   # what a crew that has started nothing asks
+                    return self._send(200, {"project": None, "slots": [
+                        {"slot": "runtime", "integration": w["runtime"], "title": w["runtime"], "source": "factory",
+                         "reason": ""}]})
                 return self._send(404, {"detail": "no"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

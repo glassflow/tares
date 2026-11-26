@@ -9,13 +9,14 @@ Run: .venv/bin/python tests/test_delete_cascade.py
 """
 import asyncio
 import os
+import tempfile
 
-DB = "/tmp/tares-delete-cascade.duckdb"
+# a folder per run: the session store is a file next to the database, and in a shared folder one
+# checkout's newer schema would stop every other checkout's run
+TMP = tempfile.mkdtemp(prefix="tares-delete-cascade-")
+DB = os.path.join(TMP, "cascade.duckdb")
 os.environ["TARES_DB"] = DB
-os.environ["TARES_CATALOG"] = "/tmp/tares-delete-cascade.catalog.yaml"
-for _p in (DB, DB + ".wal", os.environ["TARES_CATALOG"]):
-    if os.path.exists(_p):
-        os.remove(_p)
+os.environ["TARES_CATALOG"] = os.path.join(TMP, "catalog.yaml")
 
 import httpx
 

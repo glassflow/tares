@@ -229,10 +229,13 @@ def plan(store) -> dict | None:
                     report_person=saved.get("person_id") if saved else None)
 
 
-def by_project(store, since=None) -> list[dict]:
+def by_project(store, since=None, hidden=frozenset()) -> list[dict]:
+    """`hidden` is the ids of the projects the caller cannot see: no row, and no part of a share."""
     names = {p["id"]: p["name"] for p in store.list_projects()}
     out = []
     for r in store.usage_by_project(since):
+        if r["project"] in hidden:
+            continue
         name = (names.get(r["project"], "a deleted project") if r["kind"] == "project"
                 else "The crew (shared)" if r["kind"] == "crew" else "Other sessions")
         out.append({**r, "name": name})
@@ -242,22 +245,23 @@ def by_project(store, since=None) -> list[dict]:
     return out
 
 
-def usage(store, days: int = 7) -> dict:
+def usage(store, days: int = 7, hidden=frozenset()) -> dict:
     now = now_utc()
     p = plan(store)
     sess = next((x for x in (p or {}).get("limits", []) if x["kind"] == "session"), None)
     end = _when(sess.get("resets_at")) if sess and not sess.get("reset") else None
     start = (end - SESSION_WINDOW) if end else now - SESSION_WINDOW
     return {"plan": p,
-            "window": {"since": start, "until": end, "projects": by_project(store, start)},
-            "days": days, "projects": by_project(store, now - timedelta(days=days)),
+            "window": {"since": start, "until": end, "projects": by_project(store, start, hidden)},
+            "days": days, "projects": by_project(store, now - timedelta(days=days), hidden),
             "now": now}
 
 
-def register(app, store) -> None:
+def register(app, store, hidden_ids) -> None:
     @app.get("/api/claude-code/usage")
     def get_claude_code_usage(days: int = 7):
         """What the Claude Code sessions reporting here spend: the plan's limits (as the crew's
         machine last read them), the current 5-hour window by project, and tokens and estimated
-        cost by project over the last `days` (1 to 90). Cost is at API list prices."""
-        return usage(store, min(max(days, 1), 90))
+        cost by project over the last `days` (1 to 90). Cost is at API list prices. A private
+        project you are not on is left out, and the shares are over what is left."""
+        return usage(store, min(max(days, 1), 90), hidden_ids())

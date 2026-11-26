@@ -125,7 +125,7 @@ async function waitFor(url, tries = 150) {
     };
 
     const expect = {
-      factory: { name: "Software Factory", menu: ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
+      factory: { name: "Software Factory", menu: ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Report", "Crew", "People", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
       // The AI SRE menu grows as each screen merges (Services, Incidents, Timeline, Settings): the menu must
       // keep the full order, start with Home, end with Settings and hold the entries that exist today.
       // The exact list is pinned per screen ticket in edition-routes.e2e.cjs.
@@ -180,7 +180,7 @@ async function waitFor(url, tries = 150) {
     // 1b. the factory menu: Home and Integrations, then the groups Work, Team and Knowledge (the Second Brain's
     // pages join Knowledge). A cell with no licence answers 404 on /api/brain: no brain. Entries below the group
     // names, in order; a name is a button that folds its group, not a link.
-    const FACTORY_ROWS = ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Crew", "People", "Docs and memory"];
+    const FACTORY_ROWS = ["Home", "Integrations", "Projects", "Tickets", "Reviews", "Report", "Crew", "People", "Docs and memory"];
     const GROUPS = "Work|Team|Knowledge";
     const BRAIN_ROWS = ["Repos", "Decisions", "Ask"];
     const brainReply = (page, status, json) => page.route(`${base("factory")}/api/brain`, (r) => r.fulfill({ status, json }));

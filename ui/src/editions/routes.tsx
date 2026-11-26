@@ -90,6 +90,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-735
     "/reviews": { page: lazyPage(() => import("./factory/FactoryReviews")), fallback: { redirect: "/crew" } },
 
+    // TR-1667
+    "/report": { page: lazyPage(() => import("./factory/FactoryReport")), fallback: { redirect: "/" } },
+
     // TR-736
     "/crew": { page: lazyPage(() => import("./factory/FactoryCrew")), fallback: "today" },
 

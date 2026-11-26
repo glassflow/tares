@@ -34,6 +34,12 @@ A command run without `--json` prints its text, unchanged. For the commands of `
 it has no `schema_version`; `settings.json` describes the keys the crew relies on and allows the rest. A change to
 its shape raises the number in `schema_version.json` all the same.
 
+`roster --json` for a crew on Codex has the same shape: `turn` is what the station's app-server says (`done`,
+`working`, `blocked`, or `gone`), `claude_code` is empty, and two optional fields, `runtime` (`codex`) and `codex`
+(the version it was started on), say what the station runs. `doctor --json` for such a crew has the ids
+`codex`, `codex_login`, and per station `codex_<station>`, `codex_home_<station>`, `codex_guard_<station>` and
+`codex_mcp_<station>`, and none of Claude Code's.
+
 `doctor --json` exits 1 when any check is at level `fix`, and still prints its document: read `checks`, not the
 exit code alone. The schema files are published with the package (`tares/crew/schemas/`), so an app can generate
 its types from them.

@@ -1,16 +1,19 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { Banner, Button, Collapse, LoadingBlocks, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
 import { ApiError } from "../../api";
+import { ageWords, formatStampUTC } from "../../lib/time";
 import { cn } from "@/lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
   crewMember, crewToolOutput, decideRule, factoryCrew, readMemoryAgain,
-  type ConvoItem, type CrewBuilders, type CrewMember, type CrewOfPerson, type CrewPage, type CrewProposal, type MemberDetail,
+  type ConvoItem, type CrewBuilders, type CrewMember, type CrewOfPerson, type CrewPage, type CrewProposal, type CrewQuestion,
+  type MemberDetail,
 } from "./FactoryCrew.api";
 import { Conversation } from "./CrewConversation";
+import { deskTarget } from "./waitingGroups";
 import { InlineIcon } from "./ProjectIcon";
 import { ChevronDown, ChevronRight } from "../../components/icons";
 import { isSample, sampleDetail, sampleLoad, sampleToolOutput } from "./crewSamples";
@@ -312,6 +315,34 @@ function Builders({ groups, actions }: { groups: CrewBuilders[]; actions: CrewAc
   );
 }
 
+/** The open questions about no project that wait for the viewer (TR-1669), read only. Home's
+ *  "Answer" and the Report's rows link to one of them as #desk-<label>. */
+function Questions({ list }: { list: CrewQuestion[] }) {
+  const asked = deskTarget(useLocation().hash);
+  const there = list.some((q) => q.label === asked);
+  // the page's data comes after it mounts: scroll once the linked row is drawn, not on every poll
+  React.useEffect(() => {
+    if (there) document.getElementById(`desk-${asked}`)?.scrollIntoView({ block: "start" });
+  }, [asked, there]);
+  const now = Date.now();
+  return (
+    <section data-testid="crew-questions">
+      <SectionHead title="Questions for you" aside={<Count>{list.length}</Count>} />
+      <div className={CARD}>
+        {list.map((q) => (
+          <div key={q.label} id={`desk-${q.label}`} data-testid="crew-question"
+               className="scroll-mt-16 border-b border-border px-4 py-3.5 last:border-b-0">
+            <div className="whitespace-pre-wrap" data-user-text>{q.text}</div>
+            <div className={cn(MUTED, "mt-1")} title={formatStampUTC(q.at)}>
+              {q.label} · Asked {ageWords(now - Date.parse(q.at))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: CrewActions; reload: () => void }) {
   const [gone, setGone] = React.useState<Set<string>>(new Set());
   const [failed, setFailed] = React.useState<string | null>(null);
@@ -417,6 +448,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
           <Collapse>{data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}</Collapse>
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
+              {data.questions_for_you?.length ? <Questions list={data.questions_for_you} /> : null}
               {(data.crews ?? []).length > 1 ? (
                 <People crews={data.crews ?? []} actions={actions} />
               ) : (

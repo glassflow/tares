@@ -9,6 +9,7 @@ text with markup in it. The body is checked against tares/words.py.
 Run: .venv/bin/python tests/test_factory_crew_page.py
 """
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -29,6 +30,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
+from session_helpers import seed_usage
 from tares import words
 from tares.screens import factory_crew as fc
 
@@ -420,8 +422,228 @@ async def holes():
     ck("only helpers count as helpers, a name nobody reported is not one", ms[2]["helpers"] == 1, ms[2])
 
 
+async def private_shares():
+    """A cell of its own: a private project's cost is in nobody's shares but its members'."""
+    import tares.daemon as daemon_mod
+    own = os.path.join(_TMP, "private")
+    os.makedirs(own, exist_ok=True)
+    daemon_mod.DB_PATH = os.path.join(own, "private.duckdb")
+    from tares.daemon import make_app
+    app = make_app()
+    mk = lambda timeout=10: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                              headers={"Authorization": f"Bearer {TOKEN}"})
+    print("== a private project the viewer is not on ==")
+    async with app.router.lifespan_context(app):
+        store = app.state.store
+        an_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        # 1000 spent this week: 800 on the private project, 200 on what everybody sees
+        spent = {"secret": 800, "a": 60, "b": 34, "c": 26, "d": 22, "e": 18, "f": 14, "g": 12,
+                 "h": 8, "i": 0.6}
+        for n, cost in spent.items():
+            store.create_project(f"uc_{n}", "custom", f"project-{n}", {}, goal="A project with a cost")
+            store.set_project_kind(f"uc_{n}", "software_factory")
+            seed_usage(store, f"s-{n}", f"m-{n}", project=f"uc_{n}", replied_at=an_hour_ago, cost_usd=cost)
+        seed_usage(store, "s-own", "m-own", replied_at=an_hour_ago, cost_usd=5.4)   # "Other sessions"
+        store.set_project_scope("uc_secret", "private")
+        mia = store.create_person("Mia", "mia@example.com")["id"]
+        bo = store.create_person("Bo", "bo@example.com")["id"]
+        store.add_project_member("uc_secret", mia)
+
+        def key(kid, person=None):
+            token = f"nvf_{kid}_{kid}-secret-for-the-test"
+            store.insert_api_key(kid, kid, f"nvf_{kid}", hashlib.sha256(token.encode()).hexdigest(),
+                                 ["read"], person_id=person)
+            return {"Authorization": f"Bearer {token}"}
+
+        def rows(*xs):
+            return [{"name": f"project-{n}", "share_text": f"{pct}%", "cost_text": f"${usd} at API prices"}
+                    for n, pct, usd in xs]
+
+        everything = (rows(("secret", 80, 800), ("a", 6, 60), ("b", 3, 34), ("c", 3, 26), ("d", 2, 22),
+                           ("e", 2, 18)), "This week: project-secret 80%, project-a 6%")
+        # over 200: g (6%) passes the 5% line, h (4%) does not, and the list still stops at six
+        without = (rows(("a", 30, 60), ("b", 17, 34), ("c", 13, 26), ("d", 11, 22), ("e", 9, 18),
+                        ("f", 7, 14)),
+                   "This week: project-a 30%, project-b 17%, project-c 13%, project-d 11%, "
+                   "project-e 9%, project-f 7%, project-g 6%")
+        async with mk() as cx:
+            async def read(headers):
+                r = await cx.get("/api/factory/crew", headers=headers)
+                assert r.status_code == 200, r.text
+                return r
+
+            for who, headers in (("the cell's token", {}), ("a person on every project", key("kmia", mia))):
+                plan = (await read(headers)).json()["plan"]
+                ck(f"{who}: by project, over all the cost, the six biggest",
+                   plan["by_project"] == everything[0], plan["by_project"])
+                ck(f"{who}: the week's line, over all the cost", plan["share_text"] == everything[1],
+                   plan["share_text"])
+            for who, headers in (("a person not on it", key("kbo", bo)),
+                                 ("a key with no person", key("knobody")),
+                                 ("the cell's token narrowed to the team", {"x-tares-viewer": "public"})):
+                r = await read(headers)
+                plan = r.json()["plan"]
+                ck(f"{who}: by project, over the cost in view, the six biggest",
+                   plan["by_project"] == without[0], plan["by_project"])
+                ck(f"{who}: the week's line, over the cost in view, from 5% up",
+                   plan["share_text"] == without[1], plan["share_text"])
+                ck(f"{who}: neither the private name nor its id",
+                   "project-secret" not in r.text and "uc_secret" not in r.text, r.text)
+            # a lot more spent on project-a: every other project in view falls under half a percent,
+            # and the list has room for six, so only the 1% line keeps them off
+            seed_usage(store, "s-a2", "m-a2", project="uc_a", replied_at=an_hour_ago, cost_usd=10000)
+            plan = (await read(key("kbo2", bo))).json()["plan"]
+            got = [(x["name"], x["share_text"]) for x in plan["by_project"]]
+            ck("a project in view under 1% is left out", got == [("project-a", "99%")], got)
+
+
+def desk(store, text, hours_ago, to=None, project=None, blocking=False, assumptions=(), **more) -> str:
+    """One question on the desk, about no project unless `project` names one; its label."""
+    at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=hours_ago)
+    return store.add_desk_item(project, text, "", [], "yes", "why", "", [], blocking,
+                               "crew-orchestrator", list(assumptions), at, to_person_id=to,
+                               **more)["label"]
+
+
+async def questions_alone(name: str, auth: bool):
+    """A cell of one person: every open question about no project is theirs, with or without auth."""
+    import tares.daemon as daemon_mod
+    own = os.path.join(_TMP, name)
+    os.makedirs(own, exist_ok=True)
+    daemon_mod.DB_PATH = os.path.join(own, f"{name}.duckdb")
+    was = daemon_mod.AUTH_TOKEN
+    if not auth:
+        daemon_mod.AUTH_TOKEN = ""
+    try:
+        app = daemon_mod.make_app()
+        print(f"== questions about no project: one person, auth {'on' if auth else 'off'} ==")
+        async with app.router.lifespan_context(app):
+            store = app.state.store
+            headers = {"Authorization": f"Bearer {TOKEN}"} if auth else {}
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                         headers=headers) as cx:
+                a = (await cx.get("/api/factory/crew")).json()
+                ck(f"auth {'on' if auth else 'off'}: with no question the page has no list of them",
+                   "summary" in a and "questions_for_you" not in a, a)
+                newer = desk(store, "Where do the release notes go?", 1)
+                older = desk(store, "crew-reviewer was refused a command. Allow it?", 2,
+                             station="crew-reviewer", command="gh pr comment 12 --body ok")
+                desk(store, "Keep these assumptions?", 3, assumptions=["A1"])
+                a = (await cx.get("/api/factory/crew")).json()
+                got = [(q["label"], q["text"]) for q in a.get("questions_for_you", [])]
+                ck(f"auth {'on' if auth else 'off'}: the question and the permission request, oldest "
+                   "first, a batch of assumptions that holds nothing up left out",
+                   got == [(older, "crew-reviewer was refused a command. Allow it?"),
+                           (newer, "Where do the release notes go?")], got)
+    finally:
+        daemon_mod.AUTH_TOKEN = was
+
+
+async def questions_in_a_team():
+    """A cell of several people: each reads the questions about no project that Home would count
+    for them, and nothing of anybody else's."""
+    import tares.daemon as daemon_mod
+    from tares import factory_home as fh
+    from tares import report
+    own = os.path.join(_TMP, "questions")
+    os.makedirs(own, exist_ok=True)
+    daemon_mod.DB_PATH = os.path.join(own, "questions.duckdb")
+    app = daemon_mod.make_app()
+    print("== questions about no project: several people ==")
+    async with app.router.lifespan_context(app):
+        store = app.state.store
+        mia = store.create_person("Mia", "mia@example.com")["id"]
+        bo = store.create_person("Bo", "bo@example.com")["id"]
+        store.create_project("uc_x", "software_factory", "project-x", {}, goal="Build X")
+        store.set_project_kind("uc_x", "software_factory")
+        store.set_project_lead("uc_x", mia)
+
+        def key(kid, person=None):
+            token = f"nvf_{kid}_{kid}-secret-for-the-test"
+            store.insert_api_key(kid, kid, f"nvf_{kid}", hashlib.sha256(token.encode()).hexdigest(),
+                                 ["read"], person_id=person)
+            return {"Authorization": f"Bearer {token}"}
+
+        keys = {"Mia": key("qmia", mia), "Bo": key("qbo", bo), "a key with no person": key("qnobody"),
+                "the cell's token": {"Authorization": f"Bearer {TOKEN}"}}
+        long = "Mia, where do the release notes go?\n" + "They are long. " * 60 + "The end."
+        texts = {}
+
+        def add(text, hours_ago, **more):
+            label = desk(store, text, hours_ago, **more)
+            texts[label] = text
+            return label
+
+        # written out of order of age: the page sorts by when each was asked, not by number
+        newest = add(long, 1, to=mia)
+        permission = add("Mia, allow the refused command?", 5, to=mia, station="crew-reviewer",
+                         command="gh pr comment 12 --body ok")
+        bos = add("Bo, which port?", 6, to=bo, blocking=True)
+        nobodys = add("Which region for every project?", 7)
+        add("Mia, keep these assumptions?", 8, to=mia, assumptions=["A1"])
+        batch = add("Mia, keep the assumptions that hold the release?", 4, to=mia, blocking=True,
+                    assumptions=["A2"])
+        closed = add("Mia, answered already?", 9, to=mia)
+        store.close_desk_item(store.get_desk_item(closed)["id"], "answered", None,
+                              datetime.now(timezone.utc))
+        add("Mia, a question of a project?", 10, to=mia, project="uc_x", blocking=True)
+        gone = add("Mia, a question of a project that is gone?", 3, to=mia, project="uc_gone")
+        report.rebuild_all(store)
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as cx:
+            async def check(want: dict):
+                for who, labels in want.items():
+                    r = await cx.get("/api/factory/crew", headers=keys[who])
+                    assert r.status_code == 200, r.text
+                    rows = r.json().get("questions_for_you", [])
+                    got = [q["label"] for q in rows]
+                    ck(f"{who}: their open questions about no project, oldest first", got == labels,
+                       (got, labels))
+                    ck(f"{who}: the whole text, the label and the time, and nothing else",
+                       all(set(q) == {"label", "text", "at"} and q["text"] == texts[q["label"]]
+                           and fc._dt(q["at"]) == fc._dt(store.get_desk_item(q["label"])["created_at"])
+                           for q in rows), rows)
+                    ck(f"{who}: the list is there only when it has a row",
+                       ("questions_for_you" in r.json()) == bool(labels), sorted(r.json()))
+                    leaked = [(n, t[:40]) for n, t in texts.items() if n not in labels
+                              and (f'"{n}"' in r.text or json.dumps(t)[1:-1] in r.text)]
+                    ck(f"{who}: neither the label nor the text of any other question", leaked == [],
+                       leaked)
+                    ck(f"{who}: no command", "gh pr comment" not in r.text, r.text)
+
+                    # what Home and the Report link to on this page is on it
+                    fh._cache.clear()
+                    h = (await cx.get("/api/home", headers=keys[who])).json()
+                    homes = {x["href"].split("#desk-")[1] for i in h["waiting_for_you"]
+                             for x in i["actions"] if x.get("href", "").startswith("/crew#desk-")}
+                    ck(f"{who}: every question Home links to here is here", homes <= set(got),
+                       (sorted(homes), got))
+                    stuck = (await cx.get("/api/factory/report", headers=keys[who])).json()[
+                        "sections"]["time"]["stuck"]
+                    reports = {q["label"] for q in stuck["questions"]["rows"] if not q.get("project")}
+                    ck(f"{who}: every question of no project the Report links to is here",
+                       reports <= set(got), (sorted(reports), got))
+                    seen[who] = (homes, reports)
+
+            seen = {}
+            await check({"Mia": [permission, batch, gone, newest], "Bo": [bos],
+                         "a key with no person": [], "the cell's token": [nobodys]})
+            ck("and Home and the Report do link to some of them",
+               {permission, newest} <= seen["Mia"][0] and batch in seen["Mia"][1]
+               and bos in seen["Bo"][1] and nobodys in seen["the cell's token"][0], seen)
+
+            print("== a question nobody is named on goes to the admin, as on Home ==")
+            store.update_person(bo, is_admin=True)
+            await check({"Bo": [nobodys, bos], "Mia": [permission, batch, gone, newest],
+                         "the cell's token": []})
+
+
 units()
 asyncio.run(main())
 asyncio.run(holes())
+asyncio.run(private_shares())
+asyncio.run(questions_alone("alone", auth=True))
+asyncio.run(questions_alone("open", auth=False))
+asyncio.run(questions_in_a_team())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

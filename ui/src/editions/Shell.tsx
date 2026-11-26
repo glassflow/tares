@@ -8,8 +8,8 @@ import CommandPalette from "../components/CommandPalette";
 import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import {
-  Activity, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, Grid, HomeIcon, Moon, Plug, Search,
-  Settings as SettingsIcon, Sun, Ticket, Users, Zap,
+  Activity, BarChart, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, Grid, HomeIcon, Moon, Plug,
+  Search, Settings as SettingsIcon, Sun, Ticket, Users, Zap,
 } from "../components/icons";
 import { Button, ProgressBar, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
@@ -61,7 +61,7 @@ const groupSlug = (g: string) => g.toLowerCase().replace(/\s+/g, "-");
 
 // Each page of the menu has its icon, so a page reads apart from a group's heading (which has none).
 const MENU_ICONS: Record<string, (p: React.SVGProps<SVGSVGElement>) => React.ReactElement> = {
-  home: HomeIcon, integrations: Plug, projects: Folder, tickets: Ticket, reviews: Eye, crew: Bot, people: Users,
+  home: HomeIcon, integrations: Plug, projects: Folder, tickets: Ticket, reviews: Eye, report: BarChart, crew: Bot, people: Users,
   docs: Book, "brain-repos": Database, "brain-decisions": Flag, "brain-ask": Chat, settings: SettingsIcon,
   services: Grid, incidents: Zap, timeline: Activity, runbooks: Book,
 };

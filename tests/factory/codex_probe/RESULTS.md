@@ -313,7 +313,35 @@ guard.
 - Still open, not tried: a managed `requirements.toml` with `unified_exec = false`, for people who can
   install one.
 
-## 7. Tares over MCP (TR-1596)
+## 7. The pace of a Codex crew (TR-1597)
+
+Built on section 3's pacing row. Product code: `tares/crew/codex_pace.py`, the Codex paths of `tares/crew/pace.py`,
+and on the cell `tares/codex_usage.py`. No connection is kept open: the watch's pace step asks a station at the
+top of each round, on a short visit.
+
+Measured on Codex 0.171.0, a ChatGPT Plus account (`probe_pace_station.py`, 25 November 2026, `results/pace_station.json`):
+
+- A station started by the product, with no turn, answers `account/rateLimits/read` and `account/read`. Asking
+  starts no conversation (`thread/list` stayed empty) and uses no model.
+- The answer has `rateLimits` and `rateLimitsByLimitId`. On this account the second holds the same bucket
+  again under its id (`codex`), so two windows are kept, not four: 300 and 10080 minutes.
+- Through `pace.round_start`, a real cell (`tares.daemon`, a database and a key of its own) and back: the
+  reading was `ok`, the windows came out as `session` and `weekly_all` by their length, and the status line
+  read `pace: ok (5-hour 13%, week 32%)`. A Claude Code crew asking the same cell got "no plan reading".
+- What left the station had no `accountId`, no address and no workspace name.
+
+Not measured, and tested with stand-ins only (`tests/test_crew_codex_pace.py`, the fake `codex`):
+
+- An API-key account. The stand-in refuses `account/rateLimits/read` and says its type is `apiKey`; the crew
+  then sends a reading with no windows, which the cell calls `unsupported`. What the real Codex answers for an
+  API key was not seen.
+- A limit reached in the middle of a turn. The stand-in ends the turn as `failed` with `codexErrorInfo`
+  `usageLimitExceeded`, which is what the 0.171.0 schema names (`TurnError`, `CodexErrorInfo`); a real turn
+  ended by the limit was not produced. `rateLimitReachedType` and `ordinaryUsageAllowed` are kept or shown, and
+  not acted on.
+- A bucket of one model with a window of its own (the stand-in has one; this account showed none).
+
+## 8. Tares over MCP (TR-1596)
 
 A station on Codex is connected to the crew's Tares MCP endpoint as itself, and gets no turn without it.
 `probe_mcp_station.py` runs the product's own start against a real cell that it starts and throws away
@@ -387,7 +415,7 @@ with it: 6 of 6, 5 of 5 and 3 of 3.
 - Linux was not run. An endpoint that answers the first request and then hangs was not run: a call waits for
   the app-server's own time limit.
 
-## 8. What a station asks (TR-1593, approvals and questions)
+## 9. What a station asks (TR-1593, approvals and questions)
 
 A Codex turn that needs a yes stops and asks whoever is connected to its conversation. The crew keeps nobody
 connected, so what an approval needs was measured first, on 0.171.0, in a station's own Codex folder.
@@ -435,7 +463,7 @@ through the console's own route.
   the crew cannot answer; the station waits until it is stopped or restarted.
 - An answered item also wakes the orchestrator, as any desk answer does. It has nothing to do for it.
 
-## 9. Recording by visits (TR-1595)
+## 10. Recording by visits (TR-1595)
 
 The question: can a station's session be recorded with nothing connected to it, by a look once a watch round?
 `probe_record.py`, three scenarios on Codex 0.171.0, the station started by the product and read by visits.
@@ -510,8 +538,8 @@ is on the session's timeline only), and a long conversation (every look reads th
 - A real Tares cell and crew: launch through `tares factory`, the Tares MCP, the desk, the merge queue.
 - Orphan cleanup after a crash. The crew's `strays` scan is the candidate; it was not run against Codex commands.
 - Hook trust by any route other than `bypass_hook_trust`, and managed `requirements.toml`.
-- `required = true` on the MCP server: verified since, in section 7.
-- Linux and Windows. Longer sessions, compaction, rate-limit errors in the middle of a turn.
+- `required = true` on the MCP server: verified since, in section 8.
+- Linux and Windows. Longer sessions, compaction, rate-limit errors in the middle of a turn (section 7 says how one is handled; none was produced).
 - Other Codex versions. The feature list, the hook payloads and the app-server protocol are the parts to
   recheck on an upgrade; `codex app-server generate-json-schema` prints the protocol of the installed version.
 
@@ -533,3 +561,18 @@ From reading `9bbe76ef`. "Seam" means code that names Claude Code today and need
 | Role prompts | protocol, roles, MCP tool names | `SendMessage`, `Cron*`, subagents, skills, model names | `claude-plugin/skills/*`, `launch.py` |
 | MCP connection | the server, `X-Tares-*` headers, token file | `.mcp.json` and its headers helper | `claude-plugin/.mcp.json`, `scripts/mcp_headers.py` |
 | Doctor | tares, keys, git, gh, a codex-present check | claude binary, version, trust, plugin checks | `tares/crew/doctor.py` |
+
+## The Builder's rules on Codex (TR-1598, first part)
+
+`probe_instructions.py`, Codex 0.171.0, 25 November 2026, one turn. A builder station was started by the product's
+own start with its developer instructions holding the identity and the whole manual the crew renders from the
+kit's skills for Codex (`tares/crew/role_text.py`): 34,053 characters.
+
+- Codex took developer instructions of that size at `thread/start`, and the turn ended in 2 s.
+- Asked which tools its instructions say it lacks, with no tool call allowed, it answered: "It has no schedule, no
+  one to hand work to, no way to send another station a message, and no other tools beyond Tares's tools."
+- Nothing was written into the folder it works in, and the person's own Codex files were as before.
+
+Not checked here: that the rules are still followed after a compaction (they are developer instructions, which
+Codex keeps), a `thread/resume` after a kit update giving the conversation the new text, and a builder doing
+real work under them, which is the acceptance run of TR-1598.

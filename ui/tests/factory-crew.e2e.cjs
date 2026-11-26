@@ -10,6 +10,8 @@
  * its header reads running and total.
  * Raw HTML in a line or a rule is shown as text. Pacing shows as a sentence. At 390 px nothing scrolls
  * sideways. Every state shows only words from words.json (the crew's own words are exempt).
+ * An open question about no project shows first, read only, and Home's Answer link scrolls to it
+ * (TR-1669).
  *
  * Seeds a scratch factory cell (tests/seed-factory-crew.py, invented names), then runs the real daemon
  * on it, serving the built console. The sample states (?sample=<name>, with the sample flag in
@@ -542,6 +544,88 @@ async function waitFor(url, tries = 100) {
       await settle(p);
       ck("sample: Reject takes the rule off the page", (await p.getByTestId("crew-rule").count()) === 1);
       await c.close();
+    }
+
+    // 11. a question about no project (TR-1669): the page has it, read only, and Home's Answer lands
+    // on it. Eight older rows sit above it, so landing on it takes a scroll.
+    {
+      const { ctx: c, page: p } = await newPage(1440);
+      await p.goto(`${BASE}/crew`, { waitUntil: "load" });
+      await p.getByTestId("crew-builders").waitFor();
+      ck("no question waits: the page has no section for one", (await p.getByTestId("crew-questions").count()) === 0
+         && (await heads(p))[0] === "Orchestrator", JSON.stringify(await heads(p)));
+      const file = async (body) => {
+        const r = await api("/api/desk", { method: "POST", body: JSON.stringify({ recommendation: "yes", why: "it is short", ...body }) });
+        const out = await r.json();
+        if (!out.label) throw new Error(`desk row not filed: ${r.status} ${JSON.stringify(out)}`);
+        return out.label;
+      };
+      const older = [await file({ question: "May the reviewer read pull requests?", station: "crew-reviewer", command: "gh pr view 12 --json state" })];
+      // the cell keeps a question on one line: long ones make the rows tall
+      const long = "It has to stay where the next reader looks, and the crew needs the place before it writes. ".repeat(3).trim();
+      for (let n = 1; n <= 7; n++) older.push(await file({ question: `Where does note ${n} go? ${long}` }));
+      const question = `Which region for every project? ${long} This is the last sentence of the question.`;
+      const asked = await file({ question });
+
+      // where the asked row sits: in the window, under the top bar, and drawn on top at its corner
+      const landed = (pg) => pg.evaluate((id) => {
+        const row = document.getElementById(id);
+        const r = row.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, height: window.innerHeight, scrolled: window.scrollY,
+                 fromStart: r.top + window.scrollY, onTop: row.contains(document.elementFromPoint(r.left + 20, r.top + 4)) };
+      }, `desk-${asked}`);
+      const good = (b) => b.scrolled > 0 && b.fromStart > b.height && b.top >= 0 && b.bottom <= b.height && b.onTop;
+      const target = (pg) => pg.locator(`#desk-${asked}`);
+
+      // the daemon keeps Home for a few seconds: wait until the kept copy asks the new row
+      for (let t = 0; t < 40; t++) {
+        const h = await (await api("/api/home")).json();
+        if ((h.waiting_for_you || []).some((i) => i.id === `question:${asked}`)) break;
+        await new Promise((ok) => setTimeout(ok, 250));
+      }
+      await p.goto(`${BASE}/`, { waitUntil: "load" });
+      await p.getByTestId("home-headline").waitFor();
+      await settle(p);
+      const answer = p.locator(`a[href="/crew#desk-${asked}"]`);
+      const more = p.getByRole("button", { name: /^\d+ more$/ });
+      if (!(await answer.count()) && (await more.count())) await more.click();
+      ck("Home asks it with an Answer link to the Crew page", (await answer.count()) === 1 && (await answer.innerText()).trim() === "Answer",
+         `${await answer.count()} ${JSON.stringify(await p.locator("a[href*='#desk-']").evaluateAll((a) => a.map((e) => e.getAttribute("href"))))}`);
+      await answer.click();
+      await target(p).waitFor();
+      await settle(p);
+      ck("following Home's Answer lands on the question, in view and clear of the top bar",
+         new URL(p.url()).pathname === "/crew" && good(await landed(p)), `${p.url()} ${JSON.stringify(await landed(p))}`);
+      const rows = p.getByTestId("crew-question");
+      const ids2 = await rows.evaluateAll((a) => a.map((e) => e.id));
+      ck("the rows are the open ones, oldest first", JSON.stringify(ids2) === JSON.stringify([...older, asked].map((l) => `desk-${l}`)), JSON.stringify(ids2));
+      const text = await target(p).innerText();
+      ck("a row is the full text, its label and its age",
+         text.startsWith(`${question}\n`)
+         && new RegExp(`${asked} · Asked (just now|\\d+ minutes? ago)$`).test(text.trim()), JSON.stringify(text));
+      const section = p.getByTestId("crew-questions");
+      ck("read only: no button, field or link, and no command of a permission request",
+         (await section.locator("button, input, textarea, select, a").count()) === 0
+         && !/gh pr view/.test(await p.getByTestId("factory-crew").innerText()), await section.innerText());
+      ck("the section comes first, with its count", (await heads(p))[0] === "Questions for you"
+         && /^Questions for you\s*9$/m.test(await section.innerText()), JSON.stringify(await heads(p)));
+      await checkWords(p, ck, "live questions");
+      await shot(p, "live-questions-1440.png");
+      await p.evaluate(() => window.scrollTo(0, 0));
+      await p.waitForResponse((r) => /\/api\/factory\/crew$/.test(r.url()), { timeout: 15000 });
+      await p.waitForTimeout(500);
+      ck("the next read does not scroll the reader back", (await p.evaluate(() => window.scrollY)) === 0);
+      await c.close();
+
+      for (const width of [1440, 390]) {
+        const { ctx: c2, page: p2 } = await newPage(width);
+        await p2.goto(`${BASE}/crew#desk-${asked}`, { waitUntil: "load" });
+        await target(p2).waitFor();
+        await settle(p2);
+        ck(`${width}: the address alone lands on the question once the page has its data`, good(await landed(p2)), JSON.stringify(await landed(p2)));
+        ck(`${width}: with questions the page does not scroll sideways`, (await overflow(p2)) <= 0, `${await overflow(p2)}px`);
+        await c2.close();
+      }
     }
   } finally {
     if (browser) await browser.close();
