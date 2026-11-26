@@ -1765,7 +1765,7 @@ class FactoryStore:
         if rows:
             self._record_challenges(rows)
 
-    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
+    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000, ends: bool = False) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
         printed and whether it failed, oldest first: what a builder's claimed checks are
         compared with. Read from `session_commands`, where each call was written as its line was
@@ -1787,12 +1787,13 @@ class FactoryStore:
                                      .order_by(t.at.desc(), t.tool_use_id.desc())
                                      .limit(limit // 2)).fetchall()
         rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
-        # `ended`: its result arrived; `exit_code` is then the code it ended with (Claude Code's result says only
-        # ok or error: 0 or 1). A step of a chain backs a claim only on that proof (factory.match_check).
+        # With `ends`, every row also says whether its result arrived (`ended`) and the code it ended with
+        # (`exit_code`; a Claude Code result says only ok or error: 0 or 1): what a step of a chain needs to back
+        # a claim (factory.match_check, TR-1598). Without, the rows are what they always were.
         return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
                  "is_error": bool(code) or outcome in ("failed", "declined"),
-                 "ended": result_at is not None, "exit_code": code,
-                 **({"outcome": outcome, "cwd": cwd} if outcome else {})}
+                 **({"outcome": outcome, "exit_code": code, "cwd": cwd} if outcome else {}),
+                 **({"ended": result_at is not None, "exit_code": code} if ends else {})}
                 for at, sid, command, tail, code, outcome, cwd, result_at in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────

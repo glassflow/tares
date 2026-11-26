@@ -607,7 +607,7 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     sessions = (store.station_session_ids(holder) if holder
                 else [s["session"] for s in store.project_sessions(uid)])
     with metrics.step("recorded_commands"):
-        commands = store.recorded_commands(source, sessions) if sessions else None
+        commands = store.recorded_commands(source, sessions, ends=True) if sessions else None
     # only what ran since the ticket went into the work counts for its checks
     since = next((x["at"] for x in store.ticket_history(t["id"])
                   if x["field"] == "stage" and x["value"] == "doing"), None)
