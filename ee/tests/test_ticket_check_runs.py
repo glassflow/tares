@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A ticket's checks as each reader gets them: the state of every check, and the recorded text
 taken from the sessions the reader may open. Read for a ticket a station holds and for one nobody
 holds.
