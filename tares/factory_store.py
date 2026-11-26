@@ -1245,6 +1245,20 @@ class FactoryStore:
         not read."""
         return self.sessions_in([r["session"] for r in rows if r["crew_id"] not in own], hidden)
 
+    def unread_among(self, sessions: list[str], hidden, own) -> set[str]:
+        """`_hidden_session` for session ids, a station's or not (TR-1710): those of `sessions`
+        the caller must not read. A session that is no station's has no crew, so none of `own`
+        covers it."""
+        found = self.sessions_in(sessions, hidden)
+        if not found or not own:
+            return found
+        t, ids = session_stations, sorted(found)
+        for i in range(0, len(ids), 500):
+            with self.sessions_db.begin() as conn:
+                found -= set(conn.execute(select(t.c.session).where(
+                    t.c.session.in_(ids[i:i + 500]), t.c.crew_id.in_(sorted(own)))).scalars())
+        return found
+
     def _rollup_from_rows(self, source: str, keep: int, hidden=frozenset(),
                           own=frozenset()) -> list[dict]:
         """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
