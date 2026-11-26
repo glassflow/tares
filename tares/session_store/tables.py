@@ -29,6 +29,8 @@ session_stations = Table(
     Column("project", Text),
     Column("seen_at", UTCDateTime),
     Column("crew_id", Text),
+    Column("runtime", Text),   # `codex` for a Codex station's session; empty for Claude Code (TR-1600)
+    Column("model", Text),     # the model a Codex station was started on; empty for its account's default
 )
 
 # What a session is doing now (store.py)

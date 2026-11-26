@@ -97,6 +97,7 @@ NOT_MACHINE = {
     ("spec",): "starts a spec session, no --json",
     ("session",): "starts a session, no --json",
     ("outcome",): "a Codex station's own account of a call cut off by a crash, text only (TR-1593)",
+    ("runtime",): "what new crews start on and what this crew runs on, text only; status --json has it (TR-1600)",
     ("_mcp-url",): "internal, prints one address for the plugin",
     ("_parse-bg-id",): "internal, parses Claude Code output",
 }

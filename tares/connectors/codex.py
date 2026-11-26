@@ -130,6 +130,8 @@ def _session(fact: dict) -> list:
         return []
     line = _base(fact, "session_station", "station")
     line.update(station=fact["station"], role=fact.get("role") or "", parent=fact.get("parent") or "")
+    if fact.get("model"):
+        line["model"] = fact["model"]   # the model the station was started on (TR-1600); none for the default
     for k in ("crew", "machine"):
         if fact.get(f"factory_{k}"):
             line[k] = fact[f"factory_{k}"]

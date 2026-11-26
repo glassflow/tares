@@ -1,6 +1,6 @@
 """The Codex runtime on the cell (tares/integrations/builtin/runtime_codex.py, TR-1592).
 
- a. the slot: `codex` is installed next to `claude_code`, which stays the default; setup does not offer it yet;
+ a. the slot: `codex` is installed next to `claude_code`, which stays the default; setup offers it (TR-1600);
  b. the spec: the app-server on the station's socket with the account's extras off, the same FACTORY_* and
     TARES_* variables a Claude Code station gets (and CODEX_HOME), the thread's settings (model, approval policy,
     sandbox, identity, the guard's hook and the trust for it), the MCP server by name, the rules filled, the
@@ -88,7 +88,8 @@ ck("codex is installed for the runtime slot, next to claude_code",
    [c.name for c in registry.available("runtime")])
 ck("claude_code stays the default", resolve.DEFAULTS["runtime"] == "claude_code")
 ck("it is named Codex and is not an ee integration", RuntimeCodex.title == "Codex" and RuntimeCodex.slot == "runtime" and not RuntimeCodex.ee)
-ck("setup does not offer it yet", ("runtime", "codex") in factory_setup.NOT_OFFERED)
+ck("setup offers it, and says a running crew keeps its runtime (TR-1600)", ("runtime", "codex") not in factory_setup.NOT_OFFERED
+   and "keeps the runtime it started on" in factory_setup.DESCRIPTIONS[("runtime", "codex")])
 
 # ---------------------------------------------------------------------------------------------
 print("b. the spec")
@@ -229,8 +230,11 @@ async def main():
             ck("set back, the launch is Claude Code's again", r.status_code == 200 and r2.json().get("runtime") == "claude_code", r2.text[:200])
             setup = (await root.get("/api/factory/setup")).json()
             step = next((s for s in setup.get("steps", []) if s.get("slot") == "runtime"), {})
-            ck("and setup still does not offer Codex", step.get("line") == "Claude Code" and step.get("available") == [],
-               (step.get("line"), step.get("available")))
+            codex = [a for a in step.get("available", []) if a.get("id") == "codex"]
+            ck("and setup offers Codex to switch to, saying a running crew keeps its runtime (TR-1600)",
+               step.get("line") == "Claude Code" and (codex or [c for c in step.get("connected", []) if c.get("id") == "codex"])
+               and all("keeps the runtime it started on" in (a.get("description") or "") for a in codex),
+               (step.get("line"), step.get("available"), [c.get("id") for c in step.get("connected", [])]))
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

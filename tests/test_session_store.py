@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
-from sqlalchemy import Column, Integer, MetaData, Table, inspect, text  # noqa: E402
+from sqlalchemy import Column, Integer, MetaData, Table, inspect, select, text  # noqa: E402
 
 import tares.store as store_mod  # noqa: E402
 from tares import state_db  # noqa: E402
@@ -29,8 +29,8 @@ from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0010_session_command_outcome"              # the newest revision: tests that count revisions move with it
-REVISIONS = 10
+HEAD = "0011_session_station_runtime"              # the newest revision: tests that count revisions move with it
+REVISIONS = 11
 FAILS = []
 
 
@@ -306,8 +306,18 @@ def _count(sdb, table):
         return c.execute(text(f"SELECT count(*) FROM {table}")).scalar()
 
 
+# columns added to a session table after the session store left DuckDB: DuckDB's copy has none of them, and a row
+# copied from it has them empty (TR-1600)
+SINCE_DUCKDB = {"session_stations": ("runtime", "model")}
+
+
+def _old_cols(table):
+    """The columns of `table` that DuckDB's copy has, in declared order."""
+    return [c for c in declared_tables.metadata.tables[table].columns if c.name not in SINCE_DUCKDB.get(table, ())]
+
+
 def _duck_rows(store, table):
-    cols = [c.name for c in declared_tables.metadata.tables[table].columns]
+    cols = [c.name for c in _old_cols(table)]
     with store._lock:
         return cols, store.con.execute(f"SELECT {', '.join(cols)} FROM {table} ORDER BY 1, 2").fetchall()
 
@@ -407,7 +417,17 @@ def copy_at_start():
 def _session_rows(s, t):
     tbl = declared_tables.metadata.tables[t]
     with s.sessions_db.begin() as c:
-        return c.execute(tbl.select().order_by(*list(tbl.columns)[:2])).all()
+        return c.execute(select(*_old_cols(t)).order_by(*list(tbl.columns)[:2])).all()
+
+
+def _new_cols_empty(s, t):
+    """The columns DuckDB's copy did not have hold nothing in any copied row."""
+    tbl = declared_tables.metadata.tables[t]
+    new = [tbl.c[n] for n in SINCE_DUCKDB.get(t, ())]
+    if not new:
+        return True
+    with s.sessions_db.begin() as c:
+        return all(v is None for r in c.execute(select(*new)).all() for v in r)
 
 
 def copy_sqlite():
@@ -420,12 +440,10 @@ def copy_sqlite():
     got = copy_from_duckdb(s, s.sessions_db)
     ck("the first call reports the rows it copied", got == {t: len(before[t]) for t in SESSION_TABLES}, got)
     for t in SESSION_TABLES:
-        tbl = declared_tables.metadata.tables[t]
-        with s.sessions_db.begin() as c:       # through the declared table, so times come back as UTC
-            rows = c.execute(tbl.select().order_by(*list(tbl.columns)[:2])).all()
+        rows = _session_rows(s, t)   # through the declared table, so times come back as UTC
         ck(f"{t}: every row arrived, values and times the same",
-           [tuple(_norm(v) for v in r) for r in rows] == [tuple(_norm(v) for v in r) for r in before[t]],
-           (rows, before[t]))
+           [tuple(_norm(v) for v in r) for r in rows] == [tuple(_norm(v) for v in r) for r in before[t]]
+           and _new_cols_empty(s, t), (rows, before[t]))
     with s.sessions_db.begin() as c:
         ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
     ck("the ledger holds each table and its count", ledger == {t: len(before[t]) for t in SESSION_TABLES}, ledger)

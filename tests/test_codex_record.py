@@ -130,9 +130,13 @@ running = thread([{**command("exec-5", "make", None, "", "inProgress")}])
 ck("an item still in progress waits for its end", [k for k in kinds(rec.facts(running, [armed()], rec.new_sent(THREAD), BASE, True, NOW)[0])
                                                      if k[0] == "item"] == [])
 waiting = thread([], flags=["waitingOnApproval"])
-ck("a station that waits for an approval is waiting, and the reason is Codex's own word",
+ck("a station that waits for an approval is waiting, and the reason says so in words (TR-1600)",
    [(f["state"], f["reason"]) for f in rec.facts(waiting, [], rec.new_sent(THREAD), BASE, True, NOW)[0] if f["kind"] == "state"]
-   == [("waiting", "waitingOnApproval")])
+   == [("waiting", "waiting for an approval")])
+odd = thread([], flags=["waitingOnUserInput", "waitingOnSomethingNew"])
+ck("for an answer too; a flag with no words is sent as Codex wrote it",
+   [f["reason"] for f in rec.facts(odd, [], rec.new_sent(THREAD), BASE, True, NOW)[0] if f["kind"] == "state"]
+   == ["waiting for an answer, waitingOnSomethingNew"])
 long = thread([command("exec-6", "cat big", 0, "x" * 50000 + "TAIL")])
 big = next(f for f in rec.facts(long, [], rec.new_sent(THREAD), BASE, True, NOW)[0] if f["kind"] == "item")
 ck("a long output keeps its end", len(big["item"]["aggregatedOutput"]) == rec.OUTPUT_KEPT and big["item"]["aggregatedOutput"].endswith("TAIL"))
@@ -194,6 +198,10 @@ ck("an item that is listed by the second look is the command's end, not an unkno
 dead, s_dead = rec.facts(None, [*record, allow("exec-3", "make e2e", at=NOW - 1)], sent1, BASE, False, NOW + 5)
 ck("a station that is not running has ended; a new start in a turn that was seen is still sent",
    kinds(dead) == [("start", "exec-3"), ("state", "ended")] and dead[1]["reason"] == "the station is not running", kinds(dead))
+stopped, _ = rec.facts(None, record, sent1, BASE, False, NOW + 5, stopped="it ran `git push` with no guard record")
+ck("one the crew stopped has ended, and the reason says the crew stopped it, and why (TR-1600)",
+   [f["reason"] for f in stopped if f["kind"] == "state"]
+   == ["the crew stopped it: it ran `git push` with no guard record"], stopped)
 unseen = [*record, allow("exec-4", "make", turn="01a2-turn-2", at=NOW + 3)]
 held, s_held = rec.facts(None, unseen, sent1, BASE, False, NOW + 5)
 ck("a start in a turn no look has listed waits while the station cannot be read",
@@ -343,7 +351,8 @@ class Tares:
 
 LOOK = {"found": mid, "alive": True}
 rec.read = lambda paths, station, thread: LOOK["found"]
-rec.cs = SimpleNamespace(is_alive=lambda paths, station: LOOK["alive"])
+rec.cs = SimpleNamespace(is_alive=lambda paths, station: LOOK["alive"], guard_off=lambda paths, station: "",
+                         unverified=lambda paths, station: {})
 tares = Tares()
 tares.fail = True
 got = rec.step(tares)

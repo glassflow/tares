@@ -58,6 +58,11 @@ TEXT_KEPT = 20000          # characters of a message sent
 POST_FACTS = 50            # facts in one post
 SETTLE = 5.0               # seconds a start may be newer than the newest listed turn and still wait for its own
 STATES = {"active": "working", "waiting": "waiting", "idle": "idle", "notLoaded": "idle"}
+# what a waiting station waits for, in the words the console shows (TR-1600); a flag not named here is sent as
+# Codex wrote it
+WAITING_FOR = {"waitingOnApproval": "waiting for an approval", "waitingOnUserInput": "waiting for an answer"}
+NOT_RUNNING = "the station is not running"
+STOPPED = "the crew stopped it: "   # the reason of an end the crew caused, before why (TR-1600)
 
 
 def machine(env=None) -> str:
@@ -127,13 +132,15 @@ def _turn_began(turn: dict) -> float:
         return 0.0
 
 
-def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float | None = None) -> tuple:
+def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float | None = None,
+          stopped: str = "") -> tuple:
     """(the facts to send, what will have been sent once they are taken). Pure.
 
     `found` is the conversation as `thread/read` gave it with its turns, or None when it could not be read
     (the station is not running, or did not answer). `record` is the guard's record, `sent` what was sent
     before (`new_sent`), `base` what every fact carries (`sessionId` and the station's stamps), `alive`
-    whether the station's app-server runs."""
+    whether the station's app-server runs, and `stopped` why the crew stopped one that does not (its guard was
+    found off, or its last turn could not be compared with the guard's record), "" when it did not."""
     now = time.time() if now is None else now
     sent = json.loads(json.dumps(sent))   # the caller keeps the old one until the post is taken
     out = []
@@ -250,8 +257,9 @@ def facts(found, record: list, sent: dict, base: dict, alive: bool, now: float |
 
     said = "ended" if not alive else STATES.get(kind or "", "")
     if said and said != sent["state"]:
-        why = ("the station is not running" if said == "ended" else
-               ", ".join(str(f) for f in status.get("activeFlags") or []) if said == "waiting" else "")
+        why = ((STOPPED + stopped if stopped else NOT_RUNNING) if said == "ended" else
+               ", ".join(WAITING_FOR.get(str(f), str(f)) for f in status.get("activeFlags") or [])
+               if said == "waiting" else "")
         out.append(_fact(base, "state", now, state=said, reason=why))
         sent["state"] = said
     return out, sent
@@ -440,7 +448,8 @@ def record_station(client, paths: CrewPaths, station: str, row: dict | None = No
         if found and found.get("model") and not base.get("model"):
             base["model"] = found["model"]
         record = codex_guard.read_record(codex_guard.record_file(str(paths.raw), station))
-        out, after = facts(found, record, sent, base, alive)
+        stopped = "" if alive else (cs.guard_off(paths, station) or str(cs.unverified(paths, station).get("why") or ""))
+        out, after = facts(found, record, sent, base, alive, stopped=stopped)
         usage, after["usage"] = tokens(after["path"], after["usage"], base) if after["path"] else ([], after["usage"])
         out += usage
         if out:

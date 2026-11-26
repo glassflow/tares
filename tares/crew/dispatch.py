@@ -162,6 +162,14 @@ def _outcome(argv: list[str], env: dict) -> int:
 PORTED[("outcome",)] = _outcome  # new in Python (TR-1593): what a call cut off by a crash was found to have done
 
 
+def _runtime(argv: list[str], env: dict) -> int:
+    from .runtime_cmd import cmd_runtime  # imported when used (TR-1600)
+    return cmd_runtime(argv, env)
+
+
+PORTED[("runtime",)] = _runtime  # new in Python (TR-1600): what new crews start on, and what this crew runs on
+
+
 def _parse_bg_id(argv: list[str], env: dict) -> int:
     from .claude import cmd_parse_bg_id  # imported when used
     return cmd_parse_bg_id(argv, env)

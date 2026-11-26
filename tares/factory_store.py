@@ -1056,16 +1056,21 @@ class FactoryStore:
 
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
-                            project: str | None, at, crew_id: str | None = None) -> None:
+                            project: str | None, at, crew_id: str | None = None,
+                            runtime: str | None = None, model: str | None = None) -> None:
+        """`runtime` and `model` (TR-1600): what a Codex station's lines say it runs on; a Claude
+        Code session's lines name neither, and a later line that does not name one keeps the last."""
         t = session_stations
         stmt = self.sessions_db.upsert(t).values(
             session=session, station=station, role=role or None, parent=parent or None,
-            project=project, seen_at=at, crew_id=crew_id)
+            project=project, seen_at=at, crew_id=crew_id, runtime=runtime or None, model=model or None)
         x = stmt.excluded
         stmt = stmt.on_conflict_do_update(index_elements=["session"], set_={
             "station": x.station, "role": x.role, "parent": x.parent,
             "project": func.coalesce(x.project, t.c.project),
-            "crew_id": func.coalesce(x.crew_id, t.c.crew_id)})
+            "crew_id": func.coalesce(x.crew_id, t.c.crew_id),
+            "runtime": func.coalesce(x.runtime, t.c.runtime),
+            "model": func.coalesce(x.model, t.c.model)})
         with self.sessions_db.begin() as conn:
             conn.execute(stmt)
 
@@ -1093,7 +1098,8 @@ class FactoryStore:
             j = j.outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
                                      sx.c.line_count > 0))
         q = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project, ss.c.seen_at,
-                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, *lines)
+                    st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, *lines,
+                    ss.c.runtime, ss.c.model)
              .select_from(j))
         with self.sessions_db.begin() as conn:
             rows = conn.execute(q).all()
@@ -1107,7 +1113,8 @@ class FactoryStore:
             out.append({"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                         "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
                         "last_at": last or r[5], "lines": n, "state": r[6],
-                        "state_reason": r[7], "state_at": r[8], "crew_id": r[10]})
+                        "state_reason": r[7], "state_at": r[8], "crew_id": r[10],
+                        "runtime": r[14], "model": r[15]})
         out.sort(key=lambda s: s["last_at"].timestamp() if s["last_at"] else float("-inf"),
                  reverse=True)
         return out
@@ -1130,7 +1137,8 @@ class FactoryStore:
         return {"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                 "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
                 "last_at": last or r[5], "lines": n, "state": r[6],
-                "state_reason": r[7], "state_at": r[8], "crew_id": r[10]}
+                "state_reason": r[7], "state_at": r[8], "crew_id": r[10],
+                "runtime": getattr(r, "runtime", None), "model": getattr(r, "model", None)}
 
     def _hidden_session(self, hidden, own):
         """The condition, on a session_stations row, that the caller must not read its session
@@ -1166,7 +1174,8 @@ class FactoryStore:
                         ss.c.seen_at, session_states.c.state, session_states.c.reason,
                         session_states.c.state_at, named.label("named"), ss.c.crew_id,
                         sx.c.started_at, sx.c.last_line_at, sx.c.line_count,
-                        sx.c.coordination_calls, last.label("last"), unread.label("unread"))
+                        sx.c.coordination_calls, last.label("last"), unread.label("unread"),
+                        ss.c.runtime, ss.c.model)
                  .select_from(j).subquery())
         key = (every.c.crew_id, every.c.station)
         newest = (every.c.last.desc().nulls_last(), every.c.session.desc())

@@ -260,7 +260,7 @@ def revision():
             kept = c.execute(select(session_commands.c.command).where(
                 session_commands.c.tool_use_id == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0010_session_command_outcome"] and kept == "x", (v, kept))
+           v == ["0011_session_station_runtime"] and kept == "x", (v, kept))
         sdb.close()
     finally:
         if PG:
