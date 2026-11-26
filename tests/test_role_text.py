@@ -205,6 +205,8 @@ roles = {r: rt.manual(KIT, rt.CODEX, r) for r in ("orchestrator", "reviewer", "r
 ck("the orchestrator, the reviewer and the releaser have a manual on Codex, naming nothing of CLAUDE_ONLY",
    sorted(table) == ["builder", "orchestrator", "releaser", "reviewer"]
    and all(len(m) > 5000 and named(m) == [] for m in roles.values()), {r: named(m) for r, m in roles.items()})
+ck("none is told it sends no messages: every role sends with send_to_station (the review of PR 984)",
+   all("send no messages" not in m and "send_to_station" in m for m in roles.values()))
 ck("none holds a schedule; each is woken by the factory",
    all("You hold no schedule" in m and "CronCreate" not in m for m in roles.values()))
 ck("the orchestrator: the person answers on the desk in the console, which records the answer; it asks nothing in its turns",
