@@ -201,5 +201,28 @@ ck("a call already settled (here by the station itself) is refused in one line, 
    (code, err.getvalue()))
 tares.__exit__(None, None, None)
 
+print("e. a Codex station's command that cannot reach Tares")
+from tares.crew.errors import CrewError as _CE  # noqa: E402
+
+tares, paths, client = crew()
+dead = "http://127.0.0.1:9"   # nothing listens there
+
+
+def refusal(env_extra):
+    c = TaresClient(paths, env={**os.environ, "TARESD_URL": dead, **env_extra}, say=lambda *_: None)
+    try:
+        c.require_tares()
+    except _CE as e:
+        return str(e)
+    return ""
+
+
+ck("from a Codex station (its FACTORY_STATION runs on Codex), it says the sandbox has no network, and what to do",
+   "Codex sandbox, which has no network, Tares is not down" in refusal({"FACTORY_STATION": CX}))
+ck("so it does with the sandbox's own mark", "ask for approval" in refusal({"CODEX_SANDBOX_NETWORK_DISABLED": "1"}))
+ck("anywhere else it says what it always said", "Start one with `tares up`" in refusal({"FACTORY_STATION": CC})
+   and "Start one with `tares up`" in refusal({}))
+tares.__exit__(None, None, None)
+
 print(json.dumps({"passed": P, "failed": F}) if os.environ.get("TEST_JSON") else f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)

@@ -141,6 +141,7 @@ ck("its liveness wakes do not depend on the idle_wake setting (TR-1598: the fact
    "woken this way whatever the `idle_wake` setting" in manual and "nothing wakes a Codex station" not in manual)
 ck("a command its sandbox refuses is asked again for approval, which reaches the desk; one the guard refuses blocks",
    "run the same command again and ask for approval (escalated permissions" in manual
+   and "a `tares factory` command that says Tares does not answer: Tares is up, your sandbox has no network" in manual
    and "**The factory's guard** refuses" in manual and "Your person can allow it in the console" not in manual)
 ck("it holds no schedule, hands the work to nobody, and has no challenger yet",
    "You hold no schedule: the factory wakes you" in manual and "4. **Implement it yourself**" in manual
