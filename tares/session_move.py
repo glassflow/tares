@@ -178,6 +178,8 @@ def plan(store) -> int:
             f"SELECT key_value, count(*) FROM events WHERE source IN ({marks}) "
             "AND key_value IS NOT NULL AND key_value <> '' GROUP BY key_value ORDER BY key_value",
             sources).fetchall()
+    # an id Postgres cannot hold has no session to move to: its lines stay in DuckDB (TR-1703)
+    found = [(sid, n) for sid, n in found if session_ingest.holds_session(store, sid)]
     db = store.sessions_db
     before = sum(counts(store).values())
     for i in range(0, len(found), 500):
