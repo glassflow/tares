@@ -62,6 +62,8 @@ Cases:
   integr_methods     the Store's rule, pair, integration, secret, required check, merge queue and
                      write-back methods keep their answers, also with several processes at once;
                      deleting a project removes its rows, its required checks too
+  integr_one_snapshot  each integration read answers from one state while another process changes
+                     the default or the settings
   integr_takeover    Postgres: the ten tables the old DDL made are taken over, rows untouched; a
                      missing column and index are added
 """
@@ -880,6 +882,96 @@ def projects_copy():
     s = Store(path, state_dsn="")
     ck("a second start copies nothing: a project made after the copy is kept",
        s.get_project("uc_later") is not None and len(s.list_projects()) >= 4)
+    s.close()
+
+
+def integr_one_snapshot():
+    print("== a read of the integrations sees one state while another process writes ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    other = _another_process(s, d)
+    s.create_project("uc_t", "custom", "Tee", {})
+
+    def during(read, write):
+        """`read()`, with `write()` run by the other process right after the read's first query."""
+        ran = []
+
+        def after(conn, cursor, statement, *a):
+            if statement.startswith("SELECT") and not ran:
+                ran.append(1)
+                write()
+
+        event.listen(s.sessions_db.engine, "after_cursor_execute", after)
+        try:
+            got = read()
+        finally:
+            event.remove(s.sessions_db.engine, "after_cursor_execute", after)
+        assert ran, "the write never ran"
+        return got
+
+    def defaults():
+        return [c["name"] for c in s.list_connections("tickets") if c["default"]]
+
+    ck("no connection, no default: an unknown one reads as None, its settings as empty",
+       (s.list_connections("tickets"), s.get_connection("tickets", "nope"), s.get_choice("tickets"))
+       == ([], None, None)
+       and s.stored_settings("tickets", "nope") == s.stored_settings("tickets", "nope", "uc_t") == {})
+    s.set_choice("ci", "github", {"repo": "o/a"}, "Kim", default=False)
+    s.set_choice("ci", "local", {"token": "l"}, "Kim", default=False)
+    ck("no default chosen: the built-in one's connection is marked",
+       [(c["name"], c["default"]) for c in s.list_connections("ci")] == [("github", False), ("local", True)],
+       s.list_connections("ci"))
+    s.set_choice("tickets", "tix_a", {"token": "a"}, "Kim", default=False)
+    ck("a connection and no default chosen: none is marked",
+       defaults() == [] and s.get_connection("tickets", "tix_a")["default"] is False
+       and s.get_choice("tickets") is None)
+    s.set_default("tickets", "tix_a", "Kim")
+    s.set_choice("tickets", "tix_b", {"token": "b"}, "Kim", default=False)
+
+    before = s.list_connections("tickets")
+
+    def connect_a_third():
+        other.set_choice("tickets", "tix_c", {"token": "c"}, "Ann", default=False)
+        other.set_default("tickets", "tix_c", "Ann")
+
+    got = during(lambda: s.list_connections("tickets"), connect_a_third)
+    ck("list_connections: set_default meanwhile, still exactly one default, all from before",
+       got == before and [c["name"] for c in got if c["default"]] == ["tix_a"] and defaults() == ["tix_c"],
+       (got, defaults()))
+
+    for name, what in (("tix_c", "the default"), ("tix_a", "the next default")):
+        s.set_default("tickets", "tix_c", "Kim")
+        before = s.get_connection("tickets", name)
+        got = during(lambda: s.get_connection("tickets", name),
+                     lambda: other.set_default("tickets", "tix_a", "Ann"))
+        ck(f"get_connection of {what}: set_default meanwhile, the flag is from before",
+           got == before and got["default"] is (name == "tix_c") and defaults() == ["tix_a"],
+           (before, got, defaults()))
+
+    s.set_default("tickets", "tix_a", "Kim")
+    before = s.get_choice("tickets")
+
+    def move_the_default_and_drop_it():
+        other.set_default("tickets", "tix_b", "Ann")
+        other.delete_connection("tickets", "tix_a")
+
+    got = during(lambda: s.get_choice("tickets"), move_the_default_and_drop_it)
+    ck("get_choice: set_default and a delete meanwhile, the default keeps its settings",
+       got == before and got["secrets"] == {"token": {"has_value": True}} and defaults() == ["tix_b"],
+       (before, got, defaults()))
+
+    s.set_choice("tickets", "github", {"repo": "o/a"}, "Kim")
+    s.set_project_choice("uc_t", "tickets", "github", {"issue_label": "old"}, "Kim")
+
+    def change_both():
+        other.set_choice("tickets", "github", {"repo": "o/b"}, "Ann")
+        other.set_project_choice("uc_t", "tickets", "github", {"issue_label": "new"}, "Ann")
+
+    got = during(lambda: s.stored_settings("tickets", "github", "uc_t"), change_both)
+    ck("stored_settings: both change meanwhile, the connection and the pick are from before",
+       got == {"repo": "o/a", "issue_label": "old"}
+       and s.stored_settings("tickets", "github", "uc_t") == {"repo": "o/b", "issue_label": "new"}, got)
+    other.sessions_db.close()
     s.close()
 
 
@@ -3229,6 +3321,15 @@ def integr_copy():
             os.environ[project_secrets.KEY_ENV] = key
 
 
+def _another_process(s, d):
+    """The Store as a second process on the same database has it: its own write lock and its own
+    engine."""
+    o = copy.copy(s)
+    o._swrite = threading.RLock()
+    o.sessions_db = SessionStore(d, s.state_dsn or None)
+    return o
+
+
 def integr_methods():
     print("== rules, pairs, integrations, secrets, checks, merge queue and write-backs through Core ==")
     d = tempfile.mkdtemp()
@@ -3425,46 +3526,67 @@ def integr_methods():
        and s.get_pending_writeback(other_tk) is not None)
 
     print("== two processes write one after the other ==")
-    others = []
-    for _ in range(4):                     # each as another process: its own lock, the same database
-        o = copy.copy(s)
-        o._swrite = threading.RLock()
-        others.append(o)
+    first, second = _another_process(s, d), _another_process(s, d)     # an engine each
 
-    def slow(conn, cursor, statement, parameters, context, executemany):
-        if statement.startswith(("SELECT max(", "SELECT guardrail_pairs", "SELECT merge_queue",
-                                 "SELECT pending_writeback.attempts")):
-            time.sleep(0.15)               # the read of one writer is done before the next one writes
+    def in_turn(prefix, call):
+        """`call` on both. The first is held after the statement that starts with `prefix` (it has
+        read, it has not written) while the second starts: what the first got, what the second
+        got, whether the second could read meanwhile, and the errors."""
+        held, second_read, release = threading.Event(), threading.Event(), threading.Event()
+        got, errors = {}, []
 
-    def at_once(call):
-        got, errors = [], []
+        def hold(conn, cursor, statement, *a):
+            if statement.startswith(prefix) and not held.is_set():
+                held.set()
+                release.wait(10)
 
-        def run(o):
+        def saw(conn, cursor, statement, *a):
+            if statement.startswith(prefix):
+                second_read.set()
+
+        def run(who, o):
             try:
-                got.append(call(o))
+                got[who] = call(o)
             except Exception as e:
-                errors.append(f"{type(e).__name__}: {e}"[:200])
-        threads = [threading.Thread(target=run, args=(o,)) for o in others]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(60)
-        return got, errors
+                errors.append(f"{who}: {type(e).__name__}: {e}"[:200])
 
-    event.listen(sdb.engine, "after_cursor_execute", slow)
-    try:
-        got, errors = at_once(lambda o: o.add_guardrail_rule("factory", None, "must", "p")["id"])
-        ck("four writers at once get four different rule numbers", not errors and len(set(got)) == 4, (got, errors))
-        got, errors = at_once(lambda o: o.save_guardrail_pair("factory", None, "pre_merge", "rail_p", "block")[1])
-        ck("four writers at once add one pair", not errors and sorted(got) == ["added"] + ["twin"] * 3,
-           (got, errors))
-        got, errors = at_once(lambda o: o.merge_queue_add("o/p", "main", 7, "h", None, None)["id"])
-        ck("four writers at once make one queue row", not errors and len(got) == 4 and len(set(got)) == 1,
-           (got, errors))
-        got, errors = at_once(lambda o: o.pending_writeback_fail("tk_par", "linear", "done", "e", _T))
-        ck("four failures at once count four attempts", not errors and sorted(got) == [1, 2, 3, 4], (got, errors))
-    finally:
-        event.remove(sdb.engine, "after_cursor_execute", slow)
+        threads = [threading.Thread(target=run, args=a) for a in (("first", first), ("second", second))]
+        event.listen(first.sessions_db.engine, "after_cursor_execute", hold)
+        event.listen(second.sessions_db.engine, "after_cursor_execute", saw)
+        try:
+            threads[0].start()
+            if not held.wait(10):
+                errors.append("the first never read")
+            threads[1].start()
+            # under SQLite's busy timeout (5 s): the second must still be waiting, not refused
+            read_meanwhile = second_read.wait(1)
+            release.set()
+            for t in threads:
+                t.join(60)
+        finally:
+            release.set()
+            event.remove(first.sessions_db.engine, "after_cursor_execute", hold)
+            event.remove(second.sessions_db.engine, "after_cursor_execute", saw)
+        return got.get("first"), got.get("second"), read_meanwhile, errors
+
+    one, two, early, errors = in_turn("SELECT max(", lambda o: o.add_guardrail_rule("factory", None, "must", "p")["id"])
+    ck("two writers at once get two different rule numbers",
+       not errors and not early and one and two and one != two, (one, two, early, errors))
+    one, two, early, errors = in_turn(
+        "SELECT guardrail_pairs", lambda o: o.save_guardrail_pair("factory", None, "pre_merge", "rail_p", "block")[1])
+    ck("two writers at once add one pair",
+       not errors and not early and (one, two) == ("added", "twin"), (one, two, early, errors))
+    one, two, early, errors = in_turn(
+        "SELECT merge_queue", lambda o: o.merge_queue_add("o/p", "main", 7, "h", None, None)["id"])
+    ck("two writers at once make one queue row",
+       not errors and not early and one and one == two, (one, two, early, errors))
+    one, two, early, errors = in_turn(
+        "SELECT pending_writeback.attempts",
+        lambda o: o.pending_writeback_fail("tk_par", "linear", "done", "e", _T))
+    ck("two failures at once count two attempts",
+       not errors and not early and (one, two) == (1, 2), (one, two, early, errors))
+    first.sessions_db.close()
+    second.sessions_db.close()
 
     print("== deleting a project ==")
     for uid in ("uc_t", "uc_u"):
@@ -3625,6 +3747,7 @@ if __name__ == "__main__":
     crew_takeover()
     integr_copy()
     integr_methods()
+    integr_one_snapshot()
     integr_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

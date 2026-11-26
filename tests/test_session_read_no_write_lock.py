@@ -281,11 +281,15 @@ def reads(s):
         "said_lately": lambda: s.said_lately(SRC, "s1"),
         "files_touched": lambda: s.files_touched(SRC, "s1"),
         "session_projects": lambda: s.session_projects("s1"),
+        "list_connections": lambda: s.list_connections("tickets"),
     }
     agreeing = {
         "station_rollup": fresh(lambda: s.station_rollup(SRC)),
         "hourly.check": lambda: hourly.check(s),
         "session_read.lines": lambda: session_read.lines(s, SRC, "s1", 100, 0),
+        "get_choice": lambda: s.get_choice("tickets"),
+        "get_connection": lambda: s.get_connection("tickets", "tixa"),
+        "stored_settings": lambda: s.stored_settings("tickets", "tixa", "p1"),
     }
     return plain, agreeing
 
