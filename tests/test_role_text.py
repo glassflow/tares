@@ -137,6 +137,9 @@ ck("a Codex builder reports through Tares: a question that blocks by blocking th
    and "the factory wakes the crew reviewer from the review queue" in manual
    and "4. Send nothing: write the tickets you hold under `## Now` in your report." in manual
    and "A Codex station cannot send a message to another station yet." in manual)
+ck("a command its sandbox refuses is asked again for approval, which reaches the desk; one the guard refuses blocks",
+   "run the same command again and ask for approval (escalated permissions" in manual
+   and "**The factory's guard** refuses" in manual and "Your person can allow it in the console" not in manual)
 ck("it holds no schedule, hands the work to nobody, and has no challenger yet",
    "You hold no schedule: the factory wakes you" in manual and "4. **Implement it yourself**" in manual
    and "No challenger runs on a Codex station yet" in manual)
