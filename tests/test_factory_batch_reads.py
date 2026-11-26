@@ -8,13 +8,21 @@ two and no project; a hand-over with an override, a later clean one, one never h
 `warm_gates` against `outside_gate`, with an outside tool as the factory's gate and one project that
 keeps its own. `autonomy_of`'s memo is checked for two people with different crew settings.
 
+A challenger line whose payload is not JSON, or is JSON but not an object, reads as {} among good
+ones: the review queue and the ticket still answer, and the one that is not JSON is logged once, by
+its ids alone (TR-1705).
+
 Run: .venv/bin/python tests/test_factory_batch_reads.py
 """
+import asyncio
 import json
+import logging
 import os
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
+
+import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +36,7 @@ os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from tares import factory_api
 from tares.daemon import make_app
@@ -79,10 +87,99 @@ def old_challenge_events(store, source, project, ref):
                  else r.tares_project.lower() in (name.lower(), project.lower()))]
     out = []
     for at, typ, pj, sid in rows:
-        o = pj or {}
+        o = json.loads(pj or "{}")
         ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
         out.append({"at": at, "type": typ, "session": sid, "challenge": ch})
     return out
+
+
+# a challenger line's payload as stored: (what it is, the text, what reads back). Not JSON first
+UNREADABLE = [("not JSON", "SECRETVERDICT not json"),
+              ("a trailing comma, which DuckDB's JSON column takes", '{"challenge": {"title": "SECRETVERDICT"},}'),
+              ("cut off", '{"challenge": {"title": "SECRETVERDICT')]
+NOT_AN_OBJECT = [("a list", '[1, 2]'), ("a number", "7"), ("a string", '"SECRETVERDICT"'), ("null", "null"),
+                 ("true", "true"), ("NaN", "NaN"), ("no payload", None), ("empty", ""), ("blank", "   "),
+                 ("an object whose challenge is a list", '{"challenge": [1]}')]
+
+
+def payloads_that_are_not_objects(app, store, t0):
+    """TR-1705: one such line must not fail the writes, the reads or the pages that list them."""
+    print("== a challenger line that is not a JSON object ==")
+    uid = "uc_odd"
+    store.create_project(uid, "custom", "Odd", {}, goal="A project for the test", status="active")
+    store.set_project_kind(uid, "software_factory")
+    # the review queue is the crew reviewer's: main() made an outside tool the factory's gate
+    store.set_project_choice(uid, "review", "tares", {}, "t")
+    tid = store.create_ticket(uid, "tares", "A ticket with an odd line", identifier="ODD-1")
+    store.update_ticket(tid, stage="review")
+
+    def good(minute, verdict, title):
+        return (minute, json.dumps({"challenge": {"verdict": verdict, "sha": f"c{minute}", "findings": [
+            {"title": title, "priority": "P1"}]}}))
+
+    odd = UNREADABLE + NOT_AN_OBJECT
+    lines = [good(0, "FAIL", "the first finding")]
+    lines += [(i + 1, text) for i, (_, text) in enumerate(odd)]
+    lines += [good(len(odd) + 1, "FAIL", "the last finding")]
+    rows = [("claude_code", "s-odd", t0 + timedelta(minutes=m), "challenge_commit", "factory/ODD-1", uid, text)
+            for m, text in lines]
+
+    said: list[str] = []
+
+    class Said(logging.Handler):
+        def emit(self, record):
+            said.append(record.getMessage())
+
+    handler = Said(level=logging.WARNING)
+    logging.getLogger("tares.factory_store").addHandler(handler)
+    try:
+        wrote = None
+        try:
+            store._record_challenges(rows)
+        except Exception as ex:
+            wrote = ex
+        ck("every line is written, the odd ones too", wrote is None, repr(wrote))
+
+        def read():
+            try:
+                return store.challenge_events("claude_code", uid, "ODD-1")
+            except Exception as ex:
+                return [{"challenge": {"error": repr(ex)}, "at": None}]
+
+        got = read()
+        ck("every line comes back, oldest first", [e["at"] for e in got] == [r[2] for r in rows], got)
+        first, last = (got[0]["challenge"], got[-1]["challenge"]) if got else ({}, {})
+        ck("the good ones as they are",
+           (first.get("sha"), last.get("sha")) == ("c0", f"c{len(odd) + 1}"), got)
+        for (what, _), e in zip(odd, got[1:-1]):
+            ck(f"{what} reads as {{}}", e["challenge"] == {}, e)
+        read()      # read() holds a failure back, so the pages below are still asked
+        ck("each line that is not JSON is logged once, however often it is read",
+           len(said) == len(UNREADABLE), said)
+        ck("the log names the line by its ids",
+           all(all(x in line for x in ("claude_code", "s-odd", "challenge_commit", "factory/ODD-1"))
+               for line in said) and len({line.rsplit(" at ", 1)[1] for line in said}) == len(said), said)
+        ck("and quotes nothing of the payload", not any("SECRETVERDICT" in line for line in said), said)
+    finally:
+        logging.getLogger("tares.factory_store").removeHandler(handler)
+
+    async def pages():
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as cx:
+                return (await cx.get("/api/review-queue"),
+                        await cx.get(f"/api/projects/{uid}/tickets/ODD-1"))
+
+    queue, ticket = asyncio.run(pages())
+    ck("the review queue answers 200", queue.status_code == 200, (queue.status_code, queue.text[:300]))
+    row = next((q for q in (queue.json()["queue"] if queue.status_code == 200 else [])
+                if q["ticket"] == "ODD-1"), None)
+    ck("and lists the ticket", row is not None, queue.text[:300])
+    ck("the ticket's page answers 200", ticket.status_code == 200, (ticket.status_code, ticket.text[:300]))
+    layer = ticket.json()["challenger"] if ticket.status_code == 200 else {}
+    ck("with the challenger's rounds: the last review's finding open, the first one's fixed",
+       (layer.get("rounds"), [f["title"] for f in layer.get("open", [])], [f["title"] for f in layer.get("fixed", [])])
+       == (len(rows), ["the last finding"], ["the first finding"]), layer)
 
 
 def main():
@@ -111,6 +208,13 @@ def main():
         line("s-a", branch, "ALPHA", "challenge_plan")
     line("s-a", "factory/T3", "uc_a")
     line("s-a", "other/T1", "uc_a")
+    # T1's by their first characters, then branches that only look like T1's (TR-1705)
+    own = ("factory/T1-", "factory/T1-fix/ü", "factory/T1-\U0001F600")
+    near = ("factory/T1.2", "factory/T1+x", "factory/T1 x", "factory/T1_2", "factory/t1", "factory/t1-2",
+            "Factory/T1", "factory/T", "xfactory/T1")
+    first_edge = n + 1
+    for branch in own + near:
+        line("s-a", branch, "uc_a")
     store._record_challenges(rows)
 
     asks = [("uc_a", "T1"), ("uc_a", "T2"), ("uc_b", "T1"), ("uc_b", "T10"), ("uc_c", "T1"),
@@ -126,6 +230,28 @@ def main():
     ck("a ref's own branch and its -N branches both count",
        len(got[("uc_a", "T1")]) > len(got[("uc_a", "T2")]) > 0, str(len(got[("uc_a", "T1")])))
     ck("a ref nothing was recorded for is empty", got[("uc_a", "T99")] == [])
+    edge = sorted(e["challenge"]["n"] for e in got[("uc_a", "T1")] if e["challenge"]["n"] >= first_edge)
+    ck("exactly the ref's own branches count: nothing of another case, ref or prefix",
+       edge == list(range(first_edge, first_edge + len(own))), str(edge))
+    if store.sessions_db.dialect == "sqlite":
+        # both columns of ix_challenges_branch find the lines, not the source alone (TR-1705)
+        asked = []
+
+        def keep(conn, cursor, statement, parameters, context, executemany):
+            if "FROM challenges" in statement:
+                asked.append((statement, parameters))
+
+        for what, some in (("one ticket", asks[:1]), ("several tickets", asks)):
+            asked.clear()
+            event.listen(store.sessions_db.engine, "before_cursor_execute", keep)
+            store.challenge_events_many("cx", some)
+            event.remove(store.sessions_db.engine, "before_cursor_execute", keep)
+            with store.sessions_db.engine.connect() as conn:
+                plan = [r[3] for st, pr in asked for r in conn.exec_driver_sql("EXPLAIN QUERY PLAN " + st, pr)]
+            searches = [x for x in plan if "challenges" in x]
+            ck(f"{what}: every search of challenges uses the branch in its index",
+               bool(searches) and all("ix_challenges_branch (source=? AND branch>? AND branch<?)" in x
+                                      for x in searches), str(plan))
     ck("no pairs asked gives {}", store.challenge_events_many("cx", []) == {})
     big = [("uc_a", f"T{i}") for i in range(400)]
     many = store.challenge_events_many("cx", big)
@@ -244,6 +370,7 @@ def main():
        [merge_queue.autonomy_of(store, u, hos, memo2) for u in ("uc_b", "uc_a")] == ["L3-review", "L4-ship"])
     ck("without a memo or a read of the hand-overs the levels are the same",
        [merge_queue.autonomy_of(store, u) for u in ("uc_a", "uc_b")] == ["L4-ship", "L3-review"])
+    payloads_that_are_not_objects(app, store, t0)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

@@ -185,8 +185,10 @@ def failed_first_start():
             close(s)
 
 
-def split_crews_after_a_failed_start():
-    print("== a split crew merged by a first start that then fails (TR-1517 review) ==")
+def split_crews_after_a_failed_start(station_in_local_file):
+    where = ("the station in tares.sqlite, the crews in DuckDB" if station_in_local_file
+             else "all of it in DuckDB")
+    print(f"== a split crew merged by a first start that then fails (TR-1517 review): {where} ==")
     if not PG:
         print("  skip  TARES_TEST_PG is not set")
         return
@@ -199,29 +201,41 @@ def split_crews_after_a_failed_start():
     con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
     con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
                 [t + timedelta(days=1), t + timedelta(days=2)])
-    con.execute("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', ?, 'cb')",
-                [t])
+    station = ("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', "
+               "'2026-11-19 09:00:00+00', 'cb')")
+    if not station_in_local_file:
+        con.execute(station)
     con.execute("CHECKPOINT")
     con.close()
+    if station_in_local_file:
+        # a cell that ran on SQLite under a release that kept crews in DuckDB: its file holds the
+        # station, and its ledger does not name crews, so those still come from DuckDB (TR-1705)
+        close(Store(path, state_dsn=""))
+        local = SessionStore(d)
+        with local.begin() as c:
+            c.execute(text("DELETE FROM crews"))
+            c.execute(text("DELETE FROM session_store_copies WHERE table_name = 'crews'"))
+            c.execute(text(station))
+        local.close()
     with pg_schema() as dsn:
         orig = state_db.move
         state_db.move = _fail_move
         try:
             try:
                 Store(path, state_dsn=dsn)
-                ck("the move raising stops the start", False, "it started")
+                ck(f"{where}: the move raising stops the start", False, "it started")
             except StoreUnavailable:
-                ck("the move raising stops the start", True)
+                ck(f"{where}: the move raising stops the start", True)
         finally:
             state_db.move = orig
         gc.collect()
-        ck("the first try merged the crews in Postgres",
+        ck(f"{where}: the first try merged the crews in Postgres",
            _pg_query(dsn, "SELECT crew_id FROM session_stations WHERE session = 's3'") == [("cn",)])
         s = Store(path, state_dsn=dsn)
-        ck("the next start has the state database", state_db.moved(s.sc))
-        ck("the station is on the crew that has the machine, not on the bare one the copy brought back",
+        ck(f"{where}: the next start has the state database", state_db.moved(s.sc))
+        ck(f"{where}: the station is on the crew that has the machine, not on the bare one the copy brought back",
            _pg_query(dsn, "SELECT crew_id FROM session_stations WHERE session = 's3'") == [("cn",)])
-        ck("the bare crew is gone and the kept one spans both",
+        ck(f"{where}: the bare crew is gone and the kept one spans both",
            [(r[0], r[1].date().isoformat(), r[2].date().isoformat())
             for r in _pg_query(dsn, "SELECT id, first_seen, last_seen FROM crews WHERE person_id = 'person1'")]
            == [("cn", "2026-11-19", "2026-11-21")],
@@ -286,6 +300,7 @@ def local_file_guards():
 if __name__ == "__main__":
     failed_first_start()
     local_file_guards()
-    split_crews_after_a_failed_start()
+    split_crews_after_a_failed_start(station_in_local_file=False)
+    split_crews_after_a_failed_start(station_in_local_file=True)
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

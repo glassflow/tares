@@ -596,7 +596,9 @@ challenges = Table(
     Column("event_type", Text, primary_key=True),
     Column("branch", Text, primary_key=True),
     Column("tares_project", Text),
-    Column("payload", JSONText),
+    # the line's payload as it arrived. Text, not JSONText: a line that is not JSON must not fail
+    # a write, a copy or a read, so factory_store parses it and reads such a one as {} (TR-1705)
+    Column("payload", Text),
 )
 Index("ix_challenges_branch", challenges.c.source, challenges.c.branch)
 

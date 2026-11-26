@@ -987,7 +987,7 @@ class _Gen:
         self.put("integration_connections", "slot, name, settings, updated_at, updated_by",
                  [["seed_slot_0", f"seed-{k}", "{}", NOW - timedelta(days=20), "Ada Quill"] for k in range(self.need("integration_connections"))])
         self.put_t("challenges", "source, key_value, event_time, event_type, branch, tares_project, payload",
-                 [["github", f"example-org/x#{k}", NOW - timedelta(days=k + 1), "challenge", "main", pr[0]["uid"], {}]
+                 [["github", f"example-org/x#{k}", NOW - timedelta(days=k + 1), "challenge", "main", pr[0]["uid"], "{}"]
                   for k in range(self.need("challenges"))])
         self.put("ask_sessions", "id, title, state, created_at, updated_at, person_id",
                  [[self.id("ask"), "A question about exports", "open", NOW - timedelta(days=2), NOW - timedelta(days=2),
