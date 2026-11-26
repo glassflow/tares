@@ -61,7 +61,7 @@ from . import metrics as _metrics
 from . import licence
 from . import session_archive
 from . import session_ingest
-from . import session_move
+from . import session_digest, session_move
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -655,6 +655,9 @@ def make_app() -> FastAPI:
     store.start_session_reconcile()
     # the factory edition's recent sessions are rebuilt in the session store, once (TR-1609)
     session_move.start(store)
+    # factory edition: the times of the stored lines are read into memory in the background, so the
+    # first trigger and page do not wait for it (TR-1695)
+    session_digest.start(store)
 
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)
