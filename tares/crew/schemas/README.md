@@ -15,6 +15,7 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `setup --json` | one document | `setup.json` |
 | `setup --progress --json` | one document | `setup.json` |
 | `setup --repos [--credential <name>] [--via app] --json` | one document | `setup.json` |
+| `setup apply - [--json]` (also `setup --apply -`), the operations on stdin | one document | `setup_apply.json` |
 | `crew setup --questions` | one document | `setup_questions.json` |
 | `crew setup --answers <file> --json` | one document | `setup_answers.json` |
 | `settings <station>` | Claude Code's settings file, no `schema_version` | `settings.json` |
@@ -104,6 +105,39 @@ know. A secret field never has a `value`: `saved` says whether the cell holds on
   `--credential` or `--via` without `--repos`, an unknown argument) is `usage`, exit 2. Without `--json` it is a usage
   line on stderr, exit 2, as for `events`.
 
+## setup apply
+
+`setup apply -` saves what the console's Setup screen saves, so a program can finish setup without a browser. `setup
+--apply -` is the same command. It reads one line of JSON from stdin, as UTF-8, never from an argument, because the
+settings can hold secrets. It prints JSON with and without `--json`.
+
+```json
+{"ops": [{"op": "save", "slot": "tickets", "name": "linear", "settings": {"api_key": "<key>"}, "default": true},
+         {"op": "keep", "slot": "review", "name": "tares"},
+         {"op": "default", "slot": "ci", "name": "github"}]}
+```
+
+| `op` | Takes besides `op`, `slot` and `name` | What the cell does |
+|---|---|---|
+| `save` | `settings` (an object, optional), `default` (true or false, optional) | PUT `/api/factory/integrations/{slot}`: connects the integration with these settings. It becomes the default unless `default` is false |
+| `keep` | nothing | PUT `/api/factory/setup/{slot}/keep`: keeps the current default, which `name` must be, and marks the step set |
+| `default` | nothing | PUT `/api/factory/integrations/{slot}/default`: makes a connected integration the default |
+
+- The whole input is checked before anything is sent: stdin that is not one line of JSON, anything but an object with
+  the one key `ops` holding a list, an unknown `op`, an unknown `slot`, an empty `name`, a key the operation does not
+  take or a value of the wrong type is `bad_input` (the error shape, exit 2). The message never quotes the input.
+- Then the operations are applied in order, and a failed one does not stop the rest. The document is
+  `{"schema_version": 1, "ok", "results": [{"index", "op", "slot", "name", "ok", "status", "code", "detail"}]}`, one
+  row per operation. Exit 0 when all of them were applied, else 1.
+- A row's `code`: `admin_required` (403: the key is not an admin's, or a station asked), `key_refused` (401),
+  `licence_required` (402: the integration needs a licence), `cell_too_old` (404 or 405: the cell lacks the route),
+  `forbidden` (a 403 that gives no reason, so something other than Tares sent it), `tares_error` (any other answer, an
+  answer that does not confirm the save, or none; with no answer, whether it was saved is not known).
+- `detail` is built from the HTTP status and the cell's `detail` when that is a string, with every settings value of 4
+  characters or more replaced by `***`, here and in the failed row's `name`. Nothing else of an answer is printed.
+- A command line other than the two forms is `usage`, exit 2. A Tares that does not answer at the start is the error
+  shape, exit 1 (`not_signed_in` or `error`), and nothing was sent.
+
 ## capabilities
 
 `tares capabilities --json` prints one document, and exits 0, so an app can ask what this engine and the Tares it is
@@ -127,7 +161,7 @@ signed in to can do before it relies on either:
 the same pull request. `tests/test_crew_capabilities.py` enforces it: it lists every command the CLI registers (the
 `tares factory` commands in `tares/crew/dispatch.py` and the top-level words of `tares/cli.py`), each either
 mapped to a dotted name or left out with a reason, and it fails for a registered command that is neither, and
-for a name in `COMMANDS` no registered command has. `factory.setup.apply` is not listed yet: it is added by the pull request that adds the command (TR-1421).
+for a name in `COMMANDS` no registered command has.
 
 ## events
 

@@ -6,6 +6,7 @@ has_commit).
 
   tares factory projects [--json]            every project handed to the crew: progress, milestone, builders, repos
   tares factory setup --json [--progress | --repos [--credential <name>] [--via app]]   the cell's factory setup (JSON only)
+  tares factory setup apply - [--json]       apply setup choices read from one line of JSON on stdin (JSON only)
   tares factory finish <project> ["words"]   the person marks a project done (never a station)
   tares factory context <role|station>       read a station's /context and send it to Tares
   tares factory plan                         read the plan's limits (/usage) and send them to Tares
@@ -20,6 +21,7 @@ Standard library plus the Tares client (httpx). Nothing here imports the daemon 
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -516,7 +518,7 @@ def _projects(args: list, env: dict) -> int:
 # (schemas/setup.json). A new command with no bash twin.
 
 SETUP_USAGE = (f"usage: {ME} setup --json | {ME} setup --progress --json | "
-               f"{ME} setup --repos [--credential <name>] [--via app] --json")
+               f"{ME} setup --repos [--credential <name>] [--via app] --json | {ME} setup apply - [--json]")
 
 
 class SetupError(CrewError):
@@ -569,7 +571,10 @@ def _setup_args(args: list) -> tuple:
 
 def cmd_setup(argv: list, env: dict) -> int:
     """`setup --json`, `setup --progress --json`, `setup --repos [--credential <name>] [--via app] --json`.
-    argv starts with the word setup. JSON only: without --json it is a usage line on stderr, exit 2."""
+    argv starts with the word setup. JSON only: without --json it is a usage line on stderr, exit 2.
+    `setup --apply -` is `setup apply -` (cmd_setup_apply)."""
+    if "--apply" in argv:
+        return cmd_setup_apply(argv, env)
     if not contract.wants_json(argv):
         print(f"{ME}: setup prints JSON only; {SETUP_USAGE}", file=sys.stderr)
         return contract.EXIT_USAGE
@@ -625,6 +630,178 @@ def _setup(args: list, env: dict) -> int:
         else:
             contract.emit({"setup": _setup_get(client, "/api/factory/setup")}, "setup")
     return 0
+
+
+# ---------- setup apply: saving setup choices without a browser ----------
+#
+# `setup apply -` (also `setup --apply -`) reads one line of JSON, a list of operations, sends each to the cell's
+# own route and prints one result row per operation (schemas/setup_apply.json). Settings can hold secrets: the
+# input is never printed, and a settings value that an error text repeats is replaced before the text is shown.
+
+APPLY_USAGE = f"usage: {ME} setup apply - [--json] (also {ME} setup --apply -)"
+
+# operation -> (the keys it may hold besides op, slot and name; the route it is sent to with PUT)
+APPLY_OPS = {
+    "save": (("settings", "default"), "/api/factory/integrations/{slot}"),
+    "keep": ((), "/api/factory/setup/{slot}/keep"),
+    "default": ((), "/api/factory/integrations/{slot}/default"),
+}
+
+ADMIN_REQUIRED = "Saving setup needs a person's admin key; a station key cannot."
+
+
+class BadInput(UsageError):
+    """An input of `setup apply` that cannot be applied. Its message never quotes the input."""
+
+    code = "bad_input"
+
+
+def cmd_setup_apply(argv: list, env: dict) -> int:
+    """`setup apply -` and `setup --apply -`. argv starts with the word setup. It prints one JSON document with or
+    without --json. Exit 0 when every operation was applied, 1 when one was not, 2 for a command line or an input
+    that cannot be run (then nothing was sent)."""
+    try:
+        if [a for a in argv[1:] if a != "--json"] not in (["apply", "-"], ["--apply", "-"]):
+            raise UsageError(APPLY_USAGE)
+        return _setup_apply(env)
+    except CrewError as e:
+        contract.refuse(e, ["--json"])
+        return contract.EXIT_USAGE if isinstance(e, UsageError) else contract.EXIT_FAILED
+    except Exception as e:  # noqa: BLE001 - its text could quote what was being sent, so only the type is told
+        contract.refuse(CrewError(f"setup apply failed: {type(e).__name__}"), ["--json"])
+        return contract.EXIT_FAILED
+
+
+def _setup_apply(env: dict) -> int:
+    ops = _apply_input()  # all of it is read and checked before Tares is asked anything
+    hidden = set()
+    for op in ops:
+        _secret_forms(op.get("settings"), hidden)
+    client = prelude(["setup", "apply"], env)
+    # A station names itself, as its other calls do, and the cell refuses a station's setup writes.
+    station = env.get("FACTORY_STATION") or ""
+    who = {"X-Tares-Station": station} if station else None
+    results = []
+    with client:
+        for index, op in enumerate(ops):
+            status, code, detail = _apply_op(client, op, who)
+            name = op["name"]
+            if code is not None:  # a name the cell took is an integration's; one it refused could be anything
+                name, detail = _redact(name, hidden), _redact(detail, hidden)
+            results.append({"index": index, "op": op["op"], "slot": op["slot"], "name": name,
+                            "ok": code is None, "status": status, "code": code, "detail": detail})
+    ok = all(r["ok"] for r in results)
+    contract.emit({"ok": ok, "results": results}, "setup_apply")
+    return contract.EXIT_OK if ok else contract.EXIT_FAILED
+
+
+def _apply_input() -> list:
+    """The operations on the first line of stdin, each one checked: with one bad operation none is sent."""
+    from ..integrations.registry import SLOTS  # here: the other person commands do not need it
+    raw = sys.stdin.buffer.readline()  # bytes: a Windows code page must not decide how a secret reads
+    try:
+        doc = state.loads_json(raw.decode("utf-8"))
+        json.dumps(doc, ensure_ascii=False, allow_nan=False).encode("utf-8")  # NaN, a lone surrogate: not sendable
+    except (ValueError, RecursionError):
+        raise BadInput("stdin does not hold one line of JSON in UTF-8") from None
+    ops = doc.get("ops") if isinstance(doc, dict) and set(doc) == {"ops"} else None
+    if not isinstance(ops, list):
+        raise BadInput('the input must be an object with one key, "ops", holding a list')
+    for index, op in enumerate(ops):
+        why = _op_problem(op, SLOTS)
+        if why:
+            raise BadInput(f"operation {index} cannot be applied: {why}. Nothing was sent.")
+    return ops
+
+
+def _op_problem(op, slots: tuple) -> str:
+    """Why `op` cannot be applied, in words that hold nothing from the input; "" when it can."""
+    if not isinstance(op, dict):
+        return "it is not an object"
+    kind = op.get("op")
+    if not isinstance(kind, str) or kind not in APPLY_OPS:
+        return f"op must be one of {', '.join(APPLY_OPS)}"
+    if op.get("slot") not in slots:
+        return f"slot must be one of {', '.join(slots)}"
+    if not isinstance(op.get("name"), str) or not op["name"].strip():
+        return "name must be a string that is not empty"
+    keys = ("op", "slot", "name", *APPLY_OPS[kind][0])
+    if set(op) - set(keys):  # a misspelt key would otherwise be dropped without a word
+        return f"a {kind} operation takes only {', '.join(keys)}"
+    if "settings" in op and not isinstance(op["settings"], dict):
+        return "settings must be an object"
+    if "default" in op and not isinstance(op["default"], bool):
+        return "default must be true or false"
+    return ""
+
+
+def _apply_op(client: TaresClient, op: dict, who: dict | None) -> tuple:
+    """Send one checked operation: (status, code, detail), with code and detail None when Tares applied it."""
+    extra, route = APPLY_OPS[op["op"]]
+    body = {k: op[k] for k in ("name", *extra) if k in op}
+    try:
+        answer = client.tares_http("PUT", route.format(slot=op["slot"]), body, headers=who)
+    except TaresHTTPError as e:
+        return (e.status, *_apply_refusal(client, e))
+    except Exception as e:  # noqa: BLE001 - every operation gets its row; its text could quote the body, so the type only
+        return None, "tares_error", f"Sending this failed ({type(e).__name__}), so whether it was saved is not known"
+    try:
+        doc = state.loads_json(answer)
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict) or doc.get("slot") != op["slot"]:  # a redirect, or a page that is not Tares
+        return None, "tares_error", f"Tares at {client.tares} did not confirm this, so it counts as not saved"
+    return 200, None, None
+
+
+def _apply_refusal(client: TaresClient, e: TaresHTTPError) -> tuple:
+    """(code, detail) for an operation Tares did not apply. Of the answer, only the route's `detail` string is
+    used (e.detail is "" for anything else), and the caller takes the settings values out of it."""
+    why = f": {e.detail}" if e.detail else ""
+    if e.status is None:
+        return "tares_error", f"Tares at {client.tares} did not answer, so whether this was saved is not known"
+    if e.status == 401:
+        return "key_refused", f"Tares at {client.tares} refused the key (HTTP 401){why}{client.no_key_hint()}"
+    if e.status == 402:
+        return "licence_required", f"This needs a Tares licence (HTTP 402){why}"
+    if e.status == 403:
+        # these routes answer 403, with a detail, to a station or a key that is no admin's; a 403 without one
+        # came from something else on the way
+        if e.detail:
+            return "admin_required", ADMIN_REQUIRED
+        return "forbidden", "This was refused (HTTP 403)"
+    if e.status in (404, 405):  # 405: the console's catch-all route answers for a path that takes no PUT
+        return "cell_too_old", (f"Tares at {client.tares} is too old to save this (HTTP {e.status}). "
+                                "Upgrade it, then run this again.")
+    return "tares_error", f"Tares did not save this (HTTP {e.status}){why}"
+
+
+def _secret_forms(value, found: set) -> None:
+    """Add to `found` every text under which an error could repeat something inside `value`: each string and
+    number, also stripped, and as JSON or repr escapes it. A text under 4 characters is left alone."""
+    if isinstance(value, dict):
+        for v in value.values():
+            _secret_forms(v, found)
+    elif isinstance(value, list):
+        for v in value:
+            _secret_forms(v, found)
+    elif value is not None and not isinstance(value, bool):
+        for text in (str(value), str(value).strip()):
+            forms = (text, repr(text)[1:-1], json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1])
+            found.update(f for f in forms if len(f) >= 4)
+
+
+def _redact(text: str, hidden: set) -> str:
+    """`text` with every part that one of `hidden` covers replaced by ***. Texts that contain or overlap each
+    other are replaced together, so no end of either is left."""
+    covered = bytearray(len(text))
+    for secret in hidden:
+        at = text.find(secret)
+        while at >= 0:
+            covered[at:at + len(secret)] = b"\x01" * len(secret)
+            at = text.find(secret, at + 1)
+    runs = itertools.groupby(zip(covered, text), key=lambda pair: pair[0])
+    return "".join("***" if is_secret else "".join(c for _, c in run) for is_secret, run in runs)
 
 
 # ---------- spec and session: the person's own Claude Code session ----------

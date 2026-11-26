@@ -242,6 +242,19 @@ class Stub(BaseHTTPRequestHandler):
 
     do_POST = do_GET  # noqa: N815
 
+    def do_PUT(self):  # noqa: N802
+        """The writes `setup apply` sends: applied, but no connection to make the default in ci."""
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        slot = ([*self.path.split("/"), "", "", "", ""])[4]
+        status, body = ((422, {"detail": "github is not connected for ci"}) if self.path.endswith("/ci/default")
+                        else (200, {"slot": slot}))
+        raw = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def log_message(self, *a):
         pass
 
@@ -293,13 +306,13 @@ def sessions():
             fake_claude.agent_row("waiting", BID, "shop-build-m1", "/x", version="2.1.100")]  # m2: gone
 
 
-def tares(env, argv, extra=None):
+def tares(env, argv, extra=None, stdin=None):
     """(exit code, stdout, stderr) of `python -m tares.crew <argv>` with the Python engine."""
     e = dict(env, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8", **(extra or {}))
     e.setdefault("TARES_FAKE_STRAYS_DIR", str(FIXTURES))   # no ps-table.json there: an empty process table, never the machine's
     e.pop("PYTHONSTARTUP", None)
     p = subprocess.run([sys.executable, "-m", "tares.crew"] + argv, env=e, cwd=str(ROOT), capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=120)
+                       input=stdin, text=True, encoding="utf-8", errors="replace", timeout=120)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -344,8 +357,8 @@ def pretty(doc):
 
 print("== the schemas")
 ck("a schema for every --json output and for the error shape",
-   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup", "setup_questions", "setup_answers", "result", "error", "login", "logout", "capabilities"}
-   <= set(VALIDATORS), sorted(VALIDATORS))
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup", "setup_questions", "setup_answers", "setup_apply", "result", "error", "login", "logout",
+    "capabilities"} <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
    all(v.schema["properties"]["schema_version"] == {"const": version} for n, v in VALIDATORS.items() if n != "settings"))
@@ -1174,6 +1187,25 @@ for argv, why in ((["setup", "--progress", "--repos", "--json"], "--progress wit
     ck(f"setup, {why}: usage", doc.get("error", {}).get("code") == "usage", doc)
 ck("setup: a usage error asks the cell nothing", len(SETUP_SEEN) == before, SETUP_SEEN[before:])
 
+print("== setup apply -")
+APPLY = json.dumps({"ops": [{"op": "save", "slot": "tickets", "name": "linear", "settings": {}},
+                            {"op": "keep", "slot": "review", "name": "tares"},
+                            {"op": "default", "slot": "ci", "name": "github"}]}) + "\n"
+apply_doc = one_document("setup apply", *tares(env, ["setup", "apply", "-", "--json"], stdin=APPLY), "setup_apply", want_code=1)
+ck("setup apply: a row for each operation, the last one not applied",
+   [(r["op"], r["ok"], r["code"]) for r in apply_doc.get("results", [])]
+   == [("save", True, None), ("keep", True, None), ("default", False, "tares_error")], apply_doc)
+fixture("setup_apply.json", pretty(apply_doc))
+_ROW = {"index": 0, "op": "save", "slot": "s", "name": "n", "ok": True, "status": 200, "code": None, "detail": None}
+ck("setup_apply.json: a document that is not the shape fails",
+   problems("setup_apply", {"schema_version": 1, "ok": True, "results": [_ROW]}) == []
+   and problems("setup_apply", {"schema_version": 1, "results": []}) != []
+   and problems("setup_apply", {"schema_version": 1, "ok": True, "results": [], "extra": 1}) != []
+   and problems("setup_apply", {"schema_version": 1, "ok": True, "results": [dict(_ROW, settings={})]}) != []
+   and problems("setup_apply", {"schema_version": 1, "ok": True, "results": [dict(_ROW, op="remove")]}) != []
+   and problems("setup_apply", {"schema_version": 1, "ok": True, "results": [{k: v for k, v in _ROW.items() if k != "code"}]}) != []
+   and problems("setup_apply", {"schema_version": 2, "ok": True, "results": []}) != [])
+
 _SETUP_OK = {"schema_version": 1, "setup": {"title": "t", "progress": {"set": 0, "total": 1}, "steps": []}}
 ck("setup.json: one of setup, progress or repos, and no more",
    problems("setup", _SETUP_OK) == []
@@ -1201,7 +1233,8 @@ ck("setup.json: a key it does not know passes at every level",
 
 print("== the samples")
 for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
-             "setup_questions.json", "setup_answers.json", "result.json", "error.json", "watch.json", "capabilities.json"):
+             "setup_questions.json", "setup_answers.json", "setup_apply.json", "result.json", "error.json", "watch.json",
+             "capabilities.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))

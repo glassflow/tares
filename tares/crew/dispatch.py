@@ -202,6 +202,7 @@ def _person(name: str) -> Callable[[list[str], dict], int]:
 
 for _word in ("projects", "finish", "context", "plan", "spec", "session", "setup"):
     PORTED[(_word,)] = _person(f"cmd_{_word}")
+PORTED[("setup", "apply")] = _person("cmd_setup_apply")  # TR-1421 (new: no bash twin)
 
 
 def _heavy(argv: list[str], env: dict) -> int:
