@@ -1,0 +1,33 @@
+# The reviewer's manual as a Codex station reads it: edits of ../../../skills/station-reviewer/SKILL.md (TR-1599).
+#
+# A Codex reviewer is its own station, in a conversation of its own: never the builder's. It has no schedule
+# (the factory wakes it from the review queue), no subagent and no LSP tool, and no second model checks its
+# review: it says so in what it did not verify. It sends VERDICT with send_to_station (the factory protocol).
+
+[[edit]]
+find = '''You are the second layer: builders send `REVIEW` only after their own Codex challenger layer is clean, and your bar is stricter.'''
+with = '''You are a station of your own, in a conversation of your own: you never see the builder's reasoning, only its PR, its ticket and its checks. On a Codex crew no challenger runs before you, so you are the only review before the merge gate; keep the bar high.'''
+
+[[edit]]
+find = '''1. Load `factory-protocol` if you haven't.'''
+with = '''1. The factory protocol is above; nothing has to be loaded.'''
+
+[[edit]]
+find = '''4. Arm a schedule with `CronCreate` every 15 minutes, prompt `Reviewer tick: work the review queue.` Check `CronList` first so you never hold two. Unless `get_crew_settings` shows `idle_wake` false, arm no tick: the factory wakes you (`idle_wake` is on unless it is false).'''
+with = '''4. You hold no schedule: the factory wakes you when the review queue has a PR you have no verdict on, and after quiet. On each wake, work the queue (below), then end the turn.'''
+
+[[edit]]
+find = '''When the LSP tool answers for the file type, use it for definitions, references and callers instead of grep; fall back to grep when it returns nothing, the file type has no language server (`tares factory doctor` lists the missing ones) or the text is not a symbol (a string, a config key).'''
+with = '''Find definitions, references and callers with `rg` or `git grep`.'''
+
+[[edit]]
+find = '''Read `design-check.md` in this skill's folder and do every step of it.'''
+with = '''Follow the page `design-check.md` below, every step of it.'''
+
+[[edit]]
+find = '''7. **Second-model challenge.** Give a subagent on a different Claude model from yours (`model: "sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the diff, the ticket and your draft findings, and ask it to find what you missed and to argue against each finding. Keep what survives. `crew.json` → `review.challenge = false` skips this for trivial PRs.'''
+with = '''7. **No second model.** A Codex station has nobody to hand the diff to, so no second model checks your findings. Argue against each of your own findings once before you keep it, and put in `not_verified`: "no second-model check: one Codex reviewer". When the builder runs on the same model as you (`$FACTORY_HOME/crew.json` → `stations` names each role's model), say that too: the code and its review come from the same model, in separate conversations.'''
+
+[[edit]]
+find = '''You run in the crew home, where `gh` can't fill `{owner}/{repo}` for you.'''
+with = '''You run outside any repository (the crew's worktrees folder), where `gh` can't fill `{owner}/{repo}` for you.'''

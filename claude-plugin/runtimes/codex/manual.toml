@@ -18,3 +18,17 @@ You run on Codex. You have no schedule of your own and nobody to hand work to; y
 parts = ["factory-protocol/SKILL.md", "station-builder/SKILL.md"]
 pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "station-builder/stop.md",
          "station-builder/screen-ticket.md"]
+
+[roles.orchestrator]
+parts = ["factory-protocol/SKILL.md", "station-orchestrator/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "station-orchestrator/takeover.md",
+         "station-orchestrator/finishing.md", "station-orchestrator/mock-ask.md", "station-orchestrator/desk-permission.md",
+         "station-orchestrator/desk-assumptions.md"]
+
+[roles.reviewer]
+parts = ["factory-protocol/SKILL.md", "station-reviewer/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "station-reviewer/design-check.md"]
+
+[roles.releaser]
+parts = ["factory-protocol/SKILL.md", "station-releaser/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md"]

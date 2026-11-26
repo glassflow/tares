@@ -1,0 +1,6 @@
+# The orchestrator's page on the milestone's assumptions, as a Codex station reads it (TR-1599): the console records
+# the person's answer, and the orchestrator settles each assumption with decide_assumption.
+
+[[edit]]
+find = '''2. The answer must settle every assumption on the item exactly once: each in `kept=[...]` or in `overturned={"A<n>": "<the person's words about it>"}`, the words theirs (a phrase from their answer is fine). If their answer leaves one out, ask about it before recording.'''
+with = '''2. The console records the person's answer. Read it (`desk_list` with the item, or `list_decisions`) and settle every assumption on the item exactly once with `decide_assumption(A<n>, "kept" or "overturned", words=<the person's words about it>)` (a phrase from their answer is fine; required when overturned). If their answer leaves one out, ask about it on the desk before settling it.'''

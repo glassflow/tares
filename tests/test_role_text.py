@@ -207,10 +207,35 @@ ck("with them it has a manual, with no code changed: the protocol, then its own 
    and named(tester) == [], tester[-200:])
 ck("the builder's is untouched by it", rt.manual(kit, rt.CODEX, "builder") == manual)
 
-print("e. a role with no rendering")
-ck("has no manual on Codex yet (the other roles come with TR-1599)",
-   sorted(table) == ["builder"] and all(rt.manual(KIT, rt.CODEX, r) == "" for r in ("orchestrator", "reviewer", "releaser")),
-   sorted(table))
+print("e. every crew role on Codex (TR-1599), and a role with no rendering")
+roles = {r: rt.manual(KIT, rt.CODEX, r) for r in ("orchestrator", "reviewer", "releaser")}
+ck("the orchestrator, the reviewer and the releaser have a manual on Codex, naming nothing of CLAUDE_ONLY",
+   sorted(table) == ["builder", "orchestrator", "releaser", "reviewer"]
+   and all(len(m) > 5000 and named(m) == [] for m in roles.values()), {r: named(m) for r, m in roles.items()})
+ck("none is told it sends no messages: every role sends with send_to_station (the review of PR 984)",
+   all("send no messages" not in m and "send_to_station" in m for m in roles.values()))
+ck("none holds a schedule; each is woken by the factory",
+   all("You hold no schedule" in m and "CronCreate" not in m for m in roles.values()))
+ck("the orchestrator: the person answers on the desk in the console, which records the answer; it asks nothing in its turns",
+   "they answer on the desk, in the Tares console" in roles["orchestrator"] and "Never record an answer yourself" in roles["orchestrator"]
+   and "crew attach orchestrator" not in roles["orchestrator"] and "PushNotification" not in roles["orchestrator"]
+   and "The console records their answer." in roles["orchestrator"])
+ck("the reviewer: a station of its own, and no second model, said in what it did not verify",
+   "a conversation of your own" in roles["reviewer"] and "no second-model check: one Codex reviewer" in roles["reviewer"]
+   and "subagent" not in roles["reviewer"].lower())
+ck("the orchestrator asks for approval to run a `tares factory` command that reaches Tares (its sandbox has no network)",
+   "this command reaches Tares: run it asking for approval (escalated permissions" in roles["orchestrator"])
+ck("it settles a batch of assumptions with decide_assumption, never by recording the answer itself",
+   "decide_assumption(A<n>" in roles["orchestrator"] and "`kept=[...]`" not in roles["orchestrator"])
+ck("a takeover's list goes on the desk: the person's own session is not a station",
+   "no message reaches it" in roles["orchestrator"] and "Reply to the session named in the `TAKEOVER`" not in roles["orchestrator"])
+ck("the reviewer knows it runs outside any repository", "You run outside any repository" in roles["reviewer"])
+ck("the releaser: woken for a RELEASE, which is kept while it is stopped",
+   "the factory wakes you when a `RELEASE` reaches you" in roles["releaser"])
+bare = kit_copy()
+shutil.copytree(KIT / "hooks", bare / "hooks")   # a kit the launch takes: it checks the hooks are there
+edit_file(bare, "runtimes/codex/manual.toml", "[roles.reviewer]", "[roles.unused]")
+ck("a role the kit's table does not name has no manual on Codex", rt.manual(bare, rt.CODEX, "reviewer") == "")
 ck("a runtime the kit has no folder for has none either", rt.manual(KIT, "other", "builder") == "" and rt.roles(KIT, "other") == {})
 
 print("f. the launch")
@@ -240,9 +265,9 @@ ck("a Codex builder's plan carries who it is and then its manual, with nothing l
 ck("the manual is the one launch.role_manual gives, a blank line first", L.role_manual(client, "builder") == "\n\n" + manual.rstrip())
 plan = L.launch_plan(client, "crew-orchestrator", "orchestrator", "", "", "", "gpt-5.6-luna", "low")
 told = plan["settings"]["thread"]["developerInstructions"]
-ck("an orchestrator's carries who it is and no manual yet",
-   told == "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Act only within your role.",
-   told[:200])
+ck("an orchestrator's carries who it is and then its manual (TR-1599)",
+   told == "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Act only within your role."
+   "\n\n" + roles["orchestrator"].rstrip() and named(told) == [], told[:200])
 state.stations_put("shop-build-api", {"role": "builder", "runtime": "codex"}, paths)
 plan = L.launch_plan(client, "shop-build-api-look", "helper", "shop-build-api", "", "", "gpt-5.6-luna", "low")
 ck("a helper's carries the manual of the station it works under",
@@ -277,9 +302,15 @@ ck("a Codex builder's boot prompt points at its instructions, and names no skill
    codex_boot == "Boot as the builder station: your operating rules are in your instructions (the factory protocol, the "
    "builder manual and their pages). Follow their Boot sections. " + WOKEN + "\n\nYour task:\nT1"
    and named(codex_boot) == [], codex_boot)
+os.environ["TARES_PLUGIN_DIR"] = str(bare)
+no_manual = L.boot_prompt(client, "reviewer", runtime="codex")
+del os.environ["TARES_PLUGIN_DIR"]
 ck("a role with no manual on Codex is told so",
-   L.boot_prompt(client, "reviewer", runtime="codex") == "Boot as the reviewer station. There is no operating manual for "
-   "your role on Codex yet: do only what this prompt and the ones after it ask. " + WOKEN)
+   no_manual == "Boot as the reviewer station. There is no operating manual for "
+   "your role on Codex yet: do only what this prompt and the ones after it ask. " + WOKEN, no_manual)
+ck("a reviewer's boot prompt points at its instructions",
+   L.boot_prompt(client, "reviewer", runtime="codex").startswith("Boot as the reviewer station: your operating rules are in "
+   "your instructions"))
 ck("the idle-wake note of a Codex station names no schedule tool, and is on its boot prompt with idle_wake off: the "
    "factory is what wakes a Codex station", named(L.idle_wake_note("codex")) == [] and L.idle_wake_note("codex") == WOKEN
    and client.crew_settings().get("idle_wake") is not True, L.idle_wake_note("codex"))
