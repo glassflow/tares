@@ -197,7 +197,12 @@ async def main():
            and "# HELP tares_" in r.text, str(r.status_code))
         r = await cx.get("/health")
         ck("/health stays public", r.status_code == 200, str(r.status_code))
-    tapp.state.store.con.close()
+    # the app's own threads (the session reconcile) may still be on the DuckDB connection: stop them, then close
+    # it under the store's lock, which they take for each call, or DuckDB refuses ("connection is busy")
+    store = tapp.state.store
+    store.close()
+    with store._lock:
+        store.con.close()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
