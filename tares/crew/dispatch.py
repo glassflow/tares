@@ -162,6 +162,12 @@ def _outcome(argv: list[str], env: dict) -> int:
 PORTED[("outcome",)] = _outcome  # new in Python (TR-1593): what a call cut off by a crash was found to have done
 
 
+def _second_look(argv: list[str], env: dict) -> int:
+    from .second_look import cmd_second_look  # imported when used (TR-1599)
+    return cmd_second_look(argv, env)
+
+
+PORTED[("second-look",)] = _second_look  # new in Python (TR-1599): a separate, fresh Codex session's look
 def _runtime(argv: list[str], env: dict) -> int:
     from .runtime_cmd import cmd_runtime  # imported when used (TR-1600)
     return cmd_runtime(argv, env)

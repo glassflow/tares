@@ -138,7 +138,7 @@ def manual(kit, runtime: str, role: str) -> str:
         return ""
     doc = _toml(runtime_dir(kit, runtime) / "manual.toml")
     out = []
-    opening = doc.get("opening")
+    opening = row.get("opening") if isinstance(row.get("opening"), str) else doc.get("opening")   # a role's own first
     if isinstance(opening, str) and opening.strip():
         out.append(opening.strip())
     out += [render_file(kit, runtime, name).strip() for name in row["parts"]]

@@ -1,0 +1,5 @@
+# The orchestrator's page on finishing a project, as a Codex station reads it (TR-1599): the console records the answer.
+
+[[edit]]
+find = '''2. Record their answer with `desk_answer`, their words as typed. On a yes, `finish_project(project, decision="D<n>")`: Tares keeps their words, marks the project done and takes it off `crew_projects`. On a no, ask what is missing and write it as tickets.'''
+with = '''2. The console records their answer. On a yes, `finish_project(project, decision="D<n>")`: Tares keeps their words, marks the project done and takes it off `crew_projects`. On a no, read what they wrote is missing and write it as tickets; when they did not say, ask on the desk.'''

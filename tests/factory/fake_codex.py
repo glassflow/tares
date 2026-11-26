@@ -309,7 +309,12 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
                     turn["error"] = {"message": env["FAKE_CODEX_FAIL"], "codexErrorInfo": "modelNotFound"}
         _end_turn(thread_id, turn_id, "failed")
         return
-    _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "userMessage", "id": "msg-" + os.urandom(4).hex()}})
+    said = {"type": "userMessage", "id": "msg-" + os.urandom(4).hex(), "content": [{"type": "text", "text": prompt}]}
+    with LOCK:   # the prompt is the turn's first item, as thread/read lists it on 0.171.0
+        for turn in t["turns"]:
+            if turn["id"] == turn_id:
+                turn.setdefault("items", []).insert(0, said)
+    _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "userMessage", "id": said["id"]}})
     try:
         commands = json.loads(env.get("FAKE_CODEX_COMMANDS") or "[]")
     except ValueError:
@@ -352,6 +357,10 @@ def _run_turn(thread_id, turn_id, prompt) -> None:
         if mcp:
             server, _, name = mcp.partition("__")
             item = {"type": "mcpToolCall", "id": call, "server": server, "tool": name, "status": "completed"}
+            if isinstance(c.get("arguments"), dict):   # what the model called it with, and Tares's answer
+                item["arguments"] = c["arguments"]
+            if c.get("result") is not None:
+                item["result"] = {"content": [{"type": "text", "text": str(c["result"])}]}
         else:
             _tell(thread_id, "item/started", {"turnId": turn_id, "item": {"type": "commandExecution", "id": call}})
             began = int(time.time() * 1000)

@@ -215,6 +215,9 @@ ck("crew up of a Codex crew from an empty crew home ends well, with no claude on
 ck("the orchestrator and the reviewer run, each on an app-server of its own, recorded for Codex",
    orch and rev and orch != rev and alive(orch) and alive(rev)
    and row(paths, ORCH).get("runtime") == "codex" and row(paths, REV).get("runtime") == "codex", (orch, rev))
+ck("they run in the crew's worktrees folder, not the crew home: their sandbox cannot write stations.json, HALT or "
+   "another station's mail (TR-1599)", all(row(paths, s).get("cwd") == str(paths.worktrees_dir) for s in (ORCH, REV))
+   and paths.worktrees_dir.is_dir(), [row(paths, s).get("cwd") for s in (ORCH, REV)])
 ck("it says so, and sends the person to the desk, not to an attach nobody can make",
    f"started {ORCH} on Codex" in err and f"started {REV} on Codex" in err and "factory desk" in err
    and "crew attach" not in err, err[-600:])
@@ -385,6 +388,13 @@ ck("a role crew.json sets to a Claude model gets a warning that says what Codex 
    by["model_reviewer"].level == "warn" and "opus, a Claude model" in by["model_reviewer"].message
    and "stations.reviewer.model" in by["model_reviewer"].fix, by["model_reviewer"])
 ck("the checks that are every crew's are still made", {"crew_home", "tares", "mcp", "settings"} <= ids, sorted(ids))
+ck("with the challenger off nothing is said of it", "challenger" not in ids)
+tares.world["settings"]["challenger"] = True
+by_c, _ = checks(paths)
+tares.world["settings"]["challenger"] = False
+ck("with it on, the doctor says no challenger runs on a Codex station yet (TR-1599), as a warning",
+   "challenger" in by_c and by_c["challenger"].level == "warn" and "no challenger runs on a Codex station" in by_c["challenger"].message,
+   by_c.get("challenger"))
 ck("each station: the Codex it runs, its own folder, its guard", all(
    by[f"codex_{s}"].level == "ok" and by[f"codex_home_{s}"].level == "ok" and by[f"codex_guard_{s}"].level == "ok"
    for s in (ORCH, REV)), [(i, by[i].level, by[i].message) for i in sorted(ids) if i.startswith("codex_")])

@@ -36,7 +36,7 @@ from .paths import ME, CrewPaths
 
 REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
 RESTART_USAGE = f"usage: {ME} restart <station>"
-RETIRE_USAGE = "usage: tares factory retire <station>"
+RETIRE_USAGE = "usage: tares factory retire <station> [--drop-mail]"
 
 
 # ---------- the watch (the real one is watch.py, TR-958) ----------
@@ -345,7 +345,11 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
         raise CrewError(f"{station} is not a recorded station")
     locks.station_lock(station, paths)
     if on_codex:   # its own app-server: a running turn is interrupted, then the process is ended
-        job_id = f"codex app-server {codex_station.stop(paths, station)}"
+        # its last messages are taken once its turn is interrupted, or the retire is refused (TR-1599)
+        mail = "drop" if "--drop-mail" in args[1:] else "require"
+        job_id = f"codex app-server {codex_station.stop(paths, station, mail=mail)}"
+        from . import codex_mail
+        codex_mail.bounce(paths, station, "it was retired")   # what waited for it goes back to its senders
         codex_station.give_up_unverified(paths, station, "retire")   # retired for good: nothing waits on it
     else:
         _stop_session(job_id, claude_bin)
@@ -391,9 +395,14 @@ def down(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) 
     if not paths.stations.is_file():
         client.say("no stations recorded")
         return
+    left = []
     for name, row in list(state.stations_load(paths).items()):
         if isinstance(row, dict) and row.get("status") == "active":
-            retire(client, paths, [name], claude_bin=claude_bin)
+            try:
+                retire(client, paths, [name, *[a for a in args if a == "--drop-mail"]], claude_bin=claude_bin)
+            except CrewError as e:   # one station that cannot be retired now does not keep the others running
+                client.say(e.message)
+                left.append(name)
     # with no crew left to relay them, a finished project's questions are moot, and so is "stop the
     # crew?", asked with or without a project: it names this command (TR-599)
     for item_id in _finished_questions(client.desk_json()):
@@ -401,6 +410,9 @@ def down(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) 
     # the person's own questions only: on a shared cell another person's are not ours to withdraw (TR-1355)
     for item_id in _stop_questions(client.desk_json(mine=True)):
         _withdraw(client, item_id, "the person stopped the crew")
+    if left:
+        raise CrewError(f"still running: {', '.join(left)} (see above); run {ME} crew down again once they can stop, "
+                        f"or {ME} crew down --drop-mail to stop them and lose what they sent since it was last read")
     client.say(f"all stations stopped. Tares keeps the projects, tickets and the desk; {ME} crew up starts fresh sessions.")
 
 

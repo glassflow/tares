@@ -538,9 +538,11 @@ async def cell():
         eq("a worth button that is neither yes nor no stores nothing",
            len(store.feedback_for([n1])[n1]), 2)
         await click("tares_worth_yes", {"r": "run_gone", "w": "team-a"})
-        await wait_for(lambda: len(calls("/resp")) > r0)
-        eq("a result that is gone gets an ephemeral reply", calls("/resp")[-1]["text"],
-           "This result is no longer in Tares.")
+        # the reply to this click: a refresh of the earlier card may land after it (it did on a CI runner)
+        await wait_for(lambda: [c for c in calls("/resp")[r0:] if c.get("response_type") == "ephemeral"])
+        eq("a result that is gone gets an ephemeral reply",
+           [c for c in calls("/resp")[r0:] if c.get("response_type") == "ephemeral"],
+           [{"response_type": "ephemeral", "replace_original": False, "text": "This result is no longer in Tares."}])
         quiet = store.start_agent_run("run_quiet", "investigator", "watch-prod", "", "x", "h",
                                       woken_by="handoff", project=uid)
         store.finish_agent_run("run_quiet", "ok", finding="", outcome="no_op")

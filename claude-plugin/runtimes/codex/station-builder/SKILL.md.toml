@@ -1,6 +1,6 @@
 # The builder's manual as a Codex station reads it: edits of ../../../skills/station-builder/SKILL.md.
 #
-# How a Codex builder reports (TR-1598), until stations can message each other (TR-1599): through Tares.
+# How a Codex builder reports (TR-1598): through Tares first, and with messages (send_to_station, TR-1599).
 # State and results are the ticket's (its stage, its checks, its working doc's Progress) and the station's
 # report. A question that blocks goes to the desk by blocking the ticket (`set_stage` with a reason, which
 # Tares puts on the desk); one that does not is an assumption. A review is asked for by the stage alone.
@@ -14,12 +14,6 @@ find = '''1. Load `factory-protocol` if you haven't.
 2. **Challenger.** If `get_crew_settings()` says `challenger: true`, call `set_session_flow("challenger")` now, before any commit. Codex then reviews each commit and its findings land on the ticket.'''
 with = '''1. The factory protocol is above; nothing has to be loaded.
 2. **Challenger.** No challenger runs on a Codex station yet, whatever `get_crew_settings()` says: nothing reviews a commit before the crew reviewer does. When the setting is on, say so in the PR body.'''
-
-[[edit]]
-find = '''A ticket you were given whose `repo` is not this one: tell the orchestrator and don't work it.
-4. Send `$FACTORY_ORCHESTRATOR` `READY` with the tickets you hold and anything missing or contradictory in them.'''
-with = '''A ticket you were given whose `repo` is not this one: don't work it, and write it under `## Waiting on` in your report.
-4. Send nothing: write the tickets you hold under `## Now` in your report. Anything missing or contradictory in a ticket is a question about it (see "When you're stuck").'''
 
 [[edit]]
 find = '''write no UI code until the mock is approved; Read `screen-ticket.md` in this skill's folder first.'''

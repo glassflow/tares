@@ -579,6 +579,10 @@ class Doctor:
                     self.warn(cid, text, fix)
         except Exception:
             pass
+        if not missing and settings.get("challenger") is True and self.codex:   # TR-1599: said, never silently off
+            self.warn("challenger", "challenger is on, but no challenger runs on a Codex station yet: nothing reviews a "
+                      "builder's commits before the crew reviewer does (builders say so in their pull requests)",
+                      "turn it off in the crew settings, or keep it for crews on Claude Code")
         if not missing and settings.get("challenger") is True and not self.codex:   # a Codex crew's codex is checked first
             if shutil.which("codex", path=self.env.get("PATH")):
                 self.ok("codex", "codex (challenger on)")
