@@ -6291,6 +6291,7 @@ def make_app() -> FastAPI:
         ensure_globals=lambda uid: _ensure_globals(uid),
         tickets_out=lambda uid: _tickets_out(uid),
         caller=_CALLER.get, project_key=_pk, hidden_project=_hidden_project,
+        auth_off=lambda: not AUTH_TOKEN,
         projects=lambda: projects,
         licence_state=lambda: licence.current(store),
         licence_required=licence.licence_required)

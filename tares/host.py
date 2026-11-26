@@ -27,7 +27,7 @@ HELPERS = (
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "start_who", "by",
     "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404", "resolve_project",
     "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out", "area_owner",
-    "hidden_project", "projects", "licence_state", "licence_required",
+    "hidden_project", "projects", "licence_state", "licence_required", "auth_off",
 )
 
 
@@ -61,6 +61,10 @@ class Host:
         """The request being served, or None when auth is off (the guard that records it only
         runs with auth on) or when called outside a request."""
         return self._call("caller")
+
+    def auth_off(self) -> bool:
+        """True when auth is off (no TARES_AUTH_TOKEN): the one person using the cell is `local`."""
+        return self._call("auth_off")
 
     # ── who is calling ──
     def current_person(self, request: Request) -> dict | None:

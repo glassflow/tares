@@ -677,10 +677,15 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
 def own_crew_ids(h: Host, crews) -> set[str]:
     """The ids of those of `crews` (rows of store.list_crews) that are the caller's own (TR-1704):
     a station's owner reads every session of it. They are the crews of the caller's person; a
-    credential with no person owns none, not even those filed under `local`."""
-    request = h.caller()
-    me = h.current_person(request) if request is not None else None
-    return {c["id"] for c in crews if me and c["person_id"] == me["id"]}
+    credential with no person owns none, not even those filed under `local`. With auth off there
+    is no credential and the one person using the cell is `local`, so those crews are theirs."""
+    if h.auth_off():
+        me = "local"
+    else:
+        request = h.caller()
+        person = h.current_person(request) if request is not None else None
+        me = person["id"] if person else None
+    return {c["id"] for c in crews if me and c["person_id"] == me}
 
 
 def blank_session(row: dict) -> None:
