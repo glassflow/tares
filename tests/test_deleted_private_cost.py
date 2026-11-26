@@ -77,6 +77,13 @@ def reply(sid, mid, ago, project=""):
     return {**o, "tares_project": project} if project else o
 
 
+def reported(sid, mid, ago, project):
+    """A reply's tokens as a line of their own, as a Codex station sends them (TR-1595)."""
+    return {"type": "session_usage", "sessionId": sid, "timestamp": ts(ago), "message_id": mid,
+            "model": "gpt-5-codex", "usage": {"input_tokens": 2, "output_tokens": 10},
+            "tares_project": project}
+
+
 @contextlib.asynccontextmanager
 async def cell(db: str):
     daemon.DB_PATH = db
@@ -247,6 +254,16 @@ async def main():
             reply("s-late", "m-late-name", 2, "project-secret"),
             reply("s-station", "m-late-station", 1),
         ], {"m-late-id": 64, "m-late-name": 128, "m-late-station": 256})
+        # in a push of their own: one push looks a name up once for all its lines
+        await ingest(cx, store, [
+            reported("s-codex-id", "m-codex-id", 1, SECRET),
+            reported("s-codex-name", "m-codex-name", 1, "project-secret"),
+        ], {"m-codex-id": 2048, "m-codex-name": 4096})
+        with store.sessions_db.begin() as conn:
+            codex = sorted(conn.execute(select(su.c.message, su.c.project).where(
+                su.c.message.in_(["m-codex-id", "m-codex-name"]))).all())
+        ck("a Codex station's late lines are counted for the project they were stamped with",
+           [tuple(r) for r in codex] == [("m-codex-id", SECRET), ("m-codex-name", SECRET)], codex)
         await after("late replies", cx, store)
         # two of the stamped ones lose their usage row: the next start counts them again from the
         # events, where the stamp still names the project (by name, and by id)

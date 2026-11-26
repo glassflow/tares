@@ -261,8 +261,7 @@ class ClaudeCodeConnector(Connector):
             return
         ref = str(o.get("tares_project") or "").strip()
         if ref and ref not in projects:
-            p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
-            projects[ref] = p["id"] if p else None
+            projects[ref] = self.store.usage_project(ref)
         self.store.record_reported_usage(str(sid), str(mid), self._ts(o), o.get("model"),
                                          projects.get(ref) if ref else None, usage)
 
