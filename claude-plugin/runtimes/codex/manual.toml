@@ -1,6 +1,6 @@
 # What a station on Codex is told (TR-1598). The rules have one source, the skills next door
 # (../../skills); this folder holds only what a Codex station must be told differently, because it has no
-# skills, no subagents, no schedule of its own, no slash commands and no way to message another station.
+# skills, no subagents, no schedule of its own and no slash commands; it messages a station with the Tares tool `send_to_station`.
 # tares/crew/role_text.py renders it, and tests/test_role_text.py holds the two together.
 #
 # A role gets a manual on Codex by a [roles.<role>] table here: `parts` are the skills files that make it,
@@ -11,7 +11,7 @@
 opening = '''
 The plan, tickets, assumptions, checks, reviews and the desk are on Tares, through the tools of the MCP server `tares`. Your operating rules follow: the factory protocol, your role's manual, then the pages they name. They are part of your instructions: nothing has to be loaded, and they stay with you after a compaction. After a compaction, and when the factory says it revived or restarted you, read your report (page `report.md`) and your work on Tares, then carry on where your report left off.
 
-You run on Codex. You have no schedule of your own, nobody to hand work to, and no way to send another station a message. Where a rule below says what a station does instead, do that; never look for another route.
+You run on Codex. You have no schedule of your own and nobody to hand work to; you send another station of your crew a message with the Tares tool `send_to_station`. Where a rule below says what a station does instead, do that; never look for another route.
 '''
 
 [roles.builder]

@@ -215,6 +215,9 @@ ck("crew up of a Codex crew from an empty crew home ends well, with no claude on
 ck("the orchestrator and the reviewer run, each on an app-server of its own, recorded for Codex",
    orch and rev and orch != rev and alive(orch) and alive(rev)
    and row(paths, ORCH).get("runtime") == "codex" and row(paths, REV).get("runtime") == "codex", (orch, rev))
+ck("they run in the crew's worktrees folder, not the crew home: their sandbox cannot write stations.json, HALT or "
+   "another station's mail (TR-1599)", all(row(paths, s).get("cwd") == str(paths.worktrees_dir) for s in (ORCH, REV))
+   and paths.worktrees_dir.is_dir(), [row(paths, s).get("cwd") for s in (ORCH, REV)])
 ck("it says so, and sends the person to the desk, not to an attach nobody can make",
    f"started {ORCH} on Codex" in err and f"started {REV} on Codex" in err and "factory desk" in err
    and "crew attach" not in err, err[-600:])

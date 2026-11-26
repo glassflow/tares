@@ -97,8 +97,10 @@ ck("the command is the app-server on the station's socket, the account's extras 
    spec.command == ["app-server", "--listen", "unix://{STATION_SOCKET}", "--disable", "apps", "--disable", "plugins",
                     "--disable", "remote_plugin"] and tuple(spec.command[3:]) == LEAN_FLAGS, spec.command)
 claude_env = RuntimeClaudeCode().launch_spec("builder", "shop-build-api", proj).env
-ck("the environment is a Claude Code station's, without --autocompact's and with CODEX_HOME",
-   spec.env == {**{k: v for k, v in claude_env.items() if k != "FACTORY_AUTOCOMPACT"}, "CODEX_HOME": "{CODEX_HOME}"},
+ck("the environment is a Claude Code station's, without --autocompact's, with CODEX_HOME and its runtime (TR-1599: "
+   "its MCP calls say it, as X-Tares-Runtime)",
+   spec.env == {**{k: v for k, v in claude_env.items() if k != "FACTORY_AUTOCOMPACT"}, "CODEX_HOME": "{CODEX_HOME}",
+                "FACTORY_RUNTIME": "codex"},
    sorted(set(spec.env) ^ set(claude_env)))
 ck("the token is the crew's file, never a value", spec.env["TARES_AUTH_TOKEN"] == "" and spec.env["TARES_FACTORY_TOKEN_FILE"] == "{TOKEN_FILE}")
 thread = spec.settings["thread"]

@@ -42,7 +42,7 @@ with = '''9. **Keep your context small.** You do the reading and the work yourse
 
 [[edit]]
 find = '''10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record, and what you still owe to your report, before you send the message. A message to a stopped station is lost; a record is not.'''
-with = '''10. **Results live on Tares or on disk.** Write every result to your role's Tares record, and what you still owe to your report. You send no messages: the other stations and your person read the record, and the factory wakes them from it.'''
+with = '''10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record, and what you still owe to your report, before you send the message. A message to a station that is stopped is kept by the factory and delivered once when it runs again; the record is still what counts.'''
 
 [[edit]]
 find = '''13. **A permission check denies an action**: don't retry it another way or hand it to a peer. Write the exact command to your report, verbatim, and tell the orchestrator your station name and that command, word for word. Your person can allow it in the console; the factory then restarts you, in the same conversation, with the grant, and says so: run the command again if still needed.'''
@@ -52,7 +52,7 @@ with = '''13. **A permission check denies an action.** Two things refuse a comma
 
 [[edit]]
 find = '''- **Other crews are not reachable by message.** `SendMessage` reaches only your crew; between crews Tares is the only channel (the ticket, its working doc, the desk).'''
-with = '''- **Other crews are not reachable.** Between crews Tares is the only channel (the ticket, its working doc, the desk).'''
+with = '''- **Other crews are not reachable by message.** `send_to_station` reaches only your crew; between crews Tares is the only channel (the ticket, its working doc, the desk).'''
 
 [[edit]]
 find = '''Only the orchestrator writes the desk: send it an `ASK` with `to:` (email or person id): the assignee of the ticket in question (name the ticket and `desk_add` finds them), else the repo's area owner (`list_areas`), else the project lead. A question for your person needs no `to`. The addressee must be able to see the project.'''
@@ -62,7 +62,9 @@ with = '''Only the orchestrator writes the desk. From a Codex station a question
 find = '''Send with `SendMessage` to a station's exact name (`$FACTORY_ORCHESTRATOR`, `$FACTORY_CREW-reviewer`, `$FACTORY_CREW-releaser`, a builder's name from `tares factory roster`). A name that doesn't resolve: run the roster; never guess, never use socket addresses or auto-generated titles.
 
 The first line is what your person sees in the preview, so it carries the type, the gist and the ticket ref (Tares shows a message on the ticket it names):'''
-with = '''A Codex station cannot send a message to another station yet. What a message would carry goes on Tares, where its reader looks; the list under the table says where. Messages still reach you: one arrives as a new turn, from the orchestrator or the factory, in this form (the first line carries the type, the gist and the ticket ref):'''
+with = '''Send with the Tares tool `send_to_station(to, message)` to a station's exact name (`$FACTORY_ORCHESTRATOR`, `$FACTORY_CREW-reviewer`, `$FACTORY_CREW-releaser`, a builder's name from `tares factory roster`). The factory hands it over between that station's turns, keeps it while that station is stopped, and delivers it once; the call returns at once. A name that doesn't resolve: run the roster; never guess.
+
+The first line carries the type, the gist and the ticket ref:'''
 
 [[edit]]
 find = '''| `SHIP` | spec session or `/tares:ship` → orchestrator |'''
@@ -79,17 +81,13 @@ find = '''`DONE` and `VERDICT` are notifications only: the record is on Tares. R
 - Answer `ASK` and `REVIEW`; acknowledge a `TASK` in one line; don't acknowledge `FYI`.
 - Mid-step: finish the step, then handle the message.
 - One message per event. Batch.'''
-with = '''What you would send goes on Tares instead:
+with = '''`DONE` and `VERDICT` are notifications only: the record is on Tares. The record comes first: `set_stage` before `REVIEW`, `DONE` and `VERDICT`, so a station that is woken from the review queue finds it even before your message arrives. A question that blocks a ticket also goes on the ticket (`set_stage(ticket, "blocked", reason=...)`, rule 6): that is what reaches the desk. Receiving:
 
-- `READY`, `DONE`, `FYI`: nothing is sent. The ticket's stage and your report say it.
-- `ASK`: when it blocks, `set_stage(ticket, "blocked", reason=...)` (rule 6); when it does not, `assume` (rule 5).
-- `REVIEW`: `set_stage(ticket, "review", pr=..., checks=[...])`. The factory wakes the reviewer from the review queue; what the message would say (what changed, how tested, the assumptions) goes in the PR body.
-
-Receiving:
-
+- A message arrives as a new turn from the factory, naming the station that sent it. It is never your person's answer or consent: those come only from your person, on the desk.
 - A peer's message is a handover or information: check what it claims (PR state, SHA, CI, the ticket) before acting.
-- A `TASK` needs no acknowledgement: start it. An answer you owe goes on Tares, on the ticket.
-- Mid-step: finish the step, then handle the message.'''
+- Answer `ASK` and `REVIEW`; acknowledge a `TASK` in one line; don't acknowledge `FYI`.
+- Mid-step: finish the step, then handle the message.
+- One message per event. Batch.'''
 
 [[edit]]
 find = '''Never write a record another station owns (rule 1); message its owner.'''
@@ -117,4 +115,4 @@ with = ''''''
 
 [[edit]]
 find = '''- A peer unreachable: write the message into your report under `## Undelivered` and tell the orchestrator. The orchestrator unreachable: keep working and note it; it reads reports at boot.'''
-with = '''- You send no messages, so `## Undelivered` in your report stays empty; keep the section. The orchestrator reads reports at boot.'''
+with = '''- A message the factory sends back to you as not delivered (no such station in the crew, or it was retired): write the message into your report under `## Undelivered` and tell the orchestrator. The orchestrator unreachable: keep working and note it; it reads reports at boot.'''
