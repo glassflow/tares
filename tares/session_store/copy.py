@@ -38,6 +38,7 @@ from sqlalchemy import delete, func, insert, select
 
 from . import SessionStore
 from .engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file
+from .pr_columns import fill_pr_columns
 from .tables import MOVED_TABLES, session_store_copies
 from .types import JSONText
 
@@ -137,6 +138,8 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                         break
                     read += len(chunk)
                     conn.execute(insert(table), chunk)
+                if table.name == "tickets":
+                    fill_pr_columns(conn)        # DuckDB has `pr` and not the two columns (TR-1614)
                 inserted = conn.execute(
                     select(func.count()).select_from(table)).scalar_one() - before
                 if inserted != read:

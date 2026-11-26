@@ -464,6 +464,7 @@ class _Gen:
 
     # ── tickets ────────────────────────────────────────────────────────────────────────────────
     def tickets_group(self):
+        from tares.session_store.pr_columns import pr_columns
         rng, st, mix = self.rng, self.store, self.mix
         tp = mix["projects_with_tickets"]
         projects = self.projects[:tp]
@@ -570,12 +571,13 @@ class _Gen:
                          f"{rng.choice(VERB)} {rng.choice(THING)}", t["status"], t["pos"], t["doc"],
                          t["created"], t["updated"], t["ms"], t["deps"] or None,
                          t["no"], t["holder"], t["stage"], "waiting on a decision" if t["stage"] == "blocked" else None,
-                         t["pr"] or None, t["repo"], t["assignee"], None])
+                         t["pr"] or None, t["repo"], t["assignee"], None, *pr_columns(t["pr"])])
         if len(rows) + 3 != total:
             raise RuntimeError(f"{len(rows) + 3} tickets planned, {total} in SHAPE")
         self.put_t("tickets", "id, project, owner, external_id, identifier, url, title, status, position, "
                               "working_doc, created_at, updated_at, milestone, depends_on, number, holder, stage, "
-                              "stage_reason, pr, repo, assignee_person_id, assignee_raw", rows)
+                              "stage_reason, pr, repo, assignee_person_id, assignee_raw, pr_repo, "
+                              "pr_number", rows)
         self.tickets = tickets
         self.ticket_projects = projects
         # the project's own times move with its tickets, as they do on the real cell

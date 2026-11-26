@@ -26,11 +26,12 @@ from .sre_store import SRE_SCHEMA, SreStore
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
 from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
-                        or_, select, type_coerce, union_all, update)
+                        or_, select, union_all, update)
 
 from . import edition, metrics, session_archive, session_ingest, session_move, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
+from .session_store.pr_columns import fill_pr_columns, pr_columns
 from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, session_stations,
                                    session_states)
 from .session_store.tables import settings as settings_table
@@ -792,12 +793,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._skills_upgrade()
         self._factory_kind_upgrade()
         self._factory_upgrade()
+        self._ticket_pr_columns()
         self._people_upgrade()
         self._claude_usage_fill()
         self._challenges_fill()
         self._init_source_stats()
         self._init_entity_counts()
         self._incidents_backfill()
+
+    def _ticket_pr_columns(self) -> None:
+        """tickets.pr_repo and pr_number say what `pr` says (TR-1614). A release before them writes
+        `pr` and knows nothing of the two columns (a cell rolled back and up again), so every start
+        repairs the rows that differ. After the copy from DuckDB, which has `pr` only."""
+        with self._swrite, self.sessions_db.begin() as conn:
+            fill_pr_columns(conn)
 
     def _incidents_backfill(self) -> None:
         """Give the notes written before incidents were tracked their incidents (TR-744). Writes
@@ -3271,6 +3280,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _ticket_row(r) -> dict:
         """A row of `select(tickets_table)` as callers read a ticket."""
         out = dict(r._mapping)
+        del out["pr_repo"], out["pr_number"]        # the index of `pr`, not part of the ticket
         out["depends_on"] = out["depends_on"] or []
         return out
 
@@ -3369,6 +3379,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if col == "pr":
                 # default=str: a value JSON cannot hold (a datetime) is kept as its text
                 v = json.loads(json.dumps(v, default=str)) if v else None
+                values["pr_repo"], values["pr_number"] = pr_columns(v)
             if col in allowed:
                 values[col] = v
         closes = fields.get("status") in DONE_STATUSES and "stage" not in fields
@@ -3513,23 +3524,17 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         else the first."""
         try:
             number = int(number)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
-        want = str(repo or "").strip().lower()
-        if not want or number <= 0:
+        # read as the columns were filled: lower case, and None for a repo or number they never hold
+        want, number = pr_columns({"repo": str(repo or "").strip(), "number": number})
+        if want is None or number is None:
             return None
         t = tickets_table
         with self.sessions_db.read() as conn:
-            # the stored text is searched: type_coerce keeps the pattern from being sent as JSON
-            rows = conn.execute(select(t).where(
-                type_coerce(t.c.pr, Text).like(f'%"number": {number}%')
-            ).order_by(*self._ticket_order())).all()
-        found = []
-        for r in rows:
-            row = self._ticket_row(r)
-            pr = row["pr"] or {}
-            if str(pr.get("repo") or "").lower() == want and pr.get("number") == number:
-                found.append(row)
+            rows = conn.execute(select(t).where(t.c.pr_repo == want, t.c.pr_number == number)
+                                .order_by(*self._ticket_order())).all()
+        found = [self._ticket_row(r) for r in rows]
         return next((x for x in found if x["stage"] not in ("merged", "shipped")), found[0] if found else None)
 
     def delete_ticket(self, tid: str) -> None:
