@@ -3628,7 +3628,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The sessions linked to any of the projects."""
         out: set[str] = set()
         for i in range(0, len(projects), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(r[0] for r in conn.execute(
                     select(project_sessions.c.session).where(
                         project_sessions.c.project.in_(projects[i:i + 500]))))
@@ -3638,7 +3638,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The projects any of the sessions is linked to."""
         out: set[str] = set()
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(r[0] for r in conn.execute(
                     select(project_sessions.c.project).where(
                         project_sessions.c.session.in_(sessions[i:i + 500]))))
@@ -3667,7 +3667,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                     # never count as the project's build session (a pick-up must not replace them)
                     ps.c.session.not_in(select(ss.c.session).where(
                         ss.c.role.in_(("orchestrator", "reviewer", "releaser", "comms"))))))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(q).all()
         seen, uniq = set(), []
         for r in rows:
@@ -3701,7 +3701,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 continue
             q = select(t.c.session, t.c.started_at, t.c.last_line_at, t.c.line_count).where(
                 t.c.source == source, t.c.session.in_(chunk), t.c.line_count > 0)
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 for sid, first, last, n in conn.execute(q):
                     out[sid] = (first, last, int(n))
         return out
@@ -3738,7 +3738,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def session_state(self, session: str) -> dict | None:
         """The session's stored state {state, reason, state_at}, as reported (not as shown), or
         None when it never reported one."""
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             row = conn.execute(select(session_states.c.state, session_states.c.reason,
                                       session_states.c.state_at).where(
                 session_states.c.session == session)).first()
@@ -3749,7 +3749,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         Read from `session_said`, which keeps the last three of each session (session_ingest,
         TR-1505), so `n` above 3 gives 3."""
         t = session_said.c
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.text, t.at).where(
                 t.source == source, t.session == session).order_by(
                 t.at.desc(), t.line_key.desc()).limit(max(n, 0))).fetchall()
@@ -3759,7 +3759,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The files the session last edited or wrote (its Edit / Write / MultiEdit / NotebookEdit
         calls), most recent first, each once. Read from `session_files` (session_ingest, TR-1505)."""
         t = session_files.c
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(t.path).where(
                 t.source == source, t.session == session).order_by(
                 t.last_at.desc(), t.path).limit(max(limit, 0)))]
@@ -3771,7 +3771,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return said[0]["text"] if said else None
 
     def session_projects(self, session: str) -> list[str]:
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(project_sessions.c.project).where(
                 project_sessions.c.session == session))]
 

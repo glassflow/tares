@@ -3,8 +3,9 @@
 `FactoryStore.station_rollup` runs four statements. On Postgres at read committed a station created
 between the first and the second showed in the totals but not in the list of stations, and
 `out[(crew, station)]` raised KeyError, so GET /api/crew answered 500. The four statements now run in
-one snapshot: the new station is left out of this answer and is in the next. On SQLite a writer waits for
-the read to finish, so the answer is the same.
+one snapshot: the new station is left out of this answer and is in the next. On SQLite the read takes no
+write lock (TR-1702), so the writer ends while it reads, and WAL gives the read one state: the answer is
+the same.
 
 Plain:                python tests/test_station_rollup_snapshot.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -49,7 +50,7 @@ def rollup_while_a_station_appears(s, new):
             state["armed"] = False
             state["writer"] = threading.Thread(target=add)
             state["writer"].start()
-            state["writer"].join(1.0)       # Postgres: done at once. SQLite: waits for the read to end
+            state["writer"].join(1.0)       # done at once: the read holds up no writer
 
     engine = s.sessions_db.engine
     event.listen(engine, "after_cursor_execute", after)

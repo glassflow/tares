@@ -41,10 +41,10 @@ and the reader falls back to DuckDB.
 On Postgres a session is archived in one transaction that starts with
 `pg_try_advisory_xact_lock(hashtext('tares_session_archive:' || session))`: two cells (or two
 passes) on one database never write the same part, and a session someone else holds is skipped.
-SQLite has one writer, so there the rows are read in one transaction, the file written and checked
-outside it (a slow upload must not hold the write lock the ingest waits on), and the part inserted
-and its rows deleted in a second. Rows never change once written, so the delete takes exactly the
-`seq` range that was read.
+SQLite has one writer, so there the rows are read in a transaction that takes no write lock, the
+file written and checked outside any transaction (a slow upload must not hold the write lock the
+ingest waits on), and the part inserted and its rows deleted in a write transaction. Rows never
+change once written, so the delete takes exactly the `seq` range that was read.
 """
 from __future__ import annotations
 
@@ -365,10 +365,13 @@ def _archive_session(db, backend: Backend, session: str, now: datetime) -> int |
 
             def tx():
                 return contextlib.nullcontext(conn)
+            reading = tx
         else:
-            tx = db.begin
+            # the rows are read with no write lock: the delete below is bounded to the part's
+            # lines and counted, in its own write transaction
+            tx, reading = db.begin, db.read
         t = session_lines.c
-        with tx() as c:
+        with reading() as c:
             rows = c.execute(select(t.session, t.seq, t.line_key, t.at, t.type, t.labels, t.render,
                                     t.payload).where(t.session == session).order_by(t.seq)).all()
             part = c.execute(select(func.coalesce(func.max(session_archive_parts.c.part), 0)).where(
@@ -393,7 +396,7 @@ def due(db, now: datetime, limit: int = PER_PASS) -> list[str]:
     """The sessions to archive: last line older than `ARCHIVE_AFTER_DAYS`, `lines_complete`, and
     rows still in `session_lines`; the oldest first."""
     cutoff = now - timedelta(days=ARCHIVE_AFTER_DAYS)
-    with db.begin() as conn:
+    with db.read() as conn:
         return [r[0] for r in conn.execute(
             select(sessions.c.session).where(
                 sessions.c.last_line_at < cutoff, sessions.c.lines_complete.is_(True),

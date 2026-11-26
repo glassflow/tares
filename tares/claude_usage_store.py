@@ -98,7 +98,7 @@ class ClaudeUsageStore:
         factory edition reads the events once and records it (`claude_usage_filled`, TR-1613); the
         SYNTHETIC rows are removed and unpriced rows priced at every start, as before."""
         u = session_usage
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             newest = conn.execute(select(func.max(u.c.replied_at))).scalar_one()
         since = newest - timedelta(days=1) if newest is not None else None
         with self.sessions_db.read() as conn:
@@ -240,7 +240,7 @@ class ClaudeUsageStore:
     def context_asks(self, since) -> list[str]:
         """Sessions a person asked a reading of, since `since`, that have none newer yet."""
         m = session_meters
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(select(m.c.session).where(
                 m.c.context_asked_at >= since,
                 m.c.context_at.is_(None) | (m.c.context_at < m.c.context_asked_at)
@@ -253,7 +253,7 @@ class ClaudeUsageStore:
         m = session_meters
         out: dict[str, dict] = {}
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows = conn.execute(select(
                     m.c.session, m.c.status, m.c.status_at, m.c.context, m.c.context_at,
                     m.c.context_asked_at).where(m.c.session.in_(list(sessions[i:i + 500])))).all()
@@ -272,7 +272,7 @@ class ClaudeUsageStore:
         # the JSON is read here, not in SQL (the two databases spell JSON paths differently); the
         # newest report nearly always carries the limits, so the first batch is the only one read
         for offset in range(0, 10_000, 20):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows = conn.execute(q.limit(20).offset(offset)).all()
             for at, status, person in rows:
                 limits = (_json(status) or {}).get("rate_limits") if isinstance(_json(status), dict) else None
@@ -301,7 +301,7 @@ class ClaudeUsageStore:
         u = session_usage
         out: dict[str, dict] = {}
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows = conn.execute(select(u.c.session, *self._total_cols(u)).where(
                     u.c.session.in_(list(sessions[i:i + 500]))).group_by(u.c.session)).all()
             out.update({r[0]: self._totals(r[1:]) for r in rows})
@@ -362,7 +362,7 @@ class ClaudeUsageStore:
         final = (select(r.c.proj, kind.label("kind"), func.count(distinct(r.c.session)), *totals)
                  .group_by(r.c.proj, kind)
                  .order_by(func.sum(r.c.cost_usd).desc().nulls_last()))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(final).all()
         return [{"project": x[0], "kind": x[1], "sessions": int(x[2] or 0), **self._totals(x[3:])}
                 for x in rows]
