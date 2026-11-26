@@ -42,7 +42,7 @@ with = '''9. **Keep your context small.** You do the reading and the work yourse
 
 [[edit]]
 find = '''10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record, and what you still owe to your report, before you send the message. A message to a stopped station is lost; a record is not.'''
-with = '''10. **Results live on Tares or on disk.** Write every result to your role's Tares record, and what you still owe to your report. You send no messages: the other stations and your person read the record, and the factory wakes them from it.'''
+with = '''10. **Results live on Tares or on disk; messages are notifications.** Write every result to your role's Tares record, and what you still owe to your report, before you send the message. A message to a station that is stopped is kept by the factory and delivered once when it runs again; the record is still what counts.'''
 
 [[edit]]
 find = '''Write the exact command to your report, verbatim, and tell the orchestrator your station name and that command, word for word. Your person can allow it in the console; the factory then restarts you'''
@@ -113,4 +113,4 @@ with = ''''''
 
 [[edit]]
 find = '''- A peer unreachable: write the message into your report under `## Undelivered` and tell the orchestrator. The orchestrator unreachable: keep working and note it; it reads reports at boot.'''
-with = '''- You send no messages, so `## Undelivered` in your report stays empty; keep the section. The orchestrator reads reports at boot.'''
+with = '''- A message the factory sends back to you as not delivered (no such station in the crew, or it was retired): write the message into your report under `## Undelivered` and tell the orchestrator. The orchestrator unreachable: keep working and note it; it reads reports at boot.'''

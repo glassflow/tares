@@ -325,11 +325,12 @@ def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     if not job_id and not on_codex:
         raise CrewError(f"{station} is not a recorded station")
     locks.station_lock(station, paths)
-    if on_codex and "--drop-mail" not in args[1:]:
-        from . import codex_mail
-        codex_mail.before_retire(paths, station)   # its last messages are taken, or the retire is refused (TR-1599)
     if on_codex:   # its own app-server: a running turn is interrupted, then the process is ended
-        job_id = f"codex app-server {codex_station.stop(paths, station)}"
+        # its last messages are taken once its turn is interrupted, or the retire is refused (TR-1599)
+        mail = "drop" if "--drop-mail" in args[1:] else "require"
+        job_id = f"codex app-server {codex_station.stop(paths, station, mail=mail)}"
+        from . import codex_mail
+        codex_mail.bounce(paths, station, "it was retired")   # what waited for it goes back to its senders
         codex_station.give_up_unverified(paths, station, "retire")   # retired for good: nothing waits on it
     else:
         _stop_session(job_id, claude_bin)

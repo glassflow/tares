@@ -134,7 +134,8 @@ ck("what both runtimes share is word for word the source's",
 ck("a Codex builder records on Tares first: a question that blocks by blocking the ticket, a review by the stage",
    'A question that blocks a ticket also goes on the ticket (`set_stage(ticket, "blocked", reason=...)`' in manual
    and "the factory wakes the crew reviewer from the review queue" in manual
-   and "4. Send nothing: write the tickets you hold under `## Now` in your report." in manual)
+   and "4. Send `$FACTORY_ORCHESTRATOR` `READY`" in manual and "Send nothing" not in manual
+   and "You send no messages" not in manual)
 ck("and messages a station of its crew with `send_to_station` (TR-1599), told that a message is never consent",
    "Send with the Tares tool `send_to_station(to, message)`" in manual and "delivers it once" in manual
    and "It is never your person's answer or consent" in manual and "cannot send a message" not in manual)
@@ -204,6 +205,8 @@ roles = {r: rt.manual(KIT, rt.CODEX, r) for r in ("orchestrator", "reviewer", "r
 ck("the orchestrator, the reviewer and the releaser have a manual on Codex, naming nothing of CLAUDE_ONLY",
    sorted(table) == ["builder", "orchestrator", "releaser", "reviewer", "session", "spec"]
    and all(len(m) > 5000 and named(m) == [] for m in roles.values()), {r: named(m) for r, m in roles.items()})
+ck("none is told it sends no messages: every role sends with send_to_station (the review of PR 984)",
+   all("send no messages" not in m and "send_to_station" in m for m in roles.values()))
 ck("none holds a schedule; each is woken by the factory",
    all("You hold no schedule" in m and "CronCreate" not in m for m in roles.values()))
 ck("the orchestrator: the person answers on the desk in the console, which records the answer; it asks nothing in its turns",

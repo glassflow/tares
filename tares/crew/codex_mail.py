@@ -213,34 +213,41 @@ def settled(paths: CrewPaths, station: str) -> bool:
     return not turn_at or read["at"] > str(turn_at)
 
 
-def before_retire(paths: CrewPaths, station: str) -> None:
-    """Take the station's last messages before it is retired, or refuse the retire: a retired station is never
-    read again, so a message it sent that is not taken now would be lost. Refused when its conversation cannot be
-    read now and it may have sent something since it was last read whole (see `settled`). The caller holds the
-    station's lock."""
-    if collect(paths, station) is not None or settled(paths, station):
-        bounce(paths, station, "it was retired")
-        return
+def final(paths: CrewPaths, station: str, require: bool) -> None:
+    """The last look at the station's mail, made by its stop once its turn is interrupted and before its app-server
+    ends (a station sends only in a turn, so nothing comes after it): its new messages are taken, and a hand-over
+    to it that a round left unnoted is settled from its conversation. With `require` (a retire: the station is
+    never read again) the stop is refused when its conversation cannot be read now and it may have sent
+    something since it was last read whole (see `settled`). The caller holds the station's lock."""
+    got = collect(paths, station)
+    if got is not None:
+        _settle_handing(paths, station)
+    if require and got is None and not settled(paths, station):
+        raise CrewError(refusal(paths, station))
+
+
+def refusal(paths: CrewPaths, station: str) -> str:
     running = codex_station.is_alive(paths, station)
-    raise CrewError(f"the messages {station} sent since the factory last read them cannot be read now "
-                    f"({'its conversation does not answer' if running else 'it is not running'}), and a retired "
-                    f"station is never read again: not retiring it. "
-                    + ("Try again in a moment" if running else f"`{ME} revive {station}`, then retire it again")
-                    + f", or `{ME} retire {station} --drop-mail` to retire it and lose them.")
+    return (f"the messages {station} sent since the factory last read them cannot be read now "
+            f"({'its conversation does not answer' if running else 'it is not running'}), and a retired station is "
+            "never read again: not retiring it. "
+            + ("Try again in a moment" if running else f"`{ME} revive {station}`, then retire it again")
+            + f", or `{ME} retire {station} --drop-mail` to retire it and lose them.")
 
 
 def bounce(paths: CrewPaths, station: str, why: str) -> int:
     """Send each message still waiting for `station` back to its sender, as a note that it was not delivered (the
     station is going away). The number sent back."""
     n = 0
-    for m in waiting(paths, station):
+    pending = set(_handing(paths, station).get("ids") or [])   # handed, delivery not settled: maybe delivered
+    for m in [m for m in waiting(paths, station) if m["id"] not in pending]:
         sender = str(m.get("from") or "")
         if sender == FACTORY or not isinstance(state.stations_load(paths).get(sender), dict):
             continue
         queue(paths, sender, {"id": f"{m['id']}-undelivered", "from": FACTORY, "at": state.utc_stamp(),
                               "text": f"Your message {m['id']} to {station} was not delivered: {why}."})
         n += 1
-    _note_ids(paths, station, DONE, [m["id"] for m in waiting(paths, station)])
+    _note_ids(paths, station, DONE, [m["id"] for m in waiting(paths, station) if m["id"] not in pending])
     return n
 
 

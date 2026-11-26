@@ -58,17 +58,19 @@ _CALLER_ROLE = contextvars.ContextVar("tares_caller_role", default="")
 _CALLER_PARENT = contextvars.ContextVar("tares_caller_parent", default="")
 _CALLER_PROJECT = contextvars.ContextVar("tares_caller_project", default="")
 _CALLER_CREW = contextvars.ContextVar("tares_caller_crew", default="")
+_CALLER_RUNTIME = contextvars.ContextVar("tares_caller_runtime", default="")
 # Set by main() for the HTTP transports. Never inferred from the environment at call time: tests
 # import this module in-process and must stay on the stdio path.
 _HTTP = False
 
 _CALLER_VARS = {"token": _CALLER_TOKEN, "station": _CALLER_STATION, "role": _CALLER_ROLE,
-                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT, "crew": _CALLER_CREW}
+                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT, "crew": _CALLER_CREW,
+                "runtime": _CALLER_RUNTIME}
 _CALLER_HEADERS = {"station": "x-tares-station", "role": "x-tares-role",
                    "parent": "x-tares-parent", "project": "x-tares-project",
-                   "crew": "x-tares-crew"}
+                   "crew": "x-tares-crew", "runtime": "x-tares-runtime"}
 _CALLER_ENV = {"station": "FACTORY_STATION", "role": "FACTORY_ROLE", "parent": "FACTORY_PARENT",
-               "project": "TARES_PROJECT", "crew": "FACTORY_CREW"}
+               "project": "TARES_PROJECT", "crew": "FACTORY_CREW", "runtime": "FACTORY_RUNTIME"}
 
 
 def _bearer(headers) -> str:
