@@ -548,6 +548,16 @@ def cmd_outcome(argv: list, env: dict) -> int:
     return 0
 
 
+def _collect_mail_now(paths: CrewPaths, station: str) -> None:
+    """Take the messages the station sent since the watch last looked into their recipients' mail (TR-1599): a
+    stop is the last time anyone can read them, and a retired station is never looked at again. Never fails."""
+    from . import codex_mail   # here: it imports this module
+    try:
+        codex_mail.collect(paths, station)
+    except Exception:   # noqa: BLE001 - a stop is never kept from ending a station by its mail
+        pass
+
+
 def _record_now(paths: CrewPaths, station: str, closing: str = "") -> None:
     """Record the station's session now (TR-1595): one look, or with `closing` (its app-server has ended) the
     closing of its open starts. Never fails: a recording Tares does not take is sent again later."""
@@ -1206,6 +1216,7 @@ def stop(paths: CrewPaths, station: str, *, turn_wait: float = TURN_STOP_WAIT, g
     thread = _recorded_thread(paths, station) if compare else ""
     why, shown, unknown = _compared_at_stop(paths, station, thread) if thread else ("", "", "")
     _record_now(paths, station)   # the last look, while the app-server still answers (TR-1595)
+    _collect_mail_now(paths, station)   # what it sent since the last round, before nobody can read it (TR-1599)
     note_children(paths, station)   # what runs under it now: told apart from any other process once it is gone
     how = "stopped"
     try:
