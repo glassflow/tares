@@ -6,9 +6,12 @@ A Claude Code reviewer hands its diff and draft findings to a subagent on anothe
 does the same with its plan. On Codex there is no subagent: this command runs one `codex exec` session of its
 own instead, and prints what it answered. That session is fresh (nothing of the caller's conversation, kept on
 no disk: `--ephemeral`), read-only (its sandbox writes nothing), and loads none of the person's own Codex setup
-(`--ignore-user-config`, connectors and plugins off). It is the same model as the caller's unless `--model` or
-the crew names another (crew.json, `stations.<role>.second_look_model`), and the answer says which model it was:
-a review by the same model in another conversation is what it is, and is never told as a second model's.
+(`--ignore-user-config`, connectors and plugins off). Its model: `--model`, else the one the crew names for
+second looks (crew.json, `stations.<role>.second_look_model`), else the model the calling station was started on
+(its row in stations.json), named on the command line so it is the same. A caller whose model is not known (one
+started on its account's default, or a planning session) gets the account's default, and the answer says that
+whether it is the caller's own is not known. The answer always says which model it was: a review by the same
+model in another conversation is what it is, and is never told as a second model's.
 
 It never runs inside itself: the session it starts has TARES_SECOND_LOOK set, and this command refuses to run
 under it, so a second look cannot start a third. It needs the network (the model is remote): a Codex station
@@ -69,8 +72,28 @@ def _args(argv: list) -> dict:
     return out
 
 
+def caller_model(paths: CrewPaths | None, station: str) -> str:
+    """The model the calling station was started on (stations.json), "" when it is not known."""
+    if not (paths and station):
+        return ""
+    try:
+        return str(state.stations_get(station, "model", paths=paths) or "")
+    except CrewError:
+        return ""
+
+
+def said_model(model: str, how: str) -> str:
+    """How the answer names the model it ran on (see the module's note)."""
+    if how == "same":
+        return f"{model}, the same model as yours"
+    if how == "named":
+        return f"{model}, the model named for this look"
+    return "the Codex account's default model (whether it is the one you run on is not known)"
+
+
 def look(env: dict, file: str, folder: str = "", model: str = "") -> tuple:
-    """(exit code, the answer, the model it was) of one look at `file`, run in `folder`."""
+    """(exit code, the answer, the model, how it was chosen: named, same or default) of one look at `file`, run
+    in `folder`."""
     if env.get(NESTED):
         raise CrewError("a second look does not start another one")
     try:
@@ -87,7 +110,13 @@ def look(env: dict, file: str, folder: str = "", model: str = "") -> tuple:
         raise CrewError(f"{folder} is not a folder")
     home = env.get("FACTORY_CREW_HOME") or env.get("FACTORY_HOME")
     paths = CrewPaths.at(home) if home else None
-    model = model or model_for(paths, env.get("FACTORY_ROLE", ""))
+    how = "named" if model else ""
+    if not model:
+        model = model_for(paths, env.get("FACTORY_ROLE", ""))
+        how = "named" if model else ""
+    if not model:
+        model = caller_model(paths, env.get("FACTORY_STATION", ""))
+        how = "same" if model else "default"
     with tempfile.TemporaryDirectory(prefix="tares-look-") as tmp:
         out = os.path.join(tmp, "answer.md")
         try:
@@ -101,17 +130,17 @@ def look(env: dict, file: str, folder: str = "", model: str = "") -> tuple:
     if done.returncode != 0 and not answer:
         why = " ".join((done.stderr or done.stdout or "").split())[-300:]
         raise CrewError(f"the second look failed (codex exited {done.returncode}): {why or 'no output'}")
-    return done.returncode, answer, model
+    return done.returncode, answer, model, how
 
 
 def cmd_second_look(argv: list, env: dict) -> int:
     try:
         a = _args(argv)
-        code, answer, model = look(env, a["file"], a["dir"], a["model"])
+        code, answer, model, how = look(env, a["file"], a["dir"], a["model"])
     except CrewError as e:
         print(e.line, file=sys.stderr)
         return 1
-    print(f"Second look: a separate Codex session, read-only, on {model or 'the same model as yours (Codex default)'}. "
+    print(f"Second look: a separate Codex session, read-only, on {said_model(model, how)}. "
           "Not a second model unless that names one.\n")
     print(answer or "(it gave no answer)")
     return code

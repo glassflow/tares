@@ -35,7 +35,7 @@ and every ticket with its working doc, and ask it to find:'''
 with = '''Before writing anything to Tares, give a separate, fresh Codex session the spec, the plan with its checks,
 and every ticket with its working doc: write them and the questions below to a file, and run
 `tares factory second-look --file <that file>`. It runs one `codex exec` session of its own, read-only, and
-prints its answer; it is the same model as yours unless the crew names another, and it says which (say so
+prints its answer; its first line says which model it ran on, and whether that is known to be yours (say so
 to the person). Ask it to find:'''
 
 [[edit]]

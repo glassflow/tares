@@ -905,29 +905,35 @@ def _warn_clash(client: TaresClient, env: dict) -> None:
 
 
 def on_codex(client: TaresClient, env: dict | None = None) -> bool:
-    """Does this crew run on Codex? Its recorded stations say, and Tares is not asked. A crew that has recorded
-    none is on Claude Code where Claude Code is installed, as bash had it (nothing more is asked of Tares), and
-    where neither Claude Code nor Codex is (the person is told Claude Code is missing before Tares is asked
-    anything). On a machine with Codex and no Claude Code, the cell's runtime slot says (TR-1599)."""
+    """Does this crew run on Codex? Its recorded stations say, and Tares is not asked. For a crew that has
+    recorded none, the cell's runtime slot says wherever Codex is installed, Claude Code or not (the factory's
+    choice decides, TR-1599). Where Codex is not installed it is Claude Code, as bash had it, and nothing more
+    is asked of Tares (with no Claude Code either, that it is missing is said before Tares is asked anything).
+    A Tares that cannot say leaves it Claude Code. Asked once per client."""
     from . import codex as cx
     from . import launch, proc
+    known = getattr(client, "_planning_on_codex", None)
+    if known is not None:
+        return known
     env = os.environ if env is None else env
     have = launch.crew_runtime(client.paths)
     if have:
-        return have == proc.CODEX
+        answer = have == proc.CODEX
+    else:
+        try:
+            cx.codex_bin(env)
+        except CrewError:
+            answer = False   # no Codex: Claude Code, as before
+        else:
+            try:
+                answer = proc.planned_runtime(client) == proc.CODEX
+            except Exception:  # noqa: BLE001 - a client that cannot ask Tares: Claude Code, as before
+                answer = False
     try:
-        claude_bin(env)
-        return False
-    except CrewError:
+        client._planning_on_codex = answer
+    except AttributeError:
         pass
-    try:
-        cx.codex_bin(env)
-    except CrewError:
-        return False   # no Codex either: the missing Claude Code is said, as before
-    try:
-        return proc.planned_runtime(client) == proc.CODEX
-    except Exception:  # noqa: BLE001 - a client that cannot ask Tares: Claude Code, as before
-        return False
+    return answer
 
 
 def app_name(client: TaresClient, env: dict | None = None) -> str:

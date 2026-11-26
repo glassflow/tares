@@ -10,10 +10,14 @@ There is no `claude` anywhere.
     plugin's headers helper and the crew's name as a header, the first prompt in words (no slash command) and
     the note that nobody answers; no claude is looked for;
  b. the first prompts: Claude Code's slash commands become words; a contributor is sent to its page;
+ a2. with Claude Code installed too, the factory's runtime decides: Codex when it is set to Codex, Claude Code
+    otherwise;
  c. on a Claude Code crew spec still looks for claude, as before;
  d. second-look: one `codex exec` that is fresh (--ephemeral), read-only, with none of the person's Codex setup,
-    in the folder given, the file as its prompt after the factory's head, the crew's second-look model when it
-    names one; the answer printed with what it was; never inside another second look; an empty file refused.
+    in the folder given, the file as its prompt after the factory's head; its model the crew's second-look model,
+    else the one the calling station was started on (named, so it is the same), else the account's default, and
+    the answer says which and never claims the same model when it is not known; never inside another second
+    look; an empty file refused.
 
 Unix only: on Windows the test says so and passes.
 Run: python tests/test_crew_codex_planning.py
@@ -95,8 +99,8 @@ def config(argv):
     return out
 
 
-def crew(runtime):
-    tmp = SCRATCH / runtime
+def crew(runtime, name=""):
+    tmp = SCRATCH / (name or runtime)
     tmp.mkdir()
     LS.make_crew(tmp, {"token": TOKEN, "stations": {"crew-orchestrator": {"role": "orchestrator", "runtime": runtime,
                                                                           "status": "active"}}})
@@ -158,6 +162,27 @@ ck("the first prompt is in words, with the project's name and the idea, and says
 ck("it says it opens Codex", "opening Codex as calc-spec" in err, err[-300:])
 tares.__exit__(None, None, None)
 
+print("a2. with Claude Code installed too, the factory's choice decides")
+both = SCRATCH / "bin-both"
+both.mkdir()
+(both / "claude").write_text(f"#!{sys.executable}\nimport sys\nopen({str(SCRATCH / 'claude-calls.txt')!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+(both / "claude").chmod(0o755)
+tares, paths, env = crew("codex", "codex-both")
+env = {**env, "PATH": f"{both}{os.pathsep}{env['PATH']}"}
+n = len(calls())
+code, out, err = run(person.cmd_spec, ["spec", "--project", "calc2", "add multiply"], env, r)
+ck("a crew that has started nothing, on a factory set to Codex, plans in Codex though claude is installed",
+   code == 0 and len(calls()) == n + 1 and calls()[-1]["argv"][:1] == ["exec"]
+   and not (SCRATCH / "claude-calls.txt").exists(), (code, err[-300:]))
+tares.__exit__(None, None, None)
+tares, paths, env = crew("claude_code", "claude-both")
+env = {**env, "PATH": f"{both}{os.pathsep}{env['PATH']}"}
+n = len(calls())
+run(person.cmd_spec, ["spec", "an idea"], env, r)
+ck("and on a factory set to Claude Code it starts claude, not codex", len(calls()) == n
+   and (SCRATCH / "claude-calls.txt").exists(), (SCRATCH / "claude-calls.txt").exists())
+tares.__exit__(None, None, None)
+
 print("b. the first prompts")
 ck("a session's slash command becomes its words", person.codex_prompt("/tares:session new: a todo app") == "new: a todo app"
    and person.codex_prompt("/tares:session calc (taken over from the crew)") == "calc (taken over from the crew)")
@@ -189,15 +214,27 @@ ck("one codex exec, fresh, read-only, with none of the person's Codex setup, in 
    and "--disable" in argv, argv)
 ck("its prompt is the factory's head, then the file", c["stdin"].startswith(second_look.HEAD)
    and c["stdin"].endswith("F1 the test misses zero."), c["stdin"][:120])
-ck("it runs marked as a second look, and prints the answer with what it was",
+ck("it runs marked as a second look, and prints the answer; a caller whose model is not known is not told it is "
+   "the same: the account's default, and that this is not known",
    c["env"].get("TARES_SECOND_LOOK") == "1" and "FINDING: the test of subtract misses negative numbers" in out
-   and "a separate Codex session, read-only, on the same model as yours" in out and "-m" not in argv, out)
+   and "on the Codex account's default model (whether it is the one you run on is not known)" in out
+   and "same model as yours" not in out and "-m" not in argv, out)
+rows = json.loads((home / "stations.json").read_text(encoding="utf-8"))
+rows["shop-reviewer"] = {"role": "reviewer", "runtime": "codex", "model": "gpt-5.6-luna", "status": "active"}
+(home / "stations.json").write_text(json.dumps(rows), encoding="utf-8")
+code, out, err = run(second_look.cmd_second_look, ["second-look", "--file", str(look)],
+                     {**env2, "FACTORY_CREW_HOME": str(home), "FACTORY_STATION": "shop-reviewer"}, SCRATCH)
+argv = calls()[-1]["argv"]
+ck("a station's look runs on the model it was started on, named, and the answer says it is the same as its own",
+   code == 0 and argv[argv.index("-m") + 1] == "gpt-5.6-luna" and "on gpt-5.6-luna, the same model as yours" in out,
+   (argv, out))
 LS.make_crew(SCRATCH / "codex", {"crew": {"stations": {"reviewer": {"second_look_model": "gpt-5.6-other"}}}})
 code, out, err = run(second_look.cmd_second_look, ["second-look", "--file", str(look)],
                      {**env2, "FACTORY_CREW_HOME": str(home)}, SCRATCH)
 argv = calls()[-1]["argv"]
 ck("the crew's second-look model, when it names one, and the answer says which",
-   code == 0 and argv[argv.index("-m") + 1] == "gpt-5.6-other" and "on gpt-5.6-other" in out, (argv, out))
+   code == 0 and argv[argv.index("-m") + 1] == "gpt-5.6-other" and "on gpt-5.6-other, the model named for this look" in out,
+   (argv, out))
 n = len(calls())
 code, out, err = run(second_look.cmd_second_look, ["second-look", "--file", str(look)], {**env2, "TARES_SECOND_LOOK": "1"}, SCRATCH)
 ck("never inside another second look", code == 1 and "does not start another" in err and len(calls()) == n, err)
