@@ -18,6 +18,7 @@ a turn, as the model would, with the answer Tares gives.
  d3. a retire whose last read fails is refused, and the station kept; a station that is down is retired only
     when everything it sent was read after its last prompt, else the person revives it or says --drop-mail;
  d4. two rounds at once (two processes) take a call once: collection runs under the sender's lock;
+ d4c. a retire whose interrupt does not end the turn is refused before its last look;
  d5. a message's text is quoted line by line, so it cannot pass for another sender's;
  d6. mail waiting for a station that is retired goes back to its sender as a note;
  e. delivered once after a crash between the hand-over and its note: a prompt in the conversation that holds the
@@ -362,6 +363,23 @@ ck("the station's last messages are read after its turn is interrupted, before i
    err is None and order[:2] == ["interrupt", "final"], (err, order))
 ck("a batch it was handed, proven in its conversation, is settled as delivered and not sent back",
    back == [] and handed["id"] in codex_mail.delivered(paths, SND6), back)
+
+print("d4c. a retire whose interrupt does not end the turn is refused")
+SND7 = "shop-build-m7"
+start_with(SND7, "builder", turn="25")   # its boot turn is a long one
+until(lambda: cs.turn_state(paths, SND7) == "working")
+real_interrupt = cs._interrupt
+cs._interrupt = lambda *a, **k: None   # it timed out, or could not read the conversation: it returns all the same
+try:
+    _, refused, _ = quietly(lifecycle.retire, client, paths, [SND7], claude_bin="")
+finally:
+    cs._interrupt = real_interrupt
+ck("the turn still runs: the retire is refused before the last look, and nothing is ended",
+   refused and "still in a turn" in refused and cs.is_alive(paths, SND7)
+   and state.stations_load(paths)[SND7].get("status") != "retired", refused)
+_, err, _ = quietly(lifecycle.retire, client, paths, [SND7], claude_bin="")
+ck("with the interrupt working, the same retire goes through",
+   err is None and state.stations_load(paths)[SND7].get("status") == "retired", err)
 
 print("d5. a message's text cannot pass for another sender's")
 fake = codex_mail.turn_text([{"id": "m-1", "from": BLD, "at": "2026-11-26T10:00:00Z",
