@@ -11,8 +11,8 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import (Integer, Text, and_, case, cast, delete, func, insert, literal, null, or_,
-                        select, type_coerce, update)
+from sqlalchemy import (Integer, Text, and_, bindparam, case, cast, delete, func, insert, literal,
+                        null, or_, select, type_coerce, update)
 from sqlalchemy import text as sql_text
 
 from . import claude_usage_hourly as hourly
@@ -60,6 +60,12 @@ from .session_store.tables import project_secrets as secrets_table
 from .session_store.tables import project_required_checks as required_table
 from .session_store.tables import merge_queue as queue_table
 from .session_store.tables import project_merge_method as method_table
+from .session_store.tables import repo_maps as maps_table
+from .session_store.tables import repo_map_history as map_history_table
+from .session_store.tables import brain_repos as brain_table
+from .session_store.tables import brain_repo_folders as brain_folders_table
+from .session_store.tables import brain_repo_updates as brain_updates_table
+from .session_store.tables import brain_calls as brain_calls_table
 from .session_store.types import UTCDateTime
 
 log = logging.getLogger("tares.factory_store")
@@ -69,6 +75,12 @@ def _loggable(x) -> str:
     """A stored name or key for a log line: control characters written out, so a newline in a
     stored row cannot start a forged line."""
     return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group())[1:-1], str(x))
+
+
+def _no_nul(v):
+    """Free text for a text column: Postgres takes no NUL byte in text, so a string is kept without
+    it, on both engines. Anything else comes back as it is."""
+    return v.replace("\x00", "") if isinstance(v, str) else v
 
 
 # A real challenger line nests a few levels. The bound is far under where the parser, a copy or the
@@ -105,90 +117,8 @@ FACTORY_SCHEMA = [
       project     TEXT,
       seen_at     TIMESTAMPTZ
     )""",
-    # A map of one GitHub repo (TR-681), shared by every project that names it, with a dated line
-    # for each change.
-    """CREATE TABLE IF NOT EXISTS repo_maps (
-      repo        TEXT PRIMARY KEY,
-      body        TEXT,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    """CREATE TABLE IF NOT EXISTS repo_map_history (
-      repo        TEXT,
-      changed_at  TIMESTAMPTZ,
-      by_station  TEXT,
-      project     TEXT,
-      note        TEXT
-    )""",
     # The crew (TR-628) the station line belongs to: a row of `crews` (session_store/tables.py).
     "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
-    # The repos a cell connected to the brain (TR-1197, ee): owner/name in lowercase, the id of the
-    # repo source lore made for it, and how far its index is. The ee routes in
-    # ee/tares_ee/brain/repos.py read and write it; the table exists on every cell.
-    """CREATE TABLE IF NOT EXISTS brain_repos (
-      repo           TEXT PRIMARY KEY,
-      repo_source_id TEXT,
-      state          TEXT,
-      files_done     INTEGER DEFAULT 0,
-      files_total    INTEGER DEFAULT 0,
-      indexed_commit TEXT,
-      last_synced    TIMESTAMPTZ,
-      error          TEXT,
-      added_by       TEXT,
-      added_at       TIMESTAMPTZ
-    )""",
-    # Where a repo's index job stands (TR-1198): the place in the control plane's queue while it
-    # waits, and when the cell asked for the job (NULL until it did, so a repo is asked for once).
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS place INTEGER",
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS job_started_at TIMESTAMPTZ",
-    # How the keep-up sync of a ready repo is doing (TR-1201): the failures in a row and the last
-    # failure's words. A success clears both.
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_failures INTEGER DEFAULT 0",
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_error TEXT",
-    # The decision folders an admin chose for a connected repo (TR-1209, ee): one row per folder, with who
-    # chose it and when. The files in them are the repo's decisions in the brain.
-    """CREATE TABLE IF NOT EXISTS brain_repo_folders (
-      repo      TEXT,
-      path      TEXT,
-      chosen_by TEXT,
-      chosen_at TIMESTAMPTZ,
-      PRIMARY KEY (repo, path)
-    )""",
-    # Each first index and each later update of a connected repo (TR-1463, ee): when, which commit, how many
-    # files it changed or deleted, the repo's file count after it, and whether it worked (and why not). The
-    # newest 50 per repo are kept; the Repos page shows the last one and a history.
-    """CREATE TABLE IF NOT EXISTS brain_repo_updates (
-      id            TEXT PRIMARY KEY,
-      repo          TEXT,
-      "at"          TIMESTAMPTZ,
-      kind          TEXT,
-      ok            INTEGER,
-      indexed_commit TEXT,
-      files_changed INTEGER,
-      files_deleted INTEGER,
-      files_total   INTEGER,
-      error         TEXT
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_brain_repo_updates_repo ON brain_repo_updates (repo, \"at\")",
-    # Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked
-    # (the station and person the call came with, `via` mcp or console), what, which repos it used,
-    # how long it took and the tokens lore reported. The daily caps count the ask rows.
-    """CREATE TABLE IF NOT EXISTS brain_calls (
-      id            TEXT PRIMARY KEY,
-      "at"          TIMESTAMPTZ,
-      tool          TEXT,
-      deep          INTEGER DEFAULT 0,
-      question      TEXT,
-      repos         TEXT,
-      duration_ms   INTEGER,
-      input_tokens  INTEGER,
-      output_tokens INTEGER,
-      ok            INTEGER,
-      error         TEXT,
-      station       TEXT,
-      person_id     TEXT,
-      via           TEXT
-    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -1514,9 +1444,10 @@ class FactoryStore:
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
         repo = repo.lower()   # GitHub names a repo the same whatever the case
-        with self._sread:
-            r = self.sc.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
-                                 [repo]).fetchone()
+        t = maps_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.body, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.repo == repo)).first()
         return {"repo": repo, "body": r[0], "updated_at": r[1], "updated_by": r[2]} if r else None
 
     def set_repo_map(self, repo: str, body: str, note: str, by: str, project: str | None,
@@ -1527,36 +1458,34 @@ class FactoryStore:
         and nothing written, when the map is the one already there."""
         from .factory import map_version
         repo = repo.lower()
-        with self._swrite:
-            cur = self.sc.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
-                                   [repo]).fetchone()
+        body, note, by, project = (_no_nul(v) for v in (body, note, by, project))
+        t = maps_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            # a second process reading the same version waits here, then sees what this one wrote
+            self._lock_numbering(conn, f"tares_repo_map:{repo}")
+            cur = conn.execute(select(t.c.body, t.c.updated_at, t.c.updated_by)
+                               .where(t.c.repo == repo)).first()
             if cur and cur[0] == body:
                 return False
             if map_version(cur[0] if cur else None) != (base or ""):
                 raise MapChanged({"repo": repo, "body": cur[0], "updated_at": cur[1],
                                   "updated_by": cur[2]} if cur else None)
-            self.sc.execute("BEGIN TRANSACTION")
-            try:
-                self.sc.execute(
-                    "INSERT INTO repo_maps (repo, body, updated_at, updated_by) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT (repo) DO UPDATE SET body = excluded.body, "
-                    "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-                    [repo, body, at, by])
-                self.sc.execute("INSERT INTO repo_map_history (repo, changed_at, by_station, project, note) "
-                                 "VALUES (?, ?, ?, ?, ?)", [repo, at, by, project, note])
-                self.sc.execute("COMMIT")
-            except Exception:
-                self.sc.execute("ROLLBACK")
-                raise
+            stmt = self.sessions_db.upsert(t).values(repo=repo, body=body, updated_at=at,
+                                                     updated_by=by)
+            conn.execute(stmt.on_conflict_do_update(index_elements=[t.c.repo], set_={
+                c: stmt.excluded[c] for c in ("body", "updated_at", "updated_by")}))
+            conn.execute(insert(map_history_table).values(repo=repo, changed_at=at, by_station=by,
+                                                          project=project, note=note))
         return True
 
     def repo_map_history(self, repo: str, limit: int = 10) -> list[dict]:
         """Newest first."""
-        repo = repo.lower()
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT changed_at, by_station, project, note FROM repo_map_history WHERE repo = ? "
-                "ORDER BY changed_at DESC LIMIT ?", [repo, limit]).fetchall()
+        t = map_history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.changed_at, t.c.by_station, t.c.project, t.c.note)
+                                .where(t.c.repo == repo.lower())
+                                .order_by(t.c.changed_at.desc().nulls_last())
+                                .limit(limit)).fetchall()
         return [{"at": r[0], "by": r[1], "project": r[2], "note": r[3]} for r in rows]
 
     # ── rule proposals (TR-443) ───────────────────────────────────────────────
@@ -2096,121 +2025,138 @@ class FactoryStore:
         return hit is not None
 
     # ── the repos connected to the brain (TR-1197) ────────────────────────────
-    _BR_COLS = ("repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
-                "error, added_by, added_at, place, job_started_at, sync_failures, sync_error")
-
     def _br_rows(self, rows) -> list[dict]:
-        out = [{"repo": r[0], "repo_source_id": r[1], "state": r[2], "files_done": r[3] or 0,
-                "files_total": r[4] or 0, "indexed_commit": r[5], "last_synced": r[6],
-                "error": r[7], "added_by": r[8], "added_at": r[9], "place": r[10],
-                "job_started_at": r[11], "sync_failures": r[12] or 0, "sync_error": r[13]}
-               for r in rows]
+        out = [dict(r._mapping) for r in rows]
+        for r in out:
+            for k in ("files_done", "files_total", "sync_failures"):
+                r[k] = r[k] or 0
         refs = self._person_refs(r["added_by"] for r in out)
         for r in out:
             r["added_by_name"] = (refs.get(r["added_by"]) or {}).get("name")
         return out
 
     def list_brain_repos(self) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._BR_COLS} FROM brain_repos ORDER BY added_at, repo").fetchall()
+        t = brain_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).order_by(t.c.added_at.asc().nulls_last(),
+                                                   t.c.repo)).fetchall()
         return self._br_rows(rows)
 
     def get_brain_repo(self, repo: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._BR_COLS} FROM brain_repos WHERE repo = ?",
-                                [repo]).fetchone()
+        t = brain_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.repo == repo)).first()
         return self._br_rows([r])[0] if r else None
 
     def add_brain_repo(self, repo: str, repo_source_id: str | None, added_by: str | None,
                        at, state: str = "queued") -> bool:
         """Keep a connected repo; False when it was already there (the row is left as it was)."""
-        with self._swrite:
-            hit = self.sc.execute(
-                f"INSERT INTO brain_repos ({self._BR_COLS}) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, "
-                "?, ?, NULL, NULL, 0, NULL) ON CONFLICT DO NOTHING RETURNING repo",
-                [repo, repo_source_id or None, state, added_by or None, at]).fetchone()
+        t = brain_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(self.sessions_db.upsert(t).values(
+                repo=repo, repo_source_id=_no_nul(repo_source_id) or None, state=state,
+                files_done=0, files_total=0, added_by=added_by or None, added_at=at,
+                sync_failures=0).on_conflict_do_nothing().returning(t.c.repo)).first()
         return hit is not None
 
+    def _lock_brain_repo(self, conn, repo: str) -> None:
+        """Taken by the writes that read a repo's rows and then change them (its folders, its
+        history, its removal), so two processes do them one at a time."""
+        self._lock_numbering(conn, f"tares_brain_repo:{repo}")
+
     def delete_brain_repo(self, repo: str) -> bool:
-        with self._swrite:
-            hit = self.sc.execute("DELETE FROM brain_repos WHERE repo = ? RETURNING repo",
-                                  [repo]).fetchone()
-            self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ?", [repo])
-            self.sc.execute("DELETE FROM brain_repo_updates WHERE repo = ?", [repo])
+        """The repo, its chosen folders and its history go in one transaction."""
+        t = brain_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_brain_repo(conn, repo)
+            hit = conn.execute(delete(t).where(t.c.repo == repo).returning(t.c.repo)).first()
+            for child in (brain_folders_table, brain_updates_table):
+                conn.execute(delete(child).where(child.c.repo == repo))
         return hit is not None
 
     BRAIN_UPDATES_KEPT = 50
-    _BU_COLS = 'id, repo, "at", kind, ok, indexed_commit, files_changed, files_deleted, files_total, error'
 
     def add_brain_repo_update(self, repo: str, kind: str, ok: bool, at, *, commit: str | None = None,
                               files_changed: int = 0, files_deleted: int = 0, files_total: int = 0,
                               error: str | None = None) -> None:
         """Keep one first index (`kind` "index") or later update ("update") of a repo, and drop all but
         the newest BRAIN_UPDATES_KEPT of that repo."""
-        with self._swrite:
-            self.sc.execute(f"INSERT INTO brain_repo_updates ({self._BU_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            [uuid.uuid4().hex, repo, at, kind, 1 if ok else 0, commit or None,
-                             int(files_changed or 0), int(files_deleted or 0), int(files_total or 0), error or None])
-            old = self.sc.execute('SELECT id FROM brain_repo_updates WHERE repo = ? ORDER BY "at" DESC, id DESC',
-                                  [repo]).fetchall()[self.BRAIN_UPDATES_KEPT:]
-            for (i,) in old:
-                self.sc.execute("DELETE FROM brain_repo_updates WHERE id = ?", [i])
+        t = brain_updates_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_brain_repo(conn, repo)
+            conn.execute(insert(t).values(
+                id=uuid.uuid4().hex, repo=repo, at=at, kind=kind, ok=1 if ok else 0,
+                indexed_commit=_no_nul(commit) or None, files_changed=int(files_changed or 0),
+                files_deleted=int(files_deleted or 0), files_total=int(files_total or 0),
+                error=_no_nul(error) or None))
+            old = (select(t.c.id).where(t.c.repo == repo)
+                   .order_by(t.c["at"].desc().nulls_last(), t.c.id.desc())
+                   .offset(self.BRAIN_UPDATES_KEPT))
+            conn.execute(delete(t).where(t.c.id.in_(old)))
 
     @staticmethod
     def _bu_row(r) -> dict:
-        return {"at": r[2], "kind": r[3], "ok": bool(r[4]), "indexed_commit": r[5], "files_changed": r[6] or 0,
-                "files_deleted": r[7] or 0, "files_total": r[8] or 0, "error": r[9]}
+        return {"at": r.at, "kind": r.kind, "ok": bool(r.ok), "indexed_commit": r.indexed_commit,
+                "files_changed": r.files_changed or 0, "files_deleted": r.files_deleted or 0,
+                "files_total": r.files_total or 0, "error": r.error}
 
     def list_brain_repo_updates(self, repo: str, limit: int = 20) -> list[dict]:
         """The repo's first index and later updates, newest first."""
-        with self._sread:
-            rows = self.sc.execute(f'SELECT {self._BU_COLS} FROM brain_repo_updates WHERE repo = ? '
-                                   'ORDER BY "at" DESC, id DESC LIMIT ?', [repo, int(limit)]).fetchall()
+        t = brain_updates_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.repo == repo)
+                                .order_by(t.c["at"].desc().nulls_last(), t.c.id.desc())
+                                .limit(int(limit))).fetchall()
         return [self._bu_row(r) for r in rows]
 
     def last_brain_repo_updates(self) -> dict[str, dict]:
         """The newest update of every repo that has one, by repo."""
-        with self._sread:
-            rows = self.sc.execute(f'SELECT {self._BU_COLS} FROM brain_repo_updates ORDER BY repo, "at" DESC, id DESC').fetchall()
+        t = brain_updates_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).order_by(
+                t.c.repo, t.c["at"].desc().nulls_last(), t.c.id.desc())).fetchall()
         out: dict[str, dict] = {}
         for r in rows:
-            out.setdefault(r[1], self._bu_row(r))
+            out.setdefault(r.repo, self._bu_row(r))
         return out
 
     def list_brain_folders(self, repo: str) -> list[dict]:
         """The decision folders chosen for `repo`, by path: {path, chosen_by, chosen_by_name, chosen_at}."""
-        with self._sread:
-            rows = self.sc.execute("SELECT path, chosen_by, chosen_at FROM brain_repo_folders "
-                                   "WHERE repo = ? ORDER BY path", [repo]).fetchall()
+        t = brain_folders_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.path, t.c.chosen_by, t.c.chosen_at)
+                                .where(t.c.repo == repo).order_by(t.c.path)).fetchall()
         refs = self._person_refs(r[1] for r in rows)
         return [{"path": r[0], "chosen_by": r[1], "chosen_by_name": (refs.get(r[1]) or {}).get("name"),
                  "chosen_at": r[2]} for r in rows]
 
     def set_brain_folders(self, repo: str, paths: list[str], by: str | None, at) -> tuple[list[str], list[str]]:
         """Make `paths` the repo's chosen folders. A folder already chosen keeps its chooser and date.
-        Returns (added, removed), each sorted. The read, the deletes and the inserts are one step under
-        the write lock."""
-        with self._swrite:
-            have = {r[0] for r in self.sc.execute(
-                "SELECT path FROM brain_repo_folders WHERE repo = ?", [repo]).fetchall()}
+        Returns (added, removed), each sorted. The read, the deletes and the inserts are one
+        transaction, and two processes take turns."""
+        t = brain_folders_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_brain_repo(conn, repo)
+            have = set(conn.execute(select(t.c.path).where(t.c.repo == repo)).scalars())
             want = set(paths)
-            for p in sorted(have - want):
-                self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ? AND path = ?", [repo, p])
-            for p in sorted(want - have):
-                self.sc.execute("INSERT INTO brain_repo_folders (repo, path, chosen_by, chosen_at) "
-                                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [repo, p, by or None, at])
-        return sorted(want - have), sorted(have - want)
+            added, removed = sorted(want - have), sorted(have - want)
+            if removed:
+                conn.execute(delete(t).where(t.c.repo == repo, t.c.path.in_(removed)))
+            if added:
+                conn.execute(self.sessions_db.upsert(t).on_conflict_do_nothing(), [
+                    {"repo": repo, "path": p, "chosen_by": by or None, "chosen_at": at}
+                    for p in added])
+        return added, removed
 
     def requeue_brain_repo(self, repo: str, from_state: str = "failed") -> bool:
         """Put a repo that is in `from_state` back to queued for a new index job: the error, the
         place, the counts and the job's start are cleared. False when it is not in that state (or
         not there), and then the row is left as it was."""
-        with self._swrite:
-            hit = self.sc.execute(
-                "UPDATE brain_repos SET state = 'queued', error = NULL, place = NULL, "
-                "files_done = 0, files_total = 0, job_started_at = NULL, sync_failures = 0, "
-                "sync_error = NULL WHERE repo = ? AND state = ? RETURNING repo", [repo, from_state]).fetchone()
+        t = brain_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(update(t).where(t.c.repo == repo, t.c.state == from_state).values(
+                state="queued", error=None, place=None, files_done=0, files_total=0,
+                job_started_at=None, sync_failures=0, sync_error=None).returning(t.c.repo)).first()
         return hit is not None
 
     _BR_SETTABLE = ("state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
@@ -2223,75 +2169,70 @@ class FactoryStore:
         bad = sorted(set(fields) - set(self._BR_SETTABLE))
         if bad or not fields:
             raise ValueError(f"cannot set {bad or 'nothing'} on a brain repo")
-        sets = ", ".join(f"{k} = ?" for k in fields)
-        args = [*fields.values(), repo]
-        where = "repo = ?"
+        t = brain_table
+        stmt = update(t).where(t.c.repo == repo)
         if only_in:
-            where += f" AND state IN ({', '.join('?' for _ in only_in)})"
-            args += list(only_in)
-        with self._swrite:
-            hit = self.sc.execute(f"UPDATE brain_repos SET {sets} WHERE {where} RETURNING repo",
-                                  args).fetchone()
+            stmt = stmt.where(t.c.state.in_(list(only_in)))
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(stmt.values({k: _no_nul(v) for k, v in fields.items()})
+                               .returning(t.c.repo)).first()
         return hit is not None
 
     # ── the calls made to the brain (TR-1200) ─────────────────────────────────
-    _BC_COLS = ('id, "at", tool, deep, question, repos, duration_ms, input_tokens, output_tokens, '
-                "ok, error, station, person_id, via")
-
     def reserve_brain_call(self, call: dict, cap: int | None = None, since=None) -> bool:
         """Keep a call that is about to start. With `cap`, only while fewer than `cap` calls of the
         same tool and depth have started since `since`; False when the cap is reached (nothing is
-        kept). The count and the insert are one step under this process's write lock, so two calls in
-        this process cannot both take the last place; the cap is not shared between daemons."""
-        with self._swrite:
+        kept). The count and the insert are one transaction, and two calls of one tool and depth
+        take turns, in this process or another, so they cannot both take the last place."""
+        t = brain_calls_table
+        deep = 1 if call.get("deep") else 0
+        with self._swrite, self.sessions_db.begin() as conn:
             if cap is not None:
-                n = self.sc.execute(
-                    'SELECT count(*) FROM brain_calls WHERE tool = ? AND deep = ? AND "at" >= ?',
-                    [call["tool"], 1 if call.get("deep") else 0, since]).fetchone()[0]
+                self._lock_numbering(conn, f"tares_brain_calls:{call['tool']}:{deep}")
+                # no `since` compares with NULL and counts nothing
+                n = conn.execute(select(func.count()).select_from(t).where(
+                    t.c.tool == call["tool"], t.c.deep == deep,
+                    t.c["at"] >= bindparam("since", since, type_=UTCDateTime))).scalar_one()
                 if n >= cap:
                     return False
-            self.sc.execute(
-                f"INSERT INTO brain_calls ({self._BC_COLS}) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, "
-                "NULL, NULL, ?, ?, ?)",
-                [call["id"], call["at"], call["tool"], 1 if call.get("deep") else 0, call.get("question"),
-                 json.dumps(call.get("repos") or []), call.get("station") or None,
-                 call.get("person_id") or None, call.get("via") or None])
+            conn.execute(insert(t).values(
+                id=call["id"], at=call["at"], tool=call["tool"], deep=deep,
+                question=_no_nul(call.get("question")), repos=json.dumps(call.get("repos") or []),
+                station=_no_nul(call.get("station")) or None,
+                person_id=call.get("person_id") or None, via=call.get("via") or None))
         return True
 
     def finish_brain_call(self, call_id: str, duration_ms: int, ok: bool, input_tokens: int | None = None,
                           output_tokens: int | None = None, error: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "UPDATE brain_calls SET duration_ms = ?, input_tokens = ?, output_tokens = ?, ok = ?, "
-                "error = ? WHERE id = ?",
-                [duration_ms, input_tokens, output_tokens, 1 if ok else 0, error, call_id])
+        t = brain_calls_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == call_id).values(
+                duration_ms=duration_ms, input_tokens=input_tokens, output_tokens=output_tokens,
+                ok=1 if ok else 0, error=_no_nul(error)))
 
     def list_brain_calls(self, since=None, tool: str | None = None, station: str | None = None,
                          limit: int = 1000) -> list[dict]:
         """The calls made to the brain, newest first."""
-        where, args = [], []
+        t = brain_calls_table
+        q = select(t).order_by(t.c["at"].desc().nulls_last(), t.c.id).limit(limit)
         if since is not None:
-            where.append('"at" >= ?')
-            args.append(since)
+            q = q.where(t.c["at"] >= since)
         if tool:
-            where.append("tool = ?")
-            args.append(tool)
+            q = q.where(t.c.tool == tool)
         if station:
-            where.append("station = ?")
-            args.append(station)
-        sql = f"SELECT {self._BC_COLS} FROM brain_calls" + (f" WHERE {' AND '.join(where)}" if where else "")
-        with self._sread:
-            rows = self.sc.execute(sql + ' ORDER BY "at" DESC, id LIMIT ?', [*args, limit]).fetchall()
+            q = q.where(t.c.station == station)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).fetchall()
         out = []
         for r in rows:
+            row = dict(r._mapping)
             try:
-                repos = json.loads(r[5]) if r[5] else []
+                row["repos"] = json.loads(row["repos"]) if row["repos"] else []
             except ValueError:
-                repos = []
-            out.append({"id": r[0], "at": r[1], "tool": r[2], "deep": bool(r[3]), "question": r[4],
-                        "repos": repos, "duration_ms": r[6], "input_tokens": r[7],
-                        "output_tokens": r[8], "ok": None if r[9] is None else bool(r[9]),
-                        "error": r[10], "station": r[11], "person_id": r[12], "via": r[13]})
+                row["repos"] = []
+            row["deep"] = bool(row["deep"])
+            row["ok"] = None if row["ok"] is None else bool(row["ok"])
+            out.append(row)
         return out
 
     def _update_waiting_grant(self, gid: str, **values) -> bool:

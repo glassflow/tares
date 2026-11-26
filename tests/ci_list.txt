@@ -200,6 +200,7 @@ test_monitoring_integration
 test_morning_status
 test_no_console
 test_normalize
+test_old_ddl_left
 test_openai_provider
 test_otlp
 test_otlp_grpc

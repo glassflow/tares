@@ -22,6 +22,7 @@ cancels the timer and clears the back-off.
 Run: .venv/bin/python ee/tests/test_brain_decisions_repo_retry.py
 """
 import asyncio, base64, hashlib, os, sys, tempfile
+from datetime import datetime, timezone
 from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,7 +66,7 @@ def H(tok):
 BRAIN_KEY = fake_lore.FakeLore().key
 GH_TOKEN = "gh-token-" + "for-the-retry-tests"       # gitleaks:allow
 SOURCE = "repo_decisions"
-NOW = "2026-01-01T00:00:00Z"
+NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 REPO = "acme/web"
 
 

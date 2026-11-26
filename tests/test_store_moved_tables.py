@@ -64,6 +64,13 @@ Cases:
                      deleting a project removes its rows, its required checks too
   integr_takeover    Postgres: the ten tables the old DDL made are taken over, rows untouched; a
                      missing column and index are added
+  brain_copy         the repo maps and brain tables (TR-1618): DuckDB's rows arrive in SQLite, null and
+                     empty kept, a column the file lacks reads as nothing
+  brain_methods      the Store's repo map, connected repo, folder, update history and brain call methods
+                     keep their answers; version checks, caps and the kept history hold with several
+                     processes at once, each with its own engine
+  brain_takeover     Postgres: the six tables the old DDL made are taken over, rows untouched; missing
+                     columns and the index are added
 """
 import copy
 import os
@@ -73,7 +80,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import duckdb  # noqa: E402
@@ -83,6 +90,8 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
 from old_ddl import _T, OLD_DDL, SEED, old_ddl_duckdb, old_ddl_postgres  # noqa: E402
 from tares import project_secrets, state_db  # noqa: E402
+from tares.factory import map_version  # noqa: E402
+from tares.factory_store import MapChanged  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store import copy as copy_mod  # noqa: E402
 from tares.session_store.engine import LEGACY_SQLITE_FILE, SQLITE_FILE, adopt_legacy_file  # noqa: E402
@@ -3582,6 +3591,415 @@ def integr_takeover():
         _drop_schema(sch)
 
 
+# ── repo maps and brain tables (TR-1618) ────────────────────────────────────
+BRAIN = {
+    "repo_maps": (("repo", "body", "updated_at", "updated_by"), [
+        ("o/web", "# map", _T, "st1"),
+        ("o/api", "", None, None),
+    ]),
+    "repo_map_history": (("repo", "changed_at", "by_station", "project", "note"), [
+        ("o/web", _T, "st1", None, "first"),
+        ("o/web", _LATER, "st2", "uc_demo", "second"),
+        ("o/web", None, None, None, None),
+    ]),
+    "brain_repos": (("repo", "repo_source_id", "state", "files_done", "files_total", "indexed_commit",
+                     "last_synced", "error", "added_by", "added_at", "place", "job_started_at",
+                     "sync_failures", "sync_error"), [
+        ("o/web", "src-1", "ready", 5, 9, "abc", _LATER, None, "pe_gone", _T, None, _T, 2, "boom"),
+        ("o/api", None, "queued", None, None, None, None, "", None, None, 3, None, None, None),
+    ]),
+    "brain_repo_folders": (("repo", "path", "chosen_by", "chosen_at"), [
+        ("o/web", "docs/adr", None, _T),
+        ("o/web", "b", "pe_gone", None),
+    ]),
+    "brain_repo_updates": (("id", "repo", "at", "kind", "ok", "indexed_commit", "files_changed",
+                            "files_deleted", "files_total", "error"), [
+        ("bu_1", "o/web", _T, "index", 1, "abc", 9, 0, 9, None),
+        ("bu_2", "o/web", _LATER, "update", 0, None, None, None, None, ""),
+    ]),
+    "brain_calls": (("id", "at", "tool", "deep", "question", "repos", "duration_ms", "input_tokens",
+                     "output_tokens", "ok", "error", "station", "person_id", "via"), [
+        ("c1", _T, "ask_brain", 0, "why?", '["o/web"]', 12, 3, 4, 1, None, "st", "pe_gone", "mcp"),
+        ("c2", _LATER, "search_brain", None, "", "not json", None, None, None, None, None, None, None, None),
+        ("c3", None, "ask_brain", 1, None, None, None, None, None, 0, "e", None, None, "console"),
+    ]),
+}
+BRAIN_COUNTS = {t: len(rows) for t, (_, rows) in BRAIN.items()}
+BRAIN_NAMES = list(BRAIN)
+
+
+def brain_copy():
+    print("== the repo maps and the brain tables are copied at the first start ==")
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "t.duckdb")
+    con = duckdb.connect(path)
+    old_ddl_duckdb(con, seed={**SEED, **BRAIN})
+    con.execute("ALTER TABLE brain_repos DROP COLUMN sync_error")      # a file from before it
+    con.execute("CHECKPOINT")
+    con.close()
+    s = Store(path, state_dsn="")
+    sdb = s.sessions_db
+    with sdb.begin() as c:
+        ledger = {r[0]: r[1] for r in
+                  c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
+    ck("the ledger counts each table as DuckDB held it",
+       {t: ledger.get(t) for t in BRAIN_NAMES} == BRAIN_COUNTS, ledger)
+    got = s.get_repo_map("O/Web")
+    ck("a repo map arrives, its time in UTC", got == {"repo": "o/web", "body": "# map",
+       "updated_at": _T, "updated_by": "st1"} and got["updated_at"].utcoffset().total_seconds() == 0, got)
+    ck("an empty map and its nulls arrive", s.get_repo_map("o/api")
+       == {"repo": "o/api", "body": "", "updated_at": None, "updated_by": None}, s.get_repo_map("o/api"))
+    ck("the map history arrives, newest first with no time last",
+       [(h["note"], h["at"], h["project"]) for h in s.repo_map_history("o/web")]
+       == [("second", _LATER, "uc_demo"), ("first", _T, None), (None, None, None)],
+       s.repo_map_history("o/web"))
+    repos = s.list_brain_repos()
+    ck("the repos arrive, the one with no date last; null counts and a column the file lacks read 0 or None",
+       [(r["repo"], r["files_done"], r["files_total"], r["sync_failures"], r["sync_error"], r["place"],
+         r["error"], r["added_by_name"]) for r in repos]
+       == [("o/web", 5, 9, 2, None, None, None, None), ("o/api", 0, 0, 0, None, 3, "", None)], repos)
+    ck("their times arrive", repos[0]["added_at"] == _T and repos[0]["last_synced"] == _LATER
+       and repos[0]["job_started_at"] == _T and repos[1]["added_at"] is None, repos)
+    ck("the chosen folders arrive, by path",
+       [(f["path"], f["chosen_by"], f["chosen_at"]) for f in s.list_brain_folders("o/web")]
+       == [("b", "pe_gone", None), ("docs/adr", None, _T)], s.list_brain_folders("o/web"))
+    ups = s.list_brain_repo_updates("o/web")
+    ck("the update history arrives, newest first; null counts read 0, empty error kept",
+       [(u["kind"], u["ok"], u["indexed_commit"], u["files_changed"], u["files_total"], u["error"])
+        for u in ups] == [("update", False, None, 0, 0, ""), ("index", True, "abc", 9, 9, None)], ups)
+    calls = s.list_brain_calls()
+    ck("the calls arrive, newest first with no time last; bad or absent repos read as none",
+       [(c["id"], c["repos"], c["deep"], c["ok"]) for c in calls]
+       == [("c2", [], False, None), ("c1", ["o/web"], False, True), ("c3", [], True, False)], calls)
+    with s._lock:
+        n = {t: s.con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in BRAIN_NAMES}
+    ck("DuckDB still has its rows: nothing is deleted there", n == BRAIN_COUNTS, n)
+    s.update_brain_repo("o/web", {"state": "failed"})
+    s.close()
+    s = Store(path, state_dsn="")
+    ck("a second start copies nothing",
+       s.get_brain_repo("o/web")["state"] == "failed"
+       and {t: _n(s.sessions_db, t) for t in BRAIN_NAMES} == BRAIN_COUNTS)
+    s.close()
+
+
+def brain_methods():
+    print("== repo maps and brain tables through Core ==")
+    d = tempfile.mkdtemp()
+    s = Store(os.path.join(d, "t.duckdb"), state_dsn="" if not HARNESS else None)
+    sdb = s.sessions_db
+
+    def stored(sql, **args):
+        with sdb.begin() as conn:
+            return conn.execute(text(sql), args).scalar()
+
+    print("== repo maps ==")
+    ck("a repo with no map reads as None and has no history",
+       s.get_repo_map("o/none") is None and s.repo_map_history("o/none") == [])
+    try:
+        s.set_repo_map("o/web", "one", "n", "st", None, _T, "0123456789ab")
+        got = "written"
+    except MapChanged as e:
+        got = e.current
+    ck("a writer that read a map there is not gets MapChanged(None), nothing written",
+       got is None and s.get_repo_map("o/web") is None, got)
+    ck("a first map is written, the name in lowercase, NUL characters dropped",
+       s.set_repo_map("O/Web", "on\x00e", "fi\x00rst", "s\x00t", "uc_\x00t", _T) is True
+       and s.get_repo_map("o/WEB") == {"repo": "o/web", "body": "one", "updated_at": _T, "updated_by": "st"}
+       and s.repo_map_history("o/web") == [{"at": _T, "by": "st", "project": "uc_t", "note": "first"}],
+       (s.get_repo_map("o/web"), s.repo_map_history("o/web")))
+    ck("the map already there changes nothing, whatever the writer read",
+       s.set_repo_map("o/web", "one", "again", "other", None, _LATER, "stale") is False
+       and len(s.repo_map_history("o/web")) == 1 and s.get_repo_map("o/web")["updated_by"] == "st")
+    try:
+        s.set_repo_map("o/web", "two", "n", "st", None, _LATER, "")
+        got = "written"
+    except MapChanged as e:
+        got = e.current
+    ck("a stale base is refused with the map that is there",
+       got == {"repo": "o/web", "body": "one", "updated_at": _T, "updated_by": "st"}, got)
+    ck("the version read lets the write through; history newest first, limited",
+       s.set_repo_map("o/web", "two", "second", "st2", None, _LATER, map_version("one")) is True
+       and [h["note"] for h in s.repo_map_history("o/web")] == ["second", "first"]
+       and [h["note"] for h in s.repo_map_history("O/Web", limit=1)] == ["second"])
+
+    print("== the connected repos ==")
+    kim = s.create_person("Kim")["id"]
+    ck("no repos yet", s.list_brain_repos() == [] and s.get_brain_repo("o/web") is None)
+    ck("add, then refused the second time with the row kept",
+       s.add_brain_repo("o/web", "src\x00-1", kim, _LATER) is True
+       and s.add_brain_repo("o/web", "src-2", None, _T) is False
+       and s.get_brain_repo("o/web")["repo_source_id"] == "src-1")
+    s.add_brain_repo("o/api", "", "", _T, state="ready")
+    s.add_brain_repo("o/b", None, None, _T)
+    s.add_brain_repo("o/a", None, None, None)
+    rows = s.list_brain_repos()
+    ck("listed oldest first, then by name, no date last", [r["repo"] for r in rows]
+       == ["o/api", "o/b", "o/web", "o/a"], [r["repo"] for r in rows])
+    ck("empty ids are kept as null; the adder is named",
+       (rows[0]["repo_source_id"], rows[0]["added_by"], rows[0]["state"], rows[2]["added_by_name"])
+       == (None, None, "ready", "Kim"), rows)
+    ck("a new row has its counts at 0",
+       (rows[2]["files_done"], rows[2]["files_total"], rows[2]["sync_failures"], rows[2]["state"])
+       == (0, 0, 0, "queued"), rows[2])
+    ck("update sets what it is given, NUL characters dropped",
+       s.update_brain_repo("o/web", {"state": "indexing", "error": "a\x00b", "sync_error": "\x00",
+                                     "files_done": 3, "place": 2, "job_started_at": _T}) is True
+       and (lambda r: (r["state"], r["error"], r["sync_error"], r["files_done"], r["place"],
+                       r["job_started_at"]))(s.get_brain_repo("o/web"))
+       == ("indexing", "ab", "", 3, 2, _T), s.get_brain_repo("o/web"))
+    ck("None clears a column; only_in holds back and lets through; a missing repo is False",
+       s.update_brain_repo("o/web", {"place": None}) is True and s.get_brain_repo("o/web")["place"] is None
+       and s.update_brain_repo("o/web", {"state": "ready"}, only_in=("queued",)) is False
+       and s.get_brain_repo("o/web")["state"] == "indexing"
+       and s.update_brain_repo("o/web", {"state": "failed"}, only_in=("indexing",)) is True
+       and s.update_brain_repo("o/none", {"state": "failed"}) is False)
+    refused = []
+    for bad in ({"repo": "x"}, {}):
+        try:
+            s.update_brain_repo("o/web", bad)
+        except ValueError:
+            refused.append(True)
+    ck("an unknown column or nothing to set is a ValueError", refused == [True, True], refused)
+    ck("requeue only from the state named, and it clears the job",
+       s.requeue_brain_repo("o/web", "ready") is False and s.requeue_brain_repo("o/web") is True
+       and s.requeue_brain_repo("o/web") is False and s.requeue_brain_repo("o/none") is False
+       and (lambda r: (r["state"], r["error"], r["files_done"], r["job_started_at"], r["sync_error"]))(
+           s.get_brain_repo("o/web")) == ("queued", None, 0, None, None), s.get_brain_repo("o/web"))
+    s.update_brain_repo("o/web", {"files_done": None, "files_total": None, "sync_failures": None})
+    ck("a null counter reads as 0",
+       (lambda r: (r["files_done"], r["files_total"], r["sync_failures"]))(s.get_brain_repo("o/web"))
+       == (0, 0, 0))
+
+    print("== chosen folders ==")
+    ck("a first choice adds all, sorted", s.set_brain_folders("o/web", ["b", "a"], kim, _T) == (["a", "b"], []))
+    ck("a folder kept keeps its chooser and date; added and removed are said",
+       s.set_brain_folders("o/web", ["b", "c"], "", _LATER) == (["c"], ["a"])
+       and [(f["path"], f["chosen_by"], f["chosen_by_name"], f["chosen_at"])
+            for f in s.list_brain_folders("o/web")]
+       == [("b", kim, "Kim", _T), ("c", None, None, _LATER)], s.list_brain_folders("o/web"))
+    ck("the same choice changes nothing; an empty one removes all",
+       s.set_brain_folders("o/web", ["c", "b"], kim, _LATER) == ([], [])
+       and s.set_brain_folders("o/web", [], kim, _LATER) == ([], ["b", "c"])
+       and s.list_brain_folders("o/web") == [])
+
+    print("== update history ==")
+    ck("no updates yet", s.list_brain_repo_updates("o/web") == [] and s.last_brain_repo_updates() == {})
+    for i in range(52):
+        s.add_brain_repo_update("o/web", "update", True, _T + timedelta(seconds=i), files_changed=i)
+    s.add_brain_repo_update("o/api", "index", False, _T, commit="", files_changed=None, error="it\x00 broke")
+    ups = s.list_brain_repo_updates("o/web", limit=100)
+    ck("only the newest 50 of a repo are kept, newest first",
+       len(ups) == 50 and ups[0]["files_changed"] == 51 and ups[-1]["files_changed"] == 2
+       and stored("SELECT count(*) FROM brain_repo_updates WHERE repo = 'o/web'") == 50,
+       (len(ups), ups[:1], ups[-1:]))
+    ck("20 are listed when no limit is given", len(s.list_brain_repo_updates("o/web")) == 20)
+    ck("the last of each repo; an empty commit is null, a null count 0",
+       {k: (v["files_changed"], v["ok"], v["indexed_commit"], v["error"])
+        for k, v in s.last_brain_repo_updates().items()}
+       == {"o/web": (51, True, None, None), "o/api": (0, False, None, "it broke")},
+       s.last_brain_repo_updates())
+
+    s.set_brain_folders("o/web", ["a"], None, _T)
+    s.set_brain_folders("o/api", ["a"], None, _T)
+    ck("deleting a repo takes its folders and history, and no one else's",
+       s.delete_brain_repo("o/web") is True and s.delete_brain_repo("o/web") is False
+       and s.get_brain_repo("o/web") is None and s.list_brain_folders("o/web") == []
+       and s.list_brain_repo_updates("o/web") == [] and len(s.list_brain_folders("o/api")) == 1
+       and len(s.list_brain_repo_updates("o/api")) == 1)
+
+    print("== calls to the brain ==")
+
+    def call(cid, tool="ask_brain", at=_T, **more):
+        return {"id": cid, "at": at, "tool": tool, **more}
+
+    ck("a call with no cap is kept", s.reserve_brain_call(call(
+        "c1", question="w\x00hy", repos=["o/web"], station="s\x00t", person_id=kim, via="mcp")) is True)
+    ck("it reads back as running", s.list_brain_calls() == [{
+        "id": "c1", "at": _T, "tool": "ask_brain", "deep": False, "question": "why", "repos": ["o/web"],
+        "duration_ms": None, "input_tokens": None, "output_tokens": None, "ok": None, "error": None,
+        "station": "st", "person_id": kim, "via": "mcp"}], s.list_brain_calls())
+    s.finish_brain_call("c1", 12, False, 3, None, "bo\x00om")
+    ck("finishing sets how it went",
+       (lambda c: (c["duration_ms"], c["ok"], c["input_tokens"], c["output_tokens"], c["error"]))(
+           s.list_brain_calls()[0]) == (12, False, 3, None, "boom"), s.list_brain_calls())
+    since = _T - timedelta(hours=1)
+    ck("the cap counts the calls since then, and a refused call is not kept",
+       s.reserve_brain_call(call("c2"), 2, since) is True
+       and s.reserve_brain_call(call("c3"), 2, since) is False
+       and s.reserve_brain_call(call("c4"), 0, since) is False
+       and sorted(c["id"] for c in s.list_brain_calls()) == ["c1", "c2"])
+    ck("another depth or tool has its own count, and an older call is not counted",
+       s.reserve_brain_call(call("c5", deep=True, station="", person_id="", via=""), 1, since) is True
+       and s.reserve_brain_call(call("c6", tool="search_brain", at=_LATER), 1, since) is True
+       and s.reserve_brain_call(call("c7"), 1, _LATER) is True)
+    ck("with a cap and no since nothing is counted", s.reserve_brain_call(call("c8"), 1, None) is True
+       and s.reserve_brain_call(call("c9"), 0, None) is False)
+    by = {c["id"]: c for c in s.list_brain_calls()}
+    ck("empty station, person and via are null; no question or repos read as such",
+       (by["c5"]["station"], by["c5"]["person_id"], by["c5"]["via"], by["c5"]["question"], by["c5"]["repos"],
+        by["c5"]["deep"]) == (None, None, None, None, [], True), by["c5"])
+    ck("newest first, then by id; since, tool, station and limit narrow the list",
+       [c["id"] for c in s.list_brain_calls()] == ["c6", "c1", "c2", "c5", "c7", "c8"]
+       and [c["id"] for c in s.list_brain_calls(since=_LATER)] == ["c6"]
+       and [c["id"] for c in s.list_brain_calls(tool="search_brain")] == ["c6"]
+       and [c["id"] for c in s.list_brain_calls(station="st")] == ["c1"]
+       and [c["id"] for c in s.list_brain_calls(limit=2)] == ["c6", "c1"],
+       [c["id"] for c in s.list_brain_calls()])
+
+    print("== two processes, each with its own engine ==")
+    others, engines = [], []
+    for _ in range(4):                  # each as another process: its own lock and its own engine
+        o = copy.copy(s)
+        o._swrite = threading.RLock()
+        o.sessions_db = SessionStore(d, sdb.engine.url.render_as_string(hide_password=False)
+                                     if sdb.dialect == "postgresql" else None)
+        others.append(o)
+        engines.append(o.sessions_db.engine)
+
+    def slow(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith(("SELECT repo_maps.body", "SELECT count(*)", "SELECT brain_repo_folders.path",
+                                 "INSERT INTO brain_repo_updates")):
+            time.sleep(0.15)            # the read of one writer is done before the next one writes
+
+    def at_once(call):
+        got, errors = [], []
+
+        def run(i, o):
+            try:
+                got.append(call(i, o))
+            except Exception as e:
+                errors.append(type(e).__name__)
+        threads = [threading.Thread(target=run, args=(i, o)) for i, o in enumerate(others)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        return got, errors
+
+    for e in engines:
+        event.listen(e, "after_cursor_execute", slow)
+    try:
+        s.set_repo_map("o/race", "start", "n", "st", None, _T)
+        got, errors = at_once(lambda i, o: o.set_repo_map("o/race", f"body {i}", f"n{i}", "st", None, _LATER,
+                                                         map_version("start")))
+        ck("four writers of one map version: one wins, the others are told it changed",
+           got == [True] and errors == ["MapChanged"] * 3 and len(s.repo_map_history("o/race")) == 2,
+           (got, errors, s.repo_map_history("o/race")))
+        got, errors = at_once(lambda i, o: o.reserve_brain_call(
+            call(f"r{i}", tool="read_doc"), 2, _T - timedelta(hours=1)))
+        ck("four calls at once under a cap of 2: two are kept",
+           not errors and sorted(got) == [False, False, True, True]
+           and len(s.list_brain_calls(tool="read_doc")) == 2, (got, errors))
+        got, errors = at_once(lambda i, o: o.add_brain_repo("o/race", f"src-{i}", None, _T))
+        ck("one repo connected four times at once is added once",
+           not errors and sorted(got) == [False, False, False, True], (got, errors))
+        got, errors = at_once(lambda i, o: o.set_brain_folders("o/race", ["a", "b"], None, _T))
+        ck("the same folders chosen at once are added by one writer only",
+           not errors and sorted(got) == sorted([(["a", "b"], [])] + [([], [])] * 3), (got, errors))
+        got, errors = at_once(lambda i, o: o.set_brain_folders("o/race", [f"only{i}"], None, _T))
+        have = [f["path"] for f in s.list_brain_folders("o/race")]
+        ck("different choices made at once leave one writer's folders, not all of them",
+           not errors and len(have) == 1, (have, errors))
+        for i in range(50):
+            s.add_brain_repo_update("o/race", "update", True, _T + timedelta(seconds=i))
+        got, errors = at_once(lambda i, o: o.add_brain_repo_update("o/race", "update", True,
+                                                                  _LATER + timedelta(seconds=i)))
+        ck("updates kept at once still leave exactly 50",
+           not errors and stored("SELECT count(*) FROM brain_repo_updates WHERE repo = 'o/race'") == 50,
+           (stored("SELECT count(*) FROM brain_repo_updates WHERE repo = 'o/race'"), errors))
+        s.update_brain_repo("o/race", {"state": "failed"})
+        got, errors = at_once(lambda i, o: o.requeue_brain_repo("o/race"))
+        ck("a failed repo is requeued once", not errors and sorted(got) == [False, False, False, True],
+           (got, errors))
+    finally:
+        for o in others:
+            o.sessions_db.close()
+
+    with s._lock:
+        have = set(s._tables_of(s.con))
+    ck("DuckDB has none of the six tables", not (have & set(BRAIN_NAMES)), sorted(have & set(BRAIN_NAMES)))
+    s.close()
+
+
+def brain_takeover():
+    print("== Postgres: the six tables the old DDL made are taken over ==")
+    if not PG:
+        print("  skip  TARES_TEST_PG is not set")
+        return
+    import psycopg
+    sch, dsn = _pg_schema()
+    try:
+        old_ddl_postgres(dsn, seed=BRAIN)
+
+        def pg():
+            return psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}")
+
+        def snapshot():
+            out = {}
+            with pg() as c:
+                for t in BRAIN_NAMES:
+                    cols = c.execute("SELECT column_name, data_type, is_nullable, column_default FROM "
+                                     "information_schema.columns WHERE table_schema = %s AND table_name = %s "
+                                     "ORDER BY column_name", [sch, t]).fetchall()
+                    rows = c.execute(f"SELECT {', '.join(chr(34) + col[0] + chr(34) for col in cols)} "
+                                     f"FROM {t}").fetchall()
+                    idx = c.execute("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND "
+                                    "tablename = %s ORDER BY indexname", [sch, t]).fetchall()
+                    out[t] = (cols, sorted(tuple(map(str, r)) for r in rows), idx)
+            return out
+
+        before = snapshot()
+        ck("the old DDL made the six tables, with the sample rows",
+           {t: len(before[t][1]) for t in BRAIN_NAMES} == BRAIN_COUNTS)
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        ck(f"the upgrade stamps {ts.HEAD}", ts.versions(sdb) == [ts.HEAD], ts.versions(sdb))
+        ck("every table, its columns, types, defaults, rows and indexes, is as the old code left it",
+           snapshot() == before, [t for t in before if snapshot()[t] != before[t]])
+        ck("each table's columns, types and primary key are what tables.py declares",
+           ts.shape(sdb.engine, BRAIN_NAMES) == {t: ts.declared(sdb.engine)[t] for t in BRAIN_NAMES},
+           ts.shape(sdb.engine, BRAIN_NAMES))
+        ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
+        ts.step_down(sdb, "0018_integration_tables")
+        ck("a downgrade keeps the tables, rows and indexes", snapshot() == before
+           and ts.versions(sdb) == ["0018_integration_tables"], ts.versions(sdb))
+        sdb.upgrade()
+        ck("an upgrade after it leaves them as they are", snapshot() == before)
+
+        # a database from before the later columns and the index
+        ts.step_down(sdb, "0018_integration_tables")
+        with pg() as c:
+            for col in ("place", "job_started_at", "sync_failures", "sync_error"):
+                c.execute(f"ALTER TABLE brain_repos DROP COLUMN {col}")
+            c.execute("DROP INDEX idx_brain_repo_updates_repo")
+        sdb.upgrade()
+        ck("missing columns and the missing index are added", ts.shape(sdb.engine, BRAIN_NAMES)
+           == {t: ts.declared(sdb.engine)[t] for t in BRAIN_NAMES}
+           and ts.index_columns(sdb.engine, "brain_repo_updates", "idx_brain_repo_updates_repo")
+           == ["repo", "at"])
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+    # a database the revision made itself: the code before it can still write to it
+    sch, dsn = _pg_schema()
+    try:
+        sdb = SessionStore(tempfile.mkdtemp(), dsn)
+        sdb.upgrade()
+        with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
+            c.execute("INSERT INTO brain_repos (repo) VALUES ('o/r')")
+            c.execute("INSERT INTO brain_calls (id) VALUES ('c')")
+            got = (c.execute("SELECT files_done, files_total, sync_failures FROM brain_repos").fetchone(),
+                   c.execute("SELECT deep FROM brain_calls").fetchone()[0])
+            idx = c.execute("SELECT count(*) FROM pg_indexes WHERE schemaname = %s AND indexname = "
+                            "'idx_brain_repo_updates_repo'", [sch]).fetchone()[0]
+        ck("a new database has the old defaults and index", got == ((0, 0, 0), 0) and idx == 1, (got, idx))
+        sdb.close()
+    finally:
+        _drop_schema(sch)
+
+
 if __name__ == "__main__":
     ck("settings, the accounts, the project and ticket tables are in MOVED_TABLES, with the five session tables",
        [t.name for t in MOVED_TABLES]
@@ -3594,7 +4012,8 @@ if __name__ == "__main__":
            "crews", "spec_questions", "signoffs", "handover_overrides", "answers", "waiting_told",
            "guardrail_rules", "guardrail_pairs", "integration_choices", "integration_connections",
            "project_integrations", "pending_writeback", "project_secrets", "project_required_checks",
-           "merge_queue", "project_merge_method"])
+           "merge_queue", "project_merge_method", "repo_maps", "repo_map_history", "brain_repos",
+           "brain_repo_folders", "brain_repo_updates", "brain_calls"])
     if not HARNESS:
         settings_copy()
     legacy_file()
@@ -3626,5 +4045,8 @@ if __name__ == "__main__":
     integr_copy()
     integr_methods()
     integr_takeover()
+    brain_copy()
+    brain_methods()
+    brain_takeover()
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

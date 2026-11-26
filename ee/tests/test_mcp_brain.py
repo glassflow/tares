@@ -27,9 +27,11 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 
 import httpx
+from sqlalchemy import delete
 
 import fake_cp
 import fake_lore
+from tares.session_store.tables import brain_calls
 from tares_ee import mcp_brain
 from tares_ee.brain import ask as ask_mod
 from tares_ee.brain import index as index_mod
@@ -80,12 +82,16 @@ async def main():
             """A connected repo in the state asked for, with a lore source of its own."""
             src = repo.replace("/", "_")
             store.add_brain_repo(repo, "id-" + src, None, now_utc(), state=state)
-            store.sc.execute("UPDATE brain_repos SET files_done = ?, files_total = ?, error = ? WHERE repo = ?",
-                             [done, total, error, repo])
+            store.update_brain_repo(repo, {"files_done": done, "files_total": total, "error": error})
+
+        def drop_repos():
+            for r in store.list_brain_repos():
+                store.delete_brain_repo(r["repo"])
 
         def clear():
-            store.sc.execute("DELETE FROM brain_repos")
-            store.sc.execute("DELETE FROM brain_calls")
+            drop_repos()
+            with store.sessions_db.begin() as conn:
+                conn.execute(delete(brain_calls))
             lore.requests.clear()
 
         def asked(body=None, **more):
@@ -393,7 +399,7 @@ async def main():
         ck("a document id with ? and # reaches the cell whole, not cut at the ?", calls()[0]["question"] == "nope?x=1#top", str(calls()[0]))
         out = await mcp_brain.get_brain_doc("nope")
         ck("a refusal comes back as words, not a crash", out.startswith("error 404:") and "no such repo or document" in out, out)
-        store.sc.execute("DELETE FROM brain_repos")
+        drop_repos()
         out = json.loads(await mcp_brain.ask_brain("x"))
         ck("ask_brain with no repo says where to connect one", out == {"ready": False, "message": out["message"], "notes": []}
            and "No repo is connected" in out["message"], str(out))

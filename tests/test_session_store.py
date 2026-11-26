@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0018_integration_tables"                 # the newest revision: tests that count revisions move with it
-REVISIONS = 18
+HEAD = "0019_brain_tables"                 # the newest revision: tests that count revisions move with it
+REVISIONS = 19
 FAILS = []
 
 
@@ -252,8 +252,10 @@ CREW_TABLES = ["assumptions", "desk_items", "decisions", "handovers", "grants", 
 INTEGRATION_TABLES = ["guardrail_rules", "guardrail_pairs", "integration_choices", "integration_connections",
                       "project_integrations", "pending_writeback", "project_secrets",
                       "project_required_checks", "merge_queue", "project_merge_method"]    # TR-1617
+BRAIN_TABLES = ["repo_maps", "repo_map_history", "brain_repos", "brain_repo_folders", "brain_repo_updates",
+                "brain_calls"]    # TR-1618
 ACCOUNT_TABLES = (ACCOUNT_TABLES + PROJECT_TABLES + TICKET_TABLES + REVIEW_TABLES + CREW_TABLES
-                  + INTEGRATION_TABLES)
+                  + INTEGRATION_TABLES + BRAIN_TABLES)
 ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts", "session_moves",
