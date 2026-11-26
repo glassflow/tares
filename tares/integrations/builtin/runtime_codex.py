@@ -176,6 +176,12 @@ class RuntimeCodex(Runtime):
                 },
                 # a hook Codex was not told to trust is skipped without an error (TR-1576)
                 "bypass_hook_trust": True,
+                # the station writes its report (`tares factory report`) in the crew home, which is not its
+                # workspace: without this every write of it would wait for the person's approval (TR-1598).
+                # Only the reports: the rest of the crew home (stations.json, the key, other stations' mail)
+                # stays out of a station's reach. A .git is never writable to a sandboxed command, so a fetch,
+                # a commit or a push still asks for approval.
+                "sandbox_workspace_write": {"writable_roots": ["{CREW_HOME}/reports"]},
             },
         }
         if _text(ctx, "model"):

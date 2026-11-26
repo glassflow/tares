@@ -137,6 +137,8 @@ ck("a Codex builder reports through Tares: a question that blocks by blocking th
    and "the factory wakes the crew reviewer from the review queue" in manual
    and "4. Send nothing: write the tickets you hold under `## Now` in your report." in manual
    and "A Codex station cannot send a message to another station yet." in manual)
+ck("its liveness wakes do not depend on the idle_wake setting (TR-1598: the factory always wakes a Codex station)",
+   "woken this way whatever the `idle_wake` setting" in manual and "nothing wakes a Codex station" not in manual)
 ck("a command its sandbox refuses is asked again for approval, which reaches the desk; one the guard refuses blocks",
    "run the same command again and ask for approval (escalated permissions" in manual
    and "**The factory's guard** refuses" in manual and "Your person can allow it in the console" not in manual)

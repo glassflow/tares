@@ -105,7 +105,7 @@ with = '''- A station stays up between turns. One that dies is revived by the wa
 
 [[edit]]
 find = ''' If `idle_wake` goes off, the watch tells you once to re-arm your tick.'''
-with = ''' With `idle_wake` off nothing wakes a Codex station on a schedule: write under `## Waiting on` in your report what you wait for.'''
+with = ''' A Codex station is woken this way whatever the `idle_wake` setting: it holds no tick of its own.'''
 
 [[edit]]
 find = '''A pacing note: put your tick at 45 minutes (`CronList`, `CronDelete`, `CronCreate`) until a note says the pacing stopped, then back as your manual says.'''
