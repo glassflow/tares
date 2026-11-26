@@ -748,7 +748,9 @@ def _same_command(claimed: str, ran: str) -> bool:
 # What makes a command more than a plain `a && b && c` chain: a pipe, `||`, `;`, a background `&`, a
 # redirection, a subshell or group, a command substitution, a newline. Such a command is never split to
 # credit one of its steps: which step did what cannot be told from its exit code.
-_NOT_PLAIN = {"|", "||", ";", ";;", "&", "|&", "<", ">", ">>", "<<", "<<<", "<&", ">&", "&>", "(", ")", "{", "}"}
+# Keep quotes and escapes until the operators have been located. shlex removes them, so its
+# token "&&" alone cannot distinguish a shell operator from an ordinary quoted argument.
+_SHELL_PART = re.compile(r''''(?:[^']*)'|"(?:\\.|[^"\\])*"|\\.|(&&|[;&|<>(){}#])''')
 
 
 def _words(command: str):
@@ -764,21 +766,25 @@ def _words(command: str):
 
 def _and_steps(command: str) -> list | None:
     """The steps of a plain `a && b && c` chain, each as its words, or None for any other command (one step, or
-    anything _NOT_PLAIN, a command substitution or a newline)."""
+    any other shell operator, a comment, a command substitution or a newline)."""
     text = str(command or "")
     if "$(" in text or "`" in text or "\n" in text:
         return None
-    words = _words(text)
-    if not words or "&&" not in words or any(w in _NOT_PLAIN for w in words):
+    if not _words(text):
         return None
-    steps, cur = [], []
-    for w in words:
-        if w == "&&":
-            steps.append(cur)
-            cur = []
-        else:
-            cur.append(w)
-    steps.append(cur)
+    parts, start = [], 0
+    for match in _SHELL_PART.finditer(text):
+        operator = match.group(1)
+        if operator is None:
+            continue
+        if operator != "&&":
+            return None
+        parts.append(text[start:match.start()])
+        start = match.end()
+    if not parts:
+        return None
+    parts.append(text[start:])
+    steps = [_words(part) for part in parts]
     return steps if all(steps) else None
 
 
