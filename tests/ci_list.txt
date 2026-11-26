@@ -43,6 +43,7 @@ test_crew_claude
 test_crew_client
 test_crew_codex_mail
 test_crew_codex_pace
+test_crew_codex_planning
 test_crew_codex_prompts
 test_crew_codex_station
 test_crew_codex_up
