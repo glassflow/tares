@@ -253,6 +253,7 @@ test_role_text
 test_run_results
 test_runtime_codex
 test_runtime_launch
+test_saved_entity_counts
 test_schedule_trigger
 test_schema_compat
 test_schema_compat_guards
