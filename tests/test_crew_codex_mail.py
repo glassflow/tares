@@ -190,7 +190,7 @@ import asyncio  # noqa: E402
 
 import tares.mcp_factory as mf  # noqa: E402
 
-os.environ["FACTORY_STATION"] = ORCH
+os.environ.update(FACTORY_STATION=ORCH, FACTORY_RUNTIME="codex")   # a Codex station's identity, as its launch sets it
 said_ok = json.loads(asyncio.run(mf.send_to_station("reviewer", "[TF:FYI] hello")))
 said_empty = json.loads(asyncio.run(mf.send_to_station("reviewer", " ")))
 del os.environ["FACTORY_STATION"]
@@ -202,10 +202,14 @@ mf.TARESD = tares.url
 tares.world.setdefault("routes", {})["/api/factory/integrations/effective"] = (
     200, {"slots": [{"slot": "runtime", "integration": "claude_code"}]})
 os.environ["FACTORY_STATION"] = ORCH
-said_cc = json.loads(asyncio.run(mf.send_to_station("reviewer", "[TF:FYI] hello")))
+said_codex = json.loads(asyncio.run(mf.send_to_station("reviewer", "[TF:FYI] hello")))   # FACTORY_RUNTIME=codex
+del os.environ["FACTORY_RUNTIME"]
+said_cc = json.loads(asyncio.run(mf.send_to_station("reviewer", "[TF:FYI] hello")))   # a Claude Code station's identity
 del os.environ["FACTORY_STATION"]
 del tares.world["routes"]["/api/factory/integrations/effective"]
-ck("on a cell whose stations run on Claude Code it is refused: nothing would collect it (use SendMessage)",
+ck("a Codex station's call is queued by its own runtime, even when the factory's default is now Claude Code",
+   said_codex.get("queued") is True, said_codex)
+ck("a Claude Code station's call is refused: nothing would collect it (use SendMessage)",
    "SendMessage" in said_cc.get("error", "") and not said_cc.get("queued"), said_cc)
 
 print("b. between turns only")
@@ -335,6 +339,29 @@ ck("two rounds at once (two processes) queue its message once", len(ids) == 1 an
 rested(REV)
 round_()
 rested(REV)
+
+print("d4b. a retire takes its station's mail after the interrupt, and settles a pending hand-over first")
+SND6 = "shop-build-m6"
+start_with(SND6, "builder")
+rested(SND6)
+order = []
+real_interrupt, real_final = cs._interrupt, codex_mail.final
+cs._interrupt = lambda *a, **k: (order.append("interrupt"), real_interrupt(*a, **k))[1]
+codex_mail.final = lambda *a, **k: (order.append("final"), real_final(*a, **k))[1]
+handed = {"id": "m-handed-late", "from": REV, "at": state.utc_stamp(), "text": "[TF:VERDICT] pass"}
+codex_mail.queue(paths, SND6, handed)
+cs.hand(paths, SND6, codex_mail.turn_text([handed]))   # a round handed it, and stopped before noting it
+state.write_json(paths.station_file(SND6, codex_mail.HANDING), {"ids": [handed["id"]], "prompt": codex_mail.turn_text([handed])})
+rested(SND6)
+try:
+    _, err, _ = quietly(lifecycle.retire, client, paths, [SND6], claude_bin="")
+finally:
+    cs._interrupt, codex_mail.final = real_interrupt, real_final
+back = [m for m in codex_mail.inbox(paths, REV) if m["id"] == "m-handed-late-undelivered"]
+ck("the station's last messages are read after its turn is interrupted, before its app-server ends",
+   err is None and order[:2] == ["interrupt", "final"], (err, order))
+ck("a batch it was handed, proven in its conversation, is settled as delivered and not sent back",
+   back == [] and handed["id"] in codex_mail.delivered(paths, SND6), back)
 
 print("d5. a message's text cannot pass for another sender's")
 fake = codex_mail.turn_text([{"id": "m-1", "from": BLD, "at": "2026-11-26T10:00:00Z",

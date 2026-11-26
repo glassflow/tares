@@ -86,7 +86,7 @@ GUARD_TIMEOUT = 5  # seconds, as claude-plugin/hooks/hooks.json gives the guard
 # The identity headers a station's MCP calls carry, and the variable of its environment each is read from.
 MCP_IDENTITY = {"X-Tares-Station": "FACTORY_STATION", "X-Tares-Role": "FACTORY_ROLE",
                 "X-Tares-Parent": "FACTORY_PARENT", "X-Tares-Crew": "FACTORY_CREW",
-                "X-Tares-Project": "TARES_PROJECT"}
+                "X-Tares-Project": "TARES_PROJECT", "X-Tares-Runtime": "FACTORY_RUNTIME"}
 MCP_SERVER = "tares"
 # The plugin's headers helper, told the crew's key file on its own command line: Codex gives a helper none
 # of the station's environment.
@@ -159,6 +159,7 @@ class RuntimeCodex(Runtime):
         env = RuntimeClaudeCode._env(station, role, parent, project, repo, ctx)
         env.pop("FACTORY_AUTOCOMPACT", None)   # Claude Code's --autocompact; Codex compacts by itself
         env["CODEX_HOME"] = "{CODEX_HOME}"
+        env["FACTORY_RUNTIME"] = "codex"   # the station's runtime, sent with each MCP call (X-Tares-Runtime)
 
         guard = {"type": "command", "command": GUARD_HOOK, "timeout": GUARD_TIMEOUT}
         thread = {

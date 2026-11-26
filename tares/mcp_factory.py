@@ -132,17 +132,13 @@ async def send_to_station(to: str, message: str) -> str:
     me = _caller("station")
     if not me:
         return json.dumps({"error": "only a factory station sends a station a message; a person answers on the desk"})
-    runtime = ""
-    try:   # on Claude Code nothing collects this call: say so rather than lose the message
-        async with _cx(10) as cx:
-            r = await cx.get(f"{TARESD}/api/factory/integrations/effective")
-        doc = r.json() if r.status_code == 200 else {}
-        slots = doc.get("slots") if isinstance(doc, dict) else None
-        runtime = next((s.get("integration") for s in slots or [] if isinstance(s, dict) and s.get("slot") == "runtime"), "")
-    except Exception:  # noqa: BLE001 - a slot that cannot be read refuses nothing: the watch tells the sender
-        runtime = ""
-    if runtime and runtime != "codex":
-        return json.dumps({"error": f"this cell's stations run on {runtime}: send the message with SendMessage"})
+    # The caller's own runtime, from its identity headers (a Codex station's app-server sends X-Tares-Runtime,
+    # set by the crew, never by the model). Not the factory's default: that may change while a crew runs, and a
+    # Codex station told "use SendMessage" could not (TR-1599).
+    runtime = _caller("runtime")
+    if runtime != "codex":
+        return json.dumps({"error": "send_to_station is for a station on Codex; a station on Claude Code sends with "
+                                    "SendMessage"})
     to, message = (to or "").strip(), (message or "").strip()
     if not to or not message:
         return json.dumps({"error": "name the station (`to`) and give the message"})
