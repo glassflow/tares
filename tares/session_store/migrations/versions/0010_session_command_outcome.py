@@ -15,14 +15,14 @@ The columns are written out here, not imported from tables.py: a revision is a r
 
 Downgrade: drops the two columns. The lines the rows were made from stay where they are.
 
-Revision ID: 0008_session_command_outcome
-Revises: 0007_session_archive
+Revision ID: 0010_session_command_outcome
+Revises: 0009_report_texts
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0008_session_command_outcome"
-down_revision = "0007_session_archive"
+revision = "0010_session_command_outcome"
+down_revision = "0009_report_texts"
 branch_labels = None
 depends_on = None
 

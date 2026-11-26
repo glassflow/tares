@@ -64,6 +64,8 @@ ERROR_BACKOFF = 300   # a read that failed is tried again after this long, not e
 def stale(pr: dict | None) -> bool:
     if not pr or not pr.get("repo"):
         return False
+    if pr.get("sample"):
+        return False    # made up by scripts/seed_report_demo.py: GitHub has no such pull request
     if pr.get("merged") and "changed_files" in pr:
         return False            # a merged PR does not change any more (read once for its size)
     at = pr.get("checked_at")

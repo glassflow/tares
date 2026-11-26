@@ -47,6 +47,11 @@ eq("day", t.formatDayUTC("2026-11-12T14:05:00Z"), "Nov 12, 2026");
 eq("day reads UTC at the edge", t.formatDayUTC("2026-11-12T23:30:00-02:00"), "Nov 13, 2026");
 eq("day of a bad string passes it through", t.formatDayUTC("soon"), "soon");
 
+// --- formatDayShortUTC: the day without its year ---
+eq("short day", t.formatDayShortUTC("2026-11-16"), "Nov 16");
+eq("short day reads UTC at the edge", t.formatDayShortUTC("2026-11-30T23:30:00-02:00"), "Dec 1");
+eq("short day of a bad string passes it through", t.formatDayShortUTC("soon"), "soon");
+
 // --- formatRelative: the tooltip's backward ladder, floored ---
 for (const [ago, want] of [
   [0, "just now"], [4 * S, "just now"], [5 * S, "5s ago"], [59 * S, "59s ago"], [60 * S, "1m ago"],

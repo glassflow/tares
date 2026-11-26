@@ -29,10 +29,11 @@ from sqlalchemy import and_, delete, null, select
 from . import session_ingest, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
-from .session_store.tables import COPIED, project_sessions, session_stations, session_states
+from .session_store.tables import (COPIED, project_sessions, report_weeks, session_stations,
+                                    session_states)
 from .session_store.tables import session_commands, session_messages
-from .session_store.tables import (session_archive_parts, session_files, session_lines, session_said,
-                                    session_turns)
+from .session_store.tables import (report_texts, session_archive_parts, session_files, session_lines,
+                                    session_said, session_turns)
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 
@@ -2862,6 +2863,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return next((u for u in self.list_projects() if u["name"] == name), None)
 
     def delete_project(self, uid: str) -> None:
+        milestones = [m["id"] for m in self.list_milestones(uid)]
         with self._swrite:
             # the state rows first: a delete that stops half way leaves session rows with no
             # project, which every reader ignores
@@ -2883,10 +2885,35 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._usage_forget_project(uid)
         with self.sessions_db.begin() as conn:
             conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
+            # its weekly figures (report.py); a pass running now sees the project gone, above
+            conn.execute(delete(report_weeks).where(report_weeks.c.project == uid))
             # a crew station's session serves every project: its state stays
             conn.execute(delete(session_states).where(
                 session_states.c.session.not_in(select(project_sessions.c.session)),
                 session_states.c.session.not_in(select(session_stations.c.session))))
+            conn.execute(delete(report_texts).where(report_texts.c.kind == "milestone",
+                                                    report_texts.c.key.in_(milestones)))
+
+    # ── texts Tares writes from its figures (TR-1645, report_words.py) ──
+    def get_report_text(self, kind: str, key: str) -> dict | None:
+        t = report_texts
+        with self.sessions_db.begin() as conn:
+            r = conn.execute(select(t.c.text, t.c.source, t.c.figures, t.c.written_at).where(
+                t.c.kind == kind, t.c.key == key)).first()
+        return ({"kind": kind, "key": key, "text": r[0], "source": r[1],
+                 "figures": json.loads(r[2]) if r[2] else {}, "written_at": r[3]} if r else None)
+
+    def put_report_text(self, kind: str, key: str, text: str, source: str, figures: dict,
+                        written_at, replace: bool = False) -> None:
+        """Keep a text. The first one written for a kind and key stays, unless `replace`."""
+        values = {"text": text, "source": source,
+                  "figures": json.dumps(figures, ensure_ascii=False), "written_at": written_at}
+        stmt = self.sessions_db.upsert(report_texts).values(kind=kind, key=key, **values)
+        on = [report_texts.c.kind, report_texts.c.key]
+        stmt = (stmt.on_conflict_do_update(index_elements=on, set_=values) if replace
+                else stmt.on_conflict_do_nothing(index_elements=on))
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt)
 
     def get_project_setup(self, uid: str) -> dict | None:
         """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was

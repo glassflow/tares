@@ -42,6 +42,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 from fake_launch import launch_answer  # noqa: E402
+
+IDENTITY_HEADERS = ("X-Tares-Station", "X-Tares-Role", "X-Tares-Parent", "X-Tares-Crew", "X-Tares-Project")
 from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 PLUGIN = ROOT / "claude-plugin"
 
@@ -53,6 +55,8 @@ DEFAULT_WORLD = {
     "token": "",             # when set, Tares wants this key as a Bearer token
     "health": True,
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
+    "mcp_tool": "[]",        # the text a tool call at /mcp answers with, for a key the cell takes
+    "mcp_key": None,         # the key the cell takes from a tool call at /mcp, when it is another than `token`
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
     "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"],   # what /health lists
@@ -89,9 +93,30 @@ class FakeTares:
                 self.wfile.write(raw)
 
             def do_POST(self):
-                outer.log.append({"path": self.path, "auth": self.headers.get("Authorization"), "post": True})
-                self.rfile.read(int(self.headers.get("Content-Length") or 0))
-                if self.path == "/mcp" and outer.world["mcp"]:
+                # /mcp answers as the real endpoint does (tares/mcp_server.py): `initialize` wants a bearer, any
+                # bearer, when the server has a key of its own; a tool call is passed on to the cell, and a key the
+                # cell refuses comes back as the tool's text, "error 401: ...", with no error flag
+                auth = self.headers.get("Authorization")
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                try:
+                    asked = json.loads(raw.decode() or "{}")
+                except ValueError:
+                    asked = {}
+                asked = asked if isinstance(asked, dict) else {}
+                params = asked.get("params") if isinstance(asked.get("params"), dict) else {}
+                outer.log.append({"path": self.path, "auth": auth, "post": True, "method": asked.get("method"),
+                                  "tool": params.get("name"), "arguments": params.get("arguments"),
+                                  **{h.lower(): self.headers.get(h) for h in IDENTITY_HEADERS if self.headers.get(h)}})
+                w = outer.world
+                if self.path == "/mcp" and w["mcp"]:
+                    if w["token"] and not auth:
+                        return self._send(401, {"detail": "unauthorized"})
+                    if asked.get("method") == "tools/call":
+                        text = w["mcp_tool"]
+                        if w["token"] and auth != f"Bearer {w['mcp_key'] or w['token']}":
+                            text = "error 401: authentication required"
+                        return self._send(200, {"jsonrpc": "2.0", "id": asked.get("id"),
+                                                "result": {"content": [{"type": "text", "text": text}]}})
                     return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "fake"}}})
                 return self._send(404, {"detail": "no"})
 
@@ -144,6 +169,10 @@ class FakeTares:
                 hit = w["routes"].get(self.path) or w["routes"].get(u.path)
                 if hit:
                     return self._send(hit[0], hit[1])
+                if u.path == "/api/factory/integrations/effective":   # what a crew that has started nothing asks
+                    return self._send(200, {"project": None, "slots": [
+                        {"slot": "runtime", "integration": w["runtime"], "title": w["runtime"], "source": "factory",
+                         "reason": ""}]})
                 return self._send(404, {"detail": "no"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

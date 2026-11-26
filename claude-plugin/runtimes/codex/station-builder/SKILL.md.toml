@@ -1,0 +1,128 @@
+# The builder's manual as a Codex station reads it: edits of ../../../skills/station-builder/SKILL.md.
+#
+# How a Codex builder reports (TR-1598), until stations can message each other (TR-1599): through Tares.
+# State and results are the ticket's (its stage, its checks, its working doc's Progress) and the station's
+# report. A question that blocks goes to the desk by blocking the ticket (`set_stage` with a reason, which
+# Tares puts on the desk); one that does not is an assumption. A review is asked for by the stage alone.
+
+[[edit]]
+find = '''The orchestrator gives you tickets; your challenger (Codex, through the Tares plugin) checks every commit; the crew reviewer checks every PR; Tares merges it when the gate holds, and you never do. You coordinate and verify; the implementation happens in subagents so your context stays small.'''
+with = '''The orchestrator gives you tickets; the crew reviewer checks every PR; Tares merges it when the gate holds, and you never do. You implement and verify yourself: a Codex station has nobody to hand the work to, so keep what you read small.'''
+
+[[edit]]
+find = '''1. Load `factory-protocol` if you haven't.
+2. **Challenger.** If `get_crew_settings()` says `challenger: true`, call `set_session_flow("challenger")` now, before any commit. Codex then reviews each commit and its findings land on the ticket.'''
+with = '''1. The factory protocol is above; nothing has to be loaded.
+2. **Challenger.** No challenger runs on a Codex station yet, whatever `get_crew_settings()` says: nothing reviews a commit before the crew reviewer does. When the setting is on, say so in the PR body.'''
+
+[[edit]]
+find = '''A ticket you were given whose `repo` is not this one: tell the orchestrator and don't work it.
+4. Send `$FACTORY_ORCHESTRATOR` `READY` with the tickets you hold and anything missing or contradictory in them.'''
+with = '''A ticket you were given whose `repo` is not this one: don't work it, and write it under `## Waiting on` in your report.
+4. Send nothing: write the tickets you hold under `## Now` in your report. Anything missing or contradictory in a ticket is a question about it (see "When you're stuck").'''
+
+[[edit]]
+find = '''write no UI code until the mock is approved; Read `screen-ticket.md` in this skill's folder first.'''
+with = '''write no UI code until the mock is approved; follow the page `screen-ticket.md` below first.'''
+
+[[edit]]
+find = '''4. **Implement through subagents.** Give a `general-purpose` subagent the working doc, the agents doc rules and the exact definition of done. Keep only its summary. Tell it to use the LSP tool: when the tool answers for a file type, prefer it over grep for where a symbol is defined, what refers to it and what calls it, since a lookup returns only the matches and a grep search reads much more. Fall back to grep when the tool returns nothing, when the file type has no language server (`tares factory doctor` lists the ones missing) and for text that is not a symbol, such as a string, a config key or a comment.
+5. **Challenger findings.** With the challenger on, Codex reviews each commit and its P1 and P2 findings block until handled. Fix every P1 and P2, or waive a disputed one with `/tares:challenger-waive <n> <why it does not apply>` (in a crew station a waiver without its reason is refused) and repeat the reason in the PR body, so the reviewer can judge it. P3 is your call. Never re-run Codex yourself; the plugin's hooks do.'''
+with = '''4. **Implement it yourself**, from the working doc, the agents doc rules and the exact definition of done. Find where a symbol is defined, what refers to it and what calls it with `rg` or `git grep`, and read files in parts.
+5. **Challenger.** Nothing reviews your commits before the crew reviewer does (see Boot).'''
+
+[[edit]]
+find = '''(Tares matches it against your recorded Bash runs;'''
+with = '''(Tares matches it against the commands recorded for your session;'''
+
+[[edit]]
+find = '''8. **Ask for review only when your challenger layer is clean**: no open P1 or P2 without a waiver. Then `set_stage(ticket, "review", pr=<PR URL>, checks=[...])`, so Tares links the PR and records the checks you have not yet recorded in the same call, and, when the project's review gate is the Tares reviewer, send `$FACTORY_CREW-reviewer` `REVIEW` with project, repo path (`$FACTORY_REPO`), PR URL, head SHA, ticket, and how you tested. Put the assumption numbers (`A<n>`) and anything for the orchestrator to note in this message and in `DONE`, not in extra messages.
+   Check the gate first: `get_integrations(project)` names the `review` slot's integration. Send the `REVIEW` only when it is `tares` or `tares+input`. With any other review tool (CodeRabbit, Qodo) the crew reviewer is skipped: `set_stage(ticket, "review", pr=..., checks=[...])` is all you do, and no `REVIEW` goes out. Tares reads that tool's verdict on the current head by itself, records it on the ticket, and moves the ticket to `changes` when it asks for changes; the tick finds that and you carry on at step 9.'''
+with = '''8. **Ask for review**: `set_stage(ticket, "review", pr=<PR URL>, checks=[...])`, so Tares links the PR and records the checks you have not yet recorded in the same call. That call is the whole request: the factory wakes the crew reviewer from the review queue. Put how you tested, the assumption numbers (`A<n>`) and anything for the orchestrator to note in the PR body.
+   With another review tool in the project's `review` slot (`get_integrations(project)` names it: CodeRabbit, Qodo) the crew reviewer is skipped, and the call is the same. Tares reads that tool's verdict on the current head by itself, records it on the ticket, and moves the ticket to `changes` when it asks for changes; you find that when you are next woken and carry on at step 9.'''
+
+[[edit]]
+find = '''   From your first PR until your last one is merged, keep a schedule armed: `CronCreate` every 30 minutes, prompt `Builder tick: for each of your open tickets, get_ticket, and act once per head on its stage and stage_reason (steps 9 and 10); otherwise end the turn.` On each tick, read a ticket with'''
+with = '''   You hold no schedule: the factory wakes you when Tares shows work on a ticket you hold, and after quiet. On each wake, for each of your open tickets, act once per head on its stage and `stage_reason` (steps 9 and 10); otherwise end the turn. Read a ticket with'''
+
+[[edit]]
+find = ''' Check `CronList` first so you never hold two. Without it Claude Code stops you after about an hour idle, and a `VERDICT` or `RELAY` sent while you are stopped is lost; the verdict on GitHub is not. Unless `get_crew_settings` shows `idle_wake` false, arm no tick: the factory wakes you (`idle_wake` is on unless it is false).'''
+with = ''' If `get_crew_settings` shows `idle_wake` false, nothing wakes you: write under `## Waiting on` in your report which PRs you wait on.'''
+
+[[edit]]
+find = '''On `VERDICT: changes`: `set_stage(ticket, "changes")`, fix in the same worktree, re-verify and record the checks, push, and send a new `REVIEW` with the new head SHA. Tares moves'''
+with = '''On a verdict of `changes` (the ticket's stage and `stage_reason` say so, and the review is on the PR): `set_stage(ticket, "changes")` if Tares has not, fix in the same worktree, re-verify and record the checks, and push. Tares moves'''
+
+[[edit]]
+find = '''On `block`: `set_stage(ticket, "blocked", reason=...)` and tell the orchestrator. Tares puts a blocked ticket on the desk with your reason; your `ASK` replaces that item with the real question.'''
+with = '''On `block`: `set_stage(ticket, "blocked", reason=...)`, the reason written for a person: Tares puts a blocked ticket on the desk with it.'''
+
+[[edit]]
+find = '''Your settings forbid `gh pr merge`.'''
+with = '''You never run `gh pr merge`.'''
+
+[[edit]]
+find = '''wait; the tick looks again.'''
+with = '''wait; you look again when you are next woken.'''
+
+[[edit]]
+find = '''with the results; no new `REVIEW` unless the head moved. If "CI is not finished" lasts more than 30 minutes, `ASK` the orchestrator (`blocking: no`) with the PR and the reason;'''
+with = '''with the results. If "CI is not finished" lasts more than 30 minutes, note the PR and the reason in the working doc's `## Progress` and under `## Waiting on` in your report;'''
+
+[[edit]]
+find = '''rebase on that base branch, resolve, re-run the checks, push, and send a new `REVIEW` with the new head SHA;'''
+with = '''rebase on that base branch, resolve, re-run and record the checks, and push;'''
+
+[[edit]]
+find = '''read the failing run, fix, push, re-verify, and send a new `REVIEW`;'''
+with = '''read the failing run, fix, push, then re-verify and record the checks;'''
+
+[[edit]]
+find = '''`ASK` the orchestrator (`blocking: yes`) with the PR and the reason, and fix only what the reason names as yours.'''
+with = '''`set_stage(ticket, "blocked", reason=...)` with the PR and the reason, and fix only what the reason names as yours.'''
+
+[[edit]]
+find = '''to your log (`tares factory report log`), drop the ticket from `## Now`, and send the orchestrator `DONE`. If that was your last open PR, `CronDelete` your tick. Next ticket.'''
+with = '''to your log (`tares factory report log`) and drop the ticket from `## Now`. Next ticket.'''
+
+[[edit]]
+find = '''`touch "$FACTORY_HOME/stations/$FACTORY_STATION.done"` and tell the orchestrator. `tares factory crew watch`'''
+with = '''`touch "$FACTORY_HOME/stations/$FACTORY_STATION.done"`. `tares factory crew watch`'''
+
+[[edit]]
+find = '''On a `[TF:STOP]`, Read `stop.md` in this skill's folder and follow it.'''
+with = '''On a `[TF:STOP]`, follow the page `stop.md` below.'''
+
+[[edit]]
+find = ''' Then pick up where `## Now` says you stopped. Keep your tick at 45 minutes while the factory still paces the crew.'''
+with = ''' Then pick up where `## Now` says you stopped.'''
+
+[[edit]]
+find = '''then tell the orchestrator `A<n>` in one line (protocol rule 5).'''
+with = '''then note `A<n>` in the working doc's `## Progress` (protocol rule 5).'''
+
+[[edit]]
+find = '''- A rule worth keeping for every project: send the orchestrator an `FYI` with the evidence; it decides and records it. Never write shared docs yourself.'''
+with = '''- A rule worth keeping for every project: write it with the evidence to your log (`tares factory report log`), starting the line with `for the shared docs:`; the orchestrator decides and records it. Never write shared docs yourself.'''
+
+[[edit]]
+find = '''A secret the project lacks is an `ASK` to the orchestrator naming it; the person adds it in the console.'''
+with = '''A secret the project lacks blocks the ticket: `set_stage(ticket, "blocked", reason=...)` with its name and nothing else of it; the person adds it in the console.'''
+
+[[edit]]
+find = '''- Missing information the plan should have had: `ASK` the orchestrator with your recommendation. If it's not blocking, assume and continue.
+- A question about the ticket (what it should do, a choice the working doc leaves open) is for the ticket's assignee, normally your person: `ASK` with the ticket ref and, when it is not your person, `to:` their email or person id (the ticket's assignee as `get_ticket` shows it), and the orchestrator puts it on the desk addressed to them (only it writes the desk). A mismatch with a dependency built by another crew (the route, field names or version that differ from what you were told) goes the same way with `to:` that dependency ticket's assignee; name the route, the field names or the version in the question. Other crews cannot be messaged: the desk is how they hear.
+- A test or build you can't make pass after two honest attempts: log what you tried (`tares factory report log`), `set_stage(ticket, "blocked", reason=...)`, `ASK` with `blocking: yes`. Write the reason for a person: Tares shows it on the desk until your `ASK` arrives.
+- A permission denial: don't work around it. Put the exact command, verbatim, under `## Waiting on` in your report and tell the orchestrator your station name and that command, word for word (protocol rule 13).'''
+with = '''- Missing information the plan should have had: if it's not blocking, assume and continue (`assume`). If it blocks, `set_stage(ticket, "blocked", reason=...)` with the question, the options and your recommendation: Tares puts the ticket on the desk with that reason.
+- A question about the ticket (what it should do, a choice the working doc leaves open) is for the ticket's assignee, normally your person: blocking the ticket puts it on the desk for them. A mismatch with a dependency built by another crew (the route, field names or version that differ from what you were told) goes the same way; name the dependency's ticket and the route, the field names or the version in the reason. Other crews cannot be messaged: the desk is how they hear.
+- A test or build you can't make pass after two honest attempts: log what you tried (`tares factory report log`), then `set_stage(ticket, "blocked", reason=...)`. Write the reason for a person: Tares shows it on the desk.
+- A permission denial: don't work around it. Put the exact command, verbatim, under `## Waiting on` in your report (protocol rule 13); when the ticket cannot go on without it, block the ticket with your station name and that command, word for word, as the reason.'''
+
+[[edit]]
+find = '''- Don't start other sessions; ask the orchestrator for a helper.'''
+with = '''- Don't start other sessions.'''
+
+[[edit]]
+find = '''A ticket that needs a change there goes back to the orchestrator as an `ASK`.'''
+with = '''A ticket that needs a change there is blocked, with that as the reason.'''

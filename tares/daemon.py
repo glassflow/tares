@@ -65,13 +65,14 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import memory_route
 from .integrations.builtin import memory_tares
-from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
+from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, milestone_summary, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
 from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
+from . import report as report_mod
 from . import linear as _linear
 from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
@@ -735,6 +736,8 @@ def make_app() -> FastAPI:
         waiting_task = asyncio.create_task(_waiting_slack.run(loop_stop))
         # sessions idle for a week move from the session store to the archive, once an hour (TR-1506)
         archive_task = asyncio.create_task(session_archive.run(store, loop_stop))
+        # the weekly figures the report reads, built once and then kept current (TR-1666)
+        report_task = asyncio.create_task(report_mod.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -759,6 +762,7 @@ def make_app() -> FastAPI:
         licence_task.cancel()
         waiting_task.cancel()
         archive_task.cancel()
+        report_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -852,6 +856,9 @@ def make_app() -> FastAPI:
         if method == "POST" and path == "/api/crew/machine":
             return "ingest"  # the command line's report after `tares login` (TR-1312): a name and a
                              # version, from a key that can write the crew's settings
+        if method == "PUT" and path == "/api/crew/codex-limits":
+            return "ingest"  # a crew's own reading of its Codex account's limits (TR-1597), as its
+                             # Claude plan reading comes in over /ingest/claude_code. A read key is refused
         if (method == "PUT" and path == "/api/crew/settings") or (
                 method == "POST" and _PERSONAL_LINES.match(path)):
             return "ingest"  # a person's own crew settings and personal docs (TR-624): the
@@ -909,6 +916,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/tickets$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/milestones$"), "read"),
+        ("GET", re.compile(r"^/milestones/[^/]+/summary$"), "read"),
         ("GET", re.compile(r"^/crew$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
         ("GET", re.compile(r"^/assumptions$"), "read"),
@@ -5839,6 +5847,37 @@ def make_app() -> FastAPI:
         out = next(x for x in _milestones_out(uid) if x["id"] == m["id"])
         return {**out, "opened": factory_mod.label(store.get_ticket(uid, opened)) if opened else None}
 
+    # ── the summary of an accepted milestone (TR-1645, milestone_summary.py) ─────────────
+    summaries = milestone_summary.Summaries(store, _record_ask_usage)
+
+    def _summary_of(uid: str, ref: str) -> tuple[dict, bool]:
+        """(the milestone, whether it is accepted), for a project the caller may see."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        return m, next((x["accepted"] for x in _milestones_out(uid) if x["id"] == m["id"]), False)
+
+    @app.get("/api/projects/{uid}/milestones/{ref}/summary")
+    def read_milestone_summary(uid: str, ref: str):
+        """{milestone, summary: {text, source, figures, written_at} | null, writing}: a few lines
+        on what an accepted milestone delivered, the decisions taken on the way and what is left.
+        Written once, when it is accepted or else on the first read, in the background: `writing`
+        says to ask again shortly. A milestone not accepted has none."""
+        m, accepted = _summary_of(uid, ref)
+        if not accepted:
+            return summaries.answer(m["id"], None, False)
+        return summaries.read(uid, m["id"])
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/summary/rewrite", status_code=202)
+    def rewrite_milestone_summary(uid: str, ref: str, request: Request):
+        """Write an accepted milestone's summary again, from today's figures. Answers at once with
+        the kept text and `writing`."""
+        m, accepted = _summary_of(uid, ref)
+        if factory_api.caller(request)["station"]:
+            _err(ValueError("a person asks for a summary again, not a station"), 403)
+        if not accepted:
+            _err(ValueError(f"{m['name']} is not accepted yet, so it has no summary"), 409)
+        return summaries.rewrite(uid, m["id"])
+
     @app.post("/api/projects/{uid}/milestones/{ref}/accept")
     def accept_milestone(uid: str, ref: str, request: Request, body: dict = Body(default={})):
         """The person accepts a milestone as it is (TR-1017): every ticket merged, whatever checks
@@ -5849,6 +5888,7 @@ def make_app() -> FastAPI:
             _err(ValueError("a person accepts a milestone, not a station"), 403)
         person = _current_person(request)
         store.accept_milestone(uid, m["id"], _by(request, body), (person or {}).get("id"), now_utc())
+        summaries.queue(uid, m["id"])   # written in the background (TR-1645); never raises
         # the answer to the milestone's home item (TR-1450), in the words the item asked
         from . import factory_waiting as _fw
         place = next((i for i, x in enumerate(store.milestones_by_project([uid]).get(uid) or [], 1)
@@ -6537,7 +6577,7 @@ def make_app() -> FastAPI:
             _err(e)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
-    claude_usage.register(app, store)
+    claude_usage.register(app, store, _hidden_ids)
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares reads from Linear; write_ticket and write_milestone create there through Tares ──

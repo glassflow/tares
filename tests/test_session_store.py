@@ -29,8 +29,8 @@ from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0008_session_command_outcome"              # the newest revision: tests that count revisions move with it
-REVISIONS = 8
+HEAD = "0010_session_command_outcome"              # the newest revision: tests that count revisions move with it
+REVISIONS = 10
 FAILS = []
 
 
@@ -241,7 +241,8 @@ def upgrade_failure():
 SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "session_stations", "session_usage"]
 ALL_TABLES = SESSION_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
-                               "session_files", "session_lines", "session_archive_parts"]
+                               "session_files", "session_lines", "session_archive_parts",
+                               "report_weeks", "report_texts"]
 
 
 def shape(engine, names=ALL_TABLES):

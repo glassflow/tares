@@ -40,7 +40,7 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
   process.on("exit", () => { signed.stop(); open_.stop(); sre.stop(); });
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
 
-  const open = async (to, { d = signed, width = 1440, dark = false, wait = "connect-endpoint", ...mock } = {}) => {
+  const open = async (to, { d = signed, width = 1440, dark = false, wait = "connect-endpoint", healthDelay = 0, ...mock } = {}) => {
     const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 }, ...(dark ? { colorScheme: "dark" } : {}),
       permissions: ["clipboard-read", "clipboard-write"] });
     if (d === signed) await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, TOKEN);
@@ -48,6 +48,10 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
     const calls = await mockConnect(page, mock);
+    if (healthDelay) await page.route("**/health", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, healthDelay));
+      await route.continue();
+    });
     await page.goto(`${d.base}${to}`);
     await page.getByTestId("connect-page").waitFor({ timeout: 10000 }).catch(() => {});
     if (wait === "connect-endpoint") {
@@ -219,7 +223,10 @@ const text = async (loc) => (await loc.count()) === 1 ? (await loc.innerText()).
 
     // ── REST API ────────────────────────────────────────────────────────────────────────────────
     {
-      const { ctx, page } = await open("/connect?tab=rest");
+      const { ctx, page } = await open("/connect?tab=rest", { healthDelay: 500 });
+      // The REST snippet renders before /health resolves. Wait for its auth state,
+      // including when the health response deliberately arrives after the snippet.
+      await page.getByTestId("connect-code").first().filter({ hasText: "Bearer ••••••••" }).waitFor();
       await words(page, "rest");
       const c = (await codes(page))[0];
       ck("rest: a /read call at this origin", c.startsWith(`curl -X POST ${signed.base}/read`) && c.includes('"window": "15m"') && c.includes("Bearer ••••••••"), c);

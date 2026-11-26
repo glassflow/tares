@@ -96,6 +96,58 @@ async function checkNumerals(page, theme) {
   ck(`${theme}: no Departure Mono face is left`, got.departure === 0, JSON.stringify(got));
 }
 
+// TR-1667: WeekChart is a plot over a table with a column per week: every value is read without hovering, a
+// bar sits over its own week, and the data is drawn in ink.
+async function checkWeekChart(page) {
+  const got = await page.evaluate(() => {
+    const paint = (v) => { const p = document.createElement("span"); p.style.color = `var(${v})`; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; };
+    const chart = (id) => document.querySelector(`[data-testid=${id}]`);
+    const texts = (root, series) => [...root.querySelectorAll(`tr[data-series="${series}"] td`)].map((c) => c.textContent);
+    const bars = chart("week-chart-bars");
+    const heads = [...bars.querySelectorAll("th[data-week]")];
+    const rects = [...bars.querySelectorAll("rect[data-bar]")].map((r) => {
+      const box = r.getBoundingClientRect(), mid = box.left + box.width / 2;
+      return { series: r.dataset.bar, height: Number(r.getAttribute("height")), fill: getComputedStyle(r).fill, opacity: getComputedStyle(r).opacity,
+               week: heads.findIndex((h) => { const b = h.getBoundingClientRect(); return mid >= b.left && mid <= b.right; }),
+               col: Math.floor(Number(r.getAttribute("x")) / 10) };
+    });
+    const lines = chart("week-chart-lines");
+    const empty = chart("week-chart-empty");
+    return {
+      weeks: heads.map((h) => h.dataset.week), heads: heads.map((h) => h.textContent),
+      merged: texts(bars, "Merged"), rects, ink: paint("--ink"), soft: paint("--ink-soft"),
+      lines: [...lines.querySelectorAll("g[data-line]")].map((g) => ({ series: g.dataset.line, d: g.querySelector("path").getAttribute("d"),
+        dash: g.querySelector("path").getAttribute("stroke-dasharray"), dots: g.querySelectorAll("line[data-dot]").length, stroke: getComputedStyle(g.querySelector("path")).stroke })),
+      listed: lines.querySelectorAll("tr[data-series]").length, half: texts(lines, "Half"),
+      swatches: [...lines.querySelectorAll("tr[data-series] th svg")].map((s) => { const l = s.querySelector("line"); return l ? l.getAttribute("stroke-dasharray") || "none" : "empty"; }),
+      empty: { words: empty.textContent, table: !!empty.querySelector("table") },
+    };
+  });
+  ck("week chart: a column per week, named by its day, the running one marked", got.weeks.length === 8 && got.heads[0] === "Oct 5" && got.heads[7] === "Nov 23so far" && got.heads.filter((h) => /so far/.test(h)).length === 1, got.heads.join(" | "));
+  ck("week chart: every value is in view as text, and a week with no value says so", JSON.stringify(got.merged) === JSON.stringify(["3", "5", "4", "0", "7", "6", "-no value", "2"]), got.merged.join(" | "));
+  const merged = got.rects.filter((r) => r.series === "Merged");
+  ck("week chart: a bar for each value above 0, none for 0 or no value", merged.length === 6 && got.rects.length === 13, `${merged.length} of ${got.rects.length}`);
+  ck("week chart: each bar sits over its own week's column", got.rects.every((r) => r.week === r.col) && JSON.stringify(merged.map((r) => r.week)) === "[0,1,2,4,5,7]", JSON.stringify(got.rects.map((r) => [r.week, r.col])));
+  const top = Math.max(...got.rects.map((r) => r.height));
+  ck("week chart: heights share one scale from 0 (4 is half of 8)", Math.abs(merged[2].height - top / 2) < 0.01 && top === 116, `${merged[2] && merged[2].height} of ${top}`);
+  ck("week chart: bars are drawn in ink, the second series softer", merged.every((r) => r.fill === got.ink) && got.rects.filter((r) => r.series === "Reviewed").every((r) => r.fill === got.soft), JSON.stringify([got.ink, got.soft, merged[0] && merged[0].fill]));
+  ck("week chart: the running week's bars are lighter", got.rects.every((r) => (r.week === 7) === (r.opacity === "0.5")), JSON.stringify(got.rects.map((r) => r.opacity)));
+  ck("week chart: four lines are drawn and five series listed", got.lines.length === 4 && got.listed === 5, `${got.lines.length} / ${got.listed}`);
+  ck("week chart: a week with no value breaks the line", got.lines.every((l) => (l.d.match(/M/g) || []).length === 2 && l.dots === 7 && !/NaN/.test(l.d)), JSON.stringify(got.lines.map((l) => [l.d, l.dots])));
+  ck("week chart: lines differ by ink and by dash, the fourth in ink again", new Set(got.lines.map((l) => l.stroke)).size === 3 && got.lines[3]?.stroke === got.lines[0]?.stroke && JSON.stringify(got.lines.map((l) => l.dash)) === JSON.stringify([null, "5 3", "1.5 3", "8 3 1.5 3"]), JSON.stringify(got.lines.map((l) => [l.stroke, l.dash])));
+  ck("week chart: each drawn line has its swatch in the legend, with the same dash", JSON.stringify(got.swatches) === JSON.stringify(["none", "5 3", "1.5 3", "8 3 1.5 3", "empty"]), JSON.stringify(got.swatches));
+  ck("week chart: the caller's format says the unit", got.half[0] === "5 h" && got.half[1] === "6.5 h", got.half.join(" | "));
+  ck("week chart: with no values it says so and draws no table", /Nothing to chart: no data in these weeks\./.test(got.empty.words) && !got.empty.table, got.empty.words);
+  ck("week chart: the table is named by its caption", (await page.getByRole("table", { name: "Tickets merged and reviewed per week" }).count()) === 1);
+  const region = page.getByRole("region", { name: "Cost per week, API-equivalent" });
+  ck("week chart: weeks that do not fit scroll in a region the keyboard reaches", (await region.getAttribute("tabindex")) === "0" && await region.evaluate((e) => e.scrollWidth > e.clientWidth), "");
+  const held = await region.evaluate((e) => { e.scrollLeft = 400; const th = e.querySelector("tr[data-series] th"); const at = th.getBoundingClientRect().left - e.getBoundingClientRect().left; const moved = e.scrollLeft; e.scrollLeft = 0; return { at, moved }; });
+  ck("week chart: the series names stay in place while the weeks scroll", held.moved === 400 && Math.abs(held.at) < 1, JSON.stringify(held));
+  // the platform pages' element styles for tables must not box the figure
+  const box = await region.evaluate((e) => { const t = getComputedStyle(e.querySelector("table")); const h = getComputedStyle(e.querySelector("th[data-week]")); return [t.borderTopWidth, t.backgroundColor, h.backgroundColor, h.borderBottomWidth]; });
+  ck("week chart: the figure sits on the page, with no box or filled head", JSON.stringify(box) === JSON.stringify(["0px", "rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)", "0px"]), JSON.stringify(box));
+}
+
 // The kit V2 ladder (TR-1271, argus-ui theme.css --agency-dark-*). Light keeps the values it had.
 const LADDER = {
   light: { canvas: "rgb(240, 239, 226)", panel: "rgb(250, 249, 236)", popover: "rgb(250, 249, 236)", focus: "rgb(240, 239, 226)" },
@@ -136,7 +188,7 @@ async function waitFor(url, tries = 100) {
 
 const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "empty-line", "stat",
   "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "search-select", "switch", "checkbox", "banner", "toast-open",
-  "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link",
+  "sparkline", "line-chart", "week-chart-bars", "week-chart-lines", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link",
   "collapse-toggle", "collapse-stack", "moving-list", "status-changing"];
 
 (async () => {
@@ -231,6 +283,8 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     ck("the chart lists its marks as text, oldest first, out-of-range ones included", JSON.stringify(markLabels) === JSON.stringify(["Deploy of service-d", "Deploy of service-a", "Deploy of service-b", "Deploy of service-c", "Deploy of service-e"]), markLabels.join(" | "));
     ck("each listed mark has a time", (await marks.locator("li time").count()) === 5);
     ck("only the marks inside the range are drawn as lines", (await id("line-chart").locator("svg g[data-mark]").count()) === 3);
+
+    await checkWeekChart(page);
 
     // SearchSelect: typing narrows the rows, the first ("All ...") stays, Enter picks, Escape closes
     {
@@ -350,6 +404,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     await open();
     ck("no horizontal scroll at 390px", (await wide()) <= 0, `${await wide()}px`);
     ck("the line chart fits at 390px", await id("line-chart").evaluate((e) => e.getBoundingClientRect().right <= window.innerWidth));
+    ck("the week chart fits at 390px and scrolls inside itself", await id("week-chart-bars").evaluate((e) => { const r = e.querySelector("[role=region]"); return e.getBoundingClientRect().right <= window.innerWidth && r.scrollWidth > r.clientWidth; }));
     await shot("gallery-narrow.png");
 
     ck("no console errors", errors.length === 0, errors.join(" | "));

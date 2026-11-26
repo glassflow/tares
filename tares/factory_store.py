@@ -1132,15 +1132,18 @@ class FactoryStore:
                 "last_at": last or r[5], "lines": n, "state": r[6],
                 "state_reason": r[7], "state_at": r[8], "crew_id": r[10]}
 
-    def station_rollup(self, source: str, keep: int = EARLIER_KEPT) -> list[dict]:
+    def station_rollup(self, source: str, keep: int = EARLIER_KEPT,
+                       hidden=frozenset()) -> list[dict]:
         """One row per station (crew id and name), however many sessions played it (TR-1500):
         `cur` the newest session (as station_sessions gives it), `earlier` the `keep` most recent
         before it, `earlier_count` how many there are in all, and the totals over every session:
         `projects` (sorted), `usage` (None when none of them has any) and `coordination_calls`.
+        `usage` leaves out the replies that count for a project in `hidden` (the ones the caller
+        cannot see, TR-1696); the rest of the row does not read it.
         Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
         stays the size of the stations; before, the same is built from the full list."""
         if not session_ingest.caught_up(self):
-            return self._rollup_from_rows(source, keep)
+            return self._rollup_from_rows(source, keep, hidden)
         ss, sx, u = session_stations, sessions_table, session_usage
         j, named, last = self._station_join(source)
         rank = func.row_number().over(
@@ -1157,8 +1160,12 @@ class FactoryStore:
                 .select_from(j).group_by(ss.c.crew_id, ss.c.station))
         worked = select(ss.c.crew_id, ss.c.station, func.coalesce(ss.c.project, named)).distinct()
         spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
-                 .select_from(ss.join(u, u.c.session == ss.c.session))
                  .group_by(ss.c.crew_id, ss.c.station))
+        if hidden:   # that join starts at the replies, so the ones of no station are put out
+            replies, seen = self._replies_outside(hidden)
+            spent = spent.select_from(replies).where(ss.c.session.is_not(None), seen)
+        else:
+            spent = spent.select_from(ss.join(u, u.c.session == ss.c.session))
         with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
             top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
             worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
@@ -1205,10 +1212,10 @@ class FactoryStore:
                   reverse=True)
         return rows
 
-    def _rollup_from_rows(self, source: str, keep: int) -> list[dict]:
+    def _rollup_from_rows(self, source: str, keep: int, hidden=frozenset()) -> list[dict]:
         """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
         rows = self._newest_first(self.station_sessions(source))
-        spent = self.usage_by_session([r["session"] for r in rows])
+        spent = self.usage_by_session([r["session"] for r in rows], hidden)
         coord = self.coordination_calls(source, [r["session"] for r in rows])
         by: dict[tuple, list[dict]] = {}
         for r in rows:   # newest first
@@ -1342,6 +1349,34 @@ class FactoryStore:
         return self._with_people([{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3],
                                    "value": r[4], "reason": r[5], "by": r[6], "person_id": r[7]}
                                   for r in rows])
+
+    # ── every project's records, for the weekly figures (report.py, TR-1666) ──
+    def all_stage_changes(self) -> list[dict]:
+        """Every stage change of every ticket, deleted tickets too, each ticket's together and
+        oldest first. `value` None is a stage taken off."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT ticket, project, changed_at, value FROM ticket_history "
+                "WHERE field = 'stage' ORDER BY ticket, changed_at").fetchall()
+        return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
+
+    def all_reviews(self) -> list[dict]:
+        """Every review round of every ticket, each ticket's together and in round order."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT id, project, ticket, round, verdict, by_station, reviewed_at FROM reviews "
+                "ORDER BY ticket, round, reviewed_at").fetchall()
+        return [{"id": r[0], "project": r[1], "ticket": r[2], "round": r[3], "verdict": r[4],
+                 "by": r[5], "at": r[6]} for r in rows]
+
+    def all_review_findings(self) -> list[dict]:
+        """Every finding of every review, with its kind as stored."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT project, severity, blocking, kind, state, fixed_in, found_at "
+                "FROM review_findings").fetchall()
+        return [{"project": r[0], "severity": r[1], "blocking": bool(r[2]), "kind": r[3],
+                 "state": r[4], "fixed_in": r[5], "found_at": r[6]} for r in rows]
 
     def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
         """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources

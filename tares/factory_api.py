@@ -16,11 +16,12 @@ import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from fastapi import Body, HTTPException, Request
+from fastapi import Body, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 
 from . import answers as answers_mod
 from . import claude_usage
+from . import codex_usage
 from . import crew_conversation
 from . import crew_onboarding
 from . import docs as docs_mod
@@ -32,6 +33,7 @@ from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
 from . import metrics
+from . import report as report_mod
 from . import team as team_mod
 from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
@@ -1146,7 +1148,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # one row per station with its newest session, the few before it and the totals over all of
         # them, so a station that has had many sessions costs no more than one that has had few
         # (TR-1500); the earlier ones are read a page at a time (GET /api/factory/crew/.../sessions)
-        rollup = store.station_rollup(h.cc_source())
+        hidden = h.hidden_ids()
+        # a project the caller cannot see adds nothing to a station's usage (TR-1696)
+        rollup = store.station_rollup(h.cc_source(), hidden=hidden)
         names = {p["id"]: p["name"] for p in store.list_projects()}
         crews = {c["id"]: c for c in store.list_crews()}
         now = now_utc()
@@ -1174,8 +1178,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "machine": crew.get("machine") or "", "person": crew.get("person"),
                         "projects": g["projects"], "usage": g["usage"],
                         "coordination_calls": g["coordination_calls"]})
-        hidden = h.hidden_ids()
+        # the status line gives one cost for the whole session, so none of it is shown for a
+        # session in a hidden project or with a reply that counts for one (TR-1696)
+        no_cost: set[str] = set()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
+            no_cost = store.sessions_counting_for([st["session"] for st in out], hidden)
             kept = []
             for st in out:
                 if st["projects"] and set(st["projects"]) <= hidden:
@@ -1188,6 +1195,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
+                    no_cost.add(st["session"])
                 kept.append(st)
             out = kept
         meters = store.session_meters([st["session"] for st in out])
@@ -1198,6 +1206,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                     if x["parent"] == st["name"] and x["crew_id"] == st["crew_id"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            if st["context"] and st["session"] in no_cost:
+                st["context"]["cost_usd"] = None
             st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
             # set while the watch retries its move, else null: the crew's own marks, else those
             # of its person that name no crew
@@ -1210,8 +1220,19 @@ def register(app, store, h: Host) -> SimpleNamespace:
         out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
         return out
 
-    def pace(request: Request | None = None) -> dict:
-        """The pace under the caller's settings (a person's own `pace` over the cell's)."""
+    def crew_runtime(asked: str = "") -> str:
+        """The runtime whose limits pace the crew: the one the caller names (a crew knows what it runs on),
+        else the cell's (the `runtime` slot, which is what a new station is started on)."""
+        asked = (asked or "").strip()
+        if asked:
+            return asked
+        return integrations_resolve.effective("runtime", None, store=store).integration
+
+    def pace(request: Request | None = None, runtime: str = "") -> dict:
+        """The pace under the caller's settings (a person's own `pace` over the cell's). A crew on Codex is
+        paced from the Codex account's limits (tares/codex_usage.py), never from Claude's plan."""
+        if crew_runtime(runtime) == "codex":
+            return codex_usage.pace(store, settings(request), now_utc(), factory_mod.pace_now)
         return factory_mod.pace_now(settings(request), claude_usage.plan(store), now_utc())
 
     def caller_person_id(request: Request) -> str:
@@ -1373,14 +1394,38 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"stations": out}
 
     @app.get("/api/crew/pace")
-    def get_crew_pace(request: Request):
+    def get_crew_pace(request: Request, runtime: str = ""):
         """Whether the crew is pacing itself before the plan's limits (the crew setting `pace`),
         worked out from the plan usage Tares keeps. `level` is 0 (ok), 1 (slow: the 5-hour window
         at 85% or the weekly limit at 90%) or 2 (hold: the window at 95%); `at_limit` is true while
         a limit is full and has not reset; `state` is off, ok, slow, hold or limit; `until` is when
         the limits behind it reset; `known` is false when no plan reading has arrived. The factory
-        watch reads this (TR-674); a person's own `pace` setting counts for that person."""
-        return pace(request)
+        watch reads this (TR-674); a person's own `pace` setting counts for that person.
+
+        `runtime` (a query parameter) names the runtime the asking crew runs on; without it the
+        cell's own runtime counts. For `codex` the pace comes from the Codex account's limits (TR-1597)
+        and the answer also has `source` ("codex"), `reading` (ok, none, stale or unsupported; `known`
+        is true only for ok), `read_at`, `limits` (every window Codex reported, each {kind, label,
+        percent, resets_at, reset, paces}; one with `paces` false is shown and never slows the crew),
+        `account` ({type, plan}) and `reached`. Claude's plan is never used for it."""
+        if runtime not in ("", "claude_code", "codex"):
+            h.err(ValueError("runtime is claude_code or codex"))
+        return pace(request, runtime)
+
+    @app.put("/api/crew/codex-limits")
+    def put_codex_limits(request: Request, body: dict = Body(...)):
+        """The Codex account's limits as a crew on Codex just read them (TR-1597): {limits, account,
+        taken_at}. `limits` is what its app-server answered to `account/rateLimits/read`, `account` the
+        `account` of `account/read`. The windows and the account's type and plan are kept, with the
+        cell's own time; an account id, an address and a workspace name are not. It replaces the last
+        reading. GET /api/crew/pace?runtime=codex is worked out from it; a reading older than 30
+        minutes is not used. The factory watch sends this once a round."""
+        if not isinstance(body.get("limits"), dict):
+            h.err(ValueError("limits must be the answer to account/rateLimits/read, an object"))
+        if len(json.dumps(body)) > 200_000:
+            h.err(ValueError("the reading is too large"))
+        kept = codex_usage.save(store, body, caller_person_id(request), now_utc())
+        return {"windows": len(kept["windows"]), "account": kept["account"]}
 
     def as_utc(x):
         """A stored time (a datetime, or its text) as an aware UTC datetime; None when there is none or it
@@ -3558,6 +3603,36 @@ def register(app, store, h: Host) -> SimpleNamespace:
         ho = store.get_handover(uid) or {}
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
+
+    @app.get("/api/factory/report")
+    def report_read(request: Request, scope: str = "factory", to: str | None = None,
+                    from_: str | None = Query(None, alias="from")):
+        """The Report page in one read, from the weekly figures: {range, scope, cannot_see,
+        sections}. `from` and `to` are days (year-month-day) widened to whole ISO weeks in UTC;
+        with neither it is the last 8 weeks. `scope` is factory (default), mine (Home's rule),
+        team:<person id> (what that person leads) or project:<id>. Every scope counts only the
+        projects the caller can read, so a private one is not in it and, asked for by name, is
+        unknown. What is stuck now lists a desk question of no project only in the factory scope,
+        and only one the caller is asked (desk_is_mine). Needs the read scope; a project key is
+        refused."""
+        hidden = h.hidden_ids()
+        projects = [p for p in store.list_projects() if p["id"] not in hidden]
+        me, o = answerer(request), owners_mod.Owners(store)
+        try:
+            return report_mod.page(
+                store, projects, lambda: my_projects(request), o, scope, from_, to,
+                asks_me=lambda d: me is not None and desk_is_mine(d, me, o))
+        except report_mod.UnknownScope as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/factory/report/rebuild")
+    def report_rebuild():
+        """Work out the report's weekly figures again, every week of every project (they are kept
+        current in the background; this is for after a repair). Answers {rows, changed, removed}.
+        Needs the admin scope, as every write does; a project key is refused."""
+        return report_mod.rebuild_all(store)
 
     fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
                          team_home=team_home, project_waiting=project_waiting,

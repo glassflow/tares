@@ -31,6 +31,7 @@ import {
   Textarea,
   Toaster,
   useToast,
+  WeekChart,
   type Tone,
 } from "@/components/edition";
 import {
@@ -44,6 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import LicenceNeeded from "@/components/LicenceNeeded";
 import { applyTheme, currentTheme, type Theme } from "@/theme";
+import { formatCount, formatDecimal } from "../../lib/number";
 import { ageWords, HOUR } from "../../lib/time";
 
 const TONES: Tone[] = ["working", "waiting", "ready", "done", "bad", "quiet"];
@@ -80,6 +82,10 @@ const MARKS = [
   { at: "2026-10-28T20:00:00Z", label: "Deploy of service-d" },
   { at: "2026-10-29T16:01:00Z", label: "Deploy of service-c" },
 ];
+
+// Mondays; the last is the week still running.
+const WEEKS = ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"];
+const LONG_WEEKS = Array.from({ length: 26 }, (_, i) => new Date(Date.UTC(2026, 5, 1 + i * 7)).toISOString().slice(0, 10));
 
 /** Shows a line instead of a blank page when a chart throws, so the e2e can name the chart that broke. */
 class Guard extends Component<{ children: ReactNode; testid: string }, { failed: boolean }> {
@@ -660,6 +666,45 @@ export default function Components() {
         <Panel>
           <HugeCharts />
         </Panel>
+      </Section>
+
+      <Section title="Week chart">
+        <WeekChart
+          caption="Tickets merged and reviewed per week"
+          data-testid="week-chart-bars"
+          weeks={WEEKS}
+          soFar="2026-11-23"
+          series={[
+            { label: "Merged", values: [3, 5, 4, 0, 7, 6, null, 2] },
+            { label: "Reviewed", values: [4, 6, 4, 1, 8, 6, null, 3] },
+          ]}
+        />
+        <Caption>Lines, with a week that has no value; a fifth series is listed and not drawn</Caption>
+        <WeekChart
+          caption="Hours from start to merge"
+          data-testid="week-chart-lines"
+          kind="lines"
+          weeks={WEEKS}
+          format={(v) => `${formatDecimal(v, 1)} h`}
+          series={[
+            { label: "Half", values: [5, 6.5, 4, null, 7, 5.5, 6, 3] },
+            { label: "Three in four", values: [9, 11, 8, null, 12, 10, 11, 7] },
+            { label: "Nine in ten", values: [20, 26, 18, null, 31, 22, 24, 12] },
+            { label: "Longest", values: [41, 44, 30, null, 52, 38, 40, 21] },
+            { label: "Mean", values: [8, 10, 7, null, 11, 9, 10, 5] },
+          ]}
+        />
+        <Caption>More weeks than fit</Caption>
+        <WeekChart
+          caption="Cost per week, API-equivalent"
+          data-testid="week-chart-long"
+          weeks={LONG_WEEKS}
+          height={80}
+          format={(v) => `$${formatCount(v)}`}
+          series={[{ label: "Cost", values: LONG_WEEKS.map((_, i) => 900 + (i % 7) * 140) }]}
+        />
+        <Caption>No values</Caption>
+        <WeekChart caption="Findings per week" data-testid="week-chart-empty" weeks={WEEKS} series={[{ label: "Findings", values: WEEKS.map(() => null) }]} />
       </Section>
 
       <Section title="Dropdown menu">

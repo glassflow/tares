@@ -13,7 +13,10 @@ sessions. Now:
   - GET /api/factory/crew/{crew}/{station}/sessions pages through all of them, newest first, with no
     session twice or missed (sessions that share a time stay on one page), the same on a cell that has
     not caught up (the events scan);
-  - a project the caller is not on never appears, and a station that only worked in it answers 404.
+  - a project the caller is not on never appears, and a station that only worked in it answers 404;
+  - GET /api/crew gives that caller no usage from a reply that counts for such a project and no
+    status line cost of a session that holds one or is in it, as the Report counts (TR-1696). A
+    caller on every project reads every figure.
 
 Run: .venv/bin/python ee/tests/test_crew_sessions_route.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python ee/tests/test_crew_sessions_route.py
@@ -50,6 +53,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 P = F = 0
 BIG, SMALL, MIXED, VAULTED = "shop-build-m1", "shop-build-m2", "shop-build-m3", "vault-build-m1"
+SPLIT, PART, QUIET, ORCH = "shop-build-m4", "shop-build-m5", "shop-build-m6", "crew-orchestrator"
 MANY = 600
 T0 = datetime(2026, 11, 1, tzinfo=timezone.utc)
 TIED = range(545, 555)     # ten sessions that were last active at the same moment, across a page boundary
@@ -302,6 +306,78 @@ async def main():
         ck("a station that only worked in Vault answers 404 to Kim, and Kim does not see the station",
            r.status_code == 404 and member((await read("kim", "/api/crew")).json(), VAULTED) is None
            and vault not in r.text, r.status_code)
+
+        # ── usage and cost: nothing of Vault's counts for Kim (TR-1696) ──────────────────────
+        def status(sid, usd):
+            """A status line report: the context window and what the whole session has cost."""
+            return {"sessionId": sid, "type": "session_status", "timestamp": iso(at(MANY)), "status": {
+                "context_window": {"context_window_size": 200000, "used_percentage": 10},
+                "cost": {"total_cost_usd": usd}}}
+
+        build = lambda name, tag, k, project="": session_lines(name, "builder", "crew-orchestrator", k, tag, project)
+        # SPLIT: an Atlas session, an Atlas session whose reply is stamped Vault, a session only
+        # linked to Vault, and the current one, started in Vault
+        split = [build(SPLIT, "spl", k, p) for k, p in enumerate((atlas, atlas, "", vault))]
+        split[1][1]["tares_project"] = vault
+        # PART: one Atlas session, one of whose two replies is stamped Vault
+        part = build(PART, "part", 0, atlas)
+        part.append({**part[1], "tares_project": vault, "message": {
+            **part[1]["message"], "id": "m-part-vault",
+            "usage": {**part[1]["message"]["usage"], "output_tokens": 50}}})
+        # QUIET: the current session started in Vault and has sent its status line, no reply yet
+        quiet = build(QUIET, "qui", 0, atlas) + build(QUIET, "qui", 1, vault)
+        quiet = [x for x in quiet if x.get("message", {}).get("id") != "m-qui-0001"]
+        # a crew station: its unstamped replies are the crew's, as the Report counts them
+        orch = [build(ORCH, "orc", k) for k in range(3)]
+        for lines_ in orch:
+            lines_[0].update(role="orchestrator", parent="")
+        orch[1][1]["tares_project"] = vault
+        await push([x for s in split + orch for x in s] + part + quiet
+                   + [status("spl-0003", 12.5), status("part-0000", 7.5), status("qui-0001", 9.0),
+                      status("orc-0002", 1.5), status(f"big-{MANY - 1:04d}", 3.25)], "lee")
+        store.link_session(vault, "spl-0002", None)
+        store.link_session(vault, "orc-0000", None)
+        store.link_session(atlas, "orc-0002", None)
+        await asyncio.sleep(0.5)
+
+        def spent_and_cost(body, name):
+            s = member(body, name) or {}
+            u = s.get("usage") or {}
+            return u.get("replies"), u.get("output_tokens"), (s.get("context") or {}).get("cost_usd")
+
+        for path_name, caught in (("caught up", real), ("events scan", lambda s: False)):
+            session_ingest.caught_up = caught
+            try:
+                kim = (await read("kim", "/api/crew")).json()
+                lee = (await read("lee", "/api/crew")).json()
+                one = (await read("kim", f"/api/crew/{SPLIT}")).json()
+            finally:
+                session_ingest.caught_up = real
+            for label, name, want in (
+                    ("only the Atlas session of a station counts, and a Vault session's cost is not shown",
+                     SPLIT, (1, 1, None)),
+                    ("a reply stamped Vault does not count, nor the cost of the session it is in",
+                     PART, (1, 1, None)),
+                    ("a session in Vault with no reply yet shows no cost", QUIET, (1, 1, None)),
+                    ("a crew station keeps its unstamped replies and loses the one stamped Vault",
+                     ORCH, (2, 4, 1.5))):
+                got = spent_and_cost(kim, name)
+                ck(f"Kim, {path_name}: {label}", got == want, f"got {got}, want {want}")
+            for name, want in ((SPLIT, (4, 10, 12.5)), (PART, (2, 51, 7.5)), (QUIET, (1, 1, 9.0)),
+                               (ORCH, (3, 6, 1.5))):
+                got = spent_and_cost(lee, name)
+                ck(f"Lee, {path_name}: {name} has every session's usage and the cost", got == want,
+                   f"got {got}, want {want}")
+            got = member(kim, SPLIT)["usage"]["cost_usd"], store.usage_by_session(["spl-0000"])["spl-0000"]["cost_usd"]
+            ck(f"Kim, {path_name}: the station's cost is that of the one reply she can see",
+               abs(got[0] - got[1]) < 1e-9, got)
+            ck(f"Kim, {path_name}: a station of Atlas sessions only keeps its usage and cost",
+               same_usage(member(kim, BIG)["usage"], row["usage"])
+               and member(kim, BIG)["context"]["cost_usd"] == 3.25,
+               (member(kim, BIG)["usage"], member(kim, BIG)["context"]))
+            ck(f"Kim, {path_name}: one station's own read gives the same",
+               (one["usage"]["replies"], one["context"]["cost_usd"]) == (1, None),
+               (one["usage"], one["context"]))
 
     print(f"{P} passed, {F} failed")
     return F

@@ -63,6 +63,14 @@ class GuardOffError(CrewError):
         super().__init__(f"{station} was stopped, since its guard cannot be relied on: {why}")
 
 
+class LimitHeldError(NotBetweenTurnsError):
+    """A Codex station whose last turn the account's limit ended is held until the limit resets (TR-1597): no
+    wake, grant, kit or pace note is handed to it meanwhile. A kind of NotBetweenTurnsError, so every caller
+    that would try again later does."""
+
+    code = "limit_held"
+
+
 class ClaudeNotFoundError(CrewError):
     """No usable `claude` binary: none on PATH or in the known install folders, and CLAUDE_BIN is not set."""
 

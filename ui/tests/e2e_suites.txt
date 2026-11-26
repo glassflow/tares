@@ -48,6 +48,7 @@ projects-list
 raise-limit
 reads
 redirects
+report
 resources
 session-picker
 settings-people

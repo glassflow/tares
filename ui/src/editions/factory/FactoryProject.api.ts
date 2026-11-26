@@ -189,6 +189,23 @@ export const acceptMilestone = (id: string, milestone: string) =>
     method: "POST", body: JSON.stringify({}),
   });
 
+/** What an accepted milestone delivered, in a few lines written once from its figures (TR-1645).
+ *  `writing` says a text is under way: ask again shortly. */
+export interface MilestoneSummaryData {
+  milestone: string;
+  summary: { text: string; source: string; figures: Record<string, unknown>; written_at: string } | null;
+  writing: boolean;
+}
+
+const summaryPath = (id: string, milestone: string) =>
+  `/api/projects/${encodeURIComponent(id)}/milestones/${encodeURIComponent(milestone)}/summary`;
+
+export const milestoneSummary = (id: string, milestone: string) =>
+  request<MilestoneSummaryData>(summaryPath(id, milestone));
+
+export const rewriteMilestoneSummary = (id: string, milestone: string) =>
+  request<MilestoneSummaryData>(`${summaryPath(id, milestone)}/rewrite`, { method: "POST", body: JSON.stringify({}) });
+
 // The body of GET /api/factory/projects/{id}/github: the project's pull requests by repo, as GitHub
 // said when Tares last read them. `title` and `ticket_title` carry a person's own text.
 export type PrState = "open" | "draft" | "merged" | "closed";

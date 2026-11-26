@@ -10,6 +10,7 @@ import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@paper-kit/ui/select";
 import { cn } from "../../lib/utils";
 import {
+  milestoneSummary, rewriteMilestoneSummary,
   type ProjectPeople, type ProjectPerson,
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
@@ -17,9 +18,11 @@ import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
 import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
-import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
+import { actionName, deskLabels, deskTarget, GroupHead, groupWaiting, OlderFold, QuestionChoices, standsFor } from "./waitingGroups";
 import { sampleClose } from "./projectSamples";
 import { PageHead, pageHref, ProjectShell, waitingItems, type ProjectCtx, type ProjectPage } from "./ProjectShell";
+import { formatDistance, formatStampUTC } from "../../lib/time";
+import { usePagePolling } from "../usePagePolling";
 
 // A factory project's Overview (/projects/:id, TR-734, TR-1245): only what needs attention. What
 // waits for you, a line for what waits for others, three cards that open the project's pull
@@ -146,8 +149,9 @@ function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: Home
 function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void }) {
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-row-hover")}
-         data-testid="waiting-row" data-kind={item.kind} id={`waiting-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}>
+    <div className={cn(ROW, "flex scroll-mt-16 flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-row-hover")}
+         data-testid="waiting-row" data-kind={item.kind} id={`waiting-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+         data-desk={deskLabels(item).join(" ") || undefined}>
       <div className="min-w-0 flex-[1_1_260px]">
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{item.title}</div>
@@ -178,7 +182,8 @@ function WaitingOthers({ items }: { items: HomeItem[] }) {
                    aside={<span className={MUTED} data-testid="waiting-others-count">{plural(items.length, "thing", "things")}</span>} />
       <div className={CARD}>
         {items.map((it) => (
-          <div key={it.id} className={cn(ROW, "min-w-0")} data-testid="waiting-other-row" data-kind={it.kind}>
+          <div key={it.id} className={cn(ROW, "min-w-0 scroll-mt-16 [overflow-wrap:anywhere]")} data-testid="waiting-other-row" data-kind={it.kind}
+               data-desk={deskLabels(it).join(" ") || undefined}>
             <div className={KIND} data-user-text>{it.label}</div>
             <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{it.title}</div>
             <div className="mt-0.5" data-user-text>{it.detail}</div>
@@ -191,13 +196,15 @@ function WaitingOthers({ items }: { items: HomeItem[] }) {
   );
 }
 
-function Waiting({ items, onClose, onKeep, onAllow }: {
-  items: HomeItem[]; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void;
+/** `target` is the desk item the address names: a fold that holds its row starts open. */
+function Waiting({ items, target, onClose, onKeep, onAllow }: {
+  items: HomeItem[]; target?: string; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void;
 }) {
   const [all, setAll] = React.useState(false);
   const g = groupWaiting(items);
   const count = items.length;
-  const rest = all ? g.rest : g.rest.slice(0, SHOW_WAITING);
+  const named = (i: HomeItem) => standsFor(i, target);
+  const rest = all || g.rest.slice(SHOW_WAITING).some(named) ? g.rest : g.rest.slice(0, SHOW_WAITING);
   const more = g.rest.length - rest.length;
   const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close" && !(a.do === "keep_assumptions" && onKeep) && !(a.do === "allow" && onAllow)));
   const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} onKeep={onKeep} onAllow={onAllow} />;
@@ -222,7 +229,7 @@ function Waiting({ items, onClose, onKeep, onAllow }: {
                 </Button>
               </div>
             )}
-            <OlderFold items={g.older} className="px-0">{(older) => older.map(row)}</OlderFold>
+            <OlderFold items={g.older} className="px-0" startOpen={g.older.some(named)}>{(older) => older.map(row)}</OlderFold>
           </div>
         </>
       )}
@@ -383,8 +390,61 @@ function PersonCheck({ c, onAnswer }: {
   );
 }
 
-export function MilestoneRow({ m, onAnswer, onAccept }: {
+/** How often a summary that is being written is asked for again. */
+const SUMMARY_POLL_MS = 2000;
+
+/** Under an accepted milestone: what it delivered, the decisions taken on the way and what is left,
+ *  written once by the cell (TR-1645). The words are the cell's, from ticket titles and decisions. */
+function MilestoneSummary({ projectId, milestone }: { projectId: string; milestone: string }) {
+  const [every, setEvery] = React.useState(0);
+  const { data, error, reload } = usePagePolling(() => milestoneSummary(projectId, milestone), every);
+  const writing = data?.writing ?? false;
+  React.useEffect(() => { setEvery(writing ? SUMMARY_POLL_MS : 0); }, [writing]);
+  const [asking, setAsking] = React.useState(false);
+  const [refused, setRefused] = React.useState("");
+  const again = async () => {
+    setAsking(true); setRefused("");
+    try { await rewriteMilestoneSummary(projectId, milestone); reload(); }
+    catch (e) { setRefused(e instanceof ApiError ? e.message : NOT_SAVED); }
+    finally { setAsking(false); }
+  };
+  if (!data && !error) return null;
+  const s = data?.summary;
+  const at = s ? Date.parse(s.written_at) : NaN;
+  return (
+    <div className="mt-2 grid max-w-[68ch] justify-items-start gap-1" data-testid="milestone-summary"
+         data-source={s?.source ?? ""} data-writing={writing}>
+      {s && (
+        <div className="whitespace-pre-line text-[13px] text-foreground [overflow-wrap:anywhere]" data-testid="summary-text" data-words-exempt>
+          {s.text}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className={MUTED} role="status" data-testid="summary-state">
+          {s ? (
+            <>
+              Written by Tares from these figures,{" "}
+              <time className="whitespace-nowrap font-mono" dateTime={s.written_at} title={formatDistance(at, Date.now())}>{formatStampUTC(s.written_at)}</time>
+              {writing && ". Writing it again."}
+            </>
+          ) : writing ? "Tares is writing the summary."
+            : error ? "The summary did not load." : "The summary could not be written."}
+        </span>
+        {!writing && (
+          <Button variant="secondary" className="h-7 text-xs" busy={asking} onClick={data ? again : reload} data-testid="summary-again">
+            {data ? "Write again" : "Try again"}
+          </Button>
+        )}
+      </div>
+      {refused && <div role="alert" className="text-[13px] text-err" data-testid="summary-error">{refused}</div>}
+    </div>
+  );
+}
+
+export function MilestoneRow({ m, projectId, onAnswer, onAccept }: {
   m: ProjectMilestone;
+  /** Left out on a sample: there is no cell to ask for the summary. */
+  projectId?: string;
   onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
   onAccept?: (m: ProjectMilestone) => Promise<void>;
 }) {
@@ -443,6 +503,7 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
               {error && <div role="alert" className="mt-1 text-[13px] text-err">{error}</div>}
             </div>
           )}
+          {m.accepted && projectId && <MilestoneSummary projectId={projectId} milestone={m.id} />}
         </div>
         <div className="flex items-center gap-2.5 pt-0.5 text-[13px] md:self-start">
           <ProgressBar value={pct(merged + closed, total)} aria-label={m.counts.label}
@@ -672,15 +733,17 @@ export function DeleteProject({ name, onDelete }: { name: string; onDelete: () =
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-/** "Waiting for others: 2 things", with the list behind Show. */
-function OthersLine({ items }: { items: HomeItem[] }) {
-  const [open, setOpen] = React.useState(false);
+/** "Waiting for others: 2 things", with the list behind Show; open when the address names one of
+ *  its desk items. */
+function OthersLine({ items, target }: { items: HomeItem[]; target?: string }) {
+  const [choice, setChoice] = React.useState<boolean>();
+  const open = choice ?? items.some((i) => standsFor(i, target));
   if (items.length === 0) return null;
   return (
     <div className="grid min-w-0 gap-3">
       <div className="text-[13px] text-muted-foreground" data-testid="waiting-others-line">
         Waiting for others: {plural(items.length, "thing", "things")}.{" "}
-        <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="waiting-others-toggle"
+        <button type="button" aria-expanded={open} onClick={() => setChoice(!open)} data-testid="waiting-others-toggle"
                 className={cn("border-0 bg-transparent p-0 text-[13px] font-normal shadow-none", LINK)}>
           {open ? "Hide" : "Show"}
         </button>
@@ -743,7 +806,11 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
   const [allowing, setAllowing] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [moving, setMoving] = React.useState(false);
   const finished = d.state === "finished";
-  const items = waitingItems(d, kept);
+  const target = deskTarget(useLocation().hash);
+  // a finished project lists nothing as waiting; the desk item the address names still shows
+  const named = (list: HomeItem[]) => list.filter((w) => standsFor(w, target));
+  const items = finished ? named(d.waiting) : waitingItems(d, kept);
+  const others = finished ? named(d.waiting_others ?? []) : d.waiting_others ?? [];
 
   const startNow = async () => {
     setMoving(true);
@@ -798,9 +865,9 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
         </Banner>
       )}</Collapse>
       <div className="grid min-w-0 gap-3">
-        <Waiting items={items} onClose={() => setAsking(true)} onKeep={onKeep}
+        <Waiting items={items} target={target} onClose={() => setAsking(true)} onKeep={onKeep}
                  onAllow={sample ? undefined : (item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); }} />
-        {!finished && <OthersLine items={d.waiting_others ?? []} />}
+        <OthersLine items={others} target={target} />
       </div>
       <Summary d={d} />
       <Moving d={d} />
