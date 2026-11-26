@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 
-from . import claude, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
+from . import claude, codex_pace, codex_station, jsonrun, launch, locks, pace, proc, report, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
 from .errors import ClaudeNotFoundError, CrewError, GuardOffError, LimitHeldError, NotBetweenTurnsError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -59,10 +59,38 @@ REPORT_READ = ("re-read your report (a short state file; for older events use `t
                "never cat or tail a file)")  # every reminder to a station says this, word for word
 
 
-def rearm_text(client: TaresClient) -> str:
+def reload_text(paths: CrewPaths, station: str, skill: str, *, may_change: bool = False) -> str:
+    """The first step a restart names: reload the skills, or, on Codex, which has none to load, that its rules
+    are in its instructions (a start gives them again; TR-1598)."""
+    tail = " (they may have changed)" if may_change else ""
+    if proc.on_codex(station, paths):
+        return f"Your rules are in your instructions{tail}"
+    return f"Reload the skills factory-protocol and station-{skill}{tail}"
+
+
+def revive_prompt(client: TaresClient, paths: CrewPaths, station: str, skill: str, fresh: bool) -> str:
+    """What a revive tells the station when it is given no prompt of its own."""
+    again = (f"{reload_text(paths, station, skill)}, {REPORT_READ} and your work on Tares, "
+             f"{rearm_text(client, station)}, then carry on where your report left off.")
+    if fresh and proc.on_codex(station, paths):
+        return ("You were started again under the same name, in a new conversation. Nothing from the last one "
+                f"carries over except your report and what is on Tares. {again}")
+    if fresh:
+        return ("You were started again under the same name, in a new conversation: the last one kept "
+                "refilling its context right after each compaction, so Claude Code stopped it. Nothing from "
+                f"it carries over except your report and what is on Tares. {again} Read big files, logs and "
+                "diffs in parts.")
+    return f"You were revived by the factory under the same name. {again}"
+
+
+
+def rearm_text(client: TaresClient, station: str = "") -> str:
     """What a restart tells a station about its schedule. The pace is read here, as bash does for a command that
     has not read it yet (a watch round has its own reading in pace.step). Bash reads it in a command substitution,
-    so a reading taken here is not remembered: a restart that read nothing before writes no pace file."""
+    so a reading taken here is not remembered: a restart that read nothing before writes no pace file. A station
+    on Codex (`station` names it) has no schedule tool and is told so."""
+    if station and proc.on_codex(station, client.paths):
+        return codex_pace.schedule_text(client)
     had = pace.has_read(client.paths)
     reading = pace.last(client.paths) if had else pace.read(client)
     if not had:
@@ -120,16 +148,7 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
     model, effort, session = get("model"), get("effort"), get("sessionId")
     old_id = get("id")
     skill = launch.parent_role(parent, paths) if role == "helper" else role
-    prompt = rest[0] if rest else ""
-    again = (f"Reload the skills factory-protocol and station-{skill}, {REPORT_READ} and your work on "
-             f"Tares, {rearm_text(client)}, then carry on where your report left off.")
-    if not prompt and fresh:
-        prompt = ("You were started again under the same name, in a new conversation: the last one kept "
-                  "refilling its context right after each compaction, so Claude Code stopped it. Nothing from "
-                  f"it carries over except your report and what is on Tares. {again} Read big files, logs and "
-                  "diffs in parts.")
-    if not prompt:
-        prompt = f"You were revived by the factory under the same name. {again}"
+    prompt = (rest[0] if rest else "") or revive_prompt(client, paths, station, skill, fresh)
     locks.station_lock(station, paths)
     if get("status") == "retired":
         raise CrewError(f"{station} was retired; tares factory spawn starts it again")
