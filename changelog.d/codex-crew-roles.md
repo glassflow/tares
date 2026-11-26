@@ -1,0 +1,2 @@
+Added
+The orchestrator, the reviewer and the releaser now have their rules on Codex, as the builder has had (TR-1599). They come from the same skills Claude Code reads, with what a Codex station does instead: it holds no schedule and is woken by the factory; the orchestrator's person answers on the desk in the console, not in the orchestrator's session; the reviewer is a station of its own and says, in what it did not verify, that no second model checked its review.
