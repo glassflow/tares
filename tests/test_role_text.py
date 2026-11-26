@@ -222,7 +222,9 @@ ck("the orchestrator: the person answers on the desk in the console, which recor
    and "The console records their answer." in roles["orchestrator"])
 ck("the reviewer: a station of its own, and its second look a separate fresh Codex session, said as what it is",
    "a conversation of your own" in roles["reviewer"] and "tares factory second-look --file" in roles["reviewer"]
-   and "second look: a separate Codex session on <model>" in roles["reviewer"] and "subagent" not in roles["reviewer"].lower())
+   and "second look: a separate Codex session on <what it said>" in roles["reviewer"]
+   and "else on the one you were started on; its first line says which" in roles["reviewer"]
+   and "subagent" not in roles["reviewer"].lower())
 plan = {r: rt.manual(KIT, rt.CODEX, r) for r in ("spec", "session")}
 ck("the spec and session manuals on Codex: the person's own session, not a station, naming nothing of CLAUDE_ONLY",
    all(m.startswith("You run on Codex as the person's own") and named(m) == [] and len(m) > 5000 for m in plan.values()),
