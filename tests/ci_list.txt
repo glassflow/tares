@@ -233,6 +233,7 @@ test_recording_person
 test_recurring_reads
 test_release_block
 test_release_changelog
+test_request_memo
 test_resources
 test_review_gate
 test_review_post

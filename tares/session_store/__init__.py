@@ -16,10 +16,11 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, func, text
+from sqlalchemy import Connection, event, func, text
 from sqlalchemy.dialects.postgresql import insert as _pg_insert
 from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 
+from .. import request_memo
 from .engine import MEMORY, make_engine
 
 log = logging.getLogger("tares.session_store")
@@ -28,9 +29,14 @@ VERSION_TABLE = "session_store_version"
 _LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('tares_session_store_migrate'))"
 
 
+def _seen(conn, cursor, statement, parameters, context, executemany) -> None:
+    request_memo.statement(statement)      # a write ends what a page read has kept (TR-1631)
+
+
 class SessionStore:
     def __init__(self, data_dir: str, state_dsn: str | None = None):
         self.engine = make_engine(data_dir, state_dsn)
+        event.listen(self.engine, "before_cursor_execute", _seen)
         # An in-memory SQLite is one shared connection (StaticPool): two threads in a transaction
         # at once would interleave on it, so they take turns. A file or Postgres needs no lock.
         self._turns = threading.RLock() if data_dir == MEMORY and not state_dsn else None

@@ -69,7 +69,7 @@ from . import memory_route
 from .integrations.builtin import memory_tares
 from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
-from . import factory_home, sre_home, screens, start_steps
+from . import factory_home, request_memo, sre_home, screens, start_steps
 from . import sre as sre_mod
 from . import watch as watch_mod
 from . import feedback as feedback_mod
@@ -6285,7 +6285,8 @@ def make_app() -> FastAPI:
         """One read for the home screen of the cell's edition; the platform has none."""
         value, _needed = edition_mod.edition(store)
         if value == "factory":
-            return await asyncio.to_thread(factory_home.build, store, fx, request)
+            # one page read: its repeated small reads run once (TR-1631)
+            return await asyncio.to_thread(request_memo.run, factory_home.build, store, fx, request)
         if value == "sre":
             body = await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
                                            runtime.health_snapshot, _by(request) or "console",

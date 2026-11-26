@@ -21,6 +21,8 @@ import re
 import threading
 import time
 
+from . import request_memo
+
 EVENT_TABLES = frozenset({"events", "cursors", "source_stats", "entity_counts",
                           "entity_label_state"})
 
@@ -208,6 +210,8 @@ class _Result:
 class PgState:
     """A DuckDB-connection lookalike over Postgres: one connection per thread."""
 
+    watched = True      # every statement passes request_memo, so its reads may be kept (TR-1631)
+
     def __init__(self, dsn: str, wait: float | None = None):
         import psycopg                                     # optional: only a cloud cell needs it
         from psycopg.types.string import TextLoader
@@ -260,12 +264,14 @@ class PgState:
             return self._run(q, params)
 
     def _run(self, q: str, params) -> _Result:
+        request_memo.statement(q)
         with self.conn().cursor() as cur:
             cur.execute(q, list(params or []))
             rows = cur.fetchall() if cur.description is not None else []
             return _Result(rows, cur.rowcount)
 
     def executemany(self, sql: str, seq) -> None:
+        request_memo.statement(sql)
         with self.conn().cursor() as cur:
             cur.executemany(to_pg(sql), [list(p) for p in seq])
 

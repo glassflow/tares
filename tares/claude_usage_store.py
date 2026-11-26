@@ -20,6 +20,7 @@ from sqlalchemy import BigInteger, bindparam, case, distinct, false, func, liter
 from . import claude_usage_hourly as hourly
 from . import session_ingest
 from .pricing import cost_usd
+from .request_memo import kept
 from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (project_sessions, session_meters, session_stations,
                                    session_usage, session_usage_hourly)
@@ -247,6 +248,7 @@ class ClaudeUsageStore:
             ).order_by(m.c.context_asked_at)).all()
         return [r[0] for r in rows]
 
+    @kept
     def session_meters(self, sessions: list[str]) -> dict[str, dict]:
         if not sessions:
             return {}
@@ -262,6 +264,7 @@ class ClaudeUsageStore:
                              "context_at": r[4], "context_asked_at": r[5]}
         return out
 
+    @kept
     def latest_rate_limits(self) -> tuple | None:
         """(when, rate_limits, person id or None) from the newest status line report that carried
         the plan's limits."""

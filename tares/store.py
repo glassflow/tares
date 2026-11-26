@@ -21,6 +21,7 @@ from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
 from .factory import DONE_STATUSES, OPEN_STAGES, state_of
 from .factory_store import FACTORY_SCHEMA, FactoryStore
+from .request_memo import kept
 from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
@@ -2603,6 +2604,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # ── settings (instance config set from the console) ───────────────────────
     # `settings` lives in the session store (TR-1480): SQLite beside the DuckDB file, or the state
     # Postgres. These methods take no DuckDB or state lock, so they are safe from inside one.
+    @kept
     def get_setting(self, key: str) -> str | None:
         with self.sessions_db.read() as conn:
             return conn.execute(select(settings_table.c.value).where(
@@ -2822,6 +2824,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 t.c.updated_at, t.c.last_error, t.c.goal, t.c.kind, t.c.lead_person_id, t.c.scope,
                 t.c.icon)
 
+    @kept
     def list_projects(self, *, kind=None, status_in=None, status_not_in=None, ids=None,
                       exclude_ids=None) -> list[dict]:
         """Every project, oldest first, or only those that match: `kind`, a status in or not in a
@@ -2849,6 +2852,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 t.c.created_at, t.c.id)).all()
         return [self._project_row(r) for r in rows]
 
+    @kept
     def project_names(self) -> dict[str, str]:
         """{project id: name} for every project, in one query."""
         with self.sessions_db.read() as conn:
@@ -2856,6 +2860,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return {r[0]: r[1] for r in rows}
 
     # Licence-independent by design (TR-915): never consult licence or team here.
+    @kept
     def private_projects(self) -> list[dict]:
         """The private projects, as {id, name, scope}: the one small query every cell-wide read
         runs to learn whether it has anything to hide (usually it has not)."""
@@ -2864,6 +2869,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 projects_table.c.scope == "private")).all()
         return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
 
+    @kept
     def get_project(self, uid: str) -> dict | None:
         with self.sessions_db.read() as conn:
             r = conn.execute(select(*self._project_cols()).where(
@@ -3482,6 +3488,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                                 .order_by(*self._ticket_order())).all()
         return [self._ticket_row(r) for r in rows]
 
+    @kept
     def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
         """{project: its tickets as list_tickets gives them} in one query (TR-659)."""
         if not projects:
@@ -4200,6 +4207,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # The token (and an App's private key) is held verbatim like every other connector secret;
     # redaction is the API's job. `config` holds the kind-specific fields: for `app` the app id,
     # private key, webhook secret and installations; for `app_broker` the broker URL and secret.
+    @kept
     def list_github_credentials(self) -> list[dict]:
         t = github_table
         with self.sessions_db.read() as conn:
@@ -5272,6 +5280,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 is_admin=bool(is_admin), created_at=now_utc(), created_via=via))
         return self.get_person(pid)
 
+    @kept
     def get_person(self, pid: str) -> dict | None:
         with self.sessions_db.read() as conn:
             r = conn.execute(select(*self._PERSON_COLS).where(people_table.c.id == pid)).first()
@@ -5288,6 +5297,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             rows = conn.execute(q).all()
         return [self._person_row(r) for r in rows]
 
+    @kept
     def list_people(self) -> list[dict]:
         """Everyone on the cell, oldest first (`local` first on a cell that has it)."""
         return self._people()
@@ -5413,6 +5423,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 return found
             raise
 
+    @kept
     def only_local_person(self) -> bool:
         """True while `local` is the only person on the cell: a key nobody has bound still acts
         as them, so a single-user cell keeps working."""
