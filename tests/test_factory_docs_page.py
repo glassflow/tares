@@ -269,6 +269,33 @@ async def main():
                (await mk(None).get("/api/reference")).status_code == 401)
             ck("the documents are behind the token", (await mk(None).get("/api/factory/docs")).status_code == 401)
 
+            print("== the newest line's day, in any server zone ==")
+            # the database hands a time back in the machine's own zone; a line's stamp is a UTC day
+            store.update_doc(mem_id, body="# Memory\n\n- An older line. (2026-11-09, console)\n"
+                                          "- The newest line. (2026-11-10, console)\n")
+            utc = lambda day, h, m: datetime(2026, 11, day, h, m, tzinfo=timezone.utc)
+            cases = (  # (the line is added, the page is read, what the newest line says), in UTC
+                (utc(10, 0, 30), utc(10, 0, 35), "5 minutes ago"),
+                (utc(10, 11, 0), utc(10, 11, 5), "5 minutes ago"),
+                (utc(10, 23, 30), utc(10, 23, 35), "5 minutes ago"),
+                (utc(10, 0, 30), utc(10, 23, 30), "23 hours ago"),
+                (utc(10, 23, 30), utc(11, 0, 30), "1 day ago"),
+            )
+            real_get_doc, real_now = store.get_doc, fd.now_utc
+            try:
+                for hours in (0, 2, 5.5, 14, -5, -8, -12):
+                    zone = timezone(timedelta(hours=hours))
+                    said = []
+                    for added, read, _ in cases:
+                        store.get_doc = lambda *a, **kw: {**real_get_doc(*a, **kw),
+                                                          "updated_at": added.astimezone(zone)}
+                        fd.now_utc = lambda: read
+                        said.append((await doc_of(cx, mem_id))["lines"][-1]["when"])
+                    ck(f"a server at UTC{hours:+g}: the newest line is dated by the UTC day",
+                       said == [want for *_, want in cases], said)
+            finally:
+                store.get_doc, fd.now_utc = real_get_doc, real_now
+
 
 units()
 asyncio.run(main())

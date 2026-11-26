@@ -209,8 +209,10 @@ def register(app, store, h, ctx):
                 if m and day is not None:
                     r["text"] = r["text"][:m.start()].rstrip()
                     r["by"] = who(m.group(2), station_roles)
-                    fresh = (i == last and _dt(d.get("updated_at")) is not None
-                             and _dt(d["updated_at"]).date() == now.date() == day.date())
+                    # the database hands a time back in the machine's own zone; the stamp is a UTC day
+                    at = _dt(d.get("updated_at"))
+                    fresh = (i == last and at is not None
+                             and at.astimezone(timezone.utc).date() == now.date() == day.date())
                     r["when"] = ago(d["updated_at"] if fresh else day, now) if (
                         fresh or day.date() < now.date()) else "today"
         empty = not rows
