@@ -3604,12 +3604,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
         with neither it is the last 8 weeks. `scope` is factory (default), mine (Home's rule),
         team:<person id> (what that person leads) or project:<id>. Every scope counts only the
         projects the caller can read, so a private one is not in it and, asked for by name, is
-        unknown. Needs the read scope; a project key is refused."""
+        unknown. What is stuck now lists a desk question of no project only in the factory scope,
+        and only one the caller is asked (desk_is_mine). Needs the read scope; a project key is
+        refused."""
         hidden = h.hidden_ids()
         projects = [p for p in store.list_projects() if p["id"] not in hidden]
+        me, o = answerer(request), owners_mod.Owners(store)
         try:
-            return report_mod.page(store, projects, lambda: my_projects(request),
-                                   owners_mod.Owners(store), scope, from_, to)
+            return report_mod.page(
+                store, projects, lambda: my_projects(request), o, scope, from_, to,
+                asks_me=lambda d: me is not None and desk_is_mine(d, me, o))
         except report_mod.UnknownScope as e:
             raise HTTPException(404, str(e))
         except ValueError as e:

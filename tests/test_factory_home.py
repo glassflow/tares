@@ -117,7 +117,8 @@ def units():
                      project={"id": "uc_1", "name": "project-x"}, repo="example-org/docs-site")
     ck("the shape: every field", set(a) == {"id", "kind", "label", "title", "detail", "meta", "project",
                                            "repo", "from", "since", "waited", "actions", "tickets", "blocking", "older",
-                                           "question", "lines", "ask", "holds_up", "checks", "for_people", "for_admin", "no_lead"}, sorted(a))
+                                           "question", "lines", "ask", "holds_up", "checks", "for_people", "for_admin", "no_lead",
+                                           "desk_labels"}, sorted(a))
     ck("waited in words, since an ISO time", a["waited"] == "3 hours"
        and a["since"] == (now - timedelta(hours=3)).isoformat(), (a["waited"], a["since"]))
     ck("the id is kind, project and a key", a["id"].startswith("question:uc_1:") and a["from"] is None, a["id"])

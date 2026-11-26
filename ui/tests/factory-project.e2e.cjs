@@ -357,7 +357,14 @@ async function waitFor(url, tries = 100) {
     ck("#decisions opens Crew questions", new URL(page.url()).pathname === `/projects/${y}/decisions`, page.url());
     await open(page, y, "#desk-D1");
     await page.waitForTimeout(THEME_MS);
-    ck("#desk-D1 brings the waiting list into view", Math.abs(await page.evaluate(() => document.getElementById("waiting").getBoundingClientRect().top)) < 40);
+    const deskRow = await page.evaluate(() => {
+      const el = document.querySelector('[data-desk~="D1"]');
+      const r = el?.getBoundingClientRect();
+      return { top: r ? Math.round(r.top) : null, below: Math.round(document.documentElement.scrollHeight - innerHeight - scrollY),
+               height: innerHeight, clear: !!r && el.contains(document.elementFromPoint(r.left + 4, r.top + 2)) };
+    });
+    ck("#desk-D1 goes to that question's row: at the top, or as near as the page scrolls",
+       deskRow.clear && deskRow.top < deskRow.height - 40 && (deskRow.top < 120 || deskRow.below <= 1), JSON.stringify(deskRow));
 
     // ── 1b. project-k: a milestone with checks for the person (TR-1017) ──────────────────────────
     {

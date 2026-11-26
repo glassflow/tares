@@ -7,7 +7,8 @@ background pass keeps them current (`run`).
 
 A pass reads every source once, works out all the (project, week) rows in memory and writes only the
 ones that differ. A late event changes an older week (an answer, a fix, a later review round, a long
-stage that just ended), and working everything out again cannot miss one.
+stage that just ended), and working everything out again cannot miss one. A full pass also writes
+what is stuck at that moment into the setting `report.stuck` (`_stuck`), which is no week's figure.
 
 The columns of a row. Project "" holds what belongs to no project; every duration is in hours:
 
@@ -38,6 +39,7 @@ import asyncio
 import json
 import re
 import threading
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from itertools import groupby
@@ -53,6 +55,9 @@ EVERY = 5 * 60.0          # seconds between passes
 FIRST_AFTER = 30.0        # after a start, so startup work goes first
 BUILT_SETTING = "report.weeks_built"   # set once the cell's first full build has run
 STAGES = ("doing", "review", "changes", "blocked")   # the stages whose time is counted
+STUCK_SETTING = "report.stuck"   # what was stuck at the last full pass
+STUCK_SHOWN = 5                  # how many of each kind "stuck now" lists
+BUCKET_EDGES = (1, 4, 24, 72)    # start to merge, hours; a time on an edge is in the bucket above it
 NO_PROJECT = ""
 PERSON = "person"         # the role of a session that is no station's
 JSON_COLUMNS = ("start_to_merge", "stage_hours", "rounds", "findings", "questions", "cost_by_role")
@@ -303,14 +308,25 @@ def _live(store) -> set[str]:
     return {p["id"] for p in store.list_projects()}
 
 
-def _compute(store, week: date | None = None) -> dict[tuple[str, date], dict]:
+def _read(store) -> dict:
+    """The records a pass works from that both the weekly rows and "stuck now" need."""
+    projects = store.list_projects()
+    ids = sorted(p["id"] for p in projects)
+    return {"projects": projects, "desk": store.list_desk(None),
+            "tickets": store.tickets_by_project(ids), "changes": store.all_stage_changes(),
+            "handovers": store.handovers_by_project(ids)}
+
+
+def _compute(store, week: date | None = None,
+             read: dict | None = None) -> dict[tuple[str, date], dict]:
     """{(project, week): row} from one read of each source, no query per cell. With `week`, the
     replies are read for that week only, so only that week's rows are whole."""
-    live = _live(store)
+    read = read or _read(store)
+    live = {p["id"] for p in read["projects"]}
     cells: dict = defaultdict(_cell)
-    items = store.list_desk(None)
-    waits = _ticket_waits(items, store.tickets_by_project(sorted(live)))
-    _add_stages(cells, store.all_stage_changes(), waits, live)
+    items = read["desk"]
+    waits = _ticket_waits(items, read["tickets"])
+    _add_stages(cells, read["changes"], waits, live)
     _add_waited(cells, waits)
     _add_desk(cells, items, live)
     _add_reviews(cells, store.all_reviews(), store.all_review_findings(), live)
@@ -321,6 +337,106 @@ def _compute(store, week: date | None = None) -> dict[tuple[str, date], dict]:
         until = since + timedelta(days=7)
     _add_cost(cells, store.usage_by_week(since, until), live)
     return {key: _row(cell) for key, cell in cells.items()}
+
+
+# ── stuck now ─────────────────────────────────────────────────────────────────
+def _stamp(at: datetime) -> str:
+    """A moment as the snapshot writes it: all one width, so the text sorts as the moments do."""
+    return _utc(at).isoformat(timespec="seconds")
+
+
+def _oldest(row: dict) -> tuple:
+    return row["at"], row["number"] or 0, row["label"]
+
+
+def _stage_since(changes: list[dict], stage: str) -> datetime | None:
+    """When a ticket came into `stage`: the first change of the last run of that value in its
+    history (every set_stage writes a change, and a repeated stage is no move). None when the
+    history does not end in that stage."""
+    since = None
+    for change in reversed(changes):
+        if change["value"] != stage:
+            break
+        since = change["at"]
+    return since
+
+
+def _stuck(read: dict, at: datetime) -> dict:
+    """What is stuck at `at`, kept per project so page() can merge the ones a viewer reads:
+    {at, projects: {id: {questions, tickets}}, unfiled}. Each of the two is {count, top}, `top`
+    the STUCK_SHOWN oldest. `unfiled` holds every question of no project with whom it is for,
+    because who reads one is decided per viewer. A question is stuck when it is open and marked
+    blocking; a ticket, when it sits in one of STAGES. Neither is, in a project that is finished
+    or kept for later. Text is worded as the project page words it (no folder of the crew's
+    machine)."""
+    from .screens.factory_project import cleaner   # the screens import much of the daemon
+    live = {p["id"]: p for p in read["projects"]}
+    clean = {pid: cleaner(read["handovers"].get(pid)) for pid in live}
+    resting = {pid for pid, p in live.items()
+               if p["status"] in ("done", "later")
+               or (read["handovers"].get(pid) or {}).get("finished")}
+    questions: dict[str, list[dict]] = defaultdict(list)
+    unfiled = []
+    for d in read["desk"]:
+        if d["state"] != "open" or not d["blocking"] or not d["created_at"]:
+            continue
+        pid = d["project"]
+        row = {"number": d["number"], "label": d["label"], "at": _stamp(d["created_at"])}
+        if not pid:
+            unfiled.append({**row, "text": d["question"], "project": None,
+                            "to_person_id": d.get("to_person_id")})
+        elif pid in live and pid not in resting:
+            questions[pid].append({**row, "text": clean[pid](d["question"])})
+    history = {ticket: list(rows)
+               for ticket, rows in groupby(read["changes"], key=lambda c: c["ticket"])}
+    tickets: dict[str, list[dict]] = defaultdict(list)
+    for pid, rows in read["tickets"].items():
+        if pid in resting:
+            continue
+        for t in rows:
+            if t["stage"] not in STAGES or factory_mod.state_of(t) in ("merged", "canceled"):
+                continue
+            since = _stage_since(history.get(t["id"], []), t["stage"])
+            if since:
+                tickets[pid].append({"number": t.get("number"), "label": factory_mod.label(t),
+                                     "title": clean[pid](t["title"]), "stage": t["stage"],
+                                     "at": _stamp(since)})
+
+    def top(rows: list[dict]) -> dict:
+        return {"count": len(rows), "top": sorted(rows, key=_oldest)[:STUCK_SHOWN]}
+
+    return {"at": _stamp(at), "unfiled": unfiled,
+            "projects": {pid: {"questions": top(questions.get(pid, [])),
+                               "tickets": top(tickets.get(pid, []))}
+                         for pid in sorted(set(questions) | set(tickets))}}
+
+
+def _stuck_now(store, visible: dict[str, dict], ids: list[str],
+               asks_me: Callable[[dict], bool] | None) -> dict | None:
+    """The last pass's "stuck now" as this viewer reads it: only the projects in `ids` (all of
+    them in `visible`), and the questions of no project that `asks_me` lets through (None: the
+    scope holds none). Counted and cut after that, so nothing else is named or counted. None
+    before the first pass."""
+    saved = store.get_setting(STUCK_SETTING)
+    if not saved:
+        return None
+    snapshot = json.loads(saved)
+    out: dict = {"at": snapshot["at"]}
+    for kind in ("questions", "tickets"):
+        count, rows = 0, []
+        for pid in ids:
+            part = snapshot["projects"].get(pid)
+            if part:
+                count += part[kind]["count"]
+                rows += [{**row, "project": {"id": pid, "name": visible[pid]["name"]}}
+                         for row in part[kind]["top"]]
+        if kind == "questions" and asks_me:
+            for row in snapshot["unfiled"]:
+                if asks_me(row):
+                    count += 1
+                    rows.append({k: v for k, v in row.items() if k != "to_person_id"})
+        out[kind] = {"count": count, "rows": sorted(rows, key=_oldest)[:STUCK_SHOWN]}
+    return out
 
 
 # ── the table ─────────────────────────────────────────────────────────────────
@@ -354,9 +470,15 @@ def _write(store, rows: dict[tuple[str, date], dict], only: tuple[str, date] | N
 
 
 def rebuild_all(store) -> dict:
-    """Work out every week of every project again. Returns {rows, changed, removed}."""
+    """Work out every week of every project again, and what is stuck now. Returns {rows, changed,
+    removed} of the weekly rows."""
     with _PASS:
-        return _write(store, _compute(store))
+        at = now_utc()
+        read = _read(store)
+        out = _write(store, _compute(store, read=read))
+        store.set_setting(STUCK_SETTING,
+                          json.dumps(_stuck(read, at), sort_keys=True, separators=(",", ":")))
+        return out
 
 
 def rebuild_week(store, project: str, week: date | datetime) -> dict:
@@ -443,16 +565,73 @@ def delivered(rows: list[dict], weeks: list[date], before: list[dict] | tuple = 
     }
 
 
+def _percents(parts: list[float]) -> list[int | None]:
+    """The parts (hours, as the rows hold them) as whole percents that add to 100: each rounded
+    down, the points left over going to the largest remainders, a tie to the earlier part. All
+    None when the parts add to nothing."""
+    units = [round(p * 10_000) for p in parts]
+    total = sum(units)
+    if not total:
+        return [None] * len(units)
+    out = [u * 100 // total for u in units]
+    for i in sorted(range(len(units)), key=lambda i: (-(units[i] * 100 % total), i))[:100 - sum(out)]:
+        out[i] += 1
+    return out
+
+
+def _stage_sums(rows: list[dict]) -> dict[str, tuple[float, float]]:
+    """{stage: (total, waiting)} hours over the rows."""
+    return {s: tuple(round(sum(r["stage_hours"][s][part] for r in rows), 4)
+                     for part in ("total", "waiting")) for s in STAGES}
+
+
+def time_spent(rows: list[dict], weeks: list[date]) -> dict:
+    """The Time section (TR-1669): where the time of the four stages went, over the range and week
+    by week, each stage split into waiting on a person and agent time (all the rest), and how long
+    the merged tickets took from start to merge. Durations are in hours, percents whole; one with
+    nothing to divide is None. page() adds what is stuck now."""
+    sums = _stage_sums(rows)
+    stages = []
+    for stage, share in zip(STAGES, _percents([sums[s][0] for s in STAGES])):
+        total, waiting = sums[stage]
+        agent = round(total - waiting, 4)
+        waiting_percent, agent_percent = _percents([waiting, agent])
+        stages.append({"stage": stage, "total": total, "waiting": waiting, "agent": agent,
+                       "share": share, "waiting_percent": waiting_percent,
+                       "agent_percent": agent_percent})
+    by_week = defaultdict(list)
+    for r in rows:
+        by_week[r["week"]].append(r)
+    each = []
+    for w in weeks:
+        of = _stage_sums(by_week[w])
+        each.append({"week": w.isoformat(),
+                     "share": dict(zip(STAGES, _percents([of[s][0] for s in STAGES]))),
+                     "waiting": {s: _percents([of[s][1], of[s][0] - of[s][1]])[0]
+                                 for s in STAGES}})
+    total = round(sum(t for t, _ in sums.values()), 4)
+    waiting = sum(w for _, w in sums.values())
+    hours = [h for r in rows for h in r["start_to_merge"]]
+    buckets = [0] * (len(BUCKET_EDGES) + 1)
+    for h in hours:
+        buckets[bisect_right(BUCKET_EDGES, h)] += 1
+    return {"total": total, "waiting_percent": _percents([waiting, total - waiting])[0],
+            "stages": stages, "weeks": each,
+            "start_to_merge": {"merged": sum(r["merged"] for r in rows),
+                               "tickets": len(hours),     # of `merged`: those with a start
+                               "buckets": buckets}}
+
+
 # The sections of the page, in its order. A section's ticket puts its builder in its line:
 # f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
 # (read_weeks) and the Mondays of the range. A builder named in COMPARED is also handed the rows
 # of as many weeks just before the range, in the same scope: f(rows, weeks, before). A builder
-# reads nothing else.
+# reads nothing else; page() itself adds the last pass's "stuck now" to the time section.
 COMPARED = {"delivered"}
 SECTIONS: dict[str, Callable[..., dict] | None] = {
     "delivered": delivered,
 
-    "time": None,
+    "time": time_spent,
 
     "review": None,
 
@@ -506,11 +685,12 @@ def range_weeks(from_: str | None, to: str | None, today: date) -> list[date]:
 
 def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owners,
          scope: str = "factory", from_: str | None = None, to: str | None = None,
-         today: date | None = None) -> dict:
+         today: date | None = None, asks_me: Callable[[dict], bool] | None = None) -> dict:
     """What GET /api/factory/report answers. `projects` are the ones the caller can read, and no
     other is ever named or counted. `mine` gives the ids that are the caller's own (None: nothing
     narrows them) and is asked for the "mine" scope only. `owners` (factory_owners.Owners) says
-    who is here to lead a team.
+    who is here to lead a team. `asks_me` says whether the caller reads a desk question that
+    belongs to no project (None: none).
 
     A team is the projects one person leads, named by that person's id; a cell of one person has
     none. The "" rows (cost no project claims) belong to the whole factory only."""
@@ -548,6 +728,9 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
     rows = [r for r in read if r["week"] >= weeks[0]]
     before = [r for r in read if r["week"] < weeks[0]]
     running = week_of(today)
+    sections = {k: build(rows, weeks, before) if k in COMPARED else build(rows, weeks)
+                for k, build in SECTIONS.items() if build}
+    sections["time"]["stuck"] = _stuck_now(store, visible, ids, asks_me if rest else None)
     return {
         "range": {"from": weeks[0].isoformat(),
                   "to": (weeks[-1] + timedelta(days=6)).isoformat(),
@@ -557,8 +740,7 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         "scope": {"value": scope, "name": name, "count": len(ids), "teams": teams,
                   "projects": [{"id": p["id"], "name": p["name"]} for p in factory_projects]},
         "cannot_see": list(CANNOT_SEE),
-        "sections": {k: build(rows, weeks, before) if k in COMPARED else build(rows, weeks)
-                     for k, build in SECTIONS.items() if build},
+        "sections": sections,
     }
 
 

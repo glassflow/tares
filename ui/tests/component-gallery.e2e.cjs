@@ -119,6 +119,7 @@ async function checkWeekChart(page) {
       lines: [...lines.querySelectorAll("g[data-line]")].map((g) => ({ series: g.dataset.line, d: g.querySelector("path").getAttribute("d"),
         dash: g.querySelector("path").getAttribute("stroke-dasharray"), dots: g.querySelectorAll("line[data-dot]").length, stroke: getComputedStyle(g.querySelector("path")).stroke })),
       listed: lines.querySelectorAll("tr[data-series]").length, half: texts(lines, "Half"),
+      swatches: [...lines.querySelectorAll("tr[data-series] th svg")].map((s) => { const l = s.querySelector("line"); return l ? l.getAttribute("stroke-dasharray") || "none" : "empty"; }),
       empty: { words: empty.textContent, table: !!empty.querySelector("table") },
     };
   });
@@ -131,9 +132,10 @@ async function checkWeekChart(page) {
   ck("week chart: heights share one scale from 0 (4 is half of 8)", Math.abs(merged[2].height - top / 2) < 0.01 && top === 116, `${merged[2] && merged[2].height} of ${top}`);
   ck("week chart: bars are drawn in ink, the second series softer", merged.every((r) => r.fill === got.ink) && got.rects.filter((r) => r.series === "Reviewed").every((r) => r.fill === got.soft), JSON.stringify([got.ink, got.soft, merged[0] && merged[0].fill]));
   ck("week chart: the running week's bars are lighter", got.rects.every((r) => (r.week === 7) === (r.opacity === "0.5")), JSON.stringify(got.rects.map((r) => r.opacity)));
-  ck("week chart: three lines are drawn and four series listed", got.lines.length === 3 && got.listed === 4, `${got.lines.length} / ${got.listed}`);
+  ck("week chart: four lines are drawn and five series listed", got.lines.length === 4 && got.listed === 5, `${got.lines.length} / ${got.listed}`);
   ck("week chart: a week with no value breaks the line", got.lines.every((l) => (l.d.match(/M/g) || []).length === 2 && l.dots === 7 && !/NaN/.test(l.d)), JSON.stringify(got.lines.map((l) => [l.d, l.dots])));
-  ck("week chart: lines differ by ink and by dash", new Set(got.lines.map((l) => l.stroke)).size === 3 && JSON.stringify(got.lines.map((l) => l.dash)) === JSON.stringify([null, "5 3", "1.5 3"]), JSON.stringify(got.lines.map((l) => [l.stroke, l.dash])));
+  ck("week chart: lines differ by ink and by dash, the fourth in ink again", new Set(got.lines.map((l) => l.stroke)).size === 3 && got.lines[3]?.stroke === got.lines[0]?.stroke && JSON.stringify(got.lines.map((l) => l.dash)) === JSON.stringify([null, "5 3", "1.5 3", "8 3 1.5 3"]), JSON.stringify(got.lines.map((l) => [l.stroke, l.dash])));
+  ck("week chart: each drawn line has its swatch in the legend, with the same dash", JSON.stringify(got.swatches) === JSON.stringify(["none", "5 3", "1.5 3", "8 3 1.5 3", "empty"]), JSON.stringify(got.swatches));
   ck("week chart: the caller's format says the unit", got.half[0] === "5 h" && got.half[1] === "6.5 h", got.half.join(" | "));
   ck("week chart: with no values it says so and draws no table", /Nothing to chart: no data in these weeks\./.test(got.empty.words) && !got.empty.table, got.empty.words);
   ck("week chart: the table is named by its caption", (await page.getByRole("table", { name: "Tickets merged and reviewed per week" }).count()) === 1);

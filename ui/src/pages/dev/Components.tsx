@@ -679,7 +679,7 @@ export default function Components() {
             { label: "Reviewed", values: [4, 6, 4, 1, 8, 6, null, 3] },
           ]}
         />
-        <Caption>Lines, with a week that has no value; a fourth series is listed and not drawn</Caption>
+        <Caption>Lines, with a week that has no value; a fifth series is listed and not drawn</Caption>
         <WeekChart
           caption="Hours from start to merge"
           data-testid="week-chart-lines"
@@ -691,6 +691,7 @@ export default function Components() {
             { label: "Three in four", values: [9, 11, 8, null, 12, 10, 11, 7] },
             { label: "Nine in ten", values: [20, 26, 18, null, 31, 22, 24, 12] },
             { label: "Longest", values: [41, 44, 30, null, 52, 38, 40, 21] },
+            { label: "Mean", values: [8, 10, 7, null, 11, 9, 10, 5] },
           ]}
         />
         <Caption>More weeks than fit</Caption>

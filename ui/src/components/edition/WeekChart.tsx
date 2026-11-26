@@ -16,7 +16,7 @@ export interface WeekChartProps extends Omit<React.HTMLAttributes<HTMLElement>, 
   caption: string;
   /** The Mondays of the weeks, oldest first, as year-month-day. */
   weeks: string[];
-  /** The first three are drawn; every one is listed with its values. */
+  /** The first three bars, or the first four lines, are drawn; every one is listed with its values. */
   series: WeekSeries[];
   /** "bars" (default) for a count or a sum; "lines" for a figure that moves, such as a median. */
   kind?: "bars" | "lines";
@@ -33,7 +33,10 @@ const DRAWN = [
   { fill: "fill-foreground", stroke: "stroke-foreground", dash: undefined },
   { fill: "fill-muted-foreground", stroke: "stroke-muted-foreground", dash: "5 3" },
   { fill: "fill-faint", stroke: "stroke-faint", dash: "1.5 3" },
+  // only lines get a fourth: the ink again, told apart by its dash and dot
+  { fill: "fill-foreground", stroke: "stroke-foreground", dash: "8 3 1.5 3" },
 ];
+const MOST = { bars: 3, lines: DRAWN.length };
 const COL = 10;       // a week's width in the plot's own units
 const GROUP = 6;      // how much of it the bars take
 const LABEL = "sticky left-0 z-10 bg-background";
@@ -41,7 +44,7 @@ const LABEL = "sticky left-0 z-10 bg-background";
 const HEAD = "border-0 p-0 pb-1 align-bottom font-mono text-[11px] font-normal uppercase tracking-[0.08em] text-muted-foreground";
 
 function Swatch({ index, kind }: { index: number; kind: "bars" | "lines" }) {
-  const look = DRAWN[index];
+  const look = index < MOST[kind] ? DRAWN[index] : undefined;
   return (
     <svg aria-hidden="true" width={16} height={8} className="shrink-0">
       {look && (kind === "bars"
@@ -58,7 +61,7 @@ export function WeekChart({ caption, weeks, series, kind = "bars", format = (v) 
   const id = React.useId();
   // Values are not trusted: anything but a finite number is a week with no value.
   const rows = series.map((s) => ({ label: s.label, values: weeks.map((_, w) => (Number.isFinite(s.values[w]) ? (s.values[w] as number) : null)) }));
-  const drawn = rows.slice(0, DRAWN.length);
+  const drawn = rows.slice(0, MOST[kind]);
   let max = 0;
   for (const s of drawn) for (const v of s.values) if (v !== null && v > max) max = v;
   const top = max || 1;

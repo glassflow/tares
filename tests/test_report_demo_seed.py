@@ -3,7 +3,7 @@ fresh data dir seeded twice holds the same rows, a run that stopped half way is 
 without doubles, a dir with other projects is refused, and each of the last eight ISO weeks (UTC)
 holds what the Report reads. The week checks run on today's seed and again as seeded just after a
 week began and just before one ended. The part that reads the Report is skipped while there is no
-GET /api/factory/report (TR-1667).
+GET /api/factory/report (TR-1667); it also looks that the Time section has data (TR-1669).
 
 What a viewer sees (TR-1691): for the hour the start hint promises, Home and the Crew page say the
 crew is running; after it, the command the seed printed makes them say so again; and a sample pull
@@ -527,6 +527,34 @@ def daemon_checks(data_dir):
             ck("GET /api/factory/report answers on the seeded cell",
                report.status_code == 200 and any(n in report.text for n in NAMES),
                f"{report.status_code} {report.text[:300]}")
+            time_section_checks(base)
+
+
+def time_section_checks(base):
+    """The Time section (TR-1669) has something to draw on the seeded cell."""
+    rebuilt = httpx.post(f"{base}/api/factory/report/rebuild", timeout=60)   # not 30 s later
+    read = httpx.get(f"{base}/api/factory/report", timeout=60).json()
+    section = read.get("sections", {}).get("time") or {}
+    stages = section.get("stages") or []
+    ck("the Time section has time in all four stages, with shares that add to 100",
+       rebuilt.status_code == 200 and len(stages) == 4 and all(s["total"] > 0 for s in stages)
+       and sum(s["share"] for s in stages) == 100, f"{rebuilt.status_code} {stages}")
+    ck("some of it waiting on a person, never more than a stage has",
+       sum(s["waiting"] for s in stages) > 0
+       and all(0 <= s["waiting"] <= s["total"] for s in stages), str(stages))
+    weeks = section.get("weeks") or []
+    ck("every one of the eight weeks has a share of each stage",
+       len(weeks) == WEEKS and all(None not in w["share"].values() for w in weeks), str(weeks))
+    merged = section.get("start_to_merge") or {}
+    buckets = merged.get("buckets") or []
+    ck("start to merge counts over a hundred tickets, in more than one bucket",
+       sum(buckets) == merged.get("tickets", 0) > 100 and sum(1 for n in buckets if n) > 1,
+       str(merged))
+    stuck = section.get("stuck") or {}
+    questions = stuck.get("questions", {}).get("rows") or []
+    tickets = stuck.get("tickets", {}).get("rows") or []
+    ck("stuck now has an open blocking question and tickets in a stage",
+       bool(questions) and bool(tickets), str(stuck))
 
 
 def crew_now(base):

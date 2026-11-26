@@ -1,12 +1,15 @@
 /*
- * Browser e2e for TR-1667 (the factory Report page's frame) and TR-1668 (its Delivered section).
+ * Browser e2e for TR-1667 (the factory Report page's frame), TR-1668 (its Delivered section) and
+ * TR-1669 (its Time section).
  *
  * A scratch factory cell seeded by tests/seed-factory-report.py (8 weeks hold 9 merged tickets, 4 weeks
  * 5). Checked: the menu entry; the page from one read of GET /api/factory/report; the six section
  * headings, the "cannot see" line and the "API-equivalent" label; each range and each kind of scope
  * changing the address and the figures; a copied address opening the same view; two dates; a range with
  * no merged ticket; Delivered's four tiles, their change on the weeks before, the lines under them and
- * the two weekly charts, also with reviews and no merge and with nothing delivered; a scope or a date
+ * the two weekly charts, also with reviews and no merge and with nothing delivered; Time's stage table,
+ * its two weekly charts, the start-to-merge histogram and "stuck now" with its links to the question
+ * (inside "Waiting for others" on the project page) and to the ticket, also empty; a scope or a date
  * the cell refuses; a read that fails; at 1440 and 390 wide, and embedded in the desktop
  * (?embed=desktop).
  * Run:  npm run build && TARES_E2E_PORT=<free port> node tests/report.e2e.cjs
@@ -30,6 +33,7 @@ const SHOTS = process.env.SHOTS_DIR;
 const ROUTE = "/api/factory/report";
 const SECTIONS = ["delivered:Delivered", "time:Time", "review:Review", "cost:Cost", "merges:Merges", "architecture:Architecture"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const waited = (n) => `Waiting on a person: ${n}% of stage time.`;
 const CANNOT_SEE = "What this report cannot see: Work done outside Tares. Pushes that skipped the merge queue. "
   + "Your bill: cost is API-equivalent (list prices), not what a subscription charges.";
 
@@ -119,6 +123,8 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       const got = await summary(page, start);
       ck(label, got.startsWith(start), got);
     };
+    /** The address of the one week `back` weeks before this one. */
+    const days = (back) => `/report?range=dates&from=${plus(ids.monday, -7 * back)}&to=${plus(ids.monday, -7 * back + 6)}`;
     const open = async (page, to) => {
       await page.goto(`${BASE}${to}`, { waitUntil: "load" });
       await page.getByTestId("factory-report").waitFor();
@@ -148,14 +154,15 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          `${page.url()} ${asked[0]}`);
       const first = plus(ids.monday, -49);
       await says(page, "frame: the summary counts the merged tickets and says which weeks",
-                 `9 tickets merged. ${said(first)} to ${said(plus(ids.monday, 6))}, in weeks that start on Monday (UTC). This week is not over yet.`);
+                 `9 tickets merged. ${waited(14)} ${said(first)} to ${said(plus(ids.monday, 6))}, in weeks that start on Monday (UTC). This week is not over yet.`);
       ck("frame: what the report cannot see, in full", (await text(page, "report-cannot-see")) === CANNOT_SEE,
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
-      ck("frame: each section but Delivered says it is not built yet",
-         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 5
-         && !(await text(page, "report-section-delivered")).includes("not built"));
+      ck("frame: each section but Delivered and Time says it is not built yet",
+         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 4
+         && !(await text(page, "report-section-delivered")).includes("not built")
+         && !(await text(page, "report-section-time")).includes("not built"));
       ck("frame: the Cost section is labelled API-equivalent",
          await page.getByTestId("report-section-cost").getByText("API-equivalent", { exact: true }).isVisible());
       ck("frame: no date fields until two dates are asked for", (await count(page, "report-from")) === 0);
@@ -165,7 +172,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
 
       // ---- range and scope live in the address
       await pick(page, "report-range", "Last 4 weeks");
-      await says(page, "range: 4 weeks count 5 merged tickets", `5 tickets merged. ${said(plus(ids.monday, -21))}`);
+      await says(page, "range: 4 weeks count 5 merged tickets", `5 tickets merged. ${waited(16)} ${said(plus(ids.monday, -21))}`);
       ck("range: the address says 4 weeks and the read starts three Mondays back or later",
          same(query(page), { range: "4w" }) && asked.at(-1).get("from") >= plus(ids.monday, -21), `${page.url()} ${asked.at(-1)}`);
 
@@ -222,11 +229,11 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          && (await page.getByTestId("report-from").inputValue()) === start.from
          && (await page.getByTestId("report-to").inputValue()) === start.to, JSON.stringify(start));
       await page.getByTestId("report-from").fill(ids.old_monday);
-      await says(page, "dates: an earlier first date counts the old ticket too", `10 tickets merged. ${said(ids.old_monday)}`);
+      await says(page, "dates: an earlier first date counts the old ticket too", `10 tickets merged. ${waited(13)} ${said(ids.old_monday)}`);
       ck("dates: the address holds the new date", query(page).from === ids.old_monday, page.url());
       await page.getByTestId("report-to").fill(plus(ids.old_monday, 2));
       await says(page, "dates: one week long, one ticket, said in the singular",
-                 `1 ticket merged. ${said(ids.old_monday)} to ${said(plus(ids.old_monday, 6))}, in weeks that start on Monday (UTC).`);
+                 `1 ticket merged. ${waited(0)} ${said(ids.old_monday)} to ${said(plus(ids.old_monday, 6))}, in weeks that start on Monday (UTC).`);
       ck("dates: a past range does not say this week is running",
          !(await text(page, "report-summary")).includes("not over"), await text(page, "report-summary"));
       {
@@ -255,10 +262,10 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
           await page.keyboard.press("ArrowRight");
         }
         await away();
-        await says(page, "dates: a last date cleared by hand means today again", `10 tickets merged. ${said(ids.old_monday)}`);
+        await says(page, "dates: a last date cleared by hand means today again", `10 tickets merged. ${waited(13)} ${said(ids.old_monday)}`);
         ck("dates: and it leaves the address", !("to" in query(page)) && query(page).from === ids.old_monday, page.url());
         await page.getByTestId("report-from").fill("");
-        await says(page, "dates: an emptied first date means the usual weeks", `9 tickets merged. ${said(plus(ids.monday, -49))} to `);
+        await says(page, "dates: an emptied first date means the usual weeks", `9 tickets merged. ${waited(14)} ${said(plus(ids.monday, -49))} to `);
         ck("dates: and it leaves the address too", same(query(page), { range: "dates", scope: `team:${ids.Ada}` }), page.url());
       }
       await pick(page, "report-range", "Last 8 weeks");
@@ -271,7 +278,8 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await page.getByTestId("report-empty").waitFor();
       ck("empty: a scope with no merged ticket says so",
          (await text(page, "report-empty")).includes("No ticket was merged in these weeks")
-         && !(await text(page, "report-summary")).includes("merged."), await text(page, "report-empty"));
+         && !(await text(page, "report-summary")).includes("merged.")
+         && !(await text(page, "report-summary")).includes("Waiting on a person"), await text(page, "report-summary"));
       ck("empty: the six sections stay under that line", (await sections(page)).join("|") === SECTIONS.join("|")
          && await page.evaluate(() => {
            const line = document.querySelector('[data-testid="report-empty"]');
@@ -367,8 +375,6 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
         await open(page, to);
         await page.getByTestId("report-section-delivered").waitFor();
       };
-      const days = (back) => `/report?range=dates&from=${plus(ids.monday, -7 * back)}&to=${plus(ids.monday, -7 * back + 6)}`;
-
       await view("/report");
       await is("delivered: 8 weeks, with nothing in the 8 weeks before",
         ["MERGED", "9", "No figures for the 8 weeks before", "67% passed first review, of 3 tickets first reviewed"],
@@ -392,7 +398,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       ck("delivered: bars for merged, a line for start to merge",
          charts.join("|") === "bars:Merged per week|lines:Start to merge, p50 per week", charts.join("|"));
       ck("delivered: the running week's column says so far in both charts",
-         (await page.locator(`[data-week-chart] th[data-week="${ids.monday}"]`).filter({ hasText: "so far" }).count()) === 2);
+         (await page.getByTestId("report-section-delivered").locator(`th[data-week="${ids.monday}"]`).filter({ hasText: "so far" }).count()) === 2);
       ck("delivered: the whole page still comes from one read", asked.length === 1, `${asked.length} reads`);
       await shot(page, "delivered-8w-1440");
 
@@ -476,6 +482,26 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          (await count(page, "delivered-empty")) === 1 && (await count(page, "delivered-merged")) === 0,
          await text(page, "report-section-delivered"));
       await page.unroute(reading);
+      // an accepted milestone is a delivery: with no merge and no review the figures still show
+      await page.route(reading, async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        body.sections.delivered.milestones_accepted = 1;
+        body.sections.delivered.previous = { merged: 0, milestones_accepted: 0, projects_merged: 0,
+          start_to_merge: { p50: null, p90: null, tickets: 0 }, first_pass: { passed: 0, reviewed: 0 }, rounds_per_ticket: null };
+        await r.fulfill({ response: res, json: body });
+      });
+      await view(`/report?scope=team:${ids.Bo}`);
+      await is("delivered: an accepted milestone and nothing else shows the figures",
+        ["MERGED", "0", "Same as the 8 weeks before"],
+        ["MILESTONES ACCEPTED", "1", "+1 on the 8 weeks before"],
+        ["PROJECTS WITH A MERGE", "0", "Same as the 8 weeks before"],
+        ["START TO MERGE, P50", "no value", "No figures for the 8 weeks before"]);
+      ck("delivered: and a milestone alone keeps the charts, with no empty sentence",
+         (await count(page, "delivered-empty")) === 0
+         && (await page.getByTestId("report-section-delivered").locator("[data-week-chart]").count()) === 2,
+         await text(page, "report-section-delivered"));
+      await page.unroute(reading);
       for (const [label, alter, want] of [
         ["delivered: a shorter start to merge reads as a minus", (d) => { d.previous.start_to_merge.p50 = 30.5; },
          "-1 day 3 hours on the 4 weeks before"],
@@ -501,6 +527,193 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await ctx.close();
     }
 
+    // ---- Time: where the stage time went, how long a ticket took, and what is stuck now
+    {
+      const { ctx, page, asked } = await fresh(1440);
+      const view = async (to) => {
+        await open(page, to);
+        await page.getByTestId("time-stuck").waitFor();
+      };
+      const flat = (s) => s.replace(/\s+/g, " ").trim();
+      /** The rows of a table as read, a "|" between cells; "-" for a cell with no value. */
+      const table = (id, rows) => page.getByTestId(id).locator(rows).evaluateAll((trs) => trs.map((tr) =>
+        [...tr.cells].map((c) => (c.querySelector(".sr-only") ? "-" : c.textContent.trim())).join("|")));
+      const rows = async (id) => (await page.getByTestId(`stuck-${id}-row`).allInnerTexts()).map(flat);
+      const of = async (id) => ((await count(page, `stuck-${id}-count`)) ? text(page, `stuck-${id}-count`) : "(no count)");
+      const q = ids.questions, t = ids.tickets;
+
+      await view("/report");
+      ck("time: the four stages with share, time and the split",
+         JSON.stringify(await table("time-stages", "tbody tr")) === JSON.stringify([
+           "In progress|67%|1 day 2 hours|0%|100%", "In review|6%|2 hours 30 minutes|20%|80%",
+           "Changes asked|1%|30 minutes|0%|100%", "Blocked|26%|10 hours|50%|50%"]), JSON.stringify(await table("time-stages", "tbody tr")));
+      ck("time: headed as shares of these four stages, with the note on agent time",
+         (await page.getByRole("table", { name: "Share of time in these four stages" }).count()) === 1
+         && (await text(page, "time-agent-note")) === "Agent time: Everything not covered by an answered question, including checks and queues. Unfinished stages are not counted.",
+         await text(page, "time-agent-note"));
+      const share = await table("time-share-weeks", "tr[data-series]");
+      ck("time: share per week, a gap in a week with nothing", JSON.stringify(share) === JSON.stringify([
+        "In progress|-|100%|-|-|-|62%|67%|-", "In review|-|0%|-|-|-|0%|28%|-",
+        "Changes asked|-|0%|-|-|-|0%|5%|-", "Blocked|-|0%|-|-|-|38%|0%|-"]), JSON.stringify(share));
+      const held = await table("time-waiting-weeks", "tr[data-series]");
+      ck("time: waiting per week and stage, no value where a stage had no time", JSON.stringify(held) === JSON.stringify([
+        "In progress|-|0%|-|-|-|0%|0%|-", "In review|-|-|-|-|-|-|20%|-",
+        "Changes asked|-|-|-|-|-|-|0%|-", "Blocked|-|-|-|-|-|50%|-|-"]), JSON.stringify(held));
+      ck("time: all four lines are drawn in both charts, and the running week says so",
+         (await page.getByTestId("time-share-weeks").locator("[data-plot] [data-line]").count()) === 4
+         && (await page.getByTestId("time-waiting-weeks").locator("[data-plot] [data-line]").count()) === 4
+         && (await page.getByTestId("report-section-time").locator(`th[data-week="${ids.monday}"]`).filter({ hasText: "so far" }).count()) === 2);
+      const buckets = await table("time-histogram", "tr[data-bucket]");
+      ck("time: one histogram for the range", JSON.stringify(buckets) === JSON.stringify(
+        ["Under 1 h||0", "1 to 4 h||6", "4 to 24 h||1", "1 to 3 days||1", "Over 3 days||0"]), JSON.stringify(buckets));
+      const bars = await page.getByTestId("time-histogram").locator("rect").evaluateAll((r) => r.map((e) => Math.round(e.getBoundingClientRect().width)));
+      ck("time: the histogram's bars follow its counts", bars[0] === 0 && bars[1] > 100 && bars[2] === bars[3]
+         && Math.abs(bars[1] - 6 * bars[2]) <= 6 && bars[4] === 0, JSON.stringify(bars));
+      ck("time: and says how many merged tickets it holds", (await text(page, "time-histogram-of")) === "from 8 of 9 merged tickets",
+         await text(page, "time-histogram-of"));
+      ck("time: no change line and no second word about the unfinished week",
+         (await page.getByTestId("report-section-time").locator("[data-change]").count()) === 0
+         && !(await text(page, "report-section-time")).includes("not over"));
+      ck("stuck: as of the last pass, as a stamp, how long ago in the tooltip",
+         /^As of \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z$/.test(await text(page, "stuck-as-of"))
+         && /^(just now|\d+\w* ago)$/.test((await page.getByTestId("stuck-as-of").getAttribute("title")) || ""),
+         `${await text(page, "stuck-as-of")} ${await page.getByTestId("stuck-as-of").getAttribute("title")}`);
+      const asking = await rows("questions");
+      ck("stuck: the five oldest blocking questions, none addressed to someone else",
+         asking.map((r) => (r.match(/(D\d+) · /) || [])[1]).join() === [100, 80, 55, 30, 10].map((h) => q[h]).join()
+         && (await of("questions")) === "5 of 7", `${await of("questions")} ${JSON.stringify(asking)}`);
+      ck("stuck: a question shows its text, number, project and age",
+         asking[0] === `May the crew rotate the signing key? ${q[100]} · No project · Asked 4 days ago`
+         && asking[1] === `Which database should the page read? ${q[80]} · project-a · Asked 3 days ago`, JSON.stringify(asking.slice(0, 2)));
+      const longest = await rows("tickets");
+      ck("stuck: the five tickets longest in one stage",
+         longest.map((r) => r.split(" ")[0]).join() === [190, 150, 120, 90, 50].map((h) => t[h]).join()
+         && (await of("tickets")) === "5 of 7", `${await of("tickets")} ${JSON.stringify(longest)}`);
+      ck("stuck: a ticket shows its number, title, project, stage and age",
+         longest[0] === `${t[190]} Move the sync project-a · Moved to in progress 7 days ago`
+         && longest[1] === `${t[150]} Read the logs project-b · Moved to review 6 days ago`, JSON.stringify(longest.slice(0, 2)));
+      ck("stuck: a question of no project links to the Crew page",
+         (await page.getByTestId("stuck-questions-row").first().getAttribute("href")) === `/crew#desk-${q[100]}`,
+         await page.getByTestId("stuck-questions-row").first().getAttribute("href"));
+      ck("time: the whole page still comes from one read", asked.length === 1, `${asked.length} reads`);
+      await checkWords(page, ck, "time @1440");
+      ck("time @1440: no horizontal scroll", (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      await shot(page, "time-8w-1440");
+
+      await view(`/report?scope=project:${ids["project-a"]}`);
+      ck("stuck: one project shows its own questions and tickets",
+         (await rows("questions")).map((r) => (r.match(/(D\d+) · /) || [])[1]).join() === [80, 30, 5].map((h) => q[h]).join()
+         && (await of("questions")) === "3 of 3"
+         && (await rows("tickets")).map((r) => r.split(" ")[0]).join() === [190, 120, 50, 5].map((h) => t[h]).join()
+         && (await of("tickets")) === "4 of 4", `${JSON.stringify(await rows("questions"))} ${JSON.stringify(await rows("tickets"))}`);
+
+      await view(days(30));
+      ck("time: a past range with no stage ended says so, with no table, chart or histogram",
+         (await count(page, "time-empty")) === 1 && (await text(page, "time-empty")) === "No stage ended in these weeks."
+         && (await count(page, "time-stages")) === 0 && (await count(page, "time-share-weeks")) === 0
+         && (await count(page, "time-histogram")) === 0, await text(page, "report-section-time"));
+      ck("time: and still shows what is stuck now", (await rows("questions")).length === 5 && (await rows("tickets")).length === 5,
+         await text(page, "report-section-time"));
+
+      await view(`/report?scope=team:${ids.Bo}`);
+      ck("time: a scope with nothing says all three, with no row and no count",
+         (await text(page, "time-empty")) === "No stage ended in these weeks."
+         && (await text(page, "stuck-questions")).endsWith("No blocking question is open.")
+         && (await text(page, "stuck-tickets")).endsWith("No ticket is in a stage now.")
+         && (await count(page, "stuck-questions-row")) === 0 && (await count(page, "stuck-tickets-row")) === 0
+         && (await of("questions")) === "(no count)" && (await of("tickets")) === "(no count)",
+         await text(page, "report-section-time"));
+      await checkWords(page, ck, "time with nothing @1440");
+      await shot(page, "time-empty-1440");
+
+      // before the cell's first pass there is no list to show; made here, the seed has passed
+      const reading = /\/api\/factory\/report\?/;
+      await page.route(reading, async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        if (body.sections.time) body.sections.time.stuck = null;
+        await r.fulfill({ response: res, json: body });
+      });
+      await open(page, "/report?range=4w");
+      const none = (await count(page, "stuck-not-yet")) ? await text(page, "stuck-not-yet") : "(no line)";
+      ck("stuck: before the first pass it says it is not worked out, not that nothing is stuck",
+         none === "Stuck now is not worked out yet." && (await count(page, "stuck-questions")) === 0
+         && (await count(page, "stuck-as-of")) === 0, none);
+      await ctx.close();
+    }
+
+    // ---- the links of "stuck now", on a phone so the row has to be scrolled to
+    {
+      const { ctx, page } = await fresh(390);
+      const q = ids.questions, t = ids.tickets;
+      const project = `/projects/${ids["project-a"]}`;
+      await open(page, "/report");
+      await page.getByTestId("stuck-tickets").waitFor();
+      ck("390: the stage table, histogram and stuck lists fit",
+         (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      const broken = await page.getByTestId("time-stages").locator("th, td").evaluateAll((cells) => cells.flatMap((c) => {
+        const out = [];
+        const walk = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+          if (n.parentElement.closest(".sr-only")) continue;
+          for (const m of n.textContent.matchAll(/\S+/g)) {
+            const r = document.createRange();
+            r.setStart(n, m.index);
+            r.setEnd(n, m.index + m[0].length);
+            if (r.getClientRects().length > 1) out.push(m[0]);
+          }
+        }
+        return out;
+      }));
+      ck("390: no word of the stage table is split over two lines", broken.length === 0, broken.join(" "));
+      await shot(page, "time-8w-390");
+
+      await page.goto(`${BASE}${project}`, { waitUntil: "networkidle" });
+      await page.getByTestId("waiting-others-toggle").waitFor();
+      ck("links: the project page starts with Waiting for others closed",
+         (await page.getByTestId("waiting-other-row").filter({ visible: true }).count()) === 0);
+
+      await open(page, "/report");
+      await page.getByTestId("stuck-questions-row").filter({ hasText: `${q[30]} · ` }).click();
+      const row = page.locator(`[data-desk~="${q[30]}"]`);
+      let shown = false;
+      try {
+        await row.waitFor({ state: "visible", timeout: 5000 });
+        await page.waitForFunction((label) => {
+          const el = document.querySelector(`[data-desk~="${label}"]`);
+          const r = el?.getBoundingClientRect();
+          // gone to the row (near the top, or the page scrolls no further), and not under the top bar
+          return !!r && (r.top < 120 || document.documentElement.scrollHeight - innerHeight - scrollY <= 1)
+            && r.top < innerHeight - 40 && el.contains(document.elementFromPoint(r.left + 4, r.top + 2));
+        }, q[30], { timeout: 5000 });
+        shown = true;
+      } catch { /* the check says where it ended */ }
+      ck("links: a question opens its project page at the row, clear of the top bar",
+         new URL(page.url()).pathname === project && new URL(page.url()).hash === `#desk-${q[30]}` && shown
+         && (await row.innerText()).includes("May the crew delete"),
+         `${page.url()} ${JSON.stringify(await row.count() ? await row.boundingBox() : null)}`);
+      await shot(page, "link-question-390");
+      ck("links: the opened rows fit a phone, a long unbroken name included",
+         (await page.getByTestId("waiting-other-row").filter({ visible: true }).count()) === 3
+         && (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+
+      await open(page, "/report");
+      await page.getByTestId("stuck-tickets-row").filter({ hasText: "Move the sync" }).click();
+      await page.getByTestId("ticket-title").waitFor();
+      ck("links: a ticket opens the ticket",
+         new URL(page.url()).pathname === `${project}/tickets/${t[190]}` && (await text(page, "ticket-title")) === "Move the sync",
+         `${page.url()} ${await text(page, "ticket-title")}`);
+
+      await open(page, "/report");
+      await page.getByTestId("stuck-questions-row").first().click();
+      const heading = page.getByRole("heading", { level: 1, name: "Crew", exact: true });
+      try { await heading.waitFor({ timeout: 10000 }); } catch { /* the check says what is there */ }
+      ck("links: a question of no project opens the Crew page",
+         new URL(page.url()).pathname === "/crew" && await heading.isVisible(),
+         `${page.url()} ${JSON.stringify(await page.locator("h1").allInnerTexts())}`);
+      await ctx.close();
+    }
+
     // ---- phone width
     {
       const { ctx, page } = await fresh(390);
@@ -514,7 +727,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await page.goto(`${BASE}/report`, { waitUntil: "networkidle" });
       await page.getByTestId("delivered-p50-weeks").waitFor();
       ck("390: 8 weeks of charts scroll inside their own box, not the page",
-         await page.locator('[data-week-chart] [role="region"]').evaluateAll((els) => els.length === 2 && els.every((e) => e.scrollWidth > e.clientWidth))
+         await page.locator('[data-week-chart] [role="region"]').evaluateAll((els) => els.length === 4 && els.every((e) => e.scrollWidth > e.clientWidth))
          && (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
       ck("390: a start-to-merge value in two units takes two lines and fits its column",
          await page.getByTestId("delivered-p50-weeks").locator("tr[data-series] td").evaluateAll((cells) => {
