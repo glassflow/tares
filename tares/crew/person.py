@@ -906,17 +906,24 @@ def _warn_clash(client: TaresClient, env: dict) -> None:
 
 def on_codex(client: TaresClient, env: dict | None = None) -> bool:
     """Does this crew run on Codex? Its recorded stations say, and Tares is not asked. A crew that has recorded
-    none is on Claude Code where Claude Code is installed, as bash had it (nothing more is asked of Tares); on a
-    machine without it, the cell's runtime slot says (TR-1599)."""
+    none is on Claude Code where Claude Code is installed, as bash had it (nothing more is asked of Tares), and
+    where neither Claude Code nor Codex is (the person is told Claude Code is missing before Tares is asked
+    anything). On a machine with Codex and no Claude Code, the cell's runtime slot says (TR-1599)."""
+    from . import codex as cx
     from . import launch, proc
+    env = os.environ if env is None else env
     have = launch.crew_runtime(client.paths)
     if have:
         return have == proc.CODEX
     try:
-        claude_bin(os.environ if env is None else env)
+        claude_bin(env)
         return False
     except CrewError:
         pass
+    try:
+        cx.codex_bin(env)
+    except CrewError:
+        return False   # no Codex either: the missing Claude Code is said, as before
     try:
         return proc.planned_runtime(client) == proc.CODEX
     except Exception:  # noqa: BLE001 - a client that cannot ask Tares: Claude Code, as before
