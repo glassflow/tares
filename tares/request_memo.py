@@ -141,16 +141,3 @@ def kept(method):
             memo.kept[key] = _own(value)
         return value
     return read
-
-
-def kept_state(method):
-    """`kept` for a read of the state tables that are still reached through `store.sc`. Their
-    writes are seen only on the Postgres state connection (`watched`), so on a DuckDB state, where
-    a read costs no round trip, the method runs every time."""
-    memoized = kept(method)
-
-    @functools.wraps(method)
-    def read(self, *args, **kwargs):
-        run = memoized if getattr(self.sc, "watched", False) else method
-        return run(self, *args, **kwargs)
-    return read

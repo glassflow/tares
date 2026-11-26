@@ -3,8 +3,8 @@
 On the store: inside `request_memo.scope()` a repeated read runs once and each caller gets its own
 copy; outside it, and after a write (through a Store method or not), the read runs again; two page
 reads share nothing. On the daemon: the page routes have a memo and no other route does, and a
-second request reads again. The reads of the state tables are kept only on a Postgres state, whose
-writes the memo sees.
+second request reads again. The integration reads Setup repeats are kept too, and a write to their
+tables is seen.
 
 Run: .venv/bin/python tests/test_request_memo.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python tests/test_request_memo.py
@@ -16,7 +16,6 @@ import os
 import sys
 import tempfile
 import threading
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
@@ -35,6 +34,7 @@ import httpx
 from sqlalchemy import event, update
 
 from tares import request_memo
+from tares.session_store.tables import integration_connections as connections_table
 from tares.session_store.tables import settings as settings_table
 from tares.store import Store
 
@@ -186,40 +186,22 @@ def on_the_store():
             _, n = selects(seen, read)
         ck(f"{sql!r} {'keeps' if keeps else 'ends'} the memo", n == (0 if keeps else 1), n)
 
-    # the state tables: kept only where their writes are seen (Postgres)
-    pg = bool(getattr(store.sc, "watched", False))
-    ran: list = []
-    if pg:
-        real = store.sc._run
-        store.sc._run = lambda q, params: (ran.append(q), real(q, params))[1]
+    # the integration reads (TR-1617)
     store.set_choice("memory", "tares", {}, "root")
+    store.create_project("uc_c", "custom", "Third", {}, goal="three")
+    store.set_project_choice("uc_c", "ci", "local", {}, "root")
     with request_memo.scope():
-        before = store.get_choice("memory")
-        start = len(ran)
-        again = store.get_choice("memory")
-        ck("a state read answers the same twice", before == again, (before, again))
-        if pg:
-            ck("on a Postgres state the second one runs no statement", len(ran) == start, ran[start:])
-        store.sc.execute("UPDATE integration_connections SET updated_by = ? WHERE slot = ?",
-                         ["someone", "memory"])
+        for label, fn in (("get_choice", lambda: store.get_choice("memory")),
+                          ("list_connections", lambda: store.list_connections("memory")),
+                          ("get_project_choice", lambda: store.get_project_choice("uc_c", "ci"))):
+            before = fn()
+            again, n = selects(seen, fn)
+            ck(f"a repeated {label} runs once", before and n == 0 and again == before, (n, before, again))
+        with store.sessions_db.begin() as conn:
+            conn.execute(update(connections_table).where(connections_table.c.slot == "memory")
+                         .values(updated_by="someone"))
         seen_by = store.get_choice("memory")["updated_by"]
-        ck("a write to the state is seen by the next read",
-           before["updated_by"] == "root" and seen_by == "someone", (before["updated_by"], seen_by))
-
-    class Fake:
-        def __init__(self, watched):
-            self.sc, self.calls = SimpleNamespace(watched=watched), 0
-
-        @request_memo.kept_state
-        def value(self):
-            self.calls += 1
-            return [self.calls]
-
-    for watched, want in ((True, 1), (False, 3)):
-        fake = Fake(watched)
-        with request_memo.scope():
-            fake.value(), fake.value(), fake.value()
-        ck(f"a state read runs {want} times of 3 with watched={watched}", fake.calls == want, fake.calls)
+        ck("a write to the connections is seen by the next read", seen_by == "someone", seen_by)
     store.close()
 
 

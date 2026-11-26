@@ -30,10 +30,13 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 
+from sqlalchemy import text, update
 from tares.integrations import registry
 from tares.integrations.base import Integration
 from tares.integrations.tickets import TicketBackend
 from tares.integrations.types import Field
+from tares.session_store.tables import integration_connections as connections_table
+from tares.session_store.tables import project_integrations as picks_table
 from tares.store import Store
 
 
@@ -68,9 +71,9 @@ def raises(fn, *a):
 
 def stored(table, **where):
     """The JSON settings as stored, bypassing every redacting read."""
-    cond = " AND ".join(f"{k} = ?" for k in where)
-    with s._sread:
-        r = s.sc.execute(f"SELECT settings FROM {table} WHERE {cond}", list(where.values())).fetchone()
+    cond = " AND ".join(f"{k} = :{k}" for k in where)
+    with s.sessions_db.read() as conn:
+        r = conn.execute(text(f"SELECT settings FROM {table} WHERE {cond}"), where).first()
     return json.loads(r[0]) if r else None
 
 
@@ -192,9 +195,10 @@ ck("None settings means none", s.set_choice("tickets", "othertix", None, "a")["s
 
 # ── a stored key the schema does not list reads as a secret (F3) ───────────────
 s.set_choice("tickets", "faketix", {}, "a")
-with s._swrite:
-    s.sc.execute("UPDATE integration_connections SET settings = ? WHERE slot = ? AND name = ?",
-                 [json.dumps({"url": "u", "token": "t", "legacy": "old-secret"}), "tickets", "faketix"])
+with s.sessions_db.begin() as conn:
+    conn.execute(update(connections_table)
+                 .where(connections_table.c.slot == "tickets", connections_table.c.name == "faketix")
+                 .values(settings={"url": "u", "token": "t", "legacy": "old-secret"}))
 g = s.get_choice("tickets")
 ck("an unlisted stored key reads as a secret: value hidden, flag set",
    g["settings"] == {"url": "u", "token": "", "legacy": ""}
@@ -213,9 +217,9 @@ ck("stored_settings with a project is the connection overlaid with the project's
 s.set_project_choice("p3", "tickets", "othertix", {}, "ashish")
 ck("a project that chose another integration adds nothing to this one",
    s.stored_settings("tickets", "faketix", "p3") == {"url": "u9", "token": "t9"})
-with s._swrite:
-    s.sc.execute("UPDATE project_integrations SET name = ?, settings = ? WHERE project_uid = ? AND slot = ?",
-                 ["faketix", json.dumps({"branch": "b3", "token": "old-own", "url": "old-url"}), "p3", "tickets"])
+with s.sessions_db.begin() as conn:
+    conn.execute(update(picks_table).where(picks_table.c.project_uid == "p3", picks_table.c.slot == "tickets")
+                 .values(name="faketix", settings={"branch": "b3", "token": "old-own", "url": "old-url"}))
 ck("a secret or an address left in a project row from before is never read",
    s.stored_settings("tickets", "faketix", "p3") == {"url": "u9", "token": "t9", "branch": "b3"})
 ck("stored_settings refuses a slot a project cannot have", raises(s.stored_settings, "memory", "x", "p3")

@@ -19,7 +19,7 @@ from . import claude_usage_hourly as hourly
 from . import metrics, session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
-from .request_memo import kept, kept_state
+from .request_memo import kept
 from .session_store.pr_columns import pr_columns
 from .session_store.tables import (project_sessions, session_commands, session_messages,
                                    session_states, session_stations, session_turns, session_usage,
@@ -50,6 +50,16 @@ from .session_store.tables import spec_questions as questions_table
 from .session_store.tables import signoffs as signoffs_table
 from .session_store.tables import answers as answers_table
 from .session_store.tables import waiting_told as told_table
+from .session_store.tables import guardrail_rules as rules_table
+from .session_store.tables import guardrail_pairs as pairs_table
+from .session_store.tables import integration_choices as choices_table
+from .session_store.tables import integration_connections as connections_table
+from .session_store.tables import project_integrations as picks_table
+from .session_store.tables import pending_writeback as writeback_table
+from .session_store.tables import project_secrets as secrets_table
+from .session_store.tables import project_required_checks as required_table
+from .session_store.tables import merge_queue as queue_table
+from .session_store.tables import project_merge_method as method_table
 from .session_store.types import UTCDateTime
 
 log = logging.getLogger("tares.factory_store")
@@ -87,33 +97,6 @@ FACTORY_SCHEMA = [
       by_station  TEXT,
       project     TEXT,
       note        TEXT
-    )""",
-    # Your own deny rules for the crew's guardrails (TR-862): a sentence a station's soft_deny list
-    # gets, for every project (scope factory, project NULL) or one project. Allow rules are the
-    # grants (the `grants` table), read in place; there is no allow row here.
-    """CREATE TABLE IF NOT EXISTS guardrail_rules (
-      id         TEXT PRIMARY KEY,
-      scope      TEXT,
-      project    TEXT,
-      kind       TEXT,
-      text       TEXT,
-      created_by TEXT,
-      created_at TIMESTAMPTZ
-    )""",
-    # Guardrail pairs (TR-863): a hook point paired with a guardrail integration, for every project
-    # (scope factory, project_uid NULL) or one project. `settings` is not used any more (it is
-    # '{}', TR-1380): a pair runs with the integration's connection at the factory. on_fail says
-    # whether a guardrail that denies, or does not answer, blocks or only warns.
-    """CREATE TABLE IF NOT EXISTS guardrail_pairs (
-      id          TEXT PRIMARY KEY,
-      scope       TEXT,
-      project_uid TEXT,
-      hook        TEXT,
-      integration TEXT,
-      settings    TEXT,
-      on_fail     TEXT DEFAULT 'block',
-      created_at  TIMESTAMPTZ,
-      created_by  TEXT
     )""",
     # The crew (TR-628) the station line belongs to: a row of `crews` (session_store/tables.py).
     "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
@@ -183,102 +166,6 @@ FACTORY_SCHEMA = [
       station       TEXT,
       person_id     TEXT,
       via           TEXT
-    )""",
-    # The default integration of each slot (TR-839, TR-1380): one row per slot, a pointer to one of
-    # the slot's connections (below). No row means the slot's built-in default. `settings` is
-    # not used any more (it is '{}'): an earlier version kept the integration settings here, and
-    # the upgrade moves them to a connection.
-    """CREATE TABLE IF NOT EXISTS integration_choices (
-      slot        TEXT PRIMARY KEY,
-      name        TEXT,
-      settings    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    # The integrations the factory has connected (TR-1380): one row per slot and integration, with
-    # its integration settings, secrets included. Credentials live only here. memory, monitoring
-    # and runtime keep one connection each.
-    """CREATE TABLE IF NOT EXISTS integration_connections (
-      slot        TEXT,
-      name        TEXT,
-      settings    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT,
-      PRIMARY KEY (slot, name)
-    )""",
-    # A project's own choice for the tickets, review and ci slots: the name of a connected
-    # integration plus the project's own fields. It holds no secret and no address (TR-1380);
-    # those come from the factory's connection.
-    """CREATE TABLE IF NOT EXISTS project_integrations (
-      project_uid TEXT,
-      slot        TEXT,
-      name        TEXT,
-      settings    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT,
-      PRIMARY KEY (project_uid, slot)
-    )""",
-    # A status change a ticket system refused or could not be reached for (TR-845). One row per
-    # ticket and integration, the status wanted last; the row is retried on each refresh and
-    # goes when the write lands. While a row exists a sync leaves the ticket's status alone.
-    """CREATE TABLE IF NOT EXISTS pending_writeback (
-      ticket       TEXT,
-      integration  TEXT,
-      status       TEXT,
-      attempts     INTEGER,
-      last_error   TEXT,
-      updated_at   TIMESTAMPTZ,
-      PRIMARY KEY (ticket, integration)
-    )""",
-    # A project's secrets (TR-775): the value sealed with the cell's TARES_SECRETS_KEY, never in
-    # the clear; who set it and when; who last fetched it for a command and when.
-    """CREATE TABLE IF NOT EXISTS project_secrets (
-      project     TEXT,
-      name        TEXT,
-      value       TEXT,
-      set_by      TEXT,
-      set_at      TIMESTAMPTZ,
-      used_by     TEXT,
-      used_at     TIMESTAMPTZ,
-      PRIMARY KEY (project, name)
-    )""",
-    # The commands a project's local ci integration wants recorded as passing on a pull request's
-    # head (TR-854): one row per project, the commands as a JSON list.
-    """CREATE TABLE IF NOT EXISTS project_required_checks (
-      project     TEXT PRIMARY KEY,
-      commands    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    # The merge queue (TR-856): one row per pull request Tares itself will merge, in order per
-    # (repo, base). state: queued, waiting_ci, waiting_approval, merging, merged, sent_back, blocked.
-    """CREATE TABLE IF NOT EXISTS merge_queue (
-      id            TEXT PRIMARY KEY,
-      repo          TEXT,
-      base          TEXT,
-      pr            INTEGER,
-      head          TEXT,
-      ticket        TEXT,
-      project_uid   TEXT,
-      state         TEXT,
-      reason        TEXT,
-      desk_item     TEXT,
-      approved_head TEXT,
-      entered_at    TIMESTAMPTZ,
-      updated_at    TIMESTAMPTZ
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
-    # TR-858: the files (and head) a pull request had before its branch was last brought up to
-    # date, as JSON (kept until the row ends: a queued row that has it holds its repo's turn), and
-    # how many ticks in a row GitHub could not say whether it merges.
-    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS before_files TEXT",
-    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS unknown_ticks INTEGER",
-    # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
-    """CREATE TABLE IF NOT EXISTS project_merge_method (
-      project     TEXT PRIMARY KEY,
-      method      TEXT,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
     )""",
 ]
 
@@ -437,7 +324,8 @@ class FactoryStore:
              Pairs of one scope and project that are then the same (hook, integration, on_fail)
              are one: the oldest stays.
 
-        Sealed project secrets (TR-775) are not touched. Lock held, or no other thread yet."""
+        Sealed project secrets (TR-775) are not touched. One transaction. Lock held, or no other
+        thread yet."""
         from .integrations import registry
 
         def moves(slot: str, name: str, key: str) -> bool:
@@ -447,59 +335,65 @@ class FactoryStore:
             kinds = {f.name: f.kind for f in cls.settings_schema}
             return kinds.get(key, "secret") in ("secret", "url")
 
-        def connect(slot: str, name: str, settings: dict, at, by, origin: str = "") -> None:
+        def connect(conn, slot: str, name: str, settings: dict, at, by, origin: str = "") -> None:
             """Make the connection unless there is one. When there is, the settings given are
             dropped: each key whose value differs from the kept one is logged, by integration,
             origin and key name only, never the value."""
-            kept = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? "
-                                   "AND name = ?", [slot, name]).fetchone()
-            if kept:
+            t = connections_table
+            kept = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
+            if kept is not None:
                 have = self._load_settings(kept[0])
                 for k in sorted(k for k, v in settings.items() if have.get(k) != v):
                     log.warning("integration upgrade: %s %s: %s from %s differs from the connection "
                                 "kept at the factory and is dropped", slot, _loggable(name), _loggable(k),
                                 _loggable(origin or "a row"))
                 return
-            self.sc.execute("INSERT INTO integration_connections (slot, name, settings, updated_at, "
-                            "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, json.dumps(settings), at, by])
+            conn.execute(insert(t).values(slot=slot, name=name, settings=settings, updated_at=at,
+                                          updated_by=by))
 
         at = now_utc()
         bare: list = []
-        for slot, name, raw, up_at, up_by in self.sc.execute(
-                "SELECT slot, name, settings, updated_at, updated_by FROM integration_choices "
-                "WHERE slot != 'monitoring' ORDER BY slot").fetchall():
-            connect(slot, name, self._load_settings(raw), up_at or at, up_by or "upgrade",
-                    "the factory's earlier choice")
-            if self._load_settings(raw):
-                self.sc.execute("UPDATE integration_choices SET settings = '{}' WHERE slot = ?", [slot])
-        for uid, slot, name, raw in self.sc.execute(
-                "SELECT project_uid, slot, name, settings FROM project_integrations "
-                "ORDER BY project_uid, slot").fetchall():
-            have = self._load_settings(raw)
-            gone = {k: v for k, v in have.items() if moves(slot, name, k)}
-            if not gone:
-                # the pick needs a connection to stand on, made below once every row that holds
-                # something to move has had its turn: an empty one made now would win over it
-                bare.append((slot, name))
-                continue
-            connect(slot, name, gone, at, "upgrade", f"project {uid}")
-            self.sc.execute("UPDATE project_integrations SET settings = ? WHERE project_uid = ? AND slot = ?",
-                            [json.dumps({k: v for k, v in have.items() if k not in gone}), uid, slot])
-        seen: set = set()
-        for pid, scope, uid, hook, name, raw, on_fail, made in sorted(
-                self.sc.execute("SELECT id, scope, project_uid, hook, integration, settings, on_fail, "
-                                "created_at FROM guardrail_pairs").fetchall(),
-                key=lambda r: int(r[0][2:])):
-            have = self._load_settings(raw)
-            if have:
-                connect("guardrails", name, have, made or at, "upgrade", f"guardrail pair {pid}")
-                self.sc.execute("UPDATE guardrail_pairs SET settings = ? WHERE id = ?", ["{}", pid])
-            key = (scope, uid, hook, name, on_fail or "block")
-            if key in seen:
-                self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ?", [pid])
-            seen.add(key)
-        for slot, name in bare:
-            connect(slot, name, {}, at, "upgrade")
+        choices, picks, pairs = choices_table, picks_table, pairs_table
+        with self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            for slot, name, raw, up_at, up_by in conn.execute(
+                    select(choices.c.slot, choices.c.name, choices.c.settings, choices.c.updated_at,
+                           choices.c.updated_by)
+                    .where(choices.c.slot != "monitoring").order_by(choices.c.slot)).fetchall():
+                have = self._load_settings(raw)
+                connect(conn, slot, name, have, up_at or at, up_by or "upgrade",
+                        "the factory's earlier choice")
+                if have:
+                    conn.execute(update(choices).where(choices.c.slot == slot).values(settings={}))
+            for uid, slot, name, raw in conn.execute(
+                    select(picks.c.project_uid, picks.c.slot, picks.c.name, picks.c.settings)
+                    .order_by(picks.c.project_uid, picks.c.slot)).fetchall():
+                have = self._load_settings(raw)
+                gone = {k: v for k, v in have.items() if moves(slot, name, k)}
+                if not gone:
+                    # the pick needs a connection to stand on, made below once every row that holds
+                    # something to move has had its turn: an empty one made now would win over it
+                    bare.append((slot, name))
+                    continue
+                connect(conn, slot, name, gone, at, "upgrade", f"project {uid}")
+                conn.execute(update(picks).where(picks.c.project_uid == uid, picks.c.slot == slot)
+                             .values(settings={k: v for k, v in have.items() if k not in gone}))
+            seen: set = set()
+            for pid, scope, uid, hook, name, raw, on_fail, made in sorted(
+                    conn.execute(select(pairs.c.id, pairs.c.scope, pairs.c.project_uid, pairs.c.hook,
+                                        pairs.c.integration, pairs.c.settings, pairs.c.on_fail,
+                                        pairs.c.created_at)).fetchall(),
+                    key=lambda r: int(r[0][2:])):
+                have = self._load_settings(raw)
+                if have:
+                    connect(conn, "guardrails", name, have, made or at, "upgrade", f"guardrail pair {pid}")
+                    conn.execute(update(pairs).where(pairs.c.id == pid).values(settings={}))
+                key = (scope, uid, hook, name, on_fail or "block")
+                if key in seen:
+                    conn.execute(delete(pairs).where(pairs.c.id == pid))
+                seen.add(key)
+            for slot, name in bare:
+                connect(conn, slot, name, {}, at, "upgrade")
 
     def _next_ticket_number(self, conn, project: str) -> int:
         """The project's next ticket number, never one given out before. One statement in the
@@ -520,15 +414,12 @@ class FactoryStore:
             for t in (history_table, milestones_table, checks_table, milestone_results_table,
                       acceptances_table, reviews_table, findings_table, assumptions_table,
                       desk_table, grants_table, decisions_table, handovers_table, overrides_table,
-                      questions_table, signoffs_table):
+                      questions_table, signoffs_table, rules_table, secrets_table,
+                      required_table, method_table):
                 conn.execute(delete(t).where(t.c.project == uid))
+            for t in (pairs_table, picks_table, queue_table):
+                conn.execute(delete(t).where(t.c.project_uid == uid))
             conn.execute(delete(pending_table).where(pending_table.c.scope == uid))
-        self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM guardrail_pairs WHERE project_uid = ?", [uid])
-        self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", [uid])
-        self.sc.execute("DELETE FROM project_secrets WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM merge_queue WHERE project_uid = ?", [uid])
-        self.sc.execute("DELETE FROM project_merge_method WHERE project = ?", [uid])
         self._secrets_changed()
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -2446,60 +2337,56 @@ class FactoryStore:
             conn.execute(update(t).where(t.c.id == gid).values(**values))
 
     # ── your own guardrail rules (TR-862) ─────────────────────────────────────
-    _RULE_COLS = "id, scope, project, kind, text, created_by, created_at"
-
     @staticmethod
     def _rule_row(r) -> dict:
-        return {"id": r[0], "scope": r[1], "project": r[2], "kind": r[3], "text": r[4],
-                "created_by": r[5], "created_at": r[6]}
+        return dict(r._mapping)
 
     def add_guardrail_rule(self, scope: str, project: str | None, kind: str, text: str,
                            by: str | None = None) -> dict:
         """One rule, numbered R1, R2... for the cell; nothing is checked here."""
-        with self._swrite:
-            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM guardrail_rules"
-                                   ).fetchone()[0] or 0
+        t = rules_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_guardrail_rules")
+            top = conn.execute(select(func.max(cast(func.substr(t.c.id, 2), Integer)))).scalar() or 0
             rid = f"R{top + 1}"
-            self.sc.execute(
-                f"INSERT INTO guardrail_rules ({self._RULE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [rid, scope, project, kind, text, by, now_utc()])
+            conn.execute(insert(t).values(id=rid, scope=scope, project=project, kind=kind, text=text,
+                                          created_by=by, created_at=now_utc()))
         return self.get_guardrail_rule(rid)
 
     def get_guardrail_rule(self, rid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules WHERE id = ?",
-                                 [str(rid or "").strip().upper()]).fetchone()
-        return self._rule_row(r) if r else None
+        t = rules_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == str(rid or "").strip().upper())).first()
+        return self._rule_row(r) if r is not None else None
 
     def list_guardrail_rules(self) -> list[dict]:
         """Every rule of every scope, oldest first."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules").fetchall()
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(rules_table)).fetchall()
         return sorted((self._rule_row(r) for r in rows), key=lambda g: int(g["id"][1:]))
 
     def set_guardrail_rule_text(self, rid: str, text: str) -> dict | None:
-        with self._swrite:
-            self.sc.execute("UPDATE guardrail_rules SET text = ? WHERE id = ?",
-                             [text, str(rid or "").strip().upper()])
+        t = rules_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == str(rid or "").strip().upper()).values(text=text))
         return self.get_guardrail_rule(rid)
 
     def delete_guardrail_rule(self, rid: str) -> bool:
         """True when a rule was removed."""
-        with self._swrite:
-            gone = self.sc.execute("DELETE FROM guardrail_rules WHERE id = ? RETURNING id",
-                                    [str(rid or "").strip().upper()]).fetchone()
-        return gone is not None
+        t = rules_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.id == str(rid or "").strip().upper())
+                                .returning(t.c.id)).fetchall()
+        return bool(gone)
 
     # ── guardrail pairs (TR-863) ──────────────────────────────────────────────
-    _PAIR_COLS = "id, scope, project_uid, hook, integration, settings, on_fail, created_at, created_by"
-
     @staticmethod
     def _pair_raw(r) -> dict:
         """A pair row. It holds no integration settings (TR-1380): `settings` is always {}, and the
         runner takes the integration's connection at the factory (`stored_settings`)."""
-        return {"id": r[0], "scope": r[1], "project_uid": r[2], "hook": r[3], "integration": r[4],
-                "settings": {}, "on_fail": r[6] or "block",
-                "created_at": r[7], "created_by": r[8]}
+        return {"id": r.id, "scope": r.scope, "project_uid": r.project_uid, "hook": r.hook,
+                "integration": r.integration, "settings": {}, "on_fail": r.on_fail or "block",
+                "created_at": r.created_at, "created_by": r.created_by}
 
     @classmethod
     def _pair_view(cls, raw: dict) -> dict:
@@ -2513,39 +2400,37 @@ class FactoryStore:
                 "settings": {}, "secrets": {}, "on_fail": raw["on_fail"],
                 "created_at": raw["created_at"], "created_by": raw["created_by"]}
 
-    def _pair_rows(self) -> list[dict]:
-        """Every pair, oldest first. Lock held, or a read."""
-        rows = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs").fetchall()
+    def _pair_rows(self, conn) -> list[dict]:
+        """Every pair, oldest first, read on `conn`."""
+        rows = conn.execute(select(pairs_table)).fetchall()
         return sorted((self._pair_raw(r) for r in rows), key=lambda p: int(p["id"][2:]))
 
     def list_guardrail_pairs(self, scope: str | None = None, project_uid: str | None = None) -> list[dict]:
         """The pairs of one scope as a read shows them, oldest first: every pair when `scope` is
         None, the factory's for "factory", one project's for "project"."""
-        with self._sread:
-            rows = self._pair_rows()
+        with self.sessions_db.read() as conn:
+            rows = self._pair_rows(conn)
         return [self._pair_view(p) for p in rows
                 if (scope is None or p["scope"] == scope)
                 and (scope != "project" or p["project_uid"] == project_uid)]
 
     def get_guardrail_pair(self, pid: str) -> dict | None:
         """One pair as a read shows it, or None."""
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
-                                [str(pid or "").strip().upper()]).fetchone()
-        return self._pair_view(self._pair_raw(r)) if r else None
+        raw = self.guardrail_pair_stored(pid)
+        return self._pair_view(raw) if raw else None
 
     def guardrail_pair_stored(self, pid: str) -> dict | None:
         """One pair as the store holds it, or None. For the routes to compare an edit with."""
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
-                                [str(pid or "").strip().upper()]).fetchone()
-        return self._pair_raw(r) if r else None
+        t = pairs_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == str(pid or "").strip().upper())).first()
+        return self._pair_raw(r) if r is not None else None
 
     def guardrail_pairs_for_run(self, hook: str, project_uid: str | None) -> list[dict]:
         """The pairs to run at `hook`: the factory's first, then the project's own, each oldest
         first. The hook runner reads each one's connection with `stored_settings`."""
-        with self._sread:
-            rows = self._pair_rows()
+        with self.sessions_db.read() as conn:
+            rows = self._pair_rows(conn)
         mine = [p for p in rows if p["hook"] == hook]
         return ([p for p in mine if p["scope"] == "factory"]
                 + [p for p in mine if p["scope"] == "project" and project_uid
@@ -2559,22 +2444,23 @@ class FactoryStore:
         settings (TR-1380): it uses the integration's connection at the factory. An exact twin
         (same scope, project, hook, integration and on_fail) adds nothing. A `pair_id` that names no
         pair of this scope and project raises LookupError. With `require_connected` a guardrail that
-        is not connected raises ValueError, checked in the same step as the write, within this
-        process (the route asks for it). Nothing else is checked here."""
+        is not connected raises ValueError, checked in the same step as the write (the route asks
+        for it). Nothing else is checked here."""
         takes = self._takes_settings("guardrails", integration)   # before the write lock: it loads the registry
-        with self._swrite:
-            if require_connected and not self._connected("guardrails", integration, takes):
+        t = pairs_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            if require_connected and not self._connected(conn, "guardrails", integration, takes):
                 raise ValueError(f"{integration} is not connected: connect it in the factory's "
                                  "integrations first")
-            rows = self._pair_rows()
+            rows = self._pair_rows(conn)
             if pair_id:
                 cur = next((p for p in rows if p["id"] == str(pair_id).strip().upper()
                             and p["scope"] == scope and p["project_uid"] == project_uid), None)
                 if cur is None:
                     raise LookupError(f"there is no pair {pair_id}")
-                self.sc.execute("UPDATE guardrail_pairs SET hook = ?, integration = ?, settings = ?, "
-                                "on_fail = ? WHERE id = ?",
-                                [hook, integration, "{}", on_fail, cur["id"]])
+                conn.execute(update(t).where(t.c.id == cur["id"]).values(
+                    hook=hook, integration=integration, settings={}, on_fail=on_fail))
                 raw, how = {**cur, "hook": hook, "integration": integration,
                             "on_fail": on_fail}, "updated"
             else:
@@ -2588,19 +2474,16 @@ class FactoryStore:
                     raw, how = {"id": f"GP{top + 1}", "scope": scope, "project_uid": project_uid,
                                 "hook": hook, "integration": integration, "settings": {},
                                 "on_fail": on_fail, "created_at": now_utc(), "created_by": by}, "added"
-                    self.sc.execute(
-                        f"INSERT INTO guardrail_pairs ({self._PAIR_COLS}) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        [raw["id"], scope, project_uid, hook, integration, "{}", on_fail,
-                         raw["created_at"], by])
+                    conn.execute(insert(t).values(**raw))
         return self._pair_view(raw), how
 
     def delete_guardrail_pair(self, pid: str) -> bool:
         """True when a pair was removed."""
-        with self._swrite:
-            gone = self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ? RETURNING id",
-                                   [str(pid or "").strip().upper()]).fetchone()
-        return gone is not None
+        t = pairs_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.id == str(pid or "").strip().upper())
+                                .returning(t.c.id)).fetchall()
+        return bool(gone)
 
     # ── memory lines waiting for a non-Tares memory integration (TR-865) ──────
     def add_pending_memory(self, scope: str, line: str, error: str = "") -> str:
@@ -2722,46 +2605,57 @@ class FactoryStore:
     # the slots that keep exactly one connection: connecting another replaces the old one
     ONE_CONNECTION = ("memory", "monitoring", "runtime")
 
-    @kept_state
-    def _default_name(self, slot: str) -> str:
+    def _default_name(self, conn, slot: str) -> str:
         """The name of the slot's default integration: the factory's pointer, else the built-in
-        default. Lock held, or a read."""
+        default. Read on `conn`."""
         from .integrations import resolve
-        r = self.sc.execute("SELECT name FROM integration_choices WHERE slot = ?", [slot]).fetchone()
-        return r[0] if r else resolve.DEFAULTS[slot]
+        t = choices_table
+        r = conn.execute(select(t.c.name).where(t.c.slot == slot)).first()
+        return r[0] if r is not None else resolve.DEFAULTS[slot]
+
+    @kept
+    def _default_read(self, slot: str) -> str:
+        """_default_name in a transaction of its own, for a read: asked once per page read for each
+        slot. Not for use inside an open transaction."""
+        with self.sessions_db.read() as conn:
+            return self._default_name(conn, slot)
 
     def _connection_view(self, slot: str, name: str, raw, at, by, default: bool) -> dict:
         return {**self._integration_view(slot, name, raw, at, by), "default": default}
 
-    @kept_state
+    @kept
     def get_choice(self, slot: str) -> dict | None:
         """The factory's default for the slot, secrets redacted: {slot, name, settings, secrets,
         updated_at, updated_by, default}, the settings those of its connection; None when the slot
         has none chosen (it uses its built-in default)."""
         self._integration_slot(slot)
-        with self._sread:
-            r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
-                                "integration_choices WHERE slot = ?", [slot]).fetchone()
+        ch, t = choices_table, connections_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(ch.c.name, ch.c.updated_at, ch.c.updated_by)
+                             .where(ch.c.slot == slot)).first()
             if r is None:
                 return None
-            c = self.sc.execute("SELECT settings, updated_at, updated_by FROM integration_connections "
-                                "WHERE slot = ? AND name = ?", [slot, r[0]]).fetchone()
-        if c:
-            return self._connection_view(slot, r[0], c[0], c[1], c[2], True)
-        return self._connection_view(slot, r[0], {}, r[2], r[3], True)
+            c = conn.execute(select(t.c.settings, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.slot == slot, t.c.name == r.name)).first()
+        if c is not None:
+            return self._connection_view(slot, r.name, c.settings, c.updated_at, c.updated_by, True)
+        return self._connection_view(slot, r.name, {}, r.updated_at, r.updated_by, True)
 
     def get_connection(self, slot: str, name: str) -> dict | None:
         """One connection of the factory, secrets redacted: {slot, name, settings, secrets,
         updated_at, updated_by, default}; None when it is not connected (a row only: an
         integration with no integration settings has none)."""
         self._integration_slot(slot)
-        with self._sread:
-            c = self.sc.execute("SELECT settings, updated_at, updated_by FROM integration_connections "
-                                "WHERE slot = ? AND name = ?", [slot, name]).fetchone()
-            default = self._default_name(slot) == name if c else False
-        return self._connection_view(slot, name, c[0], c[1], c[2], default) if c else None
+        t = connections_table
+        with self.sessions_db.read() as conn:
+            c = conn.execute(select(t.c.settings, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.slot == slot, t.c.name == name)).first()
+            default = self._default_name(conn, slot) == name if c is not None else False
+        if c is None:
+            return None
+        return self._connection_view(slot, name, c.settings, c.updated_at, c.updated_by, default)
 
-    @kept_state
+    @kept
     def list_connections(self, slot: str) -> list[dict]:
         """The slot's connections, secrets redacted, by name, each with `default` true for the one
         the slot uses. Monitoring keeps its one in the tracing settings: it is listed when
@@ -2775,23 +2669,26 @@ class FactoryStore:
                 return []
             return [self._connection_view(slot, cfg.provider, mon.stored(self, cfg.provider),
                                           None, None, True)]
-        with self._sread:
-            rows = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
-                                   "integration_connections WHERE slot = ? ORDER BY name",
-                                   [slot]).fetchall()
-            default = self._default_name(slot)
-        return [self._connection_view(slot, r[0], r[1], r[2], r[3], r[0] == default) for r in rows]
+        t = connections_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.name, t.c.settings, t.c.updated_at, t.c.updated_by)
+                                .where(t.c.slot == slot).order_by(t.c.name)).fetchall()
+        default = self._default_read(slot)
+        return [self._connection_view(slot, r.name, r.settings, r.updated_at, r.updated_by,
+                                      r.name == default) for r in rows]
 
-    def _connected(self, slot: str, name: str, takes_settings: bool) -> bool:
-        """is_connected with the lock held (a read lock or the write lock), so a write can check
-        it in the same step as the write (within this process). `takes_settings` is False for an installed integration
-        whose settings_schema is empty. Read the registry before taking the lock."""
-        if not takes_settings:
-            return True
-        if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
-                           [slot, name]).fetchone():
-            return True
-        return self._default_name(slot) == name
+    @staticmethod
+    def _has_row(conn, slot: str, name: str) -> bool:
+        t = connections_table
+        return conn.execute(select(t.c.name).where(t.c.slot == slot,
+                                                   t.c.name == name)).first() is not None
+
+    def _connected(self, conn, slot: str, name: str, takes_settings: bool) -> bool:
+        """is_connected on `conn`, so a write can check it in the same step as the write.
+        `takes_settings` is False for an installed integration whose settings_schema is empty. Read
+        the registry before taking the lock."""
+        return (not takes_settings or self._has_row(conn, slot, name)
+                or self._default_name(conn, slot) == name)
 
     @staticmethod
     def _takes_settings(slot: str, name: str) -> bool:
@@ -2803,9 +2700,12 @@ class FactoryStore:
         """The integration is connected: it has a connection row, or it takes no integration
         settings (nothing to connect), or it is the slot's default."""
         self._integration_slot(slot)
-        takes = self._takes_settings(slot, name)
-        with self._sread:
-            return self._connected(slot, name, takes)
+        if not self._takes_settings(slot, name):
+            return True
+        with self.sessions_db.read() as conn:
+            if self._has_row(conn, slot, name):
+                return True
+        return self._default_read(slot) == name
 
     def set_choice(self, slot: str, name: str, settings: dict | None, by: str,
                    default: bool = True) -> dict:
@@ -2821,35 +2721,31 @@ class FactoryStore:
         secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
         if slot == "monitoring" and name in MONITORING_NAMES:
             return self._set_monitoring(name, settings, secret, by)
-        with self._swrite:
-            cur = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? "
-                                  "AND name = ?", [slot, name]).fetchone()
-            stored = self._load_settings(cur[0]) if cur else {}
+        t = connections_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            cur = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
+            stored = self._load_settings(cur[0]) if cur is not None else {}
             merged = self._merge_integration_settings(secret, settings, stored)
             at = now_utc()
-            self.sc.execute(
-                "INSERT INTO integration_connections (slot, name, settings, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (slot, name) DO UPDATE SET "
-                "settings = excluded.settings, updated_at = excluded.updated_at, "
-                "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
+            ins = self.sessions_db.upsert(t).values(slot=slot, name=name, settings=merged,
+                                                    updated_at=at, updated_by=by)
+            conn.execute(ins.on_conflict_do_update(index_elements=["slot", "name"], set_={
+                k: ins.excluded[k] for k in ("settings", "updated_at", "updated_by")}))
             one = slot in self.ONE_CONNECTION
             if one:
-                self.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name != ?",
-                                [slot, name])
+                conn.execute(delete(t).where(t.c.slot == slot, t.c.name != name))
             if default or one:
-                self._point_default(slot, name, at, by)
-            is_default = self._default_name(slot) == name
+                self._point_default(conn, slot, name, at, by)
+            is_default = self._default_name(conn, slot) == name
         return self._connection_view(slot, name, merged, at, by, is_default)
 
-    def _point_default(self, slot: str, name: str, at, by) -> None:
-        """Make `name` the slot's default. Lock held."""
-        cur = self.sc.execute("SELECT 1 FROM integration_choices WHERE slot = ?", [slot]).fetchone()
-        if cur:
-            self.sc.execute("UPDATE integration_choices SET name = ?, settings = ?, updated_at = ?, "
-                            "updated_by = ? WHERE slot = ?", [name, "{}", at, by, slot])
-        else:
-            self.sc.execute("INSERT INTO integration_choices (slot, name, settings, updated_at, "
-                            "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, "{}", at, by])
+    def _point_default(self, conn, slot: str, name: str, at, by) -> None:
+        """Make `name` the slot's default, in the transaction of `conn`."""
+        ins = self.sessions_db.upsert(choices_table).values(slot=slot, name=name, settings={},
+                                                            updated_at=at, updated_by=by)
+        conn.execute(ins.on_conflict_do_update(index_elements=["slot"], set_={
+            k: ins.excluded[k] for k in ("name", "settings", "updated_at", "updated_by")}))
 
     def set_default(self, slot: str, name: str, by: str) -> dict:
         """Make a connected integration the slot's default. Raises ValueError when it is not
@@ -2861,39 +2757,39 @@ class FactoryStore:
         if slot == "monitoring":
             raise ValueError("monitoring keeps one connection: connect another integration to replace it")
         takes = self._takes_settings(slot, name)
-        with self._swrite:
-            # checked in the same step as the write (within this process): a connection deleted meanwhile cannot slip by
-            if not self._connected(slot, name, takes):
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            # checked in the same step as the write: a connection deleted meanwhile cannot slip by
+            if not self._connected(conn, slot, name, takes):
                 raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
-            self._point_default(slot, name, now_utc(), by)
+            self._point_default(conn, slot, name, now_utc(), by)
         return self.get_connection(slot, name) or self._connection_view(slot, name, {}, now_utc(), by, True)
 
     def delete_connection(self, slot: str, name: str) -> bool:
         """Remove a connection. False when there is none. Raises ValueError, naming what uses it,
         while it is the slot's default, a project uses it, or a guardrail pair uses it."""
         self._integration_slot(slot)
-        with self._swrite:
-            if not self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
-                                   [slot, name]).fetchone():
+        t, picks, pt = connections_table, picks_table, pairs_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            if conn.execute(select(t.c.name).where(t.c.slot == slot, t.c.name == name)).first() is None:
                 return False
-            if self._default_name(slot) == name:
+            if self._default_name(conn, slot) == name:
                 raise ValueError(f"{name} is the default for {slot}: make another connection the "
                                  "default first")
             if slot in PROJECT_SLOTS:
-                used = [r[0] for r in self.sc.execute(
-                    "SELECT project_uid FROM project_integrations WHERE slot = ? AND name = ? "
-                    "ORDER BY project_uid", [slot, name]).fetchall()]
+                used = conn.execute(select(picks.c.project_uid).where(
+                    picks.c.slot == slot, picks.c.name == name)
+                    .order_by(picks.c.project_uid)).scalars().all()
                 if used:
                     raise ValueError(f"{name} is used by project {', '.join(used)} for {slot}: "
                                      "change what the project uses first")
             if slot == "guardrails":
-                pairs = [r[0] for r in self.sc.execute(
-                    "SELECT id FROM guardrail_pairs WHERE integration = ?", [name]).fetchall()]
+                pairs = conn.execute(select(pt.c.id).where(pt.c.integration == name)).scalars().all()
                 if pairs:
                     raise ValueError(f"{name} is used by guardrail pair {', '.join(sorted(pairs))}: "
                                      "remove the pair first")
-            self.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name = ?",
-                            [slot, name])
+            conn.execute(delete(t).where(t.c.slot == slot, t.c.name == name))
         return True
 
     def _set_monitoring(self, name: str, settings: dict | None, secret: set | None, by: str) -> dict:
@@ -2904,12 +2800,12 @@ class FactoryStore:
         from .integrations.builtin import monitoring_tares as mon
         merged = self._merge_integration_settings(secret, settings, mon.stored(self, name))
         mon.save(self, name, merged)
-        with self._swrite:
-            self.sc.execute("DELETE FROM integration_choices WHERE slot = ?", ["monitoring"])
+        t = choices_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.slot == "monitoring"))
         return self._connection_view("monitoring", name, merged, now_utc(), by, True)
 
     # ── a project's secrets (TR-775): sealed values; tares/project_secrets.py seals and opens them ──
-    _SECRET_COLS = "project, name, value, set_by, set_at, used_by, used_at"
     _secrets_gen = 0
 
     def _secrets_changed(self) -> None:
@@ -2919,47 +2815,44 @@ class FactoryStore:
         """A number that changes whenever a secret is set or removed (for a cache of the values)."""
         return FactoryStore._secrets_gen
 
-    def _secret_row(self, r) -> dict:
-        return dict(zip(self._SECRET_COLS.split(", "), r))
-
     def secret_rows(self, uid: str) -> list[dict]:
         """The project's secrets by name, the sealed value included: never return it from a route."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._SECRET_COLS} FROM project_secrets WHERE project = ? "
-                                   "ORDER BY name", [uid]).fetchall()
-        return [self._secret_row(r) for r in rows]
+        t = secrets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project == uid).order_by(t.c.name)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def all_secret_rows(self) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._SECRET_COLS} FROM project_secrets").fetchall()
-        return [self._secret_row(r) for r in rows]
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(secrets_table)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def set_secret(self, uid: str, name: str, sealed: str, by: str) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO project_secrets (project, name, value, set_by, set_at, used_by, used_at) "
-                "VALUES (?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT (project, name) DO UPDATE SET "
-                "value = excluded.value, set_by = excluded.set_by, set_at = excluded.set_at",
-                [uid, name, sealed, by, now_utc()])
+        ins = self.sessions_db.upsert(secrets_table).values(
+            project=uid, name=name, value=sealed, set_by=by, set_at=now_utc(), used_by=None,
+            used_at=None)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins.on_conflict_do_update(index_elements=["project", "name"], set_={
+                k: ins.excluded[k] for k in ("value", "set_by", "set_at")}))
         self._secrets_changed()
 
     def delete_secret(self, uid: str, name: str) -> bool:
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM project_secrets WHERE project = ? AND name = ?",
-                                  [uid, name]).fetchone()
-            if had:
-                self.sc.execute("DELETE FROM project_secrets WHERE project = ? AND name = ?", [uid, name])
+        t = secrets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.project == uid, t.c.name == name)
+                                .returning(t.c.name)).fetchall()
         self._secrets_changed()
-        return bool(had)
+        return bool(gone)
 
     def secrets_used(self, uid: str, names: list[str], by: str) -> None:
         if not names:
             return
         at = now_utc()
-        with self._swrite:
+        t = secrets_table
+        with self._swrite, self.sessions_db.begin() as conn:
             for n in names:
-                self.sc.execute("UPDATE project_secrets SET used_by = ?, used_at = ? WHERE project = ? "
-                                "AND name = ?", [by, at, uid, n])
+                conn.execute(update(t).where(t.c.project == uid, t.c.name == n)
+                             .values(used_by=by, used_at=at))
 
     # ── the project's required checks (TR-854) ────────────────────────────────
     @staticmethod
@@ -2979,98 +2872,94 @@ class FactoryStore:
 
     def get_required_checks(self, uid: str) -> list[str]:
         """The commands the project requires recorded as passing; [] when it has none."""
-        with self._sread:
-            r = self.sc.execute("SELECT commands FROM project_required_checks WHERE project = ?",
-                                [uid]).fetchone()
-        v = json.loads(r[0]) if r and isinstance(r[0], str) else (r[0] if r else None)
+        t = required_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.commands).where(t.c.project == uid)).first()
+        v = r[0] if r is not None else None
         return [c for c in v if isinstance(c, str)] if isinstance(v, list) else []
 
     def set_required_checks(self, uid: str, commands, by: str) -> list[str]:
         """Replace the project's required checks with `commands` (cleaned as clean_commands);
         an empty list is "no required checks". Returns what was saved."""
         saved = self.clean_commands(commands)
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO project_required_checks (project, commands, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
-                "commands = excluded.commands, updated_at = excluded.updated_at, "
-                "updated_by = excluded.updated_by", [uid, json.dumps(saved), now_utc(), by])
+        ins = self.sessions_db.upsert(required_table).values(
+            project=uid, commands=saved, updated_at=now_utc(), updated_by=by)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+                k: ins.excluded[k] for k in ("commands", "updated_at", "updated_by")}))
         return saved
 
     # ── merge queue (TR-856) ──────────────────────────────────────────────────
     MERGE_METHODS = ("squash", "merge", "rebase")
     MERGE_OPEN = ("queued", "waiting_ci", "waiting_approval", "merging", "blocked")
-    _MQ_COLS = ("id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
-                "approved_head, entered_at, updated_at, before_files, unknown_ticks")
     _MQ_FIELDS = ("repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
                   "desk_item", "approved_head", "before_files", "unknown_ticks")
 
     @staticmethod
     def _mq_row(r) -> dict:
-        return {"id": r[0], "repo": r[1], "base": r[2], "pr": r[3], "head": r[4], "ticket": r[5],
-                "project_uid": r[6], "state": r[7], "reason": r[8], "desk_item": r[9],
-                "approved_head": r[10], "entered_at": r[11], "updated_at": r[12],
-                "before_files": r[13], "unknown_ticks": r[14] or 0}
+        return {**r._mapping, "unknown_ticks": r.unknown_ticks or 0}
+
+    @staticmethod
+    def _mq_order():
+        t = queue_table
+        return (t.c.entered_at.asc().nulls_last(), t.c.id)
+
+    def _mq_rows(self, *where) -> list[dict]:
+        """The rows that match, oldest entry first."""
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(queue_table).where(*where).order_by(*self._mq_order())).fetchall()
+        return [self._mq_row(r) for r in rows]
 
     def merge_queue_add(self, repo: str, base: str, pr: int, head: str, ticket: str | None,
                         project_uid: str | None, state: str = "queued",
                         reason: str | None = None) -> dict:
         mid = "mq_" + uuid.uuid4().hex[:10]
         now = now_utc()
-        marks = ", ".join("?" for _ in self.MERGE_OPEN)
-        with self._swrite:
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_merge_queue")
             # one open row per pull request: two ticks that both saw it ready add it once
-            have = self.sc.execute(
-                f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND pr = ? AND "
-                f"state IN ({marks})", [repo, pr, *self.MERGE_OPEN]).fetchone()
-            if have:
+            have = conn.execute(select(t).where(
+                t.c.repo == repo, t.c.pr == pr, t.c.state.in_(self.MERGE_OPEN))).first()
+            if have is not None:
                 return self._mq_row(have)
-            self.sc.execute(
-                f"INSERT INTO merge_queue ({self._MQ_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [mid, repo, base, pr, head, ticket, project_uid, state, reason, None, None, now,
-                 now, None, 0])
+            conn.execute(insert(t).values(
+                id=mid, repo=repo, base=base, pr=pr, head=head, ticket=ticket,
+                project_uid=project_uid, state=state, reason=reason, desk_item=None,
+                approved_head=None, entered_at=now, updated_at=now, before_files=None,
+                unknown_ticks=0))
         return self.merge_queue_get(mid)
 
     def merge_queue_get(self, mid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE id = ?",
-                                [mid]).fetchone()
-        return self._mq_row(r) if r else None
+        t = queue_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == mid)).first()
+        return self._mq_row(r) if r is not None else None
 
     def merge_queue_list(self, repo: str, base: str) -> list[dict]:
         """The rows of one (repo, base), oldest entry first (the queue's own order is the
         caller's)."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
-                                    "base = ? ORDER BY entered_at, id", [repo, base]).fetchall()
-        return [self._mq_row(r) for r in rows]
+        t = queue_table
+        return self._mq_rows(t.c.repo == repo, t.c.base == base)
 
     def merge_queue_open(self) -> list[dict]:
         """Every row that is not finished: queued, waiting_ci, waiting_approval, merging, blocked."""
-        marks = ", ".join("?" for _ in self.MERGE_OPEN)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state IN "
-                                    f"({marks}) ORDER BY entered_at, id",
-                                    list(self.MERGE_OPEN)).fetchall()
-        return [self._mq_row(r) for r in rows]
+        return self._mq_rows(queue_table.c.state.in_(self.MERGE_OPEN))
 
     def merge_queue_sent_back(self) -> list[dict]:
         """Every row that was sent back to its builder (or ended with the ticket's review)."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state = "
-                                    "'sent_back' ORDER BY entered_at, id").fetchall()
-        return [self._mq_row(r) for r in rows]
+        return self._mq_rows(queue_table.c.state == "sent_back")
 
     def merge_queue_last_merged(self, repo: str, base: str, not_pr: int | None = None) -> dict | None:
         """The row of the pull request merged most recently into (repo, base), or None. `not_pr`
         leaves one pull request out."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
-                                    "base = ? AND state = 'merged' ORDER BY updated_at DESC, id "
-                                    "DESC", [repo, base]).fetchall()
+        t = queue_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(
+                t.c.repo == repo, t.c.base == base, t.c.state == "merged")
+                .order_by(t.c.updated_at.desc().nulls_last(), t.c.id.desc())).fetchall()
         for r in rows:
-            if not_pr is None or r[3] != not_pr:
+            if not_pr is None or r.pr != not_pr:
                 return self._mq_row(r)
         return None
 
@@ -3080,77 +2969,73 @@ class FactoryStore:
             raise ValueError(f"not a merge queue field: {', '.join(bad)}")
         if not fields:
             return
-        sets = ", ".join(f"{k} = ?" for k in fields) + ", updated_at = ?"
-        with self._swrite:
-            self.sc.execute(f"UPDATE merge_queue SET {sets} WHERE id = ?",
-                             [*fields.values(), now_utc(), mid])
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == mid).values(**fields, updated_at=now_utc()))
 
     def merge_queue_delete(self, mid: str) -> None:
-        with self._swrite:
-            self.sc.execute("DELETE FROM merge_queue WHERE id = ?", [mid])
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.id == mid))
 
     def merge_queue_claim(self, mid: str, approved_only: bool = False) -> bool:
         """Take the row for merging: it becomes `merging` only when it is `queued` and no other
         row of its (repo, base) is `merging` (one merge at a time across the cell). With
         `approved_only` (autonomy L3-review) the row also needs approved_head == head. One
         write-locked step, so two ticks cannot both take it."""
-        with self._swrite:
-            r = self.sc.execute("SELECT repo, base, state, head, approved_head FROM merge_queue "
-                                "WHERE id = ?", [mid]).fetchone()
-            if not r or r[2] != "queued":
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_merge_queue")
+            r = conn.execute(select(t.c.repo, t.c.base, t.c.state, t.c.head, t.c.approved_head)
+                             .where(t.c.id == mid)).first()
+            if r is None or r.state != "queued":
                 return False
-            if approved_only and (not r[4] or r[4] != r[3]):
+            if approved_only and (not r.approved_head or r.approved_head != r.head):
                 return False
-            busy = self.sc.execute("SELECT 1 FROM merge_queue WHERE repo = ? AND base = ? AND "
-                                   "state = 'merging' AND id != ?", [r[0], r[1], mid]).fetchone()
-            if busy:
+            busy = conn.execute(select(t.c.id).where(
+                t.c.repo == r.repo, t.c.base == r.base, t.c.state == "merging", t.c.id != mid)).first()
+            if busy is not None:
                 return False
-            self.sc.execute("UPDATE merge_queue SET state = 'merging', updated_at = ? WHERE "
-                             "id = ?", [now_utc(), mid])
+            conn.execute(update(t).where(t.c.id == mid).values(state="merging", updated_at=now_utc()))
         return True
 
     def get_merge_method(self, uid: str) -> str:
         """squash, merge or rebase; squash when the project never chose."""
-        with self._sread:
-            r = self.sc.execute("SELECT method FROM project_merge_method WHERE project = ?",
-                                [uid]).fetchone()
-        return r[0] if r and r[0] in self.MERGE_METHODS else "squash"
+        t = method_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.method).where(t.c.project == uid)).first()
+        return r[0] if r is not None and r[0] in self.MERGE_METHODS else "squash"
 
     def set_merge_method(self, uid: str, method: str, by: str) -> str:
         method = (method or "").strip().lower()
         if method not in self.MERGE_METHODS:
             raise ValueError("merge_method is squash, merge or rebase")
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO project_merge_method (project, method, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
-                "method = excluded.method, updated_at = excluded.updated_at, "
-                "updated_by = excluded.updated_by", [uid, method, now_utc(), by])
+        ins = self.sessions_db.upsert(method_table).values(
+            project=uid, method=method, updated_at=now_utc(), updated_by=by)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+                k: ins.excluded[k] for k in ("method", "updated_at", "updated_by")}))
         return method
 
-    @kept_state
+    @kept
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, as get_choice; None when it has none. Its settings
         are the project's own fields only. It never falls back to the factory's default: that is
         the caller's rule."""
         self._integration_slot(slot, PROJECT_SLOTS)
-        with self._sread:
-            r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
-                                "project_integrations WHERE project_uid = ? AND slot = ?",
-                                [uid, slot]).fetchone()
-        return self._integration_view(slot, r[0], r[1], r[2], r[3], project_uid=uid) if r else None
+        t = picks_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.name, t.c.settings, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.project_uid == uid, t.c.slot == slot)).first()
+        if r is None:
+            return None
+        return self._integration_view(slot, r.name, r.settings, r.updated_at, r.updated_by,
+                                      project_uid=uid)
 
     def projects_with_choice(self, slot: str, uids: list[str]) -> set[str]:
-        """The projects among `uids` that hold their own choice for the slot, in one query."""
-        self._integration_slot(slot, PROJECT_SLOTS)
-        ids = sorted({u for u in uids if u})
-        if not ids:
-            return set()
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT project_uid FROM project_integrations WHERE slot = ? AND project_uid IN "
-                f"({', '.join('?' for _ in ids)})", [slot, *ids]).fetchall()
-        return {r[0] for r in rows}
+        """The projects among `uids` that hold their own choice for the slot, in one query per 500
+        projects."""
+        return set(self.project_choice_names(slot, uids))
 
     def project_choice_names(self, slot: str, uids: list[str]) -> dict[str, str]:
         """{project uid: name of its own choice} for the projects among `uids` that hold one for the
@@ -3159,13 +3044,12 @@ class FactoryStore:
         self._integration_slot(slot, PROJECT_SLOTS)
         ids = sorted({u for u in uids if u})
         out: dict[str, str] = {}
+        t = picks_table
         for i in range(0, len(ids), 500):
-            chunk = ids[i:i + 500]
-            with self._sread:
-                rows = self.sc.execute(
-                    "SELECT project_uid, name FROM project_integrations WHERE slot = ? AND project_uid IN "
-                    f"({', '.join('?' for _ in chunk)})", [slot, *chunk]).fetchall()
-            out.update({r[0]: r[1] for r in rows})
+            with self.sessions_db.read() as conn:
+                rows = conn.execute(select(t.c.project_uid, t.c.name).where(
+                    t.c.slot == slot, t.c.project_uid.in_(ids[i:i + 500]))).fetchall()
+            out.update({r.project_uid: r.name for r in rows})
         return out
 
     @classmethod
@@ -3191,7 +3075,7 @@ class FactoryStore:
         """Save the project's own choice for the slot: a connected integration's name and the
         project's own fields. A secret or an address in `settings` raises ValueError: those live at
         the factory (TR-1380), so a project never holds one. With `require_connected` an integration
-        that is not connected raises ValueError too, checked in the same step as the write, within this process (the
+        that is not connected raises ValueError too, checked in the same step as the write (the
         route asks for it). Only tickets, review and ci take one."""
         self._integration_slot(slot, PROJECT_SLOTS)
         name = str(name or "").strip()
@@ -3206,20 +3090,15 @@ class FactoryStore:
             if why:
                 raise ValueError(why)
         takes = self._takes_settings(slot, name)
-        with self._swrite:
-            if require_connected and not self._connected(slot, name, takes):
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            if require_connected and not self._connected(conn, slot, name, takes):
                 raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
             at = now_utc()
-            cur = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? AND slot = ?",
-                                  [uid, slot]).fetchone()
-            if cur:
-                self.sc.execute("UPDATE project_integrations SET name = ?, settings = ?, updated_at = ?, "
-                                "updated_by = ? WHERE project_uid = ? AND slot = ?",
-                                [name, json.dumps(settings), at, by, uid, slot])
-            else:
-                self.sc.execute("INSERT INTO project_integrations (project_uid, slot, name, settings, "
-                                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?)",
-                                [uid, slot, name, json.dumps(settings), at, by])
+            ins = self.sessions_db.upsert(picks_table).values(
+                project_uid=uid, slot=slot, name=name, settings=settings, updated_at=at, updated_by=by)
+            conn.execute(ins.on_conflict_do_update(index_elements=["project_uid", "slot"], set_={
+                k: ins.excluded[k] for k in ("name", "settings", "updated_at", "updated_by")}))
         return self._integration_view(slot, name, settings, at, by, project_uid=uid)
 
     def stored_settings(self, slot: str, name: str, uid: str | None = None) -> dict:
@@ -3235,94 +3114,74 @@ class FactoryStore:
         from .integrations import registry
         found = registry.get(slot, name)           # before the lock: it loads the registry
         plain = {f.name for f in found.settings_schema if f.kind not in ("secret", "url")} if found else set()
-        with self._sread:
-            c = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? AND name = ?",
-                                [slot, name]).fetchone()
-            own = self.sc.execute("SELECT name, settings FROM project_integrations WHERE project_uid = ? "
-                                  "AND slot = ?", [uid, slot]).fetchone() if uid is not None else None
-        out = self._load_settings(c[0]) if c else {}
-        if own and own[0] == name:
+        t, picks = connections_table, picks_table
+        with self.sessions_db.read() as conn:
+            c = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
+            own = conn.execute(select(picks.c.name, picks.c.settings).where(
+                picks.c.project_uid == uid, picks.c.slot == slot)).first() if uid is not None else None
+        out = self._load_settings(c[0]) if c is not None else {}
+        if own is not None and own.name == name:
             # a project's own fields; a secret or an address left in a row from before is not read
-            out.update({k: v for k, v in self._load_settings(own[1]).items() if k in plain})
+            out.update({k: v for k, v in self._load_settings(own.settings).items() if k in plain})
         return out
 
     # ── status changes waiting to reach the ticket system (TR-845) ────────────
-    _PW_COLS = "ticket, integration, status, attempts, last_error, updated_at"
-
-    @staticmethod
-    def _pw_row(r) -> dict:
-        return {"ticket": r[0], "integration": r[1], "status": r[2], "attempts": r[3],
-                "last_error": r[4], "updated_at": r[5]}
-
     def pending_writeback_fail(self, ticket: str, integration: str, status: str, error: str,
                                at) -> int:
         """A write of `status` to the ticket system failed: add the ticket's row, or update it
         with the status wanted now and the error, one attempt more (the count starts again when the
         status wanted is not the one the row held). Returns the attempts so far.
-        Select, then insert or update, under one lock: no ON CONFLICT, so it runs on Postgres."""
-        with self._swrite:
-            cur = self.sc.execute("SELECT attempts, status FROM pending_writeback WHERE "
-                                  "ticket = ? AND integration = ?", [ticket, integration]).fetchone()
+        Select, then insert or update, in one locked transaction."""
+        t = writeback_table
+        mine = (t.c.ticket == ticket, t.c.integration == integration)
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_writeback")
+            cur = conn.execute(select(t.c.attempts, t.c.status).where(*mine)).first()
             # a different status wanted now is a new write: its attempts start again
-            attempts = int(cur[0] or 0) + 1 if cur and cur[1] == status else 1
-            if cur:
-                self.sc.execute("UPDATE pending_writeback SET status = ?, attempts = ?, "
-                                "last_error = ?, updated_at = ? WHERE ticket = ? AND "
-                                "integration = ?", [status, attempts, error, at, ticket,
-                                                    integration])
+            attempts = int(cur.attempts or 0) + 1 if cur is not None and cur.status == status else 1
+            values = {"status": status, "attempts": attempts, "last_error": error, "updated_at": at}
+            if cur is not None:
+                conn.execute(update(t).where(*mine).values(**values))
             else:
-                self.sc.execute(f"INSERT INTO pending_writeback ({self._PW_COLS}) VALUES "
-                                "(?, ?, ?, ?, ?, ?)",
-                                [ticket, integration, status, attempts, error, at])
+                conn.execute(insert(t).values(ticket=ticket, integration=integration, **values))
         return attempts
 
     def pending_writeback_clear(self, ticket: str, integration: str | None = None) -> bool:
         """The ticket's row goes (the write landed, or the ticket left the system). False when
         there was none."""
-        sql, args = "FROM pending_writeback WHERE ticket = ?", [ticket]
-        if integration:
-            sql, args = sql + " AND integration = ?", args + [integration]
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 " + sql, args).fetchone()
-            self.sc.execute("DELETE " + sql, args)
-        return bool(had)
+        t = writeback_table
+        where = [t.c.ticket == ticket] + ([t.c.integration == integration] if integration else [])
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(*where).returning(t.c.ticket)).fetchall()
+        return bool(gone)
 
     def get_pending_writeback(self, ticket: str, integration: str | None = None) -> dict | None:
-        sql, args = (f"SELECT {self._PW_COLS} FROM pending_writeback WHERE ticket = ?", [ticket])
-        if integration:
-            sql, args = sql + " AND integration = ?", args + [integration]
-        with self._sread:
-            r = self.sc.execute(sql, args).fetchone()
-        return self._pw_row(r) if r else None
+        t = writeback_table
+        where = [t.c.ticket == ticket] + ([t.c.integration == integration] if integration else [])
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(*where)).first()
+        return dict(r._mapping) if r is not None else None
 
     def list_pending_writebacks(self, integration: str | None = None,
                                 project: str | None = None) -> list[dict]:
         """The rows waiting, oldest first; `project` keeps those of that project's tickets."""
-        sql, args = f"SELECT {self._PW_COLS} FROM pending_writeback WHERE 1 = 1", []
+        t = writeback_table
+        q = select(t)
         if integration:
-            sql, args = sql + " AND integration = ?", args + [integration]
-        with self._sread:
-            rows = self.sc.execute(sql + " ORDER BY updated_at, ticket", args).fetchall()
-        out = [self._pw_row(r) for r in rows]
-        if project and out:
-            # the tickets are in the session store: which of the waiting ones are the project's
-            t = tickets_table
-            ids = sorted({r["ticket"] for r in out if r["ticket"] is not None})
-            mine: set = set()
-            with self.sessions_db.read() as conn:
-                for i in range(0, len(ids), 500):
-                    mine.update(conn.execute(select(t.c.id).where(
-                        t.c.project == project, t.c.id.in_(ids[i:i + 500]))).scalars())
-            out = [r for r in out if r["ticket"] in mine]
-        return out
+            q = q.where(t.c.integration == integration)
+        if project:
+            q = q.where(t.c.ticket.in_(
+                select(tickets_table.c.id).where(tickets_table.c.project == project)))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.updated_at.asc().nulls_last(), t.c.ticket)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def clear_project_choice(self, uid: str, slot: str) -> bool:
         """Drop the project's own choice, so the slot follows the factory's again. False when
         there was none."""
         self._integration_slot(slot, PROJECT_SLOTS)
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? "
-                                  "AND slot = ?", [uid, slot]).fetchone()
-            self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ? AND slot = ?",
-                            [uid, slot])
-        return bool(had)
+        t = picks_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.project_uid == uid, t.c.slot == slot)
+                                .returning(t.c.slot)).fetchall()
+        return bool(gone)
