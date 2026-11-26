@@ -1728,8 +1728,16 @@ out_l = io.StringIO()
 with redirect_stdout(out_l):
     code_l = cs.cmd_outcome([], env_s)
 call_id = line["call"]
-bad = [quietly(cs.cmd_outcome, argv, env_s)[0] for argv in ([call_id], [call_id, "maybe", "x"], ["exec-nothing", "done", "x"],
-                                                            [call_id, "done", " "], ["1", "done", "a place in the list"])]
+def refused_line(argv):
+    """What `tares factory outcome` says when it refuses: one line on stderr and exit 1 (TR-1598), or "" when it took it."""
+    err = io.StringIO()
+    with redirect_stderr(err), redirect_stdout(io.StringIO()):
+        code = cs.cmd_outcome(argv, env_s)
+    return err.getvalue().strip() if code == 1 and "Traceback" not in err.getvalue() else ""
+
+
+bad = [refused_line(argv) for argv in ([call_id], [call_id, "maybe", "x"], ["exec-nothing", "done", "x"],
+                                       [call_id, "done", " "], ["1", "done", "a place in the list"])]
 ck("`tares factory outcome` lists it by its call id, and takes no answer that says nothing or names a place in the list",
    code_l == 0 and out_l.getvalue().startswith(f"{call_id}  {command}") and all(bad) and "name it by its call id" in bad[4]
    and len(cs.unknown(paths, S)) == 1, (out_l.getvalue(), bad))

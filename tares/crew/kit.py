@@ -474,6 +474,9 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
     idle any more or the crew froze since the round began, 1 it could not be restarted. Says what happened."""
     from . import lifecycle
     skill = state.stations_get(station, "role", paths=paths)
+    if skill == "helper":   # a helper works under its parent's role: its skill is that role's (as revive says)
+        from . import launch
+        skill = launch.parent_role(state.stations_get(station, "parent", paths=paths), paths)
     rc = 0
     with TaresClient(paths, client.env, client.say) as fresh:   # Tares and the settings are asked again, as in bash's subshell
         try:
@@ -488,10 +491,11 @@ def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: st
                 else:
                     client.say(f"{station} runs an older version of the plugin; restarting it on this one now that it's "
                                "idle, in the same conversation")
+                    reload = lifecycle.reload_text(paths, station, skill, may_change=True)
                     lifecycle.restart(fresh, paths, [station, (
                         "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with "
-                        f"fresh settings. Reload the skills factory-protocol and station-{skill} (they may have changed), "
-                        f"{lifecycle.REPORT_READ}, {lifecycle.rearm_text(fresh)}, then carry on where you were.")],
+                        f"fresh settings. {reload}, {lifecycle.REPORT_READ}, {lifecycle.rearm_text(fresh, station)}, "
+                        "then carry on where you were.")],
                         claude_bin=claude_bin, only_between_turns=True, prompt_wait=None)
                     state.event("upgraded", station, kit, paths=paths)
         except NotBetweenTurnsError:

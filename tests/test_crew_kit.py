@@ -650,6 +650,15 @@ with FakeTares() as ft:
 ck("(control) an idle one is: rc 0, restarted, upgraded recorded", rc == 0 and len(restarts) == 1 and len(kinds("upgraded")) == 1, str((rc, restarts, kinds())))
 ck("the restart is asked to stop the station only between turns", bool(guards) and all(guards), str(guards))
 ck("and to look at a prompt with the same 30 minute wait as the round did", bool(waits) and all(w is None for w in waits), str(waits))
+ck("a builder is told to reload its own skill", "station-builder (they may have changed)" in restarts[-1][1], restarts[-1][1])
+# a helper works under its parent's role: it reloads that role's skill, not a station-helper there is none of
+world({"shop-build-m1": station(), "shop-build-m1-look": station(role="helper", parent="shop-build-m1", id="aaaa0001")}, IDLE)
+del restarts[:]
+with FakeTares() as ft:
+    with TaresClient(CP, os.environ, lambda m: None) as c:
+        rc = kit.upgrade_station(CP, c, "shop-build-m1-look", kit.kit_version(KITDIR), claude_bin=BIN)
+ck("a helper is told to reload its parent's role's skill", rc == 0 and restarts
+   and "station-builder (they may have changed)" in restarts[-1][1] and "station-helper" not in restarts[-1][1], str((rc, restarts)))
 
 # it starts a turn after the last look: the restart refuses, nothing is recorded, the station is not stopped
 world({"shop-build-m1": station()}, IDLE)

@@ -1810,7 +1810,7 @@ class FactoryStore:
         if rows:
             self._record_challenges(rows)
 
-    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
+    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000, ends: bool = False) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
         printed and whether it failed, oldest first: what a builder's claimed checks are
         compared with. Read from `session_commands`, where each call was written as its line was
@@ -1826,16 +1826,20 @@ class FactoryStore:
         for i in range(0, len(sessions), 500):
             with self.sessions_db.begin() as conn:
                 rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code,
-                                            t.outcome, t.cwd)
+                                            t.outcome, t.cwd, t.result_at)
                                      .where(t.source == source, t.session.in_(sessions[i:i + 500]),
                                             t.command.is_not(None), t.at.is_not(None))
                                      .order_by(t.at.desc(), t.tool_use_id.desc())
                                      .limit(limit // 2)).fetchall()
         rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
+        # With `ends`, every row also says whether its result arrived (`ended`) and the code it ended with
+        # (`exit_code`; a Claude Code result says only ok or error: 0 or 1): what a step of a chain needs to back
+        # a claim (factory.match_check, TR-1598). Without, the rows are what they always were.
         return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
                  "is_error": bool(code) or outcome in ("failed", "declined"),
-                 **({"outcome": outcome, "exit_code": code, "cwd": cwd} if outcome else {})}
-                for at, sid, command, tail, code, outcome, cwd in reversed(rows)]
+                 **({"outcome": outcome, "exit_code": code, "cwd": cwd} if outcome else {}),
+                 **({"ended": result_at is not None, "exit_code": code} if ends else {})}
+                for at, sid, command, tail, code, outcome, cwd, result_at in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:

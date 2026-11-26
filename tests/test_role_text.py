@@ -16,7 +16,8 @@ rendering that names nothing only Claude Code has.
     fill; an orchestrator's carries its identity alone; a kit whose rules cannot be rendered stops the
     plan; a Claude Code plan has no such place;
  g. the prompts: Claude Code's boot prompt and idle-wake note are as they were; a Codex station's name
-    nothing of CLAUDE_ONLY, no READY, and tell it of a halt.
+    nothing of CLAUDE_ONLY, no READY, say the factory wakes it (whatever the idle_wake setting), and tell
+    it of a halt.
 
 Run: python tests/test_role_text.py
 """
@@ -136,6 +137,12 @@ ck("a Codex builder reports through Tares: a question that blocks by blocking th
    and "the factory wakes the crew reviewer from the review queue" in manual
    and "4. Send nothing: write the tickets you hold under `## Now` in your report." in manual
    and "A Codex station cannot send a message to another station yet." in manual)
+ck("its liveness wakes do not depend on the idle_wake setting (TR-1598: the factory always wakes a Codex station)",
+   "woken this way whatever the `idle_wake` setting" in manual and "nothing wakes a Codex station" not in manual)
+ck("a command its sandbox refuses is asked again for approval, which reaches the desk; one the guard refuses blocks",
+   "run the same command again and ask for approval (escalated permissions" in manual
+   and "a `tares factory` command that says Tares does not answer: Tares is up, your sandbox has no network" in manual
+   and "**The factory's guard** refuses" in manual and "Your person can allow it in the console" not in manual)
 ck("it holds no schedule, hands the work to nobody, and has no challenger yet",
    "You hold no schedule: the factory wakes you" in manual and "4. **Implement it yourself**" in manual
    and "No challenger runs on a Codex station yet" in manual)
@@ -253,6 +260,7 @@ ck("a Claude Code plan has no such place: its station loads the skills",
    "ROLE_MANUAL" not in str(plan) and "station-builder" in " ".join(plan["args"]), plan["args"])
 
 print("g. the prompts")
+WOKEN = "The factory wakes you when there is work, so end your turn when there is nothing to do."
 BOOT = ("Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot "
         "sections, and send crew-orchestrator READY when you are set.")
 ck("Claude Code's boot prompt is as it was, with and without a task",
@@ -264,12 +272,14 @@ ck("and so is its idle-wake note",
 codex_boot = L.boot_prompt(client, "builder", "T1", runtime="codex")
 ck("a Codex builder's boot prompt points at its instructions, and names no skill, no READY, nothing of Claude Code's",
    codex_boot == "Boot as the builder station: your operating rules are in your instructions (the factory protocol, the "
-   "builder manual and their pages). Follow their Boot sections.\n\nYour task:\nT1" and named(codex_boot) == [], codex_boot)
+   "builder manual and their pages). Follow their Boot sections. " + WOKEN + "\n\nYour task:\nT1"
+   and named(codex_boot) == [], codex_boot)
 ck("a role with no manual on Codex is told so",
    L.boot_prompt(client, "reviewer", runtime="codex") == "Boot as the reviewer station. There is no operating manual for "
-   "your role on Codex yet: do only what this prompt and the ones after it ask.")
-ck("the idle-wake note of a Codex station names no schedule tool",
-   named(L.idle_wake_note("codex")) == [] and "the factory wakes you" in L.idle_wake_note("codex"), L.idle_wake_note("codex"))
+   "your role on Codex yet: do only what this prompt and the ones after it ask. " + WOKEN)
+ck("the idle-wake note of a Codex station names no schedule tool, and is on its boot prompt with idle_wake off: the "
+   "factory is what wakes a Codex station", named(L.idle_wake_note("codex")) == [] and L.idle_wake_note("codex") == WOKEN
+   and client.crew_settings().get("idle_wake") is not True, L.idle_wake_note("codex"))
 state.halt_write("the person said stop", paths=paths)
 halted = L.boot_prompt(client, "builder", runtime="codex")
 ck("a Codex station is told of a halt at its start, which a Claude Code one hears from its hook",

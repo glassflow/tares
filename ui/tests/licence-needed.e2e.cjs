@@ -339,6 +339,15 @@ async function fakeHome(page) {
       const SAY = /enterprise licence|needs a licence|licence_required|\{"code"/i;
       const HEALTH = /\/health(\?|$)/;
       const slowHealth = (page, ms) => page.route(HEALTH, async (route) => { await new Promise((r) => setTimeout(r, ms)); return route.continue(); });
+      // /health held until the test lets it answer: the samples "before /health answered" are taken while it is
+      // still held, however long the page took to show its list (a slow runner reached 3000 ms after a 3.5 s
+      // delay had run out, TR-1598's CI)
+      async function heldHealth(page) {
+        let release;
+        const held = new Promise((r) => { release = r; });
+        await page.route(HEALTH, async (route) => { await held; return route.continue(); });
+        return release;
+      }
       // sample the page at the given times after load; every sample must pass `ok`
       async function samples(page, label, times, ok) {
         let last = 0;
@@ -362,11 +371,12 @@ async function fakeHome(page) {
         ["cloud, slow /health, Areas page", cloudPlatNone.base, "/settings?tab=areas", null],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
-        await fakeCloud(p, { status: 200, body: {} }); await slowHealth(p, 3500);
+        await fakeCloud(p, { status: 200, body: {} }); const answer = await heldHealth(p);
         await p.goto(base + route, { waitUntil: "commit" });
         if (ready) await ready(p).waitFor({ timeout: 15000 });
         await samples(p, label, [300, 1500, 3000], pendingQuiet);
-        await samples(p, label + ", after it landed", [6500], (s) => never(s)
+        answer();
+        await samples(p, label + ", after it landed", [3500], (s) => never(s)
           || (s.lines.length ? (s.lines.every((l) => / (is|are) not available on this workspace right now\./.test(l)) ? "" : "a line is not the plain one") : "no line"));
         await p.context().close();
       }
@@ -376,10 +386,11 @@ async function fakeHome(page) {
         ["self-hosted, slow /health, Settings Access", selfPlatNone.base, "/settings?tab=access", (p) => p.getByTestId("you-row"), "Adding people needs an enterprise licence."],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
-        await slowHealth(p, 3500);
+        const answer = await heldHealth(p);
         await p.goto(base + route, { waitUntil: "commit" });
         await ready(p).waitFor({ timeout: 15000 });
         await samples(p, label, [300, 1500, 3000], (s) => s.lines.length ? "a line shows before /health answered" : s.links ? "a link before /health answered" : "");
+        answer();
         await p.getByTestId("licence-needed").first().waitFor({ timeout: 10000 });
         const text = (await p.getByTestId("licence-needed").first().innerText()).trim();
         ck(`${label}, after it landed: the words`, text.includes(want), text);

@@ -148,6 +148,44 @@ f2, s2 = rec.facts(cut, record, s1, BASE, True, NOW + 40)
 ck("the look after says the command's outcome is unknown, once",
    kinds(f2) == [("unknown", "exec-2")] and "interrupted" in f2[0]["why"] and s2["starts"] == {} and s2["closed"] == [TURN], f2)
 ck("and never again", rec.facts(cut, record, s2, BASE, True, NOW + 50)[0] == [])
+# after a crash and a revive Codex may list the cut-off command with its item still in progress, in a turn that
+# has ended, or leave that turn in progress under a newer one (TR-1598: the start was never closed)
+open_item = thread([said("u1", "Run it.", "userMessage"), command("exec-2", "sleep 40", status="inProgress")],
+                   status="interrupted", kind="idle")
+g1, t1 = rec.facts(open_item, record, sent1, BASE, True, NOW + 30)
+g2, t2 = rec.facts(open_item, record, t1, BASE, True, NOW + 40)
+ck("a command whose item is still in progress in an ended turn: its outcome is unknown, at the look after",
+   [k for k in kinds(g2) if k[0] == "unknown"] == [("unknown", "exec-2")] and t2["starts"] == {}, kinds(g1) + kinds(g2))
+stale = thread([said("u2", "Next.", "userMessage")], status="completed", kind="idle", turn="01a2-turn-2",
+               more=({"id": TURN, "status": "inProgress", "itemsView": "full", "startedAt": int(NOW - 20),
+                      "items": [said("u1", "Run it.", "userMessage")]},))
+h1, u1 = rec.facts(stale, record, sent1, BASE, True, NOW + 30)
+h2, u2 = rec.facts(stale, record, u1, BASE, True, NOW + 40)
+ck("a turn left in progress under a newer one has ended: its command's outcome is unknown",
+   ("unknown", "exec-2") in kinds(h2) and "exec-2" not in u2["starts"], kinds(h1) + kinds(h2))
+running_now = thread([said("u1", "Run it.", "userMessage"), command("exec-2", "sleep 40", status="inProgress")])
+r1, v1 = rec.facts(running_now, record, sent1, BASE, True, NOW + 30)
+r2, _ = rec.facts(running_now, record, v1, BASE, True, NOW + 40)
+ck("the newest turn in progress, with its command running, is left alone",
+   not [k for k in kinds(r1) + kinds(r2) if k[0] == "unknown"], kinds(r1) + kinds(r2))
+# A resumed conversation may be at rest while its last stored turn still says inProgress.
+# No later turn is needed to settle the command the old app-server cut off.
+for resting in ("idle", "notLoaded"):
+    stranded = thread([said("u1", "Run it.", "userMessage"),
+                       command("exec-2", "sleep 40", status="inProgress")], kind=resting)
+    first, pending = rec.facts(stranded, record, sent1, BASE, True, NOW + 30)
+    settled, noted = rec.facts(stranded, record, pending, BASE, True, NOW + 40)
+    ck(f"{resting}: the last stored turn still in progress does not keep a cut-off command running forever",
+       not [f for f in first if f["kind"] == "unknown"]
+       and ("unknown", "exec-2") in kinds(settled) and "exec-2" not in noted["starts"], kinds(first) + kinds(settled))
+    ck(f"{resting}: the unknown outcome is sent once",
+       not [f for f in rec.facts(stranded, record, noted, BASE, True, NOW + 50)[0] if f["kind"] == "unknown"])
+# Waiting on a person is still an active turn, even when no command is listed as ended.
+waiting_turn = thread([said("u1", "Run it.", "userMessage")], flags=["waitingOnApproval"])
+w1, ws = rec.facts(waiting_turn, record, sent1, BASE, True, NOW + 30)
+w2, _ = rec.facts(waiting_turn, record, ws, BASE, True, NOW + 40)
+ck("a latest turn waiting on approval is left open",
+   not [f for f in w1 + w2 if f["kind"] == "unknown"])
 late = thread([*cut["turns"][0]["items"], command("exec-2", "sleep 40", 0, "")], status="completed", kind="idle")
 f_late, _ = rec.facts(late, record, s1, BASE, True, NOW + 40)
 ck("an item that is listed by the second look is the command's end, not an unknown outcome",
@@ -400,6 +438,18 @@ ck("the Crew page's conversation shows each command as one call with its output,
    tools[f"codex:{THREAD}:exec-1"]["output"] == "14 passed" and tools[f"codex:{THREAD}:exec-1"]["failed"] is False
    and tools[f"codex:{THREAD}:exec-1"]["name"] == "Bash" and len(tools) == 2
    and [i["text"] for i in shown if i.get("kind") == "said"] == ["I will run them.", "slept"], shown)
+# Carry the crash settlement through ingestion, rather than checking only the recorder's facts.
+crash_session = "01a2-crash-thread"
+crash_facts = [{**f, "sessionId": crash_session} for f in facts1 + settled]
+store.append(conn.map_payload(cell.session_lines(crash_facts)))
+crash_rows = store.recorded_commands("claude_code", [crash_session])
+crash_row = next(r for r in crash_rows if r["command"] == "sleep 40")
+ck("an idle conversation's cut-off command reaches the cell as unknown, with no invented exit code",
+   crash_row["outcome"] == "unknown" and crash_row["exit_code"] is None
+   and "outcome unknown" in crash_row["output"], crash_row)
+from tares.factory import match_check  # noqa: E402
+ck("the settled cut-off command cannot back a passing claim",
+   match_check({"command": "sleep 40", "result": "passed"}, crash_rows)[0] == "differs")
 store.con.close()
 
 print(f"\n{P} passed, {F} failed")

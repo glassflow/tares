@@ -115,6 +115,7 @@ ck("the guard is registered for every tool call and for the start of every turn,
        {"type": "command", "command": GUARD_HOOK, "timeout": 5}]}]
    and hooks["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": GUARD_HOOK, "timeout": 5}]}]
    and thread["config"]["bypass_hook_trust"] is True
+   and thread["config"]["sandbox_workspace_write"] == {"writable_roots": ["{CREW_HOME}/reports"]}
    and GUARD_HOOK == "tares hook codex-guard --plugin-root {PLUGIN_DIR_SHELL}", thread["config"])
 ck("the MCP server is named, with its address and the identity headers read from the station's variables, and no token",
    spec.settings["mcp_servers"]["tares"]["url"] == "http://cell.test/mcp"
