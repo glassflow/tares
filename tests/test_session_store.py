@@ -650,8 +650,9 @@ def takeover():
             pg.execute(stmt)
         return sch, dsn
 
-    def snapshot(sch):
-        """Every row of the five tables, and every column's type, as Postgres holds them."""
+    def snapshot(sch, new=False):
+        """Every row of the five tables, and every column's type, as Postgres holds them: the columns the old
+        DDL made, or with `new` only the ones added since (SINCE_DUCKDB, TR-1600)."""
         with psycopg.connect(PG, autocommit=True) as c:
             c.execute(f"SET search_path = {sch}")
             out = {}
@@ -661,7 +662,13 @@ def takeover():
                 cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
                                  "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
                                  [sch, t]).fetchall()
-                rows = c.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
+                cols = [x for x in cols if (x[0] in SINCE_DUCKDB.get(t, ())) == new]
+                if not cols:
+                    out[t] = ([], [])
+                    continue
+                names = ", ".join(x[0] for x in cols)
+                rows = c.execute(f"SELECT {names} FROM {t} ORDER BY session").fetchall() if new else \
+                    c.execute(f"SELECT {names} FROM {t} ORDER BY 1, 2").fetchall()
                 out[t] = (cols, [tuple(map(str, r)) for r in rows])
             return out
 
@@ -689,6 +696,10 @@ def takeover():
         after = snapshot(sch)
         ck("no row and no column of the five tables changed", after == before,
            [t for t in SESSION_TABLES if after[t] != before[t]])
+        added = snapshot(sch, new=True)["session_stations"]
+        ck("the columns added since are there, and empty in every row (TR-1600)",
+           sorted(x[0] for x in added[0]) == sorted(SINCE_DUCKDB["session_stations"])
+           and all(v == "None" for r in added[1] for v in r) and len(added[1]) == 2, added)
         ck("each table's columns, types and primary key are what tables.py declares",
            shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
         ck("project_sessions has its index on session",
