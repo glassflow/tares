@@ -23,6 +23,7 @@ test_console_answers
 test_crew_page_by_person
 test_crew_sessions_route
 test_crew_split
+test_crew_text_and_rule_tickets
 test_crewname_team
 test_crews
 test_desk_person
