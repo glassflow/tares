@@ -28,7 +28,22 @@ from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths
 
-FAILED_TOLD = "turnFailedTold"   # on a station's row: the failed turn the person was told of
+FAILED_TOLD = "turnFailedTold"   # on a station's row before TR-1600's fix: the failed turn the person was told of
+
+
+def told_file(paths: CrewPaths, station: str):
+    """The failed turn the person was told of, in a file of the station's own: written under the station's lock,
+    so a second watch at work on another station never writes it back from an older read of stations.json, as
+    a mark on the row could be (TR-1600)."""
+    return paths.station_file(station, "codex.failed-told")
+
+
+def told_of(paths: CrewPaths, station: str) -> str:
+    """The failed turn already told of: the station's file, else the mark an older crew wrote on its row."""
+    try:
+        return told_file(paths, station).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return str((state.stations_load(paths).get(station) or {}).get(FAILED_TOLD) or "")
 
 
 def failed_turns(client, paths: CrewPaths, say=None) -> list:
@@ -43,9 +58,9 @@ def failed_turns(client, paths: CrewPaths, say=None) -> list:
         try:
             with locks.held_station_lock(station, paths):
                 turn, why = cs.failed_turn(paths, station)
-                if not turn or (state.stations_load(paths).get(station) or {}).get(FAILED_TOLD) == turn:
+                if not turn or told_of(paths, station) == turn:
                     continue
-                state.stations_put(station, {FAILED_TOLD: turn}, paths)
+                state.atomic_write_text(told_file(paths, station), f"{turn}\n")
         except StationLockedError:
             continue   # another command is at work on it: looked at again next round
         state.event("turn-failed", station, why, paths=paths)

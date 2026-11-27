@@ -17,8 +17,9 @@ account's quota. CI runs the same behaviours without a login, against the fake a
     TARES_PROBE_CODEX=/path/to/codex .venv/bin/python tests/test_codex_real.py [--out DIR] [probe ...]
 
 Each probe (see tests/factory/codex_probe/README.md) runs in turn with its own --out folder, and one line says
-whether it passed; the exit code is 1 when one did not. A probe depends on the model doing the steps it is asked
-for: one that fails says why in its results file, and is worth a second run before it is believed. Run it with
+whether it passed; the exit code is 1 when one did not, and 2 when a name given is not a probe's (nothing runs
+then). A probe depends on the model doing the steps it is asked for: one that fails says why in its results
+file, and is worth a second run before it is believed. Run it with
 the checkout's interpreter and its folder first on PATH, so a station's `tares` is this checkout's. Without
 TARES_PROBE_CODEX it says how to run it and fails.
 
@@ -62,6 +63,11 @@ def main() -> int:
         print("needs a signed-in Codex: TARES_PROBE_CODEX=/path/to/codex .venv/bin/python tests/test_codex_real.py\n"
               "(not in CI: tests/ci_skip.txt says why)")
         return 1
+    known = [n for n, _ in ORDER]
+    unknown = [n for n in picked if n not in known]
+    if unknown:   # a name that picks nothing must not pass as a run with nothing failed
+        print(f"no such probe: {', '.join(unknown)}. The probes: {', '.join(known)}")
+        return 2
     todo = [(n, what) for n, what in ORDER if not picked or n in picked]
     env = {**os.environ, "PATH": os.pathsep.join([os.path.dirname(sys.executable), os.environ.get("PATH", "")])}
     env.pop("ANTHROPIC_BASE_URL", None)
