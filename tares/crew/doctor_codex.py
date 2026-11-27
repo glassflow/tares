@@ -37,8 +37,10 @@ from .paths import ME, CrewPaths
 
 GUARD_WORDS = ("tares", "hook", "codex-guard")
 GUARD_EVENTS = ("PreToolUse", "UserPromptSubmit")
-# what codex.home_config writes, and nothing else, belongs in a station's own config.toml
+# what codex.home_config writes, and nothing else, belongs in a station's own config.toml: the trust marks line by
+# line, and the table that gives shell commands their PATH, which holds that one key
 _OWN_CONFIG = re.compile(r'^(\[projects\."(?:[^"\\]|\\.)*"\]|trust_level = "untrusted")$')
+_OWN_PATH = re.compile(r'^\[shell_environment_policy\.set\]\nPATH = "(?:[^"\\\n]|\\.)*"$', re.MULTILINE)
 
 
 def machine(env: dict) -> tuple:
@@ -131,7 +133,8 @@ def home_problems(paths: CrewPaths, station: str, env: dict) -> list:
         text = (home / "config.toml").read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
-    extra = [line.strip() for line in text.splitlines() if line.strip() and not _OWN_CONFIG.match(line.strip())]
+    extra = [line.strip() for line in _OWN_PATH.sub("", text, count=1).splitlines()
+             if line.strip() and not _OWN_CONFIG.match(line.strip())]
     if extra:
         out.append(f"its config.toml holds a setup of its own ({extra[0][:60]})")
     return out

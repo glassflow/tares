@@ -71,7 +71,7 @@ from urllib.parse import unquote
 from . import claude as cl
 from . import codex as cx
 from . import role_text
-from . import pace, state
+from . import github_access, pace, state
 from .client import TaresClient, TaresHTTPError, cksum, uri
 from .errors import CrewError
 from .paths import ME, CrewPaths
@@ -396,6 +396,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         state.write_json(mcp_path, {"mcpServers": servers}, mode=0o600)
     else:
         mcp_path.unlink(missing_ok=True)
+    github_access.write_station_files(client, station, plan["env"])
     pid = plan["env"].get("TARES_PROJECT")
     if project and pid:
         state.stations_put(station, {"project_id": pid}, paths)
@@ -817,6 +818,20 @@ def mcp_servers(paths: CrewPaths, station: str, role: str, parent: str, env=None
     return out
 
 
+def _github_env(client: TaresClient, station: str, repo: str, tares_bin: str | None, claude: bool) -> dict:
+    """What a start adds so that the station's git and gh use the cell's GitHub token, {} when it adds nothing
+    (see github_access.launch_env). A station without a repository folder goes by the crew's."""
+    def folders() -> list:
+        if repo:
+            return [repo]
+        found = client.all_repos()
+        if client.projects_err:   # Tares cannot list them: the folders the crew's stations were started in
+            found = sorted({p for _, p in _recorded_repo_rows(client.paths)})
+        return found
+
+    return github_access.launch_env(client, station, _forward(tares_bin) if tares_bin else "", folders, claude)
+
+
 def launch_plan(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
                 model: str | None = None, effort: str | None = None) -> dict:
     """What a station starts with, from the cell's launch spec and not started: {args, env, settings, otel, otel_file}.
@@ -835,6 +850,8 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
     crew's (see model_effort).
     client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
     this fills the placeholders of this machine and adds FACTORY_TARES, the `tares` that started the crew.
+    On a cell that gives GitHub tokens, env also holds what makes git and gh use them (see
+    github_access.launch_env).
     Dies (CrewError) for a model that cannot run auto mode, a name that is not a station name, a helper whose
     parent's role is not clear, a spec Tares will not give and no copy stands in for, or a spec for another
     runtime than the crew's.
@@ -855,7 +872,7 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
                         f"from its parent ('{parent}'). Name the parent as one of this crew's stations, then run this again.")
     spec = _spec(client, station, role, parent, project, repo, model, effort)
     values = machine_values(client, station, project, repo)
-    # the `tares` that started the crew, written for a later release to read (TR-1069); nothing reads it yet
+    # the `tares` that started the crew (TR-1069): what the station's gh shim runs (github_access)
     try:
         tares_bin = shutil.which("tares")
     except (AttributeError, OSError):  # a lookup that cannot run never stops a launch
@@ -864,10 +881,13 @@ def launch_plan(client: TaresClient, station: str, role: str, parent: str, proje
         # nothing of Claude Code's is added: no flags, no settings of the person's, no MCP servers of theirs
         values = {**values, **cx.machine_values(paths, station),
                   "ROLE_MANUAL": role_manual(client, parent_role(parent, paths) if role == "helper" else role)}
-        return cx.plan(spec, values, _forward(tares_bin) if tares_bin else "")
+        plan = cx.plan(spec, values, _forward(tares_bin) if tares_bin else "")
+        plan["env"].update(_github_env(client, station, repo, tares_bin, claude=False))
+        return plan
     env = fill_placeholders(spec["env"], values)
     if tares_bin:
         env["FACTORY_TARES"] = _forward(tares_bin)
+    env.update(_github_env(client, station, repo, tares_bin, claude=True))
     person = person_settings(client.env)
     otel = telemetry_env(person, env)
     env = {k: v for k, v in env.items() if not k.startswith("OTEL_")}
