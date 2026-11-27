@@ -174,7 +174,7 @@ def stop(proc):
 
 async def seeding_order():
     print("== a seeded empty cell is not settled as platform ==")
-    proc = start(tempfile.mkdtemp(), TARES_SEED_PROJECT="ai_sre_demo")
+    proc = start(tempfile.mkdtemp(), TARES_SEED_PROJECT="challenger_workflow")
     try:
         async with httpx.AsyncClient(timeout=10) as cx:
             await wait_up(cx)
@@ -234,8 +234,8 @@ async def api():
 
             print("== /api/home ==")
             r = await cx.get(f"{B}/api/home", headers=root)
-            check("sre home", r.status_code == 200 and r.json().get("edition") == "sre"
-                  and "headline" in r.json() and "watch" in r.json(), r.text)
+            check("sre has no home now (TR-1809)", r.status_code == 404
+                  and r.json() == {"error": "no home on this edition"}, r.text)
             await cx.put(f"{B}/api/settings/edition", headers=root, json={"edition": "platform"})
             r = await cx.get(f"{B}/api/home", headers=root)
             check("platform has no home", r.status_code == 404 and r.json() == {"error": "no home on this edition"}, r.text)

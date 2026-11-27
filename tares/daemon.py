@@ -25,7 +25,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
@@ -70,11 +69,7 @@ from . import memory_route
 from .integrations.builtin import memory_tares
 from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, milestone_summary, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
-from . import factory_home, request_memo, sre_home, screens, start_steps
-from . import sre as sre_mod
-from . import watch as watch_mod
-from . import feedback as feedback_mod
-from . import incidents as incidents_mod
+from . import factory_home, request_memo, screens
 from . import report as report_mod
 from . import linear as _linear
 from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
@@ -83,7 +78,6 @@ from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
-from . import slack_actions
 from . import slack_verify
 from . import timeline
 from . import goal as goal_mod
@@ -595,7 +589,7 @@ class SlackTeamIn(BaseModel):
 def _seed_project(store, projects) -> None:
     """Create TARES_SEED_PROJECT's project once, on the first boot that carries the var, and only
     on a new cell: one with no project besides the default. A cell that already has projects (a
-    factory cell switched to SRE gets the var on its next upgrade) is not given the demo; it
+    cell that already ran gets the var on its next upgrade) is not given the demo; it
     records the skip, so it never seeds later. The `seeded_project` settings marker (`seeded_usecase` before 1.14) is the one-shot record: it is written after the attempt
     (success or failure), so a user who deletes the seeded project never gets it back on a pod
     restart. An unknown template key writes NO marker — a config typo stays fixable by fixing the
@@ -734,8 +728,6 @@ def make_app() -> FastAPI:
         # the clock for schedule triggers (TR-320)
         from . import schedule as _schedule
         schedule_task = asyncio.create_task(_schedule.run(runtime, loop_stop))
-        # who is watching each service, and telling Slack when that changes (TR-743)
-        watch_task = asyncio.create_task(watch_mod.run(runtime, loop_stop))
         # pull requests read again in the background, not only when a project is opened (TR-1010)
         pr_sync_task = asyncio.create_task(factory_api.sync_prs(store, loop_stop))
         # the morning status goes out from here, whoever's laptop is shut (TR-825)
@@ -768,7 +760,6 @@ def make_app() -> FastAPI:
         loop_stop.set()
         loop_watch.cancel()
         schedule_task.cancel()
-        watch_task.cancel()
         pr_sync_task.cancel()
         morning_task.cancel()
         licence_task.cancel()
@@ -808,8 +799,7 @@ def make_app() -> FastAPI:
     # /ingest, /v1/*, remember), admin (configure: catalog CRUD, discover, credentials, keys).
     # Credentials: the env AUTH_TOKEN is the implicit root (admin, non-revocable), plus revocable
     # scoped keys in the api_keys table (docs/design/api-keys.md).
-    _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import", "/api/agent/chat",
-                    "/api/feedback/export")   # the last one names people
+    _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import", "/api/agent/chat")
     # the only writes a read key may make: reads that take a body, and a reader's own delivery.
     # Every other write, including a route added later, needs admin.
     _READ_WRITES = ("/read", "/subscribe", "/unsubscribe", "/api/labels/preview")
@@ -894,8 +884,8 @@ def make_app() -> FastAPI:
                              # is refused here; admin implies ingest
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
-        if path in ("/api/factory/settings", "/api/sre/settings", "/api/factory/setup"):
-            return "admin"   # the edition settings pages and the factory setup screen (TR-871): the
+        if path in ("/api/factory/settings", "/api/factory/setup"):
+            return "admin"   # the factory settings page and the factory setup screen (TR-871): the
                              # keys, the crew's limits, the Slack channels, the connected
                              # integrations. A read key is refused, as on the other admin-only pages
         if path == "/api/setup/github-suggestion":
@@ -1040,11 +1030,6 @@ def make_app() -> FastAPI:
         if not hasattr(request.state, "person"):
             request.state.person = _person_ref(store.get_person("local"))
         return request.state.person
-
-    def _start_who(request) -> str:
-        """Whose Start checklist hide applies to this request (see start_steps.person_key)."""
-        cred = getattr(request.state, "credential", None) or {}
-        return start_steps.person_key(_current_person(request), cred.get("name"))
 
     def _is_admin(request) -> bool:
         """The credential may manage people and keys: admin scope (the system credential has it),
@@ -3925,41 +3910,15 @@ def make_app() -> FastAPI:
             print(f"taresd: slack {method} failed: {type(e).__name__}: {e}", flush=True)
 
     async def _slack_interaction(payload: dict) -> None:
-        """A click on a button that acts: run its handler, then replace the clicked message with
-        the incident, or the note, as it reads now (through the payload's response_url) and say
-        who did what in the message's thread. Never raises: it runs detached from the request."""
+        """A click on a button Tares posted that is not a link: an old message's button whose
+        feature is gone. Say so to the clicker alone, through the payload's response_url. Never
+        raises: it runs detached from the request."""
         try:
-            result = await asyncio.to_thread(slack_actions.dispatch, store, payload,
-                                             _slack_workspace)
             response_url = str(payload.get("response_url") or "").strip()
-            if result.get("ephemeral") and response_url:
+            if response_url:
                 await _slack_respond(response_url, {"response_type": "ephemeral",
                                                     "replace_original": False,
-                                                    "text": result["ephemeral"]})
-            if (result.get("incident_id") or result.get("run_id")) and response_url:
-                if result.get("incident_id"):
-                    inc = await asyncio.to_thread(store.get_incident, result["incident_id"])
-                    msg = (await asyncio.to_thread(slack_mod.build_incident_message, store, inc,
-                                                   _slack_workspace)) if inc else None
-                else:
-                    msg = await asyncio.to_thread(slack_mod.build_run_message, store,
-                                                  result["run_id"], _slack_workspace)
-                if msg is not None:
-                    await _slack_respond(response_url, {**msg, "replace_original": True})
-                else:
-                    await _slack_respond(response_url, {
-                        "response_type": "ephemeral", "replace_original": False,
-                        "text": slack_actions.GONE_NOTE})
-            if result.get("thread"):
-                container = payload.get("container") or {}
-                message = payload.get("message") or {}
-                channel = (payload.get("channel") or {}).get("id") or container.get("channel_id")
-                ts = message.get("thread_ts") or container.get("message_ts") or message.get("ts")
-                token, _origin = await asyncio.to_thread(slack_mod.resolve_token, store)
-                if token and channel and ts:
-                    await _slack_post(token, "chat.postMessage", {
-                        "channel": channel, "thread_ts": ts, "text": result["thread"],
-                        "unfurl_links": False, "unfurl_media": False})
+                                                    "text": slack_mod.GONE_NOTE})
         except Exception as e:   # noqa: BLE001 - nobody is waiting on this, so the log is the place
             print(f"taresd: slack interaction failed: {type(e).__name__}: {e}", flush=True)
 
@@ -4003,20 +3962,22 @@ def make_app() -> FastAPI:
 
         form = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
         if "payload" in form:
-            # An interaction: someone clicked a button on a message Tares posted. The link buttons
-            # (View in Tares, Open timeline, TR-275) already took the browser where they point.
-            # The others act (TR-762: take, resolve or reopen an incident, answer "Was this worth
-            # raising?"), in the background: Slack wants its 200 within 3 seconds, and without it
-            # puts a warning triangle next to the button. Always 200, whatever the payload holds.
+            # An interaction: someone clicked a button on a message Tares posted. A link button
+            # (Open in Tares on a waiting item, View in Tares) already took the browser where it
+            # points, so its click only needs the 200. Any other button is an old message's, whose
+            # feature is gone: the clicker is told so, in the background. Slack wants its 200
+            # within 3 seconds, and without it puts a warning triangle next to the button. Always
+            # 200, whatever the payload holds.
             try:
                 payload = json.loads(form["payload"])
             except ValueError:
                 payload = None
-            if isinstance(payload, dict) and payload.get("type") == "block_actions":
+            if isinstance(payload, dict) and payload.get("type") == "block_actions" \
+                    and not slack_mod.is_link_click(payload):
                 task = asyncio.create_task(_slack_interaction(payload))
                 _ask_tasks.add(task)
                 task.add_done_callback(_ask_tasks.discard)
-            else:
+            elif not (isinstance(payload, dict) and payload.get("type") == "block_actions"):
                 print("taresd: ignored a Slack interaction that is not a block action", flush=True)
             return Response(status_code=200)
         response_url = (form.get("response_url") or "").strip()
@@ -4276,7 +4237,6 @@ def make_app() -> FastAPI:
             store.set_project_lead(out["id"], person["id"])
         if body.kind:
             store.set_project_kind(out["id"], body.kind)
-        sre_home.clear_cache()   # the AI SRE home reads the projects (the demo row), so show this one
         return projects.get(out["id"])
 
     @app.get("/api/projects/{uid}")
@@ -4335,7 +4295,6 @@ def make_app() -> FastAPI:
             out = projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
         except Exception as e:
             _uc_err(e)
-        sre_home.clear_cache()
         factory_home.clear_cache()
         return out
 
@@ -4364,7 +4323,7 @@ def make_app() -> FastAPI:
     @app.post("/api/projects/{uid}/pause")
     def pause_project(uid: str, body: dict | None = Body(default=None)):
         """Body {"sources": true} also pauses the project's sources, so nothing accumulates while
-        it is paused (the AI SRE demo's traffic, for one). Default: sources keep ingesting."""
+        it is paused. Default: sources keep ingesting."""
         _project_or_404(uid)
         try:
             return projects.pause(uid, sources=bool((body or {}).get("sources")))
@@ -4489,29 +4448,6 @@ def make_app() -> FastAPI:
             _err(ValueError('show is "findings", "worth" or "agent:<name>"'))
         out = await asyncio.to_thread(goal_mod.project_results, store, uid, limit=limit,
                                       before=at, scheduled=_scheduled(), show=show)
-        await asyncio.to_thread(feedback_mod.with_answers, store, out["results"], _who(request)[0])
-        return out
-
-    @app.get("/api/findings")
-    async def cell_findings(request: Request, show: str = "worth", service: str = "",
-                            limit: int = 20, before: str = ""):
-        """The findings of every project in the cell, newest first, with a title, the parts and
-        an outcome each (the results of GET /api/projects/{uid}/results, across projects;
-        practice results left out). `show` "worth" (default) leaves out the quiet checks and
-        counts them in `quiet`, "all" keeps them; `service` keeps one service's. Page with
-        `before` = the previous page's `next_before`. Not open to project keys."""
-        at = None
-        if before:
-            try:
-                at = datetime.fromisoformat(before.replace("Z", "+00:00"))
-            except ValueError:
-                _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
-        if show not in ("worth", "all"):
-            _err(ValueError('show is "worth" or "all"'))
-        out = await asyncio.to_thread(goal_mod.cell_results, store, _scheduled(), limit=limit,
-                                      before=at, show=show, service=service,
-                                      hide=_hidden_ids())
-        await asyncio.to_thread(feedback_mod.with_answers, store, out["findings"], _who(request)[0])
         return out
 
     @app.get("/api/projects/{uid}/results/{run_id}")
@@ -4537,11 +4473,6 @@ def make_app() -> FastAPI:
             _err(ValueError("handled must be true or false"))
         ident = getattr(request.state, "credential", None)
         store.set_run_handled(run_id, (ident or {}).get("name") or "console" if handled else None)
-        if handled:   # a note handled closes its incident, by the same caller (TR-744)
-            note_of = store.incident_for_run(run_id)
-            if note_of is not None:
-                who = (ident or {}).get("name") or "console"
-                incidents_mod.resolve(store, note_of["id"], who, who, "console")
         run = store.get_agent_run(run_id)
         return {"ok": True, "id": run_id,
                 "handled": ({"at": run["handled_at"], "by": run["handled_by"]}
@@ -6410,7 +6341,6 @@ def make_app() -> FastAPI:
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
-        start_who=lambda request: _start_who(request),
         area_owner=lambda repo: team_mod.get().area_owner(store, repo),
         is_system=lambda request: _is_system(request),
         is_admin=lambda request: _is_admin(request),
@@ -6445,121 +6375,7 @@ def make_app() -> FastAPI:
         if value == "factory":
             # one page read: its repeated small reads run once (TR-1631)
             return await asyncio.to_thread(request_memo.run, factory_home.build, store, fx, request)
-        if value == "sre":
-            body = await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
-                                           runtime.health_snapshot, _by(request) or "console",
-                                           _start_who(request), _hidden_ids())
-            # Whether this key may press the page's buttons (they all need the admin scope). It is
-            # added here, outside the cache, because the cache is shared by every key of one name.
-            scopes = getattr(request.state, "scopes", None)
-            return {**body, "can_act": scopes is None or "admin" in scopes}
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
-
-    # ── services (TR-742): the services this cell receives data for, read from the events ──
-    @app.get("/api/services")
-    async def list_services_route(hidden: int = 0):
-        """Services busiest first; `hidden=1` includes the ones a person hid."""
-        items = await asyncio.to_thread(sre_mod.list_services, store, runtime.catalog,
-                                        None, bool(hidden), _hidden_ids())
-        rows = await asyncio.to_thread(store.watch_rows)
-        agents = {a["name"]: a for a in await asyncio.to_thread(store.list_catalog_agents)}
-        for i in items:
-            i["watch"] = watch_mod.service_state(store, rows, i["name"], agents, now_utc())
-        return {"services": items, "updated_at": now_utc().isoformat()}
-
-    @app.get("/api/watch")
-    async def watch_route():
-        """Whether anybody is watching each service, and each watcher's state (TR-743)."""
-        return await asyncio.to_thread(watch_mod.view, store, runtime.catalog, None,
-                                       _hidden_ids())
-
-    # ── incidents (TR-744): notes with an owner and an end ──
-    if incidents_mod.sweep_hook not in watch_mod.EVERY_TICK:
-        watch_mod.EVERY_TICK.append(incidents_mod.sweep_hook)
-    if slack_actions.on_change not in incidents_mod.ON_CHANGE:
-        incidents_mod.ON_CHANGE.append(slack_actions.on_change)   # TR-762: Slack follows the console
-
-    def _who(request: Request) -> tuple[str, str]:
-        """(id, name) of who acts: the credential's name, "console" with auth off."""
-        name = _by(request) or "console"
-        return name, name
-
-    def _incident_or_404(incident_id: str) -> dict:
-        inc = store.get_incident(incident_id)
-        if inc is None or inc.get("project") in _hidden_ids():   # a private project reads as no incident
-            _err(KeyError(f"no incident {incident_id!r}"), 404)
-        return inc
-
-    @app.get("/api/incidents")
-    def list_incidents_route(state: str = "", service: str = "", limit: int = 50,
-                             before: str = ""):
-        """Newest note first. `state` is open, on_it, resolved or active (open and on_it);
-        `before` is the `next_before` of the page before."""
-        if state and state not in ("open", "on_it", "resolved", "active"):
-            _err(ValueError("state must be open, on_it, resolved or active"))
-        cut = None
-        if before:
-            try:
-                cut = goal_mod._aware(datetime.fromisoformat(before.replace("Z", "+00:00")))
-            except ValueError:
-                _err(ValueError("before must be a time such as 2026-10-01T12:00:00Z"))
-        limit = max(1, min(int(limit), 200))
-        hidden = _hidden_ids()
-        rows = store.list_incidents(state or None, service or None, limit, cut, hide=hidden)
-        notes = store.notes_of([r["id"] for r in rows])
-        settings = store.service_settings()
-        now = incidents_mod.clock()
-        return {"incidents": [incidents_mod.view(store, r, notes=notes[r["id"]],
-                                                 settings=settings, now=now) for r in rows],
-                "next_before": (goal_mod._iso(rows[-1]["last_note_at"])
-                                if len(rows) == limit else None),
-                "counts": store.incident_counts(service or None, hide=hidden)}
-
-    @app.get("/api/incidents/{incident_id}")
-    def get_incident_route(incident_id: str):
-        return incidents_mod.detail(store, _incident_or_404(incident_id))
-
-    def _incident_action(incident_id: str, request: Request, act) -> dict:
-        _incident_or_404(incident_id)
-        by_id, by_name = _who(request)
-        try:
-            out = act(store, incident_id, by_id, by_name, "console")
-        except incidents_mod.Held as e:
-            _err(e, 409)
-        if out is None:
-            _err(KeyError(f"no incident {incident_id!r}"), 404)
-        return incidents_mod.detail(store, out)
-
-    @app.post("/api/incidents/{incident_id}/on_it")
-    def incident_on_it_route(incident_id: str, request: Request):
-        """Somebody is on it: the caller. Admin, like every write."""
-        return _incident_action(incident_id, request, incidents_mod.take)
-
-    @app.post("/api/incidents/{incident_id}/resolve")
-    def incident_resolve_route(incident_id: str, request: Request):
-        return _incident_action(incident_id, request, incidents_mod.resolve)
-
-    @app.post("/api/incidents/{incident_id}/reopen")
-    def incident_reopen_route(incident_id: str, request: Request):
-        return _incident_action(incident_id, request, incidents_mod.reopen)
-
-    # ── "Was this worth raising?" (TR-746) ──
-    def _worth_out(counts: dict, mine) -> dict:
-        return {"ok": True, "worth": {**counts, "mine": mine}}
-
-    def _hidden_agent():
-        """A test for a watcher only private projects the caller cannot see use; None when none is hidden.
-        Each watcher is looked up once per call."""
-        hidden = _hidden_ids()
-        if not hidden:
-            return None
-        known: dict = {}
-
-        def test(agent):
-            if agent not in known:
-                known[agent] = _owned_by_hidden("agent", agent, hidden)
-            return known[agent]
-        return test
 
     def _run_hidden(run_id: str) -> bool:
         """Does this run belong only to private projects the caller cannot see?"""
@@ -6572,145 +6388,6 @@ def make_app() -> FastAPI:
         # a run with no project of its own follows the watcher that raised it
         run = store.get_agent_run(run_id)
         return bool(run) and _owned_by_hidden("agent", run["agent"], hidden)
-
-    def _run_visible_or_404(run_id: str) -> None:
-        """A run of a private project the caller cannot see reads as no run at all."""
-        if _run_hidden(run_id):
-            _err(LookupError(f"no run {run_id!r}"), 404)
-
-    @app.put("/api/findings/{run_id}/worth")
-    def put_worth_route(run_id: str, request: Request, body: dict = Body(...)):
-        """{worth: true|false, note?}: the caller's answer on a result the watcher raised. Answering
-        again replaces it. 409 when no watcher raised it."""
-        worth = (body or {}).get("worth")
-        note = (body or {}).get("note")
-        if not isinstance(worth, bool):
-            _err(ValueError("worth must be true or false"))
-        if note is not None and (not isinstance(note, str) or len(note) > feedback_mod.NOTE_MAX):
-            _err(ValueError(f"note must be text of at most {feedback_mod.NOTE_MAX} characters"))
-        _run_visible_or_404(run_id)
-        who, name = _who(request)
-        try:
-            counts = feedback_mod.answer(store, run_id, worth, who, name, "console", note)
-        except KeyError:
-            _err(LookupError(f"no run {run_id!r}"), 404)
-        except feedback_mod.NotRaised as e:
-            _err(e, 409)
-        return _worth_out(counts, worth)
-
-    @app.delete("/api/findings/{run_id}/worth")
-    def delete_worth_route(run_id: str, request: Request):
-        """Take the caller's answer back."""
-        if store.get_agent_run(run_id) is None:
-            _err(LookupError(f"no run {run_id!r}"), 404)
-        _run_visible_or_404(run_id)
-        store.clear_feedback(run_id, _who(request)[0])
-        return _worth_out(feedback_mod.counts(store.feedback_for([run_id])[run_id]), None)
-
-    @app.get("/api/watchers/hit-rate")
-    def watcher_hit_rate_route(days: int = 30):
-        """Per watcher, how many of the answers said it was worth raising, over the last `days`."""
-        days = max(1, min(int(days), 365))
-        return {"watchers": feedback_mod.hit_rates(store, days, hide=_hidden_ids(),
-                                                           skip_agent=_hidden_agent())}
-
-    @app.get("/api/feedback/export")
-    def feedback_export_route(since: str = "", format: str = "json"):
-        """Every answer since `since` (all when empty), with the firing id: JSON, or CSV with a
-        header line. Admin only: it names people."""
-        if format not in ("json", "csv"):
-            _err(ValueError('format is "json" or "csv"'))
-        cut = None
-        if since:
-            try:
-                cut = goal_mod._aware(datetime.fromisoformat(since.replace("Z", "+00:00")))
-            except ValueError:
-                _err(ValueError("since must be a time such as 2026-10-01T12:00:00Z"))
-        rows = feedback_mod.export_rows(store, cut, hide=_hidden_ids(), skip_agent=_hidden_agent())
-        if format == "csv":
-            return Response(feedback_mod.export_csv(rows), media_type="text/csv")
-        return {"feedback": rows}
-
-    @app.get("/api/repos")
-    async def repos_route():
-        """The repos GitHub-type sources have sent events for, and the services each is linked to."""
-        hide = _hidden_ids()
-        known = await asyncio.to_thread(sre_mod.github_repos, store, runtime.catalog, hide)
-        settings = await asyncio.to_thread(store.service_settings)
-        seen = None   # the services the caller can see, when some are hidden from them
-        if hide and await asyncio.to_thread(sre_mod.hidden_sources, store, hide):
-            seen = {i["name"] for i in await asyncio.to_thread(
-                sre_mod.list_services, store, runtime.catalog, None, True, hide)}
-        owners: dict = {}
-        for raw, st in settings.items():
-            for repo in st["repos"]:
-                owner = sre_mod.canonical(raw, settings)
-                if seen is None or owner in seen:
-                    owners.setdefault(repo, set()).add(owner)
-        return {"repos": [{"repo": r, "last_seen": sre_mod._iso(t),
-                           "services": sorted(owners.get(r, ()))}
-                          for r, t in sorted(known.items())]}
-
-    @app.get("/api/blind-spots")
-    async def blind_spots_route():
-        """What the cell cannot see: silent services, services seen only through another, rules
-        that match nothing and services whose deploys are not tied to them."""
-        return {"blind_spots": await asyncio.to_thread(sre_mod.blind_spots, store, runtime.catalog,
-                                                           None, _hidden_ids())}
-
-    # before get_service_route: its {name:path} would take the /deploys tail as part of the name
-    @app.get("/api/services/{name:path}/deploys")
-    async def service_deploys_route(name: str, window: str = "7d"):
-        try:
-            since = sre_mod.series_for(window, now_utc())[0]
-        except ValueError as e:
-            _err(e)
-        hide = _hidden_ids()
-        if not await asyncio.to_thread(sre_mod.exists, store, runtime.catalog, name, hide):
-            raise HTTPException(status_code=404, detail=f"no service named {name}")
-        canon = sre_mod.canonical(name, await asyncio.to_thread(store.service_settings))
-        return {"deploys": await asyncio.to_thread(sre_mod.deploys, store, runtime.catalog,
-                                                   canon, since, hide=hide)}
-
-    @app.get("/api/services/{name:path}")
-    async def get_service_route(name: str):
-        item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name, None,
-                                       _hidden_ids())
-        if item is None:
-            raise HTTPException(status_code=404, detail=f"no service named {name}")
-        return item
-
-    @app.patch("/api/services/{name:path}")
-    async def patch_service_route(name: str, request: Request, body: Any = Body(...)):
-        """{display?, hidden?, merged_into?}: a field left out stays, null clears it. Answers the
-        service as GET does. Admin: every non-GET route is, by _required_scope."""
-        who = _by(request) or "console"
-        try:
-            return await asyncio.to_thread(sre_mod.patch_service, store, runtime.catalog, name,
-                                           body, who, _hidden_ids())
-        except LookupError as e:
-            raise HTTPException(status_code=404, detail=str(e.args[0]))
-        except ValueError as e:
-            _err(e)
-
-    @app.put("/api/settings/service-labels")
-    async def put_service_labels(body: Any = Body(...)):
-        """{source name: label name, or null}: which label names the services in each source.
-        Replaces the stored mapping and answers it. Admin like every /api/settings route."""
-        try:
-            return await asyncio.to_thread(sre_mod.set_service_labels, store, runtime.catalog, body,
-                                           _hidden_ids())
-        except ValueError as e:
-            _err(e)
-
-    @app.put("/api/settings/via-labels")
-    async def put_via_labels(body: Any = Body(...)):
-        """{source name: [label name, ...]}: the labels that carry another service's name, such as
-        the upstream an ingress forwarded to. Replaces the stored mapping and answers it."""
-        try:
-            return await asyncio.to_thread(sre_mod.set_via_labels, store, body, _hidden_ids())
-        except ValueError as e:
-            _err(e)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
     claude_usage.register(app, store, _hidden_ids)

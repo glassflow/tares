@@ -4,8 +4,8 @@ Covers the four fields a conclude call carries (what_changed, since, failing, li
 derivation for older notes (filler, the three parts of a numbered note, the next step), the title
 ("service: what changed since when") for today, yesterday and older dates, the outcome of a run
 over a watcher to investigator chain, the results feed with show=worth and its quiet roll-up,
-GET /api/findings across projects, the Slack header on an AI SRE cell against any other edition,
-and twenty older notes that open on narration.
+an outside finding with the new fields, a handled result, and twenty older notes that open on
+narration.
 
 The model loop is a stand-in that concludes from a script per (agent, key) and builds the conclude
 result with the real parse_conclude, so the real run path stores the new fields.
@@ -277,7 +277,7 @@ async def cell():
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
         store, runtime, runner = app.state.store, app.state.runtime, app.state.agents
         runner.attach_loop()
-        store.set_setting(edition_mod.EDITION_SETTING, "sre")
+        store.set_setting(edition_mod.EDITION_SETTING, "platform")
         now = datetime.now(timezone.utc)
         made = build(store, now, watcher=True, investigator=True)
         runtime.reload_catalog()
@@ -365,7 +365,7 @@ async def cell():
         ck("the detail has them too", det["title"] == top["title"] and det["outcome"] == "note_written"
            and det["failing"] == top["failing"] and det["next_step"] == top["next_step"], str(det)[:300])
 
-        print("== GET /api/findings, across projects ==")
+        print("== an outside finding ==")
         r = await cx.post("/api/projects", json={"template": "custom", "name": "Docs watch", "objects": [],
                                                  "goal": "Keep the docs site fast"})
         assert r.status_code == 201, r.text
@@ -383,90 +383,24 @@ async def cell():
             "entity": "x", "finding": "y", "since": "not a time", "agent": "outside-bot"})
         eq("a since that is no time is refused", r.status_code, 400)
 
-        allf = (await cx.get("/api/findings")).json()
-        eq("the shape", sorted(allf), ["findings", "next_before", "quiet"])
-        got = {x["entity"] for x in allf["findings"]}
-        eq("both projects, the quiet one left out", got,
-           {"cart-api", "docs-site", "edge-proxy", "service-a"})
-        eq("two docs-site findings, one from each project", sum(1 for x in allf["findings"] if x["entity"] == "docs-site"), 2)
-        eq("newest first", [x["at"] for x in allf["findings"]], sorted((x["at"] for x in allf["findings"]), reverse=True))
-        ext = next(x for x in allf["findings"] if x["id"] == ext_id)
+        ext = next(x for x in (await cx.get(f"/api/projects/{other}/results")).json()["results"]
+                   if x["id"] == ext_id)
         eq("an outside finding is a note, titled by its words", (ext["outcome"], ext["title"].split(" since ")[0],
                                                               ext["failing"], ext["likely_cause"]),
            ("note_written", "docs-site: builds failing", "two failed builds", "a missing image"))
-        eq("the quiet roll-up", allf["quiet"]["count"], 1)
-        ck("every finding has the new keys", all(
+        ck("every result has the new keys", all(
             {"title", "title_parts", "failing", "likely_cause", "next_step", "outcome", "outcome_words",
-             "kind"} <= set(x) for x in allf["findings"]), str(allf["findings"][0].keys()))
-        svc = (await cx.get("/api/findings?service=docs-site")).json()
-        eq("service= keeps one service", {x["entity"] for x in svc["findings"]}, {"docs-site"})
-        eq("service= keeps both projects' findings", len(svc["findings"]), 2)
-        every = (await cx.get("/api/findings?show=all")).json()
-        eq("show=all brings the quiet one back", "checkout-web" in {x["entity"] for x in every["findings"]}, True)
-        eq("and counts none left out", every["quiet"]["count"], 0)
-        page = (await cx.get("/api/findings?show=all&limit=3")).json()
-        ck("a page and a cursor", len(page["findings"]) == 3 and page["next_before"], str(page)[:200])
-        nxt = (await cx.get("/api/findings", params={"show": "all", "limit": 50, "before": page["next_before"]})).json()
-        eq("the next page has the rest, once", len(page["findings"]) + len(nxt["findings"]), len(every["findings"]))
-        eq("a bad show is refused", (await cx.get("/api/findings?show=some")).status_code, 400)
-        eq("a bad cursor is refused", (await cx.get("/api/findings?before=yesterday")).status_code, 400)
-        no_dash = "—" not in json.dumps(allf)
-        ck("no em dash in the feed", no_dash)
+             "kind"} <= set(x) for x in res["results"]), str(res["results"][0].keys()))
 
-        print("== handled, practice and shared threads ==")
+        print("== handled ==")
         sid = by["service-a"]["id"]
         eq("service-a asks for action before it is handled", by["service-a"]["kind"], "action")
         r = await cx.post(f"/api/projects/{uid}/results/{sid}/handled", json={"handled": True})
         eq("marking it handled", r.status_code, 200)
         eq("a handled result is no action, in the detail", (await cx.get(f"/api/projects/{uid}/results/{sid}")).json()["kind"], "no_action")
-        eq("and in the feed", next(x["kind"] for x in (await cx.get("/api/findings?show=all")).json()["findings"] if x["id"] == sid), "no_action")
+        eq("and in the results", next(x["kind"] for x in (await cx.get(f"/api/projects/{uid}/results")).json()["results"] if x["id"] == sid), "no_action")
         r = await cx.post(f"/api/projects/{uid}/results/{sid}/handled", json={"handled": False})
         eq("clearing the mark brings the action back", (await cx.get(f"/api/projects/{uid}/results/{sid}")).json()["kind"], "action")
-
-        store.start_agent_run("run_practice1", "investigator", "watch-prod", "", "practice-svc", "h",
-                              woken_by="handoff", project=other, practice=True)
-        store.finish_agent_run("run_practice1", "ok", finding="The practice-svc service returns 500s.",
-                               outcome="finding", verdict="rca")
-        store.start_agent_run("run_shared1", "investigator", "watch-prod", "", "shared-svc", "h",
-                              woken_by="handoff", project=uid)
-        store.finish_agent_run("run_shared1", "ok", finding="The shared-svc service returns 500s.",
-                               outcome="finding", verdict="rca")
-        store.add_run_projects("run_shared1", [other])
-        feed = (await cx.get("/api/findings?show=all&limit=100")).json()["findings"]
-        eq("a practice result is not in the feed", [x for x in feed if x["entity"] == "practice-svc"], [])
-        eq("a thread two projects share is listed once", [x["id"] for x in feed if x["entity"] == "shared-svc"], ["run_shared1"])
-
-        print("== the Slack header ==")
-        agent = {"name": "investigator", "prompt": "p", "slack_channel": "C123", "owned_by": uid}
-        title_args = dict(what_changed="5xx errors up 12x", since=since)
-
-        async def post(key="edge-proxy", **parts):
-            SLACK.clear()
-            await runner._record(agent, "watch-prod", key, NOTE, verdict="rca", run_id="run_slack1",
-                                 model="claude-sonnet-5", headline=None, next_step=None, parts=parts)
-            return SLACK[0] if SLACK else {}
-
-        msg = await post(**title_args)
-        head = msg["blocks"][0]["text"]["text"] if msg else ""
-        eq("on an AI SRE cell the header is the title", head,
-           G.title(G.title_parts_of("edge-proxy", "5xx errors up 12x", None, since, datetime.now(timezone.utc), {}),
-                   datetime.now(timezone.utc)))
-        ck("it names the service and what changed", head.startswith("edge-proxy: 5xx errors up 12x since "), head)
-        fields = json.dumps(msg["blocks"][1])
-        ck("a Service field comes first", "*Service*\\nedge-proxy" in fields
-           and fields.index("*Service*") < fields.index("*Agent*"), fields)
-        msg = await post(what_changed="x" * 60, since=since)
-        ck("a header never passes Slack's limit", len(msg["blocks"][0]["text"]["text"]) <= 150,
-           str(len(msg["blocks"][0]["text"]["text"])))
-        msg = await post()
-        ck("with no words the header is still a title", msg["blocks"][0]["text"]["text"].startswith("edge-proxy: "),
-           msg["blocks"][0]["text"]["text"])
-
-        store.set_setting(edition_mod.EDITION_SETTING, "platform")
-        msg = await post(**title_args)
-        eq("on a platform cell the header is the key, as before", msg["blocks"][0]["text"]["text"], "edge-proxy")
-        ck("and there is no Service field", "Service" not in json.dumps(msg["blocks"][1]), json.dumps(msg["blocks"][1]))
-        store.set_setting(edition_mod.EDITION_SETTING, "sre")
 
         print("== twenty older notes that open on narration ==")
         narration = ["Now I have the full picture.", "Let me put this together.",
@@ -487,7 +421,7 @@ async def cell():
             rid = f"run_old_{i:02d}"
             store.start_agent_run(rid, "investigator", "watch-prod", "", svc, "h", woken_by="handoff", project=uid)
             store.finish_agent_run(rid, "ok", finding=note, outcome="finding", verdict="rca")
-        old = (await cx.get("/api/findings?show=all&limit=100")).json()["findings"]
+        old = (await cx.get(f"/api/projects/{uid}/results?limit=100")).json()["results"]
         mine = [x for x in old if x["entity"].startswith("svc-")]
         eq("twenty results", len(mine), 20)
         bad = [x["title"] for x in mine if any(n.rstrip(".") in x["title"] for n in narration)

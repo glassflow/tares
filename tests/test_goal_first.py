@@ -395,7 +395,7 @@ async def main():
                                                  "goal": "My own words."})
         eq("an explicit goal wins over the template's", r.json().get("goal"), "My own words.")
         from tares.projects.registry import get_template
-        for key in ("ai_sre_demo", "rius_rca", "challenger_workflow", "shared_code_context"):
+        for key in ("rius_rca", "challenger_workflow", "shared_code_context"):
             g = get_template(key).GOAL
             ck(f"{key} has a plain goal", bool(g) and len(g) <= 200 and "—" not in g, g)
 
@@ -545,11 +545,6 @@ async def main():
            eng.fill_template_trigger_descriptions() == 0
            and {t["name"]: t for t in store.list_catalog_triggers()}["desc-alert"][
                "description"] == "")
-        from tares.projects.registry import get_template
-        sre = [o for o in get_template("ai_sre_demo").plan(
-            get_template("ai_sre_demo").validate({})) if o.kind == "trigger"]
-        eq("the AI SRE demo's trigger says what happens", sre[0].spec.get("description"),
-           "Prometheus fires an alert for the demo service")
 
         print("== health before anything arrived ==")
         h = (await cx.get(f"/api/projects/{a}/health")).json()

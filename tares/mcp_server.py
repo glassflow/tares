@@ -145,19 +145,16 @@ def _cx(timeout: float = 10):
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at
 # /mcp (streamable-http) or /sse (sse), proxying tool calls to taresd as usual.
 # What each edition's agent sees (TR-757). The low-level building-block tools stay off a factory
-# or AI SRE cell unless an admin turns them on; the crew's tools stay on everywhere.
+# cell unless an admin turns them on; the crew's tools stay on everywhere.
 OBJECT_TOOLS = frozenset({
     "read", "stats", "catalog_list", "catalog_describe", "list_connectors", "discover_source",
     "discover_docker", "test_source", "create_source", "list_sources", "source_fields",
     "create_trigger", "update_trigger", "subscribe"})
-SRE_KEEP = frozenset({"read"})   # the outside AI SRE investigator reads timelines
 # The outcome tools, listed first on a factory cell (tares/mcp_outcomes.py registers them).
-# The two that read the home page need the factory home, so they stay off platform and sre.
+# The two that read the home page need the factory home, so they stay off platform.
 FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
                            "hand_project_to_crew"})
 FACTORY_ONLY = frozenset({"what_needs_me", "how_is_project"})
-# The outcome tools of an AI SRE cell (tares/mcp_outcomes.py registers them); they stay off factory.
-SRE_TOOLS = frozenset({"what_is_broken", "how_is_service", "what_happened", "mark_incident"})
 # The tools an ee team adds (Team.mcp_tools(), registered by _register_ee_tools). They show only
 # while the cell's licence allows ee, for every caller, crew stations included. They are in none of
 # the sets above, so the edition filter leaves them alone.
@@ -259,13 +256,11 @@ def _visible(name: str, edition: str, object_tools: bool, station: bool, ee_on: 
     if station or edition not in ("factory", "sre", "platform"):   # unknown edition: every tool
         return True
     if name in OBJECT_TOOLS:
-        return object_tools or (edition == "sre" and name in SRE_KEEP)
+        return object_tools
     if name in FACTORY_ONLY:
         return edition == "factory"
     if name in FACTORY_TOOLS:
         return edition in ("factory", "platform")
-    if name in SRE_TOOLS:
-        return edition in ("sre", "platform")
     return True
 
 
@@ -279,7 +274,7 @@ class TaresMCP(FastMCP):
             return [t for t in tools if t.name not in EE_TOOLS or ee_on]
         edition, object_tools = await _surface()
         tools = [t for t in tools if _visible(t.name, edition, object_tools, False, ee_on)]
-        first = FACTORY_TOOLS if edition == "factory" else SRE_TOOLS if edition == "sre" else frozenset()
+        first = FACTORY_TOOLS if edition == "factory" else frozenset()
         return sorted(tools, key=lambda t: t.name not in first)   # stable: outcome tools first
 
     async def call_tool(self, name, arguments):

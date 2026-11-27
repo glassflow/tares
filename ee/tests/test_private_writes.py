@@ -233,18 +233,9 @@ async def checks(B, ids):
            f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
 
         print("== a run is hidden only when every project it belongs to is hidden ==")
-        def worth(run):
-            return cx.put(f"{B}/api/findings/{run}/worth", headers=KIM, json={"worth": True})
-        r, gone = await worth("run-secret-free"), await worth("run-nobody-here")
-        ck("a run with no project of its own, of a hidden agent: as unknown as a run that is not there",
-           r.status_code == gone.status_code == 404
-           and shape(r.text, "run-secret-free") == shape(gone.text, "run-nobody-here"),
-           f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
-        r = await worth("run-both")
-        ck("a run in a hidden project and an open one is still Kim's to read", r.status_code != 404,
+        r = await cx.post(url("shared-agent", "run-both"), headers=KIM)
+        ck("a run in a hidden project and an open one is still Kim's to rerun", r.status_code != 404,
            f"{r.status_code} {r.text[:100]}")
-        r = await worth("run-shared-secret")
-        ck("a run only in the hidden project is not", r.status_code == 404, f"{r.status_code} {r.text[:100]}")
 
         print("== a rule proposal ==")
         for decision in ("reject", "accept"):

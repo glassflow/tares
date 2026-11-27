@@ -89,19 +89,16 @@ async def main():
     threading.Thread(target=stack.serve_forever, daemon=True).start()
 
     # ── first boot with the var: seeded exactly once ─────────────────────────
-    proc, up = await boot(daemon_env(stack.server_port, "ai_sre_demo"))
+    proc, up = await boot(daemon_env(stack.server_port, "challenger_workflow"))
     try:
         ck("daemon up", up)
         async with httpx.AsyncClient(timeout=20) as cx:
             uc = await projects(cx)
-            ck("project seeded on first boot", len(uc) == 1 and uc[0]["template"] == "ai_sre_demo",
+            ck("project seeded on first boot", len(uc) == 1 and uc[0]["template"] == "challenger_workflow",
                json.dumps(uc)[:200])
             uid = uc[0]["id"] if uc else ""
             srcs = {s["name"] for s in (await cx.get(f"{B}/api/sources")).json()}
-            ck("seeded objects exist (loki logs source included)",
-               {"demo_metrics", "demo_logs", "demo_alerts"} <= srcs, str(srcs))
-            logs = next(s for s in (await cx.get(f"{B}/api/sources")).json() if s["name"] == "demo_logs")
-            ck("seeded in hosted mode", logs["connector"] == "loki", logs["connector"])
+            ck("seeded objects exist (its claude_code source included)", "claude_code" in srcs, str(srcs))
             # a user deletes it on purpose
             r = await cx.delete(f"{B}/api/projects/{uid}")
             ck("user can delete the seeded project", r.status_code == 200, r.text[:200])
@@ -109,7 +106,7 @@ async def main():
         stop(proc)
 
     # ── second boot, same var: the deletion sticks ───────────────────────────
-    proc, up = await boot(daemon_env(stack.server_port, "ai_sre_demo"))
+    proc, up = await boot(daemon_env(stack.server_port, "challenger_workflow"))
     try:
         ck("daemon back up", up)
         async with httpx.AsyncClient(timeout=20) as cx:
@@ -127,7 +124,7 @@ async def main():
             ck("nothing seeded for an unknown template", await projects(cx) == [])
     finally:
         stop(proc)
-    proc, up = await boot(daemon_env(stack.server_port, "ai_sre_demo"))
+    proc, up = await boot(daemon_env(stack.server_port, "challenger_workflow"))
     try:
         ck("daemon up after fixing the config", up)
         async with httpx.AsyncClient(timeout=20) as cx:

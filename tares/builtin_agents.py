@@ -1140,9 +1140,7 @@ class AgentRunner:
         skills = self._project_skills(agent)
         skill_names = [sk["name"] for sk in skills]
         system = (agent["prompt"] + (conclude_instructions(agent) if offers_conclude(agent) else "")
-                  + (_skills.prompt_section(skills) if skills else "")
-                  + (self._not_worth_section(agent) if not handoff
-                     and self._is_scheduled(trigger_name) else ""))
+                  + (_skills.prompt_section(skills) if skills else ""))
         # set to conclude: the run may not end without it (asked for it once more, below)
         must_conclude = bool(agent.get("concludes"))
         verdicts = verdict_words(agent)
@@ -1318,19 +1316,6 @@ class AgentRunner:
                     out.append(sk)
         return out
 
-    def _not_worth_section(self, agent: dict) -> str:
-        """The watcher's recent "not worth raising" cases (TR-746), told to a scheduled check on an
-        AI SRE cell and to nobody else. Any other edition's prompt is exactly the agent's own."""
-        try:
-            from .edition import edition
-            if edition(self.store)[0] != "sre":
-                return ""
-            from . import feedback
-            return feedback.prompt_section(self.store, agent["name"])
-        except Exception as e:  # noqa: BLE001 — a missing hint must never lose the run
-            print(f"[agent {agent.get('name')}] not-worth section: {type(e).__name__}: {e}")
-            return ""
-
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its
         sources rather than trips for an entity."""
@@ -1444,7 +1429,7 @@ class AgentRunner:
         """An external agent's finding (TR-336): a run of kind external in the project, ended
         with this finding, plus the finding event every read and findings trigger sees, exactly
         like a Tares agent's. A practice finding (it answers the guided setup's practice firing)
-        is flagged from the start, so no incident takes its note. Returns the run id."""
+        is flagged from the start. Returns the run id."""
         run_id = "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent_label, "", "", key, "", None,
                                    woken_by="external", project=project, practice=practice)
@@ -1456,67 +1441,7 @@ class AgentRunner:
                                     verdict=verdict, headline=headline, next_step=next_step,
                                     what_changed=what_changed, since_at=since, failing=failing,
                                     likely_cause=likely_cause)
-        self._note_incident({"name": agent_label, "owned_by": project}, key, finding, verdict,
-                            label, run_id)
         return run_id
-
-    def _note_incident(self, agent: dict, key: str, finding: str, verdict: str | None,
-                       label: str | None, run_id: str | None) -> dict | None:
-        """File the run's note under an incident when it is one (TR-744): the incident it
-        joined or opened, else None. It writes the incident tables only, on every edition, and
-        a failure is printed and never breaks the run (the rule `_hand_off` follows)."""
-        if not run_id:
-            return None
-        try:
-            from . import incidents
-            run = self.store.get_agent_run(run_id)
-            if run is None:
-                return None
-            # the run row is still open when its note is recorded: judge it as it will end
-            run = {**run, "status": "ok", "outcome": "finding", "verdict": verdict,
-                   "finding": finding}
-            catalog = self.runtime.catalog
-            if not incidents.is_note(self.store, catalog, agent, run):
-                return None
-            return incidents.on_note(self.store, catalog, agent, run_id, key, label, run=run)
-        except Exception as e:
-            print(f"[agent {agent.get('name')}] incident: {type(e).__name__}: {e}")
-            return None
-
-    def _thread_of(self, incident: dict | None, run_id: str | None, channel: str) -> str | None:
-        """The `ts` of the message a joined note is posted under: the incident's first message,
-        when this note is not that message's own and it sits in this agent's channel. AI SRE cells
-        only; every other edition posts each note as a message of its own, as before."""
-        try:
-            from .edition import edition
-            slack = (incident or {}).get("slack") or {}
-            if not slack.get("ts") or slack.get("channel") != channel:
-                return None
-            if edition(self.store)[0] != "sre":
-                return None
-            notes = self.store.incident_notes(incident["id"])
-            if not notes or notes[0]["run_id"] == run_id:
-                return None
-            return str(slack["ts"])
-        except Exception as e:
-            print(f"[agent] incident thread: {type(e).__name__}: {e}")
-            return None
-
-    def _keep_slack(self, incident: dict | None, run_id: str | None, posted: dict) -> None:
-        """Store where a note was posted: on the note, and on the incident when it has no
-        message yet (the first note posted). A pure addition, on every edition."""
-        if not incident or not posted.get("ts"):
-            return
-        try:
-            channel, ts = posted.get("channel"), posted["ts"]
-            if run_id:
-                self.store.set_note_slack(run_id, channel, ts)
-            # only the first note's message is what a click rebuilds, so only it is the incident's
-            notes = self.store.incident_notes(incident["id"])
-            if not incident.get("slack") and notes and notes[0]["run_id"] == run_id:
-                self.store.set_incident_slack(incident["id"], channel, ts)
-        except Exception as e:
-            print(f"[agent] incident slack: {type(e).__name__}: {e}")
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
@@ -1541,60 +1466,13 @@ class AgentRunner:
         hook = agent.get("slack_webhook")
         # what the Slack message shows beside the note (TR-275)
         meta = {"verdict": verdict, "model": model, "run_id": run_id, "when": now_utc().isoformat()}
-        meta.update(self._title_meta(key, finding, headline, parts or {}))
-        incident = self._note_incident(agent, key, finding, verdict, label, run_id)
         if channel:
-            posted: dict = {}
-            thread_ts = self._thread_of(incident, run_id, channel)
-            meta = {**meta, **self._button_meta(incident, run_id, verdict)}
-            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta,
-                                         thread_ts=thread_ts, posted=posted):
-                self._keep_slack(incident, run_id, posted)
+            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": f"Slack {channel}"}]
         elif hook:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
-
-    def _button_meta(self, incident: dict | None, run_id: str | None, verdict: str | None) -> dict:
-        """What the Slack message needs for its buttons that act (TR-762), on an AI SRE cell only:
-        the incident (on the message that opens it, the one a click rebuilds), this cell's
-        workspace slug and the run a "Was this worth raising?" answer is about, when a person
-        can answer it. Every other edition gets nothing, and so the message it always had."""
-        try:
-            from . import feedback, incidents, slack as _slack_mod
-            from .edition import edition
-            if edition(self.store)[0] != "sre":
-                return {}
-            out: dict = {"workspace": _slack_mod.cell_workspace()}
-            if incident:
-                notes = self.store.incident_notes(incident["id"])
-                if notes and notes[0]["run_id"] == run_id:
-                    out["incident"] = incidents.view(self.store, incident)
-            if run_id and feedback.answerable(
-                    self.store, run_id, {"status": "ok", "outcome": "finding", "verdict": verdict}):
-                out["worth_run"] = run_id
-            return out
-        except Exception as e:   # buttons must never cost the notification
-            print(f"[agent] slack buttons: {type(e).__name__}: {e}")
-            return {}
-
-    def _title_meta(self, key: str, finding: str, headline: str | None, parts: dict) -> dict:
-        """The Slack title and service of a finding (TR-745), on an AI SRE cell only: the other
-        editions keep the message as it was, with the entity as its header."""
-        try:
-            from . import goal
-            from .edition import edition
-            if edition(self.store)[0] != "sre":
-                return {}
-            now = now_utc()
-            settings = self.store.service_settings()
-            tp = goal.title_parts_of(key, parts.get("what_changed"), headline or finding,
-                                     parts.get("since"), now, settings)
-            return {"title": goal.title(tp, now), "service": tp["service"]}
-        except Exception as e:   # a title must never cost the notification
-            print(f"[agent] finding title: {type(e).__name__}: {e}")
-            return {}
 
     def _write_back_in_flight(self, agent: dict, trigger_name: str, key: str,
                               dispatch_id: str | None, going: str | None) -> None:
@@ -1675,17 +1553,12 @@ class AgentRunner:
         return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
-                             key: str, finding: str, meta: dict | None = None,
-                             thread_ts: str | None = None, posted: dict | None = None) -> bool:
+                             key: str, finding: str, meta: dict | None = None) -> bool:
         """Post the finding through the workspace bot (`chat.postMessage`): the entity, a grid of
         fields, the note and buttons in the channel (TR-275). A note too long for one message
         block gets an excerpt in the channel and the full note as a reply in the message's thread,
         so it cannot fill the channel; a shorter one is posted whole, with no thread. The credential is the one bot token the
         instance holds, and the target is a channel picked from a list.
-
-        `thread_ts` posts the note as a reply under that message (a note joining an incident,
-        TR-744). `posted`, when given, is filled with the channel and `ts` Slack answered, so the
-        caller can keep them; the return value stays whether the note went out.
 
         One attempt, verdict from `slack.classify` (Slack answers HTTP 200 with ok:false), failure
         printed — a notification failing must never lose the finding, which is already stored."""
@@ -1701,8 +1574,6 @@ class AgentRunner:
         try:
             async with httpx.AsyncClient(timeout=15) as cx:
                 body = {"channel": channel, **msg}
-                if thread_ts:
-                    body["thread_ts"] = thread_ts
                 r = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage",
                                   json=body, headers=headers)
                 try:
@@ -1714,13 +1585,11 @@ class AgentRunner:
                     print(f"[agent {agent_name}] slack: {error}")
                     return False
                 ts = (data or {}).get("ts")
-                if posted is not None and ts:
-                    posted.update({"channel": (data or {}).get("channel") or channel, "ts": ts})
                 if threaded and ts:
                     # The full note under the message. Failing here still leaves the finding in
                     # the channel with its excerpt and buttons, so the post counts as delivered.
                     r2 = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage", headers=headers,
-                                       json={"channel": channel, "thread_ts": thread_ts or ts,
+                                       json={"channel": channel, "thread_ts": ts,
                                              "text": f"Full note from {agent_name} on {key}",
                                              "blocks": _slack_mod.build_finding_thread(finding),
                                              "unfurl_links": False, "unfurl_media": False})

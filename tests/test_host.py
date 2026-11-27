@@ -47,7 +47,7 @@ def ck(label, cond, detail=""):
 
 
 MEMBERS = [
-    "err", "caller", "current_person", "is_admin", "is_system", "project_key", "start_who", "by",
+    "err", "caller", "current_person", "is_admin", "is_system", "project_key", "by",
     "require_admin", "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404",
     "resolve_project", "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out",
     "area_owner", "hidden_project", "projects", "licence_state", "licence_required", "team_reader",
