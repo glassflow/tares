@@ -51,12 +51,12 @@ function tools(data: SetupData): Tool[] {
     { key: "tickets", name: "Tickets", steps: ["tickets"], use: "Holds the plan. Builders take their work from it.", options: choicesOf(data, "tickets") },
     { key: "review", name: "Review", steps: ["review"], use: "Reads each pull request before it merges.", options: choicesOf(data, "review") },
     { key: "ci", name: "CI", steps: ["ci"], use: "Tests each pull request.", options: choicesOf(data, "ci") },
-    { key: "runtime", name: "Claude Code", steps: ["runtime", "terminal"], use: "Every crew member is a Claude Code session on your computer.", options: "", wide: true },
+    { key: "runtime", name: "Runtime", steps: ["runtime", "terminal"], use: "Every crew member is a session of the runtime you choose, on your computer. A crew keeps the runtime it started on.", options: choicesOf(data, "runtime"), wide: true },
   ];
 }
 
 const FLOW: { who: string; text: string; tools: string[]; you?: boolean }[] = [
-  { who: "You", text: "plan the goal with Claude Code. It writes the tickets.", tools: ["Tickets"], you: true },
+  { who: "You", text: "plan the goal with Claude Code or Codex. It writes the tickets.", tools: ["Tickets"], you: true },
   { who: "The orchestrator", text: "puts builders to work and answers their questions, so you are not asked.", tools: [] },
   { who: "Builders", text: "write the code and open pull requests.", tools: ["Code"] },
   { who: "The reviewer", text: "checks each one while CI tests it.", tools: ["Review", "CI"] },

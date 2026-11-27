@@ -198,7 +198,10 @@ class ClaudeCodeConnector(Connector):
             str(o.get("factory_crew") or o.get("crew") or ""), self.person_id,
             str(o.get("factory_machine") or o.get("machine") or ""))
         crew_id = self.store.resolve_crew(crew_name, self.person_id, machine, at)
-        self.store.set_session_station(sid, name, role, parent, project, at, crew_id)
+        # a Codex station's lines say so, and name the model it was started on (TR-1600)
+        self.store.set_session_station(sid, name, role, parent, project, at, crew_id,
+                                       runtime=str(o.get("runtime") or "") or None,
+                                       model=str(o.get("model") or "") or None)
 
     def _link_project(self, o: dict) -> bool:
         """A `session_project` line (TR-405): the plugin saw the session work in a Tares project

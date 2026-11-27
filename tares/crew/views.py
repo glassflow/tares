@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 from .. import status_words  # standard library only, so the dispatcher stays light
-from . import claude, codex_station, contract, proc, state
+from . import claude, codex_station, contract, launch, proc, state
 from .cc_update import cc_behind, cc_retry_in, station_cc  # moved there by TR-963, TR-964; status and roster read them
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import ClaudeNotFoundError, CrewError, SessionListUnreadableError
@@ -343,6 +343,32 @@ def _codex_or_claude(paths: CrewPaths, client: TaresClient, env: dict) -> tuple:
 # ---------- status ----------
 
 
+def _codex_line(env) -> str:
+    """`runtime: Codex <version>`, with the version the crew was tested on when this one differs, or why there
+    is none (TR-1600)."""
+    from . import codex as cx
+    tested = ".".join(str(n) for n in cx.TESTED_VERSION)
+    try:
+        found = cx.check_version(cx.codex_version(cx.codex_bin(env)))
+    except CrewError as e:
+        return f"runtime: Codex ({e})"
+    return f"runtime: Codex {found}" + ("" if found == tested else f" (tested on {tested})")
+
+
+def _stopped_codex(paths: CrewPaths) -> list:
+    """The Codex stations the crew stopped and that are not running again: [{station, why}] (TR-1600). One
+    whose guard was found off, or whose last turn could not be compared with the guard's record."""
+    out = []
+    for name, row in sorted(state.stations_load(paths).items()):
+        if (not isinstance(row, dict) or row.get("status") != "active" or not proc.on_codex(name, paths)
+                or codex_station.is_alive(paths, name)):
+            continue
+        why = codex_station.guard_off(paths, name) or str(codex_station.unverified(paths, name).get("why") or "")
+        if why:
+            out.append({"station": name, "why": why})
+    return out
+
+
 def cmd_status(argv: list, env: dict) -> int:
     """`status` and `crew status`."""
     paths, client = _start(env, local_only=False)
@@ -382,6 +408,8 @@ def cmd_status(argv: list, env: dict) -> int:
     asks: dict = {}
     for i in items:
         asks.setdefault(_text(i.get("station")), i)
+    stopped = _stopped_codex(paths) if on_codex else []
+    stopped_why = {row["station"]: row["why"] for row in stopped}
     if running > 0:
         out.write(ROW % ("STATION", "ROLE", "MODEL", "STATE", "TEMPO", "DOING / NEEDS"))
     else:
@@ -410,6 +438,8 @@ def cmd_status(argv: list, env: dict) -> int:
             when = _ago(job.get("updatedAt"))
             detail = f"Its note: {needs}" + (f" ({when})" if when else "")
         shown = status_words.station_state(st, _background(job), bool(ask))
+        if s in stopped_why:   # the crew stopped it (TR-1600)
+            detail = f"STOPPED by the crew: {stopped_why[s]}"
         if stuck_on_context(paths, binary, s, agents):
             detail = f"STUCK on autocompact: {ME} crew watch starts it fresh"
         if (st and state.stations_get(s, "sessionId", paths=paths) and not paths.done_file(s).exists()
@@ -422,7 +452,8 @@ def cmd_status(argv: list, env: dict) -> int:
         if not model and proc.on_codex(s, paths):   # no model named for it: the one Codex gives the account
             runs = f"default/{effort}" if effort else "default"
         out.write(ROW % (s, role, runs, shown, tempo, detail[:70]))
-        doc["stations"].append({"station": s, "role": role, "model": model, "effort": effort,
+        doc["stations"].append({"station": s, "runtime": proc.runtime(s, paths), "role": role, "model": model,
+                                "effort": effort,
                                 "state": st or "gone", "shown": shown, "asked": ask.get("label") if ask else None,
                                 "tempo": "" if tempo == "-" else tempo, "detail": detail})
     # two live sessions under one station name
@@ -438,6 +469,13 @@ def cmd_status(argv: list, env: dict) -> int:
         if len(groups[name]) > 1:
             out.write(f"TWO SESSIONS named {name}: {', '.join(groups[name])}; "
                       "stop the one stations.json does not list (tares factory roster)\n")
+    doc["runtime"] = proc.CODEX if on_codex else launch.RUNTIME_DEFAULT
+    if on_codex:   # what the crew runs on, and the stations it stopped (TR-1600); a Claude Code crew's text is as before
+        out.write(_codex_line(env) + "\n")
+        doc["stopped"] = stopped
+        for row in stopped:
+            out.write(f"STOPPED {row['station']}: {row['why'][:160]}; {ME} revive {row['station']} starts it again "
+                      "once you have looked at what it ran\n")
     is_frozen = frozen.on
     doc["plugin"] = {"older": old}
     if old == 0:

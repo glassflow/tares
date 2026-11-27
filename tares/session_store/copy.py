@@ -85,6 +85,10 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                     chunks = (lambda: [dict(r._mapping) for r in result.fetchmany(CHUNK)])
                 else:
                     stack.enter_context(store._lock)
+                    # DuckDB's copy is the table as it was before the session store: a column added
+                    # since (session_stations.runtime and .model, TR-1600) is not in it, and stays empty
+                    have = {d[0] for d in store.con.execute(f"SELECT * FROM {table.name} LIMIT 0").description}
+                    cols = [c for c in cols if c in have]
                     cur = store.con.execute(f"SELECT {', '.join(cols)} FROM {table.name}")
                     chunks = (lambda: [dict(zip(cols, r)) for r in cur.fetchmany(CHUNK)])
                 conn = stack.enter_context(sessions_db.begin())

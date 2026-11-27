@@ -310,8 +310,9 @@ async def main():
                and [a["id"] for a in mon["available"]] == ["rius", "otlp"], (mon["connected"], mon["available"]))
             ck("monitoring: the Rius form leads with how it is replaced",
                avail(mon, "rius")["form"]["lead"].endswith("It replaces Off."), avail(mon, "rius")["form"]["lead"])
-            ck("runtime: nothing left to connect, and no line saying so", step(body, "runtime")["available"] == []
-               and "available_empty" not in step(body, "runtime"))
+            ck("runtime: Codex can be connected, and says a crew that runs keeps its runtime (TR-1600)",
+               [a["id"] for a in step(body, "runtime")["available"]] == ["codex"]
+               and "keeps the runtime it started on" in avail(step(body, "runtime"), "codex")["description"])
             ck("a fresh cell has no app block", all(a["app"] is None for a in tix["available"]))
 
             print("== a filled cell ==")
@@ -687,10 +688,10 @@ async def main():
                r.status_code == 200 and {k: v for k, v in r.json().items() if k != "projects"} == b["progress"]
                and r.json()["projects"] == sum(1 for p in store.list_projects() if p.get("kind") == "software_factory"),
                r.text)
-            fs.HIDE_WITHOUT_CHOICE = ("runtime",)
+            fs.HIDE_WITHOUT_CHOICE, fs.NOT_OFFERED = ("runtime",), {("runtime", "codex")}   # runtime with nothing else to offer
             ck("a step with one connection and nothing to connect is left out",
                "runtime" not in [x["slot"] for x in (await get()).json()["steps"]])
-            fs.HIDDEN_STEPS, fs.HIDE_WITHOUT_CHOICE = (), ()
+            fs.HIDDEN_STEPS, fs.HIDE_WITHOUT_CHOICE, fs.NOT_OFFERED = (), (), set()
             async with mk(reader) as rx:
                 ck("a read key gets no progress", (await rx.get("/api/factory/setup/progress")).status_code == 403)
 
