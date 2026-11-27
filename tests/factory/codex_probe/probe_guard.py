@@ -189,7 +189,9 @@ def shells_alive(marker: str) -> list[str]:
 
 def stdin_facts(st: "Station", marker: str) -> dict:
     """What happened to the shell of stdin_steps, from the wire, the process table and the stored thread."""
-    name = os.path.basename(marker)
+    # the shell is known by the marker's random id: a model has been seen to shorten the path it was given
+    # (`<root>/probe-shell-<id>.rc` run as `/tmp/tares-codex-probe-<id>.rc`, Linux, gpt-5.6-luna)
+    name = os.path.basename(marker)[len("probe-shell-"):-len(".rc")]
     began = ended = None
     item_id = exit_code = None
     typed: list[dict] = []
@@ -414,7 +416,8 @@ def stdin_closed_by_the_adapter(out):
     t = st.turn(steps, timeout=300)
     first = st.facts()
     sf = stdin_facts(st, marker)
-    shell_cmd = next((c["command"] or "" for c in first["commands"] if os.path.basename(marker) in (c["command"] or "")), "")
+    shell_id = os.path.basename(marker)[len("probe-shell-"):-len(".rc")]   # as stdin_facts knows the shell
+    shell_cmd = next((c["command"] or "" for c in first["commands"] if shell_id in (c["command"] or "")), "")
     w.lift_halt()
     t2 = st.turn("Step 1: run `printf 'a\\nb\\n' | wc -l > lines.txt`. Step 2: run this exactly:\n"
                  "cat > heredoc.txt <<'EOF'\nhello\nEOF\n"
