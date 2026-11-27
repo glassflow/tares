@@ -116,6 +116,8 @@ ck("a value of one's own that is not the team's is not called the team's",
    words.team_choices(two, {"autonomy": "L3-review", "builders_max": 1}) == "")
 ck("an autonomy with no words says nothing",
    words.team_choices({"autonomy": "L9", "builders_max": None}, {"autonomy": "L9"}) == "")
+ck("an autonomy that is not a text says nothing",
+   all(words.team_choices({"autonomy": a}, {"autonomy": a}) == "" for a in (["L4-ship"], {"level": "L4-ship"}, 4, "")))
 ck("the line keeps to the words list, no em dash",
    all(words.offenders(words.team_choices(t, t)) == [] for t in (one, two)))
 

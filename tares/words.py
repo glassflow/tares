@@ -43,7 +43,7 @@ def team_choices(team: dict, mine: dict) -> str:
     stricter than the team's). "" when neither."""
     parts = []
     autonomy = team.get("autonomy")
-    if autonomy in CREW_AUTONOMY and mine.get("autonomy") == autonomy:
+    if isinstance(autonomy, str) and autonomy in CREW_AUTONOMY and mine.get("autonomy") == autonomy:
         parts.append(CREW_AUTONOMY[autonomy])
     n = team.get("builders_max")
     if n is not None and mine.get("builders_max") == n:
