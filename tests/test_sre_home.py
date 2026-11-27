@@ -728,8 +728,9 @@ async def main():
             h = sre_home.build(store, runtime.catalog, None)
             times.append((time.perf_counter() - t0) * 1000)
         slow = p95(times)
-        # a 300 ms target, with the slack of the backend the state is on (TR-1731)
-        backend = "postgres" if os.environ.get("TARES_TEST_PG") else "duckdb"
+        # a 300 ms target, with the slack of the backend the state is on (TR-1731). The store says which,
+        # not the env: CI's duckdb and mit suites set TARES_TEST_PG without the harness on the path
+        backend = "postgres" if store.sessions_db.dialect == "postgresql" else "duckdb"
         limit = 300 * SLACK[backend]
         print(f"  first build, nothing held: {first:.0f} ms")
         print(f"  build x20: min {min(times):.0f} ms, median {sorted(times)[10]:.0f} ms, "
