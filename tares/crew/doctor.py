@@ -11,8 +11,10 @@ app, and exits the same way: 1 when a check is FIX, with the document still on s
 Checks bash does not make are marked `new` and their text starts with a fixed label (NEW_LABELS), so a
 test can set them aside when it compares the output with the old bash doctor line by line: the installed
 tares against the plugin's min_tares (TR-1064), `tares` and `tares hook` on PATH (TR-1068), the login key
-in the keychain or in a file only its owner reads (TR-949), the crew key file's permissions, git, and
-Git for Windows on Windows.
+in the keychain or in a file only its owner reads (TR-949), the crew key file's permissions, git, Git for
+Windows on Windows, and GitHub through the cell's token endpoint (github_console, TR-1718) on a cell that
+gives tokens. Where that check reaches every repository, the checks of gh, git's identity and a project's
+GitHub access do not ask for what stations have no use for.
 
 The cmux and language-server checks (doctor_cmux, doctor_lsp) are not here: TR-970 ports them, and until
 then this doctor prints no line for them.
@@ -21,7 +23,7 @@ Several helpers bash shares with other commands are not ported yet (the freeze, 
 trust file, the watch's pid, a station's Claude Code version). They are small readers here, named for the
 bash function they stand in for; the ticket that ports the original takes them over.
 
-Standard library, httpx (through the client) and psutil, like the rest of tares.crew.
+Standard library, httpx and psutil, like the rest of tares.crew.
 """
 from __future__ import annotations
 
@@ -36,9 +38,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import psutil
 
-from . import claude, contract, doctor_codex, doctor_lsp, proc, state, version
+from . import claude, contract, doctor_codex, doctor_lsp, github_access, proc, state, version
 from .client import TaresClient, _say as client_say, cksum, key_name, settings_missing
 from .errors import ClaudeNotFoundError, CrewError, JobStateUnreadableError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -48,9 +51,12 @@ LABELS = {"ok": "ok   ", "warn": "warn ", "fix": "FIX  "}
 # What the new checks' text starts with (after the level word), for a test that sets them aside.
 NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows",
               "Claude processes", "Claude's background service", "orphaned crew processes",
-              "idle_wake is off")
+              "idle_wake is off", "GitHub through the console")
 TEMP_FLAGS = re.compile(r"/var/folders/|/tmp/cmux|cmux-claude-settings")
 RUN_TIMEOUT = 60
+GITHUB_API = "https://api.github.com"   # the one address the cell's token is sent to; nothing configures it
+ASK_FOR_A_CHECK = 10   # seconds the doctor waits for the cell's token answer
+GITHUB_TIMEOUT = 20    # seconds GitHub may take to answer for a repository
 WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "OWNER RIGHTS", "CREATOR OWNER")
 
 
@@ -195,6 +201,70 @@ def watch_running(paths: CrewPaths) -> bool:
     return watch.running_pid(paths) is not None
 
 
+# ---------- GitHub through the cell's token ----------
+
+
+def github_repo_status(repo: str, token: str) -> int:
+    """The HTTP status of GitHub's `GET /repos/<owner>/<name>` with this token. A redirect is not followed."""
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+               "Authorization": f"Bearer {token}"}
+    return httpx.get(f"{GITHUB_API}/repos/{repo}", headers=headers, timeout=GITHUB_TIMEOUT,
+                     follow_redirects=False).status_code
+
+
+def names_identity(body: dict) -> bool:
+    """Whether a token answer holds a name and an email to commit as: the test a station's launch makes."""
+    return all(isinstance(v, str) and v.strip() and "\0" not in v for v in (body.get("name"), body.get("email")))
+
+
+def drop_login_fix(env) -> str:
+    """How to take gh's own github.com login away, so a station's gh gets the cell's token. A token in the
+    environment is such a login too, and `gh auth logout` leaves it in place. Its value is never read out."""
+    held = [k for k in ("GH_TOKEN", "GITHUB_TOKEN") if env.get(k)]
+    if held:
+        return f"remove {' and '.join(held)} from the environment"
+    return f"gh auth logout --hostname {github_access.HOST}"
+
+
+def console_repo(c: TaresClient, repo: str) -> tuple:
+    """One repository through the cell: (what is wrong, what to do, whether the answer names who to commit
+    as). The first two are "" when GitHub answers 200 for it with the cell's token. Neither ever holds the
+    token, the answer's detail or an exception's text."""
+    again = f"then run {ME} doctor again"
+    look = f"check GitHub in the console (Setup, GitHub), {again}"
+    try:
+        status, body = c.github_token(repo, ASK_FOR_A_CHECK)
+    except Exception as e:  # noqa: BLE001 - named by its type: its text may quote a request
+        return f"no answer from Tares ({type(e).__name__})", f"check that Tares answers, {again}", False
+    code = body.get("code")
+    if status == 404 and code == "no_credential":
+        return ("the console holds no GitHub credential (404 no_credential)",
+                "Connect GitHub in the console: Setup, GitHub", False)
+    if status == 403 and code == "repo_not_allowed":
+        return ("the console does not allow a token for this repository (403 repo_not_allowed): no project you "
+                "can see names it, or no GitHub credential for your key covers it",
+                f"name {repo} on a project and give the console's GitHub access to it: Setup, GitHub", False)
+    if status == 409 and code == "app_permissions_missing":
+        return ("the console's GitHub App lacks a permission the crew needs (409 app_permissions_missing)",
+                "approve the App's permissions on GitHub (contents, pull requests and checks: write; metadata: "
+                f"read), {again}", False)
+    if status != 200:
+        return f"Tares answered {status} to the token request", look, False
+    token = body.get("token")
+    if not github_access._usable(token):
+        return "Tares answered 200 with no usable token", look, False
+    try:
+        answered = github_repo_status(repo, token)
+    except Exception as e:  # noqa: BLE001 - named by its type: its text may quote the request
+        return (f"no answer from api.github.com ({type(e).__name__})",
+                f"check this machine's connection to api.github.com, {again}", False)
+    if answered != 200:
+        return (f"GitHub answered {answered} to the console's token",
+                f"check that {repo} is the repository's current name and that the console's GitHub access covers "
+                "it: Setup, GitHub", False)
+    return "", "", names_identity(body)
+
+
 # ---------- Windows: who can read a file ----------
 
 
@@ -257,6 +327,10 @@ class Doctor:
         self.codex_version = ""       # the installed Codex, for such a crew
         self.sessions = None          # the session list, when it could be read (bash: $list)
         self._trust = None
+        self.github_console_ok = False   # the cell's token reaches every github.com repository of the crew
+        self.github_identity_ok = False  # that, each answer names who to commit as, and every folder is on github.com
+        self.console_repos: dict = {}    # project folder -> owner/name, for the folders such a repository is in
+        self._gh_login: dict = {}        # gh -> has_login's answer, asked once
 
     # -- plumbing --
 
@@ -610,6 +684,64 @@ class Doctor:
         else:
             self.ok("kit", f"the kit is frozen {text}; the checkout has nothing newer")
 
+    def check_github_console(self, c: TaresClient) -> None:
+        """github_console, on a cell that gives GitHub tokens (TR-1718): whether the cell's token reaches every
+        github.com repository of the crew's project folders. It sets github_console_ok, github_identity_ok and
+        console_repos, which the gh, git identity and project checks read. No line and no token request on a
+        cell without the capability, or when no project folder is on github.com."""
+        if github_access.CAPABILITY not in c.capabilities():
+            return
+        try:
+            rows = c.project_repo_rows()
+        except CrewError:
+            return
+        repos: dict = {}       # lowercased owner/name -> owner/name, one token request each
+        elsewhere: dict = {}   # existing folders with no github.com origin, in order, once each
+        for _project, folder in rows:
+            if not isinstance(folder, str) or not os.path.isdir(folder):
+                continue   # check_projects reports a folder that is not there
+            repo = github_access._station_repo([folder], self.env)   # the name a station's launch would ask for
+            if repo:
+                self.console_repos[folder] = repo
+                repos.setdefault(repo.lower(), repo)
+            else:
+                elsewhere[folder] = True
+        if not repos:
+            return
+        failed, fixes, nameless = [], {}, []
+        for repo in repos.values():
+            wrong, fix, named = console_repo(c, repo)
+            if wrong:
+                failed.append(f"{repo}: {wrong}")
+                fixes[fix] = True
+            elif not named:
+                nameless.append(repo)
+        if failed:
+            self.no("github_console", f"GitHub through the console: {'; '.join(failed)}", "; ".join(fixes), True)
+            return
+        self.github_console_ok = True
+        self.github_identity_ok = not nameless and not elsewhere
+        reached = f"GitHub through the console: {len(repos)} repo{'' if len(repos) == 1 else 's'} reachable"
+        if self.github_identity_ok:
+            self.ok("github_console", reached, True)
+            return
+        notes, todo = [], []
+        if nameless:
+            notes.append(f"no name and email to commit as for {', '.join(nameless)} (stations there use this "
+                         "machine's git identity)")
+            todo.append("set user.name and user.email in git on this machine")
+        if elsewhere:
+            notes.append(f"no github.com origin in {', '.join(elsewhere)} (stations there use this machine's git "
+                         "setup)")
+            todo.append("add a github.com origin to those folders, or set up git for them on this machine")
+        self.warn("github_console", f"{reached}; {'; '.join(notes)}", "; ".join(todo), True)
+
+    def has_login(self, gh: str) -> bool | None:
+        """github_access.has_login, asked once a run: gh's exit code is read, never what it prints."""
+        if gh not in self._gh_login:
+            self._gh_login[gh] = github_access.has_login(gh, os.environ)
+        return self._gh_login[gh]
+
     def check_projects(self, c: TaresClient) -> None:
         try:
             rows = c.project_repo_rows()
@@ -638,8 +770,15 @@ class Doctor:
             if perm in ("ADMIN", "MAINTAIN", "WRITE"):
                 self.ok(f"project_{p}_{rid}_github", f"project {p}: {repo} is {name} on GitHub ({perm})")
             elif perm == "":
+                reached = self.console_repos.get(repo) if self.github_console_ok else None
+                if reached and self.has_login(gh) is False:
+                    self.ok(f"project_{p}_{rid}_github",
+                            f"project {p}: {repo} is {reached} on GitHub (through the console)")
+                    continue
+                fix = (f"give gh's own login access to {reached}, or take that login away: {drop_login_fix(os.environ)}"
+                       if reached else "gh auth login, and add a GitHub remote")
                 self.no(f"project_{p}_{rid}_github", f"project {p}: gh can't read the GitHub repo of {repo} (no GitHub remote, "
-                        "or no access); builders open PRs there", "gh auth login, and add a GitHub remote")
+                        "or no access); builders open PRs there", fix)
             else:
                 self.no(f"project_{p}_{rid}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
                         "push branches and open PRs", "ask for write access to the repo")
@@ -699,7 +838,8 @@ class Doctor:
         """git's global user.name and user.email. Without them a builder's first commit in a repo that sets
         none of its own stops with "Author identity unknown", and crew up names the person "the user". A
         fresh Windows machine often has neither. A warn, not a FIX: each repo can set its own. No line when
-        git cannot be asked."""
+        git cannot be asked. Neither is needed where stations get their identity from the cell
+        (github_identity_ok)."""
         missing = []
         for key in ("user.name", "user.email"):
             r = self.run(["git", "config", "--global", "--get", key], timeout=30)
@@ -707,7 +847,9 @@ class Doctor:
                 return
             if r.returncode != 0 or not r.stdout.strip():
                 missing.append(key)
-        if missing:
+        if missing and self.github_identity_ok:
+            self.ok("git_identity", "git identity: stations commit as the console's GitHub identity", True)
+        elif missing:
             self.warn("git_identity", f"git identity: no {' or '.join(missing)} in git's global config, so a builder's "
                       "commit in a repo that sets none fails with \"Author identity unknown\"",
                       "; ".join(f'git config --global {k} "<your {k.split(".")[1]}>"' for k in missing), True)
@@ -720,10 +862,25 @@ class Doctor:
             r = self.run([gh, "auth", "status"])
             if r is not None and r.returncode == 0:
                 self.ok("gh", "gh signed in")
+            elif self.github_console_ok:
+                self.check_gh_beside_console(gh)
             else:
                 self.no("gh", "gh not signed in: gh auth login", "gh auth login")
         else:
             self.no("gh", "gh not installed (needed for PRs and reviews): brew install gh", "brew install gh")
+
+    def check_gh_beside_console(self, gh: str) -> None:
+        """A gh whose `auth status` fails, where the cell's token works. A station's gh gets that token only when
+        gh has no github.com login at all; one with a login of its own keeps it, so that login has to work."""
+        if self.has_login(gh) is False:
+            self.ok("gh", "gh: stations use the console's GitHub token, no sign in needed")
+            return
+        r = self.run([gh, "auth", "status", "--hostname", github_access.HOST])
+        if r is not None and r.returncode == 0:
+            self.ok("gh", "gh signed in to github.com")
+        else:
+            self.no("gh", "gh auth status fails for github.com, and stations use gh's own login when it has one",
+                    drop_login_fix(os.environ))
 
     def check_stations(self) -> None:
         if not self.paths.stations.is_file():
@@ -824,6 +981,8 @@ class Doctor:
                 self.check_sessions()
                 self.check_trust_and_plugin()
             self.check_mcp(c)
+            if on:
+                self.check_github_console(c)   # before check_crew: the project checks read its result
             self.check_crew(c) if on else self.check_crew_offline()
             if not self.codex:   # the MCP servers and plugins a role keeps, cmux and the language servers are Claude Code's
                 self.check_allow()
