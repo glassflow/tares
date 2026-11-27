@@ -13,16 +13,16 @@ Downgrade: this revision added no column and no index, so there is nothing to dr
 on both engines: on Postgres they are the live tables the code before this revision reads, and on
 SQLite they hold the people and keys written since the copy.
 
-Revision ID: 0013_core_people
-Revises: 0012_session_origin
+Revision ID: 0014_core_people
+Revises: 0013_session_origin
 """
 import sqlalchemy as sa
 from alembic import op
 
 from tares.session_store.migrations.frozen.takeover import takeover
 
-revision = "0013_core_people"
-down_revision = "0012_session_origin"
+revision = "0014_core_people"
+down_revision = "0013_session_origin"
 branch_labels = None
 depends_on = None
 

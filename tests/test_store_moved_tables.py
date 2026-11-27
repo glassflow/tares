@@ -40,14 +40,14 @@ Cases:
   tickets_pr_lookup  pr_repo and pr_number (TR-1614) follow every write of pr, are repaired at start
                      when an older release left them stale, take any odd pr without failing a start,
                      and ticket_for_pr reads their index among 1,000 tickets
-  tickets_pr_revision  revision 0018 down and up on SQLite and Postgres, filling the rows there are
+  tickets_pr_revision  revision 0019 down and up on SQLite and Postgres, filling the rows there are
   reviews_copy       milestones, checks, reviews, findings, challenger lines and rule proposals
                      (TR-1615): DuckDB's rows arrive in SQLite, null and empty kept
   reviews_methods    the Store's milestone, check, review, finding, challenger and rule proposal
                      methods keep their answers; deleting a project removes its rows
   reviews_takeover   Postgres: the eight tables the old DDL made are taken over, rows untouched; a
                      missing column and index are added, an extra column stops the upgrade
-  tickets_pr_guard   the fill of pr_repo and pr_number (the live one and revision 0018's frozen copy) leaves
+  tickets_pr_guard   the fill of pr_repo and pr_number (the live one and revision 0019's frozen copy) leaves
                      a row whose pr changes between its read and its write
   crew_copy          the decision, question and crew tables (TR-1616): DuckDB's rows arrive in SQLite
                      with lists parsed (null and blank read as []), and numbering goes on from them
@@ -751,9 +751,9 @@ def accounts_takeover():
         with ts.capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
         ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
-        ts.step_down(sdb, "0012_session_origin")
+        ts.step_down(sdb, "0013_session_origin")
         ck("a downgrade to the revision before keeps the tables and their rows", snapshot() == before
-           and ts.versions(sdb) == ["0012_session_origin"], ts.versions(sdb))
+           and ts.versions(sdb) == ["0013_session_origin"], ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it takes them over again, rows untouched", snapshot() == before)
         # the Core tables read what the old code wrote
@@ -1359,9 +1359,9 @@ def projects_takeover():
         with ts.capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
         ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
-        ts.step_down(sdb, "0015_session_usage_hourly")
+        ts.step_down(sdb, "0016_session_usage_hourly")
         ck("a downgrade to the revision before keeps the tables and their rows", snapshot() == before
-           and ts.versions(sdb) == ["0015_session_usage_hourly"], ts.versions(sdb))
+           and ts.versions(sdb) == ["0016_session_usage_hourly"], ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it takes them over again, rows untouched", snapshot() == before)
         with sdb.begin() as c:
@@ -1685,7 +1685,7 @@ def tickets_takeover():
     sch, dsn = _pg_schema()
     try:
         old_ddl_postgres(dsn, seed={**SEED, **TICKETS})
-        added = ("pr_repo", "pr_number")          # by 0018
+        added = ("pr_repo", "pr_number")          # by 0019
 
         def snapshot(leave_out=()):
             out = {}
@@ -1723,9 +1723,9 @@ def tickets_takeover():
         with ts.capture_logs("alembic.runtime.migration") as recs:
             sdb.upgrade()
         ck("a second upgrade runs nothing", ts.upgrade_lines(recs) == [])
-        ts.step_down(sdb, "0016_project_tables")
-        ck("a downgrade to 0016 keeps the tables, rows and indexes and drops what 0018 added", snapshot() == before
-           and ts.versions(sdb) == ["0016_project_tables"]
+        ts.step_down(sdb, "0017_project_tables")
+        ck("a downgrade to 0017 keeps the tables, rows and indexes and drops what 0019 added", snapshot() == before
+           and ts.versions(sdb) == ["0017_project_tables"]
            and ts.index_columns(sdb.engine, "tickets", "tickets_pr") is None, ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it takes them over again, rows untouched", snapshot(added) == before)
@@ -1913,7 +1913,7 @@ def tickets_pr_revision():
     from tares.session_store.tables import tickets as declared
     new = ["pr_repo", "pr_number"]
     for label, make in (("SQLite", None), ("Postgres", _pg_schema)):
-        print(f"== 0018 up and down on {label} ==")
+        print(f"== 0019 up and down on {label} ==")
         if make and not PG:
             print("  skip  TARES_TEST_PG is not set")
             continue
@@ -1927,7 +1927,7 @@ def tickets_pr_revision():
             ck("at head tickets has the columns tables.py declares, and the index", columns()
                == [c.name for c in declared.columns]
                and ts.index_columns(sdb.engine, "tickets", "tickets_pr") == new, columns())
-            ts.step_down(sdb, "0017_ticket_tables")
+            ts.step_down(sdb, "0018_ticket_tables")
             ck("a downgrade drops the two columns and the index and keeps the rest", columns() == list(_TICKET_COLS)
                and ts.index_columns(sdb.engine, "tickets", "tickets_pr") is None
                and ts.index_columns(sdb.engine, "tickets", "tickets_project") == ["project"], columns())
@@ -1945,7 +1945,7 @@ def tickets_pr_revision():
                                                     "tk_bad": "{oops"}, kept)
             # a column or the index left by a run that stopped half way does not stop the next one
             with sdb.begin() as c:
-                c.execute(text("UPDATE session_store_version SET version_num = '0017_ticket_tables'"))
+                c.execute(text("UPDATE session_store_version SET version_num = '0018_ticket_tables'"))
             sdb.upgrade()
             ck("a second run over columns that are there stamps head", ts.versions(sdb) == [ts.HEAD])
         finally:
@@ -2304,10 +2304,10 @@ def reviews_takeover():
     import ast
     from tares import session_store
     rev = os.path.join(os.path.dirname(session_store.__file__), "migrations", "versions",
-                       "0019_review_tables.py")
+                       "0020_review_tables.py")
     imported = [(getattr(n, "module", None) or "") + "|" + ",".join(a.name for a in n.names)
                 for n in ast.walk(ast.parse(open(rev).read())) if isinstance(n, (ast.Import, ast.ImportFrom))]
-    ck("revision 0019 imports nothing from tares", not [i for i in imported if "tares" in i or i.startswith(".")]
+    ck("revision 0020 imports nothing from tares", not [i for i in imported if "tares" in i or i.startswith(".")]
        and len(imported) >= 3, imported)
     if not PG:
         print("  skip  TARES_TEST_PG is not set")
@@ -2344,9 +2344,9 @@ def reviews_takeover():
            ts.shape(sdb.engine, REVIEW_TABLES) == {t: ts.declared(sdb.engine)[t] for t in REVIEW_TABLES},
            ts.shape(sdb.engine, REVIEW_TABLES))
         ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
-        ts.step_down(sdb, "0018_ticket_pr_columns")
+        ts.step_down(sdb, "0019_ticket_pr_columns")
         ck("a downgrade keeps the tables, rows and index", snapshot() == before
-           and ts.versions(sdb) == ["0018_ticket_pr_columns"], ts.versions(sdb))
+           and ts.versions(sdb) == ["0019_ticket_pr_columns"], ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it leaves them as they are", snapshot() == before)
         with sdb.begin() as c:
@@ -2355,7 +2355,7 @@ def reviews_takeover():
            and ms["ms_null"] is None, ms)
 
         # a database from before the person columns and the index
-        ts.step_down(sdb, "0018_ticket_pr_columns")
+        ts.step_down(sdb, "0019_ticket_pr_columns")
         with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
             c.execute("ALTER TABLE reviews DROP COLUMN person_id")
             c.execute("ALTER TABLE ticket_checks DROP COLUMN person_id")
@@ -2364,7 +2364,7 @@ def reviews_takeover():
         ck("a missing column and the missing index are added", ts.shape(sdb.engine, REVIEW_TABLES)
            == {t: ts.declared(sdb.engine)[t] for t in REVIEW_TABLES}
            and ts.index_columns(sdb.engine, "challenges", "ix_challenges_branch") == ["source", "branch"])
-        ts.step_down(sdb, "0018_ticket_pr_columns")
+        ts.step_down(sdb, "0019_ticket_pr_columns")
         with psycopg.connect(PG, autocommit=True, options=f"-csearch_path={sch}") as c:
             c.execute("ALTER TABLE rule_proposals ADD COLUMN surprise TEXT")
         try:
@@ -2372,7 +2372,7 @@ def reviews_takeover():
             ck("a column the revision does not define stops the upgrade", False, ts.versions(sdb))
         except Exception as e:
             ck("a column the revision does not define stops the upgrade", "rule_proposals" in str(e)
-               and "surprise" in str(e) and ts.versions(sdb) == ["0018_ticket_pr_columns"], e)
+               and "surprise" in str(e) and ts.versions(sdb) == ["0019_ticket_pr_columns"], e)
         sdb.close()
     finally:
         _drop_schema(sch)
@@ -2402,7 +2402,7 @@ def _fill_with_writes_between(sdb, fill, writes):
 
 
 def tickets_pr_guard():
-    fills = (("the fill at start", fill_pr_columns), ("revision 0018's fill", frozen_pr.fill_pr_columns))
+    fills = (("the fill at start", fill_pr_columns), ("revision 0019's fill", frozen_pr.fill_pr_columns))
     for label, make in (("SQLite", None), ("Postgres", _pg_schema)):
         print(f"== a pr written while the fill runs, on {label} ==")
         if make and not PG:
@@ -3136,9 +3136,9 @@ def crew_takeover():
            ts.shape(sdb.engine, CREW_NAMES) == {t: ts.declared(sdb.engine)[t] for t in CREW_NAMES},
            ts.shape(sdb.engine, CREW_NAMES))
         ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
-        ts.step_down(sdb, "0019_review_tables")
+        ts.step_down(sdb, "0020_review_tables")
         ck("a downgrade keeps the tables, rows and indexes", snapshot() == before
-           and ts.versions(sdb) == ["0019_review_tables"], ts.versions(sdb))
+           and ts.versions(sdb) == ["0020_review_tables"], ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it leaves them as they are", snapshot() == before)
         with sdb.begin() as c:
@@ -3146,7 +3146,7 @@ def crew_takeover():
         ck("Core reads the JSON the old code wrote", dk == {"dk_1": ["yes", "no"], "dk_2": None}, dk)
 
         # a database from before the later columns, the defaults and the index
-        ts.step_down(sdb, "0019_review_tables")
+        ts.step_down(sdb, "0020_review_tables")
         with pg() as c:
             c.execute("ALTER TABLE grants DROP COLUMN needs_lead")
             c.execute("ALTER TABLE waiting_told DROP COLUMN closed")
@@ -3673,9 +3673,9 @@ def integr_takeover():
            ts.shape(sdb.engine, INTEGR_NAMES) == {t: ts.declared(sdb.engine)[t] for t in INTEGR_NAMES},
            ts.shape(sdb.engine, INTEGR_NAMES))
         ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
-        ts.step_down(sdb, "0020_crew_tables")
+        ts.step_down(sdb, "0021_crew_tables")
         ck("a downgrade keeps the tables, rows and indexes", snapshot() == before
-           and ts.versions(sdb) == ["0020_crew_tables"], ts.versions(sdb))
+           and ts.versions(sdb) == ["0021_crew_tables"], ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it leaves them as they are", snapshot() == before)
         with sdb.begin() as c:
@@ -3684,7 +3684,7 @@ def integr_takeover():
            conns == {"tixa": {"url": "https://a", "token": "t1"}, "cia": None}, conns)
 
         # a database from before the later columns and the index
-        ts.step_down(sdb, "0020_crew_tables")
+        ts.step_down(sdb, "0021_crew_tables")
         with pg() as c:
             c.execute("ALTER TABLE merge_queue DROP COLUMN before_files")
             c.execute("ALTER TABLE merge_queue DROP COLUMN unknown_ticks")
@@ -4083,14 +4083,14 @@ def brain_takeover():
            ts.shape(sdb.engine, BRAIN_NAMES) == {t: ts.declared(sdb.engine)[t] for t in BRAIN_NAMES},
            ts.shape(sdb.engine, BRAIN_NAMES))
         ck("a take-over made no copy", ts._count(sdb, "session_store_copies") == 0)
-        ts.step_down(sdb, "0021_integration_tables")
+        ts.step_down(sdb, "0022_integration_tables")
         ck("a downgrade keeps the tables, rows and indexes", snapshot() == before
-           and ts.versions(sdb) == ["0021_integration_tables"], ts.versions(sdb))
+           and ts.versions(sdb) == ["0022_integration_tables"], ts.versions(sdb))
         sdb.upgrade()
         ck("an upgrade after it leaves them as they are", snapshot() == before)
 
         # a database from before the later columns and the index
-        ts.step_down(sdb, "0021_integration_tables")
+        ts.step_down(sdb, "0022_integration_tables")
         with pg() as c:
             for col in ("place", "job_started_at", "sync_failures", "sync_error"):
                 c.execute(f"ALTER TABLE brain_repos DROP COLUMN {col}")

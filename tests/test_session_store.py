@@ -30,7 +30,7 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0022_brain_tables"                 # the newest revision: tests that count revisions move with it
+HEAD = "0023_brain_tables"                 # the newest revision: tests that count revisions move with it
 REVISIONS = 23
 FAILS = []
 

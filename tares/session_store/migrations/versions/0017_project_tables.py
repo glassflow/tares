@@ -17,16 +17,16 @@ Downgrade: nothing is dropped. The tables stay on both engines: on Postgres they
 tables the code before this revision reads, and on SQLite they hold what was written since the
 copy.
 
-Revision ID: 0016_project_tables
-Revises: 0015_session_usage_hourly
+Revision ID: 0017_project_tables
+Revises: 0016_session_usage_hourly
 """
 import sqlalchemy as sa
 from alembic import op
 
 from tares.session_store.migrations.frozen.takeover import takeover
 
-revision = "0016_project_tables"
-down_revision = "0015_session_usage_hourly"
+revision = "0017_project_tables"
+down_revision = "0016_session_usage_hourly"
 branch_labels = None
 depends_on = None
 

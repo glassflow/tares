@@ -19,8 +19,8 @@ Downgrade: nothing is dropped. The tables stay on both engines: on Postgres they
 tables the code before this revision reads, and on SQLite they hold what was written since the
 copy. The index stays too: on Postgres the code before this revision makes it itself.
 
-Revision ID: 0019_review_tables
-Revises: 0018_ticket_pr_columns
+Revision ID: 0020_review_tables
+Revises: 0019_ticket_pr_columns
 """
 import logging
 
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.schema import CreateColumn
 
-revision = "0019_review_tables"
-down_revision = "0018_ticket_pr_columns"
+revision = "0020_review_tables"
+down_revision = "0019_ticket_pr_columns"
 branch_labels = None
 depends_on = None
 

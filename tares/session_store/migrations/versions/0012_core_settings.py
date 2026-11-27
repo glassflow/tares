@@ -13,7 +13,7 @@ on both engines: on Postgres it is the live table the code before this revision 
 it holds the settings written since the copy (a drop would lose them, and the copy ledger would
 stop a second upgrade from filling the table again).
 
-Revision ID: 0011_core_settings
+Revision ID: 0012_core_settings
 Revises: 0011_session_station_runtime
 """
 import sqlalchemy as sa
@@ -21,7 +21,7 @@ from alembic import op
 
 from tares.session_store.takeover import takeover
 
-revision = "0011_core_settings"
+revision = "0012_core_settings"
 down_revision = "0011_session_station_runtime"
 branch_labels = None
 depends_on = None

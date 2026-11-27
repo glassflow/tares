@@ -796,7 +796,7 @@ handovers = Table(
 )
 
 # Standing permissions; `areas` and `consents` are lists. `needs_lead` keeps the default the old DDL
-# gave it, as `attempts` does below: the code before revision 0020 reads the same table
+# gave it, as `attempts` does below: the code before revision 0021 reads the same table
 grants = Table(
     "grants", metadata,
     Column("id", Text, primary_key=True),
