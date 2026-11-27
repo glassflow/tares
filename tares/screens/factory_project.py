@@ -292,7 +292,10 @@ def register(app, store, h, ctx):
         """Who is on the project (top right of the page): its lead and its members, each {id,
         name, picture, tickets}. A member is anyone added to the project or holding an open ticket
         in it. Also whether the caller may set the lead (an admin, or the lead) and add members
-        (the lead), and the people who can be picked. Both are false on a cell without an
+        (the lead), and the people who can be picked. A member who joined by themselves carries
+        `joined`: they have no secrets until the lead adds them (never the person `local`). For a
+        person who is neither the lead nor on the member list: `can_join` (a team project, and a
+        key that writes) or `ask_lead` (a private one). All are false on a cell without an
         enterprise licence: the routes behind them answer 402 there, so the page shows no control."""
         def ref(pid):
             x = store.get_person(pid) if pid else None
@@ -306,9 +309,14 @@ def register(app, store, h, ctx):
         lead = ref(p.get("lead_person_id"))
         if lead:
             lead["tickets"] = counts.get(lead["id"], 0)
-        ids = [m["person_id"] for m in store.list_project_members(p["id"])]
-        ids += [i for i in counts if i not in ids]
-        members = [{**r, "tickets": counts.get(r["id"], 0)} for r in (ref(i) for i in ids)
+        rows = store.list_project_members(p["id"])
+        added = [m["person_id"] for m in rows]
+        # `local` is the one person of a cell with auth off and has the secrets however they joined
+        joined = {m["person_id"] for m in rows if m["reason"] == "self" and m["person_id"] != "local"}
+        ids = added + [i for i in counts if i not in added]
+        members = [{**r, "tickets": counts.get(r["id"], 0),
+                    **({"joined": True} if r["id"] in joined else {})}
+                   for r in (ref(i) for i in ids)
                    if r and (not lead or r["id"] != lead["id"])]
         me = h.current_person(request) or {}
         scopes = getattr(request.state, "scopes", None)
@@ -318,7 +326,11 @@ def register(app, store, h, ctx):
         everyone = [r for r in (ref(x["id"]) for x in store.list_people()
                                 if not (x["id"] == "local" and not x.get("email"))) if r]
         team = team_mod.enabled()   # the ee team loaded and the licence allows it; a key alone is not enough
+        outside = bool(team and me.get("id") and not is_lead and me["id"] not in added)
+        private = p.get("scope") == "private"
         return {"lead": lead, "members": members,
+                "can_join": outside and not private and (admin or "ingest" in scopes),
+                "ask_lead": outside and private,
                 "can_set_lead": team and (admin or is_lead),
                 "can_add": team and (is_lead or h.is_system(request)),
                 "you": me.get("id"), "people": everyone if (team and (admin or is_lead)) else []}

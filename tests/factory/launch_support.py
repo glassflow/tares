@@ -96,6 +96,20 @@ class FakeTares:
                 self.end_headers()
                 self.wfile.write(raw)
 
+            def do_PUT(self):
+                # the factory's runtime slot (tares factory runtime, TR-1600): an admin key sets it
+                w = outer.world
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                outer.log.append({"path": self.path, "method": "PUT", "body": raw.decode("utf-8", "replace")})
+                if w["token"] and self.headers.get("Authorization") != f"Bearer {w['token']}":
+                    return self._send(401, {"detail": "unauthorized"})
+                if urlparse(self.path).path == "/api/factory/integrations/runtime":
+                    if not w.get("admin", True):
+                        return self._send(403, {"detail": "this needs the admin scope"})
+                    w["runtime"] = json.loads(raw or b"{}").get("name") or w["runtime"]
+                    return self._send(200, {"slot": "runtime", "integration": w["runtime"]})
+                return self._send(404, {"detail": "no"})
+
             def do_POST(self):
                 # /mcp answers as the real endpoint does (tares/mcp_server.py): `initialize` wants a bearer, any
                 # bearer, when the server has a key of its own; a tool call is passed on to the cell, and a key the

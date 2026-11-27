@@ -15,7 +15,7 @@ Tares comes in two editions, and each Tares you create is one of them. As a **So
 
 ## Software Factory
 
-You plan a project with Claude Code. A crew of Claude Code sessions on your machine builds it: an orchestrator hands out the tickets, builders open pull requests, a reviewer holds every change to a fixed bar, and a change merges once it passes review and CI. You talk to one session, and only for the decisions that are yours.
+You plan a project with Claude Code or Codex. A crew of sessions on your machine builds it: an orchestrator hands out the tickets, builders open pull requests, a reviewer holds every change to a fixed bar, and a change merges once it passes review and CI. You talk to one session, and only for the decisions that are yours.
 
 - **Plan once**: a spec, milestones with acceptance checks, and tickets with a working doc each, kept on Tares, Linear or GitHub Issues.
 - **Build in parallel**: one crew serves every project, with a builder per milestone and repo.
@@ -30,7 +30,7 @@ tares factory crew up                         # start the crew; the first run as
 tares factory spec "what you want to build"   # in your repo: plan the project and hand it over
 ```
 
-Needs Claude Code (signed in, on a plan with background sessions) and `gh` with write access to your repos.
+Needs Claude Code (signed in, on a plan with background sessions) or Codex 0.171.0 or newer (signed in; see [the Software Factory on Codex](docs/codex.md)), and `gh` with write access to your repos.
 
 → [Get started](https://docs.glassflow.ai/tares/software-factory/get-started), [The console](https://docs.glassflow.ai/tares/software-factory/console), [Teams](https://docs.glassflow.ai/tares/software-factory/teams), [A project, end to end](https://docs.glassflow.ai/tares/software-factory/a-project-end-to-end)
 

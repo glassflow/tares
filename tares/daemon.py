@@ -819,6 +819,7 @@ def make_app() -> FastAPI:
     _PROJECT_INTEGRATION = re.compile(
         r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks|guardrails/pairs(/[^/]+)?)$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
+    _SELF_JOIN = re.compile(r"^/api/projects/[^/]+/join$")
     _BRAIN_DECISION_WRITE = re.compile(r"^/api/brain/decisions(/[^/]+)?$")
 
     def _required_scope(method: str, path: str) -> str | None:
@@ -853,6 +854,9 @@ def make_app() -> FastAPI:
             return "ingest"   # anyone on the cell adds a decision by hand, and takes back their own
                               # (TR-1212): the enterprise handler decides who may delete, from the
                               # credential's person. A read key is refused here
+        if method == "POST" and _SELF_JOIN.match(path):
+            return "ingest"   # a person putting themself on a team project (TR-1720): the enterprise
+                              # handler decides, from the credential's person. A read key is refused
         if method != "GET" and _PROJECT_INTEGRATION.match(path):
             return "ingest"   # a project's own integration choice and its test (TR-842), and
                               # its required checks (TR-854) and its guardrail pairs (TR-863): an admin or the project's lead;

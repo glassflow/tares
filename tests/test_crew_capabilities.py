@@ -90,6 +90,8 @@ NOT_MACHINE = {
     ("with-secrets",): "runs a command with project secrets, no --json",
     ("secrets",): "manages project secrets for a person, no --json",
     ("allow",): "a person's permission edit, no --json",
+    ("git-credential",): "git's credential protocol on stdin, not a JSON command",
+    ("gh",): "runs gh with a fresh token, its output is gh's",
     ("finish",): "hands a project back, text only",
     ("context",): "prints a station's context for a person, text only",
     ("plan",): "starts a planning session, no --json",
@@ -97,6 +99,7 @@ NOT_MACHINE = {
     ("session",): "starts a session, no --json",
     ("outcome",): "a Codex station's own account of a call cut off by a crash, text only (TR-1593)",
     ("second-look",): "a reviewer's or a spec session's look by a separate Codex session, text only (TR-1599)",
+    ("runtime",): "what new crews start on and what this crew runs on, text only; status --json has it (TR-1600)",
     ("_mcp-url",): "internal, prints one address for the plugin",
     ("_parse-bg-id",): "internal, parses Claude Code output",
 }

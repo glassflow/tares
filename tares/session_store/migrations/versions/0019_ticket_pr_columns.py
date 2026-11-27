@@ -12,16 +12,16 @@ changed.
 
 Downgrade: drops the index and the two columns and nothing else.
 
-Revision ID: 0018_ticket_pr_columns
-Revises: 0017_ticket_tables
+Revision ID: 0019_ticket_pr_columns
+Revises: 0018_ticket_tables
 """
 import sqlalchemy as sa
 from alembic import op
 
 from tares.session_store.migrations.frozen.pr_columns import fill_pr_columns
 
-revision = "0018_ticket_pr_columns"
-down_revision = "0017_ticket_tables"
+revision = "0019_ticket_pr_columns"
+down_revision = "0018_ticket_tables"
 branch_labels = None
 depends_on = None
 

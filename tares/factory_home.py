@@ -476,13 +476,31 @@ def _start_steps(onboarding: dict) -> list:
 
 def setup_state(store, fx=None, request=None) -> tuple[dict, list]:
     """The caller's (`onboarding`, Start steps) without building the home (TR-1634): what Setup
-    reads, and what `home` answers in `onboarding` and `start`, from the same two functions.
-    Never kept between calls."""
+    reads. `onboarding` is what `home` answers, from the same function. The steps are the
+    factory's; a person joining gets other steps in `home`'s `start` (`_start`), with the same
+    three terminal commands, which are all Setup reads of them. Never kept between calls."""
     fx = for_caller(fx, request)
     stations = fx.station_states() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
     onboarding = _onboarding(store, fx, request, _cut(fx, "own_stations", request, stations), settings)
     return onboarding, _start_steps(onboarding)
+
+
+def _start(store, onboarding: dict, joiner: dict, me: str | None, open_ps: list[dict], who: str) -> dict:
+    """The caller's Start checklist, hidden or not for `who`. A person joining (`joiner`) gets the
+    new member's steps, and what the team already set as `team` (TR-1314)."""
+    if not joiner["joining"]:
+        return start_steps.checklist(store, _start_steps(onboarding), who)
+    from .factory_api import CREW_SETTING   # factory_api imports this module
+    ctx = _start_ctx(onboarding)
+    # the record's presence counts: an empty one accepts the team's choices and keeps following them
+    ctx.own_settings_set = store.get_setting(f"{CREW_SETTING}:{me}") is not None
+    ctx.member_of_project = any(p["lead_person_id"] == me for p in open_ps) or any(
+        m["person_id"] == me
+        for rows in store.members_by_project([p["id"] for p in open_ps]).values() for m in rows)
+    return {**start_steps.checklist(store, start_steps.joiner_steps(ctx), who),
+            "team": {"settings_text": crew_onboarding.choices_text(joiner["team_settings"]),
+                     "github": onboarding["github"]["text"]}}
 
 
 def _cut(fx, name: str, request, rows, *more):
@@ -595,7 +613,8 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
     is addressed to the caller's person (TR-739); its keys replace the single-person ones.
-    `joiner` says whether the caller is joining a factory someone else set up (TR-1719).
+    `joiner` says whether the caller is joining a factory someone else set up (TR-1719); if so,
+    `start` holds a new member's steps.
     `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
@@ -653,9 +672,8 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
-            "start": start_steps.checklist(
-                store, _start_steps(onboarding),
-                "console" if credential_key == "open" else credential_key),
+            "start": _start(store, onboarding, joiner, who["me"], open_ps,
+                            "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
             "joiner": joiner,
             "now": now.isoformat()}

@@ -21,8 +21,8 @@ LIVE = ("tares", "tares_ee")
 
 # (file under migrations/, the module it imports): why it may
 ALLOWED = {
-    ("versions/0011_core_settings.py", "tares.session_store.takeover"):
-        "0011 is older than the rule: TR-1700 froze revisions 0013 onward and left earlier ones alone",
+    ("versions/0012_core_settings.py", "tares.session_store.takeover"):
+        "0012 is older than the rule: TR-1700 froze revisions 0014 onward and left earlier ones alone",
 }
 
 FAILS = []
@@ -121,7 +121,7 @@ def the_tree():
             else:
                 bad.append(f"migrations/{path}:{line} imports {what}")
     ck("it read env.py, the revisions and the frozen helpers", "env.py" in files
-       and "versions/0018_ticket_pr_columns.py" in files and "frozen/pr_columns.py" in files, files)
+       and "versions/0019_ticket_pr_columns.py" in files and "frozen/pr_columns.py" in files, files)
     ck("none imports live code (copy what it needs into the revision or into migrations/frozen/)",
        not bad, bad)
     ck("every entry of ALLOWED has a reason and is still needed",

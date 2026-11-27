@@ -14,11 +14,17 @@ blocked, and two answered blocking questions held them up, so 8 weeks hold 39 ho
 5 and a half of them waiting. Stuck now: seven open blocking questions the viewer may read (six of
 project-a and project-b, one of no project) and one of no project addressed to Ada; seven open
 tickets of project-a and project-b in a stage. project-c has neither.
+For the Review section (TR-1670): the three reviewed merged tickets have a pull request in
+example-org/web and their reviews hold seven findings, one of them fixed. "Missing test" and "error
+handling" are each on all three tickets, security on one. A rule is accepted for missing test; the
+one for error handling is left open. In 8 weeks 2 of 3 tickets passed their first review, with 1.3
+review rounds per ticket.
 Starts a daemon on the scratch data dir with TARES_EDITION=factory (so the cell settles to the
 factory edition), stops it, then writes the people, projects, tickets, reviews and milestones
-straight into the database and rolls them up into the weekly figures. Prints a JSON map of names to
-ids, with the Mondays used, on the last line; "questions" and "tickets" in it map the age in hours
-of each stuck candidate to its label (D7, T12).
+straight into the database, starts the daemon once more to read the ids of the rule offers, and
+rolls everything up into the report's figures. Prints a JSON map of names to ids, with the Mondays
+used, on the last line; "questions" and "tickets" in it map the age in hours of each stuck candidate
+to its label (D7, T12).
 usage: python seed-factory-report.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.request
 from datetime import datetime, timedelta, timezone
@@ -29,20 +35,27 @@ env = {**os.environ, "PYTHONPATH": os.getcwd(), "TARES_HOME": home, "TARES_PORT"
 for k in ("TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     env.pop(k, None)
 
-daemon = subprocess.Popen([tares, "up", "--port", port, "--data-dir", home], env=env,
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-try:
-    for _ in range(100):
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
-            break
-        except Exception:
-            time.sleep(0.3)
-    else:
-        raise SystemExit("daemon did not start")
-finally:
-    daemon.terminate()
-    daemon.wait()
+
+def with_daemon(work=lambda: None):
+    """Starts a daemon on the scratch data dir, runs `work` once it answers, and stops it."""
+    daemon = subprocess.Popen([tares, "up", "--port", port, "--data-dir", home], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.3)
+        else:
+            raise SystemExit("daemon did not start")
+        return work()
+    finally:
+        daemon.terminate()
+        daemon.wait()
+
+
+with_daemon()
 
 sys.path.insert(0, os.getcwd())
 from tares import factory, report  # noqa: E402
@@ -52,6 +65,7 @@ store = Store(os.path.join(home, "tares.duckdb"))
 today = datetime.now(timezone.utc).date()
 monday = today - timedelta(days=today.weekday())
 ids = {name: store.create_person(name, f"{name.lower()}@example.com")["id"] for name in ("Ada", "Bo")}
+REPO = "example-org/web"
 
 
 def project(name, lead):
@@ -82,9 +96,19 @@ def merged(uid, back, *took):
     return tids
 
 
-def reviewed(uid, tid, back, verdict, hour=10):
-    store.add_review(uid, tid, "7", "abc1234", verdict, "read the diff", "", "crew-reviewer", [], {},
-                     factory.finding_kind, wednesday(back, hour))
+def reviewed(uid, tid, back, verdict, hour=10, findings=(), resolved=None):
+    """A review round with new findings, each (severity, blocking, text), and what became of
+    earlier ones."""
+    new = [{"severity": severity, "file": None, "line": None, "blocking": blocking, "text": text}
+           for severity, blocking, text in findings]
+    store.add_review(uid, tid, "7", "abc1234", verdict, "read the diff", "", "crew-reviewer", new,
+                     resolved or {}, factory.finding_kind, wednesday(back, hour))
+
+
+def pull_request(uid, tid, number):
+    store.update_ticket(tid, pr={"url": f"https://github.com/{REPO}/pull/{number}", "repo": REPO,
+                                 "number": number, "head": "abc1234", "base": "main",
+                                 "state": "merged", "checked_at": None})
 
 
 def accepted(uid, back):
@@ -99,10 +123,16 @@ first, second, _ = merged(a, 1, 2, 3, 4)
 merged(a, 20, 2)
 third, _ = merged(b, 2, 26, None)
 merged(b, 6, 1, 1, 1, 1)
-reviewed(a, first, 1, "changes")
-reviewed(a, first, 1, "pass", hour=11)
-reviewed(a, second, 1, "pass")
-reviewed(b, third, 2, "pass")
+for number, (uid, tid) in enumerate(((a, first), (a, second), (b, third)), start=1):
+    pull_request(uid, tid, number)
+reviewed(a, first, 1, "changes", findings=(("P2", True, "No tests here"),
+                                           ("P3", False, "Uncaught exception in the page")))
+reviewed(a, first, 1, "pass", hour=11, resolved={"F1": "fixed", "F2": "open"})
+reviewed(a, second, 1, "pass", findings=(("P2", False, "No tests here"),
+                                         ("P2", False, "Uncaught exception")))
+reviewed(b, third, 2, "pass", findings=(("P2", False, "No tests here"),
+                                        ("P3", False, "Uncaught exception"),
+                                        ("P1", False, "A secret in the log")))
 reviewed(b, store.create_ticket(b, "tares", "Not merged"), 30, "changes")
 for uid, back in ((a, 1), (a, 5), (b, 5)):
     accepted(uid, back)
@@ -158,6 +188,23 @@ for hours, uid, stage, title in (
     moved(uid, tid, stage, now - timedelta(hours=hours))
     store.update_ticket(tid, stage=stage)
     ids["tickets"][hours] = factory.label(store.get_ticket(uid, tid))
+
+# ---- the Review section: two offered rules, one of them accepted
+for kind, text in (("missing test", "Add a test with the change."), ("error handling", "Handle the error.")):
+    store.upsert_rule_proposal(REPO, kind, None, "repo", text, [], now)
+store.con.close()
+
+
+def open_offers():
+    url = f"http://127.0.0.1:{port}/api/rule-proposals?state=open"
+    with urllib.request.urlopen(url, timeout=10) as answer:
+        return json.load(answer)["proposals"]
+
+
+offers = with_daemon(open_offers)
+store = Store(os.path.join(home, "tares.duckdb"))
+offer = next(o for o in offers if o["repo"] == REPO and o["kind"] == "missing test")
+store.decide_rule_proposal(offer["id"], "accepted", offer["text"], now)
 report.rebuild_all(store)
 store.con.close()
 

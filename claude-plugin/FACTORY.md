@@ -223,8 +223,8 @@ Handing it to the crew again opens it. With no project left, stop the crew (belo
 ## A GitHub token from the cell
 
 The cell can hand a crew a GitHub token for one repository, made from a github.com credential stored
-under Settings > GitHub, so a machine needs no GitHub secret of its own to ask for one. This is the
-cell's side only: it does not change how the stations sign in to GitHub today (`gh`, above).
+under Settings > GitHub, so a machine needs no GitHub secret of its own to ask for one. How the
+stations use it is at the end of this section.
 
 `GET /api/factory/github/token?repo=owner/name`, sent with a person's key (a station's key is its
 person's) or the cell's own token, answers `{token, expires_at, kind, login, name, email}` with
@@ -250,6 +250,22 @@ person's) or the cell's own token, answers `{token, expires_at, kind, login, nam
   a request from a browser, or to any other host name, is refused.
 
 The cell lists `github_token` in the capabilities it reports on `/health`.
+
+When it does, the cell holds a GitHub credential and a station's repository has a github.com origin,
+the station starts set up to use the token:
+
+- git asks `tares factory git-credential` for `https://github.com/` remotes, in place of the machine's
+  own helpers for github.com. A station's git never prompts for a password. Remotes over SSH are not
+  affected.
+- Commits carry the `name` and `email` the cell answers with, when it knows both.
+- `gh` runs through `tares factory gh`. A `gh` that already has a login keeps using it. One without a
+  login gets a fresh token for the repository the command names.
+- With an App credential, a push that changes files under `.github/workflows/` is refused, because
+  the token has no workflows permission.
+- The token has no commit statuses, actions or issues permission, so keep `gh` signed in (above) for
+  the reviewer's `factory/review` status, `gh run` and `gh issue`.
+
+Otherwise a station starts as before.
 
 ## Stop and clean up
 

@@ -13,14 +13,14 @@ imported from tables.py: a revision is a record of what ran.
 Downgrade: drops the table and the plan's mark (so an upgrade plans again) and nothing else. The
 lines the move already wrote stay in `session_lines`.
 
-Revision ID: 0014_session_moves
-Revises: 0013_core_people
+Revision ID: 0015_session_moves
+Revises: 0014_core_people
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0014_session_moves"
-down_revision = "0013_core_people"
+revision = "0015_session_moves"
+down_revision = "0014_core_people"
 branch_labels = None
 depends_on = None
 

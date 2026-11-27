@@ -37,7 +37,7 @@ from tares.screens import factory_crew as fc
 P = F = 0
 
 MEMBER_KEYS = {"station", "role_label", "state", "state_text", "doing", "heard", "memory_pct",
-               "memory_text", "helpers", "crew"}
+               "memory_text", "helpers", "crew", "runtime", "runtime_text", "usage_text", "stopped"}
 
 
 def ck(label, cond, detail=""):
@@ -644,8 +644,59 @@ async def questions_in_a_team():
                          "the cell's token": []})
 
 
+async def codex_members():
+    """A crew on Codex (TR-1600): what each member runs on, its model, a wait for an approval in words, a
+    cost nobody knows said so, and a member the crew stopped, with why. Recorded the way a crew's recorder
+    sends a Codex station (/ingest/codex)."""
+    import tares.daemon as daemon_mod
+    d = os.path.join(_TMP, "codex")
+    os.makedirs(d, exist_ok=True)
+    daemon_mod.DB_PATH = os.path.join(d, "codex.duckdb")
+    from tares.daemon import make_app
+    app = make_app()
+    stamps = {"cwd": "/w/crew", "factory_crew": "crew"}
+
+    def fact(kind, sid, ago, **more):
+        return {"type": "codex", "kind": kind, "sessionId": sid, "timestamp": ts(ago), **stamps, **more}
+    facts = [
+        fact("session", "cx-rev", 120, station="crew-reviewer", role="reviewer", factory_station="crew-reviewer",
+             model="gpt-5.6-luna"),
+        fact("state", "cx-rev", 60, state="waiting", reason="waiting for an approval", factory_station="crew-reviewer"),
+        fact("usage", "cx-rev", 50, n=1, usage={"input_tokens": 1200, "output_tokens": 300}, model="gpt-5.6-luna",
+             factory_station="crew-reviewer"),
+        fact("session", "cx-orch", 120, station="crew-orchestrator", role="orchestrator",
+             factory_station="crew-orchestrator"),
+        fact("state", "cx-orch", 30, state="ended", factory_station="crew-orchestrator",
+             reason="the crew stopped it: it ran `git push` with no record from its guard"),
+    ]
+    print("== a crew on Codex ==")
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                     headers={"Authorization": f"Bearer {TOKEN}"}) as cx:
+            r = await cx.post("/ingest/codex", content="\n".join(json.dumps(x) for x in facts) + "\n",
+                              headers={"Content-Type": "application/x-ndjson"})
+            assert r.status_code < 300, r.text
+            a = (await cx.get("/api/factory/crew")).json()
+            rv, t = a.get("reviewer") or {}, a.get("talk_to") or {}
+            ck("a Codex member says it runs on Codex, with the model it was started on",
+               rv.get("runtime") == "codex" and rv.get("runtime_text") == "Codex, gpt-5.6-luna", rv)
+            ck("one started with no model named runs on its account's default, and says so",
+               t.get("runtime_text") == "Codex, its account's default model", t)
+            ck("a wait for an approval is said in words", rv.get("state") == "waiting for you"
+               and rv.get("doing") == "waiting for an approval", rv)
+            ck("its tokens are counted and its cost is said to be unknown, never $0",
+               rv.get("usage_text") == "1,500 tokens, cost unknown (no price for a Codex model).", rv.get("usage_text"))
+            ck("one with no token counts says its usage is unknown",
+               (t.get("usage_text") or "").startswith("Usage unknown"), t.get("usage_text"))
+            ck("a member the crew stopped says so and why, not that it finished its work",
+               t.get("stopped") is True and t.get("doing") == "Stopped by the crew: it ran `git push` with no record "
+               "from its guard", t)
+            ck("the page is still free of forbidden words", words.offenders_in(a, ("name", "doing", "text")) == [])
+
+
 units()
 asyncio.run(main())
+asyncio.run(codex_members())
 asyncio.run(holes())
 asyncio.run(private_shares())
 asyncio.run(questions_alone("alone", auth=True))

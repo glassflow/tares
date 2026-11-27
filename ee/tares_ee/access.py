@@ -1,9 +1,10 @@
 # Tares enterprise licence, see ee/LICENSE
 """Who leads a project, whether it is private, and who is on it (TR-921).
 
-The routes that change a project's lead, scope or members: `PATCH /api/projects/{uid}` and the
-`/members` routes. Each one answers `licence_required` unless the licence allows ee, before it does
-anything with the request. Without ee at all the same paths answer from `tares.team.FALLBACKS`.
+The routes that change a project's lead, scope or members: `PATCH /api/projects/{uid}`, the
+`/members` routes and `/join`, where a person puts themself on a team project. Each one answers
+`licence_required` unless the licence allows ee, before it does anything with the request. Without
+ee at all the same paths answer from `tares.team.FALLBACKS`.
 
 The lead is still set when a project is made (core, `store.set_project_lead`), and what a person may
 see is core too (`_can_see`): both work the same with or without a licence. The MCP tool is in
@@ -14,6 +15,7 @@ from __future__ import annotations
 from fastapi import Body, HTTPException, Request
 
 from tares import factory_home, licence
+from tares.factory_api import caller
 
 __all__ = ["NEEDS_LICENCE", "register_routes"]
 
@@ -102,4 +104,32 @@ def register_routes(app, host) -> None:
             host.err(ValueError("the lead is always a member; make someone else the lead first"), 409)
         store.remove_project_member(uid, person_id)
         factory_home.clear_cache()
+        return host.projects().get(uid)
+
+    @app.post("/api/projects/{uid}/join")
+    def join_project(uid: str, request: Request):
+        """A person puts themself on a team project. Answers with the project; for someone already
+        on it nothing changes. A private project is its lead's to open: 403 `ask_lead`, naming the
+        lead. A station, or a credential with no person, gets 403.
+
+        Joining is recorded as `self`: a member for everything but the project's secrets, until the
+        lead adds the person, and no member once the project is private."""
+        need_licence()
+        person = host.current_person(request)
+        if caller(request)["station"] or not person:
+            raise HTTPException(status_code=403, detail="only a person can join a project, with their own key")
+        p = store.get_project(uid)
+        if p is None:
+            host.err(KeyError(f"unknown project {uid!r}"), 404)
+        if not store.is_project_member(uid, person["id"]):
+            if p["scope"] == "private":
+                # the one answer under /api/projects/{uid} that tells someone who is not on a private
+                # project that it exists. It says what their project list already does: who leads it
+                lead = store.get_person(p["lead_person_id"]) if p["lead_person_id"] else None
+                ask = (f"Ask its lead, {lead['name'] or lead['id']}, to add you." if lead
+                       else "It has no lead: ask an admin to give it one.")
+                raise HTTPException(status_code=403, detail={
+                    "code": "ask_lead", "detail": f"This project is private. {ask}"})
+            store.add_project_member(uid, person["id"], person["id"], reason="self")
+            factory_home.clear_cache()   # Home keeps its answer for a few seconds
         return host.projects().get(uid)

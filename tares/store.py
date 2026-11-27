@@ -3091,17 +3091,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # is taken, so these are safe from inside one.
     def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
                            reason: str = "manual") -> bool:
-        """Put a person on the project. True when they were added, False when they already were
-        a member (a second add changes nothing, the first reason stays)."""
-        if reason not in ("manual", "ticket"):
-            raise ValueError("reason is manual or ticket")
+        """Put a person on the project. True when the row was written: a new member, or a person
+        who had joined by themselves and is now added (`manual` or `ticket`). Otherwise False,
+        and a second add changes nothing: the first reason stays."""
+        if reason not in ("manual", "ticket", "self"):
+            raise ValueError("reason is manual, ticket or self")
+        t = members_table
+        row = {"added_by": added_by or None, "added_at": now_utc(), "reason": reason}
+        stmt = self.sessions_db.upsert(t).values(project=uid, person_id=person_id, **row)
+        key = [t.c.project, t.c.person_id]
+        if reason == "self":
+            stmt = stmt.on_conflict_do_nothing(index_elements=key)
+        else:       # one statement, so an add racing a join still ends as an added member
+            stmt = stmt.on_conflict_do_update(index_elements=key, set_=row, where=t.c.reason == "self")
         with self.sessions_db.begin() as conn:
             # RETURNING, not rowcount: Postgres reports -1 for an insert that skipped on conflict
-            done = conn.execute(self.sessions_db.upsert(members_table).values(
-                project=uid, person_id=person_id, added_by=added_by or None, added_at=now_utc(),
-                reason=reason).on_conflict_do_nothing(index_elements=["project", "person_id"])
-                .returning(members_table.c.person_id))
-            return done.first() is not None
+            return conn.execute(stmt.returning(t.c.person_id)).first() is not None
 
     def remove_project_member(self, uid: str, person_id: str) -> bool:
         """True when they were a member (a stored one; the lead is not)."""
@@ -3114,13 +3119,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _member_row(r) -> dict:
         return {"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
 
+    # Which rows of project_members count, for every read of them: someone who joined by
+    # themselves is a member while the project is a team project, and not once it is private.
+    _MEMBER_ROW = or_(func.coalesce(members_table.c.reason, "") != "self",
+                      ~select(projects_table.c.id).where(
+                          projects_table.c.id == members_table.c.project,
+                          projects_table.c.scope == "private").exists())
+
     def list_project_members(self, uid: str) -> list[dict]:
         """The people on the project besides its lead, oldest first: {person_id, added_by,
         added_at, reason}."""
         t = members_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.c.person_id, t.c.added_by, t.c.added_at, t.c.reason).where(
-                t.c.project == uid).order_by(t.c.added_at, t.c.person_id)).all()
+                t.c.project == uid, self._MEMBER_ROW).order_by(t.c.added_at, t.c.person_id)).all()
         return [self._member_row(r) for r in rows]
 
     def members_by_project(self, uids: list[str]) -> dict[str, list[dict]]:
@@ -3131,8 +3143,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         t = members_table
         with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.c.project, t.c.person_id, t.c.added_by, t.c.added_at,
-                                       t.c.reason).where(t.c.project.in_(ids)).order_by(
-                t.c.added_at, t.c.person_id)).all()
+                                       t.c.reason).where(t.c.project.in_(ids), self._MEMBER_ROW)
+                                .order_by(t.c.added_at, t.c.person_id)).all()
         out: dict[str, list[dict]] = {}
         for r in rows:
             out.setdefault(r[0], []).append(self._member_row(r[1:]))
@@ -3140,7 +3152,18 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def is_project_member(self, uid: str, person_id: str | None) -> bool:
-        """The project's lead, or a person on its member list."""
+        """The project's lead, or a person on its member list. Someone who joined by themselves
+        counts while the project is a team project."""
+        return self._leads_or_on(uid, person_id, self._MEMBER_ROW)
+
+    # Licence-independent too: what a person who joined by themselves does not get.
+    def is_added_member(self, uid: str, person_id: str | None) -> bool:
+        """The project's lead, or a member someone put on it (`manual` or `ticket`), as opposed to
+        one who joined by themselves. This is who gets the project's secrets."""
+        return self._leads_or_on(uid, person_id, func.coalesce(members_table.c.reason, "") != "self")
+
+    def _leads_or_on(self, uid: str, person_id: str | None, counts) -> bool:
+        """The person is the project's lead, or has a member row that `counts`."""
         if not person_id:
             return False
         with self.sessions_db.read() as conn:
@@ -3149,7 +3172,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if lead and lead[0] == person_id:
                 return True
             return conn.execute(select(members_table.c.person_id).where(
-                members_table.c.project == uid, members_table.c.person_id == person_id)
+                members_table.c.project == uid, members_table.c.person_id == person_id, counts)
             ).first() is not None
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:

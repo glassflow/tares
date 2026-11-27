@@ -156,6 +156,12 @@ def writers_keep_the_totals():
     agree("an unpriced reply is counted as unpriced")
     s.record_reply_usage("s5", "no-clock", None, "claude-opus-5-5", None, None, {"input_tokens": 4})
     agree("a reply with no time is in the all-time totals only")
+    # a Codex station's replies are written by another writer, with only the counts Codex gave (TR-1595)
+    s.record_reported_usage("s3", "codex:usage:1", T0 + timedelta(hours=33), "gpt-5.6-luna", None,
+                            {"input_tokens": 1200, "output_tokens": 300})
+    agree("a reply a runtime reported is in the totals")
+    s.record_reported_usage("s3", "codex:usage:2", None, "gpt-5.6-luna", None, {"output_tokens": 9})
+    agree("so is one with no time and a count that was not reported")
 
     s._usage_forget_project("p3")
     agree("a project forgotten moves its replies to the session's own project")
@@ -264,7 +270,7 @@ def the_migration_is_additive():
         raw = conn.execute(select(func.count()).select_from(session_usage)).scalar_one()
         cfg = sdb._config()
         cfg.attributes["connection"] = conn
-        command.downgrade(cfg, "0014_session_moves")
+        command.downgrade(cfg, "0015_session_moves")
     names = inspect(sdb.engine).get_table_names()
     ck("a downgrade drops the two new tables", "session_usage_hourly" not in names
        and "session_rollup_state" not in names, names)

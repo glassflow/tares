@@ -41,6 +41,8 @@ session_stations = Table(
     Column("project", Text),
     Column("seen_at", UTCDateTime),
     Column("crew_id", Text),
+    Column("runtime", Text),   # `codex` for a Codex station's session; empty for Claude Code (TR-1600)
+    Column("model", Text),     # the model a Codex station was started on; empty for its account's default
 )
 
 # What a session is doing now (store.py)
@@ -379,8 +381,9 @@ api_keys = Table(
     Column("person_id", Text),
 )
 
-# Who is on a project besides its lead (store.py add_project_member, TR-1608): reason `manual` or
-# `ticket`. The lead is not a row.
+# Who is on a project besides its lead (store.py add_project_member, TR-1608): reason `manual` (the
+# lead or the system added them), `ticket` (they hold one of its tickets) or `self` (they joined a
+# team project themselves; the row counts on a team project only). The lead is not a row.
 project_members = Table(
     "project_members", metadata,
     Column("project", Text, primary_key=True),
@@ -793,7 +796,7 @@ handovers = Table(
 )
 
 # Standing permissions; `areas` and `consents` are lists. `needs_lead` keeps the default the old DDL
-# gave it, as `attempts` does below: the code before revision 0020 reads the same table
+# gave it, as `attempts` does below: the code before revision 0021 reads the same table
 grants = Table(
     "grants", metadata,
     Column("id", Text, primary_key=True),

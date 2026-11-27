@@ -57,6 +57,7 @@ test_crew_doctor
 test_crew_doctor_lsp
 test_crew_exe_launcher
 test_crew_fake_claude
+test_crew_git_credential
 test_crew_guard_hook
 test_crew_heavy
 test_crew_hooks
@@ -79,10 +80,12 @@ test_crew_readings
 test_crew_regrant
 test_crew_report
 test_crew_rules
+test_crew_runtime_cmd
 test_crew_scratch_home
 test_crew_session
 test_crew_session_brain
 test_crew_session_start
+test_crew_settings_missing
 test_crew_setup_apply
 test_crew_setup_contract
 test_crew_standup
@@ -149,6 +152,7 @@ test_factory_setup
 test_factory_setup_api
 test_factory_setup_progress
 test_factory_start
+test_factory_start_joiner
 test_factory_start_show
 test_factory_takeover
 test_factory_ticket_page

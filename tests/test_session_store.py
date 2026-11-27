@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from alembic import command  # noqa: E402
-from sqlalchemy import Column, Integer, MetaData, Table, inspect, text  # noqa: E402
+from sqlalchemy import Column, Integer, MetaData, Table, inspect, select, text  # noqa: E402
 
 import tares.store as store_mod  # noqa: E402
 from tares import state_db  # noqa: E402
@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0022_brain_tables"                 # the newest revision: tests that count revisions move with it
-REVISIONS = 22
+HEAD = "0023_brain_tables"                 # the newest revision: tests that count revisions move with it
+REVISIONS = 23
 FAILS = []
 
 
@@ -297,6 +297,26 @@ def step_down(sessions_db, revision):
         command.downgrade(cfg, revision)
 
 
+def runtime_backfill():
+    """0011 (TR-1600): a session already recorded from a Codex station is marked codex, by its command rows."""
+    print("== 0011 marks the sessions recorded from Codex stations ==")
+    sdb = SessionStore(tempfile.mkdtemp())
+    sdb.upgrade()
+    step_down(sdb, "0010_session_command_outcome")
+    with sdb.begin() as c:
+        for sid, st in (("cx", "crew-builder"), ("cc", "crew-reviewer"), ("quiet", "crew-releaser")):
+            c.execute(text("INSERT INTO session_stations (session, station, role) VALUES (:s, :st, 'builder')"),
+                      {"s": sid, "st": st})
+        c.execute(text("INSERT INTO session_commands (tool_use_id, source, session, command) VALUES "
+                       "('codex:cx:exec-1', 'claude_code', 'cx', 'make'), ('toolu_01', 'claude_code', 'cc', 'make')"))
+    sdb.upgrade()
+    with sdb.begin() as c:
+        got = dict(c.execute(text("SELECT session, runtime FROM session_stations")).all())
+    ck("a session with a Codex command row is codex; a Claude Code one, and one with no command, stay empty",
+       got == {"cx": "codex", "cc": None, "quiet": None}, got)
+    sdb.close()
+
+
 def session_tables():
     print("== the session tables on SQLite ==")
     d = tempfile.mkdtemp()
@@ -327,8 +347,18 @@ def _count(sdb, table):
         return c.execute(text(f"SELECT count(*) FROM {table}")).scalar()
 
 
+# columns added to a session table after the session store left DuckDB: DuckDB's copy has none of them, and a row
+# copied from it has them empty (TR-1600)
+SINCE_DUCKDB = {"session_stations": ("runtime", "model")}
+
+
+def _old_cols(table):
+    """The columns of `table` that DuckDB's copy has, in declared order."""
+    return [c for c in declared_tables.metadata.tables[table].columns if c.name not in SINCE_DUCKDB.get(table, ())]
+
+
 def _duck_rows(store, table):
-    cols = [c.name for c in declared_tables.metadata.tables[table].columns]
+    cols = [c.name for c in _old_cols(table)]
     with store._lock:
         return cols, store.con.execute(f"SELECT {', '.join(cols)} FROM {table} ORDER BY 1, 2").fetchall()
 
@@ -430,7 +460,17 @@ def copy_at_start():
 def _session_rows(s, t):
     tbl = declared_tables.metadata.tables[t]
     with s.sessions_db.begin() as c:
-        return c.execute(tbl.select().order_by(*list(tbl.columns)[:2])).all()
+        return c.execute(select(*_old_cols(t)).order_by(*list(tbl.columns)[:2])).all()
+
+
+def _new_cols_empty(s, t):
+    """The columns DuckDB's copy did not have hold nothing in any copied row."""
+    tbl = declared_tables.metadata.tables[t]
+    new = [tbl.c[n] for n in SINCE_DUCKDB.get(t, ())]
+    if not new:
+        return True
+    with s.sessions_db.begin() as c:
+        return all(v is None for r in c.execute(select(*new)).all() for v in r)
 
 
 def copy_sqlite():
@@ -445,12 +485,10 @@ def copy_sqlite():
        got == {**{t: len(before[t]) for t in SESSION_TABLES}, "settings": 0,
                **{t: 0 for t in ACCOUNT_TABLES}}, got)
     for t in SESSION_TABLES:
-        tbl = declared_tables.metadata.tables[t]
-        with s.sessions_db.begin() as c:       # through the declared table, so times come back as UTC
-            rows = c.execute(tbl.select().order_by(*list(tbl.columns)[:2])).all()
+        rows = _session_rows(s, t)   # through the declared table, so times come back as UTC
         ck(f"{t}: every row arrived, values and times the same",
-           [tuple(_norm(v) for v in r) for r in rows] == [tuple(_norm(v) for v in r) for r in before[t]],
-           (rows, before[t]))
+           [tuple(_norm(v) for v in r) for r in rows] == [tuple(_norm(v) for v in r) for r in before[t]]
+           and _new_cols_empty(s, t), (rows, before[t]))
     with s.sessions_db.begin() as c:
         ledger = {r[0]: r[1] for r in c.execute(text("SELECT table_name, rows FROM session_store_copies")).all()}
     ck("the ledger holds each table and its count", ledger == {**{t: len(before[t]) for t in SESSION_TABLES},
@@ -665,8 +703,9 @@ def takeover():
             pg.execute(stmt)
         return sch, dsn
 
-    def snapshot(sch):
-        """Every row of the five tables, and every column's type, as Postgres holds them."""
+    def snapshot(sch, new=False):
+        """Every row of the five tables, and every column's type, as Postgres holds them: the columns the old
+        DDL made, or with `new` only the ones added since (SINCE_DUCKDB, TR-1600)."""
         with psycopg.connect(PG, autocommit=True) as c:
             c.execute(f"SET search_path = {sch}")
             out = {}
@@ -676,7 +715,13 @@ def takeover():
                 cols = c.execute("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
                                  "WHERE table_schema = %s AND table_name = %s ORDER BY column_name",
                                  [sch, t]).fetchall()
-                rows = c.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
+                cols = [x for x in cols if (x[0] in SINCE_DUCKDB.get(t, ())) == new]
+                if not cols:
+                    out[t] = ([], [])
+                    continue
+                names = ", ".join(x[0] for x in cols)
+                rows = c.execute(f"SELECT {names} FROM {t} ORDER BY session").fetchall() if new else \
+                    c.execute(f"SELECT {names} FROM {t} ORDER BY 1, 2").fetchall()
                 out[t] = (cols, [tuple(map(str, r)) for r in rows])
             return out
 
@@ -704,6 +749,10 @@ def takeover():
         after = snapshot(sch)
         ck("no row and no column of the five tables changed", after == before,
            [t for t in SESSION_TABLES if after[t] != before[t]])
+        added = snapshot(sch, new=True)["session_stations"]
+        ck("the columns added since are there, and empty in every row (TR-1600)",
+           sorted(x[0] for x in added[0]) == sorted(SINCE_DUCKDB["session_stations"])
+           and all(v == "None" for r in added[1] for v in r) and len(added[1]) == 2, added)
         ck("each table's columns, types and primary key are what tables.py declares",
            shape(sdb.engine) == declared(sdb.engine), (shape(sdb.engine), declared(sdb.engine)))
         ck("project_sessions has its index on session",
@@ -868,6 +917,7 @@ if __name__ == "__main__":
     dsn_rewrite()
     upgrade_failure()
     session_tables()
+    runtime_backfill()
     copy_sqlite()
     copy_at_start()
     copy_on_postgres()

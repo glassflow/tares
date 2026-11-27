@@ -374,6 +374,7 @@ FALLBACKS: list[tuple[str, str, str]] = [
     ("PATCH", "/api/projects/{uid}", ACCESS_REASON),
     ("POST", "/api/projects/{uid}/members", ACCESS_REASON),
     ("DELETE", "/api/projects/{uid}/members/{person_id}", ACCESS_REASON),
+    ("POST", "/api/projects/{uid}/join", ACCESS_REASON),
     ("POST", "/api/grants/{gid}/consent", CONSENT_REASON),
     ("POST", "/api/grants/{gid}/decline", CONSENT_REASON),
     ("POST", "/api/projects/{uid}/questions", QUESTIONS_REASON),

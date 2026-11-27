@@ -29,7 +29,10 @@ TMP = tempfile.mkdtemp(prefix="private-routes-")
 
 # routes a stranger may reach on a private project, as "METHOD path": why. The PATCH is not here:
 # it answers 404 unless it only hands the lead over, which is tested on its own below.
-ALLOWLIST: dict[str, str] = {}
+ALLOWLIST: dict[str, str] = {
+    "POST /api/projects/{uid}/join": "answers 403 ask_lead, naming the lead the stranger's list "
+                                     "already shows (TR-1720); checked in test_project_self_join.py",
+}
 
 
 def free_port() -> str:

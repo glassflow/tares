@@ -168,6 +168,12 @@ def _second_look(argv: list[str], env: dict) -> int:
 
 
 PORTED[("second-look",)] = _second_look  # new in Python (TR-1599): a separate, fresh Codex session's look
+def _runtime(argv: list[str], env: dict) -> int:
+    from .runtime_cmd import cmd_runtime  # imported when used (TR-1600)
+    return cmd_runtime(argv, env)
+
+
+PORTED[("runtime",)] = _runtime  # new in Python (TR-1600): what new crews start on, and what this crew runs on
 
 
 def _parse_bg_id(argv: list[str], env: dict) -> int:
@@ -227,6 +233,20 @@ def _report(argv: list[str], env: dict) -> int:
 
 
 PORTED[("report",)] = _report  # new in Python: a station's dated log, apart from its report
+
+
+def _git_credential(argv: list[str], env: dict) -> int:
+    from .github_access import cmd_git_credential  # imported when used (TR-1425)
+    return cmd_git_credential(argv, env)
+
+
+def _gh(argv: list[str], env: dict) -> int:
+    from .github_access import cmd_gh  # imported when used (TR-1425)
+    return cmd_gh(argv, env)
+
+
+PORTED[("git-credential",)] = _git_credential  # new in Python (TR-1425): git's credential helper for github.com
+PORTED[("gh",)] = _gh                          # new in Python (TR-1425): the real gh, with the cell's token if none
 
 
 def find(argv: list[str]) -> Callable[[list[str], dict], int] | None:

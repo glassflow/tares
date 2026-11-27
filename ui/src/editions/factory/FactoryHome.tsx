@@ -6,7 +6,7 @@ import {
   Textarea, Toaster, toneOf, useToast,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
-import { ApiError, isLicenceRequired } from "../../api";
+import { ApiError } from "../../api";
 import { formatDistance, formatStampUTC } from "../../lib/time";
 import { formatCount } from "../../lib/number";
 import { licenceSentence } from "@/components/LicenceNeeded";
@@ -16,16 +16,18 @@ import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
-import { CopyCommand } from "../StartChecklist";
+import { CopyCommand, StartChecklistHidden } from "../StartChecklist";
 import {
   acceptMilestone, allowDesk, approveMerge, deskReply, finishProject, getAnsweredToday, getAnswerTo, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeAnswered, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
+  HomeAction, HomeAnswered, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, ProjectsView, TeamHomeHandler,
 } from "./home.types";
 import { CHOICE, FOCUS_ROW, FocusLabel, FocusNote, parseFocus, sameItem, splitFocus, VIA } from "./homeFocus";
 import { HOME_SAMPLES } from "./homeSamples";
+import { COLS, isTeam, LEFT, MUTED, PAGE, reason, RIGHT, SectionHead } from "./homeShared";
+import JoinerStart, { joinerShows } from "./JoinerStart";
 import { Detail, DetailLines } from "./HomeDetail";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
 import { ItemIcon } from "./ProjectIcon";
@@ -43,11 +45,9 @@ export const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 second
 const GRANT_MAX = 400;
 const WARN_AT = 80;
 
-const SECTION_H = "m-0 text-base";
 /** Loading rows on the paper: no inset, as the rows they stand for. */
 const FLUSH_ROWS = "[&>div]:px-0";
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
-const MUTED = "text-xs text-muted-foreground";
 const INK_FILL = "[&>div:first-child]:bg-foreground";
 
 function greetingWord(hour: number): string {
@@ -70,15 +70,6 @@ function firstName(who: string | undefined): string {
 function useFirstName(): string {
   const { credentialName, personName } = useEdition();
   return firstName(personName && personName !== "You" ? personName : credentialName);
-}
-
-function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
-  return (
-    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
-      <h2 className={SECTION_H}>{title}</h2>
-      {aside}
-    </div>
-  );
 }
 
 /** What one waiting row is doing: a button at work (`busy`), the sentence of a refusal, or a copy just made. */
@@ -198,9 +189,6 @@ function AnsweredToday({ answers }: { answers?: HomeAnswered[] }) {
     </section>
   );
 }
-
-/** A cell with more than one person sends these keys; a cell of one never does. */
-const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
 function Waiting({ items, focus, onAction, rows }: {
   items: HomeItem[]; focus?: string; onAction?: OnAction; rows?: Record<string, RowState>;
@@ -355,10 +343,25 @@ function TopBar({ name, headline }: { name: string; headline?: React.ReactNode }
   );
 }
 
-const PAGE = "flex min-w-0 flex-col gap-6 md:gap-8";
-const COLS = "flex flex-wrap items-start gap-8";
-const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
-const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
+/** What waits for the person, with its buttons: the team's lists on a team cell, core's otherwise. */
+function WaitingBlock({ data, onAction, rows, panels, focus }: {
+  data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; panels?: Record<string, React.ReactNode>; focus?: string;
+}) {
+  const eePending = useEePending();
+  const named = splitFocus(data.waiting_for_you, focus);
+  const top = named.focus?.id ?? topItem(named.rest)?.id;
+  const core = <Waiting items={data.waiting_for_you} focus={focus} onAction={onAction} rows={rows} />;
+  if (!isTeam(data)) return core;
+  return (
+    // the team's lists are enterprise: without it the single-person list shows
+    <Slot name="home.waiting" items={data.waiting_for_you} focus={focus}
+      renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} top={item.id === top} />}
+      errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
+      panels={panels}
+      // while the ee chunk is on its way, core's rows would flash with the team's buttons on them
+      fallback={eePending ? <WaitingPending /> : core} />
+  );
+}
 
 // Setting the factory up lives on /setup (the Setup menu entry), so the home shows no first-run list.
 export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, focusAnswer, answered }: {
@@ -373,10 +376,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, f
   panels?: Record<string, React.ReactNode>;
 }) {
   const name = useFirstName();
-  const eePending = useEePending();
-  const named = splitFocus(data.waiting_for_you, focus);
-  const top = named.focus?.id ?? topItem(named.rest)?.id;
-  const closed = !!focus && !named.focus && focusAnswer !== undefined;
+  const closed = !!focus && !splitFocus(data.waiting_for_you, focus).focus && focusAnswer !== undefined;
   return (
     <div className={PAGE} data-testid="factory-home">
       <TopBar name={name} headline={<p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
@@ -384,17 +384,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, focus, f
       {closed && <FocusNote answer={focusAnswer ?? null} more={data.waiting_for_you.length > 0} />}
       <div className={COLS}>
         <div className={LEFT}>
-          {isTeam(data) ? (
-            // the team's lists are enterprise: without it the single-person list shows
-            <Slot name="home.waiting" items={data.waiting_for_you} focus={focus}
-              renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} top={item.id === top} />}
-              errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
-              panels={panels}
-              // while the ee chunk is on its way, core's rows would flash with the team's buttons on them
-              fallback={eePending ? <WaitingPending /> : <Waiting items={data.waiting_for_you} focus={focus} onAction={onAction} rows={rows} />} />
-          ) : (
-            <Waiting items={data.waiting_for_you} focus={focus} onAction={onAction} rows={rows} />
-          )}
+          <WaitingBlock data={data} onAction={onAction} rows={rows} panels={panels} focus={focus} />
           <AnsweredToday answers={answered} />
           {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
           {data.plan_command && data.projects.length === 0 && data.finished_count === 0 && !data.later_count && (
@@ -443,12 +433,6 @@ export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
 }
 
 // ── actions ────────────────────────────────────────────────────────────────────
-
-/** The sentence of a refusal, or a plain one when the cell could not be reached. */
-function reason(e: unknown): string {
-  if (isLicenceRequired(e)) return licenceSentence();   // plain words under the row, never the raw answer
-  return e instanceof ApiError && e.message ? e.message : "Could not reach the cell. Try again in a moment.";
-}
 
 /** The command a permission item names, in backticks, and the role that wants it ("The builder"). */
 function permissionParts(item: HomeItem): { who: string; command: string } {
@@ -800,7 +784,19 @@ function hhmm(d: Date): string {
 let answeredWarned = false;
 
 function LiveHome({ focus }: { focus?: string }) {
-  const { data, error, reload } = usePagePolling(() => getHome(), POLL_MS);
+  // A person joining also needs the team's projects, hidden ones included, so their view asks for the Team
+  // list; everyone else asks what Home always asked. When an answer says the other view applies, that one is
+  // read at once; every read after it is a single call again.
+  const view = React.useRef<ProjectsView>();
+  const { data, error, reload } = usePagePolling(async () => {
+    const asked = view.current;
+    const home = await getHome(asked);
+    const want: ProjectsView | undefined = joinerShows(home) ? "team" : undefined;
+    if (want === asked) return home;
+    const again = await getHome(want);
+    view.current = want;
+    return again;
+  }, POLL_MS);
   // What the record says of the item a link named, read once it is known not to wait: with the first home
   // read, and again when the row leaves the list (it was just answered). Nothing shows before the read lands.
   const [recorded, setRecorded] = React.useState<{ id: string; answer: HomeAnswered | null }>();
@@ -862,15 +858,29 @@ function LiveHome({ focus }: { focus?: string }) {
       waiting_for_you: data.waiting_for_you.filter((i) => !overlay.items.has(i.id)),
       ...(data.you_are_waiting_on ? { you_are_waiting_on: data.you_are_waiting_on.filter((w) => !overlay.later.has(w.project.id)) } : {}),
     } : data;
-    const notice = error ? (
+    const stale = error ? (
       <Banner tone="warn" data-testid="stale-banner">
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
-    ) : undefined;
-    body = (
-      <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} focus={focus}
-        focusAnswer={recorded?.id === focus ? recorded?.answer : undefined} answered={answered} />
-    );
+    ) : null;
+    const focusAnswer = recorded?.id === focus ? recorded?.answer : undefined;
+    if (joinerShows(shown)) {
+      const closed = !!focus && !splitFocus(shown.waiting_for_you, focus).focus && focusAnswer !== undefined;
+      body = (
+        <JoinerStart data={shown} onChanged={reload}
+          notice={<>{stale}{closed && <FocusNote answer={focusAnswer ?? null} more={shown.waiting_for_you.length > 0} />}</>}
+          waiting={shown.waiting_for_you.length > 0
+            ? <WaitingBlock data={shown} onAction={onAction} rows={rows} panels={panels} focus={focus} /> : null} />
+      );
+    } else {
+      // a person joining who hid their steps can have them back
+      const back = shown.joiner?.joining && shown.start
+        ? <StartChecklistHidden block={shown.start} title="Your first steps" onShown={reload} /> : null;
+      body = (
+        <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={<>{stale}{back}</>} focus={focus}
+          focusAnswer={focusAnswer} answered={answered} />
+      );
+    }
   }
   return (
     <>

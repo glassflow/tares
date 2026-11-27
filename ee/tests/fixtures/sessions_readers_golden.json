@@ -39,6 +39,7 @@
       "last_at": "2026-11-19T08:04:00+00:00",
       "lines": 8,
       "machine": "",
+      "model": null,
       "name": "crew-orchestrator",
       "parent": null,
       "person": null,
@@ -47,6 +48,7 @@
       "projects": [],
       "quiet_minutes": 236,
       "role": "orchestrator",
+      "runtime": "claude_code",
       "session": "sess-0-1",
       "started_at": "2026-11-19T06:45:00+00:00",
       "state": "quiet",
@@ -75,6 +77,7 @@
       "last_at": "2026-11-19T09:04:00+00:00",
       "lines": 9,
       "machine": "",
+      "model": null,
       "name": "crew-reviewer",
       "parent": "crew-orchestrator",
       "person": null,
@@ -83,6 +86,7 @@
       "projects": [],
       "quiet_minutes": 176,
       "role": "reviewer",
+      "runtime": "claude_code",
       "session": "sess-1-1",
       "started_at": "2026-11-19T07:40:00+00:00",
       "state": "quiet",
@@ -111,6 +115,7 @@
       "last_at": "2026-11-19T10:04:00+00:00",
       "lines": 10,
       "machine": "",
+      "model": null,
       "name": "crew-releaser",
       "parent": "crew-orchestrator",
       "person": null,
@@ -119,6 +124,7 @@
       "projects": [],
       "quiet_minutes": 116,
       "role": "releaser",
+      "runtime": "claude_code",
       "session": "sess-2-1",
       "started_at": "2026-11-19T08:35:00+00:00",
       "state": "quiet",
@@ -147,6 +153,7 @@
       "last_at": "2026-11-19T11:04:00+00:00",
       "lines": 13,
       "machine": "",
+      "model": null,
       "name": "readers0-build-m1",
       "parent": "crew-orchestrator",
       "person": null,
@@ -157,6 +164,7 @@
       ],
       "quiet_minutes": 56,
       "role": "builder",
+      "runtime": "claude_code",
       "session": "sess-3-1",
       "started_at": "2026-11-19T09:30:00+00:00",
       "state": "quiet",
@@ -185,6 +193,7 @@
       "last_at": "2026-11-19T12:04:00+00:00",
       "lines": 14,
       "machine": "",
+      "model": null,
       "name": "readers1-build-m1",
       "parent": "crew-orchestrator",
       "person": null,
@@ -195,6 +204,7 @@
       ],
       "quiet_minutes": -4,
       "role": "builder",
+      "runtime": "claude_code",
       "session": "sess-4-1",
       "started_at": "2026-11-19T10:25:00+00:00",
       "state": "idle",
@@ -223,6 +233,7 @@
       "last_at": "2026-11-19T13:04:00+00:00",
       "lines": 15,
       "machine": "",
+      "model": null,
       "name": "readers2-build-m1",
       "parent": "crew-orchestrator",
       "person": null,
@@ -233,6 +244,7 @@
       ],
       "quiet_minutes": -64,
       "role": "builder",
+      "runtime": "claude_code",
       "session": "sess-5-1",
       "started_at": "2026-11-19T11:20:00+00:00",
       "state": "waiting",
@@ -253,6 +265,7 @@
       "last_at": "2026-11-18T06:00:00+00:00",
       "lines": 0,
       "machine": "",
+      "model": null,
       "name": "spec",
       "parent": "crew-orchestrator",
       "person": null,
@@ -263,6 +276,7 @@
       ],
       "quiet_minutes": 1800,
       "role": "builder",
+      "runtime": "claude_code",
       "session": "sess-spec",
       "started_at": "2026-11-18T06:00:00+00:00",
       "state": "quiet",
@@ -331,6 +345,7 @@
     "last_at": "2026-11-19T08:04:00+00:00",
     "lines": 8,
     "machine": "",
+    "model": null,
     "name": "crew-orchestrator",
     "parent": null,
     "person": null,
@@ -339,6 +354,7 @@
     "projects": [],
     "quiet_minutes": 236,
     "role": "orchestrator",
+    "runtime": "claude_code",
     "session": "sess-0-1",
     "started_at": "2026-11-19T06:45:00+00:00",
     "state": "quiet",
@@ -367,6 +383,7 @@
     "last_at": "2026-11-19T09:04:00+00:00",
     "lines": 9,
     "machine": "",
+    "model": null,
     "name": "crew-reviewer",
     "parent": "crew-orchestrator",
     "person": null,
@@ -375,6 +392,7 @@
     "projects": [],
     "quiet_minutes": 176,
     "role": "reviewer",
+    "runtime": "claude_code",
     "session": "sess-1-1",
     "started_at": "2026-11-19T07:40:00+00:00",
     "state": "quiet",
@@ -403,6 +421,7 @@
     "last_at": "2026-11-19T10:04:00+00:00",
     "lines": 10,
     "machine": "",
+    "model": null,
     "name": "crew-releaser",
     "parent": "crew-orchestrator",
     "person": null,
@@ -411,6 +430,7 @@
     "projects": [],
     "quiet_minutes": 116,
     "role": "releaser",
+    "runtime": "claude_code",
     "session": "sess-2-1",
     "started_at": "2026-11-19T08:35:00+00:00",
     "state": "quiet",
@@ -439,6 +459,7 @@
     "last_at": "2026-11-19T11:04:00+00:00",
     "lines": 13,
     "machine": "",
+    "model": null,
     "name": "readers0-build-m1",
     "parent": "crew-orchestrator",
     "person": null,
@@ -449,6 +470,7 @@
     ],
     "quiet_minutes": 56,
     "role": "builder",
+    "runtime": "claude_code",
     "session": "sess-3-1",
     "started_at": "2026-11-19T09:30:00+00:00",
     "state": "quiet",
@@ -477,6 +499,7 @@
     "last_at": "2026-11-19T12:04:00+00:00",
     "lines": 14,
     "machine": "",
+    "model": null,
     "name": "readers1-build-m1",
     "parent": "crew-orchestrator",
     "person": null,
@@ -487,6 +510,7 @@
     ],
     "quiet_minutes": -4,
     "role": "builder",
+    "runtime": "claude_code",
     "session": "sess-4-1",
     "started_at": "2026-11-19T10:25:00+00:00",
     "state": "idle",
@@ -515,6 +539,7 @@
     "last_at": "2026-11-19T13:04:00+00:00",
     "lines": 15,
     "machine": "",
+    "model": null,
     "name": "readers2-build-m1",
     "parent": "crew-orchestrator",
     "person": null,
@@ -525,6 +550,7 @@
     ],
     "quiet_minutes": -64,
     "role": "builder",
+    "runtime": "claude_code",
     "session": "sess-5-1",
     "started_at": "2026-11-19T11:20:00+00:00",
     "state": "waiting",
@@ -545,6 +571,7 @@
     "last_at": "2026-11-18T06:00:00+00:00",
     "lines": 0,
     "machine": "",
+    "model": null,
     "name": "spec",
     "parent": "crew-orchestrator",
     "person": null,
@@ -555,6 +582,7 @@
     ],
     "quiet_minutes": 1800,
     "role": "builder",
+    "runtime": "claude_code",
     "session": "sess-spec",
     "started_at": "2026-11-18T06:00:00+00:00",
     "state": "quiet",
@@ -596,9 +624,13 @@
       "memory_pct": null,
       "memory_text": null,
       "role_label": "Builder",
+      "runtime": "claude_code",
+      "runtime_text": "Claude Code",
       "state": "not heard",
       "state_text": "Not heard from in 56 minutes",
-      "station": "readers0-build-m1"
+      "station": "readers0-build-m1",
+      "stopped": false,
+      "usage_text": null
      },
      {
       "crew": null,
@@ -608,9 +640,13 @@
       "memory_pct": null,
       "memory_text": null,
       "role_label": "Builder",
+      "runtime": "claude_code",
+      "runtime_text": "Claude Code",
       "state": "not heard",
       "state_text": "Not heard from in 1 day",
-      "station": "spec"
+      "station": "spec",
+      "stopped": false,
+      "usage_text": null
      }
     ],
     "project": {
@@ -629,9 +665,13 @@
       "memory_pct": null,
       "memory_text": null,
       "role_label": "Builder",
+      "runtime": "claude_code",
+      "runtime_text": "Claude Code",
       "state": "idle",
       "state_text": "Idle for 4 minutes",
-      "station": "readers1-build-m1"
+      "station": "readers1-build-m1",
+      "stopped": false,
+      "usage_text": null
      }
     ],
     "project": {
@@ -650,9 +690,13 @@
       "memory_pct": null,
       "memory_text": null,
       "role_label": "Builder",
+      "runtime": "claude_code",
+      "runtime_text": "Claude Code",
       "state": "waiting for you",
       "state_text": "Waiting for you",
-      "station": "readers2-build-m1"
+      "station": "readers2-build-m1",
+      "stopped": false,
+      "usage_text": null
      }
     ],
     "project": {
@@ -675,9 +719,13 @@
         "memory_pct": null,
         "memory_text": null,
         "role_label": "Builder",
+        "runtime": "claude_code",
+        "runtime_text": "Claude Code",
         "state": "not heard",
         "state_text": "Not heard from in 56 minutes",
-        "station": "readers0-build-m1"
+        "station": "readers0-build-m1",
+        "stopped": false,
+        "usage_text": null
        },
        {
         "crew": null,
@@ -687,9 +735,13 @@
         "memory_pct": null,
         "memory_text": null,
         "role_label": "Builder",
+        "runtime": "claude_code",
+        "runtime_text": "Claude Code",
         "state": "not heard",
         "state_text": "Not heard from in 1 day",
-        "station": "spec"
+        "station": "spec",
+        "stopped": false,
+        "usage_text": null
        }
       ],
       "project": {
@@ -708,9 +760,13 @@
         "memory_pct": null,
         "memory_text": null,
         "role_label": "Builder",
+        "runtime": "claude_code",
+        "runtime_text": "Claude Code",
         "state": "idle",
         "state_text": "Idle for 4 minutes",
-        "station": "readers1-build-m1"
+        "station": "readers1-build-m1",
+        "stopped": false,
+        "usage_text": null
        }
       ],
       "project": {
@@ -729,9 +785,13 @@
         "memory_pct": null,
         "memory_text": null,
         "role_label": "Builder",
+        "runtime": "claude_code",
+        "runtime_text": "Claude Code",
         "state": "waiting for you",
         "state_text": "Waiting for you",
-        "station": "readers2-build-m1"
+        "station": "readers2-build-m1",
+        "stopped": false,
+        "usage_text": null
        }
       ],
       "project": {
@@ -760,9 +820,13 @@
      "memory_pct": null,
      "memory_text": null,
      "role_label": "Releaser",
+     "runtime": "claude_code",
+     "runtime_text": "Claude Code",
      "state": "not heard",
      "state_text": "Not heard from in 1 hour",
-     "station": "crew-releaser"
+     "station": "crew-releaser",
+     "stopped": false,
+     "usage_text": null
     },
     "reviewer": {
      "crew": null,
@@ -772,9 +836,13 @@
      "memory_pct": null,
      "memory_text": null,
      "role_label": "Reviewer",
+     "runtime": "claude_code",
+     "runtime_text": "Claude Code",
      "state": "not heard",
      "state_text": "Not heard from in 2 hours",
-     "station": "crew-reviewer"
+     "station": "crew-reviewer",
+     "stopped": false,
+     "usage_text": null
     },
     "summary": "Not heard from in 3 hours",
     "talk_to": {
@@ -785,9 +853,13 @@
      "memory_pct": null,
      "memory_text": null,
      "role_label": "Orchestrator",
+     "runtime": "claude_code",
+     "runtime_text": "Claude Code",
      "state": "not heard",
      "state_text": "Not heard from in 3 hours",
-     "station": "crew-orchestrator"
+     "station": "crew-orchestrator",
+     "stopped": false,
+     "usage_text": null
     }
    }
   ],
@@ -813,9 +885,13 @@
    "memory_pct": null,
    "memory_text": null,
    "role_label": "Releaser",
+   "runtime": "claude_code",
+   "runtime_text": "Claude Code",
    "state": "not heard",
    "state_text": "Not heard from in 1 hour",
-   "station": "crew-releaser"
+   "station": "crew-releaser",
+   "stopped": false,
+   "usage_text": null
   },
   "reviewer": {
    "crew": null,
@@ -825,9 +901,13 @@
    "memory_pct": null,
    "memory_text": null,
    "role_label": "Reviewer",
+   "runtime": "claude_code",
+   "runtime_text": "Claude Code",
    "state": "not heard",
    "state_text": "Not heard from in 2 hours",
-   "station": "crew-reviewer"
+   "station": "crew-reviewer",
+   "stopped": false,
+   "usage_text": null
   },
   "rule_proposals": [],
   "standup": null,
@@ -840,9 +920,13 @@
    "memory_pct": null,
    "memory_text": null,
    "role_label": "Orchestrator",
+   "runtime": "claude_code",
+   "runtime_text": "Claude Code",
    "state": "not heard",
    "state_text": "Not heard from in 3 hours",
-   "station": "crew-orchestrator"
+   "station": "crew-orchestrator",
+   "stopped": false,
+   "usage_text": null
   }
  },
  "guardrail_rules": {
@@ -1183,7 +1267,9 @@
   },
   "now": "2026-11-19T12:00:00+00:00",
   "people": {
+   "ask_lead": false,
    "can_add": false,
+   "can_join": true,
    "can_set_lead": true,
    "lead": null,
    "members": [],
@@ -1265,6 +1351,7 @@
       "last_at": "2026-11-19T11:04:00+00:00",
       "lines": 13,
       "machine": "",
+      "model": null,
       "name": "readers0-build-m1",
       "parent": "crew-orchestrator",
       "person": null,
@@ -1275,6 +1362,7 @@
       ],
       "quiet_minutes": 56,
       "role": "builder",
+      "runtime": "claude_code",
       "session": "sess-3-1",
       "started_at": "2026-11-19T09:30:00+00:00",
       "state": "quiet",
@@ -1295,6 +1383,7 @@
       "last_at": "2026-11-18T06:00:00+00:00",
       "lines": 0,
       "machine": "",
+      "model": null,
       "name": "spec",
       "parent": "crew-orchestrator",
       "person": null,
@@ -1305,6 +1394,7 @@
       ],
       "quiet_minutes": 1800,
       "role": "builder",
+      "runtime": "claude_code",
       "session": "sess-spec",
       "started_at": "2026-11-18T06:00:00+00:00",
       "state": "quiet",
@@ -1359,6 +1449,7 @@
     "last_at": "2026-11-19T11:04:00+00:00",
     "lines": 13,
     "machine": "",
+    "model": null,
     "name": "readers0-build-m1",
     "parent": "crew-orchestrator",
     "person": null,
@@ -1369,6 +1460,7 @@
     ],
     "quiet_minutes": 56,
     "role": "builder",
+    "runtime": "claude_code",
     "session": "sess-3-1",
     "started_at": "2026-11-19T09:30:00+00:00",
     "state": "quiet",
@@ -1389,6 +1481,7 @@
     "last_at": "2026-11-18T06:00:00+00:00",
     "lines": 0,
     "machine": "",
+    "model": null,
     "name": "spec",
     "parent": "crew-orchestrator",
     "person": null,
@@ -1399,6 +1492,7 @@
     ],
     "quiet_minutes": 1800,
     "role": "builder",
+    "runtime": "claude_code",
     "session": "sess-spec",
     "started_at": "2026-11-18T06:00:00+00:00",
     "state": "quiet",
