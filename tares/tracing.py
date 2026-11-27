@@ -39,12 +39,9 @@ batches in a background thread, and a backend that is down only costs dropped sp
 from __future__ import annotations
 
 import json
-import os
-import socket
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 # ── conventions (OpenInference + OpenTelemetry gen_ai) ─────────────────────────

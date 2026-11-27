@@ -98,8 +98,8 @@ def scan() -> list[str]:
                     elif isinstance(node, ast.ImportFrom):
                         names = resolve(mod, node, is_pkg)
                     bad = sorted({n for n in names if n.startswith("tares") and going(n)})
-                    for n in bad[:1]:
-                        hits.append((os.path.relpath(path, ROOT), node.lineno, n))
+                    for n in bad:
+                        hits.append((os.path.relpath(path, ROOT).replace(os.sep, "/"), node.lineno, n))
     return hits
 
 

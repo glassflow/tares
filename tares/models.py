@@ -376,12 +376,6 @@ class OpenAIProvider(Provider):
             body["stream_options"] = {"include_usage": True}
         return body
 
-    def _trace_output(self, reply: ModelReply) -> list:
-        blocks: list = [{"type": "text", "text": reply.text}] if reply.text else []
-        blocks += [{"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments}
-                   for tc in reply.tool_calls]
-        return blocks
-
     async def complete(self, *, model, system, tools, messages, max_tokens,
                        tools_allowed=True, tracer=None, tool_choice=None) -> ModelReply:
         body = self._body(model, system, tools, messages, max_tokens, tools_allowed, False,
@@ -393,7 +387,6 @@ class OpenAIProvider(Provider):
             if r.status_code >= 400:
                 raise ModelError(f"{self.label} {r.status_code}: {r.text[:300]}")
             reply = self.parse(r.json(), r.headers.get("x-litellm-response-cost"))
-            gen.set_output(self._trace_output(reply))
             gen.set_usage(reply.usage)
             gen.set_response_model(reply.model)
             gen.set_finish_reason(reply.stop_reason)
@@ -454,7 +447,6 @@ class OpenAIProvider(Provider):
                 **({"tool_calls": tool_calls} if tool_calls else {})}}],
                 "usage": usage_block, "model": resp_model}
             reply = self.parse(assembled, cost_header)
-            gen.set_output(self._trace_output(reply))
             gen.set_usage(reply.usage)
             gen.set_response_model(reply.model)
             gen.set_finish_reason(reply.stop_reason)

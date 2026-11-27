@@ -390,11 +390,6 @@ async def part2():
             llms = [sp for svc, sp in spans if _attr(sp, "openinference.span.kind") == "LLM"]
             # models.py no longer opens a span per model call (TR-1808); the exporter goes in TR-1810
             ck("no LLM span per model call any more", len(llms) == 0, str(len(llms)))
-            ck("LLM spans carry usage", all(_attr(sp, "gen_ai.usage.input_tokens") == 100
-                                           and _attr(sp, "gen_ai.usage.output_tokens") == 50 for sp in llms))
-            ck("LLM spans carry the tool definitions",
-               all("read" in [d["name"] for d in json.loads(_attr(sp, "gen_ai.tool.definitions") or "[]")] for sp in llms))
-            ck("LLM spans carry the finish reason", all(_attr(sp, "gen_ai.response.finish_reasons") == ["end_turn"] for sp in llms))
             tools = [sp for svc, sp in spans if _attr(sp, "openinference.span.kind") == "TOOL"]
             ck("one TOOL span, named read", len(tools) == 1 and tools[0].name == "read"
                and _attr(tools[0], "gen_ai.tool.name") == "read", str([t.name for t in tools]))

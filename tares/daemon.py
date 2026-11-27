@@ -50,7 +50,8 @@ from .host import Host
 from .projects.icon import normalize_icon
 from .envelope import now_utc
 from .models import add_usage, empty_usage
-from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
+from .providers import AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL
+from .builtin_agents import (offers_conclude,
                              MAX_ROUNDS as AGENT_MAX_ROUNDS,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
