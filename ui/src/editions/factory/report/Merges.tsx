@@ -1,19 +1,14 @@
-import * as React from "react";
 import { Link } from "react-router-dom";
 
 import { Button, EmptyState } from "../../../components/edition";
 import { formatCount } from "../../../lib/number";
 import { formatDayUTC, formatDistance, formatStampUTC } from "../../../lib/time";
 import type { MergeRow, MergesData, ReportData } from "../FactoryReport.api";
-import { CAPTION, CELL, HEAD, TABLE } from "./shared";
+import { CAPTION, CELL, Figure, HEAD, LINK, NOTE, SUB, TABLE } from "./shared";
 
 // Merges (TR-1672): the merges through the merge queue in these weeks, each with its autonomy level,
 // the gate on the reviewed commit, the review rounds and who approved. The words of a row and the CSV
 // come with the page's one read (tares/report.py `merges`).
-
-const NOTE = "m-0 max-w-[640px] text-xs text-muted-foreground";
-const LINK = "text-foreground underline decoration-border underline-offset-[3px]";
-const SUB = "block text-xs text-muted-foreground";
 
 const webUrl = (u: string | null): u is string => !!u && /^https?:\/\//i.test(u);
 
@@ -23,19 +18,6 @@ function download(csv: string, name: string) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
-}
-
-/** A caption over a table that scrolls sideways when it does not fit. */
-function Figure({ title, children, ...props }: { title: string; children: React.ReactNode; "data-testid": string }) {
-  const id = React.useId();
-  return (
-    <figure aria-labelledby={id} className="m-0 grid min-w-0 content-start gap-2" {...props}>
-      <figcaption id={id} className={CAPTION}>{title}</figcaption>
-      <div role="region" aria-labelledby={id} tabIndex={0} className="min-w-0 overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring">
-        {children}
-      </div>
-    </figure>
-  );
 }
 
 function Commit({ label, sha }: { label: string; sha: string | null }) {

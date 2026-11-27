@@ -6,6 +6,7 @@ import { formatCount } from "../../lib/number";
 import { DAY, formatDayUTC } from "../../lib/time";
 import { usePagePolling } from "../usePagePolling";
 import { factoryReport, isRefused, type ReportData, type SectionKey, type TimeData } from "./FactoryReport.api";
+import { Architecture } from "./report/Architecture";
 import { Cost } from "./report/Cost";
 import { Delivered } from "./report/Delivered";
 import { Merges } from "./report/Merges";
@@ -26,11 +27,11 @@ const RANGES = [
 const DEFAULT_RANGE = "8w";
 const DEFAULT_SCOPE = "factory";
 
-/** The sections in reading order. A section's ticket gives its entry a `body`, drawn from the page's one
- *  read, and keeps to its own entry: one per line with a blank line between them. Sections are drawn also
+/** The sections in reading order. A section's entry has a `body`, drawn from the page's one read, and
+ *  its ticket keeps to that entry: one per line with a blank line between them. Sections are drawn also
  *  when no ticket was merged (cost or waiting can exist without a merge), so a `body` says for itself
  *  when it has nothing. */
-const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: ReportData) => React.ReactNode }[] = [
+const SECTIONS: { key: SectionKey; title: string; aside?: string; body: (data: ReportData) => React.ReactNode }[] = [
   { key: "delivered", title: "Delivered", body: (data) => <Delivered data={data} /> },
 
   { key: "time", title: "Time", body: (data) => <TimeSpent data={data} /> },
@@ -41,7 +42,7 @@ const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: 
 
   { key: "merges", title: "Merges", body: (data) => <Merges data={data} /> },
 
-  { key: "architecture", title: "Architecture" },
+  { key: "architecture", title: "Architecture", body: (data) => <Architecture data={data} /> },
 ];
 
 /** The first and last date the read is asked for. A preset is worked out from today (UTC), so its
@@ -104,7 +105,7 @@ export function ReportView({ data }: { data: ReportData }) {
           )}
           {SECTIONS.map((s) => (
             <ListSection paper key={s.key} title={s.title} aside={s.aside} data-testid={`report-section-${s.key}`}>
-              {s.body ? s.body(data) : <EmptyState>This section is not built yet.</EmptyState>}
+              {s.body(data)}
             </ListSection>
           ))}
         </>

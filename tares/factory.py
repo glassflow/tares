@@ -723,6 +723,17 @@ FINDING_KINDS = [
     ("security", (r"secrets?", r"(sql|command) injection", r"xss", r"csrf",
                   r"auth(entication|orization|z)?\b(?!or)")),
     ("docs out of date", (r"readme", r"out of date doc\w*", r"comment says")),
+    # last, so a text that fits a kind above keeps it. Phrases about how the code is divided
+    # up, never single words such as "layer" or "module", which mean other things too
+    ("architecture", (
+        r"layering",
+        r"(another|other|wrong|service|domain|repository|data|storage|presentation|api) layer",
+        r"reach(es|ed|ing)? (in|into|across)", r"internals of", r"module boundar(y|ies)",
+        r"imports? each other", r"(circular|cyclic) (imports?|dependenc(y|ies))",
+        r"(import|dependency) cycles?", r"dependency direction",
+        r"belongs? in the \w+ (module|layer)", r"owns? (a |the )?(business|domain) rules?",
+        r"(second|duplicate) (definition|implementation|source of truth)",
+        r"(contradicts?|goes against) (a |the )?((recorded|earlier|standing) )?decision")),
 ]
 
 

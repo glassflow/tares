@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import { formatCount, formatDecimal } from "../../../lib/number";
 import type { DeliveredFigures } from "../FactoryReport.api";
 
@@ -25,4 +27,23 @@ export const CELL = "border-0 bg-transparent py-1.5 pl-0 pr-3 text-left align-to
 
 export function NoValue() {
   return <><span aria-hidden="true">-</span><span className="sr-only">no value</span></>;
+}
+
+/** A line of small print, a link in a line of text, and a second line in a cell or a list item. */
+export const NOTE = "m-0 max-w-[640px] text-xs text-muted-foreground";
+export const LINK = "text-foreground underline decoration-border underline-offset-[3px]";
+export const SUB = "block text-xs text-muted-foreground";
+
+/** A caption over a table that scrolls sideways when it does not fit. The box is `relative` so that
+ *  text for screen readers in a far column stays inside it and does not widen the page. */
+export function Figure({ title, children, ...props }: { title: string; children: React.ReactNode; "data-testid": string }) {
+  const id = React.useId();
+  return (
+    <figure aria-labelledby={id} className="m-0 grid min-w-0 content-start gap-2" {...props}>
+      <figcaption id={id} className={CAPTION}>{title}</figcaption>
+      <div role="region" aria-labelledby={id} tabIndex={0} className="relative min-w-0 overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring">
+        {children}
+      </div>
+    </figure>
+  );
 }

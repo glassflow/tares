@@ -1827,7 +1827,23 @@ class FactoryStore:
               "person_id": r.person_id}
              for r in rows], None)
 
-    ANSWER_VIA = ("console", "feed", "session", "message")
+    def decisions_between(self, projects: list[str], since, until) -> list[dict]:
+        """The decisions of `projects` made from `since` up to, not including, `until`, newest
+        first, in one read (the Report). A decision asked with no project is none of theirs."""
+        if not projects:
+            return []
+        d = decisions_table
+        q = select(d.c.project, d.c.question, d.c.words, d.c.choice, d.c.tickets, d.c.decided_at,
+                   d.c.person_id).where(
+            d.c.project.in_(list(projects)), d.c.decided_at >= since, d.c.decided_at < until)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(d.c.decided_at.desc(), d.c.id.desc())).fetchall()
+        return self._with_people(
+            [{"project": r.project, "question": r.question, "words": r.words, "choice": r.choice,
+              "tickets": r.tickets or [], "at": r.decided_at, "person_id": r.person_id}
+             for r in rows], None)
+
+    ANSWER_VIA =("console", "feed", "session", "message")
 
     def add_answer(self, item: str, kind: str, project: str | None, ask: str, choice: str | None,
                    said: str, via: str, person_id: str | None, at) -> dict:

@@ -1,6 +1,7 @@
 /*
  * Browser e2e for TR-1667 (the factory Report page's frame), TR-1668 (its Delivered section),
- * TR-1669 (its Time section), TR-1670 (its Review section) and TR-1672 (its Merges section).
+ * TR-1669 (its Time section), TR-1670 (its Review section), TR-1672 (its Merges section) and TR-1673
+ * (its Architecture section).
  *
  * A scratch factory cell seeded by tests/seed-factory-report.py (8 weeks hold 9 merged tickets, 4 weeks
  * 5). Checked: the menu entry; the page from one read of GET /api/factory/report; the six section
@@ -12,8 +13,9 @@
  * its two weekly charts, the start-to-merge histogram and "stuck now" with its links to the question
  * (inside "Waiting for others" on the project page) and to the ticket, also empty; Review's two tiles
  * and two weekly charts, its findings table sorted by each column, its projects with the weeks before,
- * and its recurring findings with the accepted rule marked, also empty and before the first pass; a
- * scope or a date the cell refuses; a read that fails; at 1440 and 390 wide, and embedded in the desktop
+ * and its recurring findings with the accepted rule marked, also empty and before the first pass;
+ * Architecture's weekly table by repo, the Rising mark, the decisions by repo and of none, its empty
+ * states and how it is counted (from a response made in the suite); a scope or a date the cell refuses; a read that fails; at 1440 and 390 wide, and embedded in the desktop
  * (?embed=desktop).
  * Run:  npm run build && TARES_E2E_PORT=<free port> node tests/report.e2e.cjs
  * (tares installed in ../.venv or on PATH). Set SHOTS_DIR to keep screenshots. TARES_E2E_PORT
@@ -100,7 +102,8 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
     const inside = (page) => page.evaluate(() => {
       const w = document.documentElement.clientWidth;
       return [...document.querySelectorAll("main *")].every((e) => e.getBoundingClientRect().right <= w + 1
-        || !!e.parentElement.closest('[data-week-chart] [role="region"], [data-testid^="merges-"] [role="region"]'));
+        || !!e.parentElement.closest('[data-week-chart] [role="region"], [data-testid^="merges-"] [role="region"], '
+          + '[data-testid="architecture-weeks"] [role="region"]'));
     });
     const shot = async (page, name) => {
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `report-${name}.png`), fullPage: true });
@@ -162,13 +165,9 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
-      ck("frame: each section but Delivered, Time, Review, Cost and Merges says it is not built yet",
-         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 1
-         && !(await text(page, "report-section-delivered")).includes("not built")
-         && !(await text(page, "report-section-time")).includes("not built")
-         && !(await text(page, "report-section-review")).includes("not built")
-         && !(await text(page, "report-section-cost")).includes("not built")
-         && !(await text(page, "report-section-merges")).includes("not built"));
+      ck("frame: every section is built",
+         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 0
+         && (await count(page, "architecture-counted")) === 1);
       ck("frame: the Cost section says what its amounts are",
          (await text(page, "cost-label")) === "API-equivalent cost: list prices from tares/pricing.py. A subscription crew pays a flat fee.",
          await text(page, "cost-label"));
@@ -1074,6 +1073,110 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          new URL(page.url()).pathname === "/crew" && await heading.isVisible(),
          `${page.url()} ${JSON.stringify(await page.locator("h1").allInnerTexts())}`);
       await ctx.close();
+    }
+
+    // ---- Architecture: drawn from a section made here, so each case is on one page
+    {
+      const four = (...counts) => counts.map((n, i) => ({ week: plus(ids.monday, -7 * (3 - i)), count: n }));
+      const long = "acme/a-repository-whose-name-has-no-break-in-it-and-is-longer-than-a-phone-is-wide";
+      const day = plus(ids.monday, -7);
+      const decision = (question, more = {}) => ({ project: ids["project-a"], name: "project-a", question,
+        answer: "Keep them apart", person: { id: ids.Ada, name: "Ada" }, at: `${day}T12:00:00Z`, tickets: ["T1", "T2"],
+        ...more });
+      const row = (repo, rising, weeks, decisions = [], decided = decisions.length) => ({ repo, rising, weeks,
+        total: weeks.reduce((sum, w) => sum + w.count, 0), decisions, decisions_total: decided });
+      const NONE = { decisions: [], decisions_total: 0 };
+      const FULL = {
+        repos: [row("acme/api", true, four(1, 2, 3, 0), [1, 2, 3, 4, 5].map((n) => decision(`Question ${n}?`)), 7),
+                row(long, false, four(0, 0, 1500, 0)),
+                row(null, false, four(0, 0, 2, 0))],
+        unplaced: { decisions: [decision("Which name?", { answer: "", person: null, tickets: [] })], decisions_total: 1 },
+      };
+      const drawn = async (width, architecture) => {
+        const opened = await fresh(width);
+        await opened.page.route(/\/api\/factory\/report\?/, async (r) => {
+          const res = await r.fetch();
+          const body = await res.json();
+          body.sections.architecture = architecture;
+          await r.fulfill({ response: res, json: body });
+        });
+        await open(opened.page, "/report?range=4w");
+        await opened.page.getByTestId("architecture-counted").waitFor();
+        return opened;
+      };
+
+      {
+        const { ctx, page } = await drawn(1440, FULL);
+        const section = page.getByTestId("report-section-architecture");
+        const table = page.getByTestId("architecture-weeks");
+        const heads = await table.locator("th[data-week]").allTextContents();
+        ck("architecture: a column for each week, the running one marked so far",
+           JSON.stringify(heads) === JSON.stringify([21, 14, 7].map((n) => said(plus(ids.monday, -n))).concat(`${said(ids.monday)}so far`)),
+           JSON.stringify(heads));
+        const rows = await table.locator("tbody tr").evaluateAll((trs) => trs.map((tr) => [...tr.children].map((c) => c.textContent)));
+        ck("architecture: a row per repo with its weeks, total and decisions, no decision count for no repo",
+           JSON.stringify(rows) === JSON.stringify([
+             ["acme/apiRising", "1", "2", "3", "0", "6", "7"],
+             [long, "0", "0", "1,500", "0", "1,500", "0"],
+             ["Repo not recorded", "0", "0", "2", "0", "2", "-no value"]]), JSON.stringify(rows));
+        ck("architecture: Rising marks the rising repo alone", (await table.locator("[data-rising]").count()) === 1
+           && (await table.locator('tr[data-repo="acme/api"] [data-rising]').count()) === 1);
+        const groups = await section.locator("[data-decisions]").evaluateAll((els) => els.map((e) =>
+          [e.querySelector("h3").textContent, e.querySelectorAll("[data-decision]").length, e.querySelector("[data-shown]")?.textContent || ""]));
+        ck("decisions: by repo, then those tied to none, a long list saying how many there are",
+           JSON.stringify(groups) === JSON.stringify([["acme/api", 5, "Showing the newest 5 of 7 decisions."],
+                                                      ["Not tied to a repo", 1, ""]]), JSON.stringify(groups));
+        const lines = (at) => section.locator("[data-decision]").nth(at)
+          .locator("[data-question], [data-answer], [data-made]").allTextContents();
+        const first = await lines(0);
+        ck("decisions: the question, the answer, who, when, the project and its tickets",
+           JSON.stringify(first) === JSON.stringify(["Question 1?", "Answer: Keep them apart", `Ada · ${said(day)} · project-a · T1 · T2`]),
+           JSON.stringify(first));
+        const bare = await lines(5);
+        ck("decisions: no answer and no person are said",
+           JSON.stringify(bare) === JSON.stringify(["Which name?", "No answer recorded", `Person not recorded · ${said(day)} · project-a`]),
+           JSON.stringify(bare));
+        const link = await section.locator("[data-decision]").first().getByRole("link", { name: "T2" }).getAttribute("href");
+        ck("decisions: a ticket links to the ticket", link === `/projects/${ids["project-a"]}/tickets/T2`, link);
+        const counted = await page.getByTestId("architecture-counted").locator("p").allTextContents();
+        ck("architecture: how it is counted, older findings and access included", counted.length === 9
+           && counted.includes("Findings recorded before this kind existed are not counted, so the first weeks can look like a rise.")
+           && counted.includes("Only projects you can open are counted and named."), JSON.stringify(counted));
+        ck("architecture: how it is counted, a newer ticket's decision being listed apart until the next pass, and stored weeks after an upgrade",
+           counted.includes("A decision's repo is as of the cell's last pass, made about every 5 minutes, so a decision on a newer ticket or pull request is under Not tied to a repo until the next one. After an upgrade, stored weeks read Repo not recorded until the first pass, about 30 seconds after the cell starts."),
+           JSON.stringify(counted));
+        await checkWords(page, ck, "architecture @1440");
+        await shot(page, "architecture-1440");
+        await ctx.close();
+      }
+
+      const PARTS = ["empty", "no-findings", "weeks", "decisions", "no-decisions"];
+      for (const [label, architecture, want, line, words] of [
+        ["nothing at all", { repos: [], unplaced: NONE }, ["empty"], "empty",
+         "No architecture finding was first raised in these weeks, and there is no decision to list."],
+        ["decisions and no finding", { repos: [], unplaced: FULL.unplaced }, ["no-findings", "decisions"], "no-findings",
+         "No architecture finding was first raised in these weeks."],
+        ["findings and no decision", { repos: [FULL.repos[2]], unplaced: NONE }, ["weeks", "no-decisions"], "no-decisions",
+         "There is no decision to list for these weeks."],
+      ]) {
+        const { ctx, page } = await drawn(1440, architecture);
+        const counts = await Promise.all(PARTS.map((part) => count(page, `architecture-${part}`)));
+        const there = PARTS.filter((_, at) => counts[at] > 0);
+        const got = there.includes(line) ? await text(page, `architecture-${line}`) : "";
+        ck(`architecture empty: ${label}`, JSON.stringify(there) === JSON.stringify(want) && got === words, `${there} ${got}`);
+        await ctx.close();
+      }
+
+      {
+        const { ctx, page } = await drawn(390, { ...FULL, unplaced: { decisions: [decision(long)], decisions_total: 1 } });
+        const box = page.getByTestId("architecture-weeks").locator('[role="region"]');
+        ck("390: the architecture table scrolls inside its own box and long names stay inside the page",
+           await box.evaluate((e) => e.scrollWidth > e.clientWidth) && (await overflow(page)) <= 0 && await inside(page),
+           `${await overflow(page)}px over`);
+        await checkWords(page, ck, "architecture @390");
+        await shot(page, "architecture-390");
+        await ctx.close();
+      }
     }
 
     // ---- phone width

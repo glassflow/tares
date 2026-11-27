@@ -112,7 +112,8 @@ ARCHITECTURE = (
     ("app/views.py", "a view helper now owns a business rule that the API also needs"),
     ("app/store.py", "this reaches across a module boundary into private state"),
 )
-# worded so that factory.finding_kind puts each in the bucket it is listed under
+# worded so that factory.finding_kind puts each of these, and of ARCHITECTURE, in the bucket it is
+# listed under
 FINDINGS = {
     "migration": (("db/migrations/004_change.sql", "the migration adds a column without a default, so older rows read back wrong"),
                   ("db/migrations/007_change.sql", "this schema change locks the table while it rewrites every row")),
@@ -416,11 +417,9 @@ class Seeder:
         s, uid, tid = self.store, p["uid"], ticket["id"]
         s.add_check(uid, tid, "make test", f"{r.randint(40, 260)} passed", pr["head"][:8], None,
                     f"{p['slug']}-build", self.session("builder", p, at), at - timedelta(seconds=20))
-        architecture = {text for _, text in ARCHITECTURE}
         s.add_review(uid, tid, pr["url"], pr["head"], verdict, r.choice(VERIFIED),
                      "No load test." if r.random() < 0.3 else "", REVIEWER, findings, resolved,
-                     lambda text: "architecture" if text in architecture else factory.finding_kind(text),
-                     at)
+                     factory.finding_kind, at)
         for k in range(r.randint(1, 2)):
             self.reply(r, "reviewer", p, at - timedelta(seconds=30 * (k + 1)))
 

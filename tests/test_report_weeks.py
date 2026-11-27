@@ -381,6 +381,89 @@ def deleting(s):
     ck("the other project is as it was", table(s, projects=["pa"]) == pa)
 
 
+def placing():
+    print("== architecture findings and their repo ==")
+    s = Store(os.path.join(tempfile.mkdtemp(), "placing.duckdb"))
+    s.create_project("pc", "blank", "C", {})
+    first, bare = (s.create_ticket("pc", "tares", n) for n in ("with a pull request", "without"))
+
+    def move(repo):
+        s.update_ticket(first, pr={"url": f"https://github.com/{repo}/pull/1", "repo": repo, "number": 1,
+                                   "head": "abc1234", "base": "main", "state": "open", "checked_at": None})
+
+    def placed(week):
+        return sorted((g["kind"], g.get("repo") or "", g["opened"], g["fixed"])
+                      for g in table(s)["pc", week]["findings"])
+
+    layer = "This module reaches into the internals of another layer"
+    move("acme/api")
+    review(s, "pc", first, "changes", at(6, 10), findings=[("P2", False, layer),
+                                                           ("P3", False, "The README is stale")])
+    review(s, "pc", bare, "changes", at(6, 11), findings=[("P2", False, layer)])
+    review(s, "pc", first, "pass", at(13, 10), resolved={"F1": "fixed"})
+    report.rebuild_all(s)
+    arch = report.ARCHITECTURE
+    ck("an architecture finding carries the repo of its ticket's pull request, none without one",
+       placed(W1) == [(arch, "", 1, 0), (arch, "acme/api", 1, 0), (K_DOCS, "", 1, 0)], placed(W1))
+    others = [g for g in table(s)["pc", W1]["findings"] if g["kind"] != arch]
+    ck("a finding of another kind carries no repo", others and all("repo" not in g for g in others),
+       others)
+    ck("its fix counts in the same repo, in the week of the fixing review",
+       placed(W2) == [(arch, "acme/api", 0, 1)], placed(W2))
+    move("acme/web")
+    out = report.rebuild_all(s)
+    ck("a pull request now in another repo moves the ticket's architecture findings there",
+       out["changed"] == 2
+       and placed(W1) == [(arch, "", 1, 0), (arch, "acme/web", 1, 0), (K_DOCS, "", 1, 0)]
+       and placed(W2) == [(arch, "acme/web", 0, 1)], (out, placed(W1), placed(W2)))
+
+
+def matching():
+    print("== an architecture finding and the ticket of its review ==")
+    s = Store(os.path.join(tempfile.mkdtemp(), "matching.duckdb"))
+    layer = "This module reaches into the internals of another layer"
+
+    def reviewed_pair(project, minutes):
+        """A ticket in each of two repos, each reviewed with one architecture finding."""
+        s.create_project(project, "blank", project, {})
+        tickets = []
+        for severity, repo, minute in zip(("P2", "P3"), ("acme/api", "acme/web"), minutes):
+            tickets.append(s.create_ticket(project, "tares", repo))
+            s.update_ticket(tickets[-1], pr={
+                "url": f"https://github.com/{repo}/pull/1", "repo": repo, "number": 1, "head": "abc1234",
+                "base": "main", "state": "open", "checked_at": None})
+            review(s, project, tickets[-1], "changes", at(6, 10, minute), findings=[(severity, False, layer)])
+        return tickets
+
+    def placed(project):
+        return sorted((g["severity"], g.get("repo") or "", g["opened"])
+                      for g in table(s)[project, W1]["findings"])
+
+    web = reviewed_pair("pd", (0, 1))[1]
+    reviewed_pair("pe", (0, 0))
+    report.rebuild_all(s)
+    ck("two tickets reviewed at one moment: both findings are under Repo not recorded",
+       placed("pe") == [("P2", "", 1), ("P3", "", 1)], placed("pe"))
+    ck("at two moments each finding is on its own ticket's repo",
+       placed("pd") == [("P2", "acme/api", 1), ("P3", "acme/web", 1)], placed("pd"))
+
+    real = report._add_reviews
+    for label, change in (
+            ("no review at its moment", lambda rows: [r for r in rows if r["ticket"] != web]),
+            ("a review that names no ticket",
+             lambda rows: [{**r, "ticket": None} if r["ticket"] == web else r for r in rows])):
+        def altered(cells, reviews, findings, live, repos, change=change):
+            real(cells, change(reviews), findings, live, repos)
+
+        report._add_reviews = altered
+        try:
+            report.rebuild_all(s)
+        finally:
+            report._add_reviews = real
+        ck(f"a finding with {label} is under Repo not recorded",
+           placed("pd") == [("P2", "acme/api", 1), ("P3", "", 1)], placed("pd"))
+
+
 def holds(s, project, ticket, *moves):
     for station, when in moves:
         s.add_ticket_history(ticket, project, "holder", station, None, None, None, when)
@@ -704,6 +787,8 @@ def main():
     again(s)
     late(s, ids)
     deleting(s)
+    placing()
+    matching()
     background()
     migration()
     ticket_costs()

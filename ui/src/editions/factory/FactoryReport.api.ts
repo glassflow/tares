@@ -137,6 +137,26 @@ export interface MergesData {
   weeks: ({ week: string; unrecorded: number } & Record<MergeLevel, number>)[];
 }
 
+/** A decision a person made. `name` is its project's, `answer` the choice picked, else their words,
+ *  `tickets` the labels it was recorded with. */
+export interface ReportDecision {
+  project: string; name: string; question: string; answer: string; at: string;
+  person: { id: string; name: string } | null; tickets: string[];
+}
+
+/** `decisions` are the newest of the `decisions_total` decisions. */
+export interface DecisionList { decisions_total: number; decisions: ReportDecision[] }
+
+/** One repo's architecture findings and decisions. `repo` null holds the findings of tickets with no
+ *  pull request. `weeks` and `total` count findings first raised in the range. */
+export interface ArchitectureRepo extends DecisionList {
+  repo: string | null; total: number; weeks: { week: string; count: number }[]; rising: boolean;
+}
+
+/** `sections.architecture` (tares/report.py `architecture`). `repos` come rising first, then most
+ *  findings; `unplaced` holds the decisions whose tickets have no pull request. */
+export interface ArchitectureData { repos: ArchitectureRepo[]; unplaced: DecisionList }
+
 export interface ReportData {
   /** The weeks the read covers: `from` is a Monday, `to` a Sunday, `weeks` the Mondays, oldest first.
    *  `running_week` is the Monday of the week that is not over, when the range holds it. */

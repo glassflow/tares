@@ -8,10 +8,11 @@ background pass keeps them current (`run`).
 A pass reads every source once, works out all the (project, week) rows in memory and writes only the
 ones that differ. A late event changes an older week (an answer, a fix, a later review round, a long
 stage that just ended), and working everything out again cannot miss one. A full pass also writes
-three things that are no week's figure: what is stuck at that moment into the setting `report.stuck`
-(`_stuck`), the findings that recur into `report.recurring` (`_recurring`), and what each merged
+four things that are no week's figure: what is stuck at that moment into the setting `report.stuck`
+(`_stuck`), the findings that recur into `report.recurring` (`_recurring`), what each merged
 ticket and accepted milestone cost into `report.costs` (`_costs`, which ties replies to tickets by
-the rule in report_cost.py).
+the rule in report_cost.py), and the repository of each ticket's pull request into
+`report.ticket_repos` (`_ticket_repos`), so that a page can place a decision and read no ticket.
 
 The columns of a row. Project "" holds what belongs to no project; every duration is in hours:
 
@@ -29,7 +30,9 @@ The columns of a row. Project "" holds what belongs to no project; every duratio
     rounds               [n, ...] review rounds to date, one number for each of those tickets
     findings             [{kind, severity, blocking, opened, opened_open, opened_fixed, fixed}]:
                          `opened` were found in the week and `opened_open` and `opened_fixed` say
-                         where they stand now; `fixed` were fixed by a review made in the week
+                         where they stand now; `fixed` were fixed by a review made in the week. An
+                         architecture finding is counted apart for each repository and carries
+                         `repo`, that of its ticket's pull request, left out when there is none
     questions            {asked, blocking, answered, answer_hours: [h, ...]}: every desk item, in
                          the week it was asked
     cost_usd             API-equivalent cost of the week's priced replies
@@ -70,6 +73,11 @@ RECURRING_SHOWN = 5                      # how many recurring findings the page 
 COST_SETTING = "report.costs"    # what tickets and milestones had cost at the last full pass
 COST_SHOWN = 5                   # how many of the most expensive of each the page lists
 NAMED_KINDS = frozenset(kind for kind, _ in factory_mod.FINDING_KINDS)
+ARCHITECTURE = "architecture"   # the finding kind counted by repository
+RISE_WEEKS = 4            # "rising": this many finished weeks, each with more than the one before
+DECISIONS_SHOWN = 5       # how many decisions the architecture section lists for one repository
+TICKET_REPOS_SETTING = "report.ticket_repos"   # each ticket's repository at the last full pass
+_MERGE_ASK = re.compile(r"Merge PR #\d+\b")   # the merge queue's own question (merge_queue._ask)
 BUCKET_EDGES = (1, 4, 24, 72)    # start to merge, hours; a time on an edge is in the bucket above it
 NO_PROJECT = ""
 PERSON = "person"         # the role of a session that is no station's
@@ -167,9 +175,9 @@ def _union(spans: list[tuple]) -> list[tuple]:
     return out
 
 
-def _ticket_waits(items: list[dict], tickets: dict[str, list[dict]]) -> dict[tuple, list[tuple]]:
-    """{(project, ticket id): the joined spans it waited on a person}. A desk item names tickets by
-    their label (T3, ENG-12) within its project; a deleted ticket's label names nothing any more."""
+def _ticket_refs(tickets: dict[str, list[dict]]) -> dict[tuple[str, str], str]:
+    """{(project, REF): ticket id}: what a stored ticket label (T3, ENG-12) names within its
+    project. A deleted ticket's label names nothing any more."""
     ids: dict[tuple[str, str], str] = {}
     for project, rows in tickets.items():
         for t in rows:
@@ -179,6 +187,30 @@ def _ticket_waits(items: list[dict], tickets: dict[str, list[dict]]) -> dict[tup
         for t in rows:      # after, so a number never takes an identifier's place
             if t.get("number"):
                 ids.setdefault((project, f"T{t['number']}"), t["id"])
+    return ids
+
+
+def _pr_repos(tickets: dict[str, list[dict]]) -> dict[tuple[str, str], str]:
+    """{(project, ticket id): the repository of the ticket's pull request}, for those with one."""
+    return {(project, t["id"]): t["pr"]["repo"] for project, rows in tickets.items() for t in rows
+            if (t.get("pr") or {}).get("repo")}
+
+
+def _ticket_repos(tickets: dict[str, list[dict]]) -> dict[str, dict[str, str]]:
+    """{project: {REF: the repository of that ticket's pull request}}, under every label that
+    names a ticket (_ticket_refs). A ticket with no pull request is left out."""
+    repos = _pr_repos(tickets)
+    out: dict[str, dict[str, str]] = defaultdict(dict)
+    for (project, ref), tid in _ticket_refs(tickets).items():
+        if (project, tid) in repos:
+            out[project][ref] = repos[project, tid]
+    return out
+
+
+def _ticket_waits(items: list[dict], tickets: dict[str, list[dict]]) -> dict[tuple, list[tuple]]:
+    """{(project, ticket id): the joined spans it waited on a person}. A desk item names tickets by
+    their label within its project (_ticket_refs)."""
+    ids = _ticket_refs(tickets)
     waits: dict[tuple, list[tuple]] = defaultdict(list)
     for item in items:
         span = waiting_span(item)
@@ -246,8 +278,11 @@ def _finding(cell: dict, key: tuple) -> dict:
                                              "fixed": 0})
 
 
-def _add_reviews(cells, reviews: list[dict], findings: list[dict], live: set[str]) -> None:
-    """Review rounds, in the week of a ticket's first, and findings opened and fixed."""
+def _add_reviews(cells, reviews: list[dict], findings: list[dict], live: set[str],
+                 repos: dict[tuple[str, str], str]) -> None:
+    """Review rounds, in the week of a ticket's first, and findings opened and fixed. `repos`
+    (_pr_repos) places the architecture findings. A finding row names no ticket, so it takes the
+    one of its project's review at the same moment; without exactly one, its repo stays ""."""
     for _, rows in groupby(reviews, key=lambda r: r["ticket"]):
         rounds = counted_rounds(list(rows))
         if not rounds or rounds[0]["project"] not in live:
@@ -258,10 +293,19 @@ def _add_reviews(cells, reviews: list[dict], findings: list[dict], live: set[str
         cell["passed_first"] += int(first["verdict"] == "pass")
         cell["rounds"].append(len(rounds))
     reviewed_at = {r["id"]: r["at"] for r in reviews}
+    tickets_at: dict[tuple[str, str], set[str]] = {}
+    for r in reviews:
+        if r["at"]:
+            tickets_at.setdefault((r["project"], r["at"]), set()).add(r["ticket"] or "")
     for f in findings:
         if f["project"] not in live:
             continue
-        key = (f["kind"] or "", f["severity"] or "", f["blocking"])
+        repo = ""
+        if f["kind"] == ARCHITECTURE:
+            named = tickets_at.get((f["project"], f["found_at"]), set())
+            ticket = next(iter(named)) if len(named) == 1 else ""
+            repo = repos.get((f["project"], ticket), "") if ticket else ""
+        key = (f["kind"] or "", f["severity"] or "", f["blocking"], repo)
         if f["found_at"]:
             group = _finding(cells[f["project"], week_of(f["found_at"])], key)
             group["opened"] += 1
@@ -302,8 +346,10 @@ def _row(cell: dict) -> dict:
         "reviewed": cell["reviewed"],
         "passed_first": cell["passed_first"],
         "rounds": sorted(cell["rounds"]),
-        "findings": [{"kind": kind, "severity": severity, "blocking": blocking, **counts}
-                     for (kind, severity, blocking), counts in sorted(cell["findings"].items())],
+        "findings": [{"kind": kind, "severity": severity, "blocking": blocking,
+                      **({"repo": repo} if repo else {}), **counts}
+                     for (kind, severity, blocking, repo), counts
+                     in sorted(cell["findings"].items())],
         "questions": {"asked": cell["asked"], "blocking": cell["blocking"],
                       "answered": cell["answered"],
                       "answer_hours": sorted(cell["answer_hours"])},
@@ -342,7 +388,8 @@ def _compute(store, week: date | None = None,
     _add_stages(cells, read["changes"], waits, live)
     _add_waited(cells, waits)
     _add_desk(cells, items, live)
-    _add_reviews(cells, store.all_reviews(), store.all_review_findings(), live)
+    _add_reviews(cells, store.all_reviews(), store.all_review_findings(), live,
+                 _pr_repos(read["tickets"]))
     _add_milestones(cells, store, live)
     since = until = None
     if week is not None:
@@ -664,8 +711,9 @@ def _write(store, rows: dict[tuple[str, date], dict], only: tuple[str, date] | N
 
 
 def rebuild_all(store) -> dict:
-    """Work out every week of every project again, what is stuck now, the findings that recur and
-    the ticket costs. Returns {rows, changed, removed} of the weekly rows."""
+    """Work out every week of every project again, what is stuck now, the findings that recur,
+    the ticket costs and each ticket's repository. Returns {rows, changed, removed} of the weekly
+    rows."""
     with _PASS:
         at = now_utc()
         read = _read(store)
@@ -673,7 +721,8 @@ def rebuild_all(store) -> dict:
         out = _write(store, rows)
         for key, value in ((STUCK_SETTING, _stuck(read, at)),
                            (RECURRING_SETTING, _recurring(store, read, at)),
-                           (COST_SETTING, _costs(store, read, rows, at))):
+                           (COST_SETTING, _costs(store, read, rows, at)),
+                           (TICKET_REPOS_SETTING, _ticket_repos(read["tickets"]))):
             store.set_setting(key, json.dumps(value, sort_keys=True, separators=(",", ":")))
         return out
 
@@ -1016,14 +1065,75 @@ def merges(store, visible: dict[str, dict], ids: list[str], weeks: list[date]) -
                       for w in weeks]}
 
 
+def architecture(store, visible: dict[str, dict], ids: list[str], weeks: list[date],
+                 rows: list[dict], finished: date) -> dict:
+    """The Architecture section (TR-1673). `repos` are the repositories with an architecture
+    finding first raised, or a decision made, in the weeks of the Mondays `weeks`, in the projects
+    `ids` (all of them in `visible`). The findings are those of the weekly rows `rows` of those
+    projects, which reach back over the RISE_WEEKS weeks ending at `finished`, the newest week of
+    the report that is over: `rising` says each of those had more than the one before. The repo
+    null holds the findings of tickets with no pull request and is never rising. The decisions are
+    read now, without the merge queue's own question. One is listed under each repository of the
+    pull requests of its tickets, as the last full pass recorded them (TICKET_REPOS_SETTING; no
+    ticket is read here), and under `unplaced` when it recorded none, as for a ticket newer than
+    the pass."""
+    from .screens.factory_project import cleaner
+    found: dict = defaultdict(int)       # (repo or None, week): findings first raised
+    for r in rows:
+        for f in r["findings"]:
+            if f["kind"] == ARCHITECTURE:
+                found[f.get("repo"), r["week"]] += f["opened"]
+    since = datetime.combine(weeks[0], time(), timezone.utc)
+    until = datetime.combine(weeks[-1] + timedelta(days=7), time(), timezone.utc)
+    decisions = [d for d in store.decisions_between(ids, since, until)
+                 if not _MERGE_ASK.match(d["question"] or "")]
+    saved = store.get_setting(TICKET_REPOS_SETTING)
+    repo_of = json.loads(saved) if saved else {}
+    decided, unplaced = defaultdict(list), []      # each list newest first
+    for d in decisions:
+        recorded = repo_of.get(d["project"], {})
+        its = {recorded.get(str(ref).upper()) for ref in d["tickets"]} - {None}
+        for repo in its:
+            decided[repo].append(d)
+        if not its:
+            unplaced.append(d)
+    handovers = store.handovers_by_project(sorted({d["project"] for d in decisions})) \
+        if decisions else {}
+
+    def listed(of: list[dict]) -> dict:
+        shown = []
+        for d in of[:DECISIONS_SHOWN]:
+            clean = cleaner(handovers.get(d["project"]))
+            shown.append({"project": d["project"], "name": visible[d["project"]]["name"],
+                          "question": clean(d["question"] or ""),
+                          "answer": clean(factory_mod.decision_words(d)["answer"]),
+                          "at": _utc(d["at"]).isoformat(), "person": d["person"],
+                          "tickets": d["tickets"]})
+        return {"decisions_total": len(of), "decisions": shown}
+
+    def repo_row(repo: str | None) -> dict:
+        counts = [{"week": w.isoformat(), "count": found.get((repo, w), 0)} for w in weeks]
+        last = [found.get((repo, finished - timedelta(weeks=back)), 0)
+                for back in reversed(range(RISE_WEEKS))]
+        return {"repo": repo, "total": sum(c["count"] for c in counts), "weeks": counts,
+                "rising": repo is not None and all(a < b for a, b in zip(last, last[1:])),
+                **listed(decided.get(repo, []))}
+
+    raised = {repo for (repo, week), n in found.items() if n and week >= weeks[0]}
+    repos = sorted((repo_row(repo) for repo in raised | set(decided)),
+                   key=lambda r: (r["repo"] is None, not r["rising"], -r["total"],
+                                  (r["repo"] or "").lower()))
+    return {"repos": repos, "unplaced": listed(unplaced)}
+
+
 # The sections of the page, in its order. A section's ticket puts its builder in its line:
 # f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
 # (read_weeks) and the Mondays of the range. A builder named in COMPARED is also handed the rows
 # of as many weeks just before the range, in the same scope: f(rows, weeks, before). A builder
 # reads nothing else; page() itself adds what is not a week's figure: the last pass's "stuck now"
 # to the time section, its recurring findings to the review section and its ticket costs to the
-# cost section. The merges section has no weekly figure: page() builds it whole (`merges`), so it
-# has no builder here.
+# cost section. Two sections have no builder here, because page() builds them whole: `merges` has
+# no weekly figure, and `architecture` also reads the decisions and weeks before the range.
 COMPARED = {"delivered", "review"}
 SECTIONS: dict[str, Callable[..., dict] | None] = {
     "delivered": delivered,
@@ -1121,12 +1231,14 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         ids, rest, name = [key], False, visible[key]["name"]
     else:
         raise ValueError("A scope is mine, factory, team:<id> or project:<id>.")
-    # one read for the range and the same number of weeks before it, for the sections that compare
-    read = read_weeks(store, ids + ([NO_PROJECT] if rest else []),
-                      weeks[0] - timedelta(weeks=len(weeks)), weeks[-1])
-    rows = [r for r in read if r["week"] >= weeks[0]]
-    before = [r for r in read if r["week"] < weeks[0]]
     running = week_of(today)
+    compared = weeks[0] - timedelta(weeks=len(weeks))   # for the sections that compare
+    finished = min(weeks[-1], running - timedelta(weeks=1))   # the newest week that is over
+    # one read for the range, the same number of weeks before it, and the weeks "rising" needs
+    read = read_weeks(store, ids + ([NO_PROJECT] if rest else []),
+                      min(compared, finished - timedelta(weeks=RISE_WEEKS - 1)), weeks[-1])
+    rows = [r for r in read if r["week"] >= weeks[0]]
+    before = [r for r in read if compared <= r["week"] < weeks[0]]
     sections = {k: build(rows, weeks, before) if k in COMPARED else build(rows, weeks)
                 for k, build in SECTIONS.items() if build}
     sections["time"]["stuck"] = _stuck_now(store, visible, ids, asks_me if rest else None)
@@ -1140,6 +1252,7 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         for p in sections["cost"]["projects"]]
     sections["cost"]["by_ticket"] = _costs_now(store, visible, ids, weeks, rest)
     sections["merges"] = merges(store, visible, ids, weeks)
+    sections["architecture"] = architecture(store, visible, ids, weeks, read, finished)
     return {
         "range": {"from": weeks[0].isoformat(),
                   "to": (weeks[-1] + timedelta(days=6)).isoformat(),
