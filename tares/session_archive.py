@@ -35,8 +35,8 @@ restored from earlier does not know the newer parts, and must not remove them. E
 `write_part` holds `writing(session)` until the part row is committed or given up.
 
 A read (`session_read.py`, TR-1507) fetches a part, checks its size and MD5 against the part's row
-and its lines against the row's range, and `decode`s it; any step that fails raises `ArchiveError`
-and the reader falls back to DuckDB.
+and its lines against the row's range, and `decode`s it a line at a time; any step that fails raises
+`ArchiveError` and the reader falls back to DuckDB.
 
 On Postgres a session is archived in one transaction that starts with
 `pg_try_advisory_xact_lock(hashtext('tares_session_archive:' || session))`: two cells (or two
@@ -274,32 +274,46 @@ def encode(rows) -> bytes:
     return buf.getvalue()
 
 
-def decode(data: bytes) -> list[dict]:
+def decode(data: bytes):
     """The rows of one part, in file order, each as the dict `encode` wrote (`at` an ISO string or
-    None). Raises `ArchiveError` for a file that is not gzip JSON-lines of such rows."""
+    None), unpacked and parsed one line at a time: the unpacked part is never held whole. Raises
+    `ArchiveError` for a file that is not gzip JSON-lines of such rows, when it gets to the fault."""
     try:
-        rows = [json.loads(ln) for ln in gzip.decompress(data).decode("ascii").splitlines()]
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+            for ln in gz:
+                r = json.loads(ln.decode("ascii"))
+                if not isinstance(r, dict) or not isinstance(r.get("seq"), int):
+                    raise ArchiveError("part holds a line that is not a session line")
+                yield r
     except (OSError, EOFError, ValueError) as e:
         raise ArchiveError(f"part is not gzip JSON-lines ({type(e).__name__}: {e})") from e
-    for r in rows:
-        if not isinstance(r, dict) or not isinstance(r.get("seq"), int):
-            raise ArchiveError("part holds a line that is not a session line")
-    return rows
 
 
-def read_part(backend: Backend, part) -> list[dict]:
-    """One part's rows, after checking the file against its row in `session_archive_parts`: the
-    size, the MD5, and that it holds `lines` rows numbered `first_seq` to `last_seq` in order.
-    Raises `ArchiveError` (or the backend's own error) for anything else."""
+def iter_part(backend: Backend, part):
+    """One part's rows one at a time, checked against its row in `session_archive_parts`: the size
+    and the MD5 of the file before the first row, and after the last one that it held `lines` rows
+    numbered `first_seq` to `last_seq` in order. Raises `ArchiveError` (or the backend's own error)
+    for anything else, which can be after rows were given: the caller drops them then."""
     data = backend.get(part.key)
     if len(data) != part.bytes or hashlib.md5(data).hexdigest() != part.md5:
         raise ArchiveError(f"{part.key} does not match its record (size {len(data)} of {part.bytes})")
-    rows = decode(data)
-    seqs = [r["seq"] for r in rows]
-    if (len(rows) != part.lines or not seqs or seqs[0] != part.first_seq or seqs[-1] != part.last_seq
-            or seqs != sorted(set(seqs))):
-        raise ArchiveError(f"{part.key} holds {len(rows)} lines, not the {part.lines} recorded")
-    return rows
+    count, first, last, ordered = 0, None, None, True
+    for r in decode(data):
+        seq = r["seq"]
+        if not count:
+            first = seq
+        elif seq <= last:
+            ordered = False
+        count, last = count + 1, seq
+        yield r
+    if (count != part.lines or not count or first != part.first_seq or last != part.last_seq
+            or not ordered):
+        raise ArchiveError(f"{part.key} holds {count} lines, not the {part.lines} recorded")
+
+
+def read_part(backend: Backend, part) -> list[dict]:
+    """All of one part's rows (`iter_part`), given only when the whole part checked out."""
+    return list(iter_part(backend, part))
 
 
 def backend_of(store) -> Backend | None:

@@ -435,7 +435,7 @@ def finish(store, plan: _Plan) -> dict:
                     if backend is None:
                         raise session_archive.ArchiveError("no archive is configured for this cell")
                     groups: dict = {}
-                    for raw in session_archive.read_part(backend, p):
+                    for raw in session_archive.iter_part(backend, p):
                         r = session_read._archived(raw)
                         kind, labels = r["type"], r["labels"]
                         key = (kind if kind is None else sys.intern(kind),
