@@ -12,8 +12,10 @@ either, so a model never reads one into a conversation. Claude Code sessions sen
 known value replaced with `[secret NAME]` before they are stored (`scrub`, called by the claude_code
 connector); a value that was encoded or split is not found.
 
-A member is the project's lead or a person on its member list (store.is_project_member). With auth off,
-or with the root credential, the one person using the cell counts as a member.
+A member, for secrets, is the project's lead or a person who was added to it (store.is_added_member),
+by hand or by holding a ticket of a private project. Joining a project yourself doesn't give you its
+secrets until the lead adds you. With auth off, or with the root credential, the one person using the cell
+counts as a member.
 
 The values are encrypted with a key derived from TARES_SECRETS_KEY (any long random string), which the cell
 gets from its environment, never from its database. Without it the feature is off: the list says so and a
@@ -129,11 +131,12 @@ def scrub(obj, pairs: list):
 
 
 def is_member(store, h, p: dict, request) -> bool:
-    """The project's lead or a person on its member list; the root credential and auth off count."""
+    """The project's lead or a person added to it (not one who only joined by themselves); the
+    root credential and auth off count."""
     if h.is_system(request):
         return True
     me = h.current_person(request)
-    return bool(me and (me.get("id") == "local" or store.is_project_member(p["id"], me["id"])))
+    return bool(me and (me.get("id") == "local" or store.is_added_member(p["id"], me["id"])))
 
 
 def listing(store, uid: str) -> dict:
@@ -160,6 +163,10 @@ def register(app, store, h):
     def member_of(uid: str, request: Request) -> dict:
         p = h.project_or_404(h.resolve_project(uid))
         if not is_member(store, h, p, request):
+            me = h.current_person(request)
+            if me and store.is_project_member(p["id"], me["id"]):
+                refuse(403, "you joined this project yourself: its secrets are for the lead and the "
+                            "people added to it. Ask the lead to add you")
             refuse(403, "only the project's members may see or change its secrets")
         return p
 

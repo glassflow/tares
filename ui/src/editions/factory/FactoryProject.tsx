@@ -581,11 +581,32 @@ function PickPerson({ people, exclude, label, testid, onPick }: {
   );
 }
 
-export function People({ people, onLead, onAdd }: {
+/** One click puts the person looking on a team project they are not on (TR-1720). */
+function JoinButton({ onJoin }: { onJoin: () => Promise<void> }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = React.useState(false);
+  const join = async () => {
+    setBusy(true);
+    try {
+      await onJoin();
+      toast("You are on the project.");
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : NOT_SAVED);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <Button busy={busy} onClick={() => void join()} data-testid="project-join">Join this project</Button>;
+}
+
+export function People({ people, onLead, onAdd, onJoin }: {
   people: ProjectPeople; onLead?: (id: string) => Promise<void>; onAdd?: (id: string) => Promise<void>;
+  onJoin?: () => Promise<void>;
 }) {
   const { lead, members } = people;
-  const on = [lead?.id, ...members.map((m) => m.id)].filter(Boolean) as string[];
+  // someone who joined by themselves stays pickable: adding them is what gives them the secrets
+  const on = [lead?.id, ...members.filter((m) => !m.joined).map((m) => m.id)].filter(Boolean) as string[];
+  const youJoined = members.some((m) => m.joined && m.id === people.you);
   return (
     <section id="people" aria-label="People" className="min-w-0 scroll-mt-4" data-testid="project-people">
       <SectionHead title="People" />
@@ -606,9 +627,24 @@ export function People({ people, onLead, onAdd }: {
         <div className={cn(MUTED, "mb-0.5 mt-3")}>Members</div>
         {members.length === 0 ? (
           <div className="py-1 text-[13px] text-muted-foreground" data-testid="people-no-members">No members yet.</div>
-        ) : members.map((m) => <PersonLine key={m.id} p={m} />)}
+        ) : members.map((m) => (
+          <PersonLine key={m.id} p={m}>
+            {m.joined && <span className={cn(MUTED, "whitespace-nowrap")} data-testid="people-joined">joined</span>}
+          </PersonLine>
+        ))}
         {people.can_add && onAdd && (
           <PickPerson people={people.people} exclude={on} label="Add a member" testid="people-add-member" onPick={onAdd} />
+        )}
+        {people.can_join && onJoin && <div className="mt-2.5"><JoinButton onJoin={onJoin} /></div>}
+        {youJoined && (
+          <p className="m-0 mt-2.5 text-[13px] [overflow-wrap:anywhere]" data-testid="people-you-joined">
+            You joined this project. {lead ? <>Ask <span data-user-text>{lead.name}</span> to add you</> : "Ask an admin to give it a lead, who can add you"} to get its secrets.
+          </p>
+        )}
+        {people.ask_lead && (
+          <p className="m-0 mt-2.5 text-[13px] [overflow-wrap:anywhere]" data-testid="people-ask-lead">
+            Private project. {lead ? <>Ask <span data-user-text>{lead.name}</span> to add you.</> : "Ask an admin to give it a lead."}
+          </p>
         )}
       </div>
     </section>
@@ -806,6 +842,7 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
   const [allowing, setAllowing] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [moving, setMoving] = React.useState(false);
   const finished = d.state === "finished";
+  const canJoin = !sample && d.people?.can_join === true;
   const target = deskTarget(useLocation().hash);
   // a finished project lists nothing as waiting; the desk item the address names still shows
   const named = (list: HomeItem[]) => list.filter((w) => standsFor(w, target));
@@ -850,8 +887,9 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
 
   return (
     <div className="grid min-w-0 gap-6" data-testid="factory-project" data-state={d.state}>
-      <PageHead title="Overview" actions={(d.later || (d.can_close && !finished)) && (
+      <PageHead title="Overview" actions={(canJoin || d.later || (d.can_close && !finished)) && (
         <>
+          {canJoin && <JoinButton onJoin={act.join} />}
           {d.later && <Button busy={moving} onClick={() => void startNow()} data-testid="project-start-now">Start now</Button>}
           {d.can_close && !finished && <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>}
         </>

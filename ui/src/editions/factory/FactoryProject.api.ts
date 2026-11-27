@@ -2,7 +2,7 @@
 // string is worded for people and shown as it is. `name`, `goal`, ticket and milestone titles, call
 // text, decisions and doc titles carry a person's own text. The one raw string is a terminal command.
 
-import { request } from "../../api";
+import { ApiError, request } from "../../api";
 import type { HomeItem } from "./home.types";
 import type { SecretsDoc } from "./ProjectSecrets";
 
@@ -84,7 +84,8 @@ export interface ProjectDoc {
   href: string;
 }
 
-export interface ProjectPerson { id: string; name: string; picture: string | null; tickets?: number }
+/** `joined`: they joined by themselves, so they have no secrets until the lead adds them. */
+export interface ProjectPerson { id: string; name: string; picture: string | null; tickets?: number; joined?: boolean }
 
 /** Who is on the project: the lead, the members (added, or holding a ticket), and what the caller may change. */
 export interface ProjectPeople {
@@ -92,6 +93,9 @@ export interface ProjectPeople {
   members: ProjectPerson[];
   can_set_lead: boolean;
   can_add: boolean;
+  /** A team project the caller is not on and may join; a private one they are not on. */
+  can_join: boolean;
+  ask_lead: boolean;
   you: string | null;
   /** The people the caller may pick from, when they may change something. */
   people: ProjectPerson[];
@@ -166,6 +170,23 @@ export const setProjectIcon = (id: string, icon: string | null) =>
 
 export const addProjectMember = (id: string, personId: string) =>
   request<unknown>(`/api/projects/${encodeURIComponent(id)}/members`, { method: "POST", body: JSON.stringify({ person_id: personId }) });
+
+/** A person puts themself on a team project. One that turned private since the page was read is
+ *  refused with `ask_lead`: the person is shown its sentence, not the JSON around it. */
+export const joinProject = (id: string) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}/join`, { method: "POST" }).catch((e) => {
+    const said = e instanceof ApiError ? askLead(e.message) : null;
+    throw said ? new ApiError(said, 403) : e;
+  });
+
+function askLead(message: string): string | null {
+  try {
+    const d = JSON.parse(message);
+    return d?.code === "ask_lead" ? String(d.detail) : null;
+  } catch {
+    return null;
+  }
+}
 
 export const factoryProject = (id: string) =>
   request<FactoryProjectData>(`/api/factory/projects/${encodeURIComponent(id)}`);

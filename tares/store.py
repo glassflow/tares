@@ -116,7 +116,8 @@ CREATE TABLE IF NOT EXISTS people (
   created_via TEXT
 );
 -- Who is on a project besides its lead (usecases.lead_person_id): reason 'manual' (the lead or
--- the system added them) or 'ticket' (they hold one of its tickets). The lead is not a row.
+-- the system added them), 'ticket' (they hold one of its tickets) or 'self' (they joined a team
+-- project themselves). A 'self' row counts on a team project only. The lead is not a row.
 CREATE TABLE IF NOT EXISTS project_members (
   project   TEXT,
   person_id TEXT,
@@ -2937,14 +2938,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
                            reason: str = "manual") -> bool:
-        """Put a person on the project. True when they were added, False when they already were
-        a member (a second add changes nothing, the first reason stays)."""
-        if reason not in ("manual", "ticket"):
-            raise ValueError("reason is manual or ticket")
+        """Put a person on the project. True when the row was written: a new member, or a person
+        who had joined by themselves and is now added (`manual` or `ticket`). Otherwise False,
+        and a second add changes nothing: the first reason stays."""
+        if reason not in ("manual", "ticket", "self"):
+            raise ValueError("reason is manual, ticket or self")
         with self._swrite:
-            if self.sc.execute("SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
-                                [uid, person_id]).fetchone():
-                return False
+            had = self.sc.execute("SELECT reason FROM project_members WHERE project = ? "
+                                   "AND person_id = ?", [uid, person_id]).fetchone()
+            if had:
+                if had[0] != "self" or reason == "self":
+                    return False
+                self.sc.execute(
+                    "UPDATE project_members SET added_by = ?, added_at = ?, reason = ? "
+                    "WHERE project = ? AND person_id = ?",
+                    [added_by or None, now_utc(), reason, uid, person_id])
+                return True
             self.sc.execute(
                 "INSERT INTO project_members (project, person_id, added_by, added_at, reason) "
                 "VALUES (?, ?, ?, ?, ?)", [uid, person_id, added_by or None, now_utc(), reason])
@@ -2959,13 +2968,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                              [uid, person_id])
         return bool(hit)
 
+    # Which rows of project_members `m` count, for every read of them: someone who joined by
+    # themselves is a member while the project is a team project, and not once it is private.
+    _MEMBER_ROW = ("(COALESCE(m.reason, '') <> 'self' OR NOT EXISTS (SELECT 1 FROM usecases u "
+                   "WHERE u.id = m.project AND u.scope = 'private'))")
+
     def list_project_members(self, uid: str) -> list[dict]:
         """The people on the project besides its lead, oldest first: {person_id, added_by,
         added_at, reason}."""
         with self._sread:
             rows = self.sc.execute(
-                "SELECT person_id, added_by, added_at, reason FROM project_members "
-                "WHERE project = ? ORDER BY added_at, person_id", [uid]).fetchall()
+                "SELECT person_id, added_by, added_at, reason FROM project_members m "
+                f"WHERE project = ? AND {self._MEMBER_ROW} ORDER BY added_at, person_id",
+                [uid]).fetchall()
         return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
                 for r in rows]
 
@@ -2976,9 +2991,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             return {}
         with self._sread:
             rows = self.sc.execute(
-                "SELECT project, person_id, added_by, added_at, reason FROM project_members "
-                f"WHERE project IN ({', '.join('?' for _ in ids)}) ORDER BY added_at, person_id",
-                ids).fetchall()
+                "SELECT project, person_id, added_by, added_at, reason FROM project_members m "
+                f"WHERE project IN ({', '.join('?' for _ in ids)}) AND {self._MEMBER_ROW} "
+                "ORDER BY added_at, person_id", ids).fetchall()
         out: dict[str, list[dict]] = {}
         for r in rows:
             out.setdefault(r[0], []).append({"person_id": r[1], "added_by": r[2],
@@ -2987,7 +3002,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def is_project_member(self, uid: str, person_id: str | None) -> bool:
-        """The project's lead, or a person on its member list."""
+        """The project's lead, or a person on its member list. Someone who joined by themselves
+        counts while the project is a team project."""
         if not person_id:
             return False
         with self._sread:
@@ -2996,8 +3012,23 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if lead and lead[0] == person_id:
                 return True
             return bool(self.sc.execute(
-                "SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
-                [uid, person_id]).fetchone())
+                "SELECT 1 FROM project_members m WHERE project = ? AND person_id = ? "
+                f"AND {self._MEMBER_ROW}", [uid, person_id]).fetchone())
+
+    # Licence-independent too: what a person who joined by themselves does not get.
+    def is_added_member(self, uid: str, person_id: str | None) -> bool:
+        """The project's lead, or a member someone put on it (`manual` or `ticket`), as opposed to
+        one who joined by themselves. This is who gets the project's secrets."""
+        if not person_id:
+            return False
+        with self._sread:
+            lead = self.sc.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
+                                    [uid]).fetchone()
+            if lead and lead[0] == person_id:
+                return True
+            return bool(self.sc.execute(
+                "SELECT 1 FROM project_members WHERE project = ? AND person_id = ? "
+                "AND COALESCE(reason, '') <> 'self'", [uid, person_id]).fetchone())
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
         with self._swrite:
