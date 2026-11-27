@@ -7,8 +7,8 @@ A table made by the old DDL and a table made from these declarations are the sam
 how revision 0002 can take over a Postgres database that already has them.
 
 The Store's session methods (store.py, factory_store.py, claude_usage_store.py) read and write
-these tables, and nothing else does outside `copy.py`, the tests' own seeding and report.py, which
-owns `report_weeks`.
+these tables, and nothing else does outside `copy.py`, the tests' own seeding, report.py, which
+owns `report_weeks`, and merge_ledger.py, which owns `merge_records`.
 """
 from __future__ import annotations
 
@@ -254,6 +254,30 @@ report_texts = Table(
     Column("figures", Text),
     Column("written_at", UTCDateTime),
 )
+
+# What one merge through the queue went through (merge_ledger.py, TR-1672), as it was at the merge.
+# The key is the merge queue row's id. A row with no `merged_at` is a merge the queue took on and has
+# not seen happen. `level` is the project's autonomy then, `reviewed_sha` the head the gate passed,
+# `merged_sha` the commit the merge made, `rounds` the review rounds counted by then, `outside` true
+# when somebody else than the queue merged it. A value nobody knew is null.
+merge_records = Table(
+    "merge_records", metadata,
+    Column("queue_row", Text, primary_key=True),
+    Column("project", Text),
+    Column("ticket", Text),
+    Column("repo", Text),
+    Column("pr", Integer),
+    Column("level", Text),
+    Column("reviewed_sha", Text),
+    Column("merged_sha", Text),
+    Column("rounds", Integer),
+    Column("ci_state", Text),
+    Column("approver_id", Text),
+    Column("approved_at", UTCDateTime),
+    Column("merged_at", UTCDateTime),
+    Column("outside", Boolean),
+)
+Index("merge_records_project_merged_at", merge_records.c.project, merge_records.c.merged_at)
 
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(

@@ -8,6 +8,7 @@ import { usePagePolling } from "../usePagePolling";
 import { factoryReport, isRefused, type ReportData, type SectionKey, type TimeData } from "./FactoryReport.api";
 import { Cost } from "./report/Cost";
 import { Delivered } from "./report/Delivered";
+import { Merges } from "./report/Merges";
 import { Review } from "./report/Review";
 import { TimeSpent } from "./report/TimeSpent";
 
@@ -38,7 +39,7 @@ const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: 
 
   { key: "cost", title: "Cost", aside: "API-equivalent cost", body: (data) => <Cost data={data} /> },
 
-  { key: "merges", title: "Merges" },
+  { key: "merges", title: "Merges", body: (data) => <Merges data={data} /> },
 
   { key: "architecture", title: "Architecture" },
 ];

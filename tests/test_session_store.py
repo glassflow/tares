@@ -29,8 +29,8 @@ from tares.session_store.types import UTCDateTime  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0011_session_station_runtime"              # the newest revision: tests that count revisions move with it
-REVISIONS = 11
+HEAD = "0012_merge_ledger"              # the newest revision: tests that count revisions move with it
+REVISIONS = 12
 FAILS = []
 
 
@@ -242,7 +242,7 @@ SESSION_TABLES = ["project_sessions", "session_meters", "session_states", "sessi
 ALL_TABLES = SESSION_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts",
-                               "report_weeks", "report_texts"]
+                               "report_weeks", "report_texts", "merge_records"]
 
 
 def shape(engine, names=ALL_TABLES):

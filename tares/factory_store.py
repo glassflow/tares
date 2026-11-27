@@ -3422,6 +3422,22 @@ class FactoryStore:
                 return self._mq_row(r)
         return None
 
+    def merge_queue_merged(self, project_uids: list[str]) -> list[dict]:
+        """The merged rows of these projects, newest last write first (TR-1672). No project, no
+        rows."""
+        if not project_uids:
+            return []
+        marks = ", ".join("?" for _ in project_uids)
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state = 'merged' AND project_uid IN "
+                f"({marks}) ORDER BY updated_at DESC, id", list(project_uids)).fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_approvers(self, person_ids: list[str]) -> dict:
+        """{id: {id, name}} of the people who approved merges (TR-1672), one read for all of them."""
+        return self._person_refs(person_ids)
+
     def merge_queue_update(self, mid: str, **fields) -> None:
         bad = [k for k in fields if k not in self._MQ_FIELDS]
         if bad:

@@ -23,6 +23,10 @@ For the Cost section (TR-1671): in the last two weeks $23.00 was spent and one r
 $17.00 of it 1 week ago. Three merged tickets have a cost ($10.00, $7.00 and $3.00 beside the reply
 with no price), the first two of them in the milestone accepted 1 week ago; $3.00 is tied to no
 ticket, $2.25 of it of no project.
+For the Merges section (TR-1672): project-a is handed over at L4-ship. Its two reviewed merged
+tickets went through the merge queue 1 week ago (one at L3-review, approved by Ada, one at L4-ship),
+project-b's reviewed one 2 weeks ago, merged outside Tares, and one more of project-b has a merged
+queue row with no record, so it counts today. "merged" lists their labels, newest first.
 Starts a daemon on the scratch data dir with TARES_EDITION=factory (so the cell settles to the
 factory edition), stops it, then writes the people, projects, tickets, reviews and milestones
 straight into the database, starts the daemon once more to read the ids of the rule offers, and
@@ -64,7 +68,7 @@ with_daemon()
 sys.path.insert(0, os.getcwd())
 sys.path.insert(0, os.path.join(os.getcwd(), "tests"))
 from session_helpers import seed_station, seed_usage  # noqa: E402
-from tares import factory, report  # noqa: E402
+from tares import factory, merge_ledger, report  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
@@ -129,7 +133,7 @@ c = project("project-c", "Bo")
 first, second, _ = merged(a, 1, 2, 3, 4)
 merged(a, 20, 2)
 third, _ = merged(b, 2, 26, None)
-merged(b, 6, 1, 1, 1, 1)
+older = merged(b, 6, 1, 1, 1, 1)
 for number, (uid, tid) in enumerate(((a, first), (a, second), (b, third)), start=1):
     pull_request(uid, tid, number)
 reviewed(a, first, 1, "changes", findings=(("P2", True, "No tests here"),
@@ -222,6 +226,27 @@ for n, (session, back, minutes, cost, uid) in enumerate((
 # ---- the Review section: two offered rules, one of them accepted
 for kind, text in (("missing test", "Add a test with the change."), ("error handling", "Handle the error.")):
     store.upsert_rule_proposal(REPO, kind, None, "repo", text, [], now)
+
+
+# ---- the Merges section: three merges through the queue with a record, and one without
+def queued(uid, tid, number, **record):
+    """A merged queue row of pull request `number`, with a ledger record when `record` is given."""
+    row = store.merge_queue_add(REPO, "main", number, "abc1234".ljust(40, "0"), tid, uid)
+    store.merge_queue_update(row["id"], state="merged")
+    if record:
+        merge_ledger.save(store, row, reviewed_sha="abc1234".ljust(40, "0"),
+                          merged_sha=f"fee000{number}".ljust(40, "0"), **record)
+
+
+store.set_handover(a, [{"path": "/w/web", "name": "web"}], "L4-ship", None, now, person_id=ids["Ada"])
+queued(a, first, 1, level="L3-review", ci_state="success", rounds=2, outside=False,
+       approver_id=ids["Ada"], approved_at=wednesday(1, 11), merged_at=wednesday(1))
+queued(a, second, 2, level="L4-ship", ci_state="none", rounds=1, outside=False,
+       merged_at=wednesday(1, 13))
+queued(b, third, 3, level="L3-review", ci_state="success", outside=True, merged_at=wednesday(2))
+queued(b, older[0], 4)     # no record: it counts at the time the queue last wrote on it, now
+ids["merged"] = [factory.label(store.get_ticket(uid, tid))
+                 for uid, tid in ((b, older[0]), (a, second), (a, first), (b, third))]
 store.con.close()
 
 
