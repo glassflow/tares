@@ -1627,6 +1627,7 @@ tares, paths, said, mk = crew()
 err, _ = start(mk())
 pid = pid_of(paths)
 until(lambda: cs.turn_state(paths, S) == "done")
+stale = paths.stations.read_text(encoding="utf-8")   # stations.json as a second watch read it before this round
 said_f = codex_step(paths, tares)
 items = [d for d in tares.world["desk"] if "failed" in d["question"]]
 ck("a turn that failed is told of: Codex leaves the station at rest, where it reads like one that finished",
@@ -1636,6 +1637,35 @@ ck("a turn that failed is told of: Codex leaves the station at rest, where it re
 said_f2 = codex_step(paths, tares)
 ck("once for a turn", "failed" not in said_f2 and len([d for d in tares.world["desk"] if "failed" in d["question"]]) == 1
    and len(events(paths, "turn-failed")) == 1, said_f2)
+# a second watch at work on another station writes back stations.json from its older read: the mark stays (TR-1600)
+paths.stations.write_text(stale, encoding="utf-8")
+said_s = codex_step(paths, tares)
+ck("a second watch writing stations.json back from an older read does not make the turn told of again (TR-1600)",
+   "failed" not in said_s and len(events(paths, "turn-failed")) == 1
+   and len([d for d in tares.world["desk"] if "failed" in d["question"]]) == 1, said_s)
+# a crew from before the fix: the mark on the row is honoured while the station has no file of its own
+told = codex_round.told_file(paths, S)
+turn_told = told.read_text(encoding="utf-8").strip()
+told.unlink()
+state.stations_put(S, {codex_round.FAILED_TOLD: turn_told}, paths)
+ck("a mark an older crew wrote on the station's row still counts", "failed" not in codex_step(paths, tares)
+   and len(events(paths, "turn-failed")) == 1)
+state.stations_put(S, {codex_round.FAILED_TOLD: ""}, paths)
+# another command (or a second watch) holds the station's lock: the turn is not told of then, and is told once after
+holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+lock = paths.lock_dir(S)
+lock.mkdir(parents=True, exist_ok=True)
+(lock / "pid").write_text(f"{holder.pid}\n")
+said_l = codex_step(paths, tares)
+held_out = "failed" not in said_l and len(events(paths, "turn-failed")) == 1
+holder.kill()
+holder.wait()
+(lock / "pid").unlink()
+lock.rmdir()
+said_l2 = codex_step(paths, tares)
+ck("under the station's lock: while another command holds it the turn is not told of, then it is, once (TR-1600)",
+   held_out and f"the last turn of {S} failed" in said_l2 and len(events(paths, "turn-failed")) == 2
+   and "failed" not in codex_step(paths, tares), (said_l, said_l2))
 end(pid)
 tares, paths, said, mk = crew(world={"runtime": "claude_code"})
 before = len(tares.log)

@@ -244,10 +244,13 @@ try:
         bare = {k: v for k, v in env.items() if k != "CLAUDE_BIN"}
         (T / "emptybin").mkdir()
         for cmd in ("spec", "session"):
+            # only this run's requests: the runs above may ask the runtime slot, as they do where a codex is on
+            # the PATH they inherit (TR-1599)
+            fake.requests.clear()
             r = run(bare, cmd, fake=fake, PATH=str(T / "emptybin"), HOME=str(T / "nohome"), USERPROFILE=str(T / "nohome"))
+            asked = [q["route"] for q in fake.requests if q["route"] not in ("GET /health", "GET /api/crew/settings")]
             ck(f"{cmd}: no Claude Code is said before Tares is asked anything", r.returncode == 1
-               and "claude not found on PATH" in r.stderr
-               and not [q for q in fake.requests if q["route"] not in ("GET /health", "GET /api/crew/settings")], r.stderr)
+               and "claude not found on PATH" in r.stderr and not asked, (r.stderr, asked))
     finally:
         fake.stop()
 

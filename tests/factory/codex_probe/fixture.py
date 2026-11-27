@@ -41,7 +41,10 @@ class World:
         self.remote = os.path.join(self.root, "remote.git")
         self.bin = os.path.join(self.root, "bin")
         self.log = os.path.join(self.root, "side-effects.log")
-        for d in (self.crew, os.path.join(self.crew, "stations"), self.work, self.bin):
+        # the folders a real crew home has (state.ensure_crew_home): a station's sandbox is given the reports
+        # folder as writable, and on Linux it starts no command when that folder does not exist
+        for d in (self.crew, *(os.path.join(self.crew, x) for x in ("stations", "reports", "worktrees")), self.work,
+                  self.bin):
             os.makedirs(d, exist_ok=True)
         for name in ("gh", "trivy"):
             path = os.path.join(self.bin, name)

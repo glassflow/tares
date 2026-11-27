@@ -97,7 +97,8 @@ class Crew:
         self.root = tempfile.mkdtemp(prefix="tcx-probe-", dir="/tmp")
         self.home = os.path.join(self.root, "crew")
         self.work = os.path.join(self.root, "work")
-        os.makedirs(os.path.join(self.home, "stations"))
+        for d in ("stations", "reports", "worktrees"):   # as a real crew home (state.ensure_crew_home)
+            os.makedirs(os.path.join(self.home, d))
         os.makedirs(self.work)
         subprocess.run(["git", "init", "-q", self.work], check=True)
         with open(os.path.join(self.home, "stations.json"), "w", encoding="utf-8") as f:
