@@ -362,6 +362,15 @@ class TaresClient:
         and `crew down` never do, and no later ticket may add it to them, because a version mismatch must
         never stop someone seeing or stopping their crew."""
         self.require_tares()
+        if name not in self._read_caps():
+            raise CrewError(f"This needs a newer Tares on the cell (missing {name}). Upgrade Tares, then run this again.")
+
+    def capabilities(self) -> list:
+        """What the cell's /health lists, from the same single read as need_capability; [] when no Tares
+        answers or the list cannot be read. Never stops a command."""
+        return self._read_caps() if self.tares_on() else []
+
+    def _read_caps(self) -> list:
         if self._caps is None:
             self._caps = []
             try:
@@ -371,8 +380,7 @@ class TaresClient:
                     self._caps = [c for c in caps if isinstance(c, str)]
             except (TaresHTTPError, ValueError, AttributeError, TypeError):
                 pass
-        if name not in self._caps:
-            raise CrewError(f"This needs a newer Tares on the cell (missing {name}). Upgrade Tares, then run this again.")
+        return self._caps
 
     def mcp_on(self) -> bool:
         """Does an MCP server answer `initialize` at mcp_url (asked once)? Only an MCP server's answer
@@ -417,6 +425,21 @@ class TaresClient:
             raise TaresHTTPError(f"curl: (22) The requested URL returned error: {r.status_code}", r.status_code,
                                  _detail(r.content))
         return r.content.decode("utf-8", "replace")
+
+    def github_token(self, repo: str, seconds: float) -> tuple:
+        """Ask the cell for a GitHub token for `repo` (owner/name): (HTTP status, the answer's JSON object,
+        {} when the body is none). One request, with no /health read first; TaresHTTPError when no answer
+        comes. The answer holds the token: a caller never prints or stores it."""
+        if not self.tares:
+            self.tares = self.tares_url()
+        headers = {"Accept": "application/json", **self._auth(self.tares_token())}
+        url = f"{self.tares}/api/factory/github/token?repo={quote(repo, safe='/')}"
+        r = self._request("GET", url, headers, None, seconds)
+        try:
+            body = json.loads(r.content.decode("utf-8", "replace"))
+        except ValueError:
+            body = None
+        return r.status_code, body if isinstance(body, dict) else {}
 
     def key_ok(self, key: str) -> bool:
         """Does this Tares let a key in? (no key: does it let anyone in)"""

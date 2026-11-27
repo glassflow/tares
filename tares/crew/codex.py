@@ -186,16 +186,21 @@ def _toml_text(value: str) -> str:
     return '"' + "".join(c if c >= " " and c != "\x7f" else f"\\u{ord(c):04x}" for c in out) + '"'
 
 
-def home_config(cwd: str) -> str:
-    """The station's own `config.toml`: the marks of `not_trusted`, and nothing else."""
-    return "".join(f"[projects.{_toml_text(folder)}]\ntrust_level = {_toml_text(mark['trust_level'])}\n\n"
+def home_config(cwd: str, shell_path: str = "") -> str:
+    """The station's own `config.toml`: the marks of `not_trusted` and, with `shell_path`, the PATH its shell
+    commands get, since a login shell orders PATH its own way. Nothing else."""
+    text = "".join(f"[projects.{_toml_text(folder)}]\ntrust_level = {_toml_text(mark['trust_level'])}\n\n"
                    for folder, mark in not_trusted(cwd).items())
+    if shell_path:
+        text += f"[shell_environment_policy.set]\nPATH = {_toml_text(shell_path)}\n"
+    return text
 
 
-def prepare_home(paths: CrewPaths, station: str, env=None, cwd: str = "") -> Path:
+def prepare_home(paths: CrewPaths, station: str, env=None, cwd: str = "", shell_path: str = "") -> Path:
     """Make the station's own Codex folder, link the person's login into it and write its `config.toml` anew:
-    the folder the station works in (`cwd`) marked not trusted, nothing else. Dies when the person has no
-    login file, or when the folder holds a login of its own where the link belongs."""
+    the folder the station works in (`cwd`) marked not trusted and, when given, the shell commands' PATH,
+    nothing else. Dies when the person has no login file, or when the folder holds a login of its own where the
+    link belongs."""
     login = person_login(env)
     if not login.is_file():
         raise CrewError(f"no Codex login at {login}: a station runs on the login of the person who starts it. Run "
@@ -206,7 +211,7 @@ def prepare_home(paths: CrewPaths, station: str, env=None, cwd: str = "") -> Pat
     os.chmod(home, 0o700)
     config = home / "config.toml"
     config.unlink(missing_ok=True)   # whatever a last run left: the folder never grows a setup of its own
-    text = home_config(cwd)
+    text = home_config(cwd, shell_path)
     if text:
         fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -408,9 +413,15 @@ def plan(spec: dict, values: dict, tares_bin: str = "") -> dict:
 
 def fingerprint(plan: dict, kit: str = "") -> str:
     """One number for what a station is started with (its arguments, environment, settings and kit): a
-    restart compares it with the one recorded at the start to tell whether anything changed."""
+    restart compares it with the one recorded at the start to tell whether anything changed. PATH and the
+    commit identity are left out: PATH follows whichever process composes the plan, and the identity is
+    missing from a plan made while the token endpoint cannot be asked."""
     from .client import cksum
-    text = state.dumps_compact([plan.get("args"), plan.get("env"), plan.get("settings"), kit])
+    from .github_access import IDENTITY_VARS
+    env = plan.get("env")
+    if isinstance(env, dict):
+        env = {k: v for k, v in env.items() if k != "PATH" and k not in IDENTITY_VARS}
+    text = state.dumps_compact([plan.get("args"), env, plan.get("settings"), kit])
     return str(cksum(text.encode("utf-8")))
 
 
@@ -436,6 +447,7 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
     if sys.platform == "win32":
         raise CrewError("a Codex station listens on a Unix socket, which a start does not set up on Windows yet")
     from . import codex_station   # here: it imports this module
+    from .github_access import shell_path
     paths = client.paths
     codex = codex or codex_bin(client.env)
     version = check_version(codex_version(codex), lambda text: print(f"  note: {text}", file=sys.stderr))
@@ -443,7 +455,8 @@ def start(client, station: str, plan: dict, cwd: str, prompt: str, row: dict, *,
     check_socket_path(station, sock)
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
     clear_socket(station, sock)
-    home = prepare_home(paths, station, client.env, cwd or paths.raw)   # the folder its conversations start in
+    home = prepare_home(paths, station, client.env, cwd or paths.raw,   # the folder its conversations start in
+                        shell_path(plan["env"]))
 
     env = {k: v for k, v in os.environ.items() if k not in drop_env}
     env.update({k: str(v) for k, v in plan["env"].items()})

@@ -90,6 +90,8 @@ NOT_MACHINE = {
     ("with-secrets",): "runs a command with project secrets, no --json",
     ("secrets",): "manages project secrets for a person, no --json",
     ("allow",): "a person's permission edit, no --json",
+    ("git-credential",): "git's credential protocol on stdin, not a JSON command",
+    ("gh",): "runs gh with a fresh token, its output is gh's",
     ("finish",): "hands a project back, text only",
     ("context",): "prints a station's context for a person, text only",
     ("plan",): "starts a planning session, no --json",

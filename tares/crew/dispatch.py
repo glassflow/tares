@@ -229,6 +229,20 @@ def _report(argv: list[str], env: dict) -> int:
 PORTED[("report",)] = _report  # new in Python: a station's dated log, apart from its report
 
 
+def _git_credential(argv: list[str], env: dict) -> int:
+    from .github_access import cmd_git_credential  # imported when used (TR-1425)
+    return cmd_git_credential(argv, env)
+
+
+def _gh(argv: list[str], env: dict) -> int:
+    from .github_access import cmd_gh  # imported when used (TR-1425)
+    return cmd_gh(argv, env)
+
+
+PORTED[("git-credential",)] = _git_credential  # new in Python (TR-1425): git's credential helper for github.com
+PORTED[("gh",)] = _gh                          # new in Python (TR-1425): the real gh, with the cell's token if none
+
+
 def find(argv: list[str]) -> Callable[[list[str], dict], int] | None:
     """The ported function for argv: the longest key that starts argv wins, so `crew status` and
     `crew` can both be keys. None when the command is not ported."""
