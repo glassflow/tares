@@ -6,6 +6,8 @@ daemon's DuckDB + catalog there, and starts the server (API + console UI) on htt
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import os
 import sys
 from pathlib import Path
@@ -375,6 +377,27 @@ def _factory(argv: list[str]):
     """`tares factory ...`: the tares-factory crew (tares/crew). It
     finds this Tares through TARESD_URL and the token in TARES_AUTH_TOKEN, else the workspace
     `tares login` saved, else the local daemon; stations get the same address."""
+    env = _factory_env(argv)
+    from .crew.dispatch import run
+    run(argv, env)
+
+
+def _git_credential(argv: list[str]):
+    """`tares factory git-credential ...`: git reads this command's output as its credential protocol, so what
+    runs before the command prints nothing, and when that fails the command exits 1 without a word."""
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            from .config import reject_legacy_env
+            reject_legacy_env()
+            env = _factory_env(argv)
+            from .crew.dispatch import run
+    except (Exception, SystemExit):
+        raise SystemExit(1) from None
+    run(argv, env)
+
+
+def _factory_env(argv: list[str]) -> dict:
+    """The environment a `tares factory` command runs in."""
     from .login import resolve
     plugin_dir()   # fails now, with its message, when the plugin is missing from this install
     env = dict(os.environ)
@@ -411,13 +434,14 @@ def _factory(argv: list[str]):
         claude = env.get("CLAUDE_BIN") or shutil.which("claude", path=env.get("PATH")) or "claude"
         if not setup(env["TARES_FACTORY_URL"].rstrip("/"), env.get("TARES_AUTH_TOKEN", ""), home, claude):
             raise SystemExit(1)
-    from .crew.dispatch import run
-    run(argv, env)
+    return env
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
         _hook(sys.argv[2:])     # first: a hook must not pay for the config import below
+    if sys.argv[1:3] == ["factory", "git-credential"]:
+        _git_credential(sys.argv[2:])   # before anything below can print
     from .config import reject_legacy_env
     reject_legacy_env()
     if len(sys.argv) > 1 and sys.argv[1] == "factory":
