@@ -531,10 +531,39 @@ def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dic
     return mine, order_waiting(owners_mod.for_others(owners_mod.Owners(store), rest), now)
 
 
+def joiner_block(store, fx, request, stations: list[dict], settings: dict,
+                 caller: dict | None = None, mine: list[dict] | None = None) -> dict:
+    """Whether the caller is joining a factory someone else already set up (TR-1719): a person
+    other than the owner, on a cell whose own crew settings name an autonomy, where another
+    person's crew has reported. {joining, team_settings, team_crews, own_crew_up}; the owner and a
+    key with no person get nothing about a team. `stations` are the ones the caller may see;
+    `caller` (`_caller`) and `mine` (the caller's own of them) are passed by a caller of this who
+    has read them already."""
+    from .factory_api import CREW_SETTING, stored_crew_setting   # factory_api imports this module
+    me = (caller or _caller(store, fx, request))["me"]
+    if mine is None:
+        mine = _cut(fx, "own_stations", request, stations)
+    # own_stations leaves the rows of a key with no person uncut, so none of them counts as its own
+    up = me is not None and crew_onboarding.crew_view(mine, settings, "")["up"]
+    out = {"joining": False, "team_settings": None, "team_crews": 0, "own_crew_up": up}
+    if me is None or me == "local":
+        return out
+    # the cell's saved row, not `settings`: a person's own values are never the team's
+    cell = stored_crew_setting(store, CREW_SETTING)
+    others = {(s.get("person") or {}).get("id") for s in stations if s.get("last_at") is not None}
+    others -= {None, me}
+    if cell["autonomy"]:
+        out["team_settings"] = {k: cell[k] for k in ("autonomy", "releaser", "builders_max", "challenger")}
+    out["team_crews"] = len(others)
+    out["joining"] = bool(cell["autonomy"]) and bool(others)
+    return out
+
+
 def home(store, fx, now, credential_key: str = "open", request=None, hidden=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
     is addressed to the caller's person (TR-739); its keys replace the single-person ones.
+    `joiner` says whether the caller is joining a factory someone else set up (TR-1719).
     `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
@@ -582,6 +611,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())
+    joiner = joiner_block(store, fx, request, stations, settings, who, mine)
     mk = getattr(fx, "machine_key", None)
     who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
     onboarding = crew_onboarding.payload(store, mine, settings,
@@ -598,6 +628,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
                 store, start_steps.factory_steps(_start_ctx(onboarding)),
                 "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
+            "joiner": joiner,
             "now": now.isoformat()}
     body.update(team)
     return body
