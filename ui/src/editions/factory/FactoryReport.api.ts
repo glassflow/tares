@@ -24,6 +24,28 @@ export interface DeliveredData extends DeliveredFigures {
   weeks: { week: string; merged: number; p50: number | null }[];
 }
 
+/** How review went in some weeks, counted as in DeliveredFigures. */
+export type ReviewFigures = Pick<DeliveredFigures, "first_pass" | "rounds_per_ticket">;
+
+/** The findings of one kind and severity, by what became of them so far. `kind` "other" holds every
+ *  kind that has no name of its own. */
+export interface FindingRow { kind: string; severity: string; fixed: number; open: number }
+
+/** A kind of finding that came back in one repo: on `count` tickets. `rule_accepted` when a rule the
+ *  caller can open was accepted for that repo and kind. */
+export interface RecurringRow { repo: string; kind: string | null; count: number; projects: string[]; tickets: string[]; rule_accepted: boolean }
+
+/** `sections.review` (tares/report.py `review`). `projects` come lowest pass rate first; `previous`
+ *  is null for a project with no reviewed ticket in as many weeks just before the range. */
+export interface ReviewData extends ReviewFigures {
+  weeks: ({ week: string } & ReviewFigures)[];
+  findings: FindingRow[];
+  projects: ({ project: string; name: string; previous: ReviewFigures | null } & ReviewFigures)[];
+  /** Over the last `days` days as of the cell's last pass, whatever the range; null before the first
+   *  one. */
+  recurring: null | { at: string; days: number; rows: RecurringRow[] };
+}
+
 /** The ticket stages whose time is counted. */
 export type Stage = "doing" | "review" | "changes" | "blocked";
 

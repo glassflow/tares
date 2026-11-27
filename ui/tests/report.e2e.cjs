@@ -1,6 +1,6 @@
 /*
- * Browser e2e for TR-1667 (the factory Report page's frame), TR-1668 (its Delivered section) and
- * TR-1669 (its Time section).
+ * Browser e2e for TR-1667 (the factory Report page's frame), TR-1668 (its Delivered section),
+ * TR-1669 (its Time section) and TR-1670 (its Review section).
  *
  * A scratch factory cell seeded by tests/seed-factory-report.py (8 weeks hold 9 merged tickets, 4 weeks
  * 5). Checked: the menu entry; the page from one read of GET /api/factory/report; the six section
@@ -9,8 +9,10 @@
  * no merged ticket; Delivered's four tiles, their change on the weeks before, the lines under them and
  * the two weekly charts, also with reviews and no merge and with nothing delivered; Time's stage table,
  * its two weekly charts, the start-to-merge histogram and "stuck now" with its links to the question
- * (inside "Waiting for others" on the project page) and to the ticket, also empty; a scope or a date
- * the cell refuses; a read that fails; at 1440 and 390 wide, and embedded in the desktop
+ * (inside "Waiting for others" on the project page) and to the ticket, also empty; Review's two tiles
+ * and two weekly charts, its findings table sorted by each column, its projects with the weeks before,
+ * and its recurring findings with the accepted rule marked, also empty and before the first pass; a
+ * scope or a date the cell refuses; a read that fails; at 1440 and 390 wide, and embedded in the desktop
  * (?embed=desktop).
  * Run:  npm run build && TARES_E2E_PORT=<free port> node tests/report.e2e.cjs
  * (tares installed in ../.venv or on PATH). Set SHOTS_DIR to keep screenshots. TARES_E2E_PORT
@@ -159,10 +161,11 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
-      ck("frame: each section but Delivered and Time says it is not built yet",
-         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 4
+      ck("frame: each section but Delivered, Time and Review says it is not built yet",
+         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 3
          && !(await text(page, "report-section-delivered")).includes("not built")
-         && !(await text(page, "report-section-time")).includes("not built"));
+         && !(await text(page, "report-section-time")).includes("not built")
+         && !(await text(page, "report-section-review")).includes("not built"));
       ck("frame: the Cost section is labelled API-equivalent",
          await page.getByTestId("report-section-cost").getByText("API-equivalent", { exact: true }).isVisible());
       ck("frame: no date fields until two dates are asked for", (await count(page, "report-from")) === 0);
@@ -642,6 +645,149 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await ctx.close();
     }
 
+    // ---- Review: pass rate and rounds, findings by kind and severity, projects, what keeps coming back
+    {
+      const { ctx, page, asked } = await fresh(1440);
+      const rulesRead = [];     // the page asks for no rules: the report says which row is marked
+      page.on("request", (r) => { const u = new URL(r.url()); if (u.pathname === "/api/rule-proposals") rulesRead.push(u.search); });
+      const view = async (to) => {
+        await open(page, to);
+        await page.getByTestId("review-recurring").waitFor();
+      };
+      const eq = (label, got, want) => ck(label, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+      const split = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
+      const lines = async (id) => ((await count(page, id)) ? split(await page.getByTestId(id).innerText()) : []);
+      const tiles = async () => [await lines("review-first-pass"), await lines("review-rounds")];
+      /** A chart's value for each week, oldest first; "-" for a week with none. */
+      const weekly = (id) => page.getByTestId(`review-${id}-weeks`).locator("tr[data-series] td")
+        .evaluateAll((cells) => cells.map((c) => (c.querySelector(".sr-only") ? "-" : c.textContent.replace(/\s+/g, " ").trim())));
+      /** The findings table's rows as a screen reader hears them, a "|" between columns. */
+      const findings = () => page.getByTestId("review-findings").locator("[data-finding]")
+        .evaluateAll((rows) => rows.map((row) => [...row.children].map((c) => c.textContent.trim()).join("|")));
+      /** The sorted column's header: its title, its arrow and what a screen reader hears. */
+      const sortedBy = () => page.getByTestId("review-findings").locator("[data-sort][data-sorted]")
+        .evaluateAll((buttons) => buttons.map((b) => b.textContent.trim()));
+      const press = (column) => page.getByTestId("review-findings").locator(`[data-sort="${column}"]`).click();
+      const projects = async () => (await page.getByTestId("review-project-row").allInnerTexts()).map(split);
+      const recurring = async () => (await page.getByTestId("recurring-row").allInnerTexts()).map((s) => s.replace(/\s+/g, " ").trim());
+      /** A findings row from "Kind|Severity|fixed|open". */
+      const row = (s) => { const [kind, severity, fixed, open] = s.split("|"); return `${kind}|${severity}|Fixed ${fixed}|Still open ${open}`; };
+      const rows = (...s) => s.map(row);
+
+      await view("/report");
+      const REPEATED = ["Error handling example-org/web · 3 tickets", "Missing test example-org/web · 3 tickets · Rule accepted"];
+      eq("review: the pass rate and rounds of the range", await tiles(),
+         [["PASSED FIRST REVIEW", "67%", "of 3 tickets first reviewed"], ["REVIEW ROUNDS PER TICKET", "1.3"]]);
+      eq("review: pass rate per week, no value in a week without a first review", await weekly("pass"),
+         ["-", "-", "-", "-", "-", "100%", "50%", "-"]);
+      eq("review: rounds per week, no value in a week without a first review", await weekly("rounds"),
+         ["-", "-", "-", "-", "-", "1", "1.5", "-"]);
+      const charts = await page.getByTestId("report-section-review").locator("[data-week-chart]")
+        .evaluateAll((els) => els.map((e) => `${e.dataset.weekChart}:${e.querySelector("figcaption").textContent}`));
+      eq("review: two lines, the running week saying so far", [charts,
+         await page.getByTestId("report-section-review").locator(`th[data-week="${ids.monday}"]`).filter({ hasText: "so far" }).count()],
+         [["lines:Passed first review per week", "lines:Review rounds per ticket per week"], 2]);
+
+      eq("findings: four columns", await page.getByTestId("review-findings").locator("[data-sort]")
+         .evaluateAll((buttons) => buttons.map((b) => b.dataset.sort)), ["kind", "severity", "fixed", "open"]);
+      eq("findings: by kind and severity, fixed and still open, most open first", [await findings(), await sortedBy()],
+         [rows("Missing test|P2|1|2", "Error handling|P3|0|2", "Security|P1|0|1", "Error handling|P2|0|1"),
+          ["Still open↓, sorted descending"]]);
+      await press("open");
+      eq("findings: the sorted column again turns it round, equal rows in the same order", [await findings(), await sortedBy()],
+         [rows("Security|P1|0|1", "Error handling|P2|0|1", "Missing test|P2|1|2", "Error handling|P3|0|2"),
+          ["Still open↑, sorted ascending"]]);
+      await press("kind");
+      eq("findings: sorted by kind, A first", [await findings(), await sortedBy()],
+         [rows("Error handling|P3|0|2", "Error handling|P2|0|1", "Missing test|P2|1|2", "Security|P1|0|1"),
+          ["Kind↑, sorted ascending"]]);
+      await press("severity");
+      eq("findings: sorted by severity, P1 first", [await findings(), await sortedBy()],
+         [rows("Security|P1|0|1", "Missing test|P2|1|2", "Error handling|P2|0|1", "Error handling|P3|0|2"),
+          ["Severity↑, sorted ascending"]]);
+      await press("fixed");
+      eq("findings: sorted by fixed, most first", [await findings(), await sortedBy()],
+         [rows("Missing test|P2|1|2", "Error handling|P3|0|2", "Security|P1|0|1", "Error handling|P2|0|1"),
+          ["Fixed↓, sorted descending"]]);
+      await press("fixed");
+      eq("findings: and fewest first", [await findings(), await sortedBy()],
+         [rows("Error handling|P3|0|2", "Security|P1|0|1", "Error handling|P2|0|1", "Missing test|P2|1|2"),
+          ["Fixed↑, sorted ascending"]]);
+
+      eq("projects: lowest pass rate first, each with the weeks before", await projects(), [
+        ["project-a", "50% passed first review · 1.5 review rounds per ticket reviewed · 2 tickets first reviewed",
+         "The 8 weeks before: no ticket first reviewed"],
+        ["project-b", "100% passed first review · 1 review round per ticket reviewed · 1 ticket first reviewed",
+         "The 8 weeks before: no ticket first reviewed"]]);
+
+      eq("recurring: highest count first, its repo, the accepted rule marked and the open one not", await recurring(), REPEATED);
+      ck("recurring: headed as the last 30 days, as of the last pass",
+         (await page.getByRole("heading", { level: 3, name: "Recurring findings, last 30 days", exact: true }).count()) === 1
+         && /^As of \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z$/.test(await text(page, "recurring-as-of")), await text(page, "review-recurring"));
+      eq("review: one report read and no read of the rules, sorting included", [asked.length, rulesRead.length], [1, 0]);
+      await checkWords(page, ck, "review @1440");
+      ck("review @1440: no horizontal scroll", (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      await shot(page, "review-8w-1440");
+
+      await view(`/report?range=dates&from=${plus(ids.monday, -7 * 19)}`);
+      eq("projects: the weeks before with figures, and without", await projects(), [
+        ["project-a", "50% passed first review · 1.5 review rounds per ticket reviewed · 2 tickets first reviewed",
+         "The 20 weeks before: no ticket first reviewed"],
+        ["project-b", "100% passed first review · 1 review round per ticket reviewed · 1 ticket first reviewed",
+         "The 20 weeks before: 0% passed first review · 1 review round per ticket reviewed · 1 ticket first reviewed"]]);
+
+      await view(days(30));
+      eq("review: a past week with a review and no finding", [await tiles(), await count(page, "review-findings"),
+         (await count(page, "review-no-findings")) ? await text(page, "review-no-findings") : "(no line)", await projects()],
+         [[["PASSED FIRST REVIEW", "0%", "of 1 ticket first reviewed"], ["REVIEW ROUNDS PER TICKET", "1"]], 0,
+          "No review finding was first raised in these weeks.",
+          [["project-b", "0% passed first review · 1 review round per ticket reviewed · 1 ticket first reviewed",
+            "The week before: no ticket first reviewed"]]]);
+      eq("recurring: the same list whatever range is picked", await recurring(), REPEATED);
+
+      await view(`/report?scope=project:${ids["project-a"]}`);
+      eq("recurring: counted over the scope's projects, here under 3 tickets for every kind",
+         [(await lines("review-first-pass"))[1], await recurring(), (await count(page, "recurring-none"))], ["50%", [], 1]);
+
+      await view(`/report?scope=team:${ids.Bo}`);
+      eq("review: a scope with nothing says all three, with no tile, chart, table or project",
+         [await text(page, "review-empty"), await text(page, "review-no-findings"), await text(page, "recurring-none"),
+          await count(page, "review-first-pass"), await page.getByTestId("report-section-review").locator("[data-week-chart]").count(),
+          await count(page, "review-findings"), await count(page, "review-projects")],
+         ["No ticket had its first review in these weeks.", "No review finding was first raised in these weeks.",
+          "No finding kind came back on 3 or more tickets in the last 30 days.", 0, 0, 0, 0]);
+      await checkWords(page, ck, "review with nothing @1440");
+      await shot(page, "review-empty-1440");
+
+      // before the cell's first pass there is no list to show; made here, the seed has passed
+      const reading = /\/api\/factory\/report\?/;
+      await page.route(reading, async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        if (body.sections.review) body.sections.review.recurring = null;
+        await r.fulfill({ response: res, json: body });
+      });
+      await open(page, "/report?range=4w");
+      eq("recurring: before the first pass it says it is not worked out, not that nothing came back",
+         [(await count(page, "recurring-not-yet")) ? await text(page, "recurring-not-yet") : "(no line)",
+          await count(page, "recurring-none"), await count(page, "recurring-row"), await count(page, "recurring-as-of")],
+         ["Recurring findings are not worked out yet.", 0, 0, 0]);
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await fresh(390);
+      await open(page, "/report");
+      await page.getByTestId("review-findings").waitFor();
+      ck("390: the review tiles, findings table, projects and recurring findings fit",
+         (await overflow(page)) <= 0 && await inside(page)
+         && await page.getByTestId("review-findings").locator("[data-findings-head], [data-finding]")
+           .evaluateAll((els) => els.length === 5 && els.every((e) => e.scrollWidth <= e.clientWidth)),
+         `${await overflow(page)}px over`);
+      await checkWords(page, ck, "review @390");
+      await shot(page, "review-8w-390");
+      await ctx.close();
+    }
+
     // ---- the links of "stuck now", on a phone so the row has to be scrolled to
     {
       const { ctx, page } = await fresh(390);
@@ -727,7 +873,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       await page.goto(`${BASE}/report`, { waitUntil: "networkidle" });
       await page.getByTestId("delivered-p50-weeks").waitFor();
       ck("390: 8 weeks of charts scroll inside their own box, not the page",
-         await page.locator('[data-week-chart] [role="region"]').evaluateAll((els) => els.length === 4 && els.every((e) => e.scrollWidth > e.clientWidth))
+         await page.locator('[data-week-chart] [role="region"]').evaluateAll((els) => els.length === 6 && els.every((e) => e.scrollWidth > e.clientWidth))
          && (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
       ck("390: a start-to-merge value in two units takes two lines and fits its column",
          await page.getByTestId("delivered-p50-weeks").locator("tr[data-series] td").evaluateAll((cells) => {
