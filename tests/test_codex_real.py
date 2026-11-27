@@ -17,11 +17,11 @@ account's quota. CI runs the same behaviours without a login, against the fake a
     TARES_PROBE_CODEX=/path/to/codex .venv/bin/python tests/test_codex_real.py [--out DIR] [probe ...]
 
 Each probe (see tests/factory/codex_probe/README.md) runs in turn with its own --out folder, and one line says
-whether it passed; the exit code is 1 when one did not, and 2 when a name given is not a probe's (nothing runs
-then). A probe depends on the model doing the steps it is asked for: one that fails says why in its results
-file, and is worth a second run before it is believed. Run it with
-the checkout's interpreter and its folder first on PATH, so a station's `tares` is this checkout's. Without
-TARES_PROBE_CODEX it says how to run it and fails.
+whether it passed; the exit code is 1 when one did not. An unknown probe or option, or an --out that is not a
+folder, exits 2 before anything runs (tests/test_codex_real_runner.py checks that offline). A probe depends
+on the model doing the steps it is asked for: one that fails says why in its results file, and is worth a
+second run before it is believed. Run it with the checkout's interpreter and its folder first on PATH, so a
+station's `tares` is this checkout's. Without TARES_PROBE_CODEX it says how to run it and fails.
 
 probe_asks (TR-1593) is not run: it waits for a station to stop on an approval its sandbox needs, and since
 TR-1599 a station is started with Codex's own reviewer, which decides such a request by the station's rules
@@ -31,6 +31,7 @@ covers. Run it by itself to look at the desk path of a station started before TR
 The acceptance runs of the whole crew (a plan to a merge on a disposable cell and repository) are by hand too;
 their results are on TR-1598, TR-1599 and TR-1600.
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -55,28 +56,54 @@ ORDER = [
 ]
 
 
-def main() -> int:
-    args = sys.argv[1:]
-    out = Path(args[args.index("--out") + 1]) if "--out" in args else Path(tempfile.mkdtemp(prefix="codex-real-"))
-    picked = [a for a in args if not a.startswith("--") and a != str(out)]
-    if not os.environ.get("TARES_PROBE_CODEX"):
+def out_dir(text: str) -> Path:
+    """--out: a folder, there or to be made; never empty, never a file."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError("--out needs a folder")
+    path = Path(text)
+    if path.exists() and not path.is_dir():
+        raise argparse.ArgumentTypeError(f"--out {text} is not a folder")
+    return path
+
+
+def parser() -> argparse.ArgumentParser:
+    names = [n for n, _ in ORDER]
+    p = argparse.ArgumentParser(prog="tests/test_codex_real.py", allow_abbrev=False,
+                                description="Run the Codex probes against a signed-in Codex (TARES_PROBE_CODEX).")
+    p.add_argument("--out", type=out_dir, help="the folder for each probe's results and log (default: a new "
+                                               "temporary folder)")
+    p.add_argument("probes", nargs="*", metavar="probe",
+                   help="the probes to run, all when none is named: " + ", ".join(names))
+    return p
+
+
+def main(argv=None, run=subprocess.run, environ=None) -> int:
+    """The selection is checked whole before any probe runs: an unknown name or option, or an --out that is
+    not a folder, ends it with argparse's message and exit code 2, and nothing runs."""
+    p = parser()
+    args = p.parse_intermixed_args(sys.argv[1:] if argv is None else argv)   # names before or after --out
+    unknown = [n for n in args.probes if n not in dict(ORDER)]
+    if unknown:   # checked here, not by choices: an empty list against choices fails on some Pythons
+        p.error(f"no such probe: {', '.join(unknown)} (the probes: {', '.join(n for n, _ in ORDER)})")
+    environ = os.environ if environ is None else environ
+    todo = [(n, what) for n, what in ORDER if not args.probes or n in args.probes]
+    if not todo:   # never a pass for a run of nothing
+        print("no probe was picked")
+        return 2
+    if not environ.get("TARES_PROBE_CODEX"):
         print("needs a signed-in Codex: TARES_PROBE_CODEX=/path/to/codex .venv/bin/python tests/test_codex_real.py\n"
               "(not in CI: tests/ci_skip.txt says why)")
         return 1
-    known = [n for n, _ in ORDER]
-    unknown = [n for n in picked if n not in known]
-    if unknown:   # a name that picks nothing must not pass as a run with nothing failed
-        print(f"no such probe: {', '.join(unknown)}. The probes: {', '.join(known)}")
-        return 2
-    todo = [(n, what) for n, what in ORDER if not picked or n in picked]
-    env = {**os.environ, "PATH": os.pathsep.join([os.path.dirname(sys.executable), os.environ.get("PATH", "")])}
+    out = args.out or Path(tempfile.mkdtemp(prefix="codex-real-"))
+    out.mkdir(parents=True, exist_ok=True)
+    env = {**environ, "PATH": os.pathsep.join([os.path.dirname(sys.executable), environ.get("PATH", "")])}
     env.pop("ANTHROPIC_BASE_URL", None)
     failed = []
     for name, what in todo:
         t = time.time()
-        done = subprocess.run([sys.executable, str(PROBES / f"{name}.py"), "--out", str(out / name)], env=env,
-                              capture_output=True, text=True)
-        (out / f"{name}.log").write_text(done.stdout + done.stderr, encoding="utf-8")
+        done = run([sys.executable, str(PROBES / f"{name}.py"), "--out", str(out / name)], env=env,
+                   capture_output=True, text=True)
+        (out / f"{name}.log").write_text((done.stdout or "") + (done.stderr or ""), encoding="utf-8")
         ok = done.returncode == 0
         failed += [] if ok else [name]
         print(f"  {'ok  ' if ok else 'FAIL'} {name} ({time.time() - t:.0f} s): {what}", flush=True)
@@ -85,5 +112,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    (Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv else Path()).mkdir(parents=True, exist_ok=True)
     sys.exit(main())
