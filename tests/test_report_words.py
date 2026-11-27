@@ -48,7 +48,7 @@ from tares.session_store import SessionStore  # noqa: E402
 from tares.session_store.tables import metadata  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0023_brain_tables"   # the newest revision: an upgrade ends there
+HEAD = "0024_merge_ledger"   # the newest revision: an upgrade ends there
 P = F = 0
 
 

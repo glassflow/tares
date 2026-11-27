@@ -42,7 +42,7 @@ os.environ.update({"TARES_DB": os.path.join(HOME, "import.duckdb"),
 
 import httpx
 
-from tares import daemon, merge_queue, report
+from tares import daemon, merge_ledger, merge_queue, report
 from tares import factory as factory_mod
 from session_helpers import seed_station, seed_usage
 from sqlalchemy import update
@@ -201,8 +201,17 @@ async def scopes():
            len(lines) == 3 and lines[0] == SEEN and "merge queue" in lines[1]
            and "API-equivalent" in lines[2], lines)
         built = body.get("sections") or {}
-        ck("Delivered, Time, Review and Cost are built",
-           sorted(built) == ["cost", "delivered", "review", "time"], sorted(built))
+        ck("Delivered, Time, Review, Cost and Merges are built",
+           sorted(built) == ["cost", "delivered", "merges", "review", "time"], sorted(built))
+        merges = built.get("merges") or {}
+        ck("with nothing merged: no merge, no level, every week at 0 and a file of the header alone",
+           {k: v for k, v in merges.items() if k != "csv"} == {
+               "total": 0, "rows": [], "levels": [],
+               "weeks": [{"week": week(n).isoformat(), "L3-review": 0, "L4-ship": 0, "unrecorded": 0}
+                         for n in range(7, -1, -1)]}
+           and merges.get("csv", "").splitlines() == [
+               "Merged at (UTC),Project,Ticket,Title,Repository,Pull request,Level,Gate,"
+               "Reviewed commit,Merged commit,Review rounds,Approver"], merges)
         none = {"cost_usd": 0.0, "unpriced": 0}
         ck("with no reply: nothing spent, a row for each role, no project, no ticket costs yet",
            built.get("cost") == {
@@ -1321,6 +1330,11 @@ async def large():
             for n in range(5):
                 seed_usage(s, builder, f"b-{i}-{n}", replied_at=when - timedelta(minutes=90 + n), cost_usd=0.1)
             seed_usage(s, "review-large", f"r-{i}", replied_at=when - timedelta(minutes=30), cost_usd=0.1)
+            queued = s.merge_queue_add(f"example-org/merged-{i % 3}", "main", i + 1, "abc1234", tid, uid)
+            s.merge_queue_update(queued["id"], state="merged")
+            if i % 10:      # one in ten has no record, so the queue row stands for it
+                merge_ledger.save(s, queued, level="L3-review", reviewed_sha="abc1234", ci_state="success",
+                                  rounds=1, outside=False, approver_id=people[i % 8], merged_at=when)
         for i in range(200):
             tid = pulled(s, uids[i % 20], f"example-org/repo-{i % 3}")
             s.add_ticket_history(tid, uids[i % 20], "stage", "doing", None, None, None, noon(week(1)))
@@ -1353,6 +1367,13 @@ async def large():
                    and all(w["mean_cost_usd"] > 0 for w in by["weeks"])
                    and len(by["top_tickets"]) == 5 and all(t["cost_usd"] > 0 for t in by["top_tickets"]),
                    str(by)[:600])
+                merged = r.json()["sections"]["merges"]
+                ck("and every merge through the queue, the newest 100 listed",
+                   merged["total"] == 600 and len(merged["rows"]) == 100
+                   and merged["csv"].count("\r\n") == 601
+                   and sum(w["unrecorded"] for w in merged["weeks"]) == 60
+                   and sum(w["L3-review"] for w in merged["weeks"]) == 540,
+                   (merged["total"], len(merged["rows"]), merged["weeks"]))
             ck(f"{label}: answered under 300 ms, the slowest of 5 ({max(took) * 1000:.0f} ms)",
                r.status_code == 200 and r.json()["scope"]["count"] > 0 and max(took) < 0.3,
                (r.status_code, [round(t * 1000) for t in took]))

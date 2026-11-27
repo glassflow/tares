@@ -39,6 +39,8 @@ The columns of a row. Project "" holds what belongs to no project; every duratio
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import re
 import threading
@@ -51,6 +53,7 @@ from typing import Callable
 from sqlalchemy import delete, select
 
 from . import factory as factory_mod
+from . import merge_ledger
 from . import report_cost
 from .claude_usage_store import TICKET_ROLES
 from .envelope import now_utc
@@ -896,13 +899,131 @@ def spend(rows: list[dict], weeks: list[date]) -> dict:
                       for w in weeks]}
 
 
+MERGES_SHOWN = 100     # the page lists this many merges, newest first; the CSV holds every one
+_UNKNOWN = "not recorded"
+_MERGE_LEVELS = {"L3-review": "L3: a person approves", "L4-ship": "L4: merges alone"}
+_MERGE_CI = {"success": "CI passed", "none": "No CI", "failure": "CI failing",
+             "pending": "CI not finished"}
+_MERGE_COLUMNS = ("Merged at (UTC)", "Project", "Ticket", "Title", "Repository", "Pull request",
+                  "Level", "Gate", "Reviewed commit", "Merged commit", "Review rounds", "Approver")
+
+
+def _merge_words(level: str | None, outside: bool | None, ci_state: str | None,
+                 approver: dict | None) -> dict:
+    """What one merge's row says for its level, gate and approver, on the page and in the CSV."""
+    ci = _MERGE_CI.get(ci_state)
+    if outside is None:        # nothing says who merged it
+        gate = ci or _UNKNOWN
+    else:
+        how = "Merged outside Tares" if outside else "Reviewer's pass"
+        gate = f"{how}, {ci or 'CI not recorded'}"
+    if level == "L4-ship":
+        who = "None needed"
+    else:
+        who = (approver or {}).get("name") or "Approver not recorded"
+    return {"level_words": _MERGE_LEVELS.get(level, "Level not recorded"), "gate_words": gate,
+            "approver_words": who}
+
+
+def _csv_cell(v):
+    """A text a spreadsheet would read as a formula (it starts with = + - @, a tab or a return)
+    gets a leading apostrophe."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
+def _merges_csv(rows: list[dict]) -> str:
+    """The rows of the Merges section as a CSV file: a header, then one line per merge, with whole
+    commit ids and UTC times."""
+    out = io.StringIO()
+    write = csv.writer(out).writerow
+    write(_MERGE_COLUMNS)
+    for r in rows:
+        write([_csv_cell(v) for v in (
+            r["merged_at"], r["name"], r["ticket"] or _UNKNOWN, r["title"] or _UNKNOWN, r["repo"],
+            r["pr"], r["level_words"], r["gate_words"], r["reviewed_sha"] or _UNKNOWN,
+            r["merged_sha"] or _UNKNOWN, r["rounds"] or _UNKNOWN, r["approver_words"])])
+    return out.getvalue()
+
+
+def merges(store, visible: dict[str, dict], ids: list[str], weeks: list[date]) -> dict:
+    """The Merges section (TR-1672), from the merge ledger (merge_ledger.py) and not from the
+    weekly rows. The merges are those through the queue in the projects `ids` (all of them in
+    `visible`) from the first of the Mondays `weeks` to the end of the last one's week, newest
+    first, each as its record has it. A merged queue row with no completed record is one too, at
+    the time of the row's last write, with null for all it does not know. `total` counts them,
+    `rows` holds the newest MERGES_SHOWN and `csv` every one. `weeks` counts them by level, week by
+    week; `levels` is the autonomy, as it is now, of each handed-over factory project in scope."""
+    from .merge_queue import autonomy_of
+    from .screens.factory_project import cleaner
+    since = datetime.combine(weeks[0], time(), timezone.utc)
+    until = datetime.combine(weeks[-1] + timedelta(days=7), time(), timezone.utc)
+    handovers = store.handovers_by_project(ids)
+    records = merge_ledger.merged_between(store, ids, since, until)
+    queued = [q for q in store.merge_queue_merged(ids) if since <= _utc(q["updated_at"]) < until]
+    known = merge_ledger.recorded(store, [q["id"] for q in queued])
+    merged_in = sorted({r["project"] for r in records} | {q["project_uid"] for q in queued})
+    tickets = {t["id"]: t for its in store.tickets_by_project(merged_in).values() for t in its} \
+        if merged_in else {}
+    approvers = store.merge_approvers(sorted({r["approver_id"] for r in records
+                                              if r["approver_id"]}))
+
+    def row(project: str, ticket: str | None, repo: str, pr: int, at: datetime,
+            record: dict) -> dict:
+        t = tickets.get(ticket)
+        now = (t or {}).get("pr") or {}
+        approved = record.get("approved_at")
+        facts = {k: record.get(k) for k in ("level", "reviewed_sha", "merged_sha", "rounds",
+                                            "ci_state", "outside")}
+        approver = approvers.get(record.get("approver_id"))
+        return {
+            "project": project, "name": visible[project]["name"],
+            "ticket": factory_mod.label(t) if t else None,
+            "title": cleaner(handovers.get(project))(t.get("title") or "") if t else None,
+            "repo": repo, "pr": pr,
+            "url": now.get("url") if (now.get("repo"), now.get("number")) == (repo, pr) else None,
+            **facts,
+            "approver": approver,
+            "approved_at": _utc(approved).isoformat() if approved else None,
+            "merged_at": _utc(at).isoformat(),
+            **_merge_words(facts["level"], facts["outside"], facts["ci_state"], approver),
+        }
+
+    rows = [row(r["project"], r["ticket"], r["repo"], r["pr"], r["merged_at"], r) for r in records]
+    for q in queued:
+        now = (tickets.get(q["ticket"]) or {}).get("pr") or {}
+        # the queue also closes a row when only the ticket's stage says merged
+        still_open = (now.get("repo"), now.get("number")) == (q["repo"], q["pr"]) \
+            and not now.get("merged")
+        if q["id"] not in known and not still_open:
+            rows.append(row(q["project_uid"], q["ticket"], q["repo"], q["pr"], q["updated_at"], {}))
+    rows.sort(key=lambda r: (r["merged_at"], r["repo"], r["pr"]), reverse=True)
+    counts: dict = defaultdict(int)
+    for r in rows:
+        counts[week_of(datetime.fromisoformat(r["merged_at"])), r["level"] or "unrecorded"] += 1
+    memo: dict = {}
+    levels = []
+    for p in sorted((visible[i] for i in ids), key=lambda p: (p["name"].lower(), p["id"])):
+        if p["kind"] == "software_factory" and handovers.get(p["id"]):
+            level = autonomy_of(store, p["id"], handovers, memo)
+            levels.append({"project": p["id"], "name": p["name"], "level": level,
+                           "level_words": _MERGE_LEVELS[level]})
+    return {"total": len(rows), "rows": rows[:MERGES_SHOWN], "csv": _merges_csv(rows),
+            "levels": levels,
+            "weeks": [{"week": w.isoformat(),
+                       **{k: counts[w, k] for k in ("L3-review", "L4-ship", "unrecorded")}}
+                      for w in weeks]}
+
+
 # The sections of the page, in its order. A section's ticket puts its builder in its line:
 # f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
 # (read_weeks) and the Mondays of the range. A builder named in COMPARED is also handed the rows
 # of as many weeks just before the range, in the same scope: f(rows, weeks, before). A builder
 # reads nothing else; page() itself adds what is not a week's figure: the last pass's "stuck now"
 # to the time section, its recurring findings to the review section and its ticket costs to the
-# cost section.
+# cost section. The merges section has no weekly figure: page() builds it whole (`merges`), so it
+# has no builder here.
 COMPARED = {"delivered", "review"}
 SECTIONS: dict[str, Callable[..., dict] | None] = {
     "delivered": delivered,
@@ -1018,6 +1139,7 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         {**p, "name": visible[p["project"]]["name"] if p["project"] else "No project"}
         for p in sections["cost"]["projects"]]
     sections["cost"]["by_ticket"] = _costs_now(store, visible, ids, weeks, rest)
+    sections["merges"] = merges(store, visible, ids, weeks)
     return {
         "range": {"from": weeks[0].isoformat(),
                   "to": (weeks[-1] + timedelta(days=6)).isoformat(),

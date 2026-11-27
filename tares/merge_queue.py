@@ -41,12 +41,13 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from fnmatch import fnmatchcase
 
 from . import factory as factory_mod
 from . import factory_api
 from . import factory_github
+from . import merge_ledger
 from .envelope import now_utc
 from .factory_waiting import crew_has, effective_autonomy, handover_of
 from .merge_ready import merge_ready
@@ -150,6 +151,7 @@ def approve(store, row: dict, person_id: str | None = None) -> dict:
                            now_utc(), via="console", person_id=person_id)
         store.close_desk_item(d["id"], "answered", None, now_utc())
     _set(store, row, "queued", None, approved_head=row["head"])
+    _note_approval(store, row, person_id, now_utc())
     return {"id": row["id"], "state": row["state"], "approved_head": row["approved_head"],
             "pr": row["pr"], "repo": row["repo"]}
 
@@ -226,11 +228,155 @@ def _blocked_unknown(store, row: dict, t: dict) -> None:
 
 
 async def _merged(store, row: dict, t: dict | None, reason: str, by: str, role: str,
-                  pr: dict | None = None) -> None:
-    """The pull request is merged: the row says so and the ticket's stage follows."""
+                  pr: dict | None = None, ans: dict | None = None, merged: dict | None = None,
+                  unasked: bool | None = True) -> None:
+    """The pull request is merged: the ledger records it, the row says so and the ticket's stage
+    follows. `ans`, `merged` and `unasked` are for the record (`_record_merge`)."""
+    seen = pr
+    if seen is None:        # seen merged without a read of the commit the merge made
+        seen = await factory_github.read_pr(store, row["repo"], int(row["pr"]), (t or {}).get("pr"))
+    await asyncio.to_thread(_record_merge, store, row, t, seen, ans, merged, unasked)
     await asyncio.to_thread(_set, store, row, "merged", None)
     if t is not None:
         await factory_api.mark_merged(store, row["project_uid"], t, reason, by, role, pr)
+
+
+# ── the merge ledger (TR-1672) ────────────────────────────────────────────────
+# What a merge went through is written as it happens (merge_ledger.py). Every write here catches
+# its own errors: a record that cannot be written never holds a merge up or takes one back.
+
+def _ledger_failed(row: dict, e: Exception) -> None:
+    print(f"[tares] merge ledger of {row.get('id')} failed: {type(e).__name__}: {e}", flush=True)
+
+
+def _same_head(a, b) -> bool:
+    return bool(a) and bool(b) and factory_mod.same_commit(str(a), str(b))
+
+
+def _note_approval(store, row: dict, person_id: str | None, at) -> None:
+    """Who said yes to the commit the row holds, and when, kept ahead of the merge: the row's
+    question may be replaced by another before it merges."""
+    try:
+        merge_ledger.save(store, row, approver_id=person_id, approved_at=at)
+    except Exception as e:  # noqa: BLE001
+        _ledger_failed(row, e)
+
+
+def _approval(store, row: dict, t: dict | None, kept: dict) -> tuple:
+    """(person id, when) of the yes the row merges on: the one noted on its record, else the
+    newest yes the desk and the console have for it since the row entered. (None, None) when there
+    is neither."""
+    if kept.get("approved_at"):
+        return kept.get("approver_id"), kept["approved_at"]
+    found: list[tuple] = []
+    ref = factory_mod.label(t) if t else row["ticket"]        # as the console's approve names it
+    items = [f"prs_to_review:{row['project_uid']}:{ref}"]
+    d = store.get_desk_item(row["desk_item"]) if row.get("desk_item") else None
+    if d:
+        items += [f"question:{d['label']}", f"permission:{d['label']}"]
+        said = next((x for x in store.list_decisions(row["project_uid"], all_=True)
+                     if x.get("desk_item") == d["id"] and judge(x)[0]), None)
+        if said:
+            found.append((said["at"], (said.get("person") or {}).get("id")))
+    a = store.last_answer(items)
+    if a and judge({"choice": a.get("choice"), "words": a.get("said")})[0] \
+            and a["at"] >= row["entered_at"]:       # an older one was for an earlier commit
+        found.append((a["at"], (a.get("person") or {}).get("id")))
+    if not found:
+        return None, None
+    at, who = max(found, key=lambda x: x[0])
+    return who, at
+
+
+def _facts(store, row: dict, level: str | None, head: str | None, ci: str | None) -> dict:
+    """What a record says of the gate: the level, the head it passed, that head's CI state and the
+    review rounds counted by now (None when no review is known)."""
+    from .report import counted_rounds       # report.py reads the ledger
+    return {"level": level or autonomy_of(store, row["project_uid"]), "reviewed_sha": head,
+            "ci_state": ci, "rounds": len(counted_rounds(store.ticket_reviews(row["ticket"]))) or None}
+
+
+def _before_merge(store, row: dict, level: str | None, ans: dict) -> dict:
+    """Write what the row is about to merge with, so a tick that dies in the merge call leaves
+    it. Returns those values, {} when they could not be worked out."""
+    facts: dict = {}
+    try:
+        facts = _facts(store, row, level, row["head"], (ans.get("ci") or {}).get("state"))
+        merge_ledger.save(store, row, **facts)
+    except Exception as e:  # noqa: BLE001
+        _ledger_failed(row, e)
+    return facts
+
+
+def _refused(store, row: dict) -> None:
+    """GitHub refused the merge call: the record no longer says a merge was asked for."""
+    try:
+        merge_ledger.save(store, row, level=None)
+    except Exception as e:  # noqa: BLE001
+        _ledger_failed(row, e)
+
+
+def _passed_head(row: dict, kept: dict, ans: dict | None) -> str | None:
+    """The row's head when the gate is known to have passed it: it is the head the row entered
+    with, or the gate passed it since the queue updated the branch. Else None."""
+    head = row["head"]
+    updated_from = _load_before(row)[0]
+    if not updated_from or _same_head(updated_from, head) or _same_head(kept.get("reviewed_sha"), head):
+        return head
+    a = ans or {}
+    passed = (_same_head(a.get("head"), head) and (a.get("review") or {}).get("state") == "approved"
+              and (a.get("ci") or {}).get("state") in ("success", "none"))
+    return head if passed else None
+
+
+def _stamp(text) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _record_merge(store, row: dict, t: dict | None, pr: dict | None, ans: dict | None = None,
+                  merged: dict | None = None, unasked: bool | None = True) -> None:
+    """Complete the row's record: its pull request merged. `pr` is GitHub's read of it and `ans`
+    this tick's gate answer, when there is one. `merged` is what the queue's own merge call went
+    with, and the commit it made (`sha`), when GitHub answered that call; None for a merge seen on
+    GitHub. Such a merge is the queue's when it asked GitHub for that very head and got no answer;
+    else `unasked` says whether it was made outside Tares (None: that is not known). A complete
+    record stays as it is."""
+    try:
+        kept = merge_ledger.get(store, row["id"]) or {}
+        if kept.get("merged_at"):
+            return
+        pr = pr or {}
+        if pr.get("error") and not pr.get("merge_commit"):
+            pr = {}         # a failed read keeps the last snapshot, which is from before the merge
+        head = str(pr.get("head") or (ans or {}).get("head") or "")
+        if merged is not None:
+            head = row["head"]
+            values = {k: v for k, v in merged.items() if k != "sha"} or _facts(
+                store, row, None, head, None)
+            values["outside"] = False
+        elif kept.get("level") and _same_head(kept.get("reviewed_sha"), head):
+            values = {k: kept.get(k) for k in ("level", "reviewed_sha", "ci_state", "rounds")}
+            values["outside"] = False
+        else:
+            passed = _passed_head(row, kept, ans)
+            ci = None
+            if _same_head((ans or {}).get("head"), passed):
+                ci = (ans.get("ci") or {}).get("state")
+            elif _same_head(kept.get("reviewed_sha"), passed):
+                ci = kept.get("ci_state")
+            values = _facts(store, row, None, passed, ci)
+            values["outside"] = unasked
+        who, at = None, None        # at L4-ship nobody is asked; a yes counts for its own commit
+        if values.get("level") != AUTO and _same_head(row.get("approved_head"), head):
+            who, at = _approval(store, row, t, kept)
+        merge_ledger.save(store, row, **values, approver_id=who, approved_at=at,
+                          merged_sha=(merged or {}).get("sha") or pr.get("merge_commit"),
+                          merged_at=_stamp(pr.get("merged_at")) or now_utc())
+    except Exception as e:  # noqa: BLE001
+        _ledger_failed(row, e)
 
 
 def _changed_lines(patch) -> list[str] | None:
@@ -514,8 +660,10 @@ async def _recover(store) -> None:
                 continue            # GitHub could not be read: the next tick looks again
             t = await asyncio.to_thread(store.get_ticket, row["project_uid"], row["ticket"])
             if pr.get("merged"):
+                # the tick that claimed it may have merged it: without a record of what it asked
+                # for, who merged it is not known
                 await _merged(store, row, t, "GitHub shows the pull request merged", "github",
-                              "github", pr)
+                              "github", pr, unasked=None)
             else:
                 await asyncio.to_thread(_set, store, row, "queued", None)
         except Exception as e:  # noqa: BLE001
@@ -542,6 +690,7 @@ def _settle_question(store, g: dict, row: dict) -> None:
     yes, words = judge(mine[0])
     if yes:
         _set(store, row, "queued", None, approved_head=row["head"])
+        _note_approval(store, row, (mine[0].get("person") or {}).get("id"), mine[0].get("at"))
     else:
         _set(store, row, "blocked", f"The person said: {words}")
 
@@ -565,6 +714,8 @@ async def _keep_rows(store, g: dict) -> dict[str, dict]:
                 await asyncio.to_thread(store.merge_queue_delete, row["id"])
                 continue
             if t["stage"] in ("merged", "shipped"):
+                if pr.get("merged"):      # the stage alone does not say the pull request merged
+                    await asyncio.to_thread(_record_merge, store, row, t, pr)
                 await asyncio.to_thread(_set, store, row, "merged", None)
                 continue
             ans = await merge_ready(store, f"{row['repo']}#{row['pr']}")
@@ -572,7 +723,7 @@ async def _keep_rows(store, g: dict) -> dict[str, dict]:
             brief = ans.get("pr") or {}
             if brief.get("merged"):      # someone else merged it: no error, just the record
                 await _merged(store, row, t, "GitHub shows the pull request merged", "github",
-                              "github")
+                              "github", ans=ans)
                 continue
             if not head:
                 continue                 # GitHub could not be read: nothing is known, no change
@@ -723,9 +874,9 @@ async def _enter(store, g: dict, fresh: dict[str, dict]) -> None:
                       f"{type(e).__name__}: {e}", flush=True)
 
 
-async def _merge(store, row: dict, t: dict) -> None:
+async def _merge(store, row: dict, t: dict, level: str | None = None) -> None:
     """The row is claimed (`merging`): read the gates once more, then merge the commit just
-    evaluated."""
+    evaluated. `level` is the autonomy the queue claimed it under."""
     def back(reason: str) -> None:
         _set(store, row, "queued", reason)
 
@@ -733,7 +884,8 @@ async def _merge(store, row: dict, t: dict) -> None:
     head = str(ans.get("head") or "")
     brief = ans.get("pr") or {}
     if brief.get("merged"):
-        await _merged(store, row, t, "GitHub shows the pull request merged", "github", "github")
+        await _merged(store, row, t, "GitHub shows the pull request merged", "github", "github",
+                      ans=ans)
         return
     if not head:
         await asyncio.to_thread(back, "; ".join(ans.get("reasons") or []) or "GitHub could not be read")
@@ -746,17 +898,22 @@ async def _merge(store, row: dict, t: dict) -> None:
         await asyncio.to_thread(back, "; ".join(ans.get("reasons") or []))
         return
     method = await asyncio.to_thread(store.get_merge_method, row["project_uid"])
+    facts = await asyncio.to_thread(_before_merge, store, row, level, ans)
     res = await factory_github.merge_pr(store, row["repo"], int(row["pr"]), head, method)
     if res["ok"]:
         pr = await factory_github.read_pr(store, row["repo"], int(row["pr"]), t.get("pr"))
         pr = {**pr, "merged": True, "state": "closed"}
         branch = pr.get("branch") or (t.get("pr") or {}).get("branch")
         await asyncio.to_thread(_withdraw, store, row, "a credential can write now")
-        await _merged(store, row, t, "Tares merged the pull request", BY, BY, pr)
+        await _merged(store, row, t, "Tares merged the pull request", BY, BY, pr, ans=ans,
+                      merged={**facts, "sha": res.get("sha") or ""})
         same_repo = str(pr.get("head_repo") or "").lower() == str(row["repo"]).lower()
         if branch and same_repo:      # a fork's branch is not the base repo's to delete
             await factory_github.delete_branch(store, row["repo"], branch)
         return
+    # an answer that says no: the merge did not happen (no answer at all may still have merged)
+    if res.get("status") in (401, 403, 404, 405, 409, 422, 429):
+        await asyncio.to_thread(_refused, store, row)
     if res["no_write"]:
         await asyncio.to_thread(_blocked_for_credential, store, row, t)
     elif res["rate_limited"]:
@@ -997,7 +1154,7 @@ async def _run_queue(store, g: dict, fresh: dict[str, dict]) -> None:
                                                level != AUTO):
                     continue
                 row["state"] = "merging"
-                await _merge(store, row, t)
+                await _merge(store, row, t, level)
                 if row["state"] == "merged":      # the next row's dependency on it is met now
                     t["stage"] = "merged"
                     if turn.get("by") == factory_mod.label(t):    # the base moved: the next goes

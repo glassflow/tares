@@ -35,8 +35,8 @@ from . import (edition, metrics, session_archive, session_digest, session_events
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
 from .session_store.pr_columns import fill_pr_columns, pr_columns
-from .session_store.tables import (MOVED_TABLE_NAMES, project_sessions, report_texts, report_weeks,
-                                   session_stations, session_states)
+from .session_store.tables import (MOVED_TABLE_NAMES, merge_records, project_sessions, report_texts,
+                                   report_weeks, session_stations, session_states)
 from .session_store.tables import settings as settings_table
 from .session_store.tables import api_keys as api_keys_table
 from .session_store.tables import people as people_table
@@ -3256,6 +3256,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
             # its weekly figures (report.py); a pass running now sees the project gone, above
             conn.execute(delete(report_weeks).where(report_weeks.c.project == uid))
+            conn.execute(delete(merge_records).where(merge_records.c.project == uid))
             # a crew station's session serves every project: its state stays
             linked = select(project_sessions.c.session).where(project_sessions.c.project.not_in(over))
             conn.execute(delete(session_states).where(

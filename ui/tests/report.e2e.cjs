@@ -1,11 +1,12 @@
 /*
  * Browser e2e for TR-1667 (the factory Report page's frame), TR-1668 (its Delivered section),
- * TR-1669 (its Time section) and TR-1670 (its Review section).
+ * TR-1669 (its Time section), TR-1670 (its Review section) and TR-1672 (its Merges section).
  *
  * A scratch factory cell seeded by tests/seed-factory-report.py (8 weeks hold 9 merged tickets, 4 weeks
  * 5). Checked: the menu entry; the page from one read of GET /api/factory/report; the six section
  * headings, the "cannot see" line and the "API-equivalent" label; each range and each kind of scope
- * changing the address and the figures; a copied address opening the same view; two dates; a range with
+ * changing the address and the figures; Merges' ledger, weekly counts by level, current levels, CSV
+ * download and empty state; a copied address opening the same view; two dates; a range with
  * no merged ticket; Delivered's four tiles, their change on the weeks before, the lines under them and
  * the two weekly charts, also with reviews and no merge and with nothing delivered; Time's stage table,
  * its two weekly charts, the start-to-merge histogram and "stuck now" with its links to the question
@@ -99,7 +100,7 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
     const inside = (page) => page.evaluate(() => {
       const w = document.documentElement.clientWidth;
       return [...document.querySelectorAll("main *")].every((e) => e.getBoundingClientRect().right <= w + 1
-        || !!e.parentElement.closest('[data-week-chart] [role="region"]'));
+        || !!e.parentElement.closest('[data-week-chart] [role="region"], [data-testid^="merges-"] [role="region"]'));
     });
     const shot = async (page, name) => {
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `report-${name}.png`), fullPage: true });
@@ -161,12 +162,13 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
-      ck("frame: each section but Delivered, Time, Review and Cost says it is not built yet",
-         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 2
+      ck("frame: each section but Delivered, Time, Review, Cost and Merges says it is not built yet",
+         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 1
          && !(await text(page, "report-section-delivered")).includes("not built")
          && !(await text(page, "report-section-time")).includes("not built")
          && !(await text(page, "report-section-review")).includes("not built")
-         && !(await text(page, "report-section-cost")).includes("not built"));
+         && !(await text(page, "report-section-cost")).includes("not built")
+         && !(await text(page, "report-section-merges")).includes("not built"));
       ck("frame: the Cost section says what its amounts are",
          (await text(page, "cost-label")) === "API-equivalent cost: list prices from tares/pricing.py. A subscription crew pays a flat fee.",
          await text(page, "cost-label"));
@@ -899,6 +901,106 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          `${await overflow(page)}px over, tables ${JSON.stringify(tables)}`);
       await checkWords(page, ck, "cost @390");
       if (SHOTS) await page.getByTestId("report-section-cost").screenshot({ path: path.join(SHOTS, "report-cost-390.png") });
+      await ctx.close();
+    }
+
+    // ---- the Merges section
+    {
+      const { ctx, page } = await fresh(1440);
+      const eq = (label, got, want) => ck(label, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+      const flat = (s) => s.replace(/\s+/g, " ").trim();
+      const said_ = async (id) => ((await count(page, id)) ? text(page, id) : "(not there)");
+      const view = async (to) => { await open(page, to); await page.getByTestId("merges-counted").waitFor(); };
+      const [unrecorded, second, first, third] = ids.merged;
+      const a = ids["project-a"], b = ids["project-b"];
+      const lines = page.getByTestId("merges-ledger").locator("tbody tr");
+      const keys = () => lines.evaluateAll((els) => els.map((e) => e.dataset.merge.replace("example-org/web", "")));
+      const column = async (name) => (await lines.locator(`[data-${name}]`).allInnerTexts()).map(flat);
+      const levels = async () => (await page.getByTestId("merges-levels").locator("li").allInnerTexts()).map(flat);
+      const byWeek = async (back) => flat((await page.getByTestId("merges-weeks")
+        .locator(`tr[data-week="${plus(ids.monday, -7 * back)}"] td`).allInnerTexts()).join(" | "));
+
+      await view("/report");
+      eq("merges: newest first, one line for each merge through the queue", await keys(), ["#4", "#2", "#1", "#3"]);
+      eq("merges: each change names its ticket, project and pull request", await column("merged-ticket"), [
+        `${unrecorded} Add a page project-b example-org/web #4`, `${second} Add a page project-a example-org/web #2`,
+        `${first} Add a page project-a example-org/web #1`, `${third} Add a page project-b example-org/web #3`]);
+      eq("merges: the level of each merge, as it was then", await column("level"),
+         ["Level not recorded", "L4: merges alone", "L3: a person approves", "L3: a person approves"]);
+      eq("merges: the gate on the reviewed commit, and what CI said", await column("gate"),
+         ["not recorded", "Reviewer's pass, No CI", "Reviewer's pass, CI passed", "Merged outside Tares, CI passed"]);
+      eq("merges: the reviewed and the merged commit", await column("commits"),
+         ["reviewed not recorded merged not recorded", "reviewed abc1234 merged fee0002",
+          "reviewed abc1234 merged fee0001", "reviewed abc1234 merged fee0003"]);
+      eq("merges: review rounds", await column("rounds"), ["not recorded", "1", "2", "not recorded"]);
+      eq("merges: who approved", await column("approver"),
+         ["Approver not recorded", "None needed", "Ada", "Approver not recorded"]);
+      eq("merges: merges per week by level",
+         [await byWeek(0), await byWeek(1), await byWeek(2), await byWeek(3),
+          await page.getByTestId("merges-weeks").locator("tbody tr").count(),
+          await page.getByTestId("merges-weeks").locator(`tr[data-week="${ids.monday}"] th`).filter({ hasText: "so far" }).count()],
+         ["0 | 0 | 1", "1 | 1 | 0", "1 | 0 | 0", "0 | 0 | 0", 8, 1]);
+      eq("merges: the count, with no empty text", [await said_("merges-shown"), await count(page, "merges-empty")],
+         ["4 merges in these weeks, newest first.", 0]);
+      eq("merges: each handed-over project's level now", await levels(), ["project-a · L4: merges alone"]);
+      const counted = await said_("merges-counted");
+      ck("merges: how it is counted says what is left out and what each column means",
+         ["Pushes that skipped the queue", "can differ from Delivered", "the one that passed the gate", "At L4 no approval is needed"]
+           .every((p) => counted.includes(p)), counted);
+
+      const [file] = await Promise.all([page.waitForEvent("download", { timeout: 10000 }),
+                                        page.getByTestId("merges-csv").click()]);
+      const csv = fs.readFileSync(await file.path(), "utf8").trim().split(/\r?\n/);
+      ck("merges: the CSV downloads with a header and every merge, whole commit ids included",
+         /^merges-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.csv$/.test(file.suggestedFilename()) && csv.length === 5
+         && csv[0].startsWith("Merged at (UTC),Project,Ticket,Title,Repository,Pull request,Level,Gate,")
+         && csv[3].includes(`project-a,${first},Add a page,example-org/web,1,`)
+         && csv[3].includes(`${"abc1234".padEnd(40, "0")},${"fee0001".padEnd(40, "0")},2,Ada`),
+         `${file.suggestedFilename()} ${JSON.stringify(csv)}`);
+      await checkWords(page, ck, "merges @1440");
+      ck("merges @1440: no horizontal scroll", (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      if (SHOTS) await page.getByTestId("report-section-merges").screenshot({ path: path.join(SHOTS, "report-merges-1440.png") });
+
+      await lines.filter({ hasText: "#1" }).getByRole("link", { name: first }).click();
+      await page.getByTestId("ticket-title").waitFor();
+      eq("merges: a ticket opens the ticket", new URL(page.url()).pathname, `/projects/${a}/tickets/${first}`);
+
+      await view(`/report?scope=project:${b}`);
+      eq("merges: one project's own merges, and no level for a project not handed over",
+         [await keys(), await count(page, "merges-levels")], [["#4", "#3"], 0]);
+
+      await view(`/report?scope=team:${ids.Bo}`);
+      eq("merges: a scope with no merge says so, with no table and no download",
+         [await said_("merges-empty"), await count(page, "merges-ledger"), await count(page, "merges-weeks"),
+          await count(page, "merges-csv"), await count(page, "merges-levels")],
+         ["Nothing was merged through the merge queue in these weeks.", 0, 0, 0, 0]);
+      await checkWords(page, ck, "merges with nothing @1440");
+
+      // more merges than the page lists
+      await page.route(/\/api\/factory\/report\?/, async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        if (body.sections.merges) body.sections.merges.total = 1234;
+        await r.fulfill({ response: res, json: body });
+      });
+      await view("/report?range=4w");
+      eq("merges: when there are more than the page lists, it says so", await said_("merges-shown"),
+         "Showing the newest 4 of 1,234 merges. The CSV holds all of them.");
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await fresh(390);
+      await open(page, "/report");
+      await page.getByTestId("merges-ledger").waitFor();
+      const box = await page.getByTestId("merges-ledger").locator('[role="region"]')
+        .evaluate((e) => [e.scrollWidth, e.clientWidth]);
+      const button = await page.getByTestId("merges-csv").boundingBox();
+      ck("390: the ledger scrolls inside its own box and the CSV button is in the window",
+         (await overflow(page)) <= 0 && await inside(page) && box[0] > box[1]
+         && !!button && button.x >= 0 && button.x + button.width <= 390,
+         `${await overflow(page)}px over, box ${JSON.stringify(box)}, button ${JSON.stringify(button)}`);
+      await checkWords(page, ck, "merges @390");
+      if (SHOTS) await page.getByTestId("report-section-merges").screenshot({ path: path.join(SHOTS, "report-merges-390.png") });
       await ctx.close();
     }
 

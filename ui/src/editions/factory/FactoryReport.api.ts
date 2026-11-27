@@ -113,6 +113,30 @@ export interface CostData {
   };
 }
 
+/** The autonomy level pull requests are merged at. */
+export type MergeLevel = "L3-review" | "L4-ship";
+
+/** One merge through the merge queue. Null is what nothing recorded; the `_words` fields say the
+ *  level, the gate and the approver for people. */
+export interface MergeRow {
+  project: string; name: string; ticket: string | null; title: string | null;
+  repo: string; pr: number; url: string | null; merged_at: string;
+  level: MergeLevel | null; reviewed_sha: string | null; merged_sha: string | null; rounds: number | null;
+  ci_state: string | null; outside: boolean | null;
+  approver: { id: string; name: string } | null; approved_at: string | null;
+  level_words: string; gate_words: string; approver_words: string;
+}
+
+/** `sections.merges` (tares/report.py `merges`). `rows` are the newest of the `total` merges and `csv`
+ *  holds every one. `levels` is each project's level as it is now. */
+export interface MergesData {
+  total: number;
+  rows: MergeRow[];
+  csv: string;
+  levels: { project: string; name: string; level: MergeLevel; level_words: string }[];
+  weeks: ({ week: string; unrecorded: number } & Record<MergeLevel, number>)[];
+}
+
 export interface ReportData {
   /** The weeks the read covers: `from` is a Monday, `to` a Sunday, `weeks` the Mondays, oldest first.
    *  `running_week` is the Monday of the week that is not over, when the range holds it. */

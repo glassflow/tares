@@ -600,7 +600,7 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
-HEAD = "0023_brain_tables"  # the newest session store revision: an upgrade ends there
+HEAD = "0024_merge_ledger"  # the newest session store revision: an upgrade ends there
 
 
 def migration():

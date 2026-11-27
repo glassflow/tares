@@ -3123,6 +3123,22 @@ class FactoryStore:
                 return self._mq_row(r)
         return None
 
+    def merge_queue_merged(self, project_uids: list[str]) -> list[dict]:
+        """The merged rows of these projects, newest last write first (TR-1672). No project, no
+        rows."""
+        if not project_uids:
+            return []
+        t = queue_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(
+                t.c.state == "merged", t.c.project_uid.in_(list(project_uids)))
+                .order_by(t.c.updated_at.desc().nulls_last(), t.c.id)).fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_approvers(self, person_ids: list[str]) -> dict:
+        """{id: {id, name}} of the people who approved merges (TR-1672), one read for all of them."""
+        return self._person_refs(person_ids)
+
     def merge_queue_update(self, mid: str, **fields) -> None:
         bad = [k for k in fields if k not in self._MQ_FIELDS]
         if bad:
