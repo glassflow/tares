@@ -459,7 +459,7 @@ def revision():
             v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
             kept = c.execute(select(sessions.c.line_count).where(sessions.c.session == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0018_integration_tables"] and kept == 3, (v, kept))
+           v == ["0019_brain_tables"] and kept == 3, (v, kept))
         sdb.close()
     finally:
         if PG:

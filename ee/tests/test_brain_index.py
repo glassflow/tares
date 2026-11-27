@@ -69,11 +69,15 @@ class Logs(logging.Handler):
         self.lines.append(self.format(record))
 
 
+def day(month, of=1):
+    return datetime(2026, month, of, tzinfo=timezone.utc)
+
+
 def unit():
     print("== the pieces ==")
     from tares.store import Store
-    s = Store(os.path.join(TMP, "unit.duckdb"))
-    s.add_brain_repo("acme/web", "src-1", None, "2026-01-01T00:00:00Z")
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the session store is one file per data folder
+    s.add_brain_repo("acme/web", "src-1", None, day(1))
     ck("update_brain_repo changes the fields it is given", s.update_brain_repo("acme/web", {"state": "indexing", "files_done": 3,
        "files_total": 9, "place": 2}) and (s.get_brain_repo("acme/web")["state"], s.get_brain_repo("acme/web")["files_done"],
        s.get_brain_repo("acme/web")["files_total"], s.get_brain_repo("acme/web")["place"]) == ("indexing", 3, 9, 2))
@@ -323,7 +327,7 @@ async def main():
         print("== a row connected before this existed gets its job ==")
         async with repos_mod.lore_client() as lc:
             made = await lc.create_repo("acme_old", remote_url="https://github.com/acme/old.git")
-        store.add_brain_repo("acme/old", made["id"], None, "2026-01-01T00:00:00Z")   # queued, no job, as TR-1197 left it
+        store.add_brain_repo("acme/old", made["id"], None, day(1))   # queued, no job, as TR-1197 left it
         ck("it has no job yet", row("acme/old")["state"] == "queued" and row("acme/old")["job_started_at"] is None)
         indexer.wake()
         await state_is("acme/old", "cloning")
@@ -337,7 +341,7 @@ async def main():
         print("== a connect and the poll at the same moment ask once ==")
         async with repos_mod.lore_client() as lc:
             made = await lc.create_repo("acme_dup", remote_url="https://github.com/acme/dup.git")
-        store.add_brain_repo("acme/dup", made["id"], None, "2026-01-01T00:00:00Z")
+        store.add_brain_repo("acme/dup", made["id"], None, day(1))
         await asyncio.gather(indexer.start("acme/dup"), indexer.advance("acme/dup"), indexer.start("acme/dup"))
         await state_is("acme/dup", "cloning")
         await asyncio.sleep(0.2)

@@ -28,6 +28,7 @@ script keeps its state in Postgres.
 Run: .venv/bin/python ee/tests/test_brain_remove.py
 """
 import asyncio, os, sys, tempfile, time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings, puts the repo, ee/ and tests/ on sys.path
@@ -189,7 +190,7 @@ async def main():
         r = await remove("acme/early")
         ck("failed before any Job was asked for: nothing to cancel", r.status_code == 200 and not cancels(s)
            and store.get_brain_repo("acme/early") is None, f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
-        store.add_brain_repo("acme/bare", None, None, "2026-01-01T00:00:00Z")
+        store.add_brain_repo("acme/bare", None, None, datetime(2026, 1, 1, tzinfo=timezone.utc))
         n, m = len(cp.calls("DELETE")), len(lore.calls("DELETE"))
         r = await remove("acme/bare")
         ck("a row that never got a lore id is just removed: no delete on either side", r.status_code == 200

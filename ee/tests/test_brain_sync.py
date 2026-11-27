@@ -18,7 +18,7 @@ script keeps its state in Postgres.
 Run: .venv/bin/python ee/tests/test_brain_sync.py
 """
 import asyncio, logging, os, sys, tempfile, time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings, puts the repo, ee/ and tests/ on sys.path
@@ -87,6 +87,10 @@ async def quiet(seconds=0.4):
     await asyncio.sleep(seconds)
 
 
+def day(month, of=1):
+    return datetime(2026, month, of, tzinfo=timezone.utc)
+
+
 def unit():
     print("== the head check ==")
     sent = []
@@ -132,8 +136,8 @@ def unit():
 
     print("== the row and its two new fields ==")
     from tares.store import Store
-    s = Store(os.path.join(TMP, "unit.duckdb"))
-    s.add_brain_repo("acme/web", "src-1", None, "2026-01-01T00:00:00Z")
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the session store is one file per data folder
+    s.add_brain_repo("acme/web", "src-1", None, day(1))
     r = s.get_brain_repo("acme/web")
     ck("a new row has no sync failures and no sync error", (r["sync_failures"], r["sync_error"]) == (0, None), str(r))
     s.update_brain_repo("acme/web", {"state": "ready", "sync_failures": 2, "sync_error": "boom"})
@@ -148,16 +152,16 @@ def unit():
 
     print("== a repo's history of indexes and updates (TR-1463) ==")
     for i in range(55):
-        s.add_brain_repo_update("acme/web", "update", True, f"2026-01-02T00:{i // 60:02d}:{i % 60:02d}Z", commit=f"c{i}", files_changed=i)
+        s.add_brain_repo_update("acme/web", "update", True, day(1, 2) + timedelta(seconds=i), commit=f"c{i}", files_changed=i)
     h = s.list_brain_repo_updates("acme/web", 100)
     ck("the newest 50 are kept, newest first", len(h) == 50 and h[0]["indexed_commit"] == "c54" and h[-1]["indexed_commit"] == "c5", str([x["indexed_commit"] for x in h[:3]]))
     ck("a list asks for at most what it says", len(s.list_brain_repo_updates("acme/web", 20)) == 20)
-    s.add_brain_repo_update("acme/api", "index", False, "2026-01-03T00:00:00Z", error="it broke")
+    s.add_brain_repo_update("acme/api", "index", False, day(1, 3), error="it broke")
     last = s.last_brain_repo_updates()
     ck("the newest of every repo", last["acme/web"]["indexed_commit"] == "c54" and last["acme/api"] == {
         "at": last["acme/api"]["at"], "kind": "index", "ok": False, "indexed_commit": None, "files_changed": 0,
         "files_deleted": 0, "files_total": 0, "error": "it broke"}, str(last.get("acme/api")))
-    s.add_brain_repo("acme/api", "src-2", None, "2026-01-01T00:00:00Z")
+    s.add_brain_repo("acme/api", "src-2", None, day(1))
     s.delete_brain_repo("acme/api")
     ck("removing a repo drops its history", s.list_brain_repo_updates("acme/api") == [] and "acme/api" not in s.last_brain_repo_updates())
 

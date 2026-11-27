@@ -10,7 +10,9 @@ the project tables (`usecases`, `usecase_objects`, `usecase_log`, `docs`, `skill
 `signoffs`, `handover_overrides`, `answers`, `waiting_told`) and the merge queue, integration,
 secret and guardrail tables (`merge_queue`, `project_merge_method`, `project_required_checks`,
 `integration_choices`, `integration_connections`, `project_integrations`, `pending_writeback`,
-`project_secrets`, `guardrail_rules`, `guardrail_pairs`), exactly as they are today in DuckDB and in the state Postgres:
+`project_secrets`, `guardrail_rules`, `guardrail_pairs`) and the repo map and brain tables
+(`repo_maps`, `repo_map_history`, `brain_repos`, `brain_repo_folders`, `brain_repo_updates`,
+`brain_calls`), exactly as they are today in DuckDB and in the state Postgres:
 same names, same columns, same primary keys, and the column types `state_db.state_ddl` gives them on
 Postgres (TEXT, BIGINT, DOUBLE PRECISION, TIMESTAMPTZ). JSON that callers read as text is `Text`.
 A table made by the old DDL and a table made from these declarations are the same table, which is
@@ -995,6 +997,99 @@ project_merge_method = Table(
     Column("updated_by", Text),
 )
 
+# A map of one GitHub repo (TR-681), shared by every project that names it
+repo_maps = Table(
+    "repo_maps", metadata,
+    Column("repo", Text, primary_key=True),
+    Column("body", Text),
+    Column("updated_at", UTCDateTime),
+    Column("updated_by", Text),
+)
+
+# A dated line for each change of a repo map; no primary key, as the old DDL made it
+repo_map_history = Table(
+    "repo_map_history", metadata,
+    Column("repo", Text),
+    Column("changed_at", UTCDateTime),
+    Column("by_station", Text),
+    Column("project", Text),
+    Column("note", Text),
+)
+
+# The repos a cell connected to the brain (TR-1197, ee): owner/name in lowercase, the id of the
+# repo source lore made for it, and how far its index is. The ee routes in
+# ee/tares_ee/brain/repos.py read and write it; the table exists on every cell. `place` is the
+# place in the control plane's queue while an index job waits, and `job_started_at` when the cell
+# asked for it (NULL until it did, so a repo is asked for once) (TR-1198). `sync_failures` and
+# `sync_error` say how the keep-up sync of a ready repo is doing; a success clears both (TR-1201).
+brain_repos = Table(
+    "brain_repos", metadata,
+    Column("repo", Text, primary_key=True),
+    Column("repo_source_id", Text),
+    Column("state", Text),
+    Column("files_done", Integer, server_default="0"),
+    Column("files_total", Integer, server_default="0"),
+    Column("indexed_commit", Text),
+    Column("last_synced", UTCDateTime),
+    Column("error", Text),
+    Column("added_by", Text),
+    Column("added_at", UTCDateTime),
+    Column("place", Integer),
+    Column("job_started_at", UTCDateTime),
+    Column("sync_failures", Integer, server_default="0"),
+    Column("sync_error", Text),
+)
+
+# The decision folders an admin chose for a connected repo (TR-1209, ee): one row per folder, with
+# who chose it and when. The files in them are the repo's decisions in the brain.
+brain_repo_folders = Table(
+    "brain_repo_folders", metadata,
+    Column("repo", Text, primary_key=True),
+    Column("path", Text, primary_key=True),
+    Column("chosen_by", Text),
+    Column("chosen_at", UTCDateTime),
+)
+
+# Each first index and each later update of a connected repo (TR-1463, ee): when, which commit, how
+# many files it changed or deleted, the repo's file count after it, and whether it worked (and why
+# not). The newest 50 per repo are kept; the Repos page shows the last one and a history.
+brain_repo_updates = Table(
+    "brain_repo_updates", metadata,
+    Column("id", Text, primary_key=True),
+    Column("repo", Text),
+    Column("at", UTCDateTime),
+    Column("kind", Text),
+    Column("ok", Integer),
+    Column("indexed_commit", Text),
+    Column("files_changed", Integer),
+    Column("files_deleted", Integer),
+    Column("files_total", Integer),
+    Column("error", Text),
+)
+Index("idx_brain_repo_updates_repo", brain_repo_updates.c.repo, brain_repo_updates.c["at"])
+
+# Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked (the
+# station and person the call came with, `via` mcp or console), what, which repos it used, how long
+# it took and the tokens lore reported. The daily caps count the ask rows. `repos` is a JSON string
+# the Store parses itself: a text that is not JSON reads as no repos.
+brain_calls = Table(
+    "brain_calls", metadata,
+    Column("id", Text, primary_key=True),
+    Column("at", UTCDateTime),
+    Column("tool", Text),
+    Column("deep", Integer, server_default="0"),
+    Column("question", Text),
+    Column("repos", Text),
+    Column("duration_ms", Integer),
+    Column("input_tokens", Integer),
+    Column("output_tokens", Integer),
+    Column("ok", Integer),
+    Column("error", Text),
+    Column("station", Text),
+    Column("person_id", Text),
+    Column("via", Text),
+)
+
 # The tables that live in the session store and no longer in DuckDB, in the order copy_from_duckdb
 # moves them. A table here is created by its Alembic revision, taken over in place on Postgres,
 # copied from DuckDB and verified on SQLite, and left out of the old DDL, its ALTERs and
@@ -1009,5 +1104,7 @@ MOVED_TABLES = (session_stations, session_states, project_sessions, session_usag
                 spec_questions, signoffs, handover_overrides, answers, waiting_told,
                 guardrail_rules, guardrail_pairs, integration_choices, integration_connections,
                 project_integrations, pending_writeback, project_secrets, project_required_checks,
-                merge_queue, project_merge_method)
+                merge_queue, project_merge_method,
+                repo_maps, repo_map_history, brain_repos, brain_repo_folders, brain_repo_updates,
+                brain_calls)
 MOVED_TABLE_NAMES = frozenset(t.name for t in MOVED_TABLES)

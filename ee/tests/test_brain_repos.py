@@ -12,6 +12,7 @@ same script keeps its state in Postgres.
 Run: .venv/bin/python ee/tests/test_brain_repos.py
 """
 import asyncio, os, sys, tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings, puts the repo, ee/ and tests/ on sys.path
@@ -61,15 +62,19 @@ ALL = (("GET", "/api/brain/repos/available", None),
        ("POST", "/api/brain/repos/acme/web/retry", None))
 
 
+def day(month, of=1):
+    return datetime(2026, month, of, tzinfo=timezone.utc)
+
+
 def unit():
     print("== the store: the same on DuckDB and Postgres ==")
     from tares.store import Store
-    s = Store(os.path.join(TMP, "unit.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the session store is one file per data folder
     who = s.create_person("Kiran", "kiran@x.dev")
     ck("a new cell has no brain repos", s.list_brain_repos() == [])
-    ck("add a repo", s.add_brain_repo("acme/web", "src-1", who["id"], "2026-01-01T00:00:00Z"))
+    ck("add a repo", s.add_brain_repo("acme/web", "src-1", who["id"], day(1, 1)))
     ck("the same repo twice is refused, the row stays",
-       not s.add_brain_repo("acme/web", "src-2", None, "2026-02-01T00:00:00Z")
+       not s.add_brain_repo("acme/web", "src-2", None, day(2, 1))
        and s.get_brain_repo("acme/web")["repo_source_id"] == "src-1")
     r = s.get_brain_repo("acme/web")
     ck("a new row is queued, nothing indexed", (r["state"], r["files_done"], r["files_total"],
@@ -77,20 +82,19 @@ def unit():
     ck("the row names who added it", (r["added_by"], r["added_by_name"]) == (who["id"], "Kiran"), str(r))
     ck("an unknown repo is not there", s.get_brain_repo("acme/none") is None)
     ck("a queued repo is not requeued", not s.requeue_brain_repo("acme/web"))
-    s.sc.execute("UPDATE brain_repos SET state = 'failed', error = 'boom', files_done = 3 WHERE repo = ?",
-                 ["acme/web"])
-    s.sc.execute("UPDATE brain_repos SET place = 4, job_started_at = '2026-01-02T00:00:00Z' WHERE repo = ?", ["acme/web"])
+    s.update_brain_repo("acme/web", {"state": "failed", "error": "boom", "files_done": 3})
+    s.update_brain_repo("acme/web", {"place": 4, "job_started_at": day(1, 2)})
     ck("a failed repo is requeued", s.requeue_brain_repo("acme/web"))
     r = s.get_brain_repo("acme/web")
     ck("... the error, the counts, the place and the job mark are cleared", (r["state"], r["error"], r["files_done"],
        r["files_total"], r["place"], r["job_started_at"]) == ("queued", None, 0, 0, None, None), str(r))
-    ck("a new row has no place and no job yet", s.add_brain_repo("acme/new", "src-9", None, "2026-01-01T00:00:00Z")
+    ck("a new row has no place and no job yet", s.add_brain_repo("acme/new", "src-9", None, day(1, 1))
        and (s.get_brain_repo("acme/new")["place"], s.get_brain_repo("acme/new")["job_started_at"]) == (None, None))
     s.delete_brain_repo("acme/new")
     ck("requeue of a repo that is not there is False", not s.requeue_brain_repo("acme/none"))
     ck("delete removes it", s.delete_brain_repo("acme/web") and s.list_brain_repos() == [])
     ck("delete of a repo that is not there is False", not s.delete_brain_repo("acme/web"))
-    s.add_brain_repo("acme/nobody", None, None, "2026-01-01T00:00:00Z")
+    s.add_brain_repo("acme/nobody", None, None, day(1, 1))
     r = s.get_brain_repo("acme/nobody")
     ck("no person and no source id are null", (r["added_by"], r["added_by_name"], r["repo_source_id"]) == (None, None, None), str(r))
 
@@ -287,7 +291,7 @@ async def main():
 
         print("== retry ==")
         def set_state(repo, state, error=None):
-            store.sc.execute("UPDATE brain_repos SET state = ?, error = ? WHERE repo = ?", [state, error, repo])
+            store.update_brain_repo(repo, {"state": state, "error": error})
 
         r = await cx.post("/api/brain/repos/acme/web/retry")
         ck("a queued repo is refused (409) in plain words", r.status_code == 409 and "acme/web is queued" in r.text

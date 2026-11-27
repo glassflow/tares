@@ -994,26 +994,26 @@ class _Gen:
                    self.people[0]] for _ in range(self.need("ask_sessions"))])
         # the brain
         n = self.need("brain_repos")
-        self.put("brain_repos", "repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
-                                "error, added_by, added_at, place, job_started_at, sync_failures, sync_error",
+        self.put_t("brain_repos", "repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
+                                  "error, added_by, added_at, place, job_started_at, sync_failures, sync_error",
                  [[repos[k % len(repos)], None, "ready", 420 + k, 420 + k, _sha(rng), NOW - timedelta(hours=k + 1), None,
                    "Ada Quill", NOW - timedelta(days=30), k, None, 0, None] for k in range(n)])
         rows = [[self.id("bu"), repos[k % 3], NOW - timedelta(hours=k * 5), "update", 1, _sha(rng), rng.randint(1, 30), 0,
                  400 + k, None] for k in range(self.need("brain_repo_updates"))]
-        self.put("brain_repo_updates", 'id, repo, "at", kind, ok, indexed_commit, files_changed, files_deleted, '
-                                       "files_total, error", rows)
+        self.put_t("brain_repo_updates", 'id, repo, "at", kind, ok, indexed_commit, files_changed, files_deleted, '
+                                         "files_total, error", rows)
         rows = [[self.id("bc"), NOW - timedelta(hours=k * 7), "ask_brain", k % 2, rng.choice(QUESTIONS), repos[k % 3],
                  rng.randint(800, 9000), rng.randint(1000, 8000), rng.randint(100, 900), 1, None,
                  self.station_of(k % len(self.crews), "builder"), self.person(), "session"]
                 for k in range(self.need("brain_calls"))]
-        self.put("brain_calls", 'id, "at", tool, deep, question, repos, duration_ms, input_tokens, output_tokens, ok, '
-                                "error, station, person_id, via", rows)
+        self.put_t("brain_calls", 'id, "at", tool, deep, question, repos, duration_ms, input_tokens, output_tokens, ok, '
+                                  "error, station, person_id, via", rows)
         rows = [[repos[k % len(repos)], _words(rng, 1500), NOW - timedelta(days=k), "Ada Quill"]
                 for k in range(self.need("repo_maps"))]
-        self.put("repo_maps", "repo, body, updated_at, updated_by", rows)
+        self.put_t("repo_maps", "repo, body, updated_at, updated_by", rows)
         rows = [[repos[k % 7 % len(repos)], NOW - timedelta(hours=k * 11), self.station_of(k % len(self.crews), "builder"),
                  pr[k % len(pr)]["uid"], "Updated after the merge."] for k in range(self.need("repo_map_history"))]
-        self.put("repo_map_history", "repo, changed_at, by_station, project, note", rows)
+        self.put_t("repo_map_history", "repo, changed_at, by_station, project, note", rows)
         rows = [[self.id("mu"), NOW - timedelta(days=k), "ask", None, None, "claude-sonnet-5-5", 1,
                  rng.randint(1000, 9000), rng.randint(100, 900), 0, 0, round(rng.random() * 0.2, 4), "env", "anthropic"]
                 for k in range(self.need("model_usage"))]
