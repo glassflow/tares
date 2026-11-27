@@ -348,6 +348,34 @@ merge_records = Table(
 )
 Index("merge_records_project_merged_at", merge_records.c.project, merge_records.c.merged_at)
 
+# The keys GitHub App webhooks are delivered on (/ingest/<key>), one per App credential (TR-1805,
+# TR-1807): which integration and credential a key belongs to, and the name its events go under
+# (`source`, the 1.x catalog source's name until the catalog goes). The webhook secret stays on the
+# credential.
+integration_keys = Table(
+    "integration_keys", metadata,
+    Column("key", Text, primary_key=True),
+    Column("integration", Text, nullable=False),
+    Column("credential", Text),
+    Column("source", Text),
+    Column("created_at", UTCDateTime),
+)
+Index("integration_keys_credential", integration_keys.c.integration, integration_keys.c.credential)
+
+# GitHub pull_request events of the last 30 days (TR-1807): what links a ticket in the work to its pull
+# request by its factory/<ref> branch. One row per delivery.
+pr_events = Table(
+    "pr_events", metadata,
+    Column("delivery_id", Text, primary_key=True),
+    Column("repo", Text, nullable=False),
+    Column("number", Integer, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("action", Text),
+    Column("at", UTCDateTime, nullable=False),
+)
+Index("pr_events_repo_branch", pr_events.c.repo, pr_events.c.branch)
+Index("pr_events_at", pr_events.c.at)
+
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
     "session_ingest_marks", metadata,

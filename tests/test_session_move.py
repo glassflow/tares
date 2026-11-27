@@ -654,9 +654,9 @@ def revision():
            marks == ["other_mark"], marks)
         sdb.upgrade()
         ck("an upgrade builds it again", "session_moves" in inspect(sdb.engine).get_table_names()
-           and version(sdb) == ["0024_merge_ledger"])
+           and version(sdb) == ["0025_integration_keys_pr_events"])
         sdb.upgrade()
-        ck("an upgrade at the head changes nothing", version(sdb) == ["0024_merge_ledger"])
+        ck("an upgrade at the head changes nothing", version(sdb) == ["0025_integration_keys_pr_events"])
         sdb.close()
     finally:
         if PG:

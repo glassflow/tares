@@ -168,6 +168,7 @@ test_github_app
 test_github_credentials
 test_github_tickets
 test_github_token_endpoint
+test_github_webhooks
 test_goal_first
 test_grants_single
 test_guardrail_pairs

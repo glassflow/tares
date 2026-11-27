@@ -2,7 +2,7 @@
 """The decision folder files follow pushes, edits and deletes (TR-1219).
 
 `tares_ee.brain.decisions_repo.RepoDecisions` keeps the lore documents of the chosen folders (TR-1202) in step
-with the repo. A push to the default branch (a webhook envelope, handled by `Syncer.on_envelopes` and told to
+with the repo. A push to the default branch (a webhook envelope from core's GitHub hub, handled by `Syncer.on_envelopes` and told to
 `RepoDecisions.on_push`) names the files it touched; the tree read decides for each one: still there means
 imported again (an unchanged blob costs no GitHub call, TR-1210's cache), gone means its document is deleted.
 A push with no usable file list (GitHub cuts the list at 20 commits) and a moved head found by the poll of a
@@ -221,6 +221,9 @@ async def main():
                             text=b["text"], event_time=b["event_time"], labels=b["labels"], payload=payload)
 
         async def ingest(*envs, source="github"):
+            from tares.github_webhook import HUB   # the App's deliveries reach the brain here (TR-1807)
+            if source == "github":
+                HUB.tell(source, list(envs))
             await runtime._store_envelopes(source, list(envs))
             await rd.wait()
 

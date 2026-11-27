@@ -5,8 +5,8 @@ A repo that is `ready` answers from lore's index. A push to its default branch m
 stale, so the cell tells lore to sync it (`lore.sync_repo` with a fresh GitHub token). Lore's own
 poller and webhook stay off: the cell drives every sync.
 
-* A push event of the cell's GitHub App (`github_app` source, `push`, `on_default_branch` true)
-  reaches `Syncer.on_envelopes` through core's `Runtime.envelope_listeners`. It records that the repo
+* A push event of the cell's GitHub App (`push`, `on_default_branch` true) reaches
+  `Syncer.on_envelopes` through core's GitHub hub (`tares.github_webhook.HUB`, TR-1807). It records that the repo
   wants a sync and wakes the task, so a push is searchable within a minute or two.
 * A repo whose GitHub connection is a token (no App, so no webhooks) is polled every
   `SYNC_POLL_SECONDS`: one conditional request for the head of the default branch (a 304 costs no
@@ -132,7 +132,7 @@ def pushed_files(payload) -> set[str] | None:
 
 class Syncer:
     """One per app, next to the Indexer (it shares the indexer's store, lore client and per-repo
-    lock). `runtime` is core's runtime, whose `envelope_listeners` brings the push events."""
+    lock). `runtime` is unused since the GitHub hub brings the push events (TR-1807); kept for callers."""
 
     def __init__(self, indexer, runtime=None):
         self.indexer = indexer
@@ -184,9 +184,9 @@ class Syncer:
                 log.warning("brain push listener for %s failed: %s", repo, type(e).__name__)
 
     def _is_app_source(self, name: str) -> bool:
-        catalog = getattr(self.runtime, "catalog", None)
-        cfg = catalog.sources.get(name) if catalog is not None else None
-        return getattr(cfg, "connector", None) == "github_app"
+        """True for every batch: only the GitHub hub calls on_envelopes now, and it carries the
+        App's deliveries alone (TR-1807)."""
+        return True
 
     def request(self, repo: str, sha=None) -> bool:
         """Note that `repo` has a newer head (`sha`, when known) and wake the task. False when the
@@ -436,9 +436,9 @@ class Syncer:
         if getattr(app.state, "brain_syncer", None) is not None:
             return
         app.state.brain_syncer = self
-        listeners = getattr(self.runtime, "envelope_listeners", None)
-        if listeners is not None and self.on_envelopes not in listeners:
-            listeners.append(self.on_envelopes)
+        # the GitHub App's events come from core's GitHub hub (TR-1807), not the runtime
+        from tares.github_webhook import HUB
+        HUB.subscribe(self.on_envelopes)
         outer = app.router.lifespan_context
 
         @contextlib.asynccontextmanager
