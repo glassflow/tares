@@ -51,6 +51,7 @@ def _own_mcp_servers() -> set:
 # switched off only where it is configured: `enabled=false` for one that is not makes an entry with no transport,
 # and Codex then refuses to start (seen on Linux, where no app adds node_repl).
 QUIET = ["--disable", "apps", "--disable", "computer_use", "--disable", "browser_use",
+         "-c", "allow_login_shell=false",   # as a station runs (runtime_codex): commands keep the PATH they had
          *[a for name in ("node_repl", "computer-use") if name in _own_mcp_servers()
            for a in ("-c", f"mcp_servers.{name}.enabled=false")]]
 RULES = ("You are a test station. Run exactly the shell commands or tools you are asked for, each as its own "

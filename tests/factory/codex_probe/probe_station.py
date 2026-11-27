@@ -225,6 +225,7 @@ def killed_mid_command(out):
                 break
             time.sleep(1)
         pid = (c.row().get("codex") or {}).get("pid")
+        before = running("sleep 43.4343")
         cs.note_children(c.paths, STATION)   # the watch's look at a station that runs, once a round
         os.kill(pid, 9)
         time.sleep(2)
@@ -238,13 +239,25 @@ def killed_mid_command(out):
         names = sorted({cs._name(p) for p in found})
         ended = cs.end_leftovers(c.paths, STATION, grace=5)
         time.sleep(1)
-        return finish({
-            "killed, the app-server left its command running": bool(still) and not cs.is_alive(c.paths, STATION),
-            "the command is found among what ran under the app-server at the watch's last look":
-                any("sleep" in n for n in names),
-            "ended, nothing of the station is left running": bool(ended) and running("sleep 43.4343") == []
-                and cs.leftovers(c.paths, STATION) == [],
-        }, programs_found=names, programs_ended=ended, found_by_the_environment_alone=by_environment)
+        if sys.platform.startswith("linux"):
+            # Codex's Linux sandbox (bubblewrap) ends a command with the app-server that started it: nothing
+            # outlives the kill, and nothing is left for the crew to end
+            checks = {
+                "the command was running when the app-server was killed": bool(before),
+                "killed, the app-server's command ended with it": not still and not cs.is_alive(c.paths, STATION),
+                "nothing of the station is left running, and nothing had to be ended":
+                    running("sleep 43.4343") == [] and cs.leftovers(c.paths, STATION) == [],
+            }
+        else:
+            checks = {
+                "killed, the app-server left its command running": bool(still) and not cs.is_alive(c.paths, STATION),
+                "the command is found among what ran under the app-server at the watch's last look":
+                    any("sleep" in n for n in names),
+                "ended, nothing of the station is left running": bool(ended) and running("sleep 43.4343") == []
+                    and cs.leftovers(c.paths, STATION) == [],
+            }
+        return finish(checks, platform=sys.platform, running_before=len(before), programs_found=names,
+                      programs_ended=ended, found_by_the_environment_alone=by_environment)
     finally:
         for left in running("sleep 43.4343"):
             subprocess.run(["kill", left])
