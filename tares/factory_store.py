@@ -2674,7 +2674,7 @@ class FactoryStore:
         has none chosen (it uses its built-in default)."""
         self._integration_slot(slot)
         ch, t = choices_table, connections_table
-        with self.sessions_db.read() as conn:
+        with self.sessions_db.consistent_read() as conn:    # the default and its connection agree
             r = conn.execute(select(ch.c.name, ch.c.updated_at, ch.c.updated_by)
                              .where(ch.c.slot == slot)).first()
             if r is None:
@@ -2691,7 +2691,7 @@ class FactoryStore:
         integration with no integration settings has none)."""
         self._integration_slot(slot)
         t = connections_table
-        with self.sessions_db.read() as conn:
+        with self.sessions_db.consistent_read() as conn:    # the row and the flag agree
             c = conn.execute(select(t.c.settings, t.c.updated_at, t.c.updated_by)
                              .where(t.c.slot == slot, t.c.name == name)).first()
             default = self._default_name(conn, slot) == name if c is not None else False
@@ -2713,13 +2713,15 @@ class FactoryStore:
                 return []
             return [self._connection_view(slot, cfg.provider, mon.stored(self, cfg.provider),
                                           None, None, True)]
-        t = connections_table
+        from .integrations import resolve
+        t, ch = connections_table, choices_table
+        # one query, not _default_read: the rows and the default must be from one state
+        chosen = select(ch.c.name).where(ch.c.slot == slot).scalar_subquery().label("chosen")
         with self.sessions_db.read() as conn:
-            rows = conn.execute(select(t.c.name, t.c.settings, t.c.updated_at, t.c.updated_by)
+            rows = conn.execute(select(t.c.name, t.c.settings, t.c.updated_at, t.c.updated_by, chosen)
                                 .where(t.c.slot == slot).order_by(t.c.name)).fetchall()
-        default = self._default_read(slot)
         return [self._connection_view(slot, r.name, r.settings, r.updated_at, r.updated_by,
-                                      r.name == default) for r in rows]
+                                      r.name == (r.chosen or resolve.DEFAULTS[slot])) for r in rows]
 
     @staticmethod
     def _has_row(conn, slot: str, name: str) -> bool:
@@ -3159,7 +3161,7 @@ class FactoryStore:
         found = registry.get(slot, name)           # before the lock: it loads the registry
         plain = {f.name for f in found.settings_schema if f.kind not in ("secret", "url")} if found else set()
         t, picks = connections_table, picks_table
-        with self.sessions_db.read() as conn:
+        with self.sessions_db.consistent_read() as conn:    # the connection and the pick agree
             c = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
             own = conn.execute(select(picks.c.name, picks.c.settings).where(
                 picks.c.project_uid == uid, picks.c.slot == slot)).first() if uid is not None else None
