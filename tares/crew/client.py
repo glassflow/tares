@@ -157,6 +157,21 @@ def settings_missing(raw: dict) -> list:
     return out
 
 
+def team_settings(home) -> dict:
+    """What the team set for the crew, from GET /api/home's `joiner` block: {} for the owner, for a cell
+    whose team named no autonomy, and for a Tares that does not say."""
+    joiner = home.get("joiner") if isinstance(home, dict) else None
+    team = joiner.get("team_settings") if isinstance(joiner, dict) else None
+    return team if isinstance(team, dict) else {}
+
+
+def looser_than_team(status, detail: str) -> str:
+    """The setting Tares refused to save because it is looser than the team's (autonomy or challenger), ""
+    for any other answer. `detail` is the server's message, which starts with the setting's name."""
+    key = detail.split(" ", 1)[0]
+    return key if status == 400 and key in ("autonomy", "challenger") and "looser than the team's" in detail else ""
+
+
 def _tostring(value) -> str:
     """jq's tostring: a string as is, anything else as compact JSON."""
     return value if isinstance(value, str) else state.dumps_compact(value)

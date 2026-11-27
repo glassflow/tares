@@ -18,7 +18,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .crew.client import _detail, looser_than_team, team_settings
 from .crew.state import trust_keys
+from .words import team_choices
 
 if os.name == "nt":
     import msvcrt
@@ -75,6 +77,8 @@ def crew_questions(missing: list[str]) -> list[Question]:
         ]),
     }
     out = [qs[k] for k in ("autonomy", "releaser", "challenger", "builders_max") if k in missing]
+    if "release_profile" in missing:   # a releaser already chosen, its shipping not yet
+        out.append(SHIPPING)
     out.append(Question("grant", "Grants", "Anything you always allow the crew, in your own words?", [
         Option("", "Nothing more", "Your answers above already cover routine work."),
         Option("", "Add one in my own words",
@@ -105,6 +109,7 @@ class Form:
     typing: str | None = None                     # the line being typed for a text option
     texts: dict = field(default_factory=dict)     # question key → words typed
     result: str | None = None                     # "save" or "cancel" once finished
+    ask_shipping: bool = True                     # False when Tares already says how a releaser ships
 
     def __post_init__(self):
         for q in self.questions:
@@ -128,7 +133,7 @@ class Form:
         """A releaser asked for brings the question of how it ships, right after it."""
         has = any(q.key == "release_profile" for q in self.questions)
         want = self.value("releaser") == "yes" if any(q.key == "releaser" for q in self.questions) else False
-        if want and not has:
+        if want and not has and self.ask_shipping:
             i = next(n for n, q in enumerate(self.questions) if q.key == "releaser")
             self.questions.insert(i + 1, SHIPPING)
             self.cursor.setdefault(SHIPPING.key, SHIPPING.default)
@@ -375,6 +380,17 @@ def missing_settings(s: dict) -> list[str]:
     return out
 
 
+def _team_line(tares: str, token: str, settings: dict) -> str:
+    """"Using your team's choices: ..." (`tares.words.team_choices`), "" when Tares does not say."""
+    if settings.get("autonomy") is None and settings.get("builders_max") is None:
+        return ""   # nothing to say whoever set it, so Tares is not asked
+    try:
+        home = _req(f"{tares}/api/home", token)
+    except (urllib.error.URLError, OSError, ValueError):
+        return ""
+    return team_choices(team_settings(home), settings)
+
+
 def home_trusted(home: Path) -> bool:
     try:
         cfg = json.loads((Path.home() / ".claude.json").read_text())
@@ -435,9 +451,13 @@ def setup(tares: str, token: str, home: Path, claude: str) -> bool:
     if not missing:
         return True
     print("\n Setting up your crew. Asked once, saved on Tares.\n")
-    form = run_form(Form(crew_questions(missing)))
+    line = _team_line(tares, token, settings)
+    if line:
+        print(f" {line}\n")
+    form = run_form(Form(crew_questions(missing), ask_shipping=settings.get("release_profile") is None))
+    cancelled = "Cancelled: nothing was saved and the crew did not start."
     if form.result != "save":
-        say("Cancelled: nothing was saved and the crew did not start.")
+        say(cancelled)
         return False
     v = form.values()
     body: dict = {}
@@ -451,9 +471,27 @@ def setup(tares: str, token: str, home: Path, claude: str) -> bool:
         body["builders_max"] = int(v["builders_max"])
     if v.get("release_profile"):
         body["release_profile"] = v["release_profile"]
-        body["prod_pattern"] = settings.get("prod_pattern") or PROD_PATTERN
+        if settings.get("prod_pattern") is None:   # one already set (a team's) is not copied
+            body["prod_pattern"] = PROD_PATTERN
     try:
-        _req(f"{tares}/api/crew/settings", token, "PUT", body)
+        while True:
+            try:
+                _req(f"{tares}/api/crew/settings", token, "PUT", body)
+                break
+            except urllib.error.HTTPError as e:
+                detail = _detail(e.read())
+                key = looser_than_team(e.code, detail)
+                if key not in body:
+                    raise
+            # the team set it while the person was answering: show why, and ask that one again
+            say(detail)
+            again = run_form(Form(crew_questions([key])[:1], single=True))
+            if again.result != "save":
+                say(cancelled)
+                return False
+            pick = again.value(key)
+            body[key] = pick if key == "autonomy" else pick == "yes"
+            form.answers.update(again.answers)
         if v.get("grant"):
             _req(f"{tares}/api/grants", token, "POST", {"words": v["grant"], "scope": "all"})
     except (urllib.error.URLError, OSError, ValueError) as e:
