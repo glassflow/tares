@@ -1,7 +1,8 @@
 """The transcript digest reads archive parts a line at a time (TR-1792).
 
-After a restart the warm-up added over a gigabyte to a daemon's memory: each archive part was
-unpacked, split into lines and parsed as a whole before the first line was counted.
+After a restart the warm-up added hundreds of MiB to a daemon's memory (over a gigabyte on macOS):
+each archive part was unpacked, split into lines and parsed as a whole before its first line was
+counted.
 
 A factory cell holds BIG sessions archived as one part of BIG_LINES lines each, more archived sessions
 than one warm-up batch, and a few still in the session store. The most memory the warm-up holds at
