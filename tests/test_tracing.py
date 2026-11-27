@@ -388,7 +388,8 @@ async def part2():
                root is not None and _attr(root, "tares.instance") == "local" and _attr(root, "tares.agent") == "first-look")
             ck("root records cost + calls", root is not None and _attr(root, "tares.model_calls") == 2)
             llms = [sp for svc, sp in spans if _attr(sp, "openinference.span.kind") == "LLM"]
-            ck("one LLM span per model call", len(llms) == 2, str(len(llms)))
+            # models.py no longer opens a span per model call (TR-1808); the exporter goes in TR-1810
+            ck("no LLM span per model call any more", len(llms) == 0, str(len(llms)))
             ck("LLM spans carry usage", all(_attr(sp, "gen_ai.usage.input_tokens") == 100
                                            and _attr(sp, "gen_ai.usage.output_tokens") == 50 for sp in llms))
             ck("LLM spans carry the tool definitions",

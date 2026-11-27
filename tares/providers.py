@@ -26,6 +26,12 @@ import re
 from urllib.parse import urlsplit
 
 from .config import API_BASE
+
+# The cell's default model on Anthropic (TARES_AGENT_MODEL), and the Anthropic models offered when a
+# provider lists none. Moved here from builtin_agents (TR-1808), which imports them from here.
+MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
+AGENT_MODELS = list(dict.fromkeys(
+    [MODEL, "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]))
 from .models import AnthropicProvider, OpenAIProvider, Provider
 
 KINDS = ("anthropic", "openai", "openai_compatible")
@@ -220,7 +226,6 @@ def list_providers(store) -> dict:
 
 def models_for(entry: dict) -> list[str]:
     if entry["kind"] == "anthropic":
-        from .builtin_agents import AGENT_MODELS
         return list(entry.get("models") or AGENT_MODELS)
     if entry["kind"] == "openai":
         return list(entry.get("models") or OPENAI_MODELS)
@@ -483,7 +488,6 @@ def default_model_for(store, provider_id: str | None) -> str:
     cell default, when the variable is set on purpose); on OpenAI the first of OPENAI_MODELS the
     key can use; on xAI XAI_MODELS["default"]; else the first model the provider lists. Empty when a router lists nothing yet:
     the agent must then name one."""
-    from .builtin_agents import MODEL
     pid = provider_id or default_id(store)
     e = entry(store, pid) if pid else None
     if e is None or e["kind"] == "anthropic":

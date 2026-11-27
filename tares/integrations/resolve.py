@@ -90,7 +90,7 @@ def carried(slot: str, project_uid: str | None, store=None) -> tuple[str, dict] 
     elif slot == "ci" and project_uid:
         found = "github" if _has_github_repos(project_uid, store) else None
     elif slot == "monitoring":
-        from .. import tracing
+        from .. import station_telemetry as tracing
         cfg = tracing.resolve(store)
         found = cfg.provider if cfg.active else None
     if found is None or found == DEFAULTS[slot]:
