@@ -893,18 +893,18 @@ def published_meanwhile():
     want = count()
     forget(s)
     decoded: Counter = Counter()
-    read_part, finish, first = session_archive.read_part, session_digest.finish, [True]
+    iter_part, finish, first = session_archive.iter_part, session_digest.finish, [True]
 
     def counted(backend, part):
         decoded[part.key] += 1
-        return read_part(backend, part)
+        return iter_part(backend, part)
 
     def beside(store, plan):
         if first.pop() if first else False:      # another read builds them all, after the load
             count()
         return finish(store, plan)
 
-    with patched(session_archive, "read_part", counted), \
+    with patched(session_archive, "iter_part", counted), \
             patched(session_digest, "_old", lambda *_: False), \
             patched(session_digest, "finish", beside):        # kept with their lines' times
         got = count()
@@ -917,7 +917,7 @@ def published_meanwhile():
 
     s.append([one("old", ago=40 * DAY, repo="shop")])         # its entry is out of date
     decoded.clear()
-    with patched(session_archive, "read_part", counted), \
+    with patched(session_archive, "iter_part", counted), \
             patched(session_digest, "_old", lambda *_: False), \
             patched(session_digest, "finish", evicting):
         got = count()
