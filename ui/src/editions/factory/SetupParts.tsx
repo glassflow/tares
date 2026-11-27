@@ -82,30 +82,32 @@ function StepShell({ step, n, current, children, onChange }: {
 
 export type SaveChoices = (c: { autonomy: string; builders_max: number; releaser: boolean }) => Promise<unknown>;
 
-/** How the crew works: who merges, builders at once, releases. Saved together when the person confirms. */
-export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue" }: {
+/** How the crew works: who merges, builders at once, releases. Saved together when the person confirms.
+ *  A refused save reads as `errorText` gives it, else as the plain "not saved" line. */
+export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue", errorText }: {
   o: HomeOnboarding; save: SaveChoices; onSaved: () => void; saveLabel?: string;
+  errorText?: (e: unknown) => string | undefined;
 }) {
   const c = o.choices;
   const [autonomy, setAutonomy] = React.useState<string>(c.autonomy ?? c.defaults.autonomy);
   const [builders, setBuilders] = React.useState<number>(c.builders_max ?? c.defaults.builders_max);
   const [releases, setReleases] = React.useState<boolean>(c.releaser ?? c.defaults.releaser);
   const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   // Letting the crew merge on its own is a bigger step than the default: it is asked about, in
   // plain words, before it can be saved. Cancel goes back to the person's own approval.
   const [asking, setAsking] = React.useState(false);
   const pick = (v: string) => {
     setAutonomy(v);
-    setError(false);
+    setError(null);
     setAsking(v === "L4-ship" && c.autonomy !== "L4-ship");
   };
   const go = () => {
     setBusy(true);
-    setError(false);
+    setError(null);
     save({ autonomy, builders_max: builders, releaser: releases }).then(
       () => { setBusy(false); setAsking(false); onSaved(); },
-      () => { setBusy(false); setError(true); },
+      (e: unknown) => { setBusy(false); setError(errorText?.(e) ?? SAVE_FAILED); },
     );
   };
   const submit = (e: React.FormEvent) => {
@@ -145,7 +147,7 @@ export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue" 
           <Switch aria-label="Releases" checked={releases} onCheckedChange={setReleases} data-testid="toggle-releases" />
         </div>
       </div>
-      {error && <div role="alert" data-testid="step-error" className="text-[13px] text-err">{SAVE_FAILED}</div>}
+      {error && <div role="alert" data-testid="step-error" className="text-[13px] text-err [overflow-wrap:anywhere]">{error}</div>}
       {asking ? (
         <div role="group" aria-labelledby="onb-merge-ask" data-testid="merge-confirm-box"
              className="grid gap-3 border border-foreground bg-field px-4 py-3.5">
