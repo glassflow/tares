@@ -250,8 +250,9 @@ UI_DIST = _ui_dist()
 
 # What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
 # cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
-# launch_spec, recall). A daemon that could not start lists none.
-CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs", "recall", "launch_spec"]
+# launch_spec, recall). A daemon that could not start lists none. Kept on one line: the crew parity
+# scenarios read the list from this file.
+CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs", "recall", "launch_spec", "github_token"]
 
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
@@ -853,6 +854,9 @@ def make_app() -> FastAPI:
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
+        if path == "/api/factory/github/token":
+            return "ingest"  # a GitHub token for the crew: a GET, but it hands out a credential, so
+                             # a read key is refused; the handler needs the credential's person
         if method == "POST" and path == "/api/crew/machine":
             return "ingest"  # the command line's report after `tares login` (TR-1312): a name and a
                              # version, from a key that can write the crew's settings
