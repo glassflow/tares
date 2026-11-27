@@ -206,7 +206,7 @@ def on_the_store():
 
 
 PAGES = ["/api/home", "/api/factory/crew", "/api/factory/setup", "/api/factory/setup/progress",
-         "/api/factory/projects"]
+         "/api/factory/projects", "/api/projects"]
 
 
 async def on_the_daemon():
@@ -248,7 +248,7 @@ async def on_the_daemon():
                                             if "FROM usecases" in sql or "FROM people" in sql)
                 ck(f"{path} asks nothing about projects or people twice",
                    again and max(again.values()) == 1, [k for k, v in again.items() if v > 1][:3])
-            r, ran = await get("/api/projects")
+            r, ran = await get("/api/projects/uc_one")
             ck("a route that is not a page read has no memo",
                r.status_code == 200 and had == {False} and not ran, (r.status_code, had, len(ran)))
             r, _ = await get("/api/factory/setup/progress")
