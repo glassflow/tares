@@ -161,13 +161,15 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          await text(page, "report-cannot-see"));
       ck("frame: six section headings in order", (await sections(page)).join("|") === SECTIONS.join("|"), (await sections(page)).join("|"));
       ck("frame: no empty line while tickets were merged", (await count(page, "report-empty")) === 0);
-      ck("frame: each section but Delivered, Time and Review says it is not built yet",
-         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 3
+      ck("frame: each section but Delivered, Time, Review and Cost says it is not built yet",
+         (await page.locator('[data-testid^="report-section-"]').filter({ hasText: "This section is not built yet." }).count()) === 2
          && !(await text(page, "report-section-delivered")).includes("not built")
          && !(await text(page, "report-section-time")).includes("not built")
-         && !(await text(page, "report-section-review")).includes("not built"));
-      ck("frame: the Cost section is labelled API-equivalent",
-         await page.getByTestId("report-section-cost").getByText("API-equivalent", { exact: true }).isVisible());
+         && !(await text(page, "report-section-review")).includes("not built")
+         && !(await text(page, "report-section-cost")).includes("not built"));
+      ck("frame: the Cost section says what its amounts are",
+         (await text(page, "cost-label")) === "API-equivalent cost: list prices from tares/pricing.py. A subscription crew pays a flat fee.",
+         await text(page, "cost-label"));
       ck("frame: no date fields until two dates are asked for", (await count(page, "report-from")) === 0);
       await checkWords(page, ck, "frame @1440");
       ck("frame @1440: no horizontal scroll", (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
@@ -786,6 +788,117 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
          `${await overflow(page)}px over, inside ${within}, rows ${JSON.stringify(widths)}`);
       await checkWords(page, ck, "review @390");
       await shot(page, "review-8w-390");
+      await ctx.close();
+    }
+
+    // ---- the Cost section
+    {
+      const { ctx, page } = await fresh(1440);
+      const eq = (label, got, want) => ck(label, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+      const flat = (s) => s.replace(/\s+/g, " ").trim();
+      const said_ = async (id) => ((await count(page, id)) ? text(page, id) : "(not there)");
+      const rows = async (id) => (await page.getByTestId(id).locator("tbody tr").allInnerTexts()).map(flat);
+      const week = async (id, back) => flat((await page.getByTestId(id)
+        .locator(`tr[data-week="${plus(ids.monday, -7 * back)}"]`).locator("td").allInnerTexts()).join(" | "));
+      const top = async (id) => (await page.getByTestId(`cost-top-${id}-row`).allInnerTexts()).map(flat);
+      const view = async (to) => { await open(page, to); await page.getByTestId("cost-counted").waitFor(); };
+      const [second, first, third] = ids.costed;
+      const a = ids["project-a"], b = ids["project-b"];
+
+      await view("/report");
+      eq("cost: the total counts a reply with no price beside it",
+         [(await said_("cost-total")).toLowerCase(), await count(page, "cost-narrow"), await count(page, "cost-empty")],
+         ["api-equivalent cost at least $23.00 1 reply with no price", 0, 0]);
+      eq("cost: the amounts are labelled API-equivalent, with the reason", await said_("cost-label"),
+         "API-equivalent cost: list prices from tares/pricing.py. A subscription crew pays a flat fee.");
+      eq("cost: spend per week, with the projects in it",
+         [await week("cost-weeks", 1), await week("cost-weeks", 2), await week("cost-weeks", 3),
+          await page.getByTestId("cost-weeks").locator(`tr[data-week="${plus(ids.monday, -7)}"] [data-bar]`).count(),
+          await page.getByTestId("cost-weeks").locator("tbody tr").count()],
+         ["project-a $17.00 | $17.00", "project-b at least $3.75 No project $2.25 | at least $6.00", "| $0", 1, 8]);
+      eq("cost: spend by project, highest first, adding up to the total", await rows("cost-projects"),
+         ["project-a $17.00", "project-b at least $3.75 1 reply with no price", "No project $2.25",
+          "Total at least $23.00 1 reply with no price"]);
+      eq("cost: spend by role, adding up to the total", await rows("cost-roles"),
+         ["Builder at least $18.00 1 reply with no price", "Reviewer $1.50", "Orchestrator $0.5000", "Releaser $0.2500",
+          "Own sessions $0.7500", "Other $2.00", "Total at least $23.00 1 reply with no price"]);
+      eq("cost: per merged ticket per week, no value in a week with none",
+         [await week("cost-per-ticket", 1), await week("cost-per-ticket", 2), await week("cost-per-ticket", 6),
+          (await page.getByTestId("cost-per-ticket").locator(`tr[data-week="${plus(ids.monday, -21)}"] td`).first().innerText()).trim()],
+         ["3 | $5.67", "2 | at least $1.50 1 ticket with replies with no price", "4 | $0", "0"]);
+      eq("cost: per accepted milestone, and what is tied to no ticket",
+         [(await said_("cost-per-milestone")).toLowerCase().includes("$5.67 3 milestones accepted in these weeks"),
+          (await said_("cost-untied")).toLowerCase().includes("not tied to a ticket, api-equivalent cost $3.00"),
+          await said_("cost-no-project")], [true, true, "No project: $2.25"]);
+      eq("cost: the most expensive merged tickets, with rounds and time", await top("tickets"), [
+        `${second} Add a page project-a · $10.00 · 1 review round · 3 hours from first start to merge`,
+        `${first} Add a page project-a · $7.00 · 2 review rounds · 2 hours from first start to merge`,
+        `${third} Add a page project-b · at least $3.00 · 1 reply with no price · 1 review round · 1 day 2 hours from first start to merge`]);
+      eq("cost: the most expensive milestones", await top("milestones"),
+         ["Step 1 project-a · $17.00 · 2 tickets · 3 review rounds · 3 hours from first start to acceptance"]);
+      const counted = await said_("cost-counted");
+      ck("cost: how it is counted says it is approximate, and the rules",
+         ["approximate", "in progress or with changes asked", "A reviewer's reply is split", "open to everyone and in its own project",
+          "misses crew replies that carry no project", "mean cost of the tickets first merged that week"].every((p) => counted.includes(p)),
+         counted);
+      ck("cost: every figure says what it cannot see",
+         (await page.getByTestId("report-section-cost").locator("[data-note]").count()) === 8
+         && (await page.getByTestId("report-section-cost").locator("[data-note]").evaluateAll((els) => els.every((e) => e.textContent.trim().length > 20))),
+         `${await page.getByTestId("report-section-cost").locator("[data-note]").count()}`);
+      await checkWords(page, ck, "cost @1440");
+      ck("cost @1440: no horizontal scroll", (await overflow(page)) <= 0 && await inside(page), `${await overflow(page)}px over`);
+      if (SHOTS) await page.getByTestId("report-section-cost").screenshot({ path: path.join(SHOTS, "report-cost-1440.png") });
+
+      await page.getByTestId("cost-top-tickets-row").first().click();
+      await page.getByTestId("ticket-title").waitFor();
+      eq("cost: an expensive ticket opens the ticket", new URL(page.url()).pathname, `/projects/${a}/tickets/${second}`);
+      await view("/report");
+      await page.getByTestId("cost-top-milestones-row").first().click();
+      const row = page.locator(`#milestone-${ids.step}`);
+      try { await row.waitFor({ state: "visible", timeout: 5000 }); } catch { /* the check says what is there */ }
+      eq("cost: an expensive milestone opens its row on the milestones page",
+         [new URL(page.url()).pathname, new URL(page.url()).hash, await row.isVisible()],
+         [`/projects/${a}/milestones`, `#milestone-${ids.step}`, true]);
+
+      await view(`/report?scope=project:${b}`);
+      eq("cost: one project leaves out what has no project, and says what it misses",
+         [await said_("cost-narrow"), await rows("cost-projects"), await count(page, "cost-no-project"),
+          (await said_("cost-untied")).includes("$0.7500"), (await top("tickets")).length, await count(page, "cost-top-milestones-row")],
+         ["This scope misses crew replies that carry no project.",
+          ["project-b at least $3.75 1 reply with no price", "Total at least $3.75 1 reply with no price"], 0, true, 1, 0]);
+
+      await view(`/report?scope=team:${ids.Bo}`);
+      eq("cost: a scope with nothing spent says so, with no table of spend and no ticket",
+         [await said_("cost-empty"), await count(page, "cost-total"), await count(page, "cost-weeks"),
+          await count(page, "cost-roles"), await count(page, "cost-top-tickets-row"), await count(page, "cost-top-milestones-row"),
+          (await said_("cost-per-milestone")).toLowerCase().includes("no value 0 milestones accepted")],
+         ["No spend was received for these weeks.", 0, 0, 0, 0, 0, true]);
+      await checkWords(page, ck, "cost with nothing @1440");
+
+      // before the cell's first pass there are no ticket costs; made here, the seed has passed
+      await page.route(/\/api\/factory\/report\?/, async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        if (body.sections.cost) body.sections.cost.by_ticket = null;
+        await r.fulfill({ response: res, json: body });
+      });
+      await view("/report?range=4w");
+      eq("cost: before the first pass it says ticket costs are not worked out, with the spend shown",
+         [await said_("cost-not-yet"), await count(page, "cost-tickets"), await count(page, "cost-total")],
+         ["Ticket and milestone costs are not worked out yet.", 0, 1]);
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await fresh(390);
+      await open(page, "/report");
+      await page.getByTestId("cost-top-milestones-row").first().waitFor();
+      const tables = await page.getByTestId("report-section-cost").locator('figure [role="region"]')
+        .evaluateAll((els) => els.map((e) => [e.scrollWidth, e.clientWidth]));
+      ck("390: the cost tiles, tables and expensive lists fit",
+         (await overflow(page)) <= 0 && await inside(page) && tables.length === 4 && tables.every(([s, c]) => s <= c),
+         `${await overflow(page)}px over, tables ${JSON.stringify(tables)}`);
+      await checkWords(page, ck, "cost @390");
+      if (SHOTS) await page.getByTestId("report-section-cost").screenshot({ path: path.join(SHOTS, "report-cost-390.png") });
       await ctx.close();
     }
 

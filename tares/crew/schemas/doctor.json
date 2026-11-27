@@ -13,7 +13,7 @@
         "type": "object",
         "required": ["id", "ok", "level", "message", "fix"],
         "properties": {
-          "id": {"description": "Names the check (`claude`, `tares_access`, `project_<name>`). Stable: branch on it, never on `message`.", "type": "string", "minLength": 1},
+          "id": {"description": "Names the check (`claude`, `tares_access`, `project_<name>`, `github_console`: GitHub through the cell's token for the crew's repositories, only on a cell that gives tokens). Stable: branch on it, never on `message`.", "type": "string", "minLength": 1},
           "ok": {"description": "False only for level `fix`.", "type": "boolean"},
           "level": {"enum": ["ok", "warn", "fix"]},
           "message": {"description": "What the check found, in a sentence a person reads.", "type": "string"},

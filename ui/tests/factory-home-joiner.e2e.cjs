@@ -1,6 +1,7 @@
 // TR-1723: Home for a person joining a factory someone else set up, on a licensed scratch daemon seeded by
 // seed-factory-home-joiner.py: the welcome, what the team already set, the three steps with their done
-// states, the team's crews, and the usual Home for everyone else. The states a real daemon can send but the
+// states, the team's crews, and the usual Home for everyone else. TR-1646: the "Your team" panel, first on
+// Home both with the steps and without them while the person is joining. The states a real daemon can send but the
 // seed cannot make are the real answer with one part changed on its way to the page.
 //   node tests/factory-home-joiner.e2e.cjs     (needs ../ui/dist and the repo .venv; TARES_E2E_PORT for the port)
 const fs = require("fs");
@@ -23,6 +24,7 @@ const CLEAR = { clear: ["autonomy", "releaser", "builders_max", "challenger"] };
 const TOO_LOOSE = "autonomy L4-ship is looser than the team's L3-review; a personal value can only be as strict or stricter. Clear yours to use the team's.";
 const NOW_PRIVATE = "This project is private. Ask its lead, Robin Owner, to add you.";
 const TEAM_WELCOME = "Welcome to your team’s factory";
+const ANSWERS = "A project’s lead answers its questions. With no lead, an admin does.";
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -36,6 +38,22 @@ const flat = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 const appears = (loc, timeout = 10000) => loc.waitFor({ timeout }).then(() => true, () => false);
 const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout }).then(() => true, () => false);
+const until = async (cond, timeout) => {
+  for (const end = Date.now() + timeout; !cond() && Date.now() < end;) await sleep(250);
+  return cond();
+};
+/** The text of each match as it is written, whatever the type does to its case. */
+const written = (loc) => loc.evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+const idsOf = (loc) => loc.evaluateAll((els) => els.map((e) => e.dataset.id));
+/** The panel opens the main column: nothing stands before it there, and that column is the one before the side. */
+const opensMain = (panel) => panel.evaluate((e) => e.previousElementSibling === null
+  && e.parentElement.previousElementSibling === null && e.parentElement.nextElementSibling?.tagName === "ASIDE");
+/** The tops of the given elements, in the order given, go down the page. */
+const downThePage = async (...locs) => {
+  const tops = [];
+  for (const l of locs) tops.push((await l.boundingBox())?.y);
+  return { ok: tops.every((y, i) => y !== undefined && (i === 0 || tops[i - 1] < y)), tops: JSON.stringify(tops) };
+};
 
 (async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-factory-home-joiner-e2e-"));
@@ -103,6 +121,7 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
       const o = await open("robin");
       await o.go("/", "factory-home");
       ck("owner: the usual Home, no joiner view", (await o.id("joiner-start").count()) === 0 && (await o.id("joiner-welcome").count()) === 0);
+      ck("owner: no team panel", (await o.id("your-team").count()) === 0);
       same("owner: one plain home read, as before", o.reads(), [""]);
       await checkWords(o.page, ck, "owner");
       const hid = await api("POST", "/api/home/start/hide", undefined, ids.keys.robin);
@@ -122,10 +141,11 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
       await m.page.route("**/api/factory/people", async (route) => { await held; await route.continue(); });
       await m.page.goto(`${BASE}/`, { waitUntil: "load" });
       await m.id("joiner-start").waitFor();
-      ck(t("the welcome names nobody while the name is read"),
-         (await m.id("joiner-welcome-loading").count()) === 1 && (await m.page.getByRole("heading", { name: /Welcome/ }).count()) === 0);
+      same(t("while the name is read the heading is there, holds the placeholder and names nobody"),
+           [await m.title().count(), await m.title().getByTestId("joiner-welcome-loading").count(), await written(m.title())],
+           [1, 1, ["Welcome"]]);
       release();
-      await m.title().waitFor();
+      ck(t("the placeholder leaves once the name is read"), await goes(m.id("joiner-welcome-loading")));
       same(t("welcome to the owner's factory"), await flat(m.title()), "Welcome to Robin Owner’s factory");
       await m.page.waitForLoadState("networkidle");
       same(t("a plain home read, then the one with the team's projects"), m.reads(), ["", "?projects=team"]);
@@ -168,6 +188,29 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
            await flat(m.id("joiner-hidden-project")), "A private project Ask Robin Owner");
       ck(t("step 3: and its name is nowhere on the page"), !(await m.page.locator("body").innerText()).includes("Payroll"));
 
+      // ── your team ──
+      same(t("your team: one panel, with its heading"),
+           [await m.id("your-team").count(), await flat(m.id("your-team").getByRole("heading", { level: 2 }))], [1, "Your team"]);
+      ck(t("your team: it opens the main column"), await opensMain(m.id("your-team")));
+      const order = await downThePage(m.id("joiner-welcome"), m.id("your-team"), m.id("joiner-team"), m.step("settings"));
+      ck(t("your team: under the welcome, above what the team set and the steps"), order.ok, order.tops);
+      const person = m.id("your-team-person");
+      same(t("your team: each person, the admin first"), await idsOf(person), [ids.people.robin, ids.people.sam]);
+      same(t("your team: names the owner and marks the admin"), await flat(person.nth(0).locator(":scope > span").first()), "Robin Owner Admin");
+      same(t("your team: marks the person reading"), await flat(person.nth(1).locator(":scope > span").first()), "Sam Member (you)");
+      same(t("your team: one you mark and one admin mark"),
+           [await m.id("your-team-you").count(), await m.id("your-team-admin").count()], [1, 1]);
+      same(t("your team: who has a crew up"), await written(m.id("your-team-crew")), ["Crew running", "No crew yet"]);
+      same(t("your team: a crew that is up is a status label"),
+           await m.id("your-team-crew").evaluateAll((els) => els.map((e) => !!e.querySelector("[data-tone]"))), [true, false]);
+      same(t("your team: the projects, without the private one"), await idsOf(m.id("your-team-project")),
+           [ids.projects.checkout, ids.projects.search]);
+      same(t("your team: each name links to its project"),
+           await m.id("your-team-project").locator("a").evaluateAll((els) => els.map((e) => [e.textContent, e.getAttribute("href")])),
+           [["Checkout", `/projects/${ids.projects.checkout}`], ["Search", `/projects/${ids.projects.search}`]]);
+      same(t("your team: each names its lead"), await written(m.id("your-team-lead")), ["Lead: Robin Owner", "Lead: Robin Owner"]);
+      same(t("your team: who answers questions"), await flat(m.id("your-team-answers")), ANSWERS);
+
       ck(t("nothing asks to connect GitHub or tickets"),
          (await m.page.locator('[data-testid=joiner-start] a[href^="/setup"], [data-testid=joiner-start] a[href^="/integrations"]').count()) === 0
          && (await m.id("joiner-start").getByRole("button", { name: /connect/i }).count()) === 0
@@ -200,8 +243,24 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
       const m = await open("sam");
       await m.page.route("**/api/factory/people", handler);
       await m.go();
-      await m.title().waitFor();
+      await goes(m.id("joiner-welcome-loading"));
       same(`${label}: the team's factory`, await flat(m.title()), TEAM_WELCOME);
+      await m.ctx.close();
+    }
+
+    // ── the second read fails: the page shows what the first one gave ──
+    {
+      const m = await open("sam");
+      await m.page.route(/\/api\/home\?projects=team$/,
+                         (route) => route.fulfill({ status: 500, contentType: "application/json", body: '{"detail":"down"}' }));
+      await m.page.goto(`${BASE}/`, { waitUntil: "load" });
+      ck("second read fails: the page still renders", await appears(m.id("joiner-start")));
+      same("second read fails: both were asked", m.reads().slice(0, 2), ["", "?projects=team"]);
+      ck("second read fails: with the team on it and no error",
+         (await m.id("your-team").count()) === 1 && (await m.id("stale-banner").count()) === 0);
+      await until(() => m.reads().length >= 4, 40000);
+      same("second read fails: the next poll asks both again", m.reads().slice(2, 4), ["", "?projects=team"]);
+      ck("second read fails: and the page stays", (await m.id("joiner-start").count()) === 1 && (await m.id("stale-banner").count()) === 0);
       await m.ctx.close();
     }
 
@@ -252,15 +311,74 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
     await altered("no team keys", (h) => { delete h.summary; }, async (m, t) => {
       ck(t("no side column"), (await m.page.locator("[data-testid=joiner-start] aside").count()) === 0);
     });
-    for (const [label, alter] of [
-      ["no joiner block", (h) => { delete h.joiner; }],
-      ["not joining", (h) => { if (h.joiner) h.joiner.joining = false; }],
-      ["no start block", (h) => { delete h.start; }],
+    for (const [label, alter, panels] of [
+      ["no joiner block", (h) => { delete h.joiner; }, 0],
+      ["not joining", (h) => { if (h.joiner) h.joiner.joining = false; }, 0],   // a team sent anyway is not drawn
+      ["no start block", (h) => { delete h.start; }, 1],
     ]) {
       await altered(label, alter, async (m, t) => {
         ck(t("the usual Home"), (await m.id("joiner-start").count()) === 0 && (await m.id("start-hidden").count()) === 0);
         same(t("read once, plainly"), m.reads(), [""]);
+        same(t("the team panel only while joining"), await m.id("your-team").count(), panels);
       }, "factory-home");
+    }
+
+    // ── your team: what the seed cannot make ──
+    const hoursAgo = (h, n) => new Date(Date.parse(h.now) - n * 3600000).toISOString();
+    let heard;
+    const threeStates = (h) => {
+      const team = h.joiner?.team;
+      if (!team) return;
+      heard = hoursAgo(h, 3);
+      team.people.splice(1, 0, { id: "p-kim", name: "Kim Example", is_admin: false, you: false, crew_running: false, last_heard: heard });
+      team.projects[1].lead = null;
+    };
+    await altered("three crew states", threeStates, async (m, t) => {
+      same(t("running, quiet and never heard"), await written(m.id("your-team-crew")),
+           ["Crew running", "No crew running, last heard 3 hours ago", "No crew yet"]);
+      same(t("the time it was heard is in the tooltip, in UTC"),
+           await m.page.locator("[data-testid=your-team-crew] time").evaluateAll((els) => els.map((e) => e.title)),
+           [`${heard.slice(0, 10)} ${heard.slice(11, 16)}Z`]);
+      same(t("a project with no lead says so"), await written(m.id("your-team-lead")), ["Lead: Robin Owner", "No lead"]);
+      await shot(m.page, "team-states", 1440);
+    });
+    await altered("no team block", (h) => { if (h.joiner) delete h.joiner.team; }, async (m, t) => {
+      ck(t("no panel, the steps stay"), (await m.id("your-team").count()) === 0 && (await m.id("joiner-step").count()) === 3);
+    });
+    await altered("empty team lists", (h) => { if (h.joiner?.team) h.joiner.team = { people: [], projects: [] }; }, async (m, t) => {
+      same(t("a plain line for people"), await flat(m.id("your-team-no-people")), "Nobody is listed yet.");
+      same(t("and one for projects"), await flat(m.id("your-team-no-projects")), "No open project yet.");
+    });
+    const bare = (h) => { delete h.start; h.projects = []; h.finished_count = 0; h.later_count = 0; h.plan_command = "tares factory spec"; };
+    await altered("joining, with no project of their own", bare, async (m, t) => {
+      ck(t("your team opens the main column of the usual Home"), await opensMain(m.id("your-team")));
+      const order = await downThePage(m.id("your-team"), m.page.getByRole("region", { name: "Waiting for you" }), m.id("projects"));
+      ck(t("above what waits and the projects"), order.ok, order.tops);
+    }, "factory-home");
+    for (const [label, alter, view] of [
+      ["long names with the steps", (h) => h, "joiner-start"],
+      ["long names on the usual Home", bare, "factory-home"],
+    ]) {
+      const m = await open("sam", 390);
+      m.ctl.alter = (h) => {
+        threeStates(h);
+        alter(h);
+        const team = h.joiner?.team;
+        if (!team) return;
+        for (const p of team.people) p.name = `${p.name} ${"Longname".repeat(14)}`;
+        for (const p of team.projects) p.name = `${p.name}-${"unbroken".repeat(14)}`;
+        team.projects[0].lead = { id: "p-long", name: "Lead".repeat(30) };
+      };
+      await m.go("/", view);
+      ck(`${label}: the panel is there`, (await m.id("your-team-person").count()) === 3);
+      ck(`${label}: no sideways scroll`, (await overflow(m.page)) <= 0, String(await overflow(m.page)));
+      const wide = await m.id("your-team").evaluate((e) => {
+        const right = e.getBoundingClientRect().right;
+        return [...e.querySelectorAll("*")].filter((c) => c.getBoundingClientRect().right > right + 1).map((c) => c.textContent.slice(0, 40));
+      });
+      same(`${label}: nothing sticks out of the panel`, wide, []);
+      await shot(m.page, view === "joiner-start" ? "long-steps" : "long-home", 390);
+      await m.ctx.close();
     }
 
     // ── /start#settings, the address the first step links to ──
@@ -369,9 +487,8 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
       await m.go();
       const row = m.id("waiting-row").filter({ hasText: "Which colour for the links" });
       ck("waiting: the row shows on the joiner view", await appears(row));
-      const [rowBox, stepBox, welcomeBox] = [await row.boundingBox(), await m.step("settings").boundingBox(), await m.id("joiner-welcome").boundingBox()];
-      ck("waiting: under the welcome and above the steps", !!rowBox && !!stepBox && !!welcomeBox && welcomeBox.y < rowBox.y && rowBox.y < stepBox.y,
-         JSON.stringify([welcomeBox, rowBox, stepBox]));
+      const order = await downThePage(m.id("joiner-welcome"), m.id("your-team"), row, m.step("settings"));
+      ck("waiting: under the welcome and your team, above the steps", order.ok, order.tops);
       await shot(m.page, "waiting", 1440);
       await checkWords(m.page, ck, "waiting");
       await checkPaper(m.page, ck, "waiting");
@@ -458,6 +575,10 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
       ck("hidden: the usual Home", await appears(m.id("factory-home")) && (await m.id("joiner-start").count()) === 0);
       ck("hidden: it offers the steps back", await appears(m.id("start-hidden")));
       same("hidden: in these words", await flat(m.id("start-hidden")), "The list “Your first steps” is hidden. Show it again");
+      ck("hidden: your team opens the main column", (await m.id("your-team").count()) === 1 && await opensMain(m.id("your-team")));
+      const order = await downThePage(m.id("start-hidden"), m.id("your-team"), m.page.getByRole("region", { name: "Waiting for you" }));
+      ck("hidden: under the offer and above what waits", order.ok, order.tops);
+      ck("hidden: the team's crews stay at the side", (await m.id("team-crews").count()) === 1);
       await m.go("/", "factory-home");
       same("hidden: Home is read plainly again", m.reads().at(-1), "");
       ck("hidden: still offered after a reload", (await m.id("start-hidden").count()) === 1);
@@ -487,9 +608,17 @@ const goes = (loc, timeout = 10000) => loc.waitFor({ state: "detached", timeout 
       ck("every step done: the usual Home, with nothing offered back",
          (await m.id("joiner-start").count()) === 0 && (await m.id("start-hidden").count()) === 0);
       same("every step done: read plainly", m.reads(), [""]);
+      ck("every step done: your team still opens the main column", (await m.id("your-team").count()) === 1 && await opensMain(m.id("your-team")));
+      same("every step done: both crews are up", await written(m.id("your-team-crew")), ["Crew running", "Crew running"]);
+      await checkPaper(m.page, ck, "every step done");
       await shot(m.page, "done", 1440);
       await checkWords(m.page, ck, "every step done");
       await m.ctx.close();
+      const narrow = await open("sam", 390);
+      await narrow.go("/", "factory-home");
+      ck("every step done, phone: no sideways scroll", (await overflow(narrow.page)) <= 0, String(await overflow(narrow.page)));
+      await shot(narrow.page, "done", 390);
+      await narrow.ctx.close();
     }
     same("no page error", crashes, []);
   } finally {

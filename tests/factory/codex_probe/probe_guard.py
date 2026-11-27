@@ -34,9 +34,26 @@ from tares.crew.codex_station import unguarded  # noqa: E402
 
 MODEL = os.environ.get("TARES_PROBE_MODEL", "gpt-5.6-luna")
 EFFORT = os.environ.get("TARES_PROBE_EFFORT", "low")
-# The person's own plugins and MCP servers are left out of a probe station: they only add tools.
+
+
+def _own_mcp_servers() -> set:
+    """The MCP servers named in the person's Codex config (CODEX_HOME, else ~/.codex)."""
+    try:
+        import tomllib
+        home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+        with open(os.path.join(home, "config.toml"), "rb") as f:
+            return set((tomllib.load(f).get("mcp_servers") or {}))
+    except (OSError, ValueError, ImportError):
+        return set()
+
+
+# The person's own plugins and MCP servers are left out of a probe station: they only add tools. A server is
+# switched off only where it is configured: `enabled=false` for one that is not makes an entry with no transport,
+# and Codex then refuses to start (seen on Linux, where no app adds node_repl).
 QUIET = ["--disable", "apps", "--disable", "computer_use", "--disable", "browser_use",
-         "-c", "mcp_servers.node_repl.enabled=false", "-c", "mcp_servers.computer-use.enabled=false"]
+         "-c", "allow_login_shell=false",   # as a station runs (runtime_codex): commands keep the PATH they had
+         *[a for name in ("node_repl", "computer-use") if name in _own_mcp_servers()
+           for a in ("-c", f"mcp_servers.{name}.enabled=false")]]
 RULES = ("You are a test station. Run exactly the shell commands or tools you are asked for, each as its own "
          "tool call, in the order given, and nothing else. If one is refused or fails, do not retry it, do not "
          "work around it and do not run it another way: go on to the next one. At the end, list each step with "
@@ -172,7 +189,9 @@ def shells_alive(marker: str) -> list[str]:
 
 def stdin_facts(st: "Station", marker: str) -> dict:
     """What happened to the shell of stdin_steps, from the wire, the process table and the stored thread."""
-    name = os.path.basename(marker)
+    # the shell is known by the marker's random id: a model has been seen to shorten the path it was given
+    # (`<root>/probe-shell-<id>.rc` run as `/tmp/tares-codex-probe-<id>.rc`, Linux, gpt-5.6-luna)
+    name = os.path.basename(marker)[len("probe-shell-"):-len(".rc")]
     began = ended = None
     item_id = exit_code = None
     typed: list[dict] = []
@@ -397,7 +416,8 @@ def stdin_closed_by_the_adapter(out):
     t = st.turn(steps, timeout=300)
     first = st.facts()
     sf = stdin_facts(st, marker)
-    shell_cmd = next((c["command"] or "" for c in first["commands"] if os.path.basename(marker) in (c["command"] or "")), "")
+    shell_id = os.path.basename(marker)[len("probe-shell-"):-len(".rc")]   # as stdin_facts knows the shell
+    shell_cmd = next((c["command"] or "" for c in first["commands"] if shell_id in (c["command"] or "")), "")
     w.lift_halt()
     t2 = st.turn("Step 1: run `printf 'a\\nb\\n' | wc -l > lines.txt`. Step 2: run this exactly:\n"
                  "cat > heredoc.txt <<'EOF'\nhello\nEOF\n"

@@ -87,7 +87,8 @@ def crew(w: dict) -> tuple:
     w["n"] += 1
     station = f"{PROJECT}-build-s{w['n']}"
     home = os.path.join(w["root"], f"crew{w['n']}")
-    os.makedirs(os.path.join(home, "stations"))
+    for d in ("stations", "reports", "worktrees"):   # as a real crew home (state.ensure_crew_home)
+        os.makedirs(os.path.join(home, d))
     with open(os.path.join(home, "stations.json"), "w", encoding="utf-8") as f:
         f.write("{}\n")
     os.environ.update(FACTORY_CREW_HOME=home, FACTORY_HOME=home)

@@ -11,7 +11,8 @@ planned action follows "Planned action JSON:" in its prompt and its last answer 
     one that ended without a decision is recorded as that;
  c. a second look, and a watch started again, record nothing twice: every name whose file is there stays kept,
     and one whose file is gone is dropped; a station on Claude Code is not looked at;
- d. the watch's Codex round runs this part after recording.
+ d. the watch's Codex round runs this part after recording;
+ f. a station's reviews are read and kept under its lock, so two watches at once record a review once.
 
 Run: python tests/test_codex_reviews.py
 """
@@ -190,6 +191,23 @@ got = rv.new(paths, S)
 ck("the second decision in the same file is recorded too, once, and the first is not again",
    [(r["outcome"], r["command"], r["turn"]) for r in got] == [("deny", "git add x && git commit -m y", "t-2")]
    and rv.new(paths, S) == [], got)
+
+print("f. two watches at once: a station's reviews are read and kept under its lock")
+import subprocess  # noqa: E402
+write(S, "rollout-2026-11-26T15-09-00-r7.jsonl", review("r7", "git push origin factory/t3", "allow", "ok"))
+holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+lock = paths.lock_dir(S)
+lock.mkdir(parents=True, exist_ok=True)
+(lock / "pid").write_text(f"{holder.pid}\n")
+skipped = rv.step(None, paths, None)
+holder.kill()
+holder.wait()
+(lock / "pid").unlink()
+lock.rmdir()
+got = rv.step(None, paths, None)
+ck("while another command holds the station's lock nothing of it is recorded; once free, the review is, once (TR-1600)",
+   [s_ for s_, _ in skipped] == [] and [r["command"] for _, r in got] == ["git push origin factory/t3"]
+   and rv.step(None, paths, None) == [], (skipped, got))
 
 print("d. the watch's Codex round")
 names = [n for n, _ in codex_round.PARTS]

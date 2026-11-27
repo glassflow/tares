@@ -486,7 +486,7 @@ def setup_state(store, fx=None, request=None) -> tuple[dict, list]:
     return onboarding, _start_steps(onboarding)
 
 
-def _start(store, onboarding: dict, joiner: dict, me: str | None, open_ps: list[dict], who: str) -> dict:
+def _start(store, onboarding: dict, joiner: dict, me: str | None, who: str) -> dict:
     """The caller's Start checklist, hidden or not for `who`. A person joining (`joiner`) gets the
     new member's steps, and what the team already set as `team` (TR-1314)."""
     if not joiner["joining"]:
@@ -495,9 +495,8 @@ def _start(store, onboarding: dict, joiner: dict, me: str | None, open_ps: list[
     ctx = _start_ctx(onboarding)
     # the record's presence counts: an empty one accepts the team's choices and keeps following them
     ctx.own_settings_set = store.get_setting(f"{CREW_SETTING}:{me}") is not None
-    ctx.member_of_project = any(p["lead_person_id"] == me for p in open_ps) or any(
-        m["person_id"] == me
-        for rows in store.members_by_project([p["id"] for p in open_ps]).values() for m in rows)
+    ctx.member_of_project = any(x["id"] == me for p in joiner["team"]["projects"]
+                                for x in (p["lead"], *p["members"]) if x)
     return {**start_steps.checklist(store, start_steps.joiner_steps(ctx), who),
             "team": {"settings_text": crew_onboarding.choices_text(joiner["team_settings"]),
                      "github": onboarding["github"]["text"]}}
@@ -609,12 +608,48 @@ def joiner_block(store, fx, request, stations: list[dict], settings: dict,
     return out
 
 
+def joiner_team(store, stations: list[dict], open_ps: list[dict], me: str) -> dict:
+    """What a person joining sees of the team (TR-1646): {people, projects}. `stations` and
+    `open_ps` are the ones the caller may see. The unclaimed `local` is listed among the people
+    only once a station of theirs has reported, and never as a lead or a member."""
+    rows: dict = {}
+    for s in stations:
+        rows.setdefault((s.get("person") or {}).get("id"), []).append(s)
+    people, named = [], {}
+    for p in store.list_people():
+        pid, own = p["id"], rows.get(p["id"], [])
+        claimed = owners_mod.claimed(p)
+        heard = max(filter(None, (_dt(s.get("last_at")) for s in own)), default=None)
+        if not claimed and heard is None:
+            continue
+        name = (p.get("name") or "Someone") if claimed else "Local"
+        if claimed:
+            named[pid] = {"id": pid, "name": name}
+        people.append({"id": pid, "name": name, "is_admin": bool(p.get("is_admin")), "you": pid == me,
+                       "crew_running": any(s.get("state") in crew_onboarding.RUNNING for s in own),
+                       "last_heard": _iso(heard)})
+
+    def by_name(row):
+        return row["name"].lower(), row["id"]
+
+    people.sort(key=lambda r: (not r["is_admin"], not r["crew_running"], *by_name(r)))
+    members = store.members_by_project([p["id"] for p in open_ps])
+    projects = []
+    for p in sorted(open_ps, key=by_name):
+        lead = p.get("lead_person_id")
+        on = [named[m["person_id"]] for m in members.get(p["id"], [])
+              if m["person_id"] != lead and m["person_id"] in named]
+        projects.append({"id": p["id"], "name": p["name"], "lead": named.get(lead),
+                         "members": sorted(on, key=by_name)})
+    return {"people": people, "projects": projects}
+
+
 def home(store, fx, now, credential_key: str = "open", request=None, hidden=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
     is addressed to the caller's person (TR-739); its keys replace the single-person ones.
     `joiner` says whether the caller is joining a factory someone else set up (TR-1719); if so,
-    `start` holds a new member's steps.
+    `start` holds a new member's steps and `joiner.team` the people and open projects (TR-1646).
     `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
@@ -663,6 +698,8 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())
     joiner = joiner_block(store, fx, request, stations, settings, who, mine)
+    if joiner["joining"]:
+        joiner["team"] = joiner_team(store, stations, open_ps, who["me"])
     onboarding = _onboarding(store, fx, request, mine, settings)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
@@ -672,7 +709,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
-            "start": _start(store, onboarding, joiner, who["me"], open_ps,
+            "start": _start(store, onboarding, joiner, who["me"],
                             "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
             "joiner": joiner,

@@ -1041,6 +1041,16 @@ class FactoryStore:
                                 .order_by(t.ticket, t.changed_at.asc().nulls_last())).fetchall()
         return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
 
+    def all_holder_changes(self) -> list[dict]:
+        """Every holder change of every ticket, deleted tickets too, each ticket's together and
+        oldest first. `value` is the station that holds the ticket from then on, None for nobody."""
+        t = history_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.ticket, t.project, t.changed_at, t.value)
+                                .where(t.field == "holder")
+                                .order_by(t.ticket, t.changed_at.asc().nulls_last())).fetchall()
+        return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
+
     def all_reviews(self) -> list[dict]:
         """Every review round of every ticket, each ticket's together and in round order."""
         t = reviews_table.c

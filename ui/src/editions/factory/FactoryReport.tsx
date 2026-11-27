@@ -6,6 +6,7 @@ import { formatCount } from "../../lib/number";
 import { DAY, formatDayUTC } from "../../lib/time";
 import { usePagePolling } from "../usePagePolling";
 import { factoryReport, isRefused, type ReportData, type SectionKey, type TimeData } from "./FactoryReport.api";
+import { Cost } from "./report/Cost";
 import { Delivered } from "./report/Delivered";
 import { Review } from "./report/Review";
 import { TimeSpent } from "./report/TimeSpent";
@@ -35,7 +36,7 @@ const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: 
 
   { key: "review", title: "Review", body: (data) => <Review data={data} /> },
 
-  { key: "cost", title: "Cost", aside: "API-equivalent" },
+  { key: "cost", title: "Cost", aside: "API-equivalent cost", body: (data) => <Cost data={data} /> },
 
   { key: "merges", title: "Merges" },
 

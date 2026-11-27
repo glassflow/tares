@@ -33,7 +33,7 @@ import json
 import os
 
 from . import codex as cx
-from . import state
+from . import locks, state
 from .paths import CrewPaths
 
 KEPT = "codex.reviews.json"   # stations/<station>.codex.reviews.json: ["<file>#<turn>", "<file>#-", ...]
@@ -210,12 +210,20 @@ def new(paths: CrewPaths, station: str) -> list:
 
 
 def step(client, paths: CrewPaths, say=None) -> list:
-    """The watch's part: every Codex station's new reviews, recorded and said. Returns [(station, review)]."""
+    """The watch's part: every Codex station's new reviews, recorded and said. Returns [(station, review)]. Each
+    station's are read and kept under its lock, so two watches at once never record one review twice; a station
+    whose lock another command holds is looked at next round (TR-1600)."""
+    from .errors import StationLockedError
     done = []
     for station, row in sorted(state.stations_load(paths).items()):
         if not isinstance(row, dict) or row.get("runtime") != cx.RUNTIME:
             continue
-        for review in new(paths, station):
+        try:
+            with locks.held_station_lock(station, paths):
+                got = new(paths, station)
+        except StationLockedError:
+            continue
+        for review in got:
             done.append((station, review))
             if say:
                 say(line_for(station, review))

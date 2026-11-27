@@ -7,9 +7,11 @@ background pass keeps them current (`run`).
 
 A pass reads every source once, works out all the (project, week) rows in memory and writes only the
 ones that differ. A late event changes an older week (an answer, a fix, a later review round, a long
-stage that just ended), and working everything out again cannot miss one. A full pass also writes two
-things that are no week's figure: what is stuck at that moment into the setting `report.stuck`
-(`_stuck`), and the findings that recur into `report.recurring` (`_recurring`).
+stage that just ended), and working everything out again cannot miss one. A full pass also writes
+three things that are no week's figure: what is stuck at that moment into the setting `report.stuck`
+(`_stuck`), the findings that recur into `report.recurring` (`_recurring`), and what each merged
+ticket and accepted milestone cost into `report.costs` (`_costs`, which ties replies to tickets by
+the rule in report_cost.py).
 
 The columns of a row. Project "" holds what belongs to no project; every duration is in hours:
 
@@ -49,6 +51,8 @@ from typing import Callable
 from sqlalchemy import delete, select
 
 from . import factory as factory_mod
+from . import report_cost
+from .claude_usage_store import TICKET_ROLES
 from .envelope import now_utc
 from .session_store.tables import report_weeks
 
@@ -60,6 +64,8 @@ STUCK_SETTING = "report.stuck"   # what was stuck at the last full pass
 STUCK_SHOWN = 5                  # how many of each kind "stuck now" lists
 RECURRING_SETTING = "report.recurring"   # the findings that recurred at the last full pass
 RECURRING_SHOWN = 5                      # how many recurring findings the page lists
+COST_SETTING = "report.costs"    # what tickets and milestones had cost at the last full pass
+COST_SHOWN = 5                   # how many of the most expensive of each the page lists
 NAMED_KINDS = frozenset(kind for kind, _ in factory_mod.FINDING_KINDS)
 BUCKET_EDGES = (1, 4, 24, 72)    # start to merge, hours; a time on an edge is in the bucket above it
 NO_PROJECT = ""
@@ -483,6 +489,147 @@ def _recurring_now(store, visible: dict[str, dict], ids: list[str],
             "rows": [{**r, "rule_accepted": (r["repo"], r["kind"]) in ruled} for r in rows]}
 
 
+# ── ticket costs ──────────────────────────────────────────────────────────────
+def _costs(store, read: dict, weekly: dict[tuple[str, date], dict], at: datetime) -> dict:
+    """What a full pass saves of the ticket costs: {at, tickets, milestones, untied}. A reply is
+    tied to tickets by the rule in report_cost.py, which is approximate. `tickets` holds each merged
+    ticket with the cost of its whole life, in the week of its first merge; `milestones` each
+    accepted one with the cost of all its tickets, in the week of its latest acceptance; `untied`
+    the [project, week, cost, replies with no price] tied to no ticket. `weekly` is the same pass's
+    rows (`_compute`), which say what the roles that never take a ticket spent. A ticket or
+    milestone that no longer exists is in neither list."""
+    from .screens.factory_project import cleaner   # the screens import much of the daemon
+    live = {p["id"] for p in read["projects"]}
+    clean = {pid: cleaner(read["handovers"].get(pid)) for pid in live}
+    tickets = {t["id"]: (pid, t) for pid, rows in read["tickets"].items() for t in rows}
+    changes = [{**c, "at": _utc(c["at"])} for c in read["changes"]]
+    holders = [{**h, "at": _utc(h["at"])} for h in store.all_holder_changes()]
+    replies, builders = store.ticket_replies()
+    ties = report_cost.Ties(
+        {ticket: pid for ticket, (pid, _) in tickets.items()},
+        {p["id"] for p in read["projects"] if p["scope"] == "private"},
+        builders, changes, holders)
+    spent: dict = defaultdict(float)
+    no_price: dict = defaultdict(set)             # the replies with no price, each once per ticket
+    untied: dict = defaultdict(lambda: [0.0, 0])
+
+    def add_untied(key: tuple, cost: float, unpriced: int) -> None:
+        untied[key][0] += cost
+        untied[key][1] += unpriced
+
+    for number, r in enumerate(replies):
+        counted, when = cost_project(r.proj, live), _utc(r.at)
+        takers = ties.shares(counted, r.role, r.station, r.parent, r.home or r.proj, when)
+        for ticket, share in takers.items():
+            if r.cost is None:
+                no_price[ticket].add(number)
+            else:
+                spent[ticket] += r.cost * share
+        if not ties.tied(counted, takers):
+            add_untied((counted, week_of(when)), r.cost or 0.0, int(r.cost is None))
+    for (project, week), row in weekly.items():
+        for role, v in json.loads(row["cost_by_role"]).items():
+            if role not in TICKET_ROLES:
+                add_untied((project, week), v["cost_usd"], v["unpriced"])
+
+    first: dict = {}                              # (ticket, stage) -> when it first came into it
+    for c in changes:
+        first.setdefault((c["ticket"], c["value"]), c["at"])
+    rounds = {ticket: len(counted_rounds(list(rows)))
+              for ticket, rows in groupby(store.all_reviews(), key=lambda r: r["ticket"])}
+
+    def hours(start: datetime | None, end: datetime) -> float | None:
+        return _hours(end - start) if start and start < end else None
+
+    merged = []
+    members: dict = defaultdict(list)             # (project, milestone) -> its tickets
+    for ticket, (pid, t) in tickets.items():
+        if t["milestone"]:
+            members[pid, t["milestone"]].append(ticket)
+        done = first.get((ticket, "merged"))
+        if done:
+            merged.append({"project": pid, "number": t.get("number"), "label": factory_mod.label(t),
+                           "title": clean[pid](t["title"]), "week": week_of(done).isoformat(),
+                           "cost_usd": round(spent.get(ticket, 0.0), 6),
+                           "unpriced": len(no_price.get(ticket, ())),
+                           "rounds": rounds.get(ticket, 0),
+                           "hours": hours(first.get((ticket, "doing")), done)})
+    milestones = {m["id"]: m for rows in store.milestones_by_project(sorted(live)).values()
+                  for m in rows}
+    accepted = []
+    for mid, acceptance in store.milestone_acceptances(list(milestones)).items():
+        if not acceptance["at"]:
+            continue
+        m, when = milestones[mid], _utc(acceptance["at"])
+        pid = m["project"]
+        its = members.get((pid, mid), [])
+        starts = [first[t, "doing"] for t in its if (t, "doing") in first]
+        accepted.append({"project": pid, "id": mid, "name": clean[pid](m["name"]),
+                         "week": week_of(when).isoformat(),
+                         "cost_usd": round(sum(spent.get(t, 0.0) for t in its), 6),
+                         "unpriced": len(set().union(*(no_price.get(t, ()) for t in its))),
+                         "rounds": sum(rounds.get(t, 0) for t in its),
+                         "hours": hours(min(starts, default=None), when), "tickets": len(its)})
+    return {"at": _stamp(at),
+            "tickets": sorted(merged, key=lambda r: (r["project"], r["number"] or 0, r["label"])),
+            "milestones": sorted(accepted, key=lambda r: (r["project"], r["id"])),
+            "untied": [[project, week.isoformat(), round(cost, 6), unpriced]
+                       for (project, week), (cost, unpriced) in sorted(untied.items())]}
+
+
+def _money(amount: list) -> dict:
+    """[cost, replies with no price] as the Cost section says an amount."""
+    return {"cost_usd": round(amount[0], 6), "unpriced": amount[1]}
+
+
+def _costs_now(store, visible: dict[str, dict], ids: list[str], weeks: list[date],
+               rest: bool) -> dict | None:
+    """The last pass's ticket costs over the projects in `ids` (all of them in `visible`) and the
+    Mondays `weeks`: {at, weeks, milestones, top_tickets, top_milestones, untied}. `weeks` gives
+    the mean cost of the tickets first merged in each (None with none), `milestones` the mean cost
+    of the accepted ones, and the top lists hold the COST_SHOWN highest that have a cost or a reply
+    with no price. `rest` (the whole factory) adds what belongs to no project to what is tied to no
+    ticket. None before the first pass."""
+    saved = store.get_setting(COST_SETTING)
+    if not saved:
+        return None
+    snapshot = json.loads(saved)
+    keep, span = set(ids), [w.isoformat() for w in weeks]
+    in_span = set(span)
+
+    def shown(rows: list[dict]) -> list[dict]:
+        return [{**r, "project_name": visible[r["project"]]["name"]} for r in rows
+                if r["project"] in keep and r["week"] in in_span]
+
+    def mean(rows: list[dict]) -> float | None:
+        return round(sum(r["cost_usd"] for r in rows) / len(rows), 6) if rows else None
+
+    def top(rows: list[dict]) -> list[dict]:
+        return sorted((r for r in rows if r["cost_usd"] or r["unpriced"]),
+                      key=lambda r: (-r["cost_usd"], -r["unpriced"], r["project_name"].lower(),
+                                     r["project"], r.get("number") or 0,
+                                     r.get("label") or r.get("id")))[:COST_SHOWN]
+
+    merged, accepted = shown(snapshot["tickets"]), shown(snapshot["milestones"])
+    by_week: dict = defaultdict(list)
+    for r in merged:
+        by_week[r["week"]].append(r)
+    untied, nowhere = [0.0, 0], [0.0, 0]
+    for project, week, cost, unpriced in snapshot["untied"]:
+        if week in in_span and (project in keep or rest and project == NO_PROJECT):
+            for into in (untied, nowhere) if project == NO_PROJECT else (untied,):
+                into[0] += cost
+                into[1] += unpriced
+    return {"at": snapshot["at"],
+            "weeks": [{"week": w, "merged": len(by_week[w]), "mean_cost_usd": mean(by_week[w]),
+                       "unpriced_tickets": sum(bool(r["unpriced"]) for r in by_week[w])}
+                      for w in span],
+            "milestones": {"accepted": len(accepted), "mean_cost_usd": mean(accepted),
+                           "unpriced_milestones": sum(bool(r["unpriced"]) for r in accepted)},
+            "top_tickets": top(merged), "top_milestones": top(accepted),
+            "untied": {**_money(untied), "no_project": _money(nowhere) if rest else None}}
+
+
 # ── the table ─────────────────────────────────────────────────────────────────
 def _write(store, rows: dict[tuple[str, date], dict], only: tuple[str, date] | None = None) -> dict:
     """Make the table (or the one row `only` names) hold exactly `rows`: a row that differs is
@@ -514,14 +661,16 @@ def _write(store, rows: dict[tuple[str, date], dict], only: tuple[str, date] | N
 
 
 def rebuild_all(store) -> dict:
-    """Work out every week of every project again, what is stuck now and the findings that recur.
-    Returns {rows, changed, removed} of the weekly rows."""
+    """Work out every week of every project again, what is stuck now, the findings that recur and
+    the ticket costs. Returns {rows, changed, removed} of the weekly rows."""
     with _PASS:
         at = now_utc()
         read = _read(store)
-        out = _write(store, _compute(store, read=read))
+        rows = _compute(store, read=read)
+        out = _write(store, rows)
         for key, value in ((STUCK_SETTING, _stuck(read, at)),
-                           (RECURRING_SETTING, _recurring(store, read, at))):
+                           (RECURRING_SETTING, _recurring(store, read, at)),
+                           (COST_SETTING, _costs(store, read, rows, at))):
             store.set_setting(key, json.dumps(value, sort_keys=True, separators=(",", ":")))
         return out
 
@@ -718,12 +867,42 @@ def time_spent(rows: list[dict], weeks: list[date]) -> dict:
                                "buckets": buckets}}
 
 
+COST_ROLES = ("builder", "reviewer", "orchestrator", "releaser", PERSON)   # all others: "other"
+
+
+def spend(rows: list[dict], weeks: list[date]) -> dict:
+    """The Cost section's weekly figures (TR-1671): API-equivalent cost per project and week with
+    the total, and the same split by role. Every amount is added up from the rows' split by role,
+    so the parts add up to the total. `unpriced` counts the replies with no price, which no amount
+    holds. page() names the projects and adds the last pass's ticket costs."""
+    total: list = [0.0, 0]
+    roles: dict = defaultdict(lambda: [0.0, 0])
+    projects: dict = defaultdict(lambda: [0.0, 0])
+    by_week: dict = defaultdict(lambda: [0.0, 0])
+    cells: dict = defaultdict(lambda: [0.0, 0])
+    for r in rows:
+        for role, v in r["cost_by_role"].items():
+            for into in (total, roles[role if role in COST_ROLES else "other"],
+                         projects[r["project"]], by_week[r["week"]],
+                         cells[r["week"], r["project"]]):
+                into[0] += v["cost_usd"]
+                into[1] += v["unpriced"]
+    order = sorted(projects, key=lambda p: (-projects[p][0], p))   # the highest spend first
+    return {"total": _money(total),
+            "roles": [{"role": role, **_money(roles[role])} for role in (*COST_ROLES, "other")],
+            "projects": [{"project": p, **_money(projects[p])} for p in order],
+            "weeks": [{"week": w.isoformat(), **_money(by_week[w]),
+                       "projects": {p: _money(cells[w, p]) for p in order if (w, p) in cells}}
+                      for w in weeks]}
+
+
 # The sections of the page, in its order. A section's ticket puts its builder in its line:
 # f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
 # (read_weeks) and the Mondays of the range. A builder named in COMPARED is also handed the rows
 # of as many weeks just before the range, in the same scope: f(rows, weeks, before). A builder
 # reads nothing else; page() itself adds what is not a week's figure: the last pass's "stuck now"
-# to the time section and its recurring findings to the review section.
+# to the time section, its recurring findings to the review section and its ticket costs to the
+# cost section.
 COMPARED = {"delivered", "review"}
 SECTIONS: dict[str, Callable[..., dict] | None] = {
     "delivered": delivered,
@@ -732,7 +911,7 @@ SECTIONS: dict[str, Callable[..., dict] | None] = {
 
     "review": review,
 
-    "cost": None,
+    "cost": spend,
 
     "merges": None,
 
@@ -835,6 +1014,10 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
         key=lambda p: (p["first_pass"]["passed"] / p["first_pass"]["reviewed"],
                        p["name"].lower(), p["project"]))     # lowest pass rate first
     sections["review"]["recurring"] = _recurring_now(store, visible, ids, accepted_rules)
+    sections["cost"]["projects"] = [
+        {**p, "name": visible[p["project"]]["name"] if p["project"] else "No project"}
+        for p in sections["cost"]["projects"]]
+    sections["cost"]["by_ticket"] = _costs_now(store, visible, ids, weeks, rest)
     return {
         "range": {"from": weeks[0].isoformat(),
                   "to": (weeks[-1] + timedelta(days=6)).isoformat(),

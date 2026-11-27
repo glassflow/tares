@@ -79,6 +79,40 @@ export interface TimeData {
   };
 }
 
+/** An amount of API-equivalent cost in US dollars. `unpriced` replies have no price and are in no
+ *  amount, so an amount beside a count above 0 is "at least". */
+export interface Money { cost_usd: number; unpriced: number }
+
+export type CostRole = "builder" | "reviewer" | "orchestrator" | "releaser" | "person" | "other";
+
+/** One of the most expensive tickets or milestones. `week` is the Monday of its first merge or its
+ *  latest acceptance, `hours` the time up to then from the first start, null with no start. */
+export interface CostedRow extends Money {
+  project: string; project_name: string; week: string; rounds: number; hours: number | null;
+}
+export interface CostedTicket extends CostedRow { number: number | null; label: string; title: string }
+export interface CostedMilestone extends CostedRow { id: string; name: string; tickets: number }
+
+/** `sections.cost` (tares/report.py `spend` and `_costs_now`). `projects` come highest spend first;
+ *  `project` "" is spend of no project. */
+export interface CostData {
+  total: Money;
+  roles: (Money & { role: CostRole })[];
+  projects: (Money & { project: string; name: string })[];
+  weeks: (Money & { week: string; projects: Record<string, Money> })[];
+  /** Ticket and milestone costs as of the cell's last pass, over the chosen range; null before the
+   *  first one. */
+  by_ticket: null | {
+    at: string;
+    weeks: { week: string; merged: number; mean_cost_usd: number | null; unpriced_tickets: number }[];
+    milestones: { accepted: number; mean_cost_usd: number | null; unpriced_milestones: number };
+    top_tickets: CostedTicket[];
+    top_milestones: CostedMilestone[];
+    /** What is tied to no ticket; `no_project` is the part of no project, on the whole factory only. */
+    untied: Money & { no_project: Money | null };
+  };
+}
+
 export interface ReportData {
   /** The weeks the read covers: `from` is a Monday, `to` a Sunday, `weeks` the Mondays, oldest first.
    *  `running_week` is the Monday of the week that is not over, when the range holds it. */
