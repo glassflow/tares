@@ -96,7 +96,10 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # project once), projects 82 to 84 (the station rows twice) and project 85 to 87 (the station rows
 # and the station roles). On DuckDB only the two counts that pass their budget move: project 88 to
 # 90 and ticket 27 to 28 (the ticket's station sessions).
-_TODAY = {"home": 108, "projects": 84, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1719 (the joiner block of the home): a person other than the owner reads the cell's own crew
+# settings once, apart from the settings that lay their own values over them: Postgres home 108 to
+# 109. DuckDB home stays at 115, which already had room for it.
+_TODAY = {"home": 109, "projects": 84, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
