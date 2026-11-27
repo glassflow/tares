@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "ok": false,
+  "results": [
+    {
+      "index": 0,
+      "op": "save",
+      "slot": "tickets",
+      "name": "linear",
+      "ok": true,
+      "status": 200,
+      "code": null,
+      "detail": null
+    },
+    {
+      "index": 1,
+      "op": "keep",
+      "slot": "review",
+      "name": "tares",
+      "ok": true,
+      "status": 200,
+      "code": null,
+      "detail": null
+    },
+    {
+      "index": 2,
+      "op": "default",
+      "slot": "ci",
+      "name": "github",
+      "ok": false,
+      "status": 422,
+      "code": "tares_error",
+      "detail": "Tares did not save this (HTTP 422): github is not connected for ci"
+    }
+  ]
+}

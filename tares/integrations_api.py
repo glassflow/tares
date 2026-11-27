@@ -23,14 +23,17 @@ HTTP face of both.
   POST   /api/projects/{uid}/integrations/{slot}/test   admin or the project's lead
   GET    /api/projects/{uid}/required-checks        the commands the local ci integration requires
   PUT    /api/projects/{uid}/required-checks        admin or the project's lead: {commands: [...]}
+  GET    /api/factory/github/token?repo=owner/name  a person's key, stations included: a GitHub token for one
+                                                    repository and who to commit as (github_crew_token.py)
 
 An integration is connected when it has a connection, takes no integration settings, or is the
 slot's default. memory, monitoring and runtime keep exactly one connection: connecting another
 replaces the old one.
 
 A request that carries X-Tares-Station (a crew station) may use only the `effective` read, which
-never holds integration settings. No response holds a secret value: a read shows each secret as ""
-and says in `secrets` whether one is set. A project write that carries a secret or an address is
+never holds integration settings, and the GitHub token, the one response here that holds a secret.
+No other response holds a secret value: a read shows each secret as "" and says in `secrets`
+whether one is set. A project write that carries a secret or an address is
 422 ("set it where the integration is connected, in the factory's integrations"), and so is one
 that names an integration that is not connected. A save or a test at the factory that changes the
 address and leaves a stored secret blank is 422: the old secret never goes to a new address. A
@@ -43,7 +46,7 @@ import asyncio
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import licence, outbound
+from . import github_crew_token, licence, outbound
 from .factory_api import caller
 from .factory_store import FactoryStore, PROJECT_SLOTS
 from .integrations import registry, resolve
@@ -260,6 +263,18 @@ def register(app, store, h):
         cfg = cls(store).exporter_config() if cls else {}
         return JSONResponse({"headers": dict((cfg or {}).get("headers") or {})},
                             headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/factory/github/token")
+    async def github_token(request: Request, repo: str = ""):
+        """A GitHub token for `repo` (owner/name) and who to commit as, for the crew, stations
+        included. Needs the ingest scope and, but for the system credential, a key with a person;
+        the repository must be one a project they can see names. A personal token goes to an admin
+        key only. Never cached."""
+        try:
+            answer = await github_crew_token.token_for_repo(store, h, request, repo)
+        except github_crew_token.Refused as e:
+            return JSONResponse(e.body, status_code=e.status)
+        return JSONResponse(answer, headers={"Cache-Control": "no-store"})
 
     @app.put("/api/factory/integrations/{slot}")
     def put_integration(slot: str, request: Request, body: dict = Body(...)):

@@ -16,11 +16,12 @@ import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from fastapi import Body, HTTPException, Request
+from fastapi import Body, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 
 from . import answers as answers_mod
 from . import claude_usage
+from . import codex_usage
 from . import crew_conversation
 from . import crew_onboarding
 from . import docs as docs_mod
@@ -32,6 +33,7 @@ from . import factory_owners as owners_mod
 from . import memory_route
 from . import merge_ready as merge_ready_mod
 from . import metrics
+from . import report as report_mod
 from . import team as team_mod
 from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
@@ -46,6 +48,7 @@ CREW_SETTING = "crew_settings"
 CLAUDE_RETRY_SETTING = "crew_claude_retry"   # stations the watch is retrying onto a new Claude Code
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
 GRANTS_MIGRATED_SETTING = "grants_migrated"   # set once the old grants docs became rows (TR-630)
+NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."
 
 
 def caller(request: Request) -> dict:
@@ -605,7 +608,7 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     sessions = (store.station_session_ids(holder) if holder
                 else [s["session"] for s in store.project_sessions(uid)])
     with metrics.step("recorded_commands"):
-        commands = store.recorded_commands(source, sessions) if sessions else None
+        commands = store.recorded_commands(source, sessions, ends=True) if sessions else None
     # only what ran since the ticket went into the work counts for its checks
     since = next((x["at"] for x in store.ticket_history(t["id"])
                   if x["field"] == "stage" and x["value"] == "doing"), None)
@@ -615,9 +618,14 @@ def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | No
     return commands, since
 
 
-def review_state(store, uid: str, t: dict, source: str) -> dict:
+def review_state(h: Host, uid: str, t: dict, source: str) -> dict:
     """What a ticket's full view adds for review (TR-440..444): its checks matched against the
-    recording, the challenger's layer, the review rounds, and whether the last verdict counts."""
+    recording, the challenger's layer, the review rounds, and whether the last verdict counts.
+
+    A check's `match` is the same for every reader, as the merge gate reads it. Its `recorded`
+    text is given only when the sessions this reader may open say the same on their own
+    (TR-1711). The challenger's findings are those such sessions carry (readable_layer)."""
+    store = h.store
     raw = store.ticket_checks(t["id"], 50)
     checks = []
     if raw:
@@ -626,10 +634,18 @@ def review_state(store, uid: str, t: dict, source: str) -> dict:
             state, recorded = (factory_mod.match_check(c, commands, since)
                                if commands is not None else (None, None))
             checks.append({**c, "match": state, "recorded": recorded})
+        if any(c["recorded"] for c in checks):
+            closed = unread_sessions(h, list({r["session"] for r in commands}))
+            if closed:
+                readable = [r for r in commands if r["session"] not in closed]
+                for c in checks:
+                    if c["recorded"] and (factory_mod.match_check(c, readable, since)
+                                          != (c["match"], c["recorded"])):
+                        c["recorded"] = None
     reviews = store.ticket_reviews(t["id"])
     with metrics.step("challenger"):
-        layer = factory_mod.challenger_layer(
-            store.challenge_events(source, uid, factory_mod.label(t)))
+        events = store.challenge_events(source, uid, factory_mod.label(t))
+        layer = readable_layer(h, factory_mod.challenger_layer(events), events)
     return {"checks": checks, "reviews": reviews, "challenger": layer,
             "verdict": verdict_now(t, factory_mod.standing_round(reviews))}
 
@@ -672,6 +688,129 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None,
             break
     return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
             "milestone": current, "progress": factory_mod.progress(tickets)}
+
+
+def own_crew_ids(h: Host, crews) -> set[str]:
+    """The ids of those of `crews` (rows of store.list_crews) that are the caller's own (TR-1704):
+    a station's owner reads every session of it. They are the crews of the caller's person; a
+    credential with no person owns none, not even those filed under `local`. With auth off there
+    is no credential and the one person using the cell is `local`, so those crews are theirs."""
+    if h.auth_off():
+        me = "local"
+    else:
+        request = h.caller()
+        person = h.current_person(request) if request is not None else None
+        me = person["id"] if person else None
+    return {c["id"] for c in crews if me and c["person_id"] == me}
+
+
+def unread_sessions(h: Host, sessions: list[str]) -> set[str]:
+    """Those of `sessions` the caller must not read (TR-1710): they worked in a project the
+    caller cannot see and belong to no crew of theirs (store.unread_among)."""
+    hidden = h.hidden_ids()
+    if not hidden:
+        return set()
+    return h.store.unread_among(sessions, hidden, own_crew_ids(h, h.store.list_crews()))
+
+
+def readable_layer(h: Host, layer: dict, events: list[dict]) -> dict:
+    """The challenger's layer `layer`, made from all of `events`, with the findings the caller may
+    read (TR-1724): an open or fixed finding whose title a review in a session they can open
+    carries, and the waivers such sessions recorded. Rounds, verdict, clean and sha stay as all
+    the events give them."""
+    if not (layer["open"] or layer["fixed"] or layer["waived"]) or not h.hidden_ids():
+        return layer
+    closed = unread_sessions(h, list({e["session"] for e in events if e["session"]}))
+    titles: dict = {}
+    waived = []
+    for e in events:
+        if e["session"] in closed:
+            continue
+        for f in e["challenge"].get("findings") or []:
+            if e["type"] == "challenge_commit":
+                titles.setdefault(f.get("title"), []).append(f)
+            elif e["type"] == "challenge_waived":
+                waived.append(f)
+
+    def mine(findings: list[dict]) -> list[dict]:
+        # as a session the caller can open wrote it: the latest such version when this one is not
+        return [f if f in titles[f.get("title")] else titles[f.get("title")][-1]
+                for f in findings if f.get("title") in titles]
+
+    return {**layer, "open": mine(layer["open"]), "fixed": mine(layer["fixed"]), "waived": waived}
+
+
+def rule_text(repo: str, kind: str, count: int | None = None) -> str:
+    """The sentence a rule offer is worded as. `count` is the number of tickets the finding came
+    back in; None leaves that part out."""
+    start = f"In {repo}, check for {kind} before asking for review"
+    if count is None:
+        return f"{start}."
+    return f"{start}: it came back in {count} ticket{'' if count == 1 else 's'}."
+
+
+def tickets_of(tickets: list, projects: list[dict], shut) -> list:
+    """Those of a rule offer's `tickets` ("<project name> <label>") whose name is that of a current
+    project in `projects`, and of none for which `shut(project)` is true."""
+    names = {p["name"] for p in projects} - {p["name"] for p in projects if shut(p)}
+    return [t for t in tickets if str(t).rsplit(" ", 1)[0] in names]
+
+
+def root_offers(h: Host, offers: list[dict], hidden, projects: list[dict]) -> list[dict]:
+    """`offers` as the root caller reads them (TR-1713): every one, its text as stored. A ticket
+    is left out when its name is that of a project in `hidden`, or of a deleted private project
+    while no project has the name (TR-1708)."""
+    names = {p["name"] for p in projects}
+    closed = {p["name"] for p in projects if p["id"] in hidden}
+    deleted = h.store.deleted_private_projects()
+
+    def kept(ticket) -> bool:
+        name = str(ticket).rsplit(" ", 1)[0]
+        if name in names:
+            return name not in closed
+        return h.store.deleted_private_ref(name, deleted) is None
+
+    return [{**o, "tickets": [t for t in o.get("tickets") or [] if kept(t)]} for o in offers]
+
+
+def readable_offers(h: Host, offers: list[dict], hidden, projects=None) -> list[dict]:
+    """The rule offers `offers` for a caller who cannot see the projects in `hidden` (TR-1713),
+    from those of the other projects. The root caller (the cell's root token, or auth off) reads
+    them as root_offers says. Anyone else gets each with the tickets whose recorded name is a
+    current project they can open, and its generated sentence counting those; an offer that has
+    tickets and keeps none is left out (TR-1724). `projects` is `store.list_projects()`, for a
+    caller who has it already."""
+    if not hidden:
+        return offers
+    offers = [o for o in offers if o.get("project") not in hidden]
+    if not any(o.get("tickets") for o in offers):
+        return offers
+    if projects is None:
+        projects = h.store.list_projects()
+    request = h.caller()   # None with auth off
+    if request is None or h.is_system(request):
+        return root_offers(h, offers, hidden, projects)
+    out = []
+    for o in offers:
+        had = o.get("tickets") or []
+        kept = tickets_of(had, projects, lambda p: p["id"] in hidden)
+        if had and not kept:
+            continue
+        text = o.get("text")
+        if len(kept) < len(had) and text == rule_text(o["repo"], o["kind"], len(had)):
+            text = rule_text(o["repo"], o["kind"], len(kept))
+        out.append({**o, "tickets": kept, "text": text})
+    return out
+
+
+def blank_session(row: dict) -> None:
+    """Take a station row's current session off it, for a caller who must not read it (TR-1704):
+    which session it is, when it started, its lines, context window, Claude Code version and the
+    reason of its state, which the session wrote. The station's state and when it was last heard
+    stay, so the row still says whether the station works."""
+    row.update(session=None, started_at=None, lines=None, claude_version=None, state_reason=None)
+    if row["context"]:
+        row["context"] = dict.fromkeys(row["context"])
 
 
 def register(app, store, h: Host) -> SimpleNamespace:
@@ -1172,19 +1311,28 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 st["projects"] = [u for u in st["projects"] if u not in hidden]
         return in_crew_order(out)
 
-    def stations(project: str | None = None) -> list[dict]:
+    def stations(project: str | None = None, whole: bool = False) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
-        never merge. Each row names its crew, machine and person."""
+        never merge. Each row names its crew, machine and person. A current session the caller must
+        not read is taken off its row (`blank_session`, TR-1704); `whole` leaves it on, for a write
+        that acts on that session."""
         # one row per station with its newest session, the few before it and the totals over all of
         # them, so a station that has had many sessions costs no more than one that has had few
         # (TR-1500); the earlier ones are read a page at a time (GET /api/factory/crew/.../sessions)
-        rollup = store.station_rollup(h.cc_source())
-        names = {p["id"]: p["name"] for p in store.list_projects()}
+        hidden = h.hidden_ids()
         crews = {c["id"]: c for c in store.list_crews()}
+        own = own_crew_ids(h, crews.values()) if hidden else set()
+        # a project the caller cannot see adds nothing to a station's usage (TR-1696), and a
+        # session that worked in one is not among its earlier sessions or calls (TR-1704)
+        rollup = store.station_rollup(h.cc_source(), hidden=hidden, own=own)
+        names = {p["id"]: p["name"] for p in store.list_projects()}
         now = now_utc()
         out = []
+        unread: set[str] = set()   # the current sessions the caller must not read
         for g in rollup:
             cid, name, cur = g["crew_id"], g["station"], g["cur"]
+            if g["cur_hidden"]:
+                unread.add(cur["session"])
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
             state = shown_station_state(cur, now)
@@ -1204,8 +1352,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "machine": crew.get("machine") or "", "person": crew.get("person"),
                         "projects": g["projects"], "usage": g["usage"],
                         "coordination_calls": g["coordination_calls"]})
-        hidden = h.hidden_ids()
+        # the status line gives one cost for the whole session, so none of it is shown for a
+        # session in a hidden project or with a reply that counts for one (TR-1696)
+        no_cost: set[str] = set()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
+            no_cost = store.sessions_counting_for([st["session"] for st in out], hidden)
+            gone = hidden & set(store.deleted_private_projects())
+            if gone:   # a row's project passes over a deleted one, so the session is asked itself
+                no_cost |= store.sessions_tied_to([st["session"] for st in out], gone)
             out = in_sight(out, hidden)
             for st in out:
                 seen = [u for u in st["projects"] if u not in hidden]
@@ -1216,6 +1370,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
+                    no_cost.add(st["session"])
         meters = store.session_meters([st["session"] for st in out])
         retry = claude_retry()
         for st in out:
@@ -1224,18 +1379,33 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                     if x["parent"] == st["name"] and x["crew_id"] == st["crew_id"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            if st["context"] and st["session"] in no_cost:
+                st["context"]["cost_usd"] = None
             st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
             # set while the watch retries its move, else null: the crew's own marks, else those
             # of its person that name no crew
             pid = (crews.get(st["crew_id"]) or {}).get("person_id")
             st["claude_retry"] = (retry.get(retry_key(pid, st["crew"]), {}).get(st["name"])
                                   or retry.get(retry_key(pid, None), {}).get(st["name"]))
+            if st["session"] in unread and not whole:
+                blank_session(st)
         if project:
             out = [s for s in out if project in s["projects"]]
         return in_crew_order(out)
 
-    def pace(request: Request | None = None) -> dict:
-        """The pace under the caller's settings (a person's own `pace` over the cell's)."""
+    def crew_runtime(asked: str = "") -> str:
+        """The runtime whose limits pace the crew: the one the caller names (a crew knows what it runs on),
+        else the cell's (the `runtime` slot, which is what a new station is started on)."""
+        asked = (asked or "").strip()
+        if asked:
+            return asked
+        return integrations_resolve.effective("runtime", None, store=store).integration
+
+    def pace(request: Request | None = None, runtime: str = "") -> dict:
+        """The pace under the caller's settings (a person's own `pace` over the cell's). A crew on Codex is
+        paced from the Codex account's limits (tares/codex_usage.py), never from Claude's plan."""
+        if crew_runtime(runtime) == "codex":
+            return codex_usage.pace(store, settings(request), now_utc(), factory_mod.pace_now)
         return factory_mod.pace_now(settings(request), claude_usage.plan(store), now_utc())
 
     def caller_person_id(request: Request) -> str:
@@ -1243,8 +1413,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         system credential) is filed under `local`, so a caller with no person is `local` too."""
         p = h.current_person(request)
         return p["id"] if p else "local"
-
-    NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."
 
     def work_person(request: Request) -> dict:
         """The person whose work the caller means (TR-633): the key's person; the system
@@ -1326,10 +1494,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         out.sort(key=lambda c: (-_ts(c["last_seen"]), c["id"] or ""))
         return out
 
-    def pick_station(name: str, request: Request, crew: str | None = None) -> dict:
+    def pick_station(name: str, request: Request, crew: str | None = None,
+                     whole: bool = False) -> dict:
         """The station called `name`. Crews can repeat a name: `crew` (a crew id or name) narrows
-        it down, and of several that remain the caller's own crew's wins, then the newest."""
-        rows = [s for s in stations() if s["name"] == name]
+        it down, and of several that remain the caller's own crew's wins, then the newest.
+        `whole` as in `stations`."""
+        rows = [s for s in stations(whole=whole) if s["name"] == name]
         if crew:
             rows = [s for s in rows if crew in (s["crew_id"], s["crew"])]
         if not rows:
@@ -1345,7 +1515,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         current session and state, `earlier_count` and the 5 most recent earlier sessions that
         played it as `earlier`, the stations it started; `usage`, `coordination_calls` and
         `projects` cover every session; the rest of the earlier ones are paged by GET
-        /api/factory/crew/{crew_id}/{station}/sessions), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
+        /api/factory/crew/{crew_id}/{station}/sessions), the crews' settings, and the shared grants.
+        In another person's crew, a session that worked in a private project the caller cannot see
+        is not in `earlier`, `earlier_count` or `coordination_calls`, and when it is the current
+        one its row has no session, `started_at`, `lines`, `claude_version` or `state_reason`, and
+        a `context` of nulls (TR-1704). `mine=1` keeps the caller's own
         crews. `stations` is the same rows flat, for a client that does not group by crew yet. `pace`
         is the crew's pace as GET /api/crew/pace gives it. `claude_retry` maps each station the
         caller's person's crews are retrying onto a newer Claude Code to {target, fails, next_at};
@@ -1397,14 +1571,38 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"stations": out}
 
     @app.get("/api/crew/pace")
-    def get_crew_pace(request: Request):
+    def get_crew_pace(request: Request, runtime: str = ""):
         """Whether the crew is pacing itself before the plan's limits (the crew setting `pace`),
         worked out from the plan usage Tares keeps. `level` is 0 (ok), 1 (slow: the 5-hour window
         at 85% or the weekly limit at 90%) or 2 (hold: the window at 95%); `at_limit` is true while
         a limit is full and has not reset; `state` is off, ok, slow, hold or limit; `until` is when
         the limits behind it reset; `known` is false when no plan reading has arrived. The factory
-        watch reads this (TR-674); a person's own `pace` setting counts for that person."""
-        return pace(request)
+        watch reads this (TR-674); a person's own `pace` setting counts for that person.
+
+        `runtime` (a query parameter) names the runtime the asking crew runs on; without it the
+        cell's own runtime counts. For `codex` the pace comes from the Codex account's limits (TR-1597)
+        and the answer also has `source` ("codex"), `reading` (ok, none, stale or unsupported; `known`
+        is true only for ok), `read_at`, `limits` (every window Codex reported, each {kind, label,
+        percent, resets_at, reset, paces}; one with `paces` false is shown and never slows the crew),
+        `account` ({type, plan}) and `reached`. Claude's plan is never used for it."""
+        if runtime not in ("", "claude_code", "codex"):
+            h.err(ValueError("runtime is claude_code or codex"))
+        return pace(request, runtime)
+
+    @app.put("/api/crew/codex-limits")
+    def put_codex_limits(request: Request, body: dict = Body(...)):
+        """The Codex account's limits as a crew on Codex just read them (TR-1597): {limits, account,
+        taken_at}. `limits` is what its app-server answered to `account/rateLimits/read`, `account` the
+        `account` of `account/read`. The windows and the account's type and plan are kept, with the
+        cell's own time; an account id, an address and a workspace name are not. It replaces the last
+        reading. GET /api/crew/pace?runtime=codex is worked out from it; a reading older than 30
+        minutes is not used. The factory watch sends this once a round."""
+        if not isinstance(body.get("limits"), dict):
+            h.err(ValueError("limits must be the answer to account/rateLimits/read, an object"))
+        if len(json.dumps(body)) > 200_000:
+            h.err(ValueError("the reading is too large"))
+        kept = codex_usage.save(store, body, caller_person_id(request), now_utc())
+        return {"windows": len(kept["windows"]), "account": kept["account"]}
 
     def as_utc(x):
         """A stored time (a datetime, or its text) as an aware UTC datetime; None when there is none or it
@@ -1643,12 +1841,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         n = min(max(recent, 0), 200)
         read = []       # where each read of the session's lines came from (TR-1507)
         lines = []
-        if n:
+        if n and st["session"]:   # none on the row: the caller must not read it (TR-1704)
             # `tail`: fewer lines than counted can be read, so the newest readable ones show
             lines, where = store.key_events_from(h.cc_source(), st["session"], limit=n,
                                                  offset=max((st["lines"] or 0) - n, 0), tail={})
             read.append(where)
-        m = store.session_meters([st["session"]]).get(st["session"]) or {}
+        m = (store.session_meters([st["session"]]).get(st["session"]) or {}) if st["session"] else {}
         convo = {}
         c = min(max(conversation, 0), 500)
         if c and st["session"]:
@@ -1689,7 +1887,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         lines are kept. The orchestrator or the person (unlabeled, such as `factory retire`) may.
         A session that is still alive turns the row back with its next line."""
         deny(request, "end_station")
-        st = pick_station(name, request, crew)
+        st = pick_station(name, request, crew, whole=True)
         # `crew` narrows the name; with none, pick_station falls back to another person's station
         # of that name, which a caller must not end (the system credential may)
         if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
@@ -1699,7 +1897,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         if (store.session_state(st["session"]) or {}).get("state") != "ended":
             store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)
             factory_home.clear_cache()   # the Crew page shows it ended on the next read
-        return next(s for s in stations() if s["session"] == st["session"])
+        row = (st["crew_id"], st["name"])
+        return next(s for s in stations() if (s["crew_id"], s["name"]) == row)
 
     # ── a station's context by category: asked from the console, read on the crew's machine ──
     ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
@@ -1707,22 +1906,30 @@ def register(app, store, h: Host) -> SimpleNamespace:
     @app.post("/api/crew/{name}/context")
     def ask_station_context(name: str, request: Request, crew: str | None = None):
         """Ask for a new /context reading of the station's session. The factory watch on the
-        crew's machine reads it (no model call) within a few seconds, if it runs."""
-        st = pick_station(name, request, crew)
+        crew's machine reads it (no model call) within a few seconds, if it runs. `session` is
+        null for a caller who must not read that session (TR-1710); the ask is recorded all the
+        same."""
+        st = pick_station(name, request, crew, whole=True)
         # the reading is taken on its owner's machine: nobody else asks it (the system credential may)
         if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
             h.err(PermissionError(f"{name} belongs to another person's crew: only its owner "
                                   "asks for its context"), 403)
         at = now_utc()
         store.ask_session_context(st["session"], at)
-        return {"session": st["session"], "asked_at": at}
+        unread = unread_sessions(h, [st["session"]])
+        return {"session": None if unread else st["session"], "asked_at": at}
 
     @app.get("/api/crew/context/asks")
     def station_context_asks():
         """The stations someone asked a /context reading of that has not come in yet, for
-        `factory crew watch`."""
+        `factory crew watch`. An ask for a session the caller must not read is left out
+        (TR-1710)."""
         out = []
-        for x in store.context_asks(now_utc() - timedelta(minutes=ASK_TTL)):
+        asked = store.context_asks(now_utc() - timedelta(minutes=ASK_TTL))
+        unread = unread_sessions(h, asked)
+        for x in asked:
+            if x in unread:
+                continue
             st = store.session_station(x)
             if st:
                 out.append({"station": st["station"], "session": x})
@@ -1924,7 +2131,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if not (m["to"] in builders or m["from"] in builders or name.search(text)):
                 continue
             out.append(m)
-        return out
+        # of those, the messages of the sessions the caller may read (TR-1713); a message
+        # recorded with no session stays
+        sids = sorted({m["session"] for m in out if m["session"]})
+        closed = unread_sessions(h, sids) if sids else set()
+        return [m for m in out if m["session"] not in closed]
 
     # ── the build, recorded (TR-433, TR-435, TR-436) ──────────────────────────
     def ticket_ids(uid: str, refs) -> list[str]:
@@ -2488,7 +2699,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
             with metrics.step("recurring"):
-                rec = recurring(pr["repo"])
+                rec = recurring(pr["repo"], h.hidden_ids())
             if rec:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
@@ -2656,8 +2867,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         for r in recurring(repo):
             scope = "all" if len(r["projects"]) > 1 else "project"
             pid = r["projects"][0] if scope == "project" else None
-            text = (f"In {repo}, check for {r['kind']} before asking for review: it came back in "
-                    f"{r['count']} tickets.")
+            text = rule_text(repo, r["kind"], r["count"])
             store.upsert_rule_proposal(repo, r["kind"], pid, scope, text, r["tickets"], now_utc())
 
     @app.get("/api/recurring-findings")
@@ -2666,39 +2876,46 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     @app.get("/api/rule-proposals")
     def list_rule_proposals(state: str = "open"):
-        hidden = h.hidden_ids()
-        names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
-        out = []
-        for rp in store.list_rule_proposals(state.strip() or None):
-            if rp.get("project") in hidden:
-                continue
-            # a rule that came back across projects lists the tickets it came from
-            rp = {**rp, "tickets": [t for t in rp.get("tickets") or []
-                                    if not any(str(t).startswith(n + " ") for n in names)]}
-            out.append(rp)
-        return {"proposals": out}
+        # a rule that came back across projects lists the tickets it came from
+        return {"proposals": readable_offers(
+            h, store.list_rule_proposals(state.strip() or None), h.hidden_ids())}
 
     @app.post("/api/rule-proposals/{pid}/{decision}")
     def decide_rule(pid: str, decision: str, request: Request,
                           body: dict = Body(default={})):
         """accept (optionally with the text edited) adds the rule to AGENTS.md (the project's,
         or the shared one when it came back across projects); reject keeps it from being
-        offered again. A person decides: refused from any crew station."""
+        offered again. A person decides: refused from any crew station. The offer's own sentence,
+        left as it was, is written without its ticket count unless every ticket behind it is in a
+        project the whole team can open (TR-1724)."""
         if caller(request)["station"]:
             h.err(PermissionError("a rule is the person's call: accept or reject it in the "
                                   "console"), 403)
         rp = store.get_rule_proposal(pid)
-        if rp is None or rp.get("project") in h.hidden_ids():
-            h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # a private project's reads as none
+        hidden = h.hidden_ids()
+        mine = readable_offers(h, [rp], hidden) if rp else []
+        if not mine:
+            h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # one the caller cannot read is none
         if rp["state"] != "open":
             h.err(ValueError(f"already {rp['state']}"), 409)
+
+        def decided() -> dict:   # the offer as it is now, as this caller may read it
+            return readable_offers(h, [store.get_rule_proposal(pid)], hidden)[0]
+
         if decision == "reject":
             store.decide_rule_proposal(pid, "rejected", None, now_utc())
             factory_home.clear_cache()   # the Crew page reads again right after
-            return store.get_rule_proposal(pid)
+            return decided()
         if decision != "accept":
             h.err(KeyError("accept or reject"), 404)
-        text = " ".join(str(body.get("text") or rp["text"]).split())
+        text = " ".join(str(body.get("text") or "").split())
+        # nothing typed: no text, or the offer's own sentence sent back, as stored or as read
+        if not text or text in {" ".join(str(o["text"]).split()) for o in (rp, mine[0])}:
+            text = " ".join(str(rp["text"]).split())
+            tickets = rp.get("tickets") or []
+            team = tickets_of(tickets, store.list_projects(), lambda p: p.get("scope") == "private")
+            if len(team) < len(tickets) and text == rule_text(rp["repo"], rp["kind"], len(tickets)):
+                text = rule_text(rp["repo"], rp["kind"])
         if rp["scope"] == "project" and not (rp["project"] and store.get_project(rp["project"])):
             h.err(ValueError("the project this rule was for is gone; reject it"), 409)
         if rp["scope"] == "project":
@@ -2713,7 +2930,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         store.update_doc(doc_id, body=new, by="console")
         store.decide_rule_proposal(pid, "accepted", text, now_utc())
         factory_home.clear_cache()
-        return {**store.get_rule_proposal(pid), "doc": doc_id}
+        return {**decided(), "doc": doc_id}
 
     # ── the desk: questions for the person, and their answers (TR-449..452) ────
     def desk_out(d: dict) -> dict:
@@ -3608,6 +3825,36 @@ def register(app, store, h: Host) -> SimpleNamespace:
         ho = store.get_handover(uid) or {}
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
+
+    @app.get("/api/factory/report")
+    def report_read(request: Request, scope: str = "factory", to: str | None = None,
+                    from_: str | None = Query(None, alias="from")):
+        """The Report page in one read, from the weekly figures: {range, scope, cannot_see,
+        sections}. `from` and `to` are days (year-month-day) widened to whole ISO weeks in UTC;
+        with neither it is the last 8 weeks. `scope` is factory (default), mine (Home's rule),
+        team:<person id> (what that person leads) or project:<id>. Every scope counts only the
+        projects the caller can read, so a private one is not in it and, asked for by name, is
+        unknown. What is stuck now lists a desk question of no project only in the factory scope,
+        and only one the caller is asked (desk_is_mine). Needs the read scope; a project key is
+        refused."""
+        hidden = h.hidden_ids()
+        projects = [p for p in store.list_projects() if p["id"] not in hidden]
+        me, o = answerer(request), owners_mod.Owners(store)
+        try:
+            return report_mod.page(
+                store, projects, lambda: my_projects(request), o, scope, from_, to,
+                asks_me=lambda d: me is not None and desk_is_mine(d, me, o))
+        except report_mod.UnknownScope as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/factory/report/rebuild")
+    def report_rebuild():
+        """Work out the report's weekly figures again, every week of every project (they are kept
+        current in the background; this is for after a repair). Answers {rows, changed, removed}.
+        Needs the admin scope, as every write does; a project key is refused."""
+        return report_mod.rebuild_all(store)
 
     fx = SimpleNamespace(stations=stations, station_states=station_states, queue=queue_all, pace=pace,
                          settings=settings,

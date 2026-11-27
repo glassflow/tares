@@ -1,0 +1,132 @@
+{
+ "wire": "commands.wire.jsonl",
+ "rows": [
+  {
+   "tool_use_id": "exec-3abe33fb-2c1c-487b-b712-3353959a795b",
+   "command": "bash",
+   "cwd": "/probe/work",
+   "exit_code": 0,
+   "is_error": false,
+   "thread": "01a208b8-7073-7d91-905c-ac1d2aa84f95",
+   "turn": "01a208b8-7233-7780-8336-fb850cef10f5",
+   "at": "2026-11-23T14:04:00.805000+00:00",
+   "output_chars": 0
+  },
+  {
+   "tool_use_id": "exec-93a549f9-9d56-463a-a3bd-b57cdfeb6ccb",
+   "command": "git log --oneline -1",
+   "cwd": "/probe/work",
+   "exit_code": 0,
+   "is_error": false,
+   "thread": "01a208b8-7073-7d91-905c-ac1d2aa84f95",
+   "turn": "01a208b8-7233-7780-8336-fb850cef10f5",
+   "at": "2026-11-23T14:04:10.896000+00:00",
+   "output_chars": 14
+  },
+  {
+   "tool_use_id": "exec-9dd25595-844a-4195-bb9b-12e47e33d5fc",
+   "command": "printf 'a\nb\n' | wc -l > lines.txt",
+   "cwd": "/probe/work",
+   "exit_code": 0,
+   "is_error": false,
+   "thread": "01a208b8-7073-7d91-905c-ac1d2aa84f95",
+   "turn": "01a208b8-b7cc-7020-8cc0-f10748250e05",
+   "at": "2026-11-23T14:04:16.412000+00:00",
+   "output_chars": 0
+  },
+  {
+   "tool_use_id": "exec-2e0367c7-0e12-4878-b694-00cb8a084d5a",
+   "command": "cat > heredoc.txt <<'EOF'\nhello\nEOF",
+   "cwd": "/probe/work",
+   "exit_code": 0,
+   "is_error": false,
+   "thread": "01a208b8-7073-7d91-905c-ac1d2aa84f95",
+   "turn": "01a208b8-b7cc-7020-8cc0-f10748250e05",
+   "at": "2026-11-23T14:04:19.870000+00:00",
+   "output_chars": 0
+  },
+  {
+   "tool_use_id": "exec-7f604382-204d-4ecd-9a20-ae6c6b6255a6",
+   "command": "sh -c 'exit 7'",
+   "cwd": "/probe/work",
+   "exit_code": 7,
+   "is_error": true,
+   "thread": "01a208b8-7073-7d91-905c-ac1d2aa84f95",
+   "turn": "01a208b8-b7cc-7020-8cc0-f10748250e05",
+   "at": "2026-11-23T14:04:22.840000+00:00",
+   "output_chars": 0
+  },
+  {
+   "tool_use_id": "exec-57ce74f9-2eb8-4219-8f2a-b0b42caeadc7",
+   "command": "git push origin main",
+   "cwd": "/probe/work",
+   "exit_code": 0,
+   "is_error": false,
+   "thread": "01a208b8-7073-7d91-905c-ac1d2aa84f95",
+   "turn": "01a208b8-b7cc-7020-8cc0-f10748250e05",
+   "at": "2026-11-23T14:04:25.740000+00:00",
+   "output_chars": 55
+  }
+ ],
+ "cases": [
+  {
+   "case": "a command that ran and passed backs its claim",
+   "pass": true,
+   "want": "matched",
+   "got": "matched",
+   "shown": null
+  },
+  {
+   "case": "a command that never ran is not found",
+   "pass": true,
+   "want": "not_found",
+   "got": "not_found",
+   "shown": null
+  },
+  {
+   "case": "a 'passed' claim for a command that exited 7 differs",
+   "pass": true,
+   "want": "differs",
+   "got": "differs",
+   "shown": "(no output recorded)"
+  },
+  {
+   "case": "a command the guard refused has no item, so no claim on it holds",
+   "pass": true,
+   "want": "not_found",
+   "got": "not_found",
+   "shown": null
+  },
+  {
+   "case": "part of a command is not the command",
+   "pass": true,
+   "want": "not_found",
+   "got": "not_found",
+   "shown": null
+  },
+  {
+   "case": "events delivered twice count once (by item id)",
+   "pass": true,
+   "want": 6,
+   "got": 6,
+   "shown": null
+  },
+  {
+   "case": "the real exit code is kept (7, not just 'failed')",
+   "pass": true,
+   "want": "7 among them",
+   "got": [
+    0,
+    7
+   ],
+   "shown": null
+  },
+  {
+   "case": "every row has its working folder",
+   "pass": true,
+   "want": true,
+   "got": true,
+   "shown": null
+  }
+ ]
+}

@@ -1,0 +1,50 @@
+# What a station on Codex is told (TR-1598). The rules have one source, the skills next door
+# (../../skills); this folder holds only what a Codex station must be told differently, because it has no
+# skills, no subagents, no schedule of its own and no slash commands; it messages a station with the Tares tool `send_to_station`.
+# tares/crew/role_text.py renders it, and tests/test_role_text.py holds the two together.
+#
+# A role gets a manual on Codex by a [roles.<role>] table here: `parts` are the skills files that make it,
+# `pages` the ones it names and reads when needed. A file that names something only Claude Code has needs
+# an edits file, <skill>/<file>.toml: [[edit]] tables with `find` (a passage of the file, there exactly
+# once) and `with` (what a Codex station reads instead).
+
+opening = '''
+The plan, tickets, assumptions, checks, reviews and the desk are on Tares, through the tools of the MCP server `tares`. Your operating rules follow: the factory protocol, your role's manual, then the pages they name. They are part of your instructions: nothing has to be loaded, and they stay with you after a compaction. After a compaction, and when the factory says it revived or restarted you, read your report (page `report.md`) and your work on Tares, then carry on where your report left off.
+
+You run on Codex. You have no schedule of your own and nobody to hand work to; you send another station of your crew a message with the Tares tool `send_to_station`. Where a rule below says what a station does instead, do that; never look for another route.
+'''
+
+[roles.builder]
+parts = ["factory-protocol/SKILL.md", "station-builder/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "station-builder/stop.md",
+         "station-builder/screen-ticket.md"]
+
+[roles.orchestrator]
+parts = ["factory-protocol/SKILL.md", "station-orchestrator/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "station-orchestrator/takeover.md",
+         "station-orchestrator/finishing.md", "station-orchestrator/mock-ask.md", "station-orchestrator/desk-permission.md",
+         "station-orchestrator/desk-assumptions.md"]
+
+[roles.reviewer]
+parts = ["factory-protocol/SKILL.md", "station-reviewer/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md", "station-reviewer/design-check.md"]
+
+[roles.releaser]
+parts = ["factory-protocol/SKILL.md", "station-releaser/SKILL.md"]
+pages = ["factory-protocol/report.md", "factory-protocol/older-tares.md"]
+
+[roles.spec]
+opening = '''
+You run on Codex as the person's own planning session, started with `tares factory spec`: not a station of the crew. The person is here: ask them. Tares (the project, its docs, tickets and the desk) is reached through the tools of the MCP server `tares`. Your rules follow: the spec manual, then the pages it names. They are part of your instructions: nothing has to be loaded.
+'''
+parts = ["spec-project/SKILL.md"]
+pages = ["spec-project/light-mode.md", "spec-project/contributor.md", "spec-project/write-out.md",
+         "spec-project/area-owners.md"]
+
+[roles.session]
+opening = '''
+You run on Codex as the person's own project session, started with `tares factory session`: not a station of the crew. The person is here: ask them. Tares is reached through the tools of the MCP server `tares`. Your rules follow: the session manual, then the pages it names. They are part of your instructions: nothing has to be loaded.
+'''
+parts = ["session/SKILL.md"]
+pages = ["spec-project/light-mode.md", "spec-project/write-out.md", "spec-project/area-owners.md"]
+

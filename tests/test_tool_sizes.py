@@ -119,8 +119,9 @@ async def main():
         for i in range(20):
             await mf.add_check("T1", f"pytest tests/test_{i}.py " + "-q " * 40, "3 passed " * 30,
                                commit="a" * 40, project="Shop")
-        msgs = [{"at": f"2026-11-17T10:{i:02d}:00Z", "from": "crew-reviewer", "to": "shop-build-m1",
-                 "type": "VERDICT", "first_line": f"[TF:VERDICT] T1 Shop round {i} " + "w" * 300,
+        msgs = [{"at": f"2026-11-17T10:{i:02d}:00Z", "session": None, "from": "crew-reviewer",
+                 "to": "shop-build-m1", "type": "VERDICT",
+                 "first_line": f"[TF:VERDICT] T1 Shop round {i} " + "w" * 300,
                  "text": f"[TF:VERDICT] T1 Shop round {i}"} for i in range(30)]
         store.protocol_messages = lambda source: msgs
 

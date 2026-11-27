@@ -1,0 +1,109 @@
+{
+ "codex": "codex-cli 0.171.0",
+ "results": {
+  "guarded_turn": {
+   "pass": true,
+   "checks": {
+    "when the start returned, the guard's record already showed the turn's start": true,
+    "the turn ended": true,
+    "one line per call: the two let through, and the merge refused": true,
+    "each command that ran has its line, and carries the line that closes its input": true,
+    "the refused merge left no command": true,
+    "the command let through did its work": true,
+    "`cat`, which waits for input, ended by itself": true,
+    "compared with the record nothing is missing, and the station stays up": true,
+    "the next prompt, on the conversation still open, left its record too": true,
+    "the refusal is in the crew's events": true,
+    "at rest, the station ended when asked": true
+   },
+   "seconds_to_the_record": 2.6,
+   "states_seen": [
+    "working",
+    "done"
+   ],
+   "seconds_of_the_turn": 9.1,
+   "record": [
+    {
+     "turn": "01a20dc8-5c26-7a82-8ddc-230bb801a614",
+     "armed": true
+    },
+    {
+     "turn": "01a20dc8-5c26-7a82-8ddc-230bb801a614",
+     "call": "exec-d34d87f9-0582-44ad-8a5b-0a1ba0094643",
+     "tool": "Bash",
+     "said": "allow"
+    },
+    {
+     "turn": "01a20dc8-5c26-7a82-8ddc-230bb801a614",
+     "call": "exec-36823909-7de9-4782-9f74-af153256983c",
+     "tool": "Bash",
+     "said": "deny"
+    },
+    {
+     "turn": "01a20dc8-5c26-7a82-8ddc-230bb801a614",
+     "call": "exec-0c7835b2-dd2c-41a7-97c5-5034fe106b7f",
+     "tool": "Bash",
+     "said": "allow"
+    },
+    {
+     "turn": "01a20dc8-86dc-7110-9a69-2b993f4d44a5",
+     "armed": true
+    }
+   ],
+   "commands": [
+    {
+     "asked": "echo one > one.txt",
+     "status": "completed",
+     "exit": 0,
+     "source": "unifiedExecStartup"
+    },
+    {
+     "asked": "cat",
+     "status": "completed",
+     "exit": 0,
+     "source": "unifiedExecStartup"
+    }
+   ]
+  },
+  "no_trust_no_command": {
+   "pass": true,
+   "checks": {
+    "the start is refused, and says the conversation does not run its hooks": true,
+    "the command the model was asked for never ran": true,
+    "the guard left no record": true,
+    "the app-server is gone, with its socket": true,
+    "a station that was never up leaves no record of itself": true,
+    "the event says why": true
+   },
+   "error_text": "probe-reviewer was stopped, since its guard cannot be relied on: the turn began (userMessage) with no run of the guard before it: the conversation does not run its hooks",
+   "seconds_the_start_took": 2.3
+  },
+  "repository_setup_stays_out": {
+   "pass": true,
+   "checks": {
+    "control: with no mark, Codex starts the repository's MCP server for the conversation": true,
+    "control: and lists the repository's hook": true,
+    "control: Codex recorded the folder as trusted by itself": true,
+    "the station's own config marks the folder not trusted, and holds nothing else": true,
+    "the station's turn ran a command": true,
+    "the repository's hook never ran": true,
+    "the app-server has no hook and no MCP server of the repository's for the folder": true,
+    "Codex left the station's config as the start wrote it": true,
+    "compared with the record nothing is missing": true,
+    "the station ended when asked": true
+   },
+   "control": {
+    "mcp_started": [
+     "repo_probe"
+    ],
+    "hooks": [
+     "project"
+    ]
+   },
+   "states_seen": [
+    "working",
+    "done"
+   ]
+  }
+ }
+}

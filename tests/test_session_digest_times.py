@@ -61,6 +61,12 @@ def count(s, ago, **kw):
 
 MONTH, DAY = timedelta(days=30), timedelta(days=1)
 
+
+def hidden_repos(s) -> list:
+    s._saved_counts.clear()     # the count itself is timed, not the saved one (TR-1716)
+    return sorted((e["value"], e["events"], str(e["last_ingest"]))
+                  for e in s.list_entities("repo", [SRC], exclude=HIDDEN))
+
 # (name, how many times as fast as the stored lines, the read)
 READS = [
     ("count over 30 days", 5, lambda s: count(s, MONTH)),
@@ -70,9 +76,7 @@ READS = [
     ("ingest gaps over 30 days", 5, lambda s: [round(g, 5) for g in
                                                 s.recent_ingest_gaps(SRC, NOW - MONTH)]),
     ("ingest hours over 30 days", 5, lambda s: sorted(s.recent_ingest_hours(SRC, NOW - MONTH))),
-    ("repos, a project hidden", 2, lambda s: sorted(
-        (e["value"], e["events"], str(e["last_ingest"]))
-        for e in s.list_entities("repo", [SRC], exclude=HIDDEN))),
+    ("repos, a project hidden", 2, hidden_repos),
 ]
 
 

@@ -157,7 +157,7 @@ def main():
     s.append([line("old") for _ in range(5)])
     s.append([line("old2") for _ in range(3)])
     s._archive_on = None
-    with s.sessions_db.begin() as c:        # what 0009 left on every existing row
+    with s.sessions_db.begin() as c:        # what 0012 left on every existing row
         c.execute(sessions.update().values(lines_origin=None))
     s.append([line("old") for _ in range(3)] + [line("new") for _ in range(2)])
     ck("the old session's new lines are in DuckDB too", duck_count(s) == 8 + 3, duck_count(s))

@@ -18,12 +18,13 @@ from fastapi import HTTPException, Request
 
 from .. import claude_usage
 from .. import factory as factory_mod
+from .. import factory_owners as owners_mod
 from .. import request_memo
 from .. import standup as standup_mod
 from ..envelope import now_utc
-from ..factory_api import project_progress
-from ..factory_home import (_STALE_MINUTES, _count, _dt, _how_far, _minutes, _plan, _resets,
-                            cached, crew_member, for_caller, heard_ago, plain_wait)
+from ..factory_api import own_crew_ids, project_progress, readable_offers
+from ..factory_home import (_STALE_MINUTES, _caller, _count, _dt, _how_far, _minutes, _plan,
+                            _resets, cached, crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
 
 _SHOWN_ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -117,6 +118,21 @@ def register(app, store, h, ctx):
         return {"text": f"In the last day: {', '.join(parts)}. Projects that moved: {names}.",
                 "when": "The last 24 hours"}
 
+    def questions_for(request, rows: list[dict]) -> list[dict]:
+        """The open desk rows of no project that wait for the caller, oldest first: where the
+        Report's links, and the unlicensed Home's, land (TR-1669). Home's rule says whose each
+        is (factory_owners), so nobody else is sent its label or text. A batch of crew answers
+        is left to Home, unless it is marked blocking, when the Report links to it too. A
+        permission request is its question here: no command, no station, no name."""
+        rows = [d for d in rows if d.get("blocking") or not d.get("assumptions")]
+        if not rows:
+            return []
+        owners = owners_mod.Owners(store)
+        tagged = [owners_mod.tag({"row": d}, owners, owners.desk(d, None)) for d in rows]
+        mine = [i["row"] for i in owners_mod.mine(tagged, **_caller(store, fx, request))]
+        return [{"label": d["label"], "text": d["question"], "at": _dt(d["created_at"]).isoformat()}
+                for d in sorted(mine, key=lambda d: (_dt(d["created_at"]), d["number"]))]
+
     def build(request) -> dict:
         now = now_utc()
         fx_ = for_caller(fx, request)
@@ -135,7 +151,8 @@ def register(app, store, h, ctx):
                     by_holder.setdefault(t["holder"], []).append(t)
         by_name = {s["name"]: s for s in stations}
         # the caller's own open desk (factory_owners), never another person's questions
-        desk_open = len(fx_.own_desk(request, [d for d in store.list_desk("open", None)
+        open_desk = store.list_desk("open", None)
+        desk_open = len(fx_.own_desk(request, [d for d in open_desk
                                               if d.get("project") not in hidden]))
         me = (h.current_person(request) or {}).get("id")
         team = not store.only_local_person() and not h.is_system(request)
@@ -232,21 +249,19 @@ def register(app, store, h, ctx):
         own = crews[0] if crews else {"summary": "Not started", "talk_to": None, "reviewer": None,
                                       "releaser": None, "builders": []}
 
-        week = claude_usage.week_by_project(store, now)      # once for both blocks that show it
-        plan = _plan(store, now, names, week=week)
+        week = claude_usage.week_by_project(store, now, hidden)   # once for both blocks that show it
+        plan = _plan(store, now, names, hidden, week=week)
         for lim in plan["limits"]:
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
         plan["by_project"] = by_project(names, week)
         # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
         # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
-        hidden_names = [p["name"] for p in store.list_projects(ids=hidden)]
-        all_names = {p["id"]: p["name"] for p in store.list_projects()}
+        projects = store.list_projects()
+        all_names = {p["id"]: p["name"] for p in projects}
+        questions = questions_for(request, [d for d in open_desk if d.get("project") not in all_names])
         proposals = []
-        for r in store.list_rule_proposals("open"):
-            if r.get("project") in hidden:
-                continue
-            tickets = [str(t) for t in r.get("tickets") or []
-                       if not any(str(t).startswith(n + " ") for n in hidden_names)]
+        for r in readable_offers(h, store.list_rule_proposals("open"), hidden, projects):
+            tickets = [str(t) for t in r.get("tickets") or []]
             where = ("For every project" if r.get("scope") != "project"
                      else f"For {all_names.get(r.get('project'), 'its project')}")
             proposals.append({"id": r["id"], "text": r["text"], "from": "the reviewer",
@@ -255,7 +270,8 @@ def register(app, store, h, ctx):
                 "releaser": own["releaser"], "builders": own["builders"], "crews": crews,
                 "how_far": _how(settings),
                 "pacing": _pacing(fx_.pace(), now), "plan": plan, "rule_proposals": proposals,
-                "standup": standup(now, hidden), "now": now.isoformat()}
+                "standup": standup(now, hidden), "now": now.isoformat(),
+                **({"questions_for_you": questions} if questions else {})}
 
     @app.get("/api/factory/crew")
     @request_memo.page
@@ -268,6 +284,9 @@ def register(app, store, h, ctx):
         ended), state_text, doing, heard, memory_pct, memory_text, helpers}; `station` is for the
         detail call and is never shown. `pacing` is a sentence while the plan presses on the crew,
         else null. `rule_proposals` are the open ones, `standup` is null when nothing moved.
+        `questions_for_you`, there only when it has a row, is the open questions and permission
+        requests of no project that wait for the caller, oldest first, each {label, text, at};
+        Home's "Answer" and the Report's rows link to them. It is read only.
         `crews` is every crew on the cell (TR-1223), the caller's own first, then by person: each
         {id, person {id, name}, machine, name, mine, machine_shown, ended, last_heard, summary,
         talk_to, reviewer, releaser, builders}; `machine_shown` is true when that person has more than
@@ -275,7 +294,7 @@ def register(app, store, h, ctx):
         member's `crew` is its crew's id, for the detail call. The top-level summary, talk_to,
         reviewer, releaser and builders are the first crew's.
         Kept for 5 seconds per caller, as Home is (factory_home.cached)."""
-        return cached("crew", store, request, lambda: build(request))
+        return cached("crew", store, request, lambda: build(request), h.hidden_ids())
 
     @app.get("/api/factory/crew/{crew_id}/{station}/sessions")
     def get_station_sessions(request: Request, crew_id: str, station: str, limit: int = 50,
@@ -293,7 +312,9 @@ def register(app, store, h, ctx):
         than `limit`. The station's current session is not listed; it is on the row GET
         /api/factory/crew gives. A project the caller cannot see is left out of `projects` and
         `sessions[].projects`; a station that only worked in such projects, or does not exist,
-        answers 404. Same auth as GET /api/factory/crew."""
+        answers 404. A session that worked in such a project is not counted or listed, also one
+        that worked in other projects too, unless the station is in the caller's own crew
+        (TR-1704). Same auth as GET /api/factory/crew."""
         if not 1 <= limit <= 200:
             h.err(ValueError("limit is 1 to 200"))
         at = None
@@ -305,8 +326,9 @@ def register(app, store, h, ctx):
             if at.tzinfo is None:
                 at = at.replace(tzinfo=timezone.utc)
         hidden = h.hidden_ids()
+        own = own_crew_ids(h, store.list_crews()) if hidden else set()
         res = store.station_earlier(h.cc_source(), None if crew_id == "-" else crew_id, station,
-                                    limit, at)
+                                    limit, at, hidden=hidden, own=own)
         if res is None or (res["projects"] and set(res["projects"]) <= hidden):
             raise HTTPException(404, "no such station")
         by = store.projects_by_session([s["session"] for s in res["sessions"]])

@@ -637,6 +637,7 @@ VERDICTS = ("pass", "changes", "block")
 
 # the `by` of a review round the merge queue writes: a pass it carries onto a commit that only
 # moved the base. It is never a review of its own.
+# Also the name the merge queue writes its other records under.
 MERGE_QUEUE = "merge-queue"
 
 
@@ -660,6 +661,13 @@ def standing_round(rounds: list[dict]) -> dict | None:
         if own is not None and own["verdict"] != "pass":
             return own
     return last
+
+
+def automatic_pass(review: dict) -> bool:
+    """Whether a review ({by, verdict}) is the merge queue's own pass for a branch update that
+    moved only the base (merge_queue._after_update, the one review the queue writes). Nobody
+    reviewed anything, so the report does not count it as a round (decided, D50)."""
+    return review.get("by") == MERGE_QUEUE and review.get("verdict") == "pass"
 
 
 def same_commit(a, b) -> bool:
@@ -762,9 +770,73 @@ def _same_command(claimed: str, ran: str) -> bool:
     return last == c
 
 
+# What makes a command more than a plain `a && b && c` chain: a pipe, `||`, `;`, a background `&`, a
+# redirection, a subshell or group, a command substitution, a newline. Such a command is never split to
+# credit one of its steps: which step did what cannot be told from its exit code.
+# Keep quotes and escapes until the operators have been located. shlex removes them, so its
+# token "&&" alone cannot distinguish a shell operator from an ordinary quoted argument.
+_SHELL_PART = re.compile(r''''(?:[^']*)'|"(?:\\.|[^"\\])*"|\\.|(&&|[;&|<>(){}#])''')
+
+
+def _words(command: str):
+    """The shell words and operators of `command` (quotes honoured), or None when it cannot be read that way."""
+    import shlex
+    try:
+        lex = shlex.shlex(str(command or ""), posix=True, punctuation_chars=";&|<>()")
+        lex.whitespace_split = True
+        return list(lex)
+    except ValueError:
+        return None
+
+
+def _and_steps(command: str) -> list | None:
+    """The steps of a plain `a && b && c` chain, each as its words, or None for any other command (one step, or
+    any other shell operator, a comment, a command substitution or a newline)."""
+    text = str(command or "")
+    if "$(" in text or "`" in text or "\n" in text:
+        return None
+    if not _words(text):
+        return None
+    parts, start = [], 0
+    for match in _SHELL_PART.finditer(text):
+        operator = match.group(1)
+        if operator is None:
+            continue
+        if operator != "&&":
+            return None
+        parts.append(text[start:match.start()])
+        start = match.end()
+    if not parts:
+        return None
+    parts.append(text[start:])
+    steps = [_words(part) for part in parts]
+    return steps if all(steps) else None
+
+
+def _earlier_step(claimed: str, ran: str) -> bool:
+    """The claimed command is a step of `ran`, a plain && chain, before its last (the last is _same_command's)."""
+    if "&&" not in str(ran or ""):       # no chain: spare a long recording the shell parse
+        return False
+    steps = _and_steps(ran)
+    if not steps:
+        return False
+    want = _words(claimed)
+    return bool(want) and want in steps[:-1]
+
+
+def _proven_ok(run: dict) -> bool:
+    """The run's result arrived and it exited 0 (on Codex: it ended, with exit code 0)."""
+    return (run.get("ended") is True and run.get("exit_code") == 0 and not run.get("is_error")
+            and run.get("outcome") in (None, "ended"))
+
+
 # the two comparisons the checks use, for code outside this module (the local ci integration)
 same_command = _same_command
 says_failed = _says_failed
+
+
+NOT_ENDED = {"started": "the recording shows this command started, and no end of it yet",
+             "unknown": "the recording shows this command started; how it ended is not known"}
 
 
 def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str | None]:
@@ -772,13 +844,28 @@ def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str
     claimed (TR-442): the command must be in the recording between `since` (when the ticket
     went into the work) and the claim, and what it printed must agree with the claimed result
     (each pass, fail, error and skip count the claim states, and no failure where the claim
-    says it passed). A break check also needs the named test failing, then passing."""
+    says it passed). A break check also needs the named test failing, then passing. A command a
+    Codex station started and that has no recorded end differs, whatever the claim.
+
+    The claimed command may also be a step before the last of a plain `a && b && c` chain (and
+    nothing else: no pipe, `||`, `;`, redirection or substitution). Such a run is the claimed
+    command's run only when the whole chain's result arrived with exit code 0: every step then
+    passed. The newest run decides: a newer chain that failed, was cut off or has no result yet
+    does not fall back to an older pass; it differs, since which of its steps failed is not
+    known."""
     when = check.get("at")
-    ran = [c for c in commands if _same_command(check.get("command"), c["command"])
+    claimed = check.get("command")
+    ran = [c for c in commands if (_same_command(claimed, c["command"]) or _earlier_step(claimed, c["command"]))
            and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
     if not ran:
         return "not_found", None
     run = ran[-1]
+    if not _same_command(claimed, run["command"]) and not _proven_ok(run):
+        return "differs", ("the latest run of it was a step of a chain that did not end with exit code 0, "
+                           "so which step failed is not known")
+    # a Codex station's command says how it ended (TR-1595): one that did not end backs no claim
+    if run.get("outcome") in NOT_ENDED:
+        return "differs", NOT_ENDED[run["outcome"]]
     out = run["output"] or ""
     claim = str(check.get("result") or "")
     counts = [(n, w.lower().rstrip("s")) for n, w in _COUNT.findall(claim) if int(n) > 0]
@@ -791,7 +878,8 @@ def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str
     test = str(check.get("broke_test") or "").strip()
     if test:
         about = [c for c in commands if test.lower() in (c["command"] + " " + c["output"]).lower()
-                 and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
+                 and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)
+                 and c.get("outcome") not in NOT_ENDED]
         failed_at = next((i for i, c in enumerate(about) if c["is_error"] or _says_failed(c["output"])), None)
         passed_after = failed_at is not None and any(
             not (c["is_error"] or _says_failed(c["output"])) for c in about[failed_at + 1:])

@@ -102,7 +102,7 @@ import time
 import weakref
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import bindparam, delete, exists, func, insert, literal, select, text, update
+from sqlalchemy import Text, bindparam, delete, exists, func, insert, literal, select, text, update
 
 from . import edition, metrics
 from .envelope import now_utc
@@ -295,26 +295,45 @@ def message_facts(event_type: str, text: str | None, payload, session: str, at: 
     return out
 
 
+def _codex(payload) -> dict:
+    """What a line of a Codex station keeps of Codex's own (`tares.connectors.codex`): the command's real
+    exit code, its folder and how it ended. {} for a Claude Code line."""
+    if isinstance(payload, (str, bytes)):
+        try:
+            payload = json.loads(payload) if payload else {}
+        except (TypeError, ValueError):
+            return {}
+    own = payload.get("codex") if isinstance(payload, dict) else None
+    return own if isinstance(own, dict) else {}
+
+
 def command_facts(event_type: str, text: str | None, payload, session: str, at: datetime,
                   source: str) -> list[dict]:
     """The shell commands of one tool_use line: its Bash calls, as rows of `session_commands`
-    (without a result yet)."""
+    (without a result yet). A Codex station's line (TR-1595) is the command's start, written before
+    it ran: its row also holds the folder and the outcome `started`."""
     if event_type != "tool_use" or not text or "Bash(" not in text:
         return []
+    own = _codex(payload)
     out = []
     for n, b in enumerate(_blocks(payload)):
         if b.get("type") == "tool_use" and b.get("name") == "Bash":
             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
             out.append({"tool_use_id": _fact_id(b, session, at, n), "source": source,
-                        "session": session, "at": at, "command": _text(inp.get("command"))})
+                        "session": session, "at": at, "command": _text(inp.get("command")),
+                        "cwd": _text(own.get("cwd")) or None,
+                        "outcome": _text(own.get("outcome")) or None})
     return out
 
 
 def result_facts(event_type: str, payload, at: datetime) -> list[dict]:
     """The results of one tool_result line, by the tool_use id they answer: the tail of what was
-    printed, and 1 when the tool failed (0 when it did not)."""
+    printed, and 1 when the tool failed (0 when it did not). A Codex station's line (TR-1595) says
+    more: the real exit code (none when Codex gave none, never 0 in its place), how the command
+    ended, its folder, and the command itself when its start was cut short."""
     if event_type != "tool_result":
         return []
+    own = _codex(payload)
     out = []
     for b in _blocks(payload):
         tool_use_id = _text(b.get("tool_use_id"))
@@ -323,8 +342,15 @@ def result_facts(event_type: str, payload, at: datetime) -> list[dict]:
         c = b.get("content")
         if isinstance(c, list):
             c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
-        out.append({"tool_use_id": tool_use_id, "exit_code": 1 if b.get("is_error") else 0,
-                    "output_tail": _text(c, OUTPUT_TAIL, tail=True), "result_at": at})
+        row = {"tool_use_id": tool_use_id, "exit_code": 1 if b.get("is_error") else 0,
+               "output_tail": _text(c, OUTPUT_TAIL, tail=True), "result_at": at,
+               "cwd": None, "outcome": None, "command": None}
+        if own.get("outcome"):
+            code = own.get("exit_code")
+            row.update(exit_code=code if isinstance(code, int) and not isinstance(code, bool) else None,
+                       outcome=_text(own.get("outcome")), cwd=_text(own.get("cwd")) or None,
+                       command=_text(own.get("command")) or None)
+        out.append(row)
     return out
 
 
@@ -366,17 +392,24 @@ def _write_facts(conn, db, facts: dict) -> None:
             set_={"source": func.coalesce(t.source, ex.source),
                   "session": func.coalesce(t.session, ex.session),
                   "at": func.coalesce(t.at, ex.at),
-                  "command": func.coalesce(t.command, ex.command)}), facts["commands"])
+                  "command": func.coalesce(t.command, ex.command),
+                  "cwd": func.coalesce(t.cwd, ex.cwd),
+                  "outcome": func.coalesce(t.outcome, ex.outcome)}), facts["commands"])
     if facts["results"]:
         # a result sets the fields of the call it answers, and makes no row of its own: it does not
         # say which tool it answers, and a row for every tool's result would hold text no reader
         # asks for. A result that comes before its call (a later batch) is written by the next fill.
         t = session_commands.c
+        # A Codex station's result (TR-1595) also says how the command ended and where it ran, and gives
+        # the whole command where the start held a cut one; a Claude Code result changes none of those.
         conn.execute(session_commands.update().where(t.tool_use_id == bindparam("r_id")).values(
             exit_code=bindparam("r_exit"), output_tail=bindparam("r_out"),
-            result_at=bindparam("r_at")),
+            result_at=bindparam("r_at"), outcome=func.coalesce(bindparam("r_outcome", type_=Text), t.outcome),
+            cwd=func.coalesce(bindparam("r_cwd", type_=Text), t.cwd),
+            command=func.coalesce(bindparam("r_command", type_=Text), t.command)),
             [{"r_id": r["tool_use_id"], "r_exit": r["exit_code"], "r_out": r["output_tail"],
-              "r_at": r["result_at"]} for r in facts["results"]])
+              "r_at": r["result_at"], "r_outcome": r.get("outcome"), "r_cwd": r.get("cwd"),
+              "r_command": r.get("command")} for r in facts["results"]])
 
 
 # ── the turns, last words and touched files the factory reads (TR-1505) ──────────────────────

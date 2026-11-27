@@ -6,7 +6,7 @@ import {
   Banner, Button, EmptyState, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, SkeletonRows, StatusLabel, STATUS_TONES,
   Toaster, useToast,
 } from "../../components/edition";
-import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@paper-kit/ui/tabs";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";

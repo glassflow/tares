@@ -82,7 +82,12 @@ export interface CrewProposal {
   tickets?: string[];
 }
 
+/** An open question or permission request about no project, waiting for the viewer. */
+export interface CrewQuestion { label: string; text: string; at: string }
+
 export interface CrewPage {
+  /** There only when it has a row, oldest first. */
+  questions_for_you?: CrewQuestion[];
   /** "Working, last heard 12 seconds ago", "Not heard from in 2 hours", "Not running" or "Not started". */
   summary: string;
   talk_to: CrewMember | null;

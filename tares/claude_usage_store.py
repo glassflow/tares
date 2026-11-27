@@ -13,9 +13,10 @@ SQLAlchemy Core on `self.sessions_db`; the DDL below stays, because on Postgres 
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
-from sqlalchemy import BigInteger, bindparam, case, distinct, false, func, literal, select, union_all, update
+from sqlalchemy import (BigInteger, bindparam, case, distinct, false, func, literal, select, union,
+                        union_all, update)
 
 from . import claude_usage_hourly as hourly
 from . import session_ingest
@@ -132,6 +133,9 @@ class ClaudeUsageStore:
                 "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
         rows = self._usage_without_nul([dict(zip(cols, r)) for r in rows
                                         if session_ingest.holds_session(self, r[0])])
+        deleted = self.deleted_private_projects()   # a reply stamped with one stays its own
+        for ref in {r["project"] for r in rows if r["project"]} - projects.keys():
+            projects[ref] = self.deleted_private_ref(ref, deleted)
         for r in rows:
             r["project"] = projects.get(r["project"])
         # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
@@ -190,14 +194,30 @@ class ClaudeUsageStore:
             out.append(r)
         return out
 
-    def _usage_forget_project(self, uid: str) -> None:
-        """A project is deleted: its replies stay, counted as the session's own."""
+    def _usage_forget_project(self, uid: str, private: bool = False) -> None:
+        """A project is deleted. A team project's replies stay, counted as the session's own. A
+        private one's stay its own, so that no total counts them (TR-1697): those that counted
+        for it through the session's link are stamped with it."""
+        u, ss, ps = session_usage, session_stations, project_sessions
+        if private:
+            # as _replies_by_project picked it until now: the lowest project the session is
+            # linked to, an earlier deleted private one left out
+            earlier = sorted(set(self.deleted_private_projects()) - {uid})
+            by_link = select(ps.c.session).where(ps.c.project.not_in(earlier)).group_by(
+                ps.c.session).having(func.min(ps.c.project) == uid)
+            # a station with a project, and a crew station, do not go by the link
+            by_station = select(ss.c.session).where(
+                ss.c.project.is_not(None) | ss.c.role.in_(CREW_ROLES))
+            change = update(u).where(u.c.project.is_(None), u.c.session.in_(by_link),
+                                     u.c.session.not_in(by_station)).values(project=uid)
+        else:
+            change = update(u).where(u.c.project == uid).values(project=None)
         with self.sessions_db.begin() as conn:
             hourly.hold(self, conn)
-            theirs = select(session_usage.c.session).where(session_usage.c.project == uid).distinct()
+            # the sessions it changes, locked first, so that their kept hourly totals follow
+            theirs = select(u.c.session).where(change.whereclause).distinct()
             covered = hourly.lock_covered(self, conn, conn.execute(theirs).scalars().all())
-            conn.execute(update(session_usage).where(session_usage.c.project == uid)
-                         .values(project=None))
+            conn.execute(change)
             hourly.after_write(self, conn, covered)
 
     # ── writes, from the claude_code source ───────────────────────────────────
@@ -227,6 +247,26 @@ class ClaudeUsageStore:
             conn.execute(stmt)
             if covered:
                 hourly.after_reply(self, conn, session, message)
+
+    def record_reported_usage(self, session: str, message: str, at, model: str | None,
+                              project: str | None, counts: dict) -> None:
+        """One reply's tokens as a runtime reported them once (a Codex station's, TR-1595): `counts` holds
+        input_tokens, output_tokens, cache_creation_input_tokens and cache_read_input_tokens, each only
+        when it was reported. A count that is not there is stored as unknown (NULL), never as 0, and the
+        cost is the price of the model when Tares has one and every count is known, else unknown. A reply
+        already stored is left as it is: its counts were final when they were written."""
+        def n(key):
+            v = counts.get(key)
+            return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+        i, o = n("input_tokens"), n("output_tokens")
+        cw, cr = n("cache_creation_input_tokens"), n("cache_read_input_tokens")
+        cost = None if None in (i, o, cw, cr) else cost_usd(model or "", i, o, cw, cr, 0)
+        stmt = self.sessions_db.upsert(session_usage).values(
+            session=session, message=message, replied_at=at, model=model or None, project=project or None,
+            subagent=None, input_tokens=i, output_tokens=o, cache_write_tokens=cw, cache_read_tokens=cr,
+            cache_write_1h_tokens=None if cw is None else 0, cost_usd=cost)
+        with self.sessions_db.begin() as conn:
+            conn.execute(stmt.on_conflict_do_nothing(index_elements=["session", "message"]))
 
     def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
         """The status line's report and the person of the credential that sent it; an older one
@@ -322,27 +362,129 @@ class ClaudeUsageStore:
                 "cache_read_tokens": int(r[4] or 0), "cost_usd": float(r[5] or 0),
                 "unpriced_replies": int(r[6] or 0)}
 
-    def usage_by_session(self, sessions: list[str]) -> dict[str, dict]:
+    def usage_by_session(self, sessions: list[str], hidden=frozenset()) -> dict[str, dict]:
+        """What each session's replies add up to. A reply that counts for a project in `hidden`
+        (the ones the caller cannot see) is not in it; a session with no other is left out."""
         if not sessions:
             return {}
         u = session_usage
+        q = select(u.c.session, *self._total_cols(u)).group_by(u.c.session)
+        if hidden:
+            replies, seen = self._replies_outside(hidden)
+            q = q.select_from(replies).where(seen)
         out: dict[str, dict] = {}
         for i in range(0, len(sessions), 500):
             with self.sessions_db.read() as conn:
-                rows = conn.execute(select(u.c.session, *self._total_cols(u)).where(
-                    u.c.session.in_(list(sessions[i:i + 500]))).group_by(u.c.session)).all()
+                rows = conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).all()
             out.update({r[0]: self._totals(r[1:]) for r in rows})
         return out
+
+    def sessions_counting_for(self, sessions: list[str], projects) -> set[str]:
+        """Those of `sessions` with a reply that counts for one of `projects`."""
+        u = session_usage
+        replies, project, _ = self._replies_by_project()
+        q = select(u.c.session).select_from(replies).where(project.in_(sorted(projects))).distinct()
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.read() as conn:
+                out.update(conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).scalars())
+        return out
+
+    def _sessions_in(self, projects):
+        """A query of the sessions that worked in one of `projects` (TR-1704): the station's
+        project, any project the session is linked to, or the project one of its replies counts
+        for (`_replies_by_project`). Inside another query it goes in as a CTE: it reads the
+        station table itself, so as a plain subquery it would be correlated with the outer one."""
+        ss, ps, u = session_stations, project_sessions, session_usage
+        ids = sorted(projects)
+        replies, project, _ = self._replies_by_project()
+        return union(select(ss.c.session).where(ss.c.project.in_(ids)),
+                     select(ps.c.session).where(ps.c.project.in_(ids)),
+                     select(u.c.session).select_from(replies).where(project.in_(ids)))
+
+    def sessions_in(self, sessions: list[str], projects) -> set[str]:
+        """Those of `sessions` that worked in one of `projects` (`_sessions_in`). An id the
+        sessions database cannot hold (a NUL, on Postgres) worked in none: it has no row there, and
+        in the IN() below it would fail the whole read."""
+        if not projects:
+            return set()
+        sessions = [s for s in sessions if session_ingest.holds_session(self, s)]
+        found = self._sessions_in(projects).cte("worked_in")
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            chunk = list(sessions[i:i + 500])
+            with self.sessions_db.read() as conn:
+                out.update(conn.execute(select(found.c.session).where(
+                    found.c.session.in_(chunk))).scalars())
+        return out
+
+    def _replies_by_project(self, rows=None):
+        """(the replies (`rows`: anything with a session and a stamped project, session_usage
+        when None) joined to their station and the project their session worked in, the
+        project each reply counts for, whether it is a crew station's). The one definition of
+        which project a reply belongs to: the one it was stamped with, else the station's project,
+        else, for a session that is no crew station, the (lowest) one it worked in, else none.
+        A deleted private project keeps its links, for what they hide, and no new reply counts
+        for it through one."""
+        u, ss, ps = session_usage if rows is None else rows, session_stations, project_sessions
+        deleted = sorted(self.deleted_private_projects())
+        worked = select(ps.c.session, func.min(ps.c.project).label("project")).where(
+            ps.c.project.not_in(deleted)).group_by(ps.c.session).subquery()
+        is_crew = ss.c.role.in_(CREW_ROLES)
+        project = func.coalesce(u.c.project, ss.c.project,
+                                case((is_crew, None), else_=worked.c.project))
+        replies = (u.outerjoin(ss, ss.c.session == u.c.session)
+                   .outerjoin(worked, worked.c.session == u.c.session))
+        return replies, project, is_crew
+
+    def _replies_outside(self, projects):
+        """(`_replies_by_project`'s join, the condition that keeps the replies that count for no
+        one of `projects`)."""
+        replies, project, _ = self._replies_by_project()
+        return replies, self._outside(project, projects)
+
+    @staticmethod
+    def _outside(project, projects):
+        return project.is_(None) | project.not_in(sorted(projects))
+
+    def usage_by_week(self, since=None, until=None) -> list[dict]:
+        """Replies in [since, until) (all when None) grouped by the project they count for (as
+        usage_by_project does; None when none), the role of the session's station (None: a
+        person's own session) and the ISO week of the reply in UTC (`week`, its Monday as a date).
+        `cost_usd` adds the priced replies; `unpriced` counts the rest. A reply with no time is
+        in no week, and one of a deleted private project is not read (TR-1697)."""
+        u, ss = session_usage, session_stations
+        replies, project, _ = self._replies_by_project()
+        if self.sessions_db.dialect == "postgresql":
+            monday = func.to_char(func.date_trunc("week", func.timezone("UTC", u.c.replied_at)),
+                                  "YYYY-MM-DD")
+        else:   # SQLite keeps the UTC wall time: forward to Sunday, back six days
+            monday = func.date(u.c.replied_at, "weekday 0", "-6 days")
+        q = select(project.label("proj"), ss.c.role.label("role"), monday.label("week"),
+                   u.c.cost_usd).select_from(replies).where(u.c.replied_at.is_not(None))
+        if since is not None:
+            q = q.where(u.c.replied_at >= since)
+        if until is not None:
+            q = q.where(u.c.replied_at < until)
+        deleted = self.deleted_private_projects()
+        if deleted:
+            q = q.where(self._outside(project, deleted))
+        r = q.cte("w")
+        final = select(r.c.proj, r.c.role, r.c.week, func.count(), func.sum(r.c.cost_usd),
+                       func.count().filter(r.c.cost_usd.is_(None))
+                       ).group_by(r.c.proj, r.c.role, r.c.week)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(final).all()
+        return [{"project": x[0], "role": x[1], "week": date.fromisoformat(x[2]),
+                 "replies": int(x[3]), "cost_usd": float(x[4] or 0), "unpriced": int(x[5])}
+                for x in rows]
 
     def usage_by_project(self, since=None) -> list[dict]:
         """Replies since `since` (all when None) by the project they count for: the project the
         reply was stamped with, else the station's project (a builder), else the project the
         session worked in. The crew's own stations serve every project, so their unstamped replies
         are the crew's (`kind` crew); anything else unclaimed is `other`."""
-        u, ss, ps, h = session_usage, session_stations, project_sessions, session_usage_hourly
-        worked = select(ps.c.session, func.min(ps.c.project).label("project")).group_by(
-            ps.c.session).subquery()
-        is_crew = ss.c.role.in_(CREW_ROLES)
+        u, h = session_usage, session_usage_hourly
         if hourly.ready(self):
             # the kept hourly totals from the first whole hour of the window on, and the replies of
             # the partial hour before it from the rows (TR-1632); one query, one snapshot
@@ -359,24 +501,18 @@ class ClaudeUsageStore:
                     case((u.c.cost_usd.is_(None), 1), else_=0), u.c.project)
                     .where(u.c.replied_at >= since, u.c.replied_at < first))
             src = (parts[0] if len(parts) == 1 else union_all(*parts)).subquery("src")
-            q = (select(src.c.session, src.c.replies, src.c.input_tokens, src.c.output_tokens,
-                        src.c.cache_write_tokens, src.c.cache_read_tokens, src.c.cost_usd,
-                        src.c.unpriced,
-                        func.coalesce(src.c.project, ss.c.project,
-                                      case((is_crew, None), else_=worked.c.project)).label("proj"),
-                        is_crew.label("crew"))
-                 .select_from(src.outerjoin(ss, ss.c.session == src.c.session)
-                              .outerjoin(worked, worked.c.session == src.c.session)))
+            replies, project, is_crew = self._replies_by_project(src)
+            q = select(src.c.session, src.c.replies, src.c.input_tokens, src.c.output_tokens,
+                       src.c.cache_write_tokens, src.c.cache_read_tokens, src.c.cost_usd,
+                       src.c.unpriced, project.label("proj"),
+                       is_crew.label("crew")).select_from(replies)
             r = q.cte("r")
             n_replies, n_unpriced = func.sum(r.c.replies), func.sum(r.c.unpriced)
         else:
-            q = (select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
-                        u.c.cache_read_tokens, u.c.cost_usd,
-                        func.coalesce(u.c.project, ss.c.project,
-                                      case((is_crew, None), else_=worked.c.project)).label("proj"),
-                        is_crew.label("crew"))
-                 .select_from(u.outerjoin(ss, ss.c.session == u.c.session)
-                              .outerjoin(worked, worked.c.session == u.c.session)))
+            replies, project, is_crew = self._replies_by_project()
+            q = select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
+                       u.c.cache_read_tokens, u.c.cost_usd, project.label("proj"),
+                       is_crew.label("crew")).select_from(replies)
             if since is not None:
                 q = q.where(u.c.replied_at >= since)
             r = q.cte("r")

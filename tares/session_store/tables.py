@@ -19,12 +19,13 @@ A table made by the old DDL and a table made from these declarations are the sam
 how revision 0002 can take over a Postgres database that already has them.
 
 The Store's session methods (store.py, factory_store.py, claude_usage_store.py) read and write
-these tables, and nothing else does outside `copy.py` and the tests' own seeding.
+these tables, and nothing else does outside `copy.py`, the tests' own seeding and report.py, which
+owns `report_weeks`.
 """
 from __future__ import annotations
 
-from sqlalchemy import (BigInteger, Boolean, Column, Double, Index, Integer, MetaData, Table, Text,
-                        UniqueConstraint, false)
+from sqlalchemy import (BigInteger, Boolean, Column, Date, Double, Index, Integer, MetaData, Table,
+                        Text, UniqueConstraint, false)
 
 from .types import JSONText, UTCDateTime
 
@@ -179,6 +180,10 @@ session_commands = Table(
     Column("exit_code", Integer),
     Column("output_tail", Text),
     Column("result_at", UTCDateTime),
+    # Set by a Codex station's lines only (TR-1595): the folder the command ran in, and how it ended
+    # (started, ended, failed, declined, unknown). Empty on a row a Claude Code line made.
+    Column("cwd", Text),
+    Column("outcome", Text),
 )
 Index("session_commands_session_at", session_commands.c.session, session_commands.c.at)
 
@@ -279,6 +284,43 @@ session_moves = Table(
     Column("attempts", Integer),
 )
 Index("session_moves_state", session_moves.c.state)
+
+# The factory's figures of one project in one ISO week (report.py, TR-1666): worked out from the
+# factory's records and `session_usage`, so a report page reads no raw rows. `week` is the week's
+# Monday (UTC) and `project` "" holds what belongs to no project. The Text columns are JSON, their
+# shapes in report.py; every duration is in hours. A week with nothing to say has no row.
+report_weeks = Table(
+    "report_weeks", metadata,
+    Column("project", Text, primary_key=True),
+    Column("week", Date, primary_key=True),
+    Column("merged", Integer),
+    Column("start_to_merge", Text),
+    Column("stage_hours", Text),
+    Column("waited_hours", Double),
+    Column("milestones_accepted", Integer),
+    Column("reviewed", Integer),
+    Column("passed_first", Integer),
+    Column("rounds", Text),
+    Column("findings", Text),
+    Column("questions", Text),
+    Column("cost_usd", Double),
+    Column("unpriced", Integer),
+    Column("cost_by_role", Text),
+    Column("updated_at", UTCDateTime),
+)
+
+# A short text Tares wrote from its figures, once per kind and key (TR-1645): `milestone` and the
+# milestone's id, later `week`. `source` is where it came from (report_words.py), `figures` the JSON
+# it was written from. Writing it again replaces the row.
+report_texts = Table(
+    "report_texts", metadata,
+    Column("kind", Text, primary_key=True),
+    Column("key", Text, primary_key=True),
+    Column("text", Text),
+    Column("source", Text),
+    Column("figures", Text),
+    Column("written_at", UTCDateTime),
+)
 
 # How far a fill from DuckDB has read: one row per fill, by name (session_ingest.py)
 session_ingest_marks = Table(
@@ -751,7 +793,7 @@ handovers = Table(
 )
 
 # Standing permissions; `areas` and `consents` are lists. `needs_lead` keeps the default the old DDL
-# gave it, as `attempts` does below: the code before revision 0017 reads the same table
+# gave it, as `attempts` does below: the code before revision 0020 reads the same table
 grants = Table(
     "grants", metadata,
     Column("id", Text, primary_key=True),

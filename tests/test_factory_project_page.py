@@ -429,7 +429,8 @@ async def main():
             ck("a waiting item has the shape of the home page's", all(
                 set(w) == {"id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
                            "waited", "actions", "tickets", "blocking", "older", "question", "lines", "ask", "holds_up", "checks",
-            "for_people", "for_admin", "no_lead"} for w in a["waiting"]), [sorted(w) for w in a["waiting"]][:1])
+            "for_people", "for_admin", "no_lead", "desk_labels"} for w in a["waiting"]),
+                [sorted(w) for w in a["waiting"]][:1])
 
             print("== nothing of the crew's machine ==")
             text = json.dumps(a)

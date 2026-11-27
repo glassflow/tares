@@ -1,0 +1,59 @@
+{
+ "checks": {
+  "before any reading the cell says a Codex crew's pace is unknown (none)": true,
+  "a station answered for the account's limits": true,
+  "nothing that names the account is in what leaves the station": true,
+  "the round's start sent it and read the pace back: an active reading from Codex": true,
+  "the 5-hour window and the week were told by their length": true,
+  "the pace's percentages are those windows'": true,
+  "a Claude Code crew on the same cell is not paced from it": true,
+  "no conversation was started to read the limits": true,
+  "the status line shows the windows": true,
+  "the watch had nothing to complain about": true
+ },
+ "pass": true,
+ "station_ended": 0,
+ "account": {
+  "type": "chatgpt",
+  "plan": "plus"
+ },
+ "reached": null,
+ "read_at": "2026-11-25T10:15:16.265775Z",
+ "limits": [
+  {
+   "kind": "session",
+   "label": "5-hour window",
+   "percent": 13,
+   "resets_at": "2026-11-25T12:59:06Z",
+   "reset": false,
+   "paces": true
+  },
+  {
+   "kind": "weekly_all",
+   "label": "This week",
+   "percent": 32,
+   "resets_at": "2026-11-26T08:20:55Z",
+   "reset": false,
+   "paces": true
+  }
+ ],
+ "pace": {
+  "known": true,
+  "level": 0,
+  "state": "ok",
+  "at_limit": false,
+  "until": null,
+  "session_pct": 13,
+  "weekly_pct": 32,
+  "note": "Pacing is on, and the plan has room."
+ },
+ "status_line": "pace: ok (5-hour 13%, week 32%)",
+ "buckets_in_the_answer": [
+  "rateLimits",
+  "rateLimitsByLimitId"
+ ],
+ "window_lengths_minutes": [
+  300,
+  10080
+ ]
+}

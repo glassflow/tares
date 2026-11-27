@@ -4,7 +4,8 @@ Postgres text holds no NUL. A posted line loses the NULs of its `sessionId` befo
 or stores it, so SQLite and Postgres keep it under the same id; an id that was nothing but NULs is
 no id. Lines DuckDB already holds under an id with a NUL (stored before this) are passed over by the
 fills and the one-time move on Postgres, which used to raise on them at every start, and the other
-sessions are filled and moved.
+sessions are filled and moved. A recorded command under such an id does not fail the ticket view's
+check of what the caller may read (TR-1710).
 
 Plain:                python tests/test_session_nul_id.py
 With the Postgres harness (every Store keeps its state in Postgres):
@@ -23,7 +24,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sqlalchemy import select  # noqa: E402
 
-from tares import session_ingest, session_move  # noqa: E402
+from tares import factory_api, session_ingest, session_move  # noqa: E402
 from tares.connectors.claude_code import ClaudeCodeConnector  # noqa: E402
 from tares.envelope import Envelope  # noqa: E402
 from tares.session_store.tables import (challenges, session_commands,  # noqa: E402
@@ -205,11 +206,42 @@ def moved():
     s.con.close()
 
 
+def ticket_view():
+    """The ticket view hands the session ids of the recorded commands to `unread_sessions`
+    (TR-1710). The session store holds no NUL on Postgres, so the commands are handed in here: the
+    check must pass over such an id and still leave out what a session the caller cannot read ran."""
+    print("== the ticket view with a NUL in a recorded command's session id ==")
+    s = open_store("factory")
+    s.create_project("uc_open", "software_factory", "Open", {})
+    s.link_session("uc_open", "mine")
+    s.link_session("uc_hidden", "closed")        # a project the caller cannot see
+    tid = s.create_ticket("uc_open", "tares", "a ticket")
+    t = s.get_ticket("uc_open", tid)
+
+    def run(sid, sec, output):
+        return {"at": T0 + timedelta(seconds=sec), "session": sid, "command": "pytest",
+                "output": output, "is_error": True, "ended": True, "exit_code": 1}
+
+    s.ticket_checks = lambda *a: [{"command": "pytest", "result": "3 passed", "at": None}]
+    s.recorded_commands = lambda *a, **k: [run(ODD, 1, "1 failed"), run("closed", 2, "2 failed")]
+    h = SimpleNamespace(store=s, hidden_ids=lambda: {"uc_hidden"}, auth_off=lambda: True)
+    got = attempt("the ticket view is made",
+                  lambda: factory_api.review_state(h, "uc_open", t, SRC))
+    check = (got or {}).get("checks") or [{}]
+    ck("the check still differs for every reader", check[0].get("match") == "differs", check)
+    ck("and does not show what the session the caller cannot read printed",
+       got is not None and check[0].get("recorded") is None, check)
+    got = attempt("the ids are looked up", lambda: factory_api.unread_sessions(h, [ODD, "closed"]))
+    ck("only the session of the hidden project is unread", got == {"closed"}, got)
+    s.con.close()
+
+
 def main():
     for edition in ("platform", "factory"):
         posted(edition)
     held_by_duckdb()
     moved()
+    ticket_view()
     print(f"\n{P} passed, {F} failed")
     raise SystemExit(1 if F else 0)
 

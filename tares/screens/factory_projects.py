@@ -32,12 +32,14 @@ _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 
 
 def plain_date(ts, now) -> str:
-    """"20 Oct", and the year after it for a day in another year; "" without a time."""
+    """"20 Oct", and the year after it for a day in another year; "" without a time. The day is the
+    UTC day: DuckDB hands a time back in the machine's own zone."""
     t, n = _dt(ts), _dt(now)
     if t is None:
         return ""
+    t = t.astimezone(timezone.utc)
     day = f"{t.day} {t.strftime('%b')}"
-    return day if n is None or t.year == n.year else f"{day} {t.year}"
+    return day if n is None or t.year == n.astimezone(timezone.utc).year else f"{day} {t.year}"
 
 
 def _full_repos(handover: dict | None, tickets: list[dict]) -> list[str]:

@@ -10,6 +10,10 @@ counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc
 sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
 its BUDGET fails the test.
 
+Then a private project is made and deleted, and the event reads and the entities page are counted
+again (TR-1716): each may run at most DELETED_EXTRA statements more than before there was one, and
+a warm entities read does not scan the events table.
+
 The pages answer the same thing on every run: the clock is frozen, ids are numbered in the order they
 appear, and the bodies are compared with ee/tests/fixtures/factory_pages_golden.json. A later change
 that must move a body re-records it with `--write-golden` and says why in its PR.
@@ -87,6 +91,11 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # queue once more, and the project page reads it twice more, plus its hand-over twice more and two
 # settings once more (home and ticket keep their counts): projects 81 to 82, project 80 to 85 on
 # Postgres, 85 to 88 on DuckDB. Reading each of them once per request is a saving for a later ticket.
+# TR-1708: each read that picks a station's or a reply's project reads the deleted project ids
+# first, one statement each. On Postgres home goes 105 to 108 (the station rows twice, the replies by
+# project once), projects 82 to 84 (the station rows twice) and project 85 to 87 (the station rows
+# and the station roles). On DuckDB only the two counts that pass their budget move: project 88 to
+# 90 and ticket 27 to 28 (the ticket's station sessions).
 # TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
 # home 105 to 98 on Postgres, 127 to 117 on DuckDB (its counts are 96 and 115, plus 2 percent; the 127 is
 # TR-1480's, which the base brought in).
@@ -97,12 +106,31 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # home 186 to 94, projects 155 to 76, setup 128 to 94, setup progress 120 to 90, crew 85 to 53 (Setup
 # keeps its state-table reads there: they cost no round trip and their writes are not watched). The
 # budgets are those counts plus 2 percent. The project and ticket pages keep no reads yet.
-_TODAY = {"home": 53, "projects": 43, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+# TR-1719 (the joiner block of the home): a person other than the owner reads the cell's own crew
+# settings once, apart from the settings that lay their own values over them.
+_TODAY = {"home": 54, "projects": 44, "project": 90, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
 DONE_EXTRA = 5
+# TR-1716: an event read and the entities pages, after a private project was deleted, against the same
+# read on the same cell before any private project existed. A delete adds at most a fixed number of
+# statements to a request, however many labels the page reads. A read of event rows or fields runs
+# three more reads: the caller's hidden sources, the sessions of the deleted project and the project
+# records. With state on DuckDB each of the three is a transaction of the session store, so each costs
+# its BEGIN too. A warm describe or entities page answers from saved counts, so it stays within the
+# same limit.
+DELETED_EXTRA = {"duckdb": 6, "postgres": 3}
+EVENT_READS = [
+    ("read", "POST", "/read"),
+    ("source_events", "GET", "/api/sources/evts/events"),
+    ("source_fields", "GET", "/api/sources/evts/fields"),
+    ("describe", "GET", "/catalog/source:evts"),
+    ("entities", "GET", "/api/entities"),
+    ("entities_service", "GET", "/api/entities?label=service"),
+    ("entities_project", "GET", "/api/entities?label=tares_project"),
+]
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
@@ -146,7 +174,15 @@ DONE_EXTRA = 5
 # kept on DuckDB too now that their writes are watched. home 94 to 97, projects 76 to 79, project 162
 # to 166, ticket 48 to 50, setup 94 to 103, setup progress 90 to 99 (the budgets are those counts plus
 # 2 percent). Crew and the raw ticket pages keep their counts, and so does every page on Postgres.
-_DUCKDB = {**_TODAY, "home": 99, "projects": 81, "project": 170, "ticket": 51, "raw_tickets": 17,
+# TR-1725 (main merged into factory-perf/m2): the pages gain the reads main added, each a SQLite
+# transaction of its own on DuckDB, so a statement and its BEGIN. The deleted private projects
+# (TR-1708, TR-1716): one read on Home, the Projects list, a ticket, Setup and its progress, two on
+# a project's page. Crew reads them too, and the cell's `runtime` choice that its pace follows
+# (TR-1598). Counts on DuckDB: home 97 to 99, projects 79 to 81, project 166 to 170, ticket 50 to
+# 52, setup 95 to 97, setup progress 91 to 93, crew 53 to 57. On Postgres: home 51 to 52, projects
+# 42 to 43, project 86 to 88, ticket 26 to 27, setup 48 to 49, setup progress 46 to 47, crew 28 to
+# 30. The budgets are those counts plus 2 percent. The raw ticket pages keep their counts.
+_DUCKDB = {**_TODAY, "home": 101, "projects": 83, "project": 174, "ticket": 54, "raw_tickets": 17,
            "raw_ticket": 26}
 # TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
 # the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
@@ -160,8 +196,8 @@ _DUCKDB = {**_TODAY, "home": 99, "projects": 81, "project": 170, "ticket": 51, "
 # TR-1717 (list_connections reads a slot's connections and its default in one query, so they are from
 # one state): one statement a slot where there were two. Setup 103 to 95 and its progress 99 to 91 on
 # DuckDB, 52 to 48 and 50 to 46 on Postgres. The budgets are those counts plus 2 percent.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 97, "setup_progress": 93, "crew": 55},
-          "postgres": {**_TODAY, "setup": 49, "setup_progress": 47, "crew": 29}}
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 99, "setup_progress": 95, "crew": 59},
+          "postgres": {**_TODAY, "setup": 50, "setup_progress": 48, "crew": 31}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
@@ -195,12 +231,20 @@ def ck(label, cond, detail=""):
 
 # ── the counting stand-in ────────────────────────────────────────────────────────────────────
 _COUNTER: contextvars.ContextVar = contextvars.ContextVar("query_counter", default=None)
+_TEXTS: contextvars.ContextVar = contextvars.ContextVar("query_texts", default=None)
 
 
 def _hit(n: int = 1) -> None:
     c = _COUNTER.get()
     if c is not None:
         c[0] += n
+
+
+def _text(args) -> None:
+    """Keep the SQL of a statement on the DuckDB connection, where the events table is."""
+    texts = _TEXTS.get()
+    if texts is not None and args:
+        texts.append(str(args[0]))
 
 
 class CountingCon:
@@ -215,10 +259,12 @@ class CountingCon:
 
     def execute(self, *a, **kw):
         _hit()
+        _text(a)
         return self._real.execute(*a, **kw)
 
     def executemany(self, *a, **kw):
         _hit()
+        _text(a)
         return self._real.executemany(*a, **kw)
 
     def __getattr__(self, name):
@@ -488,6 +534,114 @@ async def crew_growth(store, sam, call):
        f"({after} against {before})", 0 < counter[0] <= 2 and after <= allowed, f"{after} over {allowed}")
 
 
+_EVENTS_SCAN = re.compile(r"\bFROM\s+events\b", re.IGNORECASE)
+
+
+async def deleted_private_reads(app, store, backend, root, sam):
+    """A private project with a session and rows of its own is made and deleted (TR-1716). The event
+    reads and the entities page then run at most DELETED_EXTRA statements more than on the same cell
+    before it, for the system credential, a person who was its member and a person who was not, and
+    a warm entities read takes its counts without a scan of the events table, also after new events
+    arrive."""
+    async def send(hdr, method, path, **kw):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                     headers=hdr, timeout=60) as cx:
+            return await cx.request(method, path, **kw)
+
+    labels = [{"name": "service", "field": "service", "primary": True}] + [
+        {"name": n, "field": n} for n in ("env", "region", "tares_project")]
+    r = await send(root, "POST", "/api/sources", json={"name": "evts", "connector": "webhook",
+                                                       "config": {"labels": labels}})
+    assert r.status_code < 300, r.text
+    r = await send(root, "POST", "/api/keys", json={
+        "name": "mia-laptop", "scopes": ["read"],
+        "person": {"email": "mia-budget@example.com", "name": "Mia"}})
+    assert r.status_code < 300, r.text
+    mia, mia_id = {"Authorization": f"Bearer {r.json()['secret']}"}, r.json()["person"]["id"]
+    callers = {"root": root, "not a member": sam, "a member": mia}
+
+    def rows(mark, project=None, key="shop"):
+        out = []
+        for i in range(3):
+            named = {"service": "shop" if i == 0 else f"{mark}-svc{i}", "env": f"{mark}-env",
+                     "region": "eu", **({"tares_project": project} if project else {})}
+            t = ago(minutes=5, seconds=i)
+            out.append(Envelope("evts", "event_stream", key, "evt", f"{mark} line {i}", t,
+                                {"text": f"{mark} line {i}"}, named, t))
+        return out
+
+    async def counted(hdr, method, path):
+        counter, texts = [0], []
+        token, kept = _COUNTER.set(counter), _TEXTS.set(texts)
+        body = {"json": {"selector": {"service": "shop"}, "window": "6h"}} if method == "POST" else {}
+        try:
+            resp = await send(hdr, method, path, **body)
+        finally:
+            _COUNTER.reset(token)
+            _TEXTS.reset(kept)
+        return resp, counter[0], sum(1 for t in texts if _EVENTS_SCAN.search(t))
+
+    async def every_read():
+        out = {}
+        for caller, hdr in callers.items():
+            for route, method, path in EVENT_READS:
+                await counted(hdr, method, path)   # the first read fills what is saved
+                out[caller, route] = await counted(hdr, method, path)
+        return out
+
+    most = DELETED_EXTRA[backend]
+    store.append(rows("open"))
+    before = await every_read()
+    for (caller, route), (resp, _, scans) in before.items():
+        ck(f"before, {caller}, {route}: answers 200", resp.status_code == 200,
+           f"{resp.status_code} {resp.text[:200]}")
+        if route.startswith("entities"):
+            ck(f"before, {caller}, {route}: a warm read does not scan the events", scans == 0, scans)
+
+    uid = "uc_budgetgone"
+    store.create_project(uid, "custom", "Budget gone", {})
+    store.set_project_scope(uid, "private")
+    store.add_project_member(uid, mia_id)
+    store.link_session(uid, "hidden-session", None)
+    store.append(rows("zz-hidden", uid) + rows("zz-hidden-linked", key="hidden-session"))
+    r = await send(root, "DELETE", f"/api/projects/{uid}")
+    assert r.status_code < 300 and store.get_project(uid) is None, r.text
+    store.append(rows("later"))
+
+    first = await counted(sam, "GET", "/api/entities")
+    ck("the first entities read after the delete scans the events (the check below sees a scan)",
+       first[2] > 0, first[2])
+    after = await every_read()
+    for (caller, route), (resp, n, scans) in after.items():
+        was = before[caller, route][1]
+        print(f"  {caller:<13} {route:<17} {was:>3} before, {n:>3} after the delete")
+        ck(f"after, {caller}, {route}: answers 200, nothing of the deleted project",
+           resp.status_code == 200 and "zz-hidden" not in resp.text and uid not in resp.text,
+           f"{resp.status_code} {resp.text[:200]}")
+        ck(f"after, {caller}, {route}: {n - was} statements more than before it, at most {most}",
+           n - was <= most, f"{was} before, {n} after")
+        if route.startswith("entities"):
+            ck(f"after, {caller}, {route}: a warm read does not scan the events", scans == 0, scans)
+
+    for round_ in ("newer", "newest"):   # twice: what is saved stays saved
+        store.append(rows(round_) + rows(f"zz-hidden-{round_}", uid)
+                     + rows(f"zz-hidden-linked-{round_}", key="hidden-session"))
+        for caller, hdr in callers.items():
+            for route, method, path in EVENT_READS:
+                if not route.startswith("entities"):
+                    continue
+                resp, n, scans = await counted(hdr, method, path)
+                was = before[caller, route][1]
+                ck(f"{round_} events, {caller}, {route}: counted without a scan, at most "
+                   f"{most} statements more ({n - was}, {scans} scans)",
+                   scans == 0 and n - was <= most, f"{was} before, {n} after, {scans} scans")
+                seen = (f"{round_}-env" if route == "entities"
+                        else f"{round_}-svc1" if route == "entities_service" else None)
+                ck(f"{round_} events, {caller}, {route}: the new values are there, nothing of the "
+                   "deleted project", resp.status_code == 200 and (seen is None or seen in resp.text)
+                   and "zz-hidden" not in resp.text and uid not in resp.text, resp.text[:300])
+
+
 async def main():
     from tares.daemon import make_app
     freeze_clock()
@@ -558,6 +712,8 @@ async def main():
         await done_projects(store, sam, call, counts["projects"])
         print("== Crew does not grow with the handed-over projects (TR-1633) ==")
         await crew_growth(store, sam, call)
+        print("== event reads after a private project is deleted (TR-1716) ==")
+        await deleted_private_reads(app, store, backend, root, sam)
 
     print("== the team home is built once per request ==")
     th.HomeRead.__init__, th._team_home = real_init, real_home

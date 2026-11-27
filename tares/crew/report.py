@@ -32,7 +32,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import claude, contract, state
+from . import claude, contract, proc, state
 from .errors import CrewError, NotBetweenTurnsError
 from .paths import CrewPaths, default_home
 from .state import station_name_ok
@@ -281,8 +281,10 @@ def _idle(station: str, paths: CrewPaths) -> bool:
     """Nothing is writing the station's files: nobody has it open in a terminal, and it either has no live
     session (stopped) or is between turns. A session list that cannot be read is not idle."""
     try:
-        if claude.attached(station, paths):
+        if proc.attached(station, paths):
             return False
+        if proc.on_codex(station, paths):   # no session id of Claude Code's: its own app-server says
+            return not proc.is_alive(station, "", None, paths) or proc.between_turns(station, None, paths)
         sid = state.stations_get(station, "id", paths=paths)
         if not sid or claude.turn_state(sid) == "":
             return True

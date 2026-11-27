@@ -30,8 +30,8 @@ from old_ddl import OLD_DDL  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
-HEAD = "0019_brain_tables"                 # the newest revision: tests that count revisions move with it
-REVISIONS = 19
+HEAD = "0022_brain_tables"                 # the newest revision: tests that count revisions move with it
+REVISIONS = 22
 FAILS = []
 
 
@@ -259,7 +259,8 @@ ACCOUNT_TABLES = (ACCOUNT_TABLES + PROJECT_TABLES + TICKET_TABLES + REVIEW_TABLE
 ALL_TABLES = SESSION_TABLES + ["settings"] + ACCOUNT_TABLES + ["session_store_copies", "session_ingest_marks", "sessions",
                                "session_messages", "session_commands", "session_turns", "session_said",
                                "session_files", "session_lines", "session_archive_parts", "session_moves",
-                               "session_usage_hourly", "session_rollup_state"]    # TR-1632
+                               "session_usage_hourly", "session_rollup_state",     # TR-1632
+                               "report_weeks", "report_texts"]
 
 
 def shape(engine, names=ALL_TABLES):

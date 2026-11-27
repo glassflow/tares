@@ -23,10 +23,10 @@ import sys
 from pathlib import Path
 
 from .. import status_words  # standard library only, so the dispatcher stays light
-from . import claude, contract, state
+from . import claude, codex_station, contract, proc, state
 from .cc_update import cc_behind, cc_retry_in, station_cc  # moved there by TR-963, TR-964; status and roster read them
 from .client import TaresClient, TaresHTTPError, cksum
-from .errors import CrewError, SessionListUnreadableError
+from .errors import ClaudeNotFoundError, CrewError, SessionListUnreadableError
 from .kit import Frozen, frozen_phys, kit_version, plugin_root, stale_kit  # noqa: F401  (moved there by TR-965; status, roster and doctor read them)
 from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
 from .paths import ME, CrewPaths
@@ -183,13 +183,19 @@ def pace_status_line(client: TaresClient) -> str:
     """The pace in one line for crew status; "" when it is off or Tares cannot say."""
     if not client.tares_on():
         return ""
+    from . import pace   # here: the pace step imports the modules this one is imported by
     try:
-        p = state.loads_json(client.tares_http("GET", "/api/crew/pace"))
+        p = state.loads_json(client.tares_http("GET", pace.pace_path(client.paths)))
     except (TaresHTTPError, ValueError):
         return ""
     if not isinstance(p, dict) or p.get("on") is not True:
         return ""
     if p.get("known") is not True:
+        if p.get("source") == "codex":   # a crew on Codex: say which kind of nothing it is (TR-1597)
+            why = {"stale": "the last reading of the Codex account's limits is too old to use",
+                   "unsupported": "this Codex account reports no limits"}.get(
+                       p.get("reading"), "no reading of the Codex account's limits yet")
+            return f"pace: on, {why}"
         return "pace: on, no reading of the plan limits yet"
 
     def pc(v):
@@ -319,6 +325,21 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
     return live
 
 
+def _codex_or_claude(paths: CrewPaths, client: TaresClient, env: dict) -> tuple:
+    """(is the crew on Codex, the `claude` program for a crew that is not). A crew with stations recorded for
+    Codex needs no `claude`. Neither does one that has recorded nothing on a machine without `claude`, when the
+    cell's runtime slot holds Codex: it is about to start on it. Any other crew without `claude` is told so
+    (ClaudeNotFoundError), as before."""
+    if proc.crew_on_codex(paths):
+        return True, ""
+    try:
+        return False, claude.claude_bin(env)
+    except ClaudeNotFoundError:
+        if proc.planned_runtime(client) != proc.CODEX:
+            raise
+        return True, ""
+
+
 # ---------- status ----------
 
 
@@ -330,14 +351,16 @@ def cmd_status(argv: list, env: dict) -> int:
     out = io.StringIO() if js else sys.stdout  # --json builds the document below; the text goes nowhere
     doc = {"crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "stations": [],
            "running": 0}
-    binary = claude.claude_bin(env)
-    adopt_unrecorded(paths, client, binary)
+    # A crew on Codex has no Claude Code to ask: each of its stations says where it is itself (TR-1593).
+    on_codex, binary = _codex_or_claude(paths, client, env)
+    if not on_codex:
+        adopt_unrecorded(paths, client, binary)
     if not paths.stations.is_file():
         _say(f"no stations yet; run {ME} crew up")
         if js:
             contract.emit(doc, "status")
         return 0
-    agents = _sessions_or_none(binary)
+    agents = [] if on_codex else _sessions_or_none(binary)
     if agents is None:
         raise SessionListUnreadableError(claude.UNREAD)
     # Stations keep the Tares they were started with. After `tares login` to another workspace,
@@ -370,9 +393,12 @@ def cmd_status(argv: list, env: dict) -> int:
         sid = state.stations_get(s, "id", paths=paths)
         model = state.stations_get(s, "model", paths=paths)
         effort = state.stations_get(s, "effort", paths=paths)
-        turn = _turn_of(agents, sid)
-        st = "" if turn is _NO_ROW else state.jq_raw(turn)
-        job = _job(sid)
+        if proc.on_codex(s, paths):   # no job file of Claude Code's: its app-server says working, done or blocked
+            st, job = codex_station.turn_state(paths, s), {}
+        else:
+            turn = _turn_of(agents, sid)
+            st = "" if turn is _NO_ROW else state.jq_raw(turn)
+            job = _job(sid)
         tempo = _field(job, "tempo", "-")
         detail = _field(job, "detail")
         needs = _field(job, "needs")
@@ -388,18 +414,21 @@ def cmd_status(argv: list, env: dict) -> int:
             detail = f"STUCK on autocompact: {ME} crew watch starts it fresh"
         if (st and state.stations_get(s, "sessionId", paths=paths) and not paths.done_file(s).exists()
                 and regranted(paths, client, s)):
-            if claude.attached(s, paths=paths):
+            if proc.attached(s, paths=paths):
                 detail = "NEW PERMISSIONS: restarted with them once you leave its session"
             else:
                 detail = "NEW PERMISSIONS: the watch restarts it with them between turns"
-        out.write(ROW % (s, role, f"{model}/{effort}", shown, tempo, detail[:70]))
+        runs = f"{model}/{effort}"
+        if not model and proc.on_codex(s, paths):   # no model named for it: the one Codex gives the account
+            runs = f"default/{effort}" if effort else "default"
+        out.write(ROW % (s, role, runs, shown, tempo, detail[:70]))
         doc["stations"].append({"station": s, "role": role, "model": model, "effort": effort,
                                 "state": st or "gone", "shown": shown, "asked": ask.get("label") if ask else None,
                                 "tempo": "" if tempo == "-" else tempo, "detail": detail})
     # two live sessions under one station name
     pattern = re.compile("^" + re.escape(state.crew_name(paths)) + "-|-build-")
     groups: dict = {}
-    for r in _sessions_or_none(binary) or []:  # bash asks again here
+    for r in ([] if on_codex else _sessions_or_none(binary)) or []:  # bash asks again here
         name = r.get("name")
         name = name if isinstance(name, str) else ""
         if pattern.search(name) and not claude.gone(r):
@@ -419,11 +448,14 @@ def cmd_status(argv: list, env: dict) -> int:
     else:
         out.write(f"plugin: {old} station(s) run an older version; {ME} crew watch moves each onto this one "
                   "when it's idle\n")
-    target = claude.claude_version(binary)
-    cc_old = cc_behind(paths, target, agents)
-    cc_retry = sum(1 for s in active
-                   if state.stations_get(s, "cc_failed", paths=paths) == target
-                   and claude.older_than(station_cc(paths, s, agents), target))
+    if on_codex:   # no Claude Code runs here, so none is behind
+        target, cc_old, cc_retry = "", 0, 0
+    else:
+        target = claude.claude_version(binary)
+        cc_old = cc_behind(paths, target, agents)
+        cc_retry = sum(1 for s in active
+                       if state.stations_get(s, "cc_failed", paths=paths) == target
+                       and claude.older_than(station_cc(paths, s, agents), target))
     doc["claude_code"] = {"target": target, "older": cc_old, "retrying": cc_retry}
     if cc_old == 0:
         pass
@@ -509,7 +541,9 @@ def cmd_roster(argv: list, env: dict) -> int:
     if not js:
         sys.stdout.write(f"crew: {state.crew_name(paths)} (orchestrator: {state.crew_orchestrator(paths)})\n")
     state.require_crew(paths)
-    binary = claude.claude_bin(env)
+    on_codex, binary = _codex_or_claude(paths, client, env)
+    if on_codex:
+        return _roster_codex(paths, js)
     listed = adopt_unrecorded(paths, client, binary)
     doc = {"crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "stations": []}
     if not paths.stations.is_file():
@@ -563,6 +597,38 @@ def cmd_roster(argv: list, env: dict) -> int:
     return 0
 
 
+def _roster_codex(paths: CrewPaths, js: bool) -> int:
+    """The roster of a crew on Codex (TR-1593): the same lines, with no Claude Code to ask. Each station's
+    app-server says where it is in its turn (done, working, blocked; gone when it does not run), and the
+    fifth column is the Codex it was started on. A station is messaged by its name in stations.json, so
+    there is no session title to compare. As JSON `claude_code` is "", and `runtime` and `codex` say what
+    it runs."""
+    doc = {"crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "stations": []}
+    if not paths.stations.is_file():
+        if js:
+            contract.emit(doc, "roster")
+        else:
+            print("no stations")
+        return 0
+    lines = []
+    for s, row in state.stations_load(paths).items():
+        if not isinstance(row, dict) or row.get("status") != "active":
+            continue
+        st = codex_station.turn_state(paths, s) or "gone"
+        rec = row.get("codex")
+        version = _text(rec.get("version")) if isinstance(rec, dict) else ""
+        project = _field(row, "project")
+        lines.append(f"{s}\t{_field(row, 'role', 'null')}\t{project}\t{st}\tcodex {version or '?'}\n")
+        doc["stations"].append({"station": s, "role": row.get("role") if isinstance(row.get("role"), str) else None,
+                                "project": project, "turn": st, "claude_code": "",
+                                "runtime": proc.CODEX, "codex": version})
+    if js:
+        contract.emit(doc, "roster")
+    else:
+        sys.stdout.write("".join(lines))
+    return 0
+
+
 # ---------- attach and logs ----------
 
 
@@ -575,6 +641,10 @@ def _through(verb: str, argv: list, env: dict) -> int:
         raise CrewError(f"usage: {ME} crew {verb} <role|station>")
     word = word[0]
     station = f"{state.crew_name(paths)}-{word}" if word in ("orchestrator", "reviewer", "releaser") else word
+    if state.stations_get(station, "role", paths=paths) and proc.on_codex(station, paths):
+        log = state.jq_get(state.stations_load(paths).get(station), ("codex", "log"))
+        raise CrewError(f"{station} runs on Codex, as an app-server with no session to open: what it asks is on the "
+                        f"desk ({ME} desk), and what its app-server wrote is in {log or paths.station_file(station, 'codex.log')}")
     sid = state.stations_get(station, "id", paths=paths)
     if not sid:
         raise CrewError(f"unknown station {word}")

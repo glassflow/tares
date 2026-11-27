@@ -770,8 +770,9 @@ def entities(store, label: str, expr: str, sources, limit: int, xsql: str, xpara
              base: tuple, hidden: set, shared: set) -> list | None:
     """The rows of `Store._list_entities_scan` as (value, lines, newest time). `xsql` is the whole
     exclusion for DuckDB's rows; `base` is (the same without the hidden sessions, its params),
-    `hidden` those sessions and `shared` the sources whose payload the exclusion looks into. None
-    when this is not a read the digest answers."""
+    `hidden` those sessions and `shared` the sources whose stored lines the digest cannot judge:
+    the exclusion looks into their payload, or at their time. None when this is not a read the
+    digest answers."""
     got = _split(store, sources or None, need_full=False, grouped=True)
     if got is None:
         return None

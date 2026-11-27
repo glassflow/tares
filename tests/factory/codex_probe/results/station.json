@@ -1,0 +1,101 @@
+{
+ "codex": "codex-cli 0.171.0",
+ "results": {
+  "turns_by_visits": {
+   "pass": true,
+   "checks": {
+    "the first prompt ran as a turn with nobody connected": true,
+    "the station read working during its turn": true,
+    "and done after it": true,
+    "when it last did anything is a time near now": true,
+    "the second prompt was one more turn on the same conversation": true,
+    "its answer shows it was the same conversation": true,
+    "at rest, the station ended when asked": true
+   },
+   "states_seen": [
+    "working",
+    "done"
+   ],
+   "seconds_of_the_first_turn": 10.1,
+   "states_seen_second": [
+    "working",
+    "done"
+   ],
+   "answers": [
+    {
+     "status": "completed",
+     "last_answer": "ready"
+    },
+    {
+     "status": "completed",
+     "last_answer": "PLUM"
+    }
+   ],
+   "stop": "stopped"
+  },
+  "no_prompt_into_a_turn": {
+   "pass": true,
+   "checks": {
+    "the station was in the middle of its command": true,
+    "a prompt for it was refused": true,
+    "stopped in the middle of the command, the app-server ended when asked": true,
+    "no command of the turn is left running": true
+   },
+   "refusal": "probe-reviewer is in a turn; not handing it a prompt",
+   "stop": "stopped",
+   "seconds_to_stop": 0.1,
+   "commands_left": 0,
+   "conversation": true
+  },
+  "carried_on_after_stop": {
+   "pass": true,
+   "checks": {
+    "the station was stopped and started again as another process": true,
+    "it carries on the conversation it had": true,
+    "and knows what was said before the stop": true
+   },
+   "second_error": null,
+   "answers": [
+    {
+     "status": "completed",
+     "last_answer": "noted"
+    },
+    {
+     "status": "completed",
+     "last_answer": "QUINCE"
+    }
+   ],
+   "turns_in_the_conversation": 2
+  },
+  "blocked_on_approval": {
+   "pass": true,
+   "checks": {
+    "the turn stopped on an approval, and the station read blocked": true,
+    "nothing ran unanswered": true,
+    "a blocked station is not between turns, and takes no prompt": true,
+    "it can still be stopped": true
+   },
+   "states_seen": [
+    "working",
+    "blocked"
+   ],
+   "seconds_until_blocked": 3.0,
+   "stop": "stopped"
+  },
+  "killed_mid_command": {
+   "pass": true,
+   "checks": {
+    "killed, the app-server left its command running": true,
+    "the command is found among what ran under the app-server at the watch's last look": true,
+    "ended, nothing of the station is left running": true
+   },
+   "programs_found": [
+    "sleep"
+   ],
+   "programs_ended": [
+    "sleep"
+   ],
+   "found_by_the_environment_alone": []
+  }
+ }
+}

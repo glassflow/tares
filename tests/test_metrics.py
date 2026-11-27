@@ -141,7 +141,10 @@ async def main():
             lag = sample(body, "tares_event_loop_lag_seconds")
             ck("the loop watcher reports a lag figure", lag is not None and lag < 0.5, str(lag))
             import time
-            time.sleep(1.2)   # block the loop on purpose, longer than the watcher interval so its timer is inside the block
+            # block the loop on purpose. The watcher's one-second timer falls due somewhere in the first second of
+            # the block and runs at its end, so it is late by the block's length less up to one second: a block of
+            # 1.2 s made that 0.2 to 1.2 s, under the half second that counts as a stall about a third of the time
+            time.sleep(2.0)
             await asyncio.sleep(1.2)
             body = (await cx.get("/metrics")).text
             ck("a blocked loop counts as a stall", (sample(body, "tares_event_loop_stalls_total") or 0) >= 1, str(sample(body, "tares_event_loop_stalls_total")))
@@ -193,13 +196,21 @@ async def main():
            and "# HELP tares_" in r.text, str(r.status_code))
         r = await cx.get("/health")
         ck("/health stays public", r.status_code == 200, str(r.status_code))
-    # make_app started the session reconcile on this store: close() waits for it, then the connection goes
-    tapp.state.store.close()
-    tapp.state.store.con.close()
+    # the app's own threads (the session reconcile) may still be on the DuckDB connection: stop them, then close
+    # it under the store's lock, which they take for each call, or DuckDB refuses ("connection is busy")
+    store = tapp.state.store
+    store.close()
+    with store._lock:
+        store.con.close()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    code = asyncio.run(main())
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # the app's daemon threads may still write while the interpreter shuts down, which Python ends with a fatal
+    # error ("could not acquire lock for <stdout>", exit -6 on the Postgres run): every check has been made
+    os._exit(code)

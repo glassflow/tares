@@ -63,14 +63,31 @@ export function QuestionChoices({ item, render }: {
   );
 }
 
-/** The fold under a list: "3 older things", open in place. */
-export function OlderFold({ items, children, className }: { items: HomeItem[]; children: (items: HomeItem[]) => React.ReactNode; className?: string }) {
-  const [open, setOpen] = React.useState(false);
+/** The desk item an address names (`#desk-D7`), as its label. */
+export const deskTarget = (hash: string): string | undefined => /^#desk-(D\d+)$/.exec(hash)?.[1];
+
+/** The desk items a row stands for: its own (`question:D7`, `permission:D7`, `desk:D7`) and those it
+ *  took in. */
+export function deskLabels(item: HomeItem): string[] {
+  const own = /^(?:question|permission|desk):(D\d+)$/.exec(item.id)?.[1];
+  return [...(own ? [own] : []), ...(item.desk_labels ?? [])];
+}
+
+export const standsFor = (item: HomeItem, desk: string | undefined): boolean =>
+  desk !== undefined && deskLabels(item).includes(desk);
+
+/** The fold under a list: "3 older things", open in place. `startOpen` holds until the person
+ *  opens or closes it. */
+export function OlderFold({ items, children, className, startOpen = false }: {
+  items: HomeItem[]; children: (items: HomeItem[]) => React.ReactNode; className?: string; startOpen?: boolean;
+}) {
+  const [choice, setChoice] = React.useState<boolean>();
+  const open = choice ?? startOpen;
   if (items.length === 0) return null;
   return (
     <>
       <div className={cn("border-t border-border px-4 py-2.5", className)} data-testid="waiting-older">
-        <Button variant="quiet" className="px-0 text-foreground underline" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Button variant="quiet" className="px-0 text-foreground underline" aria-expanded={open} onClick={() => setChoice(!open)}>
           {open ? "Hide" : "Show"} {items.length} older {items.length === 1 ? "thing" : "things"}
         </Button>
         {!open && <span className="ml-2 text-xs text-muted-foreground">waited more than a week, holding nothing up</span>}

@@ -1,0 +1,147 @@
+{
+ "codex": "codex-cli 0.171.0",
+ "model": "gpt-5.6-luna",
+ "results": {
+  "start_without_claude": {
+   "pass": true,
+   "checks": {
+    "there is no claude on the PATH of this run": true,
+    "the start succeeded": true,
+    "the path leads to a socket, the owner's alone": true,
+    "where the path is a link, the folder that holds the socket is the owner's alone": true,
+    "initialize answers, from the station's own Codex folder": true,
+    "the app-server runs in a session of its own": true,
+    "a second start while it runs is refused and leaves it alone": true,
+    "asked to end, it exits 0 and takes its socket with it": true
+   },
+   "error": null,
+   "version": "0.171.0",
+   "socket_mode": "0o600",
+   "path_is_a_link": true,
+   "socket_kept_in": "/private/tmp/codex-daemon-<uid>",
+   "folder_mode": "0o700",
+   "second_start": "probe-reviewer is running: its app-server answers on <crew root>/crew/stations/probe-reviewer.sock",
+   "exit_code": 0
+  },
+  "stale_socket": {
+   "pass": true,
+   "checks": {
+    "the first start succeeded": true,
+    "killed, the app-server left its socket behind": true,
+    "the next start is not blocked by it": true,
+    "the new app-server answers on the socket": true
+   },
+   "first_error": null,
+   "second_error": null,
+   "exit_code_of_the_second": 0,
+   "path_is_a_link": true
+  },
+  "personal_setup_stays_out": {
+   "pass": true,
+   "checks": {
+    "the turn completed": true,
+    "no MCP server is loaded": true,
+    "no plugin is installed": true,
+    "no notify program is configured": true,
+    "the guard is the thread's only hook (every tool call, the start of every turn), and it ran before the command": true,
+    "the command ran": true,
+    "no program was started that carries the prompt": true,
+    "the conversation is kept in the station's own folder": true,
+    "the person's config, login and conversations are as they were": true,
+    "the login is still a link to the person's file": true
+   },
+   "turn": "completed",
+   "approvals_asked": [],
+   "commands": [
+    {
+     "command": "/bin/zsh -lc 'exec </dev/null\necho launch-probe'",
+     "exit": 0
+    }
+   ],
+   "hook_runs": [
+    "completed"
+   ],
+   "mcp_servers": [],
+   "programs_that_carried_the_prompt": [],
+   "station_folder_entries": [
+    ".sandbox_migration",
+    "app-server-control",
+    "auth.json",
+    "config.toml",
+    "goals_1.sqlite",
+    "goals_1.sqlite-shm",
+    "goals_1.sqlite-wal",
+    "installation_id",
+    "logs_2.sqlite",
+    "logs_2.sqlite-shm",
+    "logs_2.sqlite-wal",
+    "memories_1.sqlite",
+    "memories_1.sqlite-wal",
+    "models_cache.json",
+    "queue_1.sqlite",
+    "queue_1.sqlite-shm",
+    "queue_1.sqlite-wal",
+    "sessions",
+    "shell_snapshots",
+    "skills",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal",
+    "thread-writer-locks",
+    "thread_history_1.sqlite",
+    "tmp"
+   ],
+   "config_keys_codex_wrote_during_the_run": [
+    "projects"
+   ],
+   "the_persons_own_config_has": {
+    "notify": true,
+    "mcp_servers": true,
+    "plugins": true
+   },
+   "exit_code": 0
+  },
+  "notify_program_control": {
+   "pass": true,
+   "checks": {
+    "the turn completed": true,
+    "config/read shows the notify program (what the product's check reads)": true,
+    "the program was started at the end of the turn and handed the prompt": true,
+    "the watcher saw a program that carries the prompt": true
+   },
+   "times_started": 1,
+   "what_it_was_handed": [
+    "client",
+    "cwd",
+    "input-messages",
+    "last-assistant-message",
+    "thread-id",
+    "turn-id",
+    "type"
+   ],
+   "programs_that_carried_the_prompt": [
+    "python"
+   ]
+  },
+  "account_extras_are_caught": {
+   "pass": true,
+   "checks": {
+    "the start is refused": true,
+    "the refusal names an MCP server the launch did not name": true,
+    "the station is not recorded": true,
+    "the app-server is stopped and its socket is gone": true
+   },
+   "error": "probe-reviewer loaded an MCP server its launch does not name (codex_apps): a station loads nothing of the person's account or setup",
+   "log_exists": true
+  },
+  "older_codex_is_refused": {
+   "pass": true,
+   "checks": {
+    "the start is refused as older, with the version it found": true,
+    "nothing was started or recorded": true
+   },
+   "version_line": "codex-cli 0.167.0-alpha.4.1",
+   "error": "Codex 0.167.0-alpha.4.1 is older than 0.171.0, the oldest version a station starts on: Codex marks its app-server experimental, and stations were tested on that version. Update Codex, then run this again."
+  }
+ }
+}

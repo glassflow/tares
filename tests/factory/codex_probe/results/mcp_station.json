@@ -1,0 +1,79 @@
+{
+ "codex": "codex-cli 0.171.0",
+ "results": {
+  "as_itself": {
+   "pass": true,
+   "checks": {
+    "the station started and its first turn ended": true,
+    "it read its ticket's brief and its ticket over MCP": true,
+    "it started the ticket, which only its holder may": true,
+    "the cell's record of that names the station and its role": true,
+    "the conversation was started with the server required and the key file named by its path": true,
+    "the key is not in the environment the model's commands print": true,
+    "nor in the arguments or environment of the station's processes, during the turn and after": true,
+    "nor in any file of the crew home but the key file, the station's Codex folder among them": true,
+    "nor in what the app-server stored of the conversation": true
+   },
+   "error": null,
+   "mcp_calls": [
+    [
+     "tares",
+     "builder_brief",
+     "completed"
+    ],
+    [
+     "tares",
+     "get_ticket",
+     "completed"
+    ]
+   ],
+   "commands": [
+    "/bin/zsh -lc 'exec </dev/null\nprintenv'"
+   ],
+   "stage_history": [
+    {
+     "at": "2026-11-25T11:20:48.478684+01:00",
+     "field": "stage",
+     "value": "doing",
+     "reason": null,
+     "by": "p1-build-s1",
+     "role": "builder",
+     "person": {
+      "id": "local",
+      "name": "You"
+     },
+     "by_label": "You (p1-build-s1)"
+    }
+   ],
+   "key_found_in": [],
+   "token_file_variable_shown": true,
+   "state_at_the_end": "done"
+  },
+  "tares_down_keeps_the_conversation": {
+   "pass": true,
+   "checks": {
+    "with the endpoint down the start is refused, and says it cannot reach the server": true,
+    "the station is not left running and its conversation is the one it had": true,
+    "with the endpoint back it is started in that conversation and takes a turn": true
+   },
+   "refused_with": "p1-build-s1 cannot reach an MCP server it is started with (tares: handshaking with MCP server failed: Send message error Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:57523/mcp)); not handing it a prompt",
+   "second_start": null
+  },
+  "wrong_key": {
+   "pass": true,
+   "checks": {
+    "the station gets no turn, and the reason is the cell's refusal of its key": true,
+    "it is not left running, and no process or conversation is recorded for it": true
+   },
+   "refused_with": "p1-build-s2 would work without Tares: tares.list_crew was refused (error 401: authentication required); not handing it a prompt"
+  },
+  "no_key": {
+   "pass": true,
+   "checks": {
+    "Codex refuses the conversation: the endpoint wants a key and the server is required": true,
+    "it is not left running, and no process or conversation is recorded for it": true
+   },
+   "refused_with": "p1-build-s3 cannot reach an MCP server it is started with (tares: handshaking with MCP server failed: Send message error unexpected server response: HTTP 401: {\"detail\":\"unauthorized\"}); not handing it a prompt"
+  }
+ }
+}

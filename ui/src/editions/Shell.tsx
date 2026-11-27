@@ -8,12 +8,13 @@ import CommandPalette from "../components/CommandPalette";
 import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import {
-  Activity, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, Grid, HomeIcon, Moon, Plug, Search,
-  Settings as SettingsIcon, Sun, Ticket, Users, Zap,
+  Activity, BarChart, Book, Bot, Chat, ChevronDown, ChevronRight, Database, Eye, Flag, Folder, Grid, HomeIcon, Moon, Plug,
+  Search, Settings as SettingsIcon, Sun, Ticket, Users, Zap,
 } from "../components/icons";
 import { Button, ProgressBar, usePresence } from "../components/edition";
 import { Initials, initialsOf } from "../components/edition/Initials";
-import { Input } from "../components/ui/input";
+import { Input } from "@paper-kit/ui/input";
+import { embedded } from "../embed";
 import { reducedMotion } from "../lib/motion";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
@@ -28,6 +29,10 @@ import { setupProgress, type SetupProgress } from "./factory/FactorySetup.api";
 
 // The shell of the factory and sre editions: a header, a left menu, and the page in between.
 // The page keeps its own heading; the shell adds no breadcrumbs.
+//
+// Embedded in the Tares desktop (embed.ts, TR-1553) the desktop draws the cell's name, the sign-in and
+// the theme, so the header goes: search moves to the top of the menu, a page's header actions get a
+// row of their own above the page, and on a phone width only a slim bar with Menu and search stays.
 
 const NARROW = "(max-width: 767px)";
 
@@ -56,7 +61,7 @@ const groupSlug = (g: string) => g.toLowerCase().replace(/\s+/g, "-");
 
 // Each page of the menu has its icon, so a page reads apart from a group's heading (which has none).
 const MENU_ICONS: Record<string, (p: React.SVGProps<SVGSVGElement>) => React.ReactElement> = {
-  home: HomeIcon, integrations: Plug, projects: Folder, tickets: Ticket, reviews: Eye, crew: Bot, people: Users,
+  home: HomeIcon, integrations: Plug, projects: Folder, tickets: Ticket, reviews: Eye, report: BarChart, crew: Bot, people: Users,
   docs: Book, "brain-repos": Database, "brain-decisions": Flag, "brain-ask": Chat, settings: SettingsIcon,
   services: Grid, incidents: Zap, timeline: Activity, runbooks: Book,
 };
@@ -258,6 +263,7 @@ export function useHeaderSlots(): HeaderSlots {
 export default function EditionShell() {
   const { edition, name, credentialName, open: openCell, personPicture } = useEdition();
   const narrow = useNarrow();
+  const embed = embedded();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
   const { pathname: here, search } = useLocation();
@@ -366,7 +372,8 @@ export default function EditionShell() {
 
   return (
     <div className="flex min-h-screen w-full min-w-0 flex-col">
-      <header data-testid="edition-header"
+      {(!embed || narrow) && (
+      <header data-testid={embed ? "embed-bar" : "edition-header"}
               className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border bg-card px-3 py-2.5 md:px-6 md:py-3.5">
         <div className="flex min-w-0 items-center gap-2.5">
           {narrow && !noMenu && (
@@ -375,6 +382,7 @@ export default function EditionShell() {
               Menu
             </Button>
           )}
+          {!embed && (<>
           {/* the platform console's brand: the mark and the "tares" wordmark (App.tsx, .brand) */}
           <img src="/tares-mark.svg" alt="" aria-hidden data-testid="brand-mark" className="h-auto w-6 shrink-0" />
           <b className="text-[19px] font-semibold tracking-[-0.02em]" data-testid="brand-word">tares</b>
@@ -393,6 +401,7 @@ export default function EditionShell() {
             </>
           )}
           <span ref={setCrumbEl} className="contents" />
+          </>)}
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
           {narrow ? (
@@ -400,7 +409,7 @@ export default function EditionShell() {
                     className="w-9 px-0 text-muted-foreground" onClick={() => ask("")}>
               <Search className="size-3.5" />
             </Button>
-          ) : (
+          ) : !embed && (
             <div className="relative w-[280px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input data-testid="edition-search" aria-label="Search or ask" placeholder="Search or ask" value={text}
@@ -416,18 +425,29 @@ export default function EditionShell() {
             </div>
           )}
           <span ref={setActionsEl} className="contents" />
-          <AccountMenu who={who} small={small} workspaceUrl={workspaceUrl} logoutUrl={logoutUrl} picture={personPicture} />
+          {!embed && <AccountMenu who={who} small={small} workspaceUrl={workspaceUrl} logoutUrl={logoutUrl} picture={personPicture} />}
         </div>
       </header>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {!narrow && !noMenu && (
           <nav aria-label="Main" data-testid="edition-menu"
-               className="sticky top-[65px] flex h-[calc(100vh-65px)] w-[232px] shrink-0 flex-col gap-0.5 self-start overflow-y-auto border-r border-border px-3 py-5">
+               className={(embed ? "top-0 h-screen" : "top-[65px] h-[calc(100vh-65px)]")
+                 + " sticky flex w-[232px] shrink-0 flex-col gap-0.5 self-start overflow-y-auto border-r border-border px-3 py-5"}>
+            {embed && (
+              <Button variant="secondary" data-testid="menu-search" aria-label="Search or ask"
+                      className="mb-[18px] w-full justify-start gap-2 text-muted-foreground" onClick={() => ask("")}>
+                <Search className="size-3.5" aria-hidden /> Search or ask
+              </Button>
+            )}
             <MenuLinks entries={entries} narrow={false} setup={setup} />
           </nav>
         )}
         <main className="main min-w-0 flex-1">
+          {/* embedded and wide there is no header: a page's header actions sit here, and the row
+              takes no room while no page fills it */}
+          {embed && !narrow && <div ref={setActionsEl} data-testid="embed-actions" className="flex justify-end gap-2.5 px-6 pt-3 empty:hidden" />}
           <LicenceBanner />
           <OwnMenu.Provider value={setFrame}>
             <HeaderSlotsContext.Provider value={slots}>
@@ -449,7 +469,7 @@ export default function EditionShell() {
           <nav id="edition-drawer" aria-label="Main" data-testid={drawer ? "edition-menu" : undefined} data-state={drawerShown.state}
                aria-hidden={drawer ? undefined : true}
                className="motion-drawer data-[state=closed]:pointer-events-none fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
-            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
+            {switcher && !embed && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
             <MenuLinks entries={entries} narrow setup={setup} />
           </nav>
         </div>

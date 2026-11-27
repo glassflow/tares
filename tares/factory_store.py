@@ -11,8 +11,8 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import (Integer, Text, and_, bindparam, case, cast, delete, func, insert, literal,
-                        null, or_, select, type_coerce, update)
+from sqlalchemy import (Integer, Text, and_, bindparam, case, cast, delete, false, func, insert,
+                        literal, null, or_, select, type_coerce, update)
 from sqlalchemy import text as sql_text
 
 from . import claude_usage_hourly as hourly
@@ -621,10 +621,10 @@ class FactoryStore:
     def station_sessions(self, source: str) -> list[dict]:
         """Every session that played a station, with its station, role, parent and project, when
         it started and last did something (from its lines on `source`), its state, and the
-        project it last named (project_sessions), newest activity first."""
-        ss, st, ps, sx = session_stations, session_states, project_sessions, sessions_table
-        named = (select(ps.c.project).where(ps.c.session == ss.c.session)
-                 .order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery())
+        project it last named (project_sessions, a deleted private one left out), newest
+        activity first."""
+        ss, st, sx = session_stations, session_states, sessions_table
+        named = self._named_project(self.deleted_private_projects())
         # once the sessions table has caught up (TR-1520) the lines come from it in the same read
         # (TR-1499); before, from a scan of events below
         table = session_ingest.caught_up(self)
@@ -654,12 +654,43 @@ class FactoryStore:
                  reverse=True)
         return out
 
+    @staticmethod
+    def _named_project(left_out=()):
+        """The project a session_stations row's session last named, as a subquery of that row,
+        the ids in `left_out` passed over."""
+        ss, ps = session_stations, project_sessions
+        q = select(ps.c.project).where(ps.c.session == ss.c.session)
+        if left_out:
+            q = q.where(ps.c.project.not_in(sorted(left_out)))
+        return q.order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery()
+
+    def _station_projects(self):
+        """A query of (crew id, station, project), each once: the station's project of each of its
+        sessions, else the one the session last named. A deleted private project stays in it,
+        unlike in a session row's own project: what hides a station by these goes on hiding it
+        (TR-1708)."""
+        ss = session_stations
+        return select(ss.c.crew_id, ss.c.station,
+                      func.coalesce(ss.c.project, self._named_project())).distinct()
+
+    def sessions_tied_to(self, sessions: list[str], projects) -> set[str]:
+        """Of `sessions`, the ones that played a station whose own project, or else the one the
+        session last named, is in `projects`, a deleted private one counted (TR-1708)."""
+        ss = session_stations
+        tied = func.coalesce(ss.c.project, self._named_project()).in_(sorted(projects))
+        out: set[str] = set()
+        for i in range(0, len(sessions), 500):
+            with self.sessions_db.read() as conn:
+                out.update(conn.execute(select(ss.c.session).where(
+                    ss.c.session.in_(list(sessions[i:i + 500])), tied)).scalars())
+        return out
+
     def _station_join(self, source: str):
         """The sessions a station played, with their state and, once the sessions table has caught
-        up, their lines on `source`: (join, project the session named, last activity)."""
-        ss, st, ps, sx = session_stations, session_states, project_sessions, sessions_table
-        named = (select(ps.c.project).where(ps.c.session == ss.c.session)
-                 .order_by(ps.c.linked_at.desc()).limit(1).scalar_subquery())
+        up, their lines on `source`: (join, the session row's project when the station has none of
+        its own, last activity)."""
+        ss, st, sx = session_stations, session_states, sessions_table
+        named = self._named_project(self.deleted_private_projects())
         j = (ss.outerjoin(st, st.c.session == ss.c.session)
              .outerjoin(sx, and_(sx.c.session == ss.c.session, sx.c.source == source,
                                  sx.c.line_count > 0)))
@@ -674,11 +705,29 @@ class FactoryStore:
                 "last_at": last or r[5], "lines": n, "state": r[6],
                 "state_reason": r[7], "state_at": r[8], "crew_id": r[10]}
 
-    def station_rollup(self, source: str, keep: int = EARLIER_KEPT, totals: bool = True) -> list[dict]:
+    def _hidden_session(self, hidden, own):
+        """The condition, on a session_stations row, that the caller must not read its session
+        (TR-1704): it worked in a project in `hidden`, the ones the caller cannot see
+        (`_sessions_in`), and its crew is not one of `own`, the caller's own crews, whose
+        sessions they read whole. A session that also worked elsewhere is hidden whole."""
+        if not hidden:
+            return false()
+        ss = session_stations
+        found = self._sessions_in(hidden).cte("hidden_sessions")
+        return and_(ss.c.session.in_(select(found.c.session)),
+                    ss.c.crew_id.is_(None) | ss.c.crew_id.not_in(sorted(own)))
+
+    def station_rollup(self, source: str, keep: int = EARLIER_KEPT,
+                       hidden=frozenset(), own=frozenset(), totals: bool = True) -> list[dict]:
         """One row per station (crew id and name), however many sessions played it (TR-1500):
         `cur` the newest session (as station_sessions gives it), `earlier` the `keep` most recent
         before it, `earlier_count` how many there are in all, and the totals over every session:
         `projects` (sorted), `usage` (None when none of them has any) and `coordination_calls`.
+        `usage` leaves out the replies that count for a project in `hidden` (the ones the caller
+        cannot see, TR-1696). `earlier`, `earlier_count` and `coordination_calls` leave out the
+        sessions the caller must not read (`_hidden_session`, TR-1704); `cur` is the newest
+        session all the same, and `cur_hidden` says it is one of those, for the caller of this to
+        blank. `projects` covers every session.
         Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
         stays the size of the stations; before, the same is built from the full list.
         `totals` False reads only who runs (TR-1634): `crew_id`, `station`, `cur` and `projects`,
@@ -686,47 +735,47 @@ class FactoryStore:
         if not totals:
             keep = 0
         if not session_ingest.caught_up(self):
-            return self._rollup_from_rows(source, keep, totals)
+            return self._rollup_from_rows(source, keep, hidden, own, totals)
         ss, sx, u = session_stations, sessions_table, session_usage
         j, named, last = self._station_join(source)
-        rank = func.row_number().over(
-            partition_by=(ss.c.crew_id, ss.c.station),
-            order_by=(last.desc().nulls_last(), ss.c.session.desc())).label("rank")
-        ranked = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project,
-                         ss.c.seen_at, session_states.c.state, session_states.c.reason,
-                         session_states.c.state_at, named.label("named"), ss.c.crew_id,
-                         sx.c.started_at, sx.c.last_line_at, sx.c.line_count, rank)
-                  .select_from(j).subquery())
-        top = select(ranked).where(ranked.c.rank <= keep + 1).order_by(ranked.c.rank)
-        sums = (select(ss.c.crew_id, ss.c.station, func.count(),
-                       func.sum(func.coalesce(sx.c.coordination_calls, 0)))
-                .select_from(j).group_by(ss.c.crew_id, ss.c.station))
-        worked = select(ss.c.crew_id, ss.c.station, func.coalesce(ss.c.project, named)).distinct()
-        if not totals:
-            spent = None
-        elif hourly.ready(self):    # the kept hourly totals, not every usage row (TR-1632)
-            h = session_usage_hourly
-            spent = (select(ss.c.crew_id, ss.c.station, func.sum(h.c.replies),
-                            func.sum(h.c.input_tokens), func.sum(h.c.output_tokens),
-                            func.sum(h.c.cache_write_tokens), func.sum(h.c.cache_read_tokens),
-                            func.sum(h.c.cost_usd), func.sum(h.c.unpriced))
-                     .select_from(ss.join(h, h.c.session == ss.c.session))
-                     .group_by(ss.c.crew_id, ss.c.station))
-        else:
-            spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
-                     .select_from(ss.join(u, u.c.session == ss.c.session))
-                     .group_by(ss.c.crew_id, ss.c.station))
+        unread = case((self._hidden_session(hidden, own), 1), else_=0)
+        every = (select(ss.c.session, ss.c.station, ss.c.role, ss.c.parent, ss.c.project,
+                        ss.c.seen_at, session_states.c.state, session_states.c.reason,
+                        session_states.c.state_at, named.label("named"), ss.c.crew_id,
+                        sx.c.started_at, sx.c.last_line_at, sx.c.line_count,
+                        sx.c.coordination_calls, last.label("last"), unread.label("unread"))
+                 .select_from(j).subquery())
+        key = (every.c.crew_id, every.c.station)
+        newest = (every.c.last.desc().nulls_last(), every.c.session.desc())
+        ranked = select(
+            every, func.row_number().over(partition_by=key, order_by=newest).label("rank"),
+            # the place among the sessions of the same kind, the readable ones or the others
+            func.row_number().over(partition_by=(*key, every.c.unread),
+                                   order_by=newest).label("kind_rank")).subquery()
+        # the newest session, and enough readable ones for `keep` before it
+        top = (select(ranked)
+               .where(or_(ranked.c.rank == 1,
+                          and_(ranked.c.unread == 0, ranked.c.kind_rank <= keep + 1)))
+               .order_by(ranked.c.rank))
+        read = every.c.unread == 0
+        sums = select(*key, func.count().filter(read),
+                      func.sum(every.c.coordination_calls).filter(read)).group_by(*key)
+        worked = self._station_projects()
+        spent = self._station_spend(hidden) if totals else None
         with self.sessions_db.consistent_read() as conn:    # the answers agree on the stations
             top_rows, worked_rows = conn.execute(top).all(), conn.execute(worked).all()
             sum_rows = conn.execute(sums).all() if totals else []
             spent_rows = conn.execute(spent).all() if totals else []
         out: dict[tuple, dict] = {}
-        for r in top_rows:
+        for r in top_rows:   # a station's newest comes first
             g = out.setdefault((r[10], r[1]), {"crew_id": r[10], "station": r[1], "sessions": [],
+                                               "cur_hidden": bool(r.unread),
                                                "projects": set(), "usage": None})
             g["sessions"].append(self._joined_row(r))
-        for cid, name, n, coord in sum_rows:
-            out[(cid, name)].update(earlier_count=int(n) - 1, coordination_calls=int(coord or 0))
+        for cid, name, n, coord in sum_rows:   # `n` counts the readable sessions
+            g = out[(cid, name)]
+            g.update(earlier_count=int(n) - (0 if g["cur_hidden"] else 1),
+                     coordination_calls=int(coord or 0))
         for cid, name, project in worked_rows:
             if project:
                 out[(cid, name)]["projects"].add(project)
@@ -734,7 +783,7 @@ class FactoryStore:
             out[(cid, name)]["usage"] = self._totals(cols)
         for g in out.values():
             rows = g.pop("sessions")
-            g.update(cur=rows[0], earlier=rows[1:], projects=sorted(g["projects"]))
+            g.update(cur=rows[0], earlier=rows[1:keep + 1], projects=sorted(g["projects"]))
         return list(out.values())
 
     def projects_by_session(self, sessions: list[str]) -> dict[str, list[str]]:
@@ -763,32 +812,91 @@ class FactoryStore:
                   reverse=True)
         return rows
 
-    def _rollup_from_rows(self, source: str, keep: int, totals: bool = True) -> list[dict]:
+    def _station_spend(self, hidden):
+        """A query of (crew id, station, then `_total_cols`' seven sums) over the sessions each
+        station played, the replies that count for a project in `hidden` left out."""
+        ss, u, h = session_stations, session_usage, session_usage_hourly
+        if hourly.ready(self):    # the kept hourly totals, not every usage row (TR-1632)
+            if hidden:   # an hour holds the project its replies were stamped with, "" for none
+                t = select(h.c.session, h.c.replies, h.c.input_tokens, h.c.output_tokens,
+                           h.c.cache_write_tokens, h.c.cache_read_tokens, h.c.cost_usd,
+                           h.c.unpriced, func.nullif(h.c.project, "").label("project")
+                           ).subquery("hours")
+            else:
+                t = h
+            q = select(ss.c.crew_id, ss.c.station, func.sum(t.c.replies),
+                       func.sum(t.c.input_tokens), func.sum(t.c.output_tokens),
+                       func.sum(t.c.cache_write_tokens), func.sum(t.c.cache_read_tokens),
+                       func.sum(t.c.cost_usd), func.sum(t.c.unpriced))
+        else:
+            t = u
+            q = select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
+        if hidden:   # that join starts at the replies, so the ones of no station are put out
+            replies, project, _ = self._replies_by_project(t)
+            q = q.select_from(replies).where(ss.c.session.is_not(None),
+                                             self._outside(project, hidden))
+        else:
+            q = q.select_from(ss.join(t, t.c.session == ss.c.session))
+        return q.group_by(ss.c.crew_id, ss.c.station)
+
+    def _unread_sessions(self, rows: list[dict], hidden, own) -> set[str]:
+        """`_hidden_session` for station_sessions rows: the sessions of `rows` the caller must
+        not read."""
+        return self.sessions_in([r["session"] for r in rows if r["crew_id"] not in own], hidden)
+
+    def unread_among(self, sessions: list[str], hidden, own) -> set[str]:
+        """`_hidden_session` for session ids, a station's or not (TR-1710): those of `sessions`
+        the caller must not read. A session that is no station's has no crew, so none of `own`
+        covers it."""
+        found = self.sessions_in(sessions, hidden)
+        if not found or not own:
+            return found
+        t, ids = session_stations, sorted(found)
+        for i in range(0, len(ids), 500):
+            with self.sessions_db.read() as conn:
+                found -= set(conn.execute(select(t.c.session).where(
+                    t.c.session.in_(ids[i:i + 500]), t.c.crew_id.in_(sorted(own)))).scalars())
+        return found
+
+    def _rollup_from_rows(self, source: str, keep: int, hidden=frozenset(),
+                          own=frozenset(), totals: bool = True) -> list[dict]:
         """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
         rows = self._newest_first(self.station_sessions(source))
-        spent = self.usage_by_session([r["session"] for r in rows]) if totals else {}
+        spent = self.usage_by_session([r["session"] for r in rows], hidden) if totals else {}
         coord = self.coordination_calls(source, [r["session"] for r in rows]) if totals else {}
+        unread = self._unread_sessions(rows, hidden, own)
+        with self.sessions_db.read() as conn:
+            worked = conn.execute(self._station_projects()).all()
+        projects: dict[tuple, set] = {}
+        for cid, name, project in worked:
+            if project:
+                projects.setdefault((cid, name), set()).add(project)
         by: dict[tuple, list[dict]] = {}
         for r in rows:   # newest first
             by.setdefault((r["crew_id"], r["station"]), []).append(r)
         out = []
         for (cid, name), ss in by.items():
             mine = [spent[r["session"]] for r in ss if r["session"] in spent]
-            out.append({"crew_id": cid, "station": name, "cur": ss[0], "earlier": ss[1:keep + 1],
-                        "earlier_count": len(ss) - 1,
-                        "projects": sorted({r["project"] for r in ss if r["project"]}),
+            read = [r for r in ss if r["session"] not in unread]
+            earlier = [r for r in read if r is not ss[0]]
+            out.append({"crew_id": cid, "station": name, "cur": ss[0],
+                        "cur_hidden": ss[0]["session"] in unread, "earlier": earlier[:keep],
+                        "earlier_count": len(earlier),
+                        "projects": sorted(projects.get((cid, name), ())),
                         "usage": {k: sum(x[k] for x in mine) for k in mine[0]} if mine else None,
-                        "coordination_calls": sum(coord.get(r["session"], 0) for r in ss)})
+                        "coordination_calls": sum(coord.get(r["session"], 0) for r in read)})
         return out
 
     def station_earlier(self, source: str, crew_id: str | None, station: str, limit: int = 50,
-                        before=None) -> dict | None:
+                        before=None, hidden=frozenset(), own=frozenset()) -> dict | None:
         """The sessions that played one station before its current one, newest first, `limit` at
         a time (TR-1500): {"earlier_count", "projects" (every project the station worked in),
         "sessions" (rows as station_sessions gives them), "next_before"}. `before` (a datetime)
         keeps those last active before it; `next_before` is the last one's time to pass as
         `before` for the next page, None on the last. A page never splits sessions that share one
-        time. None when no such station has reported."""
+        time. The sessions the caller must not read (`_hidden_session`, TR-1704) are not counted,
+        listed or paged over; `projects` covers every session. None when no such station has
+        reported."""
         ss, sx = session_stations, sessions_table
         j, named, last = self._station_join(source)
         mine = and_(ss.c.station == station,
@@ -802,9 +910,12 @@ class FactoryStore:
                     if r["station"] == station and r["crew_id"] == crew_id]
             if not rows:
                 return None
-            cur, rows = rows[0], rows[1:]
+            rows = rows[1:]
+            with self.sessions_db.read() as conn:
+                projects = sorted(p for *_, p in conn.execute(self._station_projects().where(mine)) if p)
+            unread = self._unread_sessions(rows, hidden, own)
+            rows = [r for r in rows if r["session"] not in unread]
             total = len(rows)
-            projects = sorted({r["project"] for r in [cur, *rows] if r["project"]})
             if before is not None:
                 rows = [r for r in rows if r["last_at"] is not None and r["last_at"] < before]
             page = rows[:limit]
@@ -819,9 +930,11 @@ class FactoryStore:
                 return None
             cur = conn.execute(select(ss.c.session).select_from(j).where(mine)
                                .order_by(*order).limit(1)).scalar_one()
-            projects = sorted(p for p in conn.execute(
-                select(func.coalesce(ss.c.project, named)).where(mine).distinct()).scalars() if p)
-            q = select(*cols).select_from(j).where(mine, ss.c.session != cur)
+            projects = sorted(p for *_, p in conn.execute(self._station_projects().where(mine)) if p)
+            earlier = (mine, ss.c.session != cur, ~self._hidden_session(hidden, own))
+            total = (conn.execute(select(func.count()).select_from(ss).where(*earlier)).scalar_one()
+                     if hidden else n - 1)
+            q = select(*cols).select_from(j).where(*earlier)
             if before is not None:
                 q = q.where(last < before)
             rows = [self._joined_row(r) for r in conn.execute(q.order_by(*order).limit(limit + 1))]
@@ -832,7 +945,7 @@ class FactoryStore:
                                     .order_by(*order)).all()
                 page = [r for r in page if r["last_at"] != page[-1]["last_at"]] + [
                     self._joined_row(r) for r in tied]
-        return {"earlier_count": n - 1, "projects": projects, "sessions": page,
+        return {"earlier_count": total, "projects": projects, "sessions": page,
                 "next_before": page[-1]["last_at"] if more else None}
 
     # ── the ledger's history (TR-427) ─────────────────────────────────────────
@@ -907,6 +1020,37 @@ class FactoryStore:
         return self._with_people([{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3],
                                    "value": r[4], "reason": r[5], "by": r[6], "person_id": r[7]}
                                   for r in rows])
+
+    # ── every project's records, for the weekly figures (report.py, TR-1666) ──
+    def all_stage_changes(self) -> list[dict]:
+        """Every stage change of every ticket, deleted tickets too, each ticket's together and
+        oldest first. `value` None is a stage taken off."""
+        t = history_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.ticket, t.project, t.changed_at, t.value)
+                                .where(t.field == "stage")
+                                .order_by(t.ticket, t.changed_at.asc().nulls_last())).fetchall()
+        return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
+
+    def all_reviews(self) -> list[dict]:
+        """Every review round of every ticket, each ticket's together and in round order."""
+        t = reviews_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.id, t.project, t.ticket, t.round, t.verdict, t.by_station,
+                                       t.reviewed_at)
+                                .order_by(t.ticket, t.round.asc().nulls_last(),
+                                          t.reviewed_at.asc().nulls_last())).fetchall()
+        return [{"id": r[0], "project": r[1], "ticket": r[2], "round": r[3], "verdict": r[4],
+                 "by": r[5], "at": r[6]} for r in rows]
+
+    def all_review_findings(self) -> list[dict]:
+        """Every finding of every review, with its kind as stored."""
+        t = findings_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.project, t.severity, t.blocking, t.kind, t.state,
+                                       t.fixed_in, t.found_at)).fetchall()
+        return [{"project": r[0], "severity": r[1], "blocking": bool(r[2]), "kind": r[3],
+                 "state": r[4], "fixed_in": r[5], "found_at": r[6]} for r in rows]
 
     def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
         """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources
@@ -1420,26 +1564,36 @@ class FactoryStore:
             out.append((source, key, at, typ, branch, project, payload))
         return out
 
-    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
+    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000, ends: bool = False) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
         printed and whether it failed, oldest first: what a builder's claimed checks are
         compared with. Read from `session_commands`, where each call was written as its line was
         stored and its result added when that arrived (session_ingest, TR-1477). A command whose
-        result has not arrived shows no output and no failure."""
+        result has not arrived shows no output and no failure. A Codex station's command (TR-1595)
+        also says how it ended (`outcome`), its real exit code and its folder: one that did not
+        end (`started`, `unknown`) is told apart from one that ended, and one Codex failed to run
+        or declined counts as failed."""
         if not sessions:
             return []
         t = session_commands.c
         rows = []
         for i in range(0, len(sessions), 500):
             with self.sessions_db.read() as conn:
-                rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code)
+                rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code,
+                                            t.outcome, t.cwd, t.result_at)
                                      .where(t.source == source, t.session.in_(sessions[i:i + 500]),
                                             t.command.is_not(None), t.at.is_not(None))
                                      .order_by(t.at.desc(), t.tool_use_id.desc())
                                      .limit(limit // 2)).fetchall()
         rows = sorted(rows, key=lambda r: r[0], reverse=True)[:limit // 2]
+        # With `ends`, every row also says whether its result arrived (`ended`) and the code it ended with
+        # (`exit_code`; a Claude Code result says only ok or error: 0 or 1): what a step of a chain needs to back
+        # a claim (factory.match_check, TR-1598). Without, the rows are what they always were.
         return [{"at": at, "session": sid, "command": command or "", "output": tail or "",
-                 "is_error": bool(code)} for at, sid, command, tail, code in reversed(rows)]
+                 "is_error": bool(code) or outcome in ("failed", "declined"),
+                 **({"outcome": outcome, "exit_code": code, "cwd": cwd} if outcome else {}),
+                 **({"ended": result_at is not None, "exit_code": code} if ends else {})}
+                for at, sid, command, tail, code, outcome, cwd, result_at in reversed(rows)]
 
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
