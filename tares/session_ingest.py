@@ -630,7 +630,9 @@ def render_flags(store, sources) -> dict:
         rows = conn.execute(select(sources_table.c.name, sources_table.c.config).where(
             sources_table.c.connector == "claude_code")).all()
     for name, raw in rows:
-        if name not in flags:
+        if name not in flags or name == "claude_code":
+            # the runtime intake maps `claude_code` lines with the defaults, whatever an older
+            # catalog row says (TR-1804), so their flags are the defaults too
             continue
         cfg = raw if isinstance(raw, dict) else {}
         flags[name] = {"include_thinking": bool(cfg.get("include_thinking", False)),

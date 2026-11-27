@@ -11,11 +11,8 @@ from .base import Connector
 class ClaudeCodeConnector(ClaudeCodeLines, Connector):
     def __init__(self, cfg, store):
         Connector.__init__(self, cfg, store)
-        c = cfg.config or {}
-        ClaudeCodeLines.__init__(self, store, redact=c.get("redact", True),
-                                 include_thinking=c.get("include_thinking", False),
-                                 source=cfg.name, source_type=cfg.type)
-        self.config = c
+        ClaudeCodeLines.__init__(self, store, source=cfg.name, source_type=cfg.type)
+        self.config = cfg.config if cfg.config is not None else {}   # the source's own, read live
 
     async def poll(self) -> list[Envelope]:
         return []   # push-only: events arrive via map_payload() from the plugin

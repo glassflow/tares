@@ -1610,6 +1610,9 @@ def make_app() -> FastAPI:
         body = await _parse_ingest_body(request)
         person = _current_person(request)   # from the credential, never from the body
         cls = integrations_registry.get("runtime", name)
+        if cls is None:
+            raise HTTPException(status_code=503, detail=f"the {name} runtime is not loaded on this "
+                                                        "cell, so its lines cannot be stored now")
         try:
             envs = cls().push_lines(body, store=store, person_id=person["id"] if person else None)
             # the store step still runs the platform's ingest tail (triggers, listeners) until
@@ -1667,7 +1670,7 @@ def make_app() -> FastAPI:
             _err(e, 400)
         except session_ingest.LinesNotStored as e:
             _err(e, 503)         # not acknowledged: the sender keeps the lines and sends them again
-        await _seed_challenger(token, body)
+        # session lines come in on /ingest/claude_code only (TR-1804), which seeds the challenger
         return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
 
     _seed_lock = asyncio.Lock()
@@ -6060,8 +6063,7 @@ def make_app() -> FastAPI:
         one, the last thing it said (`last_said`). A session that also worked in a private project
         the caller cannot see is not listed, unless it is the caller's own station's (TR-1710)."""
         _project_or_404(uid)
-        src = next((n for n, c in runtime.catalog.sources.items()
-                    if c.connector == "claude_code"), "claude_code")
+        src = _cc_source()   # the one source session lines are stored under (TR-1804)
         out = store.project_sessions(uid)
         unread = factory_api.unread_sessions(h, [s["session"] for s in out])
         out = [s for s in out if s["session"] not in unread]
@@ -6083,8 +6085,7 @@ def make_app() -> FastAPI:
         if (not any(s["session"] == sid for s in store.project_sessions(uid))
                 or factory_api.unread_sessions(h, [sid])):
             _err(KeyError(f"session {sid!r} did not work in this project"), 404)
-        src = next((n for n, c in runtime.catalog.sources.items()
-                    if c.connector == "claude_code"), "claude_code")
+        src = _cc_source()   # the one source session lines are stored under (TR-1804)
         lines, where = store.key_events_from(src, sid, limit=min(max(limit, 1), 1000),
                                              offset=max(offset, 0))
         return {"session": sid, "lines": lines, "lines_from": where}
