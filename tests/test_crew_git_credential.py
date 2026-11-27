@@ -12,7 +12,8 @@ process against the same fake Tares. No git or gh setup of the person's is read.
     Codex station's config, the fingerprint, a station that starts a station, and real git with that environment;
  d. no token is left in any file, plan or output.
 
-Checks that need a Unix shell or a Unix socket are left out on Windows.
+Checks that need a Unix shell are left out on Windows, and so is everything about a Codex station, which listens
+on a Unix socket.
 
 Run: python tests/test_crew_git_credential.py
 """
@@ -25,6 +26,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -517,10 +519,12 @@ if POSIX:
        stat.S_IMODE(shim.stat().st_mode) == 0o755 and stat.S_IMODE(env_file.stat().st_mode) == 0o600,
        (oct(shim.stat().st_mode), oct(env_file.stat().st_mode)))
 
+# a Codex station listens on a Unix socket, so there is none to compose on Windows
+RUNTIMES = ("claude_code", "codex") if POSIX else ("claude_code",)
 for label, opts in (("a cell that does not list the capability", {"caps": CAPS}),
                     ("a cell with no credential", {"status": 404, "body": {"code": "no_credential", "detail": "none"}}),
                     ("no github.com origin in any folder", {"repos": (GITLAB, str(PLAIN))})):
-    for runtime in ("claude_code", "codex"):
+    for runtime in RUNTIMES:
         c = Crew(runtime=runtime, **opts)
         got, requests = c.plan()
         was, was_requests = c.plan(without=True)
@@ -619,46 +623,44 @@ if POSIX:
     SEEN.append(("git refusal", (r.stdout + r.stderr).encode()))
     GITCONFIG.write_text("")
 
-codex = Crew(runtime="codex")
-plan, requests = codex.plan()
-before, _ = codex.plan(without=True)
-cx_bin = str(codex.paths.home / "bin")
-ck("a Codex station gets the same, without an env file",
-   {k: plan["env"].get(k) for k in expected if k not in ("PATH", "CLAUDE_ENV_FILE")}
-   == {k: v for k, v in expected.items() if k not in ("PATH", "CLAUDE_ENV_FILE")}
-   and plan["env"]["PATH"].split(os.pathsep)[0] == cx_bin and "CLAUDE_ENV_FILE" not in plan["env"]
-   and {k: v for k, v in plan["env"].items() if k not in GH_KEYS} == before["env"], plan["env"])
-codex.write(plan)
-ck("its start writes the shim and no env file", (codex.paths.home / "bin" / "gh").exists()
-   and (codex.paths.home / "bin" / "gh.cmd").exists()
-   and not codex.paths.station_file("crew-reviewer", "env.sh").exists())
-
-import tomllib  # noqa: E402
-
-awkward = 'C:\\a b\\bin;/x"y/bin'
-doc = tomllib.loads(cx.home_config(str(PLAIN), awkward))
-ck("the station's Codex config gives its shell commands that PATH, written as a TOML string",
-   doc["shell_environment_policy"] == {"set": {"PATH": awkward}}
-   and all(v == {"trust_level": "untrusted"} for v in doc["projects"].values()), doc)
-ck("with no GitHub access the config is the trust marks alone",
-   list(tomllib.loads(cx.home_config(str(PLAIN), ga.shell_path(before["env"])))) == ["projects"]
-   and ga.shell_path({"PATH": "/x"}) == "")
-
-longer, _ = codex.plan(codex.client(PATH=str(PLAIN) + os.pathsep + os.environ["PATH"]))
-codex.tares.world["routes"][ROUTE] = [502, {"code": "github_error", "detail": "no"}]
-unnamed, _ = codex.plan()
-codex.tares.world["routes"][ROUTE] = [200, ANSWER]
-ck("the fingerprint does not move with the launcher's PATH or with the identity",
-   longer["env"]["PATH"] != plan["env"]["PATH"] and "GIT_AUTHOR_NAME" not in unnamed["env"]
-   and cx.fingerprint(plan, "kit") == cx.fingerprint(longer, "kit") == cx.fingerprint(unnamed, "kit"),
-   [cx.fingerprint(x, "kit") for x in (plan, longer, unnamed)])
-ck("it does move when the station's GitHub setup does",
-   cx.fingerprint(plan, "kit") != cx.fingerprint(before, "kit"))
-ck("a plan without the GitHub setup has the fingerprint it had", "PATH" not in before["env"]
-   and cx.fingerprint(before, "kit") == str(cksum(state.dumps_compact(
-       [before["args"], before["env"], before["settings"], "kit"]).encode("utf-8"))), sorted(before["env"]))
-
 if POSIX:
+    codex = Crew(runtime="codex")
+    plan, requests = codex.plan()
+    before, _ = codex.plan(without=True)
+    cx_bin = str(codex.paths.home / "bin")
+    ck("a Codex station gets the same, without an env file",
+       {k: plan["env"].get(k) for k in expected if k not in ("PATH", "CLAUDE_ENV_FILE")}
+       == {k: v for k, v in expected.items() if k not in ("PATH", "CLAUDE_ENV_FILE")}
+       and plan["env"]["PATH"].split(os.pathsep)[0] == cx_bin and "CLAUDE_ENV_FILE" not in plan["env"]
+       and {k: v for k, v in plan["env"].items() if k not in GH_KEYS} == before["env"], plan["env"])
+    codex.write(plan)
+    ck("its start writes the shim and no env file", (codex.paths.home / "bin" / "gh").exists()
+       and (codex.paths.home / "bin" / "gh.cmd").exists()
+       and not codex.paths.station_file("crew-reviewer", "env.sh").exists())
+
+    awkward = 'C:\\a b\\bin;/x"y/bin'
+    doc = tomllib.loads(cx.home_config(str(PLAIN), awkward))
+    ck("the station's Codex config gives its shell commands that PATH, written as a TOML string",
+       doc["shell_environment_policy"] == {"set": {"PATH": awkward}}
+       and all(v == {"trust_level": "untrusted"} for v in doc["projects"].values()), doc)
+    ck("with no GitHub access the config is the trust marks alone",
+       list(tomllib.loads(cx.home_config(str(PLAIN), ga.shell_path(before["env"])))) == ["projects"]
+       and ga.shell_path({"PATH": "/x"}) == "")
+
+    longer, _ = codex.plan(codex.client(PATH=str(PLAIN) + os.pathsep + os.environ["PATH"]))
+    codex.tares.world["routes"][ROUTE] = [502, {"code": "github_error", "detail": "no"}]
+    unnamed, _ = codex.plan()
+    codex.tares.world["routes"][ROUTE] = [200, ANSWER]
+    ck("the fingerprint does not move with the launcher's PATH or with the identity",
+       longer["env"]["PATH"] != plan["env"]["PATH"] and "GIT_AUTHOR_NAME" not in unnamed["env"]
+       and cx.fingerprint(plan, "kit") == cx.fingerprint(longer, "kit") == cx.fingerprint(unnamed, "kit"),
+       [cx.fingerprint(x, "kit") for x in (plan, longer, unnamed)])
+    ck("it does move when the station's GitHub setup does",
+       cx.fingerprint(plan, "kit") != cx.fingerprint(before, "kit"))
+    ck("a plan without the GitHub setup has the fingerprint it had", "PATH" not in before["env"]
+       and cx.fingerprint(before, "kit") == str(cksum(state.dumps_compact(
+           [before["args"], before["env"], before["settings"], "kit"]).encode("utf-8"))), sorted(before["env"]))
+
     import signal
 
     import psutil
