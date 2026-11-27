@@ -157,8 +157,11 @@ _DUCKDB = {**_TODAY, "home": 99, "projects": 81, "project": 170, "ticket": 51, "
 # projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
 # 2 percent. With TR-1612, Crew's three ticket reads (the tickets twice, their history once) are each a
 # SQLite transaction on DuckDB: 75 to 78, so 80.
-BUDGET = {"duckdb": {**_DUCKDB, "setup": 106, "setup_progress": 101, "crew": 55},
-          "postgres": {**_TODAY, "setup": 54, "setup_progress": 51, "crew": 29}}
+# TR-1717 (list_connections reads a slot's connections and its default in one query, so they are from
+# one state): one statement a slot where there were two. Setup 103 to 95 and its progress 99 to 91 on
+# DuckDB, 52 to 48 and 50 to 46 on Postgres. The budgets are those counts plus 2 percent.
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 97, "setup_progress": 93, "crew": 55},
+          "postgres": {**_TODAY, "setup": 49, "setup_progress": 47, "crew": 29}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
