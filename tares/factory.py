@@ -635,7 +635,32 @@ def add_check_to_doc(body: str, line: str) -> str:
 
 VERDICTS = ("pass", "changes", "block")
 
-MERGE_QUEUE = "merge-queue"   # the name the merge queue writes its records under
+# the `by` of a review round the merge queue writes: a pass it carries onto a commit that only
+# moved the base. It is never a review of its own.
+# Also the name the merge queue writes its other records under.
+MERGE_QUEUE = "merge-queue"
+
+
+def reviewer_last(rounds: list[dict]) -> dict | None:
+    """The newest of `rounds` (oldest first) the merge queue did not write: the reviewer's last
+    verdict on the ticket, on whichever commit. None when only the queue wrote, or nobody did."""
+    return next((r for r in reversed(rounds) if r.get("by") != MERGE_QUEUE), None)
+
+
+def standing_round(rounds: list[dict]) -> dict | None:
+    """The review round that says what the verdict is now, of `rounds` (oldest first): the newest,
+    except a merge queue pass over a reviewer whose last verdict, on whichever commit, is not a
+    pass. The queue carries a pass and gives none of its own, so the reviewer's round stands then.
+    None when there are no rounds. Everything that shows or acts on the verdict reads this; a list
+    of the rounds as history shows them all."""
+    if not rounds:
+        return None
+    last = rounds[-1]
+    if last.get("by") == MERGE_QUEUE:
+        own = reviewer_last(rounds)
+        if own is not None and own["verdict"] != "pass":
+            return own
+    return last
 
 
 def automatic_pass(review: dict) -> bool:
@@ -743,9 +768,14 @@ def recurring_findings(store, repo: str, now: datetime, hidden: set | frozenset 
     most tickets first: what GET /api/recurring-findings answers. Findings of a project in `hidden`
     are left out before the count."""
     rows = [f for f in store.repo_findings(repo, now - timedelta(days=RECUR_DAYS)) if f["project"] not in hidden]
-    names = {p["id"]: p["name"] for p in store.list_projects()}
+    # the ticket's label comes with the finding (one read, not one per finding); a finding whose
+    # ticket sits in another project names no ticket, as get_ticket(project, id) did
+    own = {(f["project"], f["ticket"]): {"id": f["ticket"], "identifier": f["ticket_identifier"],
+                                         "number": f["ticket_number"]}
+           for f in rows if f["ticket_project"] == f["project"]}
+    names = store.project_names()
     out = []
-    for kind, k in recurring_refs(rows, store.get_ticket).items():
+    for kind, k in recurring_refs(rows, lambda *key: own.get(key)).items():
         row = recurring_row(kind, k["refs"], names)
         if row:
             out.append({**row, "examples": k["examples"]})
@@ -827,9 +857,13 @@ def _and_steps(command: str) -> list | None:
 
 def _earlier_step(claimed: str, ran: str) -> bool:
     """The claimed command is a step of `ran`, a plain && chain, before its last (the last is _same_command's)."""
+    if "&&" not in str(ran or ""):       # no chain: spare a long recording the shell parse
+        return False
     steps = _and_steps(ran)
+    if not steps:
+        return False
     want = _words(claimed)
-    return bool(steps and want) and want in steps[:-1]
+    return bool(want) and want in steps[:-1]
 
 
 def _proven_ok(run: dict) -> bool:

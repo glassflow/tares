@@ -83,6 +83,12 @@ if AVAILABLE:
                                       "Batches of claude_code lines the sessions table could not "
                                       "take (the lines are stored; the next start catches the "
                                       "table up)")
+    CHALLENGES_LOST = Counter("tares_challenges_lost_total",
+                              "Challenger lines a factory cell could not write to the sessions "
+                              "database: they are sent once, so they are lost")
+    SESSION_LINES_TO_DUCKDB = Counter("tares_session_lines_to_duckdb_total",
+                                      "claude_code lines written to the DuckDB events table (stays 0 "
+                                      "on a factory cell with an archive)")
     SESSION_LINES_ROWS = Gauge("tares_session_lines_rows",
                                "Rows in the session_lines table (every claude_code line stored "
                                "since it was added), read every ten minutes")
@@ -98,6 +104,15 @@ if AVAILABLE:
     ARCHIVE_FAILURES = Counter("tares_archive_failures_total",
                                "Sessions the hourly archive could not move (the rows stay in "
                                "session_lines; the next pass tries again)")
+    SESSION_MOVE_SESSIONS = Gauge("tares_session_move_sessions",
+                                  "Sessions in the one-time move of older lines out of DuckDB, by "
+                                  "state (pending, verified, failed)",
+                                  ["state"])
+    SESSION_MOVE_LINES = Counter("tares_session_move_lines_total",
+                                 "Lines the one-time move wrote, into session_lines or the archive, "
+                                 "for sessions it verified")
+    for _state in ("pending", "verified", "failed"):
+        SESSION_MOVE_SESSIONS.labels(state=_state)
 
 _storage_probe = None
 _licence_probe = None
@@ -107,6 +122,16 @@ _licence_probe = None
 def events_ingested(source: str, n: int) -> None:
     if AVAILABLE and n:
         EVENTS.labels(source=source).inc(n)
+
+
+def challenges_lost(n: int) -> None:
+    if AVAILABLE and n:
+        CHALLENGES_LOST.inc(n)
+
+
+def session_lines_to_duckdb(n: int) -> None:
+    if AVAILABLE and n:
+        SESSION_LINES_TO_DUCKDB.inc(n)
 
 
 def poll(source: str, outcome: str) -> None:
@@ -179,6 +204,20 @@ def session_archived(nbytes: int) -> None:
     if AVAILABLE:
         ARCHIVE_SESSIONS.inc()
         ARCHIVE_BYTES.inc(nbytes)
+
+
+def session_move_sessions(counts: dict) -> None:
+    """The sessions of the one-time move by state, {state: n} (TR-1609); a state missing reads 0."""
+    if AVAILABLE:
+        for state in ("pending", "verified", "failed"):
+            SESSION_MOVE_SESSIONS.labels(state=state).set(int(counts.get(state, 0)))
+
+
+def session_move_lines(n: int) -> None:
+    """Lines written into session_lines or the archive for one verified session of the move
+    (TR-1609, TR-1611)."""
+    if AVAILABLE and n:
+        SESSION_MOVE_LINES.inc(n)
 
 
 def archive_failed() -> None:

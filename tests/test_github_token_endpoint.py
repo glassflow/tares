@@ -826,7 +826,9 @@ async def auth_off():
     section("auth off")
     reset_fake()
     daemon.AUTH_TOKEN = ""
-    daemon.DB_PATH = os.path.join(_TMP, "off.duckdb")
+    # a folder of its own: the session store is a file beside the database, so the first daemon's
+    # projects would still be there
+    daemon.DB_PATH = os.path.join(tempfile.mkdtemp(prefix="off-", dir=_TMP), "off.duckdb")
     app = daemon.make_app()
     async with app.router.lifespan_context(app):
         store = app.state.store

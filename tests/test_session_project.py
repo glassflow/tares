@@ -260,6 +260,11 @@ async def tares(shipped):
         texts = [x["text"] for x in r.json()["lines"]]
         ck("read the session top to bottom", texts[0] == "let's build an invoice parser"
            and "session works in project Invoices" in texts, texts)
+        from sqlalchemy import update as _update
+        from tares.session_store.tables import sessions as _sessions
+        with store.sessions_db.begin() as _c:        # a session the table does not hold in full
+            _c.execute(_update(_sessions).values(lines_complete=False))
+        r = await cx.get(f"/api/projects/{uid}/sessions/{SID}")
         ck("the lines come from DuckDB until the table holds them all: lines_from says events",
            r.json().get("lines_from") == "events", r.json().get("lines_from"))
         from tares import session_ingest

@@ -7,7 +7,8 @@ line. Here each line is counted once, as it is stored, into one row per session.
 `caught_up`), and scan events until then (TR-1520), so a cell just upgraded shows right numbers
 at once. Two writers keep the row right:
 
-- `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB. It
+- `record`, called by `Store.append` after a batch of claude_code lines is committed to DuckDB (in
+  the factory edition `record_first`, before DuckDB, see below). It
   adds the batch to each session's row in one transaction (`ON CONFLICT ... DO UPDATE`), so
   concurrent batches lose nothing.
 - `reconcile_sessions`, run in a background thread at start. It reads the absolute counts from
@@ -18,11 +19,28 @@ at once. Two writers keep the row right:
   chunks it sets the `sessions_caught_up` row in `session_ingest_marks`; a pass that raised does
   not, so the readers stay on the scan and the next start tries again.
 
+In the factory edition the session store is written FIRST (TR-1665, `record_first`): counts, lines,
+facts and turns in one transaction. When the store takes no write, `LinesNotStored` goes up,
+DuckDB gets nothing and `/ingest` answers 503, so the sender sends the same lines again. When the
+store is up but will not take a session's lines, the session is counted and marked
+`lines_complete` false, DuckDB keeps the lines, and the M1 drain (`session_drain.py`) copies them
+over later; the request is acknowledged, so one bad line blocks nothing behind it. When even the
+session's counts and mark cannot be written, the batch is refused like the first case (TR-1647). A
+DuckDB write that fails after the store's takes the store's back (`take_back`).
+
+With an archive, the factory edition does not write DuckDB at all for the sessions `holdable` names
+(TR-1479, TR-1647); the readers of DuckDB `events` read those from here (`session_events.py`).
+
+In the factory edition, once the one-time move out of DuckDB is complete (`session_move.complete`:
+planned, no session `pending`), `reconcile_sessions` reads nothing from DuckDB, nor do `fill_facts`
+and `fill_turns` once each has finished one pass (TR-1613), and the usage and challenger fills of
+`Store._upgrade` read it once (`filled_once`). The platform editions are as described below.
+
 The readers know the table has caught up from one row in `session_ingest_marks`, `CAUGHT_UP`. It
 is set by the first complete `reconcile_sessions`, or at once by `Store.__init__` on a cell whose
 events hold no claude_code line (nothing to catch up on). It is never unset.
 
-DuckDB is never changed: `Store.append` keeps writing every line there.
+Nothing here changes DuckDB: `Store.append` alone decides what is written there.
 
 The same two writers keep the facts the factory reads (TR-1477): the crew's protocol messages in
 `session_messages` and the shell commands sessions ran, with what they printed, in
@@ -50,12 +68,20 @@ within its session by `seq`. `record` takes `seq` from the `line_count` the `ses
 and inserts the lines in that transaction, so `seq` is dense and unique per session on SQLite and
 Postgres. DuckDB does not deduplicate a line, so `session_lines` does not either, and the two counts
 can be compared: `sessions.lines_complete` is true when a session has as many rows in
-`session_lines` as lines in DuckDB. A new row starts false; the reconcile sets it for the sessions
-it reads (every 10 minutes, and at start), and a `record` that could not write a session's lines
-sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
+`session_lines` as lines in DuckDB. A row `record` makes is born in the table (`lines_origin =
+'table'`, TR-1606) and starts true: its lines go in with its counts, and it is complete when the
+table and the archive hold `line_count` lines, with no DuckDB read; the start-up pass
+`repair_table_sessions` recomputes that for every such session. A row the reconcile makes has a null
+origin, starts false, and is set by comparing with DuckDB (every 10 minutes, and at start). A
+`record` that could not write a session's lines sets it false. The hourly archive (`session_archive.py`, TR-1506) moves the rows of sessions idle for
 a week into files and records each file in `session_archive_parts`; the count compared with DuckDB's
 is the rows of `session_lines` plus the `lines` of the parts. `session_read.py` (TR-1507) reads a
-complete session from the table and the parts instead of DuckDB; nothing fills the table from old events (milestone 2). `tares_session_lines_rows` and `tares_session_lines_bytes` say how big it is.
+complete session from the table and the parts instead of DuckDB. The table is filled from old events
+once, by `session_move.py` (TR-1609, TR-1611): a background job at the first start of the factory
+edition rebuilds every session from DuckDB's lines and the lines only the table or the archive
+holds, into the table when its last line is inside the archive window and straight into archive
+parts when it is older, and verifies each. `tares_session_lines_rows` and
+`tares_session_lines_bytes` say how big the table is.
 
 Two things to know when reading the table:
 
@@ -76,11 +102,12 @@ import time
 import weakref
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Text, bindparam, delete, func, insert, select, text, update
+from sqlalchemy import Text, bindparam, delete, exists, func, insert, literal, select, text, update
 
-from . import metrics
+from . import edition, metrics
 from .envelope import now_utc
 from .factory import is_coordination
+from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (session_archive_parts, session_commands, session_files,
                                    session_ingest_marks, session_lines, session_messages,
                                    session_said, session_turns, sessions)
@@ -91,13 +118,22 @@ MARGIN = timedelta(minutes=10)       # a pass starts this long before the last o
 CHUNK = 200                          # sessions read from DuckDB under one hold of the lock
 FACTS_MARK = "session_facts"         # the facts fill's row in session_ingest_marks (TR-1477)
 TURNS_MARK = "session_turns"         # the turns fill's row in session_ingest_marks (TR-1505)
+USAGE_FILLED = "claude_usage_filled"     # the factory's usage fill read DuckDB (TR-1613)
+CHALLENGES_FILLED = "challenges_filled"  # the factory's challenger fill read DuckDB (TR-1613)
+FACTS_FILLED = "session_facts_filled"    # a facts fill finished on this factory cell (TR-1613)
+TURNS_FILLED = "session_turns_filled"    # a turns fill finished on this factory cell (TR-1613)
 SAID_KEEP = 3                        # the assistant messages kept per session
 SAID_READ = 60                       # the newest assistant lines per session a fill reads
 FILES_READ = 400                     # the newest file-editing tool_use lines per session a fill reads
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 OUTPUT_TAIL = 20000                  # characters of a command's output kept: a test run's summary is at the end
 MESSAGE_TEXT = 4000                  # characters of a protocol message kept
+TABLE = "table"                      # `sessions.lines_origin` of a session born in session_lines (TR-1606)
 CYCLE = 600.0                        # seconds between the reconcile passes after the first (TR-1478)
+# names in session_ingest_marks, each followed by a session id (TR-1665, `session_drain`)
+DRAIN_TODO = "session_drain_todo:"   # a session the drain still has to refill, or to write facts of
+DRAIN_GAVE_UP = "session_drain_gave_up:"   # the drain could not store all its lines: not tried again
+PROBE_SESSION = "tares:write-probe"  # the row a probe writes and removes in one transaction
 
 # the rendered text names each tool as "→ name(": a cheap filter before the payload is parsed
 # (the same one `Store.coordination_calls` puts in its SQL)
@@ -129,9 +165,9 @@ def coordination_in(text: str | None, payload) -> int:
 def claude_code_sources(store) -> set[str]:
     """The names of the cell's claude_code sources (`claude_code` too, which `cc_source` falls back
     to when the catalog has none)."""
-    with store._sread:
-        rows = store.sc.execute(
-            "SELECT name FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
+    with store.sessions_db.read() as conn:
+        rows = conn.execute(select(sources_table.c.name).where(
+            sources_table.c.connector == "claude_code")).all()
     return {r[0] for r in rows} | {"claude_code"}
 
 
@@ -153,6 +189,35 @@ def claude_code_lines(store, envelopes) -> list:
         return cands          # the default name: no catalog lookup for the common case
     ours = claude_code_sources(store)
     return [e for e in cands if e.source in ours]
+
+
+def holdable(store, lines: list) -> list:
+    """The claude_code `lines` the session store may hold alone, without a copy in DuckDB
+    (TR-1479): those of a session with no row yet, or whose row was born in the table and is
+    complete. A session from before `lines_origin` (null), one the reconcile made, one a failed
+    write left incomplete, or one with the drain's todo mark keeps getting its lines in DuckDB too:
+    it is judged against DuckDB's count, and a read of it falls back to DuckDB, so a line held back
+    would be missing there.
+    `session_lines` keeps no source of a line: a stored line's source is its session's (TR-1647),
+    so a line of another claude_code source than the session's keeps going to DuckDB.
+    Called under `Store._sess_lock`, so no `record` changes a row meanwhile."""
+    own: dict = {}                      # a session with no row yet takes its first line's source
+    for e in lines:
+        own.setdefault(e.key_value, e.source)
+    sids = sorted(own)
+    ok = set(sids)
+    c = sessions.c
+    todo = exists(select(session_ingest_marks.c.name).where(
+        session_ingest_marks.c.name == literal(DRAIN_TODO) + c.session))
+    with store.sessions_db.read() as conn:
+        for i in range(0, len(sids), 500):
+            for sid, source, origin, done, waits in conn.execute(
+                    select(c.session, c.source, c.lines_origin, c.lines_complete, todo.label("todo"))
+                    .where(c.session.in_(sids[i:i + 500]))).all():
+                own[sid] = source
+                if waits or not (origin == TABLE and done):
+                    ok.discard(sid)
+    return [e for e in lines if e.key_value in ok and e.source == own[e.key_value]]
 
 
 def _utc(t: datetime) -> datetime:
@@ -205,7 +270,7 @@ def _text(v, limit: int | None = None, tail: bool = False) -> str:
 
 def _fact_id(block: dict, session: str, at: datetime, n: int) -> str:
     """A call's id: its tool_use id, or, for a block without one, a stand-in from the line."""
-    return str(block["id"]) if block.get("id") else f"{session}:{at.isoformat()}:{n}"
+    return _text(block.get("id")) or f"{session}:{at.isoformat()}:{n}"
 
 
 def message_facts(event_type: str, text: str | None, payload, session: str, at: datetime,
@@ -271,12 +336,13 @@ def result_facts(event_type: str, payload, at: datetime) -> list[dict]:
     own = _codex(payload)
     out = []
     for b in _blocks(payload):
-        if b.get("type") != "tool_result" or not b.get("tool_use_id"):
+        tool_use_id = _text(b.get("tool_use_id"))
+        if b.get("type") != "tool_result" or not tool_use_id:
             continue
         c = b.get("content")
         if isinstance(c, list):
             c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
-        row = {"tool_use_id": str(b["tool_use_id"]), "exit_code": 1 if b.get("is_error") else 0,
+        row = {"tool_use_id": tool_use_id, "exit_code": 1 if b.get("is_error") else 0,
                "output_tail": _text(c, OUTPUT_TAIL, tail=True), "result_at": at,
                "cwd": None, "outcome": None, "command": None}
         if own.get("outcome"):
@@ -510,13 +576,14 @@ def _add_turns(store, rows: dict) -> None:
         _write_turns(conn, db, rows)
 
 
-def _add(store, folded: dict, lines: dict | None = None) -> None:
+def _add(store, folded: dict, lines: dict | None = None, also=None) -> dict:
     """Add each session's counts to its row, in one transaction. Rows are written in session order,
     so two writers on Postgres meet their rows in the same order and cannot deadlock. With `lines`
     ({session: [row of session_lines without its seq, ...]}, from `_line_rows`) the same
     transaction numbers each session's lines from the `line_count` the upsert returns, and inserts
     them: a line is counted and stored together or not at all, and two batches of one session never
-    take the same `seq`."""
+    take the same `seq`. `also(conn)` writes what must land in that transaction too. Returns
+    {session: line_count after the write} when `lines` was given, else {}."""
     db = store.sessions_db
     now = now_utc()
     stmt = db.upsert(sessions)
@@ -529,13 +596,18 @@ def _add(store, folded: dict, lines: dict | None = None) -> None:
               "started_at": db.least(sessions.c.started_at, stmt.excluded.started_at),
               "last_line_at": db.greatest(sessions.c.last_line_at, stmt.excluded.last_line_at),
               "updated_at": stmt.excluded.updated_at})
+    # a session with no row yet is born in the table (TR-1606): complete when its lines go in with
+    # its counts, short when they do not
     rows = [{"session": sid, "source": r[0], "started_at": r[1], "last_line_at": r[2],
-             "line_count": r[3], "tool_calls": r[4], "coordination_calls": r[5], "updated_at": now}
+             "line_count": r[3], "tool_calls": r[4], "coordination_calls": r[5], "updated_at": now,
+             "lines_origin": "table", "lines_complete": bool(lines)}
             for sid, r in sorted(folded.items())]
     with db.begin() as conn:
         if not lines:
             conn.execute(stmt, rows)
-            return
+            if also:
+                also(conn)
+            return {}
         c = sessions.c
         total = dict(conn.execute(stmt.returning(c.session, c.line_count), rows).all())
         out = []
@@ -544,6 +616,9 @@ def _add(store, folded: dict, lines: dict | None = None) -> None:
             first = total[sid] - len(mine) + 1
             out += [{**r, "session": sid, "seq": first + i} for i, r in enumerate(mine)]
         conn.execute(insert(session_lines), out)
+        if also:
+            also(conn)
+    return total
 
 
 def render_flags(store, sources) -> dict:
@@ -551,17 +626,13 @@ def render_flags(store, sources) -> dict:
     flags the connector builds a line's text with (`include_thinking`, `redact`), read from the
     source's config in the catalog, with the connector's defaults when the source has none."""
     flags = {s: {"include_thinking": False, "redact": True} for s in sources}
-    with store._sread:
-        rows = store.sc.execute(
-            "SELECT name, config FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
+    with store.sessions_db.read() as conn:
+        rows = conn.execute(select(sources_table.c.name, sources_table.c.config).where(
+            sources_table.c.connector == "claude_code")).all()
     for name, raw in rows:
         if name not in flags:
             continue
-        try:
-            cfg = json.loads(raw or "{}")
-        except (TypeError, ValueError):
-            cfg = {}
-        cfg = cfg if isinstance(cfg, dict) else {}
+        cfg = raw if isinstance(raw, dict) else {}
         flags[name] = {"include_thinking": bool(cfg.get("include_thinking", False)),
                        "redact": bool(cfg.get("redact", True))}
     return {s: json.dumps(f, sort_keys=True) for s, f in flags.items()}
@@ -602,18 +673,22 @@ def _add_facts(store, facts: dict) -> None:
         _write_facts(conn, db, facts)
 
 
-def record(store, envelopes) -> None:
-    """Count a batch of claude_code lines (already committed to DuckDB) into `sessions`. A failure
-    logs one line and counts in tares_session_ingest_failures_total; it never reaches the caller,
-    because the lines are stored and the next start's reconcile counts them."""
+def record(store, envelopes) -> bool:
+    """Count a batch of claude_code lines (already committed to DuckDB, or held back from it, see
+    `Store.append`) into `sessions`. A failure logs one line and counts in
+    tares_session_ingest_failures_total; it never reaches the caller, because the lines are stored
+    and the next start's reconcile counts them. Returns whether the lines went into
+    `session_lines`: a caller that kept them out of DuckDB writes them there when it did not."""
     if not envelopes:
-        return
+        return True
     t0 = time.perf_counter()
     ok = True
+    lines_ok = False
     folded: dict = {}
     try:
         folded = _fold(envelopes)
         _add(store, folded, _line_rows(store, envelopes))
+        lines_ok = True
     except Exception as e:
         ok = False
         print(f"taresd: counting {len(envelopes)} claude_code line(s) into sessions failed "
@@ -645,11 +720,199 @@ def record(store, envelopes) -> None:
         print(f"taresd: writing the turns of {len(envelopes)} claude_code line(s) failed "
               f"({type(e).__name__}: {e}); written at the next start", flush=True)
     metrics.session_ingest(time.perf_counter() - t0, ok)
+    return lines_ok
+
+
+# ── the factory edition writes the session store first (TR-1665) ─────────────────────────────
+# The factory's pages read only the session store, so a claude_code line is not acknowledged until
+# the store has it, or has a durable mark that says it is missing. `Store.append` calls
+# `record_first` before it writes DuckDB. The platform editions keep `record`, after DuckDB.
+class LinesNotStored(RuntimeError):
+    """The sessions database takes no write: the lines are not acknowledged, and nothing of them is
+    stored, so the sender sends them again."""
+
+
+class Written:
+    """What `record_first` wrote for one batch: `counted` is [(session, lines, tool calls,
+    coordination calls, the last seq of its rows or None when no rows were written)], what
+    `take_back` undoes; `refused` the sessions whose lines the store would not take."""
+
+    def __init__(self):
+        self.counted: list = []
+        self.refused: set = set()
+
+    def add(self, folded: dict, totals: dict) -> None:
+        self.counted += [(sid, r[3], r[4], r[5], totals.get(sid)) for sid, r in sorted(folded.items())]
+
+
+def _probe(store) -> None:
+    """Raise `LinesNotStored` unless the store takes a plain write now: a harmless row of
+    `sessions`, written and removed in one transaction. It tells a store that is down from one that
+    refuses a particular line."""
+    now = now_utc()
+    try:
+        with store.sessions_db.begin() as conn:
+            conn.execute(insert(sessions).values(
+                session=PROBE_SESSION, source="tares", started_at=now, last_line_at=now,
+                line_count=0, tool_calls=0, coordination_calls=0, updated_at=now,
+                lines_origin=TABLE, lines_complete=True))
+            conn.execute(delete(sessions).where(sessions.c.session == PROBE_SESSION))
+    except Exception as e:
+        raise LinesNotStored(f"the sessions database does not take writes ({type(e).__name__}: "
+                               f"{e}); send the lines again") from e
+
+
+def _write_whole(store, envelopes, written: Written) -> None:
+    """Counts, lines, facts and turns of `envelopes` in one transaction: all of it or nothing."""
+    db = store.sessions_db
+    folded = _fold(envelopes)
+    lines = _line_rows(store, envelopes)
+    facts = facts_of((e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
+                     for e in envelopes)
+    turns = turns_of((e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload, e.labels)
+                     for e in envelopes)
+
+    def also(conn):
+        _write_facts(conn, db, facts)
+        _write_turns(conn, db, turns)
+    written.add(folded, _add(store, folded, lines, also))
+
+
+def _write_refused(store, sid: str, envelopes, written: Written) -> None:
+    """A session whose lines the store will not take: its counts, with the durable mark that its
+    lines are missing (`lines_complete` false, which `session_drain` reads), in one transaction;
+    then its facts and turns, as far as they go. DuckDB keeps the lines.
+
+    When that transaction does not go through either, nothing would ever say the lines are missing,
+    so they are not acknowledged: `LinesNotStored`, and the sender sends them again (TR-1647)."""
+    folded = _fold(envelopes)
+
+    def mark(conn):
+        conn.execute(update(sessions).where(sessions.c.session == sid).values(lines_complete=False))
+        conn.execute(delete(session_ingest_marks).where(     # a new miss: the drain tries again
+            session_ingest_marks.c.name == DRAIN_GAVE_UP + sid))
+    written.refused.add(sid)
+    for last_try in (False, True):
+        try:
+            _add(store, folded, also=mark)
+            written.add(folded, {})
+            break
+        except Exception as e:
+            _probe(store)          # down: the whole batch is refused and sent again
+            if last_try:           # up, and still neither counted nor marked
+                print(f"taresd: the sessions database does not take the row of session {sid} "
+                      f"({type(e).__name__}: {e}); {len(envelopes)} claude_code line(s) are not "
+                      "acknowledged, the sender sends them again", flush=True)
+                raise LinesNotStored(f"the sessions database does not take the row of session "
+                                     f"{sid} ({type(e).__name__}: {e}); send the lines again") from e
+    for what, write in (
+            ("facts", lambda: _add_facts(store, facts_of(
+                (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload)
+                for e in envelopes))),
+            ("turns", lambda: _add_turns(store, turns_of(
+                (e.source, e.key_value, e.event_time, e.event_type, e.text, e.payload, e.labels)
+                for e in envelopes)))):
+        try:
+            write()
+        except Exception as e:
+            print(f"taresd: writing the {what} of {len(envelopes)} claude_code line(s) failed "
+                  f"({type(e).__name__}: {e}); the background repair tries again", flush=True)
+
+
+def record_first(store, envelopes) -> Written:
+    """Write a batch of claude_code lines to the session store BEFORE DuckDB has it (factory).
+
+    The batch goes in one transaction. When that fails: a store that takes no write raises
+    `LinesNotStored` and nothing is stored. Otherwise each session is tried again on its own (a
+    passing error succeeds then), and one that still fails is counted, marked incomplete and left to
+    `session_drain`, so a line that can never be stored does not make the sender send it for ever.
+    Called under `Store._sess_lock`."""
+    written = Written()
+    if not envelopes:
+        return written
+    t0 = time.perf_counter()
+    try:
+        _write_whole(store, envelopes, written)
+    except Exception:
+        by_session: dict = {}
+        for e in envelopes:
+            by_session.setdefault(e.key_value, []).append(e)
+        try:
+            _probe(store)
+            for sid, mine in sorted(by_session.items()):
+                try:
+                    _write_whole(store, mine, written)
+                except Exception as e:
+                    _probe(store)
+                    why = f"{type(e).__name__}: {e}"
+                    _write_refused(store, sid, mine, written)
+                    print(f"taresd: the sessions database refused {len(mine)} claude_code line(s) "
+                          f"of session {sid} ({why}); counted, and copied from DuckDB by the "
+                          "background repair", flush=True)
+        except LinesNotStored:
+            take_back(store, written)
+            metrics.session_ingest(time.perf_counter() - t0, False)
+            raise
+    metrics.session_ingest(time.perf_counter() - t0, not written.refused)
+    return written
+
+
+def take_back(store, written: Written) -> None:
+    """Undo the counts and lines `record_first` wrote for a batch that is refused after all, so the
+    batch sent again is not counted twice. Facts and turns need no undoing: a second write of them
+    changes nothing. Called under the same hold of `Store._sess_lock`."""
+    if not written.counted:
+        return
+    c = sessions.c
+    try:
+        with store.sessions_db.begin() as conn:
+            for sid, n, tools, coord, last in sorted(written.counted, key=lambda r: r[0]):
+                if last is not None:
+                    conn.execute(delete(session_lines).where(
+                        session_lines.c.session == sid, session_lines.c.seq > last - n))
+                conn.execute(update(sessions).where(c.session == sid).values(
+                    line_count=c.line_count - n, tool_calls=c.tool_calls - tools,
+                    coordination_calls=c.coordination_calls - coord))
+                conn.execute(delete(sessions).where(c.session == sid, c.line_count <= 0))
+    except Exception as e:
+        print(f"taresd: {sum(r[1] for r in written.counted)} claude_code line(s) stayed in the "
+              f"sessions database after their batch was refused ({type(e).__name__}: {e}); sent "
+              "again, they are stored there twice", flush=True)
+
+
+def mark_drain_todo(store, sids) -> None:
+    """Leave `sids` for `session_drain` to refill, whatever their `lines_complete` says."""
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).on_conflict_do_nothing(index_elements=["name"])
+    now = now_utc()
+    with db.begin() as conn:
+        conn.execute(stmt, [{"name": DRAIN_TODO + sid, "at": now} for sid in sorted(sids)])
+
+
+# ── fills the factory runs once ──────────────────────────────────────────────────────────────
+def filled_once(store, name: str) -> bool:
+    """True in the factory edition when the fill `name` has finished before, so it reads DuckDB's
+    events no more (TR-1613). The platform editions run their fills at every open."""
+    if edition.edition(store)[0] != "factory":
+        return False
+    with store.sessions_db.read() as conn:
+        return conn.execute(select(session_ingest_marks.c.at).where(
+            session_ingest_marks.c.name == name)).first() is not None
+
+
+def set_filled(store, name: str) -> None:
+    """Record, in the factory edition, that the fill `name` finished. Call it after the fill wrote."""
+    if edition.edition(store)[0] != "factory":
+        return
+    db = store.sessions_db
+    stmt = db.upsert(session_ingest_marks).values(name=name, at=now_utc())
+    with db.begin() as conn:
+        conn.execute(stmt.on_conflict_do_nothing(index_elements=["name"]))
 
 
 # ── catching up from DuckDB ──────────────────────────────────────────────────────────────────
 def _mark(store):
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == MARK)).scalar_one_or_none()
 
@@ -668,7 +931,7 @@ def caught_up(store) -> bool:
     is kept on the store (the row is never unset, and losing the answer changes nothing)."""
     if getattr(store, "_sessions_caught_up", False):
         return True
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         at = conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == CAUGHT_UP)).first()
     if at is None:
@@ -710,7 +973,15 @@ def reconcile_sessions(store, chunk: int = CHUNK) -> int:
     chunks of `chunk` sessions, taking and letting go of the store's lock for each, and writes
     under the same lock that `Store.append` holds across its commit and `record`, so a line is
     never counted by both. Sets the caught-up row when every chunk has been written (even when it
-    found no session). Returns how many sessions it looked at."""
+    found no session). Returns how many sessions it looked at.
+
+    In the factory edition, once the one-time move is complete (`session_move.events_done`), DuckDB
+    is not read: the caught-up row is set and the mark is left where it was."""
+    from . import session_move          # session_move imports this module
+    if session_move.events_done(store):
+        if not caught_up(store):
+            _set_caught_up(store)
+        return 0
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _mark(store)
@@ -778,26 +1049,54 @@ def _reconcile_chunk(store, sources: list, sids: list) -> None:
             _set_lines_complete(conn, {sid: c[3] for sid, c in computed.items()})
 
 
-def _set_lines_complete(conn, wanted: dict) -> None:
-    """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}): true when
-    `session_lines` holds as many rows, archived parts included (TR-1506), else false. DuckDB's
-    count was read under the lock that `Store.append` holds from its commit to the end of
-    `record`, so neither side moves meanwhile."""
-    sids = sorted(wanted)
-    have: dict = {}
-    # one statement, so one snapshot on Postgres: a session the archive moves between two queries
-    # (rows deleted, part inserted, one transaction) would be counted twice or not at all
+def _held_lines():
+    """The count of the lines `session_lines` and the archive hold for `sessions.session`: rows of
+    the table plus the `lines` of the archived parts (TR-1506). One statement with the session row,
+    so one snapshot on Postgres: a session the archive moves between two queries (rows deleted, part
+    inserted, one transaction) would be counted twice or not at all."""
     kept = select(func.count()).where(session_lines.c.session == sessions.c.session).scalar_subquery()
     archived = select(func.coalesce(func.sum(session_archive_parts.c.lines), 0)).where(
         session_archive_parts.c.session == sessions.c.session).scalar_subquery()
+    return kept + archived
+
+
+def _set_lines_complete(conn, wanted: dict) -> None:
+    """`lines_complete` of each session of `wanted` ({session: lines DuckDB holds}). A session born
+    in the table (`lines_origin = 'table'`, TR-1606) is complete when the table and the archive hold
+    `sessions.line_count` lines, and DuckDB's count is not looked at. Any other session is complete
+    when they hold as many lines as DuckDB does. DuckDB's count was read under the lock that
+    `Store.append` holds from its commit to the end of `record`, so neither side moves meanwhile."""
+    sids = sorted(wanted)
+    have: dict = {}
+    held = _held_lines()
     for i in range(0, len(sids), 500):
-        have.update(conn.execute(select(sessions.c.session, kept + archived).where(
-            sessions.c.session.in_(sids[i:i + 500]))).all())
-    for flag in (True, False):
-        mine = [sid for sid in sids if (have.get(sid, 0) == wanted[sid]) is flag]
+        have.update({r[0]: r[1:] for r in conn.execute(select(
+            sessions.c.session, sessions.c.lines_origin, sessions.c.line_count, held).where(
+            sessions.c.session.in_(sids[i:i + 500]))).all()})
+    flags: dict = {True: [], False: []}
+    for sid in sids:
+        origin, count, n = have.get(sid, (None, 0, 0))
+        flags[n == (count if origin == TABLE else wanted[sid])].append(sid)
+    for flag, mine in flags.items():
         for i in range(0, len(mine), 500):
             conn.execute(update(sessions).where(sessions.c.session.in_(mine[i:i + 500]))
                          .values(lines_complete=flag))
+
+
+def repair_table_sessions(store) -> int:
+    """Recompute `lines_complete` of every session born in the table (TR-1606): complete when the
+    table and the archive hold `line_count` lines. Run at start: it puts right a session that 1.61.0
+    marked false against DuckDB's count after a rollback, or that a failed write left false and a
+    later pass filled. Two statements, one per direction, that touch only the rows that change.
+    Returns how many rows changed."""
+    whole = _held_lines() == sessions.c.line_count
+    n = 0
+    with store.sessions_db.begin() as conn:
+        for flag in (True, False):
+            n += conn.execute(update(sessions).where(
+                sessions.c.lines_origin == TABLE, sessions.c.lines_complete.is_(not flag),
+                whole if flag else ~whole).values(lines_complete=flag)).rowcount
+    return n
 
 
 def lines_size(store) -> tuple[int, int]:
@@ -805,7 +1104,7 @@ def lines_size(store) -> tuple[int, int]:
     its indexes on Postgres (`pg_total_relation_size`) or the whole file's size on SQLite (pages
     times page size: SQLite has no size per table without a build option)."""
     db = store.sessions_db
-    with db.begin() as conn:
+    with db.read() as conn:
         rows = conn.execute(select(func.count()).select_from(session_lines)).scalar_one()
         if db.dialect == "postgresql":
             size = conn.execute(text("SELECT pg_total_relation_size('session_lines')")).scalar_one()
@@ -825,7 +1124,7 @@ def refresh_lines_gauges(store) -> None:
 
 
 def _facts_mark(store):
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == FACTS_MARK)).scalar_one_or_none()
 
@@ -845,7 +1144,14 @@ def fill_facts(store, chunk: int = CHUNK) -> int:
     line `record` already wrote, or a pass that runs twice, changes nothing. Reads DuckDB for
     `chunk` sessions at a time, taking and letting go of the store's lock for each; the mark moves
     to the newest `ingest_time` read once every chunk is written, so a pass that raised is read
-    again from the same place. Returns how many sessions it looked at."""
+    again from the same place. Returns how many sessions it looked at.
+
+    In the factory edition, once the one-time move is complete and this fill has finished before
+    (`FACTS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
+    reads once more, so a session whose fill failed during the move is covered."""
+    from . import session_move          # session_move imports this module
+    if session_move.events_done(store) and filled_once(store, FACTS_FILLED):
+        return 0
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _facts_mark(store)
@@ -863,6 +1169,7 @@ def fill_facts(store, chunk: int = CHUNK) -> int:
         _fill_chunk(store, sources, sids[i:i + chunk], since)
     if newest is not None:
         _set_facts_mark(store, _utc(newest))
+    set_filled(store, FACTS_FILLED)
     return len(sids)
 
 
@@ -887,7 +1194,7 @@ def _fill_chunk(store, sources: list, sids: list, since) -> None:
 
 
 def _turns_mark(store):
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         return conn.execute(select(session_ingest_marks.c.at).where(
             session_ingest_marks.c.name == TURNS_MARK)).scalar_one_or_none()
 
@@ -908,7 +1215,14 @@ def fill_turns(store, chunk: int = CHUNK) -> int:
     changes nothing. Reads DuckDB for `chunk` sessions at a time, taking and letting go of the
     store's lock for each, so one chunk is in memory at once; the mark moves to the newest
     `ingest_time` read once every chunk is written, so a pass that raised is read again from the
-    same place. Returns how many sessions it looked at."""
+    same place. Returns how many sessions it looked at.
+
+    In the factory edition, once the one-time move is complete and this fill has finished before
+    (`TURNS_FILLED`), nothing is read: `record` writes what arrives. A cell where it never finished
+    reads once more, so a session whose fill failed during the move is covered."""
+    from . import session_move          # session_move imports this module
+    if session_move.events_done(store) and filled_once(store, TURNS_FILLED):
+        return 0
     sources = sorted(claude_code_sources(store))
     marks = ", ".join("?" for _ in sources)
     mark = _turns_mark(store)
@@ -926,6 +1240,7 @@ def fill_turns(store, chunk: int = CHUNK) -> int:
         _fill_turns_chunk(store, sources, sids[i:i + chunk], since)
     if newest is not None:
         _set_turns_mark(store, _utc(newest))
+    set_filled(store, TURNS_FILLED)
     return len(sids)
 
 
@@ -960,6 +1275,16 @@ def _fill_turns_chunk(store, sources: list, sids: list, since) -> None:
         _write_turns(conn, db, rows)
 
 
+def _repair_pass(store) -> None:
+    try:
+        n = repair_table_sessions(store)
+        if n:
+            print(f"taresd: lines_complete put right for {n} session(s)", flush=True)
+    except Exception as e:
+        print(f"taresd: lines_complete repair failed ({type(e).__name__}: {e}); "
+              "tried again at the next start", flush=True)
+
+
 def _reconcile_pass(store, t0: float) -> None:
     # one pass at a time: the start-up pass can still be running when the first cycle comes round
     with store.__dict__.setdefault("_reconcile_pass_lock", threading.Lock()):
@@ -974,6 +1299,16 @@ def _reconcile_pass(store, t0: float) -> None:
         refresh_lines_gauges(store)
 
 
+def _drain_pass(store, stop: threading.Event | None = None) -> None:
+    """Repair the factory's marked sessions (`session_drain`, TR-1665)."""
+    from . import session_drain          # it imports this module
+    try:
+        session_drain.drain(store, stop=stop)
+    except Exception as e:
+        print(f"taresd: M1 drain failed ({type(e).__name__}: {e}); tried again at the next pass",
+              flush=True)
+
+
 def _cycle(ref, stop: threading.Event) -> None:
     """After the first pass: `reconcile_sessions` again every `CYCLE` seconds, so a session that
     `record` wrote in full becomes `lines_complete` within minutes, and the gauges of
@@ -985,7 +1320,24 @@ def _cycle(ref, stop: threading.Event) -> None:
         if store is None:
             return
         _reconcile_pass(store, time.perf_counter())
+        _usage_hourly_pass(store)       # a no-op once the hourly totals are built (TR-1632)
+        _drain_pass(store, stop)
         del store
+
+
+def _usage_hourly_pass(store) -> None:
+    """Build the hourly usage totals the page reads (`claude_usage_hourly.fill`): chunked, resumes
+    from its cursor, sets its ready mark only after the totals match the usage rows."""
+    from . import claude_usage_hourly
+    t = time.perf_counter()
+    try:
+        n = claude_usage_hourly.fill(store)
+        if n:
+            print(f"taresd: hourly usage totals built for {n} session(s) in "
+                  f"{time.perf_counter() - t:.1f}s", flush=True)
+    except Exception as e:
+        print(f"taresd: hourly usage totals failed ({type(e).__name__}: {e}); "
+              "tried again at the next pass", flush=True)
 
 
 def start_reconcile(store) -> threading.Thread:
@@ -993,6 +1345,7 @@ def start_reconcile(store) -> threading.Thread:
     (the thread returned), and `reconcile_sessions` again every ten minutes in another. A failure
     prints one line: the next pass tries again, and the tables only undercount until then."""
     def run():
+        _repair_pass(store)
         _reconcile_pass(store, time.perf_counter())
         t1 = time.perf_counter()
         try:
@@ -1012,8 +1365,11 @@ def start_reconcile(store) -> threading.Thread:
         except Exception as e:
             print(f"taresd: session turns fill failed ({type(e).__name__}: {e}); "
                   "tried again at the next start", flush=True)
+        _usage_hourly_pass(store)
+        _drain_pass(store)
     th = threading.Thread(target=run, name="sessions-reconcile", daemon=True)
     th.start()
+    store._reconcile_thread = th    # `Store.close` waits for it before the connections go
     stop = getattr(store, "_reconcile_stop", None)
     if stop is None:
         stop = store._reconcile_stop = threading.Event()

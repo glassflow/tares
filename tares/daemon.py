@@ -60,6 +60,8 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import licence
 from . import session_archive
+from . import session_ingest
+from . import session_digest, session_move
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -67,7 +69,7 @@ from . import memory_route
 from .integrations.builtin import memory_tares
 from . import answers as answers_mod, claude_usage, factory_api, guardrails_api, integrations_api, milestone_summary, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod, waiting_slack as waiting_slack_mod
 from . import edition as edition_mod
-from . import factory_home, sre_home, screens, start_steps
+from . import factory_home, request_memo, sre_home, screens, start_steps
 from . import sre as sre_mod
 from . import watch as watch_mod
 from . import feedback as feedback_mod
@@ -653,6 +655,11 @@ def make_app() -> FastAPI:
     # The sessions table catches up with the events in the background (TR-1471); the lines stored
     # from here on are counted as they arrive.
     store.start_session_reconcile()
+    # the factory edition's recent sessions are rebuilt in the session store, once (TR-1609)
+    session_move.start(store)
+    # factory edition: the times of the stored lines are read into memory in the background, so the
+    # first trigger and page do not wait for it (TR-1695)
+    session_digest.start(store)
 
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)
@@ -1626,6 +1633,8 @@ def make_app() -> FastAPI:
             _err(e, 404)
         except ValueError as e:
             _err(e, 400)
+        except session_ingest.LinesNotStored as e:
+            _err(e, 503)         # not acknowledged: the sender keeps the lines and sends them again
         await _seed_challenger(token, body)
         return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
 
@@ -1853,6 +1862,7 @@ def make_app() -> FastAPI:
                 if claimed:
                     if picture:
                         claimed = store.update_person(claimed["id"], picture=picture) or claimed
+                    factory_home.clear_cache()   # the kept pages name people
                     return _person_out(claimed)
             with team_mod.ADD_LOCK:   # the seat check and the insert are one step
                 # a creation of this email that held the lock first has made the row since the
@@ -1873,6 +1883,7 @@ def make_app() -> FastAPI:
                                         bool(body.get("is_admin")), via="admin")
             if picture:
                 p = store.update_person(p["id"], picture=picture) or p
+            factory_home.clear_cache()
         except ValueError as e:
             # this handler runs in the thread pool: two creations of one email can both pass the
             # lookup above, and the loser then meets the winner's row. It gets that person (200).
@@ -1898,6 +1909,7 @@ def make_app() -> FastAPI:
             _err(e, 400)
         if not removed:
             raise HTTPException(status_code=404, detail="no such person")
+        factory_home.clear_cache()
         return {"removed": True}
 
     @app.patch("/api/people/{pid}")
@@ -1932,6 +1944,7 @@ def make_app() -> FastAPI:
             _err(e, 409 if "already belongs" in str(e) else 400)
         if not p:
             _err(KeyError(f"no person {pid!r}"), 404)
+        factory_home.clear_cache()
         return _person_out(p)
 
     @app.get("/api/whoami")
@@ -4123,6 +4136,7 @@ def make_app() -> FastAPI:
                 "lead": p["lead"]}
 
     @app.get("/api/projects")
+    @request_memo.page
     def list_projects(request: Request):
         pk = _pk(request)
         if pk:
@@ -4206,6 +4220,7 @@ def make_app() -> FastAPI:
                 out = {**projects.get(uid), "report": out["report"]}
             if body.name.strip():
                 store.update_project(uid, name=body.name.strip())
+                factory_home.clear_cache()
                 out = {**projects.get(uid), "report": out["report"]}
             return out
         except Exception as e:
@@ -4227,6 +4242,7 @@ def make_app() -> FastAPI:
         except Exception as e:
             _uc_err(e)
         sre_home.clear_cache()
+        factory_home.clear_cache()
         return out
 
     @app.post("/api/projects/{uid}/sources")
@@ -5406,8 +5422,8 @@ def make_app() -> FastAPI:
         elif "last_review" in ctx:
             out["verdict"] = factory_api.verdict_now(t, ctx["last_review"].get(t["id"]))
         else:
-            last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
-            out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
+            rounds = store.ticket_reviews(t["id"]) if t["stage"] else []
+            out["verdict"] = factory_api.verdict_now(t, factory_mod.standing_round(rounds))
         return out
 
     def _tickets_out(uid: str) -> list[dict]:
@@ -6180,9 +6196,10 @@ def make_app() -> FastAPI:
 
     def _standup(since: str | None, until: str | None) -> dict:
         start, end = _standup_range(since, until)
-        return standup_mod.facts(store, start, end,
-                                 lambda uid: factory_api.project_progress(store, uid),
-                                 hide=_hidden_ids())
+        return standup_mod.facts(
+            store, start, end,
+            lambda uid, tickets, ms: factory_api.project_progress(store, uid, tickets, ms),
+            hide=_hidden_ids())
 
     @app.get("/api/crew/standup")
     def crew_standup(since: str | None = None, until: str | None = None):
@@ -6285,7 +6302,8 @@ def make_app() -> FastAPI:
     _morning = morning_mod.MorningStatus(
         store,
         report=lambda since, until: standup_mod.facts(
-            store, since, until, lambda uid: factory_api.project_progress(store, uid),
+            store, since, until,
+            lambda uid, tickets, ms: factory_api.project_progress(store, uid, tickets, ms),
             hide={p["id"] for p in store.private_projects()}),
         summarise=_summarise_standup,
         post_slack=_post_slack,
@@ -6336,7 +6354,8 @@ def make_app() -> FastAPI:
         """One read for the home screen of the cell's edition; the platform has none."""
         value, _needed = edition_mod.edition(store)
         if value == "factory":
-            return await asyncio.to_thread(factory_home.build, store, fx, request)
+            # one page read: its repeated small reads run once (TR-1631)
+            return await asyncio.to_thread(request_memo.run, factory_home.build, store, fx, request)
         if value == "sre":
             body = await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
                                            runtime.health_snapshot, _by(request) or "console",

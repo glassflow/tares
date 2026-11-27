@@ -10,11 +10,10 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _env import remove_db
 
 DB = "/tmp/metrics_test.duckdb"
-for pth in (DB, DB + ".wal"):
-    if os.path.exists(pth):
-        os.remove(pth)
+remove_db(DB)
 os.environ["TARES_DB"] = DB
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = "metrics-test-token"

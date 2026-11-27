@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 P = F = 0
 def ck(l, c, d=""):
@@ -35,9 +35,7 @@ async def _wait(url):
 
 
 def start(db, port, auth):
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
+    remove_db(db)
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
@@ -126,8 +124,10 @@ def unit():
     ck("store: take_over keeps its person", (ho["takeover"]["person"] or {}).get("id") == ben, str(ho))
     ck("store: finish_handover keeps its person", (ho["finished"]["person"] or {}).get("id") == ann, str(ho))
     s.set_handover("proj", [{"path": "/w/x"}], None, "", at, ben)
-    left = s.sc.execute("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
-                         "WHERE project = 'proj'").fetchone()
+    from sqlalchemy import text
+    with s.sessions_db.begin() as c:
+        left = c.execute(text("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
+                              "WHERE project = 'proj'")).fetchone()
     ho = s.get_handover("proj")
     ck("store: handing over again clears the finished and taken persons",
        tuple(left) == (ben, None, None) and ho["finished"] is None and ho["takeover"] is None,

@@ -20,7 +20,7 @@ import asyncio
 import os
 import sys
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
@@ -121,7 +121,8 @@ async def main():
             return (g["state"], g["consents"])
 
         # a question waiting for the person the test's key acts as, so an unlicensed answer would work
-        qid = store.add_spec_question(uid, "local", "acme/web", "Is the cart in scope?", pid, "2026-01-01T00:00:00Z")["id"]
+        qid = store.add_spec_question(uid, "local", "acme/web", "Is the cart in scope?", pid,
+                                      datetime(2026, 1, 1, tzinfo=timezone.utc))["id"]
 
         def questions_state():
             return [(q["id"], q["state"], q.get("answer")) for q in store.list_spec_questions(uid)]

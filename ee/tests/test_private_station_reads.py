@@ -417,12 +417,34 @@ async def check_writes(app, world):
        and ended.json()["claude_version"] is None, ended.text)
 
 
+def keep_held(store):
+    """A caught-up factory cell holds new lines in the session store alone (TR-1647); one that has
+    not caught up writes them to DuckDB too and reads them there. Call before the seed. The function
+    it returns writes the held lines to DuckDB, which the events scan needs and a caught-up read is
+    not changed by."""
+    held, real = [], store._append_session_first
+
+    def remember(*args):
+        got = real(*args)
+        held.extend(got)
+        return got
+
+    store._append_session_first = remember
+
+    def to_duckdb():
+        store._append_events(held)
+        held.clear()
+
+    return to_duckdb
+
+
 async def main():
     from tares import session_ingest
     from tares.daemon import make_app
     app = make_app()
     store = app.state.store
     async with app.router.lifespan_context(app):
+        to_duckdb = keep_held(store)
         world = await seed(app)
         ck("same", "the sessions table has caught up", session_ingest.caught_up(store))
         every = [sid for ss in PLAN.values() for sid, _ in ss]
@@ -433,6 +455,8 @@ async def main():
 
         real = session_ingest.caught_up
         for path_name, caught in (("caught up", real), ("events scan", lambda s: False)):
+            if path_name == "events scan":
+                to_duckdb()
             session_ingest.caught_up = caught
             try:
                 for who in ("ann", "bot"):

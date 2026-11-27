@@ -30,11 +30,13 @@ HOME = tempfile.mkdtemp(prefix="tares-saved-entity-counts-")
 os.environ.update({"TARES_DB": os.path.join(HOME, "import.duckdb"),
                    "TARES_CATALOG": os.path.join(HOME, "catalog.yaml"),
                    "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": ROOT,
-                   "TARES_EDITION": "factory"})
+                   "TARES_EDITION": "factory",
+                   # a factory cell on Postgres keeps lines out of DuckDB only with an archive
+                   "TARES_ARCHIVE_URL": "file://" + os.path.join(HOME, "archive")})
 
 import httpx
 
-from tares import daemon
+from tares import daemon, session_ingest
 from tares import store as store_module
 from tares.envelope import Envelope, now_utc
 from tares.saved_counts import UNSAVED, SavedCounts
@@ -205,6 +207,15 @@ async def main():
         seen.update({s: EVERYBODY for s in ("svc-new", "svc-no-key", "svc-naive", "svc-finding",
                                             "svc-solo-new")})
         await compare(world, store, cx, scans, "appended", seen, unscanned=True)
+
+        print("== session lines that only the session store holds ==")
+        ck("a factory cell that has caught up keeps these lines out of DuckDB (TR-1647)",
+           session_ingest.caught_up(store) and store._lines_skip_duckdb())
+        await ingest(cx, world["kim"], [line(sid, "user", message={"role": "user", "content": "q"})
+                                        for sid in ("held-0001", "sess-quartz", "sess-vault")])
+        await compare(world, store, cx, scans, "held lines", seen, unscanned=True)
+        keys = {v for v, _, _ in (await entities(cx, world["root"])).get("key", [])}
+        ck("the saved counts took the held lines", {"held-0001", "sess-quartz"} <= keys, keys)
 
         print("== a later line joins an older session to the deleted project ==")
         await ingest(cx, world["kim"], [line("old-0001", "session_project", tares_project=VAULT)])

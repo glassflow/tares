@@ -16,7 +16,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import clean_env
+from _env import clean_env, remove_db
 
 import httpx
 
@@ -88,8 +88,8 @@ async def projects(cx):
 
 
 def fresh():
-    for p in (DB, DB + ".wal"):
-        os.path.exists(p) and os.remove(p)
+    # a seed marker left in tares.sqlite by an earlier run would make this cell look old
+    remove_db(DB)
 
 
 async def main():

@@ -45,6 +45,8 @@ import httpx
 from tares import daemon, merge_ledger, merge_queue, report
 from tares import factory as factory_mod
 from session_helpers import seed_station, seed_usage
+from sqlalchemy import update
+from tares.session_store.tables import people
 
 P = F = 0
 def ck(l, c, d=""):
@@ -364,8 +366,8 @@ async def scopes():
 
             # the built-in `local` person is nobody while it has no email, as before an owner claims it
             def local_email(value):
-                with s._swrite:
-                    s.sc.execute("UPDATE people SET email = ? WHERE id = 'local'", [value])
+                with s.sessions_db.begin() as conn:
+                    conn.execute(update(people).where(people.c.id == "local").values(email=value))
 
             s.set_project_lead("uc_gamma", "local")
             local_email(None)

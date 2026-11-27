@@ -631,6 +631,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await perm.waitFor({ state: "detached" });
       const given = (await api("GET", "/api/desk?state=answered")).body.desk;
       ck(t("Allow answered the permission on the daemon"), given.some((d) => d.label === ids.desk.allow), JSON.stringify(given.map((d) => d.label)));
+      // TR-1651: Alex does not lead Shop, so the grant his Allow made waits for Kim and is not in effect
+      const asked = ((await api("GET", `/api/grants?project=${ids.project}`, undefined, ids.keys.kim)).body.grants || []).filter((g) => g.words.includes("gh api repos"));
+      ck(t("the grant Alex allowed waits for the lead"), asked.length === 1 && asked[0].state === "waiting", JSON.stringify(asked.map((g) => [g.words, g.state])));
       ck(t("one remains: the long question"), (await rows.count()) === 1, String(await rows.count()));
 
       // Two items made for the refusals: the daemon withdraws one after the page listed it, the other has an open assumption
@@ -1180,7 +1183,10 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const answered = (await api("GET", "/api/desk?state=answered")).body.desk.map((d) => d.label);
       ck(t("both are answered on the cell"), answered.includes(first) && answered.includes(second), answered.join());
       const grants = await api("GET", `/api/grants?project=${ids.project}`);
-      ck(t("both grants are kept"), [firstCmd, secondCmd].every((c) => JSON.stringify(grants.body).includes(c)), JSON.stringify(grants.body).slice(0, 300));
+      // TR-1651: kept as grants that wait for Shop's lead, since Alex is neither lead nor admin
+      ck(t("both grants are kept, each waiting for the lead"),
+         [firstCmd, secondCmd].every((c) => (grants.body.grants || []).some((g) => g.words.includes(c) && g.state === "waiting")),
+         JSON.stringify((grants.body.grants || []).map((g) => [g.words, g.state])).slice(0, 600));
       // Kim's request is Kim's: on Alex's view it sits under Waiting for others, named for her, with
       // nothing to press (TR-1223 follow-up; before, it had an Allow the cell then refused)
       // on Overview it is one line, with the list behind Show (TR-1245)

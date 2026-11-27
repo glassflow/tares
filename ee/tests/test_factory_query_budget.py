@@ -5,7 +5,7 @@ A licensed factory cell with a team's worth of work: 25 projects of 10 tickets e
 3 of them handed to a crew, 40 crew sessions over 6 stations, and one person who signs in with a key
 (next to the cell's own `local` person, so the team parts of the pages run). That person reads the
 pages the console opens on: Home, the Projects list, one project, one ticket, and the two raw ticket
-routes. A counting stand-in replaces the store's connections, so every statement a route runs is
+routes (and Setup, its progress and the Crew page, counted only). A counting stand-in replaces the store's connections, so every statement a route runs is
 counted (DuckDB: `store.con`, which `store.sc` is too; Postgres state: `store.sc.execute`; a
 sessions database, when the store has one: SQLAlchemy's cursor events). A route that runs more than
 its BUDGET fails the test.
@@ -67,7 +67,7 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 
-from tares import factory_home as fh
+from tares import claude_usage, factory_home as fh
 from tares.envelope import Envelope
 
 NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
@@ -96,22 +96,32 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # project once), projects 82 to 84 (the station rows twice) and project 85 to 87 (the station rows
 # and the station roles). On DuckDB only the two counts that pass their budget move: project 88 to
 # 90 and ticket 27 to 28 (the ticket's station sessions).
+# TR-1629 (Home reads the stations roll-up once, not twice: the team home takes the one the home read):
+# home 105 to 98 on Postgres, 127 to 117 on DuckDB (its counts are 96 and 115, plus 2 percent; the 127 is
+# TR-1480's, which the base brought in).
+# TR-1631 (Home, the Projects list, Crew, Setup and its progress keep the small reads they repeat for
+# the length of the request: who is on the cell, settings, the projects, their tickets and milestones;
+# and the Projects list reads the stations roll-up once). On Postgres, where each is a round trip:
+# home 97 to 51, projects 83 to 42, setup 86 to 52, setup progress 82 to 50, crew 44 to 28. On DuckDB:
+# home 186 to 94, projects 155 to 76, setup 128 to 94, setup progress 120 to 90, crew 85 to 53 (Setup
+# keeps its state-table reads there: they cost no round trip and their writes are not watched). The
+# budgets are those counts plus 2 percent. The project and ticket pages keep no reads yet.
 # TR-1719 (the joiner block of the home): a person other than the owner reads the cell's own crew
-# settings once, apart from the settings that lay their own values over them: Postgres home 108 to
-# 109. DuckDB home stays at 115, which already had room for it.
-_TODAY = {"home": 109, "projects": 84, "project": 87, "ticket": 27, "raw_tickets": 9, "raw_ticket": 14}
+# settings once, apart from the settings that lay their own values over them.
+_TODAY = {"home": 54, "projects": 44, "project": 90, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most
 # DONE_EXTRA more statements than the same page without them, so the count does not grow per project.
 DONE_PROJECTS = 12
-DONE_EXTRA = 4
+DONE_EXTRA = 5
 # TR-1716: an event read and the entities pages, after a private project was deleted, against the same
 # read on the same cell before any private project existed. A delete adds at most a fixed number of
 # statements to a request, however many labels the page reads. A read of event rows or fields runs
-# that many more: the caller's hidden sources (one), the sessions of the deleted project (one, and on
-# SQLite the BEGIN before it) and the project records (one). A warm describe or entities page answers
-# from saved counts, so it stays within the same limit.
-DELETED_EXTRA = {"duckdb": 4, "postgres": 3}
+# three more reads: the caller's hidden sources, the sessions of the deleted project and the project
+# records. With state on DuckDB each of the three is a transaction of the session store, so each costs
+# its BEGIN too. A warm describe or entities page answers from saved counts, so it stays within the
+# same limit.
+DELETED_EXTRA = {"duckdb": 6, "postgres": 3}
 EVENT_READS = [
     ("read", "POST", "/read"),
     ("source_events", "GET", "/api/sources/evts/events"),
@@ -124,8 +134,70 @@ EVENT_READS = [
 # TR-1498: the session tables are read through the sessions database, and each of its SQLite
 # transactions starts with a BEGIN IMMEDIATE that the counter sees as a statement: home reads it 5
 # times, projects 4, project 2. Postgres state keeps its counts.
-_DUCKDB = {**_TODAY, "home": 115, "projects": 89, "project": 90, "ticket": 28}
-BUDGET = {"duckdb": dict(_DUCKDB), "postgres": dict(_TODAY)}
+# TR-1480 (the settings table is read and written through the session store): on DuckDB each settings
+# read is now a SQLite transaction, so it costs its BEGIN IMMEDIATE too: home 115 to 127, projects 89 to
+# 95, project 88 to 94. Postgres state counts a settings read once, as before, so its counts stay.
+# TR-1608 (people, API keys and project members are read through the session store): on DuckDB each of
+# those reads is now a SQLite transaction too, so it costs its BEGIN as well. Most of them are the
+# per-request "is `local` the only person" check and the person lookups, which ran once each before:
+# home 117 to 145, projects 95 to 116, project 94 to 119, ticket 27 to 30, raw_tickets 9 to 11, raw_ticket
+# 14 to 16 (the counts are 142, 113, 116, 29, 10 and 15, plus 2 percent). Postgres state counts each
+# once, as before, so its counts stay. Reading each of them once per request is TR-1631's.
+# TR-1610 (projects, their objects and log, docs, skills, shared skills, catalog sources, GitHub
+# credentials and model usage are read through the session store): the same on DuckDB, each read of
+# one of them is a SQLite transaction with its BEGIN: home 145 to 164, projects 116 to 133, project 119
+# to 135, ticket 30 to 32, raw_tickets 11 to 14, raw_ticket 16 to 17 (the counts are 160, 130, 132, 31, 13
+# and 16, plus 2 percent). Postgres state counts each once, as before, so its counts stay, but for the
+# two pages that read the review queue: its join of the tickets with the projects (one statement when
+# both were in one database) is now a tickets read and a projects read, so projects 82 to 84 and
+# project 85 to 87 (the counts are 83 and 86, plus 2 percent).
+# TR-1612 (tickets, ticket history and ticket numbers are read through the session store): on DuckDB
+# each ticket read is now a SQLite transaction, so it costs its BEGIN; the queries themselves are one
+# for one: home 164 to 171, projects 133 to 140, project 135 to 142, ticket 32 to 39, raw_ticket 17
+# to 20 (the counts are 167, 137, 139, 38 and 19, plus 2 percent). With finished projects their
+# grouped ticket read has a BEGIN of its own too: DONE_EXTRA 4 to 5. Postgres state keeps its counts.
+# TR-1615 (milestones, checks, reviews, findings, challenger lines and rule proposals are read through
+# the session store): the same on DuckDB, the queries are one for one and each read costs its BEGIN:
+# home 171 to 177, projects 140 to 146, project 142 to 151, ticket 39 to 45, raw_tickets 14 to 17,
+# raw_ticket 20 to 24 (the counts are 173, 143, 148, 44, 16 and 23, plus 2 percent). Crew goes 78 to
+# 80, which its budget holds. Postgres state keeps its counts.
+# TR-1616 (the crew's tables: assumptions, decisions, the desk, hand-overs, grants, crews and the
+# rest are read through the session store): the same on DuckDB, the queries are one for one and each
+# read costs its BEGIN: home 177 to 190, projects 146 to 159, project 151 to 166, ticket 45 to 49,
+# raw_ticket 24 to 26 (the counts are 186, 155, 162, 48 and 25, plus 2 percent), and Crew 80 to 87
+# (85). Setup and its progress go 126 to 128 and 118 to 120, which their budgets hold. The hard cap
+# on Home and the Projects list at 25 projects goes 180 to 200, for the BEGINs alone. Postgres state
+# keeps its counts.
+# TR-1617 (the merge queue, merge method, required checks, secrets, guardrail rules and pairs, the
+# integration connections and choices and the waiting write-backs are read through the session store):
+# the same on DuckDB, each read costs its BEGIN. The integration reads TR-1631 kept on Postgres are
+# kept on DuckDB too now that their writes are watched. home 94 to 97, projects 76 to 79, project 162
+# to 166, ticket 48 to 50, setup 94 to 103, setup progress 90 to 99 (the budgets are those counts plus
+# 2 percent). Crew and the raw ticket pages keep their counts, and so does every page on Postgres.
+# TR-1725 (main merged into factory-perf/m2): the pages gain the reads main added, each a SQLite
+# transaction of its own on DuckDB, so a statement and its BEGIN. The deleted private projects
+# (TR-1708, TR-1716): one read on Home, the Projects list, a ticket, Setup and its progress, two on
+# a project's page. Crew reads them too, and the cell's `runtime` choice that its pace follows
+# (TR-1598). Counts on DuckDB: home 97 to 99, projects 79 to 81, project 166 to 170, ticket 50 to
+# 52, setup 95 to 97, setup progress 91 to 93, crew 53 to 57. On Postgres: home 51 to 52, projects
+# 42 to 43, project 86 to 88, ticket 26 to 27, setup 48 to 49, setup progress 46 to 47, crew 28 to
+# 30. The budgets are those counts plus 2 percent. The raw ticket pages keep their counts.
+_DUCKDB = {**_TODAY, "home": 101, "projects": 83, "project": 174, "ticket": 54, "raw_tickets": 17,
+           "raw_ticket": 26}
+# TR-1634 (Setup and its progress work out the crew, GitHub and the terminal steps without building
+# the home; they had no entry before): on this cell setup 230 to 114 and setup progress 224 to 108 on
+# DuckDB, 166 to 86 and 162 to 82 on Postgres. The budgets are those counts plus 2 percent. With
+# TR-1610's reads, each a SQLite transaction on DuckDB: 114 to 126 and 108 to 118, so 129 and 121.
+# TR-1633 (Crew's standup reads the handed-over projects, their hand-overs, tickets, milestones and
+# open desk items once for all of them, not once each; Crew had no entry before): on this cell, with 3
+# projects handed over, 102 to 75 on DuckDB and 62 to 44 on Postgres. The budgets are those counts plus
+# 2 percent. With TR-1612, Crew's three ticket reads (the tickets twice, their history once) are each a
+# SQLite transaction on DuckDB: 75 to 78, so 80.
+# TR-1717 (list_connections reads a slot's connections and its default in one query, so they are from
+# one state): one statement a slot where there were two. Setup 103 to 95 and its progress 99 to 91 on
+# DuckDB, 52 to 48 and 50 to 46 on Postgres. The budgets are those counts plus 2 percent.
+BUDGET = {"duckdb": {**_DUCKDB, "setup": 99, "setup_progress": 95, "crew": 59},
+          "postgres": {**_TODAY, "setup": 50, "setup_progress": 48, "crew": 31}}
 
 FLOOR = 0.9   # a count under this share of its budget means BUDGET is stale: the PR that saved the queries lowers it
 
@@ -136,6 +208,15 @@ ROUTES = [
     ("ticket", "/api/factory/projects/{uid}/tickets/{ref}"),
     ("raw_tickets", "/api/projects/{uid}/tickets"),
     ("raw_ticket", "/api/projects/{uid}/tickets/{ref}"),
+]
+# counted against BUDGET like the routes above, with no body in the golden file
+SETUP_ROUTES = [
+    ("setup", "/api/factory/setup"),
+    ("setup_progress", "/api/factory/setup/progress"),
+]
+# counted the same way, with no body in the golden file
+CREW_ROUTES = [
+    ("crew", "/api/factory/crew"),
 ]
 
 P = F = 0
@@ -289,9 +370,13 @@ def seed(store):
         by_project[uid] = tickets
         # each project moved at its own minute, so the list's order does not hang on a tie
         stamp = ago(minutes=i * 3)
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?", [stamp, uid])
-        store.sc.execute("UPDATE usecases SET created_at = ?, updated_at = ? WHERE id = ?",
-                         [ago(days=30, minutes=i), stamp, uid])
+        from sqlalchemy import update
+        from tares.session_store.tables import tickets as tickets_t
+        from tares.session_store.tables import usecases as projects_t
+        with store.sessions_db.begin() as c:
+            c.execute(update(tickets_t).where(tickets_t.c.project == uid).values(updated_at=stamp))
+            c.execute(update(projects_t).where(projects_t.c.id == uid).values(
+                created_at=ago(days=30, minutes=i), updated_at=stamp))
         if i < 3:
             store.set_handover(uid, [{"path": f"/Users/sam/code/budget-{i:02d}", "name": repo}],
                                None, None, ago(days=2))
@@ -346,6 +431,7 @@ async def done_projects(store, sam, call, base):
 
     async def measure():
         fh.clear_cache()
+        claude_usage.clear_week_by_project()    # the kept week (TR-1627) must not hide the counts
         counter = [0]
         rows[0] = 0
         token = _COUNTER.set(counter)
@@ -383,6 +469,69 @@ async def done_projects(store, sam, call, base):
        after <= base + DONE_EXTRA, f"{after} over {base} + {DONE_EXTRA}")
     ck(f"a finished project's tickets are not read ({after_rows} ticket rows against {before_rows})",
        before_rows - after_rows == DONE_PROJECTS * 5, (after_rows, before_rows))
+
+
+# Crew's standup reads the handed-over projects together (TR-1633): this many more of them, half open
+# and half finished in the last day, add no statement of its own. What each still adds is one: the
+# page's cut of the open desk to the caller (team.own_desk) reads the project of each desk item.
+CREW_MORE = 8
+
+
+async def crew_growth(store, sam, call):
+    sam_id = store.find_person_by_email("sam-budget@example.com")["id"]
+
+    def add(i):
+        """A handed-over project with a ticket merged, in review and blocked, a milestone and an
+        open question for sam; every other one finished an hour ago."""
+        uid = f"uc_budgetcrew{i:02d}"
+        store.create_project(uid, "custom", f"Crew project {i:02d}", {}, goal=f"Goal {i:02d}")
+        store.set_project_kind(uid, "software_factory")
+        mid = store.create_milestone(uid, "M1: the page", "It loads.", [])
+        for stage in ("merged", "review", "blocked"):
+            tid = store.create_ticket(uid, "tares", f"A {stage} ticket of {i:02d}", milestone=mid)
+            store.update_ticket(tid, stage=stage, status="done" if stage == "merged" else "in_progress")
+            store.add_ticket_history(tid, uid, "stage", stage, None, "crew-orchestrator", "builder",
+                                     ago(hours=2))
+        store.set_handover(uid, [{"path": f"/Users/sam/code/crew-{i:02d}", "name": f"example-org/crew-{i:02d}"}],
+                           None, None, ago(days=2), person_id=sam_id)
+        store.add_desk_item(uid, "Which colour?", "", [], "blue", "", "", [], True, "crew", [],
+                            ago(hours=1), to_person_id=sam_id)
+        if i % 2:
+            store.finish_handover(uid, "done", None, "crew", ago(hours=1), person_id=sam_id)
+
+    async def measure():
+        fh.clear_cache()
+        claude_usage.clear_week_by_project()
+        counter = [0]
+        token = _COUNTER.set(counter)
+        try:
+            resp = await call(sam, "/api/factory/crew")
+        finally:
+            _COUNTER.reset(token)
+        return resp, counter[0]
+
+    add(0)
+    add(1)   # one open and one finished already there, so the names of people are read both times
+    before_resp, before = await measure()
+    for i in range(2, 2 + CREW_MORE):
+        add(i)
+    after_resp, after = await measure()
+    ck("the Crew page answers 200 with more handed-over projects",
+       before_resp.status_code == 200 and after_resp.status_code == 200, after_resp.text[:200])
+    was, now = before_resp.json()["standup"], after_resp.json()["standup"]
+    ck(f"its standup counts the added projects ({2 + CREW_MORE} questions asked)",
+       bool(now) and f"{2 + CREW_MORE} questions asked" in now["text"], (was, now))
+    print(f"  crew: {before} statements; with {CREW_MORE} more handed-over projects: {after}")
+    # the one read left for each project is the desk cut's get_project: BEGIN and SELECT on SQLite
+    counter = [0]
+    token = _COUNTER.set(counter)
+    try:
+        store.get_project("uc_budgetcrew00")
+    finally:
+        _COUNTER.reset(token)
+    allowed = before + CREW_MORE * counter[0]
+    ck(f"{CREW_MORE} more handed-over projects add only the desk cut's {CREW_MORE} project reads "
+       f"({after} against {before})", 0 < counter[0] <= 2 and after <= allowed, f"{after} over {allowed}")
 
 
 _EVENTS_SCAN = re.compile(r"\bFROM\s+events\b", re.IGNORECASE)
@@ -532,12 +681,22 @@ async def main():
             builds["home"] += 1
             return real_home(t)
         th.HomeRead.__init__, th._team_home = counted_init, counted_home
+        # how often a request reads the stations roll-up (TR-1629: Home reads it once), and how often
+        # with the totals over every session (TR-1634: Setup never)
+        real_rollup = store.station_rollup
+
+        def counted_rollup(*a, **kw):
+            builds["rollup"] += 1
+            builds["totals"] += bool(kw.get("totals", True))
+            return real_rollup(*a, **kw)
+        store.station_rollup = counted_rollup
         built = {}
-        for name, tmpl in ROUTES:
+        for name, tmpl in ROUTES + SETUP_ROUTES + CREW_ROUTES:
             path = tmpl.format(uid=uid, ref=ref)
             fh.clear_cache()
+            claude_usage.clear_week_by_project()
             counter = [0]
-            builds["read"] = builds["home"] = 0
+            builds["read"] = builds["home"] = builds["rollup"] = builds["totals"] = 0
             token = _COUNTER.set(counter)
             try:
                 resp = await call(sam, path)
@@ -546,27 +705,39 @@ async def main():
             built[name] = dict(builds)
             ck(f"GET {tmpl} answers 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}")
             counts[name] = counter[0]
-            bodies[name] = steady(resp.json())
+            if (name, tmpl) in ROUTES:
+                bodies[name] = steady(resp.json())
             print(f"  {name:<12} {counter[0]:>5} statements   {path}")
         print("== finished projects on a team cell (TR-1503) ==")
         await done_projects(store, sam, call, counts["projects"])
+        print("== Crew does not grow with the handed-over projects (TR-1633) ==")
+        await crew_growth(store, sam, call)
         print("== event reads after a private project is deleted (TR-1716) ==")
         await deleted_private_reads(app, store, backend, root, sam)
 
     print("== the team home is built once per request ==")
     th.HomeRead.__init__, th._team_home = real_init, real_home
+    store.station_rollup = real_rollup
+    ck("Home reads the stations roll-up once (TR-1629)", built["home"]["rollup"] == 1, str(built["home"]))
+    ck("Projects reads the stations roll-up once (TR-1631)", built["projects"]["rollup"] == 1,
+       str(built["projects"]))
+    for name, _ in SETUP_ROUTES:
+        b = built[name]
+        ck(f"{name} reads who runs once, with no totals, and no team home (TR-1634)",
+           (b["rollup"], b["totals"], b["read"], b["home"]) == (1, 0, 0, 0), str(b))
+    print("  roll-up reads per route:", {n: b["rollup"] for n, b in built.items()})
     for name, _ in ROUTES:
         ck(f"{name}: the team home is read once at most ({built[name]['read']} reads, "
            f"{built[name]['home']} builds)", built[name]["read"] <= 1 and built[name]["home"] <= 1,
            str(built[name]))
     ck("home builds it (the counter sees a build)", built["home"]["read"] == 1, str(built["home"]))
     for name in ("home", "projects"):
-        ck(f"{name} runs under 150 statements at 25 projects", counts[name] < 150, counts[name])
+        ck(f"{name} runs under 200 statements at 25 projects", counts[name] < 200, counts[name])
 
 
     print("== the budget ==")
     budget = BUDGET[backend]
-    for name, _ in ROUTES:
+    for name, _ in ROUTES + SETUP_ROUTES + CREW_ROUTES:
         ck(f"{name} runs statements the counter can see", counts[name] > 0, counts[name])
         ck(f"{name}: {counts[name]} statements, budget {budget.get(name)}",
            name in budget and counts[name] <= budget[name],

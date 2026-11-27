@@ -19,11 +19,12 @@ from fastapi import HTTPException, Request
 from .. import claude_usage
 from .. import factory as factory_mod
 from .. import factory_owners as owners_mod
+from .. import request_memo
 from .. import standup as standup_mod
 from ..envelope import now_utc
 from ..factory_api import own_crew_ids, project_progress, readable_offers
 from ..factory_home import (_STALE_MINUTES, _caller, _count, _dt, _how_far, _minutes, _plan,
-                            _resets, crew_member, for_caller, heard_ago, plain_wait)
+                            _resets, cached, crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
 
 _SHOWN_ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -100,9 +101,9 @@ def _pacing(pace: dict, now) -> str | None:
 def register(app, store, h, ctx):
     fx = ctx.fx
 
-    def by_project(names: dict, hidden, now) -> list[dict]:
+    def by_project(names: dict, week: list[dict]) -> list[dict]:
         out = []
-        for r in claude_usage.by_project(store, now - timedelta(days=7), hidden):
+        for r in week:
             if r.get("kind") != "project" or r.get("project") not in names or r.get("share") is None:
                 continue
             if round(r["share"] * 100) < 1:
@@ -116,7 +117,8 @@ def register(app, store, h, ctx):
         """One line from the ledger over the last day; null when nothing moved."""
         try:
             rep = standup_mod.facts(store, now - timedelta(days=1), now,
-                                    lambda uid: project_progress(store, uid), hide=hidden)
+                                    lambda uid, tickets, ms: project_progress(store, uid, tickets, ms),
+                                    hide=hidden)
         except Exception:
             return None
         ps = rep["projects"]
@@ -283,10 +285,11 @@ def register(app, store, h, ctx):
         own = crews[0] if crews else {"summary": "Not started", "talk_to": None, "reviewer": None,
                                       "releaser": None, "builders": []}
 
-        plan = _plan(store, now, names, hidden)
+        week = claude_usage.week_by_project(store, now, hidden)   # once for both blocks that show it
+        plan = _plan(store, now, names, hidden, week=week)
         for lim in plan["limits"]:
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
-        plan["by_project"] = by_project(names, hidden, now)
+        plan["by_project"] = by_project(names, week)
         # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
         # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
         projects = store.list_projects()
@@ -307,6 +310,7 @@ def register(app, store, h, ctx):
                 **({"questions_for_you": questions} if questions else {})}
 
     @app.get("/api/factory/crew")
+    @request_memo.page
     def get_crew_page(request: Request):
         """The Crew page in one read. `talk_to`, `reviewer` and `releaser` are a member or null
         (not started, or no releaser by choice); `builders` are grouped by project, running ones
@@ -324,8 +328,9 @@ def register(app, store, h, ctx):
         talk_to, reviewer, releaser, builders}; `machine_shown` is true when that person has more than
         one crew; `ended` is true when every member ended over a day ago (they come last). A
         member's `crew` is its crew's id, for the detail call. The top-level summary, talk_to,
-        reviewer, releaser and builders are the first crew's."""
-        return build(request)
+        reviewer, releaser and builders are the first crew's.
+        Kept for 5 seconds per caller, as Home is (factory_home.cached)."""
+        return cached("crew", store, request, lambda: build(request), h.hidden_ids())
 
     @app.get("/api/factory/crew/{crew_id}/{station}/sessions")
     def get_station_sessions(request: Request, crew_id: str, station: str, limit: int = 50,

@@ -33,6 +33,7 @@ os.environ["TARES_EDITION"] = "factory"
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy import text
 
 from tares import factory as factory_mod
 from tares import factory_api
@@ -63,8 +64,19 @@ async def main():
         return now_utc() - timedelta(**kw)
 
     def back(table, key, col, **kw):
+        sql = f"UPDATE {table} SET {col} = :at WHERE id = :key"
+        if table == "tickets":                   # in the session store (TR-1612)
+            from sqlalchemy import update
+            from tares.session_store.tables import tickets as tickets_t
+            with store.sessions_db.begin() as conn:
+                conn.execute(update(tickets_t).where(tickets_t.c.id == key).values({col: ago(**kw)}))
+            return
+        if table == "docs":                      # in the session store (TR-1610)
+            with store.sessions_db.begin() as conn:
+                conn.execute(text(sql), {"at": ago(**kw), "key": key})
+            return
         with store._swrite:
-            store.sc.execute(f"UPDATE {table} SET {col} = ? WHERE id = ?", [ago(**kw), key])
+            store.sc.execute(sql.replace(":at", "?").replace(":key", "?"), [ago(**kw), key])
 
     def project(name, factory=True, goal="A project for the test"):
         uid = f"uc_{name.replace('-', '')}"
@@ -344,8 +356,9 @@ async def main():
         store.accept_milestone(pw, mws["M2"], "Vladimir", None, now_utc())
         mc2 = next(i for i in (await get_home())["waiting_for_you"] if i["kind"] == "milestone_to_check")
         ck("a milestone accepted already is not the one held up", mc2["holds_up"] == "M3: dropped", mc2["holds_up"])
-        with store._swrite:
-            store.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [mws["M2"]])
+        with store.sessions_db.begin() as conn:
+            conn.execute(text("DELETE FROM milestone_acceptances WHERE milestone = :m"),
+                         {"m": mws["M2"]})
         ck("a refused command holds its station's work",
            px_perm["holds_up"] == "the builder's work", px_perm["holds_up"])
         ck("calls and a question that names nothing hold nothing",
@@ -559,6 +572,10 @@ async def main():
         h2 = fh.waiting_items(store, fx, now_utc())
         rest = [i for i in h2 if i["kind"] != "signoff"]
         key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
+        ck("a time written with another offset is given in UTC",
+           fh._iso("2026-11-25T21:28:44+01:00") == "2026-11-25T20:28:44+00:00", fh._iso("2026-11-25T21:28:44+01:00"))
+        ck("every since is in UTC, wherever it was read from",
+           all(i["since"].endswith("+00:00") for i in h2), [i["since"] for i in h2 if not i["since"].endswith("+00:00")][:3])
         ck("the list is still in order: what holds the crew up, the rest, ready-to-close rows last",
            [key(i) for i in h2] == sorted(key(i) for i in h2), [(i["kind"], i["blocking"]) for i in h2])
 

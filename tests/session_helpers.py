@@ -18,6 +18,22 @@ TABLES = {t.name: t for t in (project_sessions, session_meters, session_stations
                               session_usage)}
 
 
+def _resync(store, sessions) -> None:
+    """The writers keep the hourly usage totals (TR-1632); a test that writes `session_usage` behind
+    them does the same, once the totals are built."""
+    from tares import claude_usage_hourly as hourly
+    if sessions and hourly.ready(store):
+        with store.sessions_db.begin() as conn:
+            hourly.rebuild(store.sessions_db, conn, sessions)
+
+
+def _usage_sessions(store, table, where) -> list:
+    if table != "session_usage":
+        return []
+    with store.sessions_db.begin() as conn:
+        return [r[0] for r in conn.execute(select(session_usage.c.session).where(*where).distinct())]
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -55,6 +71,7 @@ def seed_usage(store, session: str, message: str, model: str | None = "claude-op
         conn.execute(insert(session_usage).values(
             session=session, message=message, model=model, project=project,
             replied_at=replied_at or _now(), **cols))
+    _resync(store, [session])
 
 
 def rows(store, table: str, *where) -> list[dict]:
@@ -69,11 +86,15 @@ def count(store, table: str, *where) -> int:
 
 
 def delete_rows(store, table: str, *where) -> None:
+    sessions = _usage_sessions(store, table, where)
     with store.sessions_db.begin() as conn:
         conn.execute(delete(TABLES[table]).where(*where))
+    _resync(store, sessions)
 
 
 def set_cols(store, table: str, where: list, **values) -> None:
     """UPDATE the named session table: `set_cols(store, "session_usage", [cond, ...], cost_usd=None)`."""
+    sessions = _usage_sessions(store, table, where)
     with store.sessions_db.begin() as conn:
         conn.execute(update(TABLES[table]).where(*where).values(**values))
+    _resync(store, sessions)

@@ -31,6 +31,7 @@ os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-repomap"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
+from sqlalchemy import text
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -244,7 +245,10 @@ async def main():
 
         print("== the map and its history are one write (TR-684) ==")
         before = store.get_repo_map("acme/api")["body"]
-        store.sc.execute("ALTER TABLE repo_map_history RENAME TO repo_map_history_away")
+        def rename(old, new):
+            with store.sessions_db.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {old} RENAME TO {new}"))
+        rename("repo_map_history", "repo_map_history_away")
         try:
             try:
                 store.set_repo_map("acme/api", MAP + " Torn.", "torn", "x", None, datetime.now(timezone.utc),
@@ -253,7 +257,7 @@ async def main():
             except Exception:
                 failed = True
         finally:
-            store.sc.execute("ALTER TABLE repo_map_history_away RENAME TO repo_map_history")
+            rename("repo_map_history_away", "repo_map_history")
         ck("a history write that fails leaves the map as it was", failed and store.get_repo_map("acme/api")["body"] == before,
            store.get_repo_map("acme/api"))
         retry = store.set_repo_map("acme/api", MAP + " Torn.", "torn", "x", None, datetime.now(timezone.utc),

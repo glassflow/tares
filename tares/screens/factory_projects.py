@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from fastapi import Request
 
 from ..envelope import now_utc
+from .. import request_memo
 from .. import factory_owners as owners_mod
 from .. import status_words
 from ..factory_home import (_STATE_ORDER, _caller, _count, _dt, _short, for_caller, plain_ago,
@@ -117,6 +118,7 @@ def done_row_for(p: dict, facts: dict, handover: dict | None, now) -> dict | Non
 
 def register(app, store, h, ctx):
     @app.get("/api/factory/projects")
+    @request_memo.page
     def factory_projects(request: Request):
         """{projects: [row], counts: {all, building, waiting_on_you, not_started, ready_to_close,
         later, done}, now}. Sorted by state (waiting for you, building, not started, ready to close,
@@ -130,7 +132,8 @@ def register(app, store, h, ctx):
         ids = [p["id"] for p in projects]
         # what waits for the caller, as their home has it (never another person's items)
         fxc = for_caller(fx, request)
-        home = team_of(fxc, request, now)   # built once: the waiting list and the team parts read it
+        # built once, from the roll-up above: the waiting list and the team parts read it
+        home = team_of(fxc, request, now, stations)
         handovers = store.handovers_by_project(ids)
         # A finished project's row needs only counts, not its tickets. On a team cell the seam
         # (team_projects) also reads each ticket's assignee: it gets one stub per ticket with just that.

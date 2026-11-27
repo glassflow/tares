@@ -166,6 +166,13 @@ async def main():
         said = [i for i in items if i["kind"] == "said"]
         ck("what the station said is its own item", [s["text"] for s in said] == ["Reading the page first.", "Done. Opened #12."])
 
+        from sqlalchemy import update as _update
+        from tares.session_store.tables import sessions as _sessions
+        with app.state.store.sessions_db.begin() as _c:      # a session the table does not hold in full
+            _c.execute(_update(_sessions).values(lines_complete=False))
+        async with mk() as cx:
+            d = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
+            plain = (await cx.get(f"/api/crew/{ST}")).json()
         ck("before the session's lines are all in the table, they come from DuckDB: lines_from says events",
            d.get("lines_from") == "events" and plain.get("lines_from") == "events", d.get("lines_from"))
         async with mk() as cx:

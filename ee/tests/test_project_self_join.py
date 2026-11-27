@@ -21,9 +21,11 @@ In process, no ports: the licence is stored through PUT /api/licence.
 Run: .venv/bin/python ee/tests/test_project_self_join.py
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
@@ -39,6 +41,14 @@ os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 os.environ["TARES_SECRETS_KEY"] = "a-long-random-string-for-this-cell-only"
 
 import httpx
+from sqlalchemy import select
+
+from tares.session_store.tables import project_members as members_t
+from tares.store import Store
+
+# under the Postgres harness the data file's connection and the session store are one schema, so
+# there is no second project_members table to look at
+HARNESS = Store.__init__.__module__ != "tares.store"
 
 P = F = 0
 VALUE = "self-join-value-0123456789"
@@ -53,6 +63,13 @@ def ck(label, cond, detail=""):
 
 def client(app, headers):
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=headers)
+
+
+def own_folder(name):
+    """A database path in a folder of its own: the session store is a file beside it, so two cells in
+    one folder would share their people, keys and members."""
+    os.makedirs(os.path.join(_TMP, name))
+    return os.path.join(_TMP, name, "api.duckdb")
 
 
 async def licensed_cell():
@@ -110,6 +127,24 @@ async def licensed_cell():
         team = await project("Atlas")
         join = f"/api/projects/{team}/join"
 
+        def landed(uid):
+            with store.sessions_db.read() as conn:
+                return [tuple(r) for r in conn.execute(select(members_t.c.person_id, members_t.c.reason)
+                        .where(members_t.c.project == uid).order_by(members_t.c.person_id))]
+
+        stale = (team, ids["reader"], "manual")
+        if not HARNESS:
+            # a cell from before the move still has DuckDB's table, which nothing may read or write
+            store.sc.execute("CREATE TABLE project_members (project VARCHAR, person_id VARCHAR, "
+                             "added_by VARCHAR, added_at TIMESTAMP, reason VARCHAR, "
+                             "PRIMARY KEY (project, person_id))")
+            store.sc.execute("INSERT INTO project_members (project, person_id, reason) VALUES (?, ?, ?)",
+                             list(stale))
+
+        def left_behind():
+            return [tuple(r) for r in store.sc.execute(
+                "SELECT project, person_id, reason FROM project_members").fetchall()]
+
         print("== a team project ==")
         ck("someone not on it is offered to join", await flags("kim", team) == (True, False),
            str(await flags("kim", team)))
@@ -154,6 +189,14 @@ async def licensed_cell():
         ck("they are on it, added by themself",
            [(a, b) for a, b, _ in first] == [(ids["kim"], ids["kim"])], str(first))
         ck("and are offered nothing now", await flags("kim", team) == (False, False))
+        ck("the row is in the session store's table", landed(team) == [(ids["kim"], "self")],
+           str(landed(team)))
+        if not HARNESS:
+            ck("the table left in the data file is not written", left_behind() == [stale], str(left_behind()))
+            ck("nor read: a person only in it is not on the project",
+               not store.is_project_member(team, ids["reader"])
+               and store.members_by_project([team])[team][0]["person_id"] == ids["kim"]
+               and len(store.members_by_project([team])[team]) == 1, str(rows(team)))
         r = await call("kim", "POST", join)
         ck("joining again answers 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
         ck("and changes nothing", rows(team) == first, str(rows(team)))
@@ -365,6 +408,43 @@ async def licensed_cell():
            and d.get("detail") == "This project is private. It has no lead: ask an admin to give it one.",
            f"{r.status_code} {r.text[:200]}")
 
+        print("== a joiner's project step ==")
+        r = await call("root", "PUT", "/api/crew/settings", {"autonomy": "L3-review"})
+        assert r.status_code == 200, r.text
+        r = await call("root", "POST", "/api/sources", {
+            "name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
+        assert r.status_code < 300, r.text
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        lines = "".join(json.dumps(
+            {"type": "session_station", "sessionId": f"s-lee-{role}", "cwd": "/w/crew", "timestamp": now,
+             "station": f"lee-{role}", "role": role, "parent": "", "factory_station": f"lee-{role}",
+             "factory_crew": "lee", "crew": "lee"}) + "\n" for role in ("orchestrator", "reviewer"))
+        async with client(app, {**keys["lead"], "Content-Type": "application/x-ndjson"}) as cx:
+            r = await cx.post("/ingest/claude_code", content=lines)
+        assert r.status_code < 300, r.text
+        dune = await project("Dune")
+
+        async def project_step():
+            r = await call("kim", "GET", "/api/home?projects=team")
+            assert r.status_code == 200, (r.status_code, r.text[:200])
+            return {s["key"]: s["done"] for s in r.json()["start"]["steps"]}.get("project")
+
+        from tares import factory_home
+        factory_home.clear_cache()
+        first_read = await project_step()   # Home keeps this answer for a few seconds
+        ck("someone joining a factory, on no project: the step is open", first_read is False,
+           str(first_read))
+        r = await call("kim", "POST", f"/api/projects/{dune}/join")
+        assert r.status_code == 200, r.text
+        ck("joining ticks it on their next read", await project_step() is True)
+        ck("from a row in the session store's table", landed(dune) == [(ids["kim"], "self")],
+           str(landed(dune)))
+        r = await call("lead", "PATCH", f"/api/projects/{dune}", {"scope": "private"})
+        assert r.status_code == 200, r.text
+        factory_home.clear_cache()
+        ck("once the project is private, joining by yourself no longer ticks it",
+           await project_step() is False)
+
         print("== no licence ==")
         r = await call("root", "DELETE", "/api/licence")
         assert r.status_code in (200, 204), r.text
@@ -381,7 +461,7 @@ async def open_cell():
     project page of a private project someone is not on can be read."""
     from tares import daemon
     daemon.AUTH_TOKEN = ""
-    daemon.DB_PATH = os.path.join(_TMP, "open.duckdb")
+    daemon.DB_PATH = own_folder("open")
     app = daemon.make_app()
 
     async def call(method, path, body=None):
@@ -433,7 +513,7 @@ async def single_cell():
     project's secrets however they came to be on it, so the page doesn't mark them as waiting."""
     from tares import daemon
     daemon.AUTH_TOKEN = TOKEN
-    daemon.DB_PATH = os.path.join(_TMP, "single.duckdb")
+    daemon.DB_PATH = own_folder("single")
     app = daemon.make_app()
     root = {"Authorization": f"Bearer {TOKEN}"}
 

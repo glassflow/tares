@@ -21,6 +21,8 @@ import re
 import threading
 import time
 
+from . import request_memo
+
 EVENT_TABLES = frozenset({"events", "cursors", "source_stats", "entity_counts",
                           "entity_label_state"})
 
@@ -260,12 +262,14 @@ class PgState:
             return self._run(q, params)
 
     def _run(self, q: str, params) -> _Result:
+        request_memo.statement(q)
         with self.conn().cursor() as cur:
             cur.execute(q, list(params or []))
             rows = cur.fetchall() if cur.description is not None else []
             return _Result(rows, cur.rowcount)
 
     def executemany(self, sql: str, seq) -> None:
+        request_memo.statement(sql)
         with self.conn().cursor() as cur:
             cur.executemany(to_pg(sql), [list(p) for p in seq])
 
@@ -303,7 +307,11 @@ def moved(pg: PgState) -> bool:
 def move(duck, pg: PgState, tables: list[str]) -> dict:
     """Copy every state table from the DuckDB connection into Postgres, in one transaction: the
     tables are emptied, filled, counted against DuckDB, and the move is recorded. Anything going
-    wrong rolls it all back, and the cell keeps its state in DuckDB. Returns {table: rows}."""
+    wrong rolls it all back, and the cell keeps its state in DuckDB. A table in MOVED_TABLES lives
+    in the session store (copied there by `session_store.copy`) and is left out. Returns
+    {table: rows}."""
+    from .session_store.tables import MOVED_TABLE_NAMES
+    tables = [t for t in tables if t not in MOVED_TABLE_NAMES]
     counts = {}
     c = pg.conn()
     with c.transaction():
@@ -321,11 +329,24 @@ def move(duck, pg: PgState, tables: list[str]) -> dict:
                 quoted = ", ".join(f'"{col}"' for col in cols)
                 rows = duck.execute(f"SELECT {quoted} FROM {t}").fetchall()
                 cur.execute(f"TRUNCATE {t}")
+                # a firing or a read can hold a NUL from a posted line (TR-1707), which DuckDB
+                # keeps and Postgres text does not take: it is dropped. Those rows go in last,
+                # so one that now has the key of a row already there is left out.
+                nul = []
                 with cur.copy(f"COPY {t} ({quoted}) FROM STDIN") as cp:
                     for r in rows:
-                        cp.write_row(r)
+                        if any(isinstance(v, str) and "\x00" in v for v in r):
+                            nul.append(r)
+                        else:
+                            cp.write_row(r)
+                left_out = 0
+                for r in nul:
+                    cur.execute(f"INSERT INTO {t} ({quoted}) VALUES "
+                                f"({', '.join(['%s'] * len(cols))}) ON CONFLICT DO NOTHING",
+                                [v.replace("\x00", "") if isinstance(v, str) else v for v in r])
+                    left_out += 1 - cur.rowcount
                 n = cur.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                if n != len(rows):
+                if n != len(rows) - left_out:
                     raise RuntimeError(f"state table {t}: {len(rows)} rows read, {n} written")
                 counts[t] = n
             cur.execute("INSERT INTO tares_state_meta (key, value) VALUES "

@@ -9,7 +9,7 @@ Stores by hand, with a DSN it names.
   failed_first_start   a first start that fails after the copy committed (the data upgrade or the
                        move raises), the cell then runs on SQLite and writes rows, and the next
                        Postgres start has them all
-  local_file_guards    the three guards before the copy reads `sessions.sqlite`: the file's
+  local_file_guards    the three guards before the copy reads `tares.sqlite`: the file's
                        existence, its upgrade, and its ledger
   split_crews_after_a_failed_start
                        the split-crew merge of a first start that then fails is made again by the
@@ -23,6 +23,8 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import duckdb
+
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import test_session_store as ts  # noqa: E402  (its helpers; its checks share its FAILS list)
@@ -30,7 +32,7 @@ from sqlalchemy import text  # noqa: E402
 
 from tares import state_db  # noqa: E402
 from tares.session_store import SessionStore  # noqa: E402
-from tares.session_store.tables import COPIED  # noqa: E402
+from tares.session_store.tables import MOVED_TABLE_NAMES, MOVED_TABLES  # noqa: E402
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 PG = os.environ.get("TARES_TEST_PG")
@@ -38,7 +40,9 @@ PG = os.environ.get("TARES_TEST_PG")
 # names its own DSN cannot run under it; the duckdb suite has TARES_TEST_PG and no harness
 if Store.__init__.__module__ != "tares.store":
     PG = None
-SESSION_TABLES = [t.name for t in COPIED]
+# settings has its own tests; the account tables (people, api_keys, project_members) were never in DuckDB's
+# five session tables, so a copy from DuckDB has nothing of theirs to compare (TR-1608)
+SESSION_TABLES = [t.name for t in MOVED_TABLES if t.name != "settings" and t.name not in ts.ACCOUNT_TABLES]
 ck = ts.ck
 
 
@@ -57,7 +61,7 @@ def pg_schema():
 
 
 def older_cell():
-    """A cell from before the session store: rows in DuckDB's five tables, no sessions.sqlite."""
+    """A cell from before the session store: rows in DuckDB's five tables, no tares.sqlite."""
     d = tempfile.mkdtemp()
     path = os.path.join(d, "t.duckdb")
     s = Store(path, state_dsn="")
@@ -140,13 +144,13 @@ def failed_first_start():
             finally:
                 setattr(target, name, orig)
             gc.collect()
-            ck(f"{what} raised after the copy committed: the five tables are in Postgres",
-               [n for n, _ in pg_ledger(dsn)] == sorted(SESSION_TABLES)
+            ck(f"{what} raised after the copy committed: every moved table is in Postgres",
+               [n for n, _ in pg_ledger(dsn)] == sorted(MOVED_TABLE_NAMES)
                and pg_count(dsn, "project_sessions") == 2, pg_ledger(dsn))
             # the cell is brought back up without the state database, and works
             s = Store(path, state_dsn="")
-            ck("the local start copied DuckDB's rows to sessions.sqlite",
-               os.path.exists(os.path.join(d, "sessions.sqlite"))
+            ck("the local start copied DuckDB's rows to tares.sqlite",
+               os.path.exists(os.path.join(d, "tares.sqlite"))
                and ts._count(s.sessions_db, "project_sessions") == 2)
             s.link_session("p1", "s-local")
             s.set_session_state("s-local", "working", "after the failed start",
@@ -165,11 +169,12 @@ def failed_first_start():
             ck(f"{what}: and no row is there twice", ts._count(s.sessions_db, "project_sessions") == 3)
             same_rows(s, want, what)
             ck(f"{what}: the ledger holds the local counts",
-               sorted(ts._ledger(s)) == sorted((t, len(want[t])) for t in SESSION_TABLES), ts._ledger(s))
+               sorted(x for x in ts._ledger(s) if x[0] in SESSION_TABLES) == sorted((t, len(want[t])) for t in SESSION_TABLES)
+               and "settings" in dict(ts._ledger(s)), ts._ledger(s))
             ck(f"{what}: DuckDB's copies are untouched",
                {t: ts._duck_rows(s, t)[1] for t in SESSION_TABLES} == duck)
             close(s)
-            ck(f"{what}: sessions.sqlite is left as it was", os.path.exists(os.path.join(d, "sessions.sqlite")))
+            ck(f"{what}: tares.sqlite is left as it was", os.path.exists(os.path.join(d, "tares.sqlite")))
             # a later start is not a first start: nothing is copied again, and what Postgres has stays
             s = Store(path, state_dsn=dsn)
             s.link_session("p1", "s-after")
@@ -180,43 +185,58 @@ def failed_first_start():
             close(s)
 
 
-def split_crews_after_a_failed_start():
-    print("== a split crew merged by a first start that then fails (TR-1517 review) ==")
+def split_crews_after_a_failed_start(station_in_local_file):
+    where = ("the station in tares.sqlite, the crews in DuckDB" if station_in_local_file
+             else "all of it in DuckDB")
+    print(f"== a split crew merged by a first start that then fails (TR-1517 review): {where} ==")
     if not PG:
         print("  skip  TARES_TEST_PG is not set")
         return
     d, path = older_cell()
-    s = Store(path, state_dsn="")
     t = datetime(2026, 11, 19, 9, 0, 0, tzinfo=timezone.utc)
-    with s._lock:
-        # one person's crew recorded without its machine and again with one: one crew (TR-1223)
-        s.con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
-        s.con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
-                      [t + timedelta(days=1), t + timedelta(days=2)])
-    with s.sessions_db.begin() as c:                   # the station is in the session store, as a cell
-        c.execute(text("INSERT INTO session_stations (session, station, role, parent, project, seen_at, crew_id) "
-                       "VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', :t, 'cb')"),
-                  {"t": t})   # that ran on SQLite has it
-    close(s)
+    con = duckdb.connect(path)                          # the file as an older release left it
+    for stmt in ts._old_ddl(["crews"]):                 # a Store no longer makes crews in DuckDB
+        con.execute(stmt)
+    # one person's crew recorded without its machine and again with one: one crew (TR-1223)
+    con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
+    con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
+                [t + timedelta(days=1), t + timedelta(days=2)])
+    # the columns are named: the session store's table has two more than DuckDB's (TR-1600)
+    station = ("INSERT INTO session_stations (session, station, role, parent, project, seen_at, crew_id) "
+               "VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', '2026-11-19 09:00:00+00', 'cb')")
+    if not station_in_local_file:
+        con.execute(station)
+    con.execute("CHECKPOINT")
+    con.close()
+    if station_in_local_file:
+        # a cell that ran on SQLite under a release that kept crews in DuckDB: its file holds the
+        # station, and its ledger does not name crews, so those still come from DuckDB (TR-1705)
+        close(Store(path, state_dsn=""))
+        local = SessionStore(d)
+        with local.begin() as c:
+            c.execute(text("DELETE FROM crews"))
+            c.execute(text("DELETE FROM session_store_copies WHERE table_name = 'crews'"))
+            c.execute(text(station))
+        local.close()
     with pg_schema() as dsn:
         orig = state_db.move
         state_db.move = _fail_move
         try:
             try:
                 Store(path, state_dsn=dsn)
-                ck("the move raising stops the start", False, "it started")
+                ck(f"{where}: the move raising stops the start", False, "it started")
             except StoreUnavailable:
-                ck("the move raising stops the start", True)
+                ck(f"{where}: the move raising stops the start", True)
         finally:
             state_db.move = orig
         gc.collect()
-        ck("the first try merged the crews in Postgres",
+        ck(f"{where}: the first try merged the crews in Postgres",
            _pg_query(dsn, "SELECT crew_id FROM session_stations WHERE session = 's3'") == [("cn",)])
         s = Store(path, state_dsn=dsn)
-        ck("the next start has the state database", state_db.moved(s.sc))
-        ck("the station is on the crew that has the machine, not on the bare one the copy brought back",
+        ck(f"{where}: the next start has the state database", state_db.moved(s.sc))
+        ck(f"{where}: the station is on the crew that has the machine, not on the bare one the copy brought back",
            _pg_query(dsn, "SELECT crew_id FROM session_stations WHERE session = 's3'") == [("cn",)])
-        ck("the bare crew is gone and the kept one spans both",
+        ck(f"{where}: the bare crew is gone and the kept one spans both",
            [(r[0], r[1].date().isoformat(), r[2].date().isoformat())
             for r in _pg_query(dsn, "SELECT id, first_seen, last_seen FROM crews WHERE person_id = 'person1'")]
            == [("cn", "2026-11-19", "2026-11-21")],
@@ -225,7 +245,7 @@ def split_crews_after_a_failed_start():
 
 
 def _local_file_cell():
-    """A cell that ran on SQLite first: sessions.sqlite holds a copy of DuckDB's rows."""
+    """A cell that ran on SQLite first: tares.sqlite holds a copy of DuckDB's rows."""
     d, path = older_cell()
     s = Store(path, state_dsn="")
     s.link_session("p1", "s-local")                    # a row only the local file has
@@ -234,18 +254,18 @@ def _local_file_cell():
 
 
 def local_file_guards():
-    print("== the guards before the copy reads sessions.sqlite ==")
+    print("== the guards before the copy reads tares.sqlite ==")
     if not PG:
         print("  skip  TARES_TEST_PG is not set")
         return
-    # 1. the file is read only when it exists: an older cell gets no empty sessions.sqlite
+    # 1. the file is read only when it exists: an older cell gets no empty tares.sqlite
     d, path = older_cell()
     with pg_schema() as dsn:
         s = Store(path, state_dsn=dsn)
         ck("an older cell's first Postgres start copies DuckDB's rows",
            s.sessions_db.dialect == "postgresql" and ts._count(s.sessions_db, "project_sessions") == 2)
         close(s)
-    ck("and leaves no sessions.sqlite behind", [f for f in os.listdir(d) if f.startswith("sessions.sqlite")] == [],
+    ck("and leaves no tares.sqlite behind", [f for f in os.listdir(d) if f.startswith("tares.sqlite")] == [],
        os.listdir(d))
 
     # 2. the file is brought to the newest revision before it is read
@@ -255,7 +275,7 @@ def local_file_guards():
     local.close()
     with pg_schema() as dsn:
         s = Store(path, state_dsn=dsn)
-        ck("a sessions.sqlite from an older revision is upgraded, then read: DuckDB's rows arrive",
+        ck("a tares.sqlite from an older revision is upgraded, then read: DuckDB's rows arrive",
            s.sessions_db.dialect == "postgresql" and ts._count(s.sessions_db, "project_sessions") == 2
            and ts._count(s.sessions_db, "session_usage") == 2)
         close(s)
@@ -281,6 +301,7 @@ def local_file_guards():
 if __name__ == "__main__":
     failed_first_start()
     local_file_guards()
-    split_crews_after_a_failed_start()
+    split_crews_after_a_failed_start(station_in_local_file=False)
+    split_crews_after_a_failed_start(station_in_local_file=True)
     print("FAIL " + ", ".join(ts.FAILS) if ts.FAILS else "OK")
     sys.exit(1 if ts.FAILS else 0)

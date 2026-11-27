@@ -17,14 +17,14 @@ revision is a record of what ran.
 
 Downgrade: drops the table, and the records with it. They are not worked out again.
 
-Revision ID: 0012_merge_ledger
-Revises: 0011_session_station_runtime
+Revision ID: 0024_merge_ledger
+Revises: 0023_brain_tables
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0012_merge_ledger"
-down_revision = "0011_session_station_runtime"
+revision = "0024_merge_ledger"
+down_revision = "0023_brain_tables"
 branch_labels = None
 depends_on = None
 

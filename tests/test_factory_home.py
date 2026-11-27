@@ -32,7 +32,7 @@ from fastapi import FastAPI
 import tares.mcp_factory as mf
 import tares.mcp_server as m
 from session_helpers import seed_usage
-from tares import factory_api
+from tares import claude_usage, factory_api
 from tares import factory_home as fh
 from tares import words
 
@@ -318,6 +318,7 @@ async def main():
                               headers={"X-Tares-Station": "crew-orchestrator", "X-Tares-Role": "orchestrator"})
             ck("a question on the desk", r.status_code < 300, r.text)
             store.upsert_github_credential("cred-a", "tok-a")
+            claude_usage.clear_week_by_project()   # an empty cell was read above; the week is kept 60 s (TR-1627)
 
             print("== a seeded cell ==")
             h = await get_home(cx)

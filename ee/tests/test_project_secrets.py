@@ -104,8 +104,7 @@ async def main():
         r = await call("bob", method, path, b)
         ck(f"bob, not on the project: {method} {path.rsplit('/', 1)[-1]} is refused", r.status_code in (403, 404), r.text)
         ck("and the answer holds no value", VALUE not in r.text)
-    app.state.store.set_project_kind(uid, "software_factory") if hasattr(app.state.store, "set_project_kind") else \
-        app.state.store.con.execute("UPDATE usecases SET kind = 'software_factory' WHERE id = ?", [uid])
+    app.state.store.set_project_kind(uid, "software_factory")
     pg = await call("bob", "GET", f"/api/factory/projects/{uid}")
     ck("the project page's read has no secrets for someone not on it",
        pg.status_code == 200 and pg.json().get("secrets") is None and VALUE not in pg.text, pg.text[:200])

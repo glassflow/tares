@@ -39,7 +39,10 @@ finally:
     daemon.wait()
 
 sys.path.insert(0, os.getcwd())
+from sqlalchemy import update  # noqa: E402
+
 from tares import factory as factory_mod  # noqa: E402
+from tares.session_store.tables import tickets  # noqa: E402
 from tares.store import Store, now_utc  # noqa: E402
 
 store = Store(os.path.join(home, "tares.duckdb"))
@@ -64,8 +67,8 @@ def in_review(uid, title, n, *, verdict="pass", reviewed=NEW, head=NEW, ci="succ
         for r in range(rounds):
             store.add_review(uid, tid, None, reviewed, "changes" if r < rounds - 1 else verdict, "ran the tests", None,
                              "crew-reviewer", [], {}, factory_mod.finding_kind, now_utc())
-    with store._swrite:
-        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [now_utc() - timedelta(**waited), tid])
+    with store.sessions_db.begin() as c:
+        c.execute(update(tickets).where(tickets.c.id == tid).values(updated_at=now_utc() - timedelta(**waited)))
     return tid
 
 

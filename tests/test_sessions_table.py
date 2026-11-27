@@ -121,7 +121,7 @@ def through_append():
     ck("started_at and last_line_at are the first and last line", r["s1"][3] == T0
        and r["s1"][4] == T0 + timedelta(seconds=6), (r["s1"][3], r["s1"][4]))
     ck("the row names its source", r["s1"][5] == "claude_code", r["s1"][5])
-    ck("lines_complete stays false", not any(v[6] for v in r.values()))
+    ck("a row Store.append makes is born in the table, so lines_complete is true", all(v[6] for v in r.values()))
     s.append([line("s1", 7), line("s1", 8, tool="ListAgents")])
     got = counts(s)
     ck("a second batch adds to the row", got["s1"] == (9, 3, 2), got["s1"])
@@ -162,8 +162,7 @@ def parity():
 def catalog_source():
     print("== a claude_code source with another name ==")
     s = fresh_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
     s.append([line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"),
               line("b", 0, source="deploys")])
     got = counts(s)
@@ -306,8 +305,7 @@ def json_dumps(o):
 def purge():
     print("== purge_events drops the source's sessions rows ==")
     s = fresh_store()
-    with s._swrite:
-        s.sc.execute("INSERT INTO catalog_sources (name, connector) VALUES ('laptop', 'claude_code')")
+    s.upsert_catalog_source("laptop", "claude_code", "claude_code", "", {})
     batch = [line("a", 0, source="laptop"), line("a", 1, tool="Skill", source="laptop"), line("a", 2, source="laptop")]
     s.append(batch + [line("keep", 0, tool="Skill")])
     ck("the lines are counted", counts(s)["a"] == (3, 1, 1), counts(s))
@@ -432,9 +430,9 @@ def revision():
         names = inspect(sdb.engine).get_table_names()
         ck("both tables exist", "sessions" in names and "session_ingest_marks" in names, names)
         cols = {c["name"]: c for c in inspect(sdb.engine).get_columns("sessions")}
-        ck("sessions has the nine columns", sorted(cols) == sorted(
+        ck("sessions has its ten columns", sorted(cols) == sorted(
             ["session", "source", "started_at", "last_line_at", "line_count", "tool_calls",
-             "coordination_calls", "lines_complete", "updated_at"]), sorted(cols))
+             "coordination_calls", "lines_complete", "updated_at", "lines_origin"]), sorted(cols))
         ck("its counters are not null", all(not cols[c]["nullable"] for c in
                                             ("line_count", "tool_calls", "coordination_calls", "lines_complete")))
         ck("last_line_at has an index", any(i["column_names"] == ["last_line_at"]
@@ -461,7 +459,7 @@ def revision():
             v = [x[0] for x in c.execute(text("SELECT version_num FROM session_store_version")).all()]
             kept = c.execute(select(sessions.c.line_count).where(sessions.c.session == "kept")).scalar()
         ck("an upgrade over tables that already exist stamps the revision and keeps the rows",
-           v == ["0012_merge_ledger"] and kept == 3, (v, kept))
+           v == ["0024_merge_ledger"] and kept == 3, (v, kept))
         sdb.close()
     finally:
         if PG:

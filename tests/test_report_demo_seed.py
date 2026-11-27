@@ -158,10 +158,13 @@ TABLES = {
 
 def load(data_dir):
     with opened(data_dir) as s:
-        db = {name: [dict(zip(cols.split(), row)) for row in s.sc.execute(
-            f"SELECT {', '.join(cols.split())} FROM {name}").fetchall()]
-            for name, cols in TABLES.items()}
+        db = {}
         with s.sessions_db.begin() as conn:
+            for name, cols in TABLES.items():
+                t = session_tables.metadata.tables[name]      # JSON read back as the stored text
+                db[name] = [{k: json.dumps(v) if isinstance(v, (dict, list)) else v
+                             for k, v in r._mapping.items()}
+                            for r in conn.execute(select(*(t.c[c] for c in cols.split())))]
             for t in (session_tables.session_usage, session_tables.session_stations,
                       session_tables.session_states, session_tables.project_sessions):
                 db[t.name] = [dict(r._mapping) for r in conn.execute(select(t)).fetchall()]
@@ -580,9 +583,11 @@ def alive_checks(base, label):
 
 def linked_prs(data_dir):
     """[(project, ticket number, the pull request as stored)] for every ticket that has one."""
-    with opened(data_dir) as s:
-        return [(uid, n, json.loads(pr)) for uid, n, pr in s.sc.execute(
-            "SELECT project, number, pr FROM tickets WHERE pr IS NOT NULL").fetchall()]
+    t = session_tables.metadata.tables["tickets"]
+    with opened(data_dir) as s, s.sessions_db.begin() as conn:
+        return [(uid, n, json.loads(pr) if isinstance(pr, str) else pr)
+                for uid, n, pr in conn.execute(select(t.c.project, t.c.number, t.c.pr)
+                                               .where(t.c.pr.is_not(None)))]
 
 
 def pr_page_checks(base, linked):

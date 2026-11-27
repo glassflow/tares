@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -21,20 +22,39 @@ from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
 from .factory import DONE_STATUSES, OPEN_STAGES, state_of
 from .factory_store import FACTORY_SCHEMA, FactoryStore
+from .request_memo import kept
 from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
-from sqlalchemy import and_, delete, null, select
+from sqlalchemy import (Date, LargeBinary, Text, and_, case, cast, delete, func, insert, literal, null,
+                        or_, select, union_all, update)
 
-from . import session_ingest, session_read, state_db
+from . import (edition, metrics, session_archive, session_digest, session_events, session_ingest,
+               session_move, session_read, state_db)
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
-from .session_store.tables import (COPIED, merge_records, project_sessions, report_weeks,
-                                    session_stations, session_states)
+from .session_store.pr_columns import fill_pr_columns, pr_columns
+from .session_store.tables import (MOVED_TABLE_NAMES, merge_records, project_sessions, report_texts,
+                                   report_weeks, session_stations, session_states)
+from .session_store.tables import settings as settings_table
+from .session_store.tables import api_keys as api_keys_table
+from .session_store.tables import people as people_table
+from .session_store.tables import project_members as members_table
+from .session_store.tables import usecases as projects_table
+from .session_store.tables import usecase_objects as objects_table
+from .session_store.tables import usecase_log as plog_table
+from .session_store.tables import docs as docs_table
+from .session_store.tables import skills as skills_table
+from .session_store.tables import shared_skills as shared_skills_table
+from .session_store.tables import catalog_sources as sources_table
+from .session_store.tables import github_credentials as github_table
+from .session_store.tables import model_usage as usage_table
+from .session_store.tables import tickets as tickets_table
+from .session_store.tables import pending_writeback as writeback_table
 from .session_store.tables import session_commands, session_messages
-from .session_store.tables import (report_texts, session_archive_parts, session_files, session_lines,
-                                    session_said, session_turns)
+from .session_store.tables import (session_archive_parts, session_files, session_ingest_marks,
+                                   session_lines, session_said, session_turns)
 from .session_store.tables import sessions as sessions_table
 from .reads import parse_window
 from .saved_counts import UNSAVED, SavedCounts
@@ -95,48 +115,6 @@ CREATE TABLE IF NOT EXISTS dispatch_deliveries (
   delivered_at    TIMESTAMPTZ,
   error           TEXT
 );
-CREATE TABLE IF NOT EXISTS api_keys (
-  id           TEXT PRIMARY KEY,
-  name         TEXT,
-  prefix       TEXT,
-  hash         TEXT,
-  scopes       JSON,
-  created_at   TIMESTAMPTZ,
-  last_used_at TIMESTAMPTZ,
-  revoked_at   TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS people (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  email      TEXT,
-  emails     TEXT,
-  github     TEXT,
-  is_admin   BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ,
-  created_via TEXT
-);
--- Who is on a project besides its lead (usecases.lead_person_id): reason 'manual' (the lead or
--- the system added them), 'ticket' (they hold one of its tickets) or 'self' (they joined a team
--- project themselves). A 'self' row counts on a team project only. The lead is not a row.
-CREATE TABLE IF NOT EXISTS project_members (
-  project   TEXT,
-  person_id TEXT,
-  added_by  TEXT,
-  added_at  TIMESTAMPTZ,
-  reason    TEXT,
-  PRIMARY KEY (project, person_id)
-);
-CREATE TABLE IF NOT EXISTS catalog_sources (
-  name       TEXT PRIMARY KEY,
-  type       TEXT,
-  connector  TEXT,
-  poll       TEXT,
-  config     JSON,
-  paused     BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ,
-  ingest_key TEXT
-);
 CREATE TABLE IF NOT EXISTS catalog_triggers (
   name       TEXT PRIMARY KEY,
   sources    JSON,
@@ -177,28 +155,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   error       TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_agent_runs_agent ON agent_runs(agent);
--- Model-usage ledger: one row per model interaction (an agent run's whole loop, an Ask turn),
--- with token counts straight from the API's usage block and the USD cost priced at write time
--- (tares/pricing.py). This is the cell's own meter for what it spends on Anthropic. A hosted
--- control plane reads the aggregate over /api/usage/model to enforce credits, but the cell
--- attaches no meaning to the total. cost_usd is NULL when the model has no known price.
--- (No semicolons in these comments: _SCHEMA is split on them.)
-CREATE TABLE IF NOT EXISTS model_usage (
-  id       TEXT PRIMARY KEY,
-  ts       TIMESTAMPTZ,
-  surface  TEXT,
-  agent    TEXT,
-  run_id   TEXT,
-  model    TEXT,
-  calls    INTEGER,
-  input_tokens  BIGINT,
-  output_tokens BIGINT,
-  cache_creation_input_tokens BIGINT,
-  cache_read_input_tokens     BIGINT,
-  cost_usd DOUBLE,
-  key_source TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_model_usage_ts ON model_usage(ts);
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
   value      TEXT,
@@ -209,15 +165,6 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   url         TEXT,
   auth_header TEXT,
   auth_value  TEXT,
-  created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS github_credentials (
-  name        TEXT PRIMARY KEY,
-  kind        TEXT,
-  token       TEXT,
-  api_url     TEXT,
-  account     TEXT,
   created_at  TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ
 );
@@ -248,40 +195,6 @@ CREATE TABLE IF NOT EXISTS dispatch_log (
   delivered   INTEGER,
   payload     TEXT
 );
--- Projects: a template (code) instantiated with params. Table and column names predate the
--- rename (use case, recipe) while the API says project and template. Every trigger, agent and MCP
--- server belongs to exactly one project (owned_by on those tables). A source is shared, and
--- usecase_objects says which projects it is in (its owned_by only records which created it).
--- usecase_objects also maps the template plan keys to the real object names so a re-plan can
--- diff against what exists. The default project (settings key default_project) holds whatever
--- no other project does.
-CREATE TABLE IF NOT EXISTS usecases (
-  id         TEXT PRIMARY KEY,
-  recipe     TEXT,
-  name       TEXT,
-  params     JSON,
-  status     TEXT,
-  created_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ,
-  last_error TEXT
-);
-CREATE TABLE IF NOT EXISTS usecase_objects (
-  usecase_id TEXT,
-  kind       TEXT,
-  key        TEXT,
-  name       TEXT,
-  customized BOOLEAN,
-  created_at TIMESTAMPTZ,
-  PRIMARY KEY (usecase_id, kind, key)
-);
-CREATE TABLE IF NOT EXISTS usecase_log (
-  usecase_id TEXT,
-  logged_at  TIMESTAMPTZ,
-  action     TEXT,
-  detail     TEXT
-);
--- Skills (TR-332): instructions a project's agents load by name when a task matches the
--- description. `project` is the project id. Deleted with the project (tares/skills.py).
 -- The wiring a project holds (P-TR-216): parts belong to the cell, and each project says how it
 -- uses them. kind 'wake': in `project`, trigger `trigger` wakes agent `agent` (`enabled`: on in
 -- this project). kind 'handoff': in `project`, when `from_agent` concludes `verdict`, `agent`
@@ -310,47 +223,6 @@ CREATE TABLE IF NOT EXISTS dispatch_projects (
   project     TEXT,
   PRIMARY KEY (dispatch_id, project)
 );
--- Skills shared by the cell (P-TR-216): one row per skill, and the projects that use one list it
--- in usecase_objects (kind 'skill'). `made_by`: the project that wrote it. The per-project
--- `skills` table below is what they were before: read once by the upgrade, then left alone.
-CREATE TABLE IF NOT EXISTS shared_skills (
-  name        TEXT PRIMARY KEY,
-  description TEXT,
-  body        TEXT,
-  made_by     TEXT,
-  created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ
-);
--- Docs (TR-403): markdown that belongs to the cell, included by projects through usecase_objects
--- (kind 'doc', key 'doc:<id>'), like skills. `made_by` is the project that wrote it, `updated_by`
--- who changed it last (a key's name, "console", a session). Kinds in tares/docs.py.
-CREATE TABLE IF NOT EXISTS docs (
-  id          TEXT PRIMARY KEY,
-  kind        TEXT,
-  title       TEXT,
-  body        TEXT,
-  made_by     TEXT,
-  updated_by  TEXT,
-  created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ
-);
--- Tickets (TR-403): a project's list of work. owner 'linear' is a record of a Linear issue, written
--- only by the Linear sync (external_id = the issue id, identifier = e.g. ENG-12). owner 'tares'
--- means the project has no Linear and Tares is the source of truth. `working_doc` is a doc id.
-CREATE TABLE IF NOT EXISTS tickets (
-  id          TEXT PRIMARY KEY,
-  project     TEXT,
-  owner       TEXT,
-  external_id TEXT,
-  identifier  TEXT,
-  url         TEXT,
-  title       TEXT,
-  status      TEXT,
-  position    DOUBLE,
-  working_doc TEXT,
-  created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ
-);
 -- Claude Code sessions that worked in a project (TR-405): the plugin tells Tares which project a
 -- session works in with a `session_project` line, and the whole session (its claude_code events,
 -- keyed by session id, the lines from before the project existed included) reads as the project's
@@ -369,23 +241,11 @@ CREATE TABLE IF NOT EXISTS session_states (
   reason     TEXT,
   state_at   TIMESTAMPTZ
 );
-CREATE TABLE IF NOT EXISTS skills (
-  project     TEXT,
-  name        TEXT,
-  description TEXT,
-  body        TEXT,
-  created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ,
-  PRIMARY KEY (project, name)
-);
 """
 
 # Columns added after the first release; bring pre-existing DBs up to the current schema.
 _MIGRATIONS = [
     "ALTER TABLE events ADD COLUMN IF NOT EXISTS labels JSON",
-    "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS ingest_key TEXT",
-    # a GitHub App or broker credential's fields (app id, key, installations); token kind: empty
-    "ALTER TABLE github_credentials ADD COLUMN IF NOT EXISTS config JSON",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_by TEXT",
     # No DEFAULT here on purpose: DuckDB re-applies an ADD COLUMN … DEFAULT on every boot even when
     # the column already exists, which would reset paused=TRUE back to FALSE each restart. Existing
@@ -422,8 +282,6 @@ _MIGRATIONS = [
     "ALTER TABLE events DROP COLUMN IF EXISTS fields",
     # Project ownership (see usecases tables). No DEFAULT for the same reason as paused above;
     # NULL reads as "not owned" / "not customized".
-    "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS owned_by TEXT",
-    "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS customized BOOLEAN",
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS owned_by TEXT",
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS customized BOOLEAN",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS owned_by TEXT",
@@ -463,10 +321,6 @@ _MIGRATIONS = [
     # the GitHub credential the agent acts with (check runs; its GitHub MCP server is in mcp_servers)
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS github TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS verdicts JSON",
-    # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
-    # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
-    "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
-    "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS provider TEXT",
     # Triggers name their own sources and filters (views were removed): the view's fields move
     # onto the trigger in _fold_views, which then drops the view column and catalog_views.
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS sources JSON",
@@ -484,13 +338,11 @@ _MIGRATIONS = [
     # Project keys and joining a project (TR-335, TR-336): a key may belong to one project, and a
     # subscription may be to a whole project (every trigger of it, including ones added later)
     # instead of to one trigger. NULL on both is what every row before meant.
-    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS project TEXT",
     # The goal-first project page: what a project is for, in the user's words (NULL = not said
     # yet), and on a run the one-line headline and next step of what it concluded, plus when a
     # person marked the result handled and who. NULL on every earlier row. Headline and next
     # step are derived from the note at read time for those (tares/goal.py).
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS goal TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS headline TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS next_step TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_at TIMESTAMPTZ",
@@ -505,63 +357,11 @@ _MIGRATIONS = [
     # ({plan, step, practice_run}, NULL for any other project), and a practice mark on the runs
     # and firings "Try it" makes. A practice result is shown, never counted: today's totals and
     # health leave it out. NULL on every earlier row reads as not practice.
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS setup JSON",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS practice BOOLEAN",
     "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS practice BOOLEAN",
     # A trigger's own words for what wakes it ("an alert fires in the demo service"), used by
     # every generated sentence instead of the rule's wording. NULL = say it from the rule.
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS description TEXT",
-    # TR-408: the Linear project a project's tickets live in, and how the last sync went
-    # ({id, name, url, synced_at, cursor, error}); NULL = the project does not use Linear
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS linear JSON",
-    # The GitHub repo and issue label a project's tickets live in, and how the last sync went
-    # ({repo, issue_label, url, credential, synced_at, error, issues, backoff_until}); NULL = no
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS github_issues JSON",
-    # What kind of project it is, shown as a tag and choosing its page (NULL = an ordinary
-    # project). 'software_factory': specced in Claude Code, built from docs and tickets.
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS kind TEXT",
-    # The factory's plan (TR-411, TR-412): the milestone a ticket belongs to (a milestone id),
-    # the tickets it depends on ([ticket id]), and its number in the project (T1, T2, ...)
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS milestone TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS depends_on JSON",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS number INTEGER",
-    # The ledger (TR-427): the station holding the ticket, where it stands (todo, doing, review,
-    # changes, merged, shipped, blocked, with the reason when blocked), and its pull request as
-    # Tares last read it from GitHub (TR-410): {url, repo, number, head, branch, ci, verdict,
-    # verdict_head, merged, merge_commit, state, checked_at, error}
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS holder TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage_reason TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
-    # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
-    # Who last changed a shared skill, when a person did it from a page (TR-753); NULL otherwise
-    "ALTER TABLE shared_skills ADD COLUMN IF NOT EXISTS updated_by TEXT",
-    # The person a key belongs to (a people.id); NULL = a key made before people existed, or one
-    # nobody has bound yet. The cell reads who is calling from this, never from a header.
-    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS person_id TEXT",
-    # A project's lead (a people.id; NULL = nobody, as for every project made before people) and
-    # its scope, 'team' or 'private'. No DEFAULT for the same reason as paused above; NULL scope
-    # reads as 'team'.
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS lead_person_id TEXT",
-    # A person's picture (TR-1016): an https address the console shows instead of their initials,
-    # the one they sign in to Tares Cloud with or one they set. NULL = initials. Never fetched here.
-    "ALTER TABLE people ADD COLUMN IF NOT EXISTS picture TEXT",
-    # When a person left the cell (their membership ended). NULL = on the cell. The row stays, so
-    # the work they did keeps their name; they no longer count as a person on the cell.
-    "ALTER TABLE people ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ",
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
-    # A project's icon (TR-617): one emoji the console shows beside its name, never part of the
-    # name. NULL = no icon, as for every project made before this column.
-    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS icon TEXT",
-    # The person a doc belongs to (a people.id): a personal AGENTS.md or memory (TR-624). NULL =
-    # a doc of the cell, as every doc made before this column.
-    "ALTER TABLE docs ADD COLUMN IF NOT EXISTS owner TEXT",
-    # Who a ticket is for (TR-631), wherever it lives: a people.id, or when nobody on the cell
-    # matches, the assignee as the source named them (an email, a name or a GitHub login). Not
-    # `owner`, which says where the ticket lives.
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_person_id TEXT",
-    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_raw TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -623,6 +423,15 @@ def _label_expr(name: str) -> str:
     if name == "key_value":
         return "key_value"
     return f"json_extract_string(labels, '$.{name}')"
+
+
+def _aggregated(agg: str, sums: list):
+    """The value of `Store.aggregate` for one group of `session_digest.aggregate`'s
+    [lines, lines with a value, sum, max, min]."""
+    lines, with_value, total, high, low = sums
+    value = {"count": lines, "sum": total, "avg": total / with_value if with_value else None,
+             "max": high, "min": low, "any": high}[agg]
+    return value if value is not None else 0.0
 
 
 def _where_sql(where) -> tuple[str, list]:
@@ -762,6 +571,43 @@ def _exclude_sql(exclude, sources=None, sessions=None, digests=None,
                  *(v for pair in moved for v in pair)]
 
 
+def _line_hidden(exclude, source: str, digests=(), moved=()):
+    """The label, payload, name and source tests of `_exclude_sql` for a line read from
+    `session_lines`: a function of (labels, payload, at), the first two JSON texts and `at` the
+    line's time, true when the line is left out. `digests` and `moved` are as there. The session
+    test is the caller's."""
+    ids = list((exclude or {}).get("ids") or [])
+    names = list((exclude or {}).get("names") or [])
+    if not (ids or names):
+        return lambda labels, payload, at=None: False
+    digests = dict(digests)
+    moved_until = dict(moved).get(source)
+    both = {v.lower() for v in [*ids, *names]}
+    shared = exclude.get("shared")
+    in_payload = shared is None or source in shared
+
+    def field(blob, name):
+        try:
+            return json.loads(blob or "{}").get(name)
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    def hidden(labels, payload, at=None) -> bool:
+        tag = field(labels, "tares_project")
+        if tag is not None:
+            if str(tag).lower() in both:
+                return True
+            digest = _name_digest(str(tag)) if digests else None
+            if digest in digests:      # a deleted private project's name
+                until = digests[digest]
+                if until is None or (at is not None and at < until):
+                    return True
+        if moved_until is not None and at is not None and at < moved_until:
+            return True
+        return in_payload and field(payload, "project") in ids
+    return hidden
+
+
 def _cgroup_mem_bytes() -> int | None:
     """The container's memory limit in bytes (cgroup v2, then v1), or None if unlimited/unknown."""
     for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
@@ -826,8 +672,21 @@ def day_month_words(when) -> str:
     return f"{when.day} {_MONTHS[when.month - 1][:3]}"
 
 
-# the five tables the session store holds (a state move leaves them out: copy_from_duckdb moved them)
-SESSION_TABLES = frozenset(t.name for t in COPIED)
+# The tables a CREATE, ALTER or CREATE INDEX statement names, for `Store._ddl()` to leave out the
+# tables that have moved to the session store (their revisions make them)
+_DDL_TARGET = re.compile(
+    r"^\s*(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE(?:\s+IF\s+EXISTS)?|"
+    r"CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+\S+\s+ON)\s+\"?(\w+)", re.I)
+
+
+def _unmoved(statements) -> list[str]:
+    """`statements` without the ones that make, change or index a table in MOVED_TABLES."""
+    out = []
+    for stmt in statements:
+        m = _DDL_TARGET.match(state_db._strip_comments(stmt))
+        if not (m and m.group(1).lower() in MOVED_TABLE_NAMES):
+            out.append(stmt)
+    return out
 
 
 class StoreUnavailable(RuntimeError):
@@ -850,8 +709,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._lock = threading.Lock()
         # held by append (commit to DuckDB, then the sessions row) and by the reconcile's writes
         self._sess_lock = threading.Lock()
+        self._archive_on = None            # whether an archive backend exists (settled at first use)
+        self._factory_mode = None          # (is the edition factory, until when), see _lines_skip_duckdb
+        self._challenges_unreadable: set = set()    # challenger lines already logged as unreadable
         # entity counts of the filtered reads (list_entities with `exclude`); used under _lock
         self._saved_counts = SavedCounts()
+        # held while a batch is written and added to them, and while a count is made to be saved
+        # (TR-1716), so no line lands between the two. Taken after _sess_lock, before _lock.
+        self._counts_lock = threading.RLock()
         self.path = path          # kept so usage() can size the db file and its WAL
         self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
@@ -868,36 +733,29 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             for stmt in self._ddl():
                 self.con.execute(stmt)
             pg = None
-            moved_at = self.con.execute(
-                "SELECT value FROM settings WHERE key = 'state_moved_to_postgres'").fetchone()
+            moved_at = self._moved_mark()
             if moved_at and not state_dsn:
                 # the DuckDB copy stopped at the move; serving it would quietly lose everything
                 # written since, so say what is missing instead
                 raise StoreUnavailable(
-                    f"this cell's state moved to Postgres on {moved_at[0]}; TARES_STATE_DSN is not "
+                    f"this cell's state moved to Postgres on {moved_at}; TARES_STATE_DSN is not "
                     "set, so it cannot be read. Set it again and restart.", path)
             if state_dsn:
                 pg = state_db.PgState(state_dsn)
                 for stmt in state_db.state_ddl(self._ddl()):
                     pg.execute(stmt)
-                # Postgres only: DuckDB's ART indexes have broken after upgrades
-                pg.execute("CREATE INDEX IF NOT EXISTS tickets_project ON tickets(project)")
-                pg.execute("CREATE INDEX IF NOT EXISTS ticket_history_ticket "
-                           "ON ticket_history(ticket)")
                 if state_db.moved(pg):
                     self._use_pg_state(pg)        # upgrades below run on the moved state
                     if not moved_at:
                         # the move committed but the start stopped before marking DuckDB: mark
                         # it now, so a later start without the DSN still refuses
-                        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                                         "('state_moved_to_postgres', ?, now())",
-                                         [now_utc().isoformat()])
+                        self._mark_moved(now_utc().isoformat())
                 elif moved_at:
                     # this cell moved before, yet this database holds none of it (recreated,
                     # restored from before the move, or the wrong DSN): moving again would put
                     # the DuckDB copy from the day of the move in place of everything since
                     raise StoreUnavailable(
-                        f"this cell's state moved to Postgres on {moved_at[0]}, but the database "
+                        f"this cell's state moved to Postgres on {moved_at}, but the database "
                         "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
                         "state database and restart.", path)
             # The session store: SQLite beside the DuckDB file, or the state Postgres. Built here,
@@ -910,9 +768,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # The five session tables are copied in before the data upgrades, so the fills in
             # _upgrade() write into a table that already holds its rows. On SQLite that is a copy
             # from DuckDB (once; the ledger skips a table already copied). On the first start with
-            # a state database the same copy fills the new Postgres tables (from sessions.sqlite
+            # a state database the same copy fills the new Postgres tables (from tares.sqlite
             # when the cell ran locally first, else from DuckDB), and the one-time move below
-            # leaves them out. DuckDB's own copies and sessions.sqlite are never changed.
+            # leaves them out. DuckDB's own copies and tares.sqlite are never changed.
             first_pg_start = pg is not None and self.sc is self.con
             copy_from_duckdb(
                 self, self.sessions_db, state_move=first_pg_start,
@@ -924,13 +782,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if first_pg_start:
                 # first start with a state database: the state moves over once, then is read
                 # from Postgres only; the DuckDB copy is left as it was, as a fallback
-                state_db.move(self.con, pg, [t for t in self._state_tables()
-                                             if t not in SESSION_TABLES])
-                self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                                 "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
-                                 "UPDATE SET value = excluded.value", [now_utc().isoformat()])
+                state_db.move(self.con, pg, self._state_tables())
+                self._mark_moved(now_utc().isoformat())
                 self._use_pg_state(pg)
-                self._merge_split_crews()         # the bare crews the first merge kept (TR-1517)
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
             # agent_runs (a table with an index) replay after a hard stop into a corrupted index:
             # "Corrupted ART index", and every query after it fails until a restart.
@@ -941,12 +795,48 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def close(self) -> None:
         """Let go of the session store's connections. The DuckDB and Postgres state connections are
         left to the process, as before."""
+        warm_stop = getattr(self, "_digest_stop", None)
+        if warm_stop is not None:
+            warm_stop.set()     # the digest warm-up (session_digest.start) stops between batches
+        th = getattr(self, "_digest_thread", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(60)
         stop = getattr(self, "_reconcile_stop", None)
         if stop is not None:
             stop.set()          # the ten minute reconcile (session_ingest._cycle) ends
+        # The start-up pass reads `con` and `sessions_db` from its own thread: let it finish, or a
+        # close that follows (`con.close()`) meets a busy connection (TR-1638)
+        th = getattr(self, "_reconcile_thread", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(60)
+        move_stop = getattr(self, "_move_stop", None)
+        if move_stop is not None:
+            move_stop.set()     # the session move (session_move.run) stops between sessions
+        th = getattr(self, "_move_thread", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(60)
         sessions_db = getattr(self, "sessions_db", None)
         if sessions_db is not None:
             sessions_db.close()
+
+    # The one setting that stays in DuckDB: `state_moved_to_postgres` says that this DuckDB file's
+    # state went to Postgres, so a start without TARES_STATE_DSN refuses to serve the stale copy
+    # (TR-1480: the other settings are in the session store, which a start without the DSN would
+    # not see the Postgres rows of). The table is the old `settings` table, made here only when
+    # the mark is first written; a cell that moved before TR-1480 already has it with the mark.
+    def _moved_mark(self) -> str | None:
+        if "settings" not in self._tables_of(self.con):
+            return None
+        row = self.con.execute(
+            "SELECT value FROM settings WHERE key = 'state_moved_to_postgres'").fetchone()
+        return row[0] if row else None
+
+    def _mark_moved(self, when: str) -> None:
+        self.con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, "
+                         "updated_at TIMESTAMPTZ)")
+        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                         "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
+                         "UPDATE SET value = excluded.value", [when])
 
     def _use_duckdb_state(self) -> None:
         self.sc, self._sread, self._swrite = self.con, self._lock, self._lock
@@ -956,11 +846,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     @staticmethod
     def _ddl() -> list[str]:
-        return ([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
-                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
+        # a table that has moved to the session store (MOVED_TABLES) is made by its revision there,
+        # not here: its CREATE and ALTER statements below stay as the record of the old schema
+        # (tests/old_ddl.py keeps them as text) and are left out of what runs
+        return _unmoved([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
+                        + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
 
     def _state_tables(self) -> list[str]:
-        return sorted(t for t in self._tables_of(self.con) if t not in state_db.EVENT_TABLES)
+        return sorted(t for t in self._tables_of(self.con)
+                      if t not in state_db.EVENT_TABLES and t not in MOVED_TABLE_NAMES)
 
     def _upgrade(self) -> None:
         """The data upgrades every open runs; each is idempotent."""
@@ -974,13 +868,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._skills_upgrade()
         self._factory_kind_upgrade()
         self._factory_upgrade()
+        self._ticket_pr_columns()
         self._people_upgrade()
         self._claude_usage_fill()
         self._challenges_fill()
         self._init_source_stats()
         self._init_entity_counts()
         self._incidents_backfill()
-        self._ticket_stage_repair()
+
+    def _ticket_pr_columns(self) -> None:
+        """tickets.pr_repo and pr_number say what `pr` says (TR-1614). A release before them writes
+        `pr` and knows nothing of the two columns (a cell rolled back and up again), so every start
+        repairs the rows that differ. After the copy from DuckDB, which has `pr` only."""
+        with self._swrite, self.sessions_db.begin() as conn:
+            fill_pr_columns(conn)
 
     def _incidents_backfill(self) -> None:
         """Give the notes written before incidents were tracked their incidents (TR-744). Writes
@@ -1023,10 +924,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _people_upgrade(self) -> None:
         """The person `local` always exists: the one person of a cell with auth off, and the one
         an unbound key acts as while nobody else is on the cell."""
-        self.sc.execute(
-            "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, created_via) "
-            "SELECT 'local', 'You', NULL, '[]', NULL, TRUE, ?, 'boot' "
-            "WHERE NOT EXISTS (SELECT 1 FROM people WHERE id = 'local')", [now_utc()])
+        with self.sessions_db.begin() as conn:
+            conn.execute(self.sessions_db.upsert(people_table).values(
+                id="local", name="You", email=None, emails=[], github=None, is_admin=True,
+                created_at=now_utc(), created_via="boot").on_conflict_do_nothing(
+                index_elements=["id"]))
 
     def _columns(self, table: str) -> set:
         con = self.con if table in state_db.EVENT_TABLES else self.sc
@@ -1107,22 +1009,23 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self._migrate_claude_code_repo_label()
 
     def _migrate_claude_code_repo_label(self) -> None:
-        rows = self.sc.execute(
-            "SELECT name, config FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
-        names = []
-        for name, raw in rows:
-            names.append(name)
-            cfg = json.loads(raw or "{}")
-            hit = False
-            for l in cfg.get("labels") or []:
-                if isinstance(l, dict) and l.get("name") == "project":
-                    l["name"] = "repo"
-                    if l.get("field") == "project":
-                        l["field"] = "repo"
-                    hit = True
-            if hit:
-                self.sc.execute("UPDATE catalog_sources SET config = ? WHERE name = ?",
-                                 [json.dumps(cfg), name])
+        t = sources_table
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(select(t.c.name, t.c.config).where(
+                t.c.connector == "claude_code")).all()
+            names = []
+            for name, cfg in rows:
+                names.append(name)
+                cfg = cfg or {}
+                hit = False
+                for l in cfg.get("labels") or []:
+                    if isinstance(l, dict) and l.get("name") == "project":
+                        l["name"] = "repo"
+                        if l.get("field") == "project":
+                            l["field"] = "repo"
+                        hit = True
+                if hit:
+                    conn.execute(update(t).where(t.c.name == name).values(config=cfg))
         for name, key_field, sources, filters in self.sc.execute(
                 "SELECT name, key_field, sources, filters FROM catalog_triggers").fetchall():
             srcs = set(json.loads(sources or "[]"))
@@ -1141,8 +1044,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         trigger's owner when that still exists (a run of a deleted agent stays unplaced). Then the
         indexes the project timeline reads through. Idempotent: only NULL rows are touched, and
         the backfill runs once per database (a settings marker), not on every start."""
-        done = self.sc.execute("SELECT 1 FROM settings WHERE key = 'lineage_backfilled'").fetchone()
-        if not done:
+        if self.get_setting("lineage_backfilled") is None:
             self._lineage_backfill()
         for stmt in ("CREATE INDEX IF NOT EXISTS ix_agent_runs_dispatch ON agent_runs(dispatch_id)",
                      "CREATE INDEX IF NOT EXISTS ix_agent_runs_parent ON agent_runs(parent_run_id)",
@@ -1165,15 +1067,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                          "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
         self.sc.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
                          "project FROM dispatch_log WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
-        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('lineage_backfilled', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
+        self._set_setting_once("lineage_backfilled", "1")
 
     def _wiring_upgrade(self) -> None:
         """Once per database (P-TR-216): the wiring an agent carried itself (its trigger, its
         handoffs, and on/off as a tares://agent/ subscription) becomes the wiring of the project
         that made it; those subscriptions go. Runs and firings get their project rows. Called
         with no lock needed (the store is being opened)."""
-        if self.sc.execute("SELECT 1 FROM settings WHERE key = 'wiring_moved'").fetchone():
+        if self.get_setting("wiring_moved") is not None:
             return
         # one transaction: a crash part-way leaves the subscriptions (the on/off record) as they
         # were, and the next start does the whole upgrade again
@@ -1184,62 +1085,63 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         except Exception:
             self.sc.execute("ROLLBACK")
             raise
+        # the marker is in the session store, outside the transaction above: it is written once
+        # the move has committed, so a crash before it repeats the move, which finds the wiring in
+        # place and the on/off record gone, and changes nothing the first run set
+        self._set_setting_once("wiring_moved", "1")
 
     def _skills_upgrade(self) -> None:
         """Once per database: the skills each project kept become skills of the cell that those
         projects use. Two projects' skills of the same name and text are one skill; the same name
-        with different text keeps both, the second named name-2 (and so on)."""
-        if self.sc.execute("SELECT 1 FROM settings WHERE key = 'skills_shared'").fetchone():
+        with different text keeps both, the second named name-2 (and so on). All of it is in the
+        session store, in one transaction."""
+        if self.get_setting("skills_shared") is not None:
             return
-        self.sc.execute("BEGIN TRANSACTION")
-        try:
-            for project, name, desc, body, c, u in self.sc.execute(
-                    "SELECT project, name, description, body, created_at, updated_at FROM skills "
-                    "ORDER BY created_at, project").fetchall():
+        k, s, o = skills_table, shared_skills_table, objects_table
+        with self.sessions_db.begin() as conn:
+            for project, name, desc, body, c, u in conn.execute(
+                    select(k.c.project, k.c.name, k.c.description, k.c.body, k.c.created_at,
+                           k.c.updated_at).order_by(k.c.created_at, k.c.project)).all():
                 use, n = name, 2
                 while True:
-                    have = self.sc.execute("SELECT body FROM shared_skills WHERE name = ?",
-                                            [use]).fetchone()
+                    have = conn.execute(select(s.c.body).where(s.c.name == use)).first()
                     if have is None or have[0] == body:
                         break
                     use, n = f"{name}-{n}", n + 1
                 if have is None:
-                    self.sc.execute("INSERT INTO shared_skills (name, description, body, made_by, "
-                                     "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                                     [use, desc, body, project, c, u])
+                    conn.execute(s.insert().values(name=use, description=desc, body=body,
+                                                   made_by=project, created_at=c, updated_at=u))
                 if use != name:   # the project's own row follows the new name
-                    self.sc.execute("UPDATE usecase_objects SET name = ? WHERE usecase_id = ? "
-                                     "AND kind = 'skill' AND name = ?", [use, project, name])
-                self.sc.execute(
-                    "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
-                    "created_at) SELECT ?, 'skill', ?, ?, FALSE, ? WHERE NOT EXISTS (SELECT 1 FROM "
-                    "usecase_objects WHERE usecase_id = ? AND kind = 'skill' AND name = ?)",
-                    [project, f"skill:{use}", use, c or now_utc(), project, use])
-            self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                             "('skills_shared', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
-            self.sc.execute("COMMIT")
-        except Exception:
-            self.sc.execute("ROLLBACK")
-            raise
+                    conn.execute(o.update().where(
+                        (o.c.usecase_id == project) & (o.c.kind == "skill") & (o.c.name == name)
+                    ).values(name=use))
+                if conn.execute(select(o.c.name).where(
+                        (o.c.usecase_id == project) & (o.c.kind == "skill") & (o.c.name == use))).first() is None:
+                    conn.execute(o.insert().values(usecase_id=project, kind="skill", key=f"skill:{use}",
+                                                   name=use, customized=False, created_at=c or now_utc()))
+        self._set_setting_once("skills_shared", "1")      # after the commit: see _wiring_upgrade
 
     def _wiring_move(self) -> None:
         default = self._lazy_default_project()
-        projects = {r[0] for r in self.sc.execute("SELECT id FROM usecases").fetchall()}
+        projects = set(self._recipes())
         on = {r[0][len(AGENT_PREFIX):] for r in self.sc.execute(
             "SELECT url FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"]).fetchall()}
         ts = now_utc()
         for name, trig, owner, raw in self.sc.execute(
                 "SELECT name, trigger, owned_by, handoffs FROM catalog_agents").fetchall():
             project = owner if owner in projects else default()
-            # the store's placement pass may have wired it already (off): keep that row, carry
-            # on/off over
+            # the store's placement pass may have wired it already (off): keep that row, and turn
+            # it on when the agent was on. Never turn one off here: a repeat of this move after
+            # the commit finds no on/off record left (it went with the commit) and must not
+            # switch off what the first run carried over
             if trig:
                 if self.sc.execute("SELECT 1 FROM project_wiring WHERE kind = 'wake' AND "
                                     "project = ? AND trigger = ? AND agent = ?",
                                     [project, trig, name]).fetchone():
-                    self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
-                                     "AND project = ? AND trigger = ? AND agent = ?",
-                                     [name in on, project, trig, name])
+                    if name in on:
+                        self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
+                                         "AND project = ? AND trigger = ? AND agent = ?",
+                                         [True, project, trig, name])
                 else:
                     self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
@@ -1264,9 +1166,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                      "CREATE INDEX IF NOT EXISTS ix_run_projects_project ON run_projects(project)",
                      "CREATE INDEX IF NOT EXISTS ix_dispatch_projects_project ON dispatch_projects(project)"):
             self.sc.execute(stmt)
-        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('wiring_moved', '1', ?) ON CONFLICT (key) DO NOTHING", [ts])
-        # last: the old on/off record goes only with the marker that says it was carried over
+        # last: the old on/off record goes with the commit that carried it over
         self.sc.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
 
     # ── wiring: what each project wakes, and who digs in on whose verdict (P-TR-216) ──
@@ -1419,18 +1319,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def active_projects_using(self, kind: str, name: str) -> list[str]:
         """projects_using, without the paused projects and the drafts: the ones a firing of the
         part reaches."""
-        with self._sread:
-            status = {r[0]: r[1] for r in self.sc.execute(
-                "SELECT id, status FROM usecases").fetchall()}
+        with self.sessions_db.read() as conn:
+            status = {r[0]: r[1] for r in conn.execute(
+                select(projects_table.c.id, projects_table.c.status)).all()}
         return [p for p in self.projects_using(kind, name)
                 if status.get(p) not in ("paused", "draft", "done", None)]
 
     def projects_using(self, kind: str, name: str) -> list[str]:
         """The projects whose object list has this part (any kind), oldest membership first."""
-        with self._sread:
-            return [r[0] for r in self.sc.execute(
-                "SELECT usecase_id FROM usecase_objects WHERE kind = ? AND name = ? "
-                "GROUP BY usecase_id ORDER BY min(created_at)", [kind, name]).fetchall()]
+        o = objects_table
+        with self.sessions_db.read() as conn:
+            return list(conn.execute(
+                select(o.c.usecase_id).where(o.c.kind == kind, o.c.name == name)
+                .group_by(o.c.usecase_id).order_by(func.min(o.c.created_at))).scalars())
 
     def ping(self) -> None:
         """Cheapest possible liveness probe for /health — proves the connection still answers.
@@ -1516,7 +1417,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 _accum_entity(ent, e.source, lname, lval, e.ingest_time)
             if last is None or e.ingest_time > last:
                 last = e.ingest_time
-        with self._lock:
+        with self._counts_lock, self._lock:
             for name in {source, *(r[0] for r in rows)}:
                 self._saved_counts.drop(name)
             self.con.execute("BEGIN TRANSACTION")
@@ -1547,26 +1448,139 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         cc = session_ingest.claude_code_lines(self, envelopes)
         if not cc:
             return self._append(envelopes)
-        # The claude_code lines of the batch are counted into `sessions` after the commit. The
-        # reconcile at start holds the same lock, so a line is never counted by both.
+        session_events.note(self, cc)       # before any of them reaches DuckDB (TR-1695)
+        # In the factory edition with an archive, the claude_code lines of a session the session
+        # store answers for alone go only there (TR-1479); anywhere else they are written to DuckDB
+        # as before. The reconcile at start holds the same lock, so a line is never counted by both.
+        gate = self._lines_skip_duckdb()
+        factory = self._factory_writes()
         with self._sess_lock:
-            self._append(envelopes)
-            session_ingest.record(self, cc)
+            try:
+                held = session_ingest.holdable(self, cc) if gate else []
+            except Exception:                # no answer from the session store: DuckDB keeps them
+                held = []
+            if factory:
+                held = self._append_session_first(envelopes, cc, held)
+            else:                            # counted into `sessions` after the commit
+                self._append(envelopes, held)
+                if not session_ingest.record(self, cc) and held:
+                    # the session store could not take them: DuckDB keeps them (no counters: the
+                    # batch's source_stats already counted them)
+                    self._append_events(held)
+        if len(cc) > len(held):
+            metrics.session_lines_to_duckdb(len(cc) - len(held))
+
+    def _factory_writes(self) -> bool:
+        """True when claude_code lines are written to the session store first (the factory edition,
+        TR-1665). A settings read that fails gives the last answer; with none yet, True: a factory
+        cell must not acknowledge lines its pages would never show."""
+        try:
+            self._factory_edition = edition.edition(self)[0] == "factory"
+        except Exception:
+            return getattr(self, "_factory_edition", True)
+        return self._factory_edition
+
+    def _append_session_first(self, envelopes, cc, held) -> list:
+        """The factory's order (TR-1665): the session store, then DuckDB. Raises
+        `session_ingest.LinesNotStored` with no line stored, so the sender sends the batch again.
+        A DuckDB failure takes the session store's write back before it is raised. Lines of a
+        session the store refused are never held back from DuckDB: the drain copies them from there.
+        Returns the lines that were held back. Called under `_sess_lock`."""
+        with self._counts_lock:   # no count is saved between the two writes (TR-1716)
+            try:
+                written = session_ingest.record_first(self, cc)
+            except session_ingest.LinesNotStored:
+                # a challenger line is sent once, with no retry, so its verdict is still written (a
+                # repeat is skipped). That keeps it when the database refused one session's row alone
+                # (TR-1647) or takes writes again. While it takes none, the verdict is lost, said in
+                # the log and counted: accepted (decision A9)
+                self._keep_challenges(envelopes)
+                raise
+            held = [e for e in held if e.key_value not in written.refused]
+            try:
+                self._append(envelopes, held)
+            except Exception:
+                session_ingest.take_back(self, written)
+                raise
+            return held
+
+    _HELD_MODE_TTL = 30.0                  # seconds the edition answer of `_lines_skip_duckdb` is kept
+
+    def _lines_skip_duckdb(self) -> bool:
+        """True when claude_code lines may go only to the session store: the edition is factory with
+        an archive backend (the folder archive always exists on SQLite; a Postgres cell needs
+        TARES_ARCHIVE_URL; the answer is settled once per process, so a cell restarts after the URL
+        is set or fixed). A factory cell on Postgres with none keeps writing to DuckDB and says so
+        once. Until the `sessions` table has caught up with the events already in DuckDB, the lines
+        go to both: the readers scan events until then, and a line held back would be missing. Which
+        sessions are held is `session_ingest.holdable`'s call. The edition is read at most every
+        `_HELD_MODE_TTL` seconds: a switch applies within that time, not on the next batch."""
+        now = time.monotonic()
+        cached = self._factory_mode
+        if cached is None or now >= cached[1]:
+            try:
+                is_factory = edition.edition(self)[0] == "factory"
+            except Exception:
+                return False
+            cached = self._factory_mode = (is_factory, now + self._HELD_MODE_TTL)
+        if not cached[0]:
+            return False
+        if self._archive_on is None:
+            try:
+                self._archive_on = session_archive.backend_of(self) is not None
+            except Exception as e:           # an unusable URL: the archive pass fails too
+                print(f"taresd: transcript lines are still written to DuckDB: the archive is not "
+                      f"usable ({e}); restart after fixing TARES_ARCHIVE_URL", flush=True)
+                self._archive_on = False
+            else:
+                if not self._archive_on:
+                    print("taresd: transcript lines are still written to DuckDB: no archive "
+                          "configured (TARES_ARCHIVE_URL; restart after setting it)", flush=True)
+        if not self._archive_on:
+            return False
+        try:
+            return session_ingest.caught_up(self)
+        except Exception:
+            return False
 
     def start_session_reconcile(self):
         """Catch the `sessions` table up with the events in a background thread (TR-1471). The four
         session readers scan events until this has finished once, and read the table after (TR-1520);
         a failed pass leaves them on the scan and the next start tries again."""
+        self._lines_skip_duckdb()          # says once, at start, when the lines still go to DuckDB
+        self._factory_writes()             # remembered, should a later settings read fail
         return session_ingest.start_reconcile(self)
 
-    def _append(self, envelopes: list[Envelope]) -> None:
+    def _append_events(self, envelopes: list[Envelope]) -> None:
+        """Only the rows of the events table, in one transaction (no counters)."""
+        rows = [(e.source, e.source_type, e.key_value, e.event_type, e.text, json.dumps(e.payload),
+                 json.dumps(e.labels), e.event_time, e.ingest_time) for e in envelopes]
+        with self._lock:
+            self.con.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, len(rows), 2000):
+                    self.con.executemany(
+                        "INSERT INTO events (source, source_type, key_value, event_type, text, "
+                        "payload, labels, event_time, ingest_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows[i:i + 2000])
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
+        metrics.session_lines_to_duckdb(len(envelopes))
+
+    def _append(self, envelopes: list[Envelope], held=()) -> None:
+        """`held`: lines of the batch that do not go to the events table (the session store has
+        them): they count in source_stats and entity_counts, and challenges are recorded for them,
+        as for any line."""
         # Explicit column list: the `labels` column was added by migration after first release,
         # so positional INSERT order is no longer guaranteed.
+        skip = {id(e) for e in held}
         rows = [
             (e.source, e.source_type, e.key_value, e.event_type, e.text,
              json.dumps(e.payload), json.dumps(e.labels),
              e.event_time, e.ingest_time)
-            for e in envelopes
+            for e in envelopes if id(e) not in skip
         ]
         # Per-source deltas for the maintained counter (see event_stats): how many rows this batch
         # adds per source and the latest ingest_time among them. Plus per-(source, label, value)
@@ -1592,7 +1606,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # The event inserts and every derived counter update run in one transaction so a counter can
         # never drift from the rows it counts (a crash rolls back all of them together).
         chunk = 2000
-        with self._lock:
+        with self._counts_lock, self._lock:
             self.con.execute("BEGIN TRANSACTION")
             try:
                 for i in range(0, len(rows), chunk):
@@ -1613,9 +1627,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             except Exception:
                 self.con.execute("ROLLBACK")
                 raise
-            self._keep_saved_counts(rows)
-        # the challenger's lines also go to `challenges` (state), after the events committed; one
-        # lost to a crash in between is copied at the next open (_challenges_fill)
+            # a held line counts as well: it has no ingest time of its own, so a read that
+            # counts the stored lines gives it the line's time
+            self._keep_saved_counts(rows + [
+                (e.source, e.source_type, e.key_value, e.event_type, e.text, json.dumps(e.payload),
+                 json.dumps(e.labels), e.event_time, e.event_time) for e in held])
+        self._keep_challenges(envelopes)
+
+    def _keep_challenges(self, envelopes) -> None:
+        # the challenger's lines also go to `challenges` (sessions database): after the events
+        # committed, or when the batch was refused (_append_session_first). One that cannot be
+        # written, or is lost to a crash in between, is copied from `events` at the next open
+        # (_challenges_fill) on a platform edition, if it got there. The factory edition runs that
+        # fill once (TR-1613) and the challenger sends a line once: there it is lost, said in the
+        # log and counted (`tares_challenges_lost_total`).
         ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
                str((e.labels or {}).get("branch") or ""),
                None if (e.labels or {}).get("tares_project") is None
@@ -1625,9 +1650,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             try:
                 with self._swrite:
                     self._record_challenges(ch)
-            except Exception as ex:          # the events are in; never fail the ingest for this
-                print(f"taresd: keeping {len(ch)} challenger line(s) failed ({ex}); "
-                      "copied at the next start", flush=True)
+            except Exception as ex:   # never fail an ingest, or hide why one was refused, for this
+                self._challenges_not_kept(ch, ex)
 
     def _apply_entity_deltas(self, ent: dict) -> None:
         """Fold this batch's (source, label, value) deltas into entity_counts. Already-truncated
@@ -1693,21 +1717,37 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         esql, eparams = self._exclude(exclude, sources)
         wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
+        held = session_events.view(self, sources, since, key=key, filters=filters, where=where,
+                                   need_payload=bool(exclude) and exclude.get("shared") is None)
+        # among lines of one instant, the stored ones keep their order in the session
+        newest, oldest = (", held_ref DESC", ", held_ref") if held.held else ("", "")
         with self._lock:
             rows = self.con.execute(
                 f"SELECT * FROM ("
-                f"  SELECT {cols}, "
-                f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC) AS rn "
+                f"  SELECT {cols}, {held.ref} AS ref, "
+                f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC{newest}) AS rn "
                 # reference sources are declarative context — always surfaced for the matched
                 # entity, regardless of the read window (a project note doesn't 'age out').
-                f"  FROM events WHERE source IN ({ph}) "
+                f"  FROM {held.table} WHERE source IN ({ph}) "
                 f"    AND (source_type = 'reference' OR event_time >= ?){ksql}{fsql}{wsql}"
-                f") WHERE rn <= {int(cap)} ORDER BY event_time",
-                [*ocols, *sources, since, *kparams, *fparams, *wparams],
+                f") WHERE rn <= {int(cap)} ORDER BY event_time{oldest.replace('held_ref', 'ref')}",
+                [*ocols, *held.params, *sources, since, *kparams, *fparams, *wparams],
             ).fetchall()
+        # each row: the columns asked for, then (key, payload project) with owners, ref, rn
+        refs = [r[-2] for r in rows]
+        rows = [r[:-2] for r in rows]
+        if held.held:                     # a stored line's text and payload, for the rows returned
+            text = held.fill(refs)
+            for i, n in enumerate(refs):
+                if n is not None:
+                    row = list(rows[i])
+                    row[2] = text[n][0]
+                    if include_payload:
+                        row[4] = text[n][1]
+                    rows[i] = tuple(row)
         if owners is None:
-            return [r[:-1] for r in rows]
-        n = len(rows[0]) - 3 if rows else 0       # the columns asked for, before key, payload project, rn
+            return rows
+        n = len(rows[0]) - 2 if rows else 0       # the columns asked for, before key and payload project
         owners |= self._row_owners(rows, n)
         return [r[:n] for r in rows]
 
@@ -1720,12 +1760,18 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         spot = ("sql", ids, None if sources is None else frozenset(sources))
         got = built.get(spot)
         if got is None:
-            looked = built.get(("looked", ids))
-            if looked is None:
-                looked = built["looked", ids] = self._looked_up(
-                    list(ids), getattr(exclude, "records", None))
-            got = built[spot] = _exclude_sql(exclude, sources, *looked)
+            got = built[spot] = _exclude_sql(exclude, sources, *self._looked(exclude))
         return got[0], list(got[1])
+
+    def _looked(self, exclude) -> tuple:
+        """What _looked_up gives for the projects `exclude` names, kept on a ReadExclude."""
+        built = getattr(exclude, "built", {})
+        ids = tuple((exclude or {}).get("ids") or [])
+        looked = built.get(("looked", ids))
+        if looked is None:
+            looked = built["looked", ids] = self._looked_up(
+                list(ids), getattr(exclude, "records", None))
+        return looked
 
     def _looked_up(self, ids: list, records: dict | None) -> tuple:
         """(sessions, digests, moved) for _exclude_sql: what the state knows of the projects
@@ -1801,12 +1847,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
         ssql, sparams = _scope_sql(scope)   # a project's view of the shared sources
+        conditions = (fsql, fparams, wsql, wparams, ssql, sparams)
         wsql, wparams = wsql + ssql, wparams + sparams
         if field and not re.match(r"^[A-Za-z0-9_.]+$", str(field)):
             raise ValueError(f"bad aggregate field {field!r}")
         # quoted JSON path so dotted field names (http.status_code) resolve as one flat key
-        valexpr = (f"CAST(json_extract_string(labels, '$.\"{field}\"') AS DOUBLE)"
-                   if field else "1")
+        raw = f"json_extract_string(labels, '$.\"{field}\"')" if field else None
+        valexpr = f"CAST({raw} AS DOUBLE)" if field else "1"
         aggexpr = {
             "count": "COUNT(*)",
             "sum": f"SUM({valexpr})",
@@ -1818,13 +1865,29 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         sel_g = ", ".join(f"{e} AS g{i}" for i, e in enumerate(gexprs))
         grp_g = ", ".join(f"g{i}" for i in range(len(gexprs)))
         having = " AND ".join(f"g{i} IS NOT NULL" for i in range(len(gexprs)))
+        # the stored lines are counted from the digest where it can (TR-1695)
+        acc = self._from_digest(session_digest.aggregate, sources, since, until, filters, where,
+                                names, gexprs, None if agg == "count" else raw, scope,
+                                conditions)
+        if acc is not None:
+            return {(g[0] if isinstance(group_by, str) else g): _aggregated(agg, a)
+                    for g, a in acc.items()}
+        held = session_events.view(self, sources, since, until, filters=filters, where=where,
+                                   counted=True)
+        if held.held:                        # one row may stand for several stored lines
+            w = held.weight
+            aggexpr = {"count": f"SUM({w})::BIGINT",
+                       "sum": f"SUM({valexpr} * {w})",
+                       "avg": f"SUM({valexpr} * {w}) / SUM({w}) FILTER (WHERE {valexpr} IS NOT NULL)",
+                       }.get(agg, aggexpr)
         with self._lock:
             rows = self.con.execute(
-                f"SELECT {sel_g}, {aggexpr} FROM events "
+                f"SELECT {sel_g}, {aggexpr} FROM {held.table} "
                 f"WHERE source IN ({ph}) AND event_time >= ?"
                 f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql} "
                 f"GROUP BY {grp_g} HAVING {having}",
-                [*sources, since, *([until] if until is not None else []), *fparams, *wparams],
+                [*held.params, *sources, since, *([until] if until is not None else []), *fparams,
+                 *wparams],
             ).fetchall()
         out = {}
         for r in rows:
@@ -1832,6 +1895,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             key = gvals[0] if isinstance(group_by, str) else tuple(gvals)
             out[key] = val if val is not None else 0.0
         return out
+
+    def _from_digest(self, read, *args):
+        """A read answered by `session_digest`, a cache over the stored transcript lines, or None:
+        then the caller reads the lines. A failure of the cache is said once and fails no read."""
+        try:
+            return read(self, *args)
+        except session_digest.NotANumber as e:
+            raise e.__cause__ from None      # the answer: the statement fails on that value too
+        except Exception as e:
+            if not self.__dict__.get("_digest_said"):
+                self._digest_said = True
+                print(f"taresd: a read counts the stored lines one by one, the digest could not "
+                      f"answer it ({type(e).__name__}: {e})", flush=True)
+            return None
 
     # ── cursors (incremental connectors) ──────────────────────────────────────
     def get_cursor(self, source: str):
@@ -1886,11 +1963,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     # ── catalog (DB-backed; YAML is import/export) ────────────────────────────
     def catalog_empty(self) -> bool:
+        with self.sessions_db.read() as conn:
+            if conn.execute(select(sources_table.c.name).limit(1)).first() is not None:
+                return False
         with self._sread:
-            n = self.sc.execute(
-                "SELECT (SELECT COUNT(*) FROM catalog_sources)"
-                " + (SELECT COUNT(*) FROM catalog_triggers)"
-            ).fetchone()[0]
+            n = self.sc.execute("SELECT COUNT(*) FROM catalog_triggers").fetchone()[0]
         return n == 0
 
     def upsert_catalog_source(self, name: str, type_: str, connector: str, poll: str, config: dict,
@@ -1899,49 +1976,49 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # the ingest_key is the stable, unguessable path segment for push endpoints (/ingest/<key>).
         # Generated once at creation, preserved across updates; backfilled if an older row lacks one.
         ik = ingest_key or f"{connector}-{secrets.token_hex(4)}"
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO catalog_sources "
-                "(name, type, connector, poll, config, paused, created_at, updated_at, ingest_key) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (name) DO UPDATE SET type = excluded.type, "
-                "connector = excluded.connector, poll = excluded.poll, config = excluded.config, "
-                "paused = excluded.paused, updated_at = excluded.updated_at, "
-                "ingest_key = COALESCE(catalog_sources.ingest_key, excluded.ingest_key)",
-                [name, type_, connector, poll, json.dumps(config), paused, ts, ts, ik],
-            )
+        t = sources_table
+        stmt = self.sessions_db.upsert(t).values(
+            name=name, type=type_, connector=connector, poll=poll, config=config,
+            paused=paused, created_at=ts, updated_at=ts, ingest_key=ik)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(stmt.on_conflict_do_update(index_elements=["name"], set_={
+                "type": stmt.excluded.type, "connector": stmt.excluded.connector,
+                "poll": stmt.excluded.poll, "config": stmt.excluded.config,
+                "paused": stmt.excluded.paused, "updated_at": stmt.excluded.updated_at,
+                "ingest_key": func.coalesce(t.c.ingest_key, stmt.excluded.ingest_key)}))
 
     def set_source_ingest_key(self, name: str, ingest_key: str) -> None:
         """Replace a push source's ingest key (a GitHub App recreated for an existing source)."""
-        with self._swrite:
-            self.sc.execute("UPDATE catalog_sources SET ingest_key = ? WHERE name = ?",
-                             [ingest_key, name])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(sources_table).where(sources_table.c.name == name).values(
+                ingest_key=ingest_key))
 
     def list_catalog_sources(self) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT name, type, connector, poll, config, paused, created_at, updated_at, "
-                "ingest_key, owned_by, customized FROM catalog_sources ORDER BY name"
-            ).fetchall()
+        t = sources_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                t.c.name, t.c.type, t.c.connector, t.c.poll, t.c.config, t.c.paused,
+                t.c.created_at, t.c.updated_at, t.c.ingest_key, t.c.owned_by,
+                t.c.customized).order_by(t.c.name)).all()
         return [
             {"name": r[0], "type": r[1], "connector": r[2], "poll": r[3],
-             "config": json.loads(r[4]), "paused": bool(r[5]),
+             "config": r[4], "paused": bool(r[5]),
              "created_at": r[6], "updated_at": r[7], "ingest_key": r[8],
              "owned_by": r[9], "customized": bool(r[10])}
             for r in rows
         ]
 
     def delete_catalog_source(self, name: str) -> None:
+        # the write lock: _forget_part rewrites custom projects' lists, as put_in_project does
         with self._swrite:
-            self.sc.execute("DELETE FROM catalog_sources WHERE name = ?", [name])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(sources_table).where(sources_table.c.name == name))
             self._forget_part("source", name)
 
     def set_source_paused(self, name: str, paused: bool) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "UPDATE catalog_sources SET paused = ?, updated_at = ? WHERE name = ?",
-                [paused, now_utc(), name],
-            )
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(sources_table).where(sources_table.c.name == name).values(
+                paused=paused, updated_at=now_utc()))
 
     def upsert_catalog_trigger(self, name: str, sources: list, condition: dict,
                                emit: dict, cooldown: str, filters: list | None = None,
@@ -2019,8 +2096,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         (the objects a caller cannot see, kind source, trigger, agent or mcp_server);
         `keep_projects`: ids of projects whose wiring stays."""
         keep = keep or {}
+        names = sorted(keep.get("source") or ())
+        with self.sessions_db.begin() as conn:
+            if names:
+                conn.execute(delete(sources_table).where(sources_table.c.name.not_in(names)))
+            else:
+                conn.execute(delete(sources_table))
         with self._swrite:
-            for table, kind in (("catalog_sources", "source"), ("catalog_triggers", "trigger"),
+            for table, kind in (("catalog_triggers", "trigger"),
                                 ("catalog_agents", "agent"), ("mcp_servers", "mcp_server")):
                 names = sorted(keep.get(kind) or ())
                 if names:
@@ -2401,20 +2484,29 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def recent_ingest_gaps(self, source: str, since, limit: int = 1000) -> list[float]:
         """Seconds between consecutive ingests of a source since `since`, over at most its last
         `limit` events: how often the source usually hears something (project health)."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT epoch(ingest_time) FROM events WHERE source = ? AND ingest_time >= ? "
-                "ORDER BY ingest_time DESC LIMIT ?", [source, since, int(limit)]).fetchall()
-        ts = sorted(float(r[0]) for r in rows if r[0] is not None)
+        newest = self._from_digest(session_digest.newest_times, source, since, int(limit))
+        if newest is None:
+            held = session_events.view(self, [source], since)
+            with self._lock:
+                rows = self.con.execute(
+                    f"SELECT epoch(ingest_time) FROM {held.table} "
+                    "WHERE source = ? AND ingest_time >= ? ORDER BY ingest_time DESC LIMIT ?",
+                    [*held.params, source, since, int(limit)]).fetchall()
+            newest = [float(r[0]) for r in rows if r[0] is not None]
+        ts = sorted(newest)
         return [b - a for a, b in zip(ts, ts[1:])]
 
     def recent_ingest_hours(self, source: str, since) -> list:
         """The distinct hours a source received events in since `since` (project health: a
         source with a steady rhythm can go silent, a bursty one cannot)."""
+        hours = self._from_digest(session_digest.hours, source, since)
+        if hours is not None:
+            return hours
+        held = session_events.view(self, [source], since)
         with self._lock:
             rows = self.con.execute(
-                "SELECT DISTINCT date_trunc('hour', ingest_time) FROM events "
-                "WHERE source = ? AND ingest_time >= ?", [source, since]).fetchall()
+                f"SELECT DISTINCT date_trunc('hour', ingest_time) FROM {held.table} "
+                "WHERE source = ? AND ingest_time >= ?", [*held.params, source, since]).fetchall()
         return [r[0] for r in rows]
 
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
@@ -2462,16 +2554,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                            cost_usd: float | None = None,
                            key_source: str | None = None,
                            provider: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO model_usage (id, ts, surface, agent, run_id, model, calls, "
-                "input_tokens, output_tokens, cache_creation_input_tokens, "
-                "cache_read_input_tokens, cost_usd, key_source, provider) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ["mu_" + uuid.uuid4().hex[:12], now_utc(), surface, agent, run_id, model,
-                 calls, input_tokens, output_tokens, cache_creation_input_tokens,
-                 cache_read_input_tokens, cost_usd, key_source or None, provider or None],
-            )
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(usage_table).values(
+                id="mu_" + uuid.uuid4().hex[:12], ts=now_utc(), surface=surface, agent=agent,
+                run_id=run_id, model=model, calls=calls, input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_read_input_tokens=cache_read_input_tokens, cost_usd=cost_usd,
+                key_source=key_source or None, provider=provider or None))
         from . import metrics
         metrics.model_usage(provider, surface, calls, input_tokens, output_tokens, cost_usd)
 
@@ -2479,10 +2569,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """All-time totals plus a per-day tail over the ledger. The shape a credits poller needs:
         totals to enforce against, days to draw a burn-down. `uncosted_calls` counts rows whose
         model had no known price, so the cost total is understood as a floor."""
-        agg = ("coalesce(sum(calls), 0), coalesce(sum(input_tokens), 0), "
-               "coalesce(sum(output_tokens), 0), coalesce(sum(cache_creation_input_tokens), 0), "
-               "coalesce(sum(cache_read_input_tokens), 0), sum(cost_usd), "
-               "coalesce(sum(calls) FILTER (WHERE cost_usd IS NULL), 0)")
+        u = usage_table
+        agg = [func.coalesce(func.sum(u.c.calls), 0), func.coalesce(func.sum(u.c.input_tokens), 0),
+               func.coalesce(func.sum(u.c.output_tokens), 0),
+               func.coalesce(func.sum(u.c.cache_creation_input_tokens), 0),
+               func.coalesce(func.sum(u.c.cache_read_input_tokens), 0), func.sum(u.c.cost_usd),
+               func.coalesce(func.sum(u.c.calls).filter(u.c.cost_usd.is_(None)), 0)]
 
         def shape(r) -> dict:
             return {"calls": int(r[0]), "input_tokens": int(r[1]), "output_tokens": int(r[2]),
@@ -2491,23 +2583,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                     "cost_usd": float(r[5]) if r[5] is not None else None,
                     "uncosted_calls": int(r[6])}
 
-        with self._sread:
-            total = self.sc.execute(f"SELECT {agg} FROM model_usage").fetchone()
-            surfaces = self.sc.execute(
-                f"SELECT surface, {agg} FROM model_usage GROUP BY surface").fetchall()
+        key_source = func.coalesce(u.c.key_source, "unknown")
+        provider = func.coalesce(u.c.provider, "anthropic")
+        # the day a row was written, in UTC
+        day = (cast(func.timezone("UTC", u.c.ts), Date) if self.sessions_db.dialect == "postgresql"
+               else func.date(u.c.ts))
+        since = now_utc() - timedelta(days=int(days))
+        with self.sessions_db.read() as conn:
+            total = conn.execute(select(*agg)).one()
+            surfaces = conn.execute(select(u.c.surface, *agg).group_by(u.c.surface)).all()
             # Which key paid: the boundary a hosted trial is enforced against ('unknown' holds
             # rows from before attribution existed).
-            key_sources = self.sc.execute(
-                f"SELECT coalesce(key_source, 'unknown'), {agg} FROM model_usage "
-                "GROUP BY 1").fetchall()
+            key_sources = conn.execute(select(key_source, *agg).group_by(key_source)).all()
             # Which provider served it: rows from before providers existed were all Anthropic.
-            providers = self.sc.execute(
-                f"SELECT coalesce(provider, 'anthropic'), {agg} FROM model_usage "
-                "GROUP BY 1").fetchall()
-            daily = self.sc.execute(
-                f"SELECT CAST(ts AS DATE) AS day, {agg} FROM model_usage "
-                f"WHERE ts > now() - INTERVAL {int(days)} DAY "
-                "GROUP BY day ORDER BY day").fetchall()
+            providers = conn.execute(select(provider, *agg).group_by(provider)).all()
+            daily = conn.execute(select(day.label("day"), *agg).where(u.c.ts > since)
+                                 .group_by(day).order_by(day)).all()
         return {
             "total": shape(total),
             "by_surface": {r[0]: shape(r[1:]) for r in surfaces},
@@ -2634,20 +2725,31 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return n
 
     # ── settings (instance config set from the console) ───────────────────────
+    # `settings` lives in the session store (TR-1480): SQLite beside the DuckDB file, or the state
+    # Postgres. These methods take no DuckDB or state lock, so they are safe from inside one.
+    @kept
     def get_setting(self, key: str) -> str | None:
-        with self._sread:
-            row = self.sc.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
-        return row[0] if row else None
+        with self.sessions_db.read() as conn:
+            return conn.execute(select(settings_table.c.value).where(
+                settings_table.c.key == key)).scalar_one_or_none()
 
     def set_setting(self, key: str, value: str | None) -> None:
-        with self._swrite:
+        with self.sessions_db.begin() as conn:
             if value is None:
-                self.sc.execute("DELETE FROM settings WHERE key = ?", [key])
-            else:
-                self.sc.execute(
-                    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
-                    "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
-                    "updated_at = excluded.updated_at", [key, value, now_utc()])
+                conn.execute(delete(settings_table).where(settings_table.c.key == key))
+                return
+            stmt = self.sessions_db.upsert(settings_table).values(
+                key=key, value=value, updated_at=now_utc())
+            conn.execute(stmt.on_conflict_do_update(
+                index_elements=["key"],
+                set_={"value": stmt.excluded.value, "updated_at": stmt.excluded.updated_at}))
+
+    def _set_setting_once(self, key: str, value: str) -> None:
+        """Set `key` unless it already has a value: the marker of a one-time upgrade."""
+        with self.sessions_db.begin() as conn:
+            conn.execute(self.sessions_db.upsert(settings_table).values(
+                key=key, value=value, updated_at=now_utc()).on_conflict_do_nothing(
+                index_elements=["key"]))
 
     # ── MCP connections (external tool servers a Tares agent may opt into) ─────
     # `auth_value` is a secret (an API key or full header value); redaction is the API layer's
@@ -2697,13 +2799,55 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                      "trigger": "catalog_triggers", "agent": "catalog_agents",
                      "mcp_server": "mcp_servers"}
 
+    _UNSET = object()
+
+    def _owner_of(self, kind: str, name: str):
+        """(owned_by,) of the part, or None when there is no such part."""
+        if kind == "source":
+            t = sources_table
+            with self.sessions_db.read() as conn:
+                r = conn.execute(select(t.c.owned_by).where(t.c.name == name)).first()
+            return (r[0],) if r else None
+        return self.sc.execute(f"SELECT owned_by FROM {self._OWNED_TABLES[kind]} WHERE name = ?",
+                                [name]).fetchone()
+
+    def _owner_update(self, kind: str, name: str, *, owned_by=_UNSET, customized=_UNSET,
+                      free_or: str | None = None, owner_is: str | None = None) -> None:
+        """Set the owner and customized columns of one part, where it is free or already `free_or`'s
+        (`free_or`), or where it is `owner_is`'s (`owner_is`); with neither, wherever it is. A
+        source is in the session store, the other kinds in DuckDB (so this is not one transaction
+        with anything else)."""
+        vals = {}
+        if owned_by is not self._UNSET:
+            vals["owned_by"] = owned_by
+        if customized is not self._UNSET:
+            vals["customized"] = customized
+        if kind == "source":
+            t = sources_table
+            cond = [t.c.name == name]
+            if free_or is not None:
+                cond.append(or_(t.c.owned_by.is_(None), t.c.owned_by == free_or))
+            if owner_is is not None:
+                cond.append(t.c.owned_by == owner_is)
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(t).where(*cond).values(**vals))
+            return
+        sets = ", ".join(f"{k} = ?" for k in vals)
+        args = list(vals.values()) + [name]
+        where = "name = ?"
+        if free_or is not None:
+            where += " AND (owned_by IS NULL OR owned_by = ?)"
+            args.append(free_or)
+        if owner_is is not None:
+            where += " AND owned_by = ?"
+            args.append(owner_is)
+        self.sc.execute(f"UPDATE {self._OWNED_TABLES[kind]} SET {sets} WHERE {where}", args)
+
     def set_owned_by(self, kind: str, name: str, project_id: str | None) -> None:
         """Mark an ordinary object as created by a project (or clear it). Ownership is a badge and
         a diff key, not a lock: the object stays editable and deletable everywhere."""
-        table = self._OWNED_TABLES[kind]
         with self._swrite:
-            self.sc.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE WHERE name = ?",
-                             [project_id, name])
+            self._owner_update(kind, name, owned_by=project_id, customized=False)
             if kind == "agent" and project_id:
                 self._wire_from_definition(name, project_id)
 
@@ -2729,49 +2873,46 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """Take ownership only if the object is unowned or already this project's; returns whether
         the claim holds afterwards. The check and the write share the store lock, so two projects
         adopting the same object cannot both win."""
-        table = self._OWNED_TABLES[kind]
         with self._swrite:
-            self.sc.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE "
-                             f"WHERE name = ? AND (owned_by IS NULL OR owned_by = ?)",
-                             [project_id, name, project_id])
-            row = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?", [name]).fetchone()
+            self._owner_update(kind, name, owned_by=project_id, customized=False,
+                               free_or=project_id)
+            row = self._owner_of(kind, name)
         return bool(row and row[0] == project_id)
 
     def release_owned_by(self, kind: str, name: str, project_id: str) -> None:
         """Clear ownership only while the object is still this project's (a same-name object
         recreated by hand and claimed by another project is left alone)."""
-        table = self._OWNED_TABLES[kind]
         with self._swrite:
-            self.sc.execute(f"UPDATE {table} SET owned_by = NULL, customized = FALSE "
-                             f"WHERE name = ? AND owned_by = ?", [name, project_id])
+            self._owner_update(kind, name, owned_by=None, customized=False, owner_is=project_id)
 
     def mark_customized(self, kind: str, name: str) -> bool:
         """Called by the normal update paths: if the object is owned by a project, flag it so the
         engine keeps the user's version on the next re-plan. Returns whether it was owned."""
-        table = self._OWNED_TABLES[kind]
         with self._swrite:
-            row = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?", [name]).fetchone()
+            row = self._owner_of(kind, name)
             if not row or not row[0]:
                 return False
-            owner = self.sc.execute("SELECT recipe FROM usecases WHERE id = ?", [row[0]]).fetchone()
+            with self.sessions_db.read() as conn:
+                owner = conn.execute(select(projects_table.c.recipe).where(
+                    projects_table.c.id == row[0])).first()
             if owner and owner[0] in ("custom", "default"):
                 return True   # adopted, not planned: there is no planned version to diverge from
-            self.sc.execute(f"UPDATE {table} SET customized = TRUE WHERE name = ?", [name])
-            self.sc.execute("UPDATE usecase_objects SET customized = TRUE "
-                             "WHERE usecase_id = ? AND kind = ? AND name = ?", [row[0], kind, name])
+            self._owner_update(kind, name, customized=True)
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(objects_table).where(
+                    objects_table.c.usecase_id == row[0], objects_table.c.kind == kind,
+                    objects_table.c.name == name).values(customized=True))
         return True
 
     def create_project(self, uid: str, template: str, name: str, params: dict,
                        status: str = "active", goal: str | None = None,
                        lead_person_id: str | None = None, icon: str | None = None) -> None:
         ts = now_utc()
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
-                "last_error, goal, lead_person_id, scope, icon) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team', ?)",
-                [uid, template, name, json.dumps(params), status, ts, ts, goal or None,
-                 lead_person_id or None, icon or None])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(projects_table).values(
+                id=uid, recipe=template, name=name, params=params, status=status, created_at=ts,
+                updated_at=ts, last_error=None, goal=goal or None,
+                lead_person_id=lead_person_id or None, scope="team", icon=icon or None))
         # an id made again (a setup that was undone puts its draft back) is no deleted project
         self._change_deleted_private(lambda d: d.pop(uid, None))
 
@@ -2780,28 +2921,35 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                        goal: str | None = "") -> None:
         """last_error and goal: "" (default) leaves it unchanged; None clears it; a string sets
         it."""
-        sets, vals = ["updated_at = ?"], [now_utc()]
+        vals: dict = {"updated_at": now_utc()}
         if goal != "":
-            sets.append("goal = ?"); vals.append(goal)
+            vals["goal"] = goal
         if params is not None:
-            sets.append("params = ?"); vals.append(json.dumps(params))
+            vals["params"] = params
         if status is not None:
-            sets.append("status = ?"); vals.append(status)
+            vals["status"] = status
         if name is not None:
-            sets.append("name = ?"); vals.append(name)
+            vals["name"] = name
         if last_error != "":
-            sets.append("last_error = ?"); vals.append(last_error)
-        vals.append(uid)
-        with self._swrite:
-            self.sc.execute(f"UPDATE usecases SET {', '.join(sets)} WHERE id = ?", vals)
+            vals["last_error"] = last_error
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(**vals))
 
     @staticmethod
     def _project_row(r) -> dict:
-        return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
+        return {"id": r[0], "template": r[1], "name": r[2], "params": r[3] or {},
                 "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
                 "goal": r[8], "kind": r[9], "lead_person_id": r[10],
                 "scope": r[11] or "team", "icon": r[12]}
 
+    @staticmethod
+    def _project_cols():
+        t = projects_table
+        return (t.c.id, t.c.recipe, t.c.name, t.c.params, t.c.status, t.c.created_at,
+                t.c.updated_at, t.c.last_error, t.c.goal, t.c.kind, t.c.lead_person_id, t.c.scope,
+                t.c.icon)
+
+    @kept
     def list_projects(self, *, kind=None, status_in=None, status_not_in=None, ids=None,
                       exclude_ids=None) -> list[dict]:
         """Every project, oldest first, or only those that match: `kind`, a status in or not in a
@@ -2809,43 +2957,41 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         `exclude_ids`. With no argument it is every project."""
         if ids is not None and not list(ids):
             return []
-        where, args = [], []
+        t = projects_table
+        where = []
         if kind is not None:
-            where.append("kind = ?")
-            args.append(kind)
+            where.append(t.c.kind == kind)
         if status_in is not None:
             vals = list(status_in)
             if not vals:
                 return []
-            where.append(f"status IN ({', '.join('?' for _ in vals)})")
-            args += vals
+            where.append(t.c.status.in_(vals))
         if status_not_in:
-            vals = list(status_not_in)
-            where.append(f"(status IS NULL OR status NOT IN ({', '.join('?' for _ in vals)}))")
-            args += vals
+            where.append(or_(t.c.status.is_(None), t.c.status.not_in(list(status_not_in))))
         if ids is not None:
-            vals = list(ids)
-            where.append(f"id IN ({', '.join('?' for _ in vals)})")
-            args += vals
+            where.append(t.c.id.in_(list(ids)))
         if exclude_ids:
-            vals = list(exclude_ids)
-            where.append(f"id NOT IN ({', '.join('?' for _ in vals)})")
-            args += vals
-        cond = (" WHERE " + " AND ".join(where)) if where else ""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind, lead_person_id, scope, icon FROM usecases" + cond
-                + " ORDER BY created_at", args).fetchall()
+            where.append(t.c.id.not_in(list(exclude_ids)))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(*self._project_cols()).where(*where).order_by(
+                t.c.created_at, t.c.id)).all()
         return [self._project_row(r) for r in rows]
 
+    @kept
+    def project_names(self) -> dict[str, str]:
+        """{project id: name} for every project, in one query."""
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(projects_table.c.id, projects_table.c.name)).all()
+        return {r[0]: r[1] for r in rows}
+
     # Licence-independent by design (TR-915): never consult licence or team here.
+    @kept
     def private_projects(self) -> list[dict]:
         """The private projects, as {id, name, scope}: the one small query every cell-wide read
         runs to learn whether it has anything to hide (usually it has not)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT id, name FROM usecases WHERE scope = 'private'").fetchall()
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(projects_table.c.id, projects_table.c.name).where(
+                projects_table.c.scope == "private")).all()
         return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
 
     # ── private projects that were deleted (TR-1697) ──────────────────────────
@@ -2875,12 +3021,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return private, deleted
 
     # Licence-independent by design (TR-915): never consult licence or team here.
+    @kept
     def private_and_records(self) -> tuple[list[dict], set[str], dict]:
         """`private_and_deleted()` and the records it read them from (`_deleted_records`)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT id, name FROM usecases WHERE scope = 'private' UNION ALL "
-                "SELECT NULL, value FROM settings WHERE key = ?", [_DELETED_PRIVATE]).fetchall()
+        q = union_all(
+            select(projects_table.c.id, projects_table.c.name).where(
+                projects_table.c.scope == "private"),
+            select(null(), settings_table.c.value).where(settings_table.c.key == _DELETED_PRIVATE))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).all()
         private = [{"id": r[0], "name": r[1], "scope": "private"} for r in rows if r[0] is not None]
         records = next((json.loads(r[1]) for r in rows if r[0] is None), {})
         # one that is still there (its delete stopped half way) is still its members' to see
@@ -2911,31 +3060,35 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         p = self.get_project_by_name(ref)
         return p["id"] if p else self.deleted_private_ref(ref, deleted)
 
+    @kept
     def get_project(self, uid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(
-                "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind, lead_person_id, scope, icon FROM usecases WHERE id = ?", [uid]).fetchone()
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(*self._project_cols()).where(
+                projects_table.c.id == uid)).first()
         return self._project_row(r) if r else None
 
     # ── who a project belongs to: its lead, its scope and its members (TR-623) ──
     def set_project_lead(self, uid: str, person_id: str | None) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET lead_person_id = ? WHERE id = ?",
-                             [person_id or None, uid])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                lead_person_id=person_id or None))
 
     def set_project_icon(self, uid: str, icon: str | None) -> None:
         """Set or clear a project's icon. Not `updated_at`: an icon is not activity on the project,
         and the Projects list sorts by activity."""
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET icon = ? WHERE id = ?", [icon or None, uid])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                icon=icon or None))
 
     def set_project_scope(self, uid: str, scope: str) -> None:
         if scope not in ("team", "private"):
             raise ValueError("scope is team or private")
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET scope = ? WHERE id = ?", [scope, uid])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                scope=scope))
 
+    # The member list lives in the session store (TR-1608), like settings: no DuckDB or state lock
+    # is taken, so these are safe from inside one.
     def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
                            reason: str = "manual") -> bool:
         """Put a person on the project. True when the row was written: a new member, or a person
@@ -2943,111 +3096,111 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         and a second add changes nothing: the first reason stays."""
         if reason not in ("manual", "ticket", "self"):
             raise ValueError("reason is manual, ticket or self")
-        with self._swrite:
-            had = self.sc.execute("SELECT reason FROM project_members WHERE project = ? "
-                                   "AND person_id = ?", [uid, person_id]).fetchone()
-            if had:
-                if had[0] != "self" or reason == "self":
-                    return False
-                self.sc.execute(
-                    "UPDATE project_members SET added_by = ?, added_at = ?, reason = ? "
-                    "WHERE project = ? AND person_id = ?",
-                    [added_by or None, now_utc(), reason, uid, person_id])
-                return True
-            self.sc.execute(
-                "INSERT INTO project_members (project, person_id, added_by, added_at, reason) "
-                "VALUES (?, ?, ?, ?, ?)", [uid, person_id, added_by or None, now_utc(), reason])
-        return True
+        t = members_table
+        row = {"added_by": added_by or None, "added_at": now_utc(), "reason": reason}
+        stmt = self.sessions_db.upsert(t).values(project=uid, person_id=person_id, **row)
+        key = [t.c.project, t.c.person_id]
+        if reason == "self":
+            stmt = stmt.on_conflict_do_nothing(index_elements=key)
+        else:       # one statement, so an add racing a join still ends as an added member
+            stmt = stmt.on_conflict_do_update(index_elements=key, set_=row, where=t.c.reason == "self")
+        with self.sessions_db.begin() as conn:
+            # RETURNING, not rowcount: Postgres reports -1 for an insert that skipped on conflict
+            return conn.execute(stmt.returning(t.c.person_id)).first() is not None
 
     def remove_project_member(self, uid: str, person_id: str) -> bool:
         """True when they were a member (a stored one; the lead is not)."""
-        with self._swrite:
-            hit = self.sc.execute("SELECT 1 FROM project_members WHERE project = ? "
-                                   "AND person_id = ?", [uid, person_id]).fetchone()
-            self.sc.execute("DELETE FROM project_members WHERE project = ? AND person_id = ?",
-                             [uid, person_id])
-        return bool(hit)
+        with self.sessions_db.begin() as conn:
+            done = conn.execute(delete(members_table).where(
+                members_table.c.project == uid, members_table.c.person_id == person_id))
+        return done.rowcount > 0
 
-    # Which rows of project_members `m` count, for every read of them: someone who joined by
+    @staticmethod
+    def _member_row(r) -> dict:
+        return {"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
+
+    # Which rows of project_members count, for every read of them: someone who joined by
     # themselves is a member while the project is a team project, and not once it is private.
-    _MEMBER_ROW = ("(COALESCE(m.reason, '') <> 'self' OR NOT EXISTS (SELECT 1 FROM usecases u "
-                   "WHERE u.id = m.project AND u.scope = 'private'))")
+    _MEMBER_ROW = or_(func.coalesce(members_table.c.reason, "") != "self",
+                      ~select(projects_table.c.id).where(
+                          projects_table.c.id == members_table.c.project,
+                          projects_table.c.scope == "private").exists())
 
     def list_project_members(self, uid: str) -> list[dict]:
         """The people on the project besides its lead, oldest first: {person_id, added_by,
         added_at, reason}."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT person_id, added_by, added_at, reason FROM project_members m "
-                f"WHERE project = ? AND {self._MEMBER_ROW} ORDER BY added_at, person_id",
-                [uid]).fetchall()
-        return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
-                for r in rows]
+        t = members_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.person_id, t.c.added_by, t.c.added_at, t.c.reason).where(
+                t.c.project == uid, self._MEMBER_ROW).order_by(t.c.added_at, t.c.person_id)).all()
+        return [self._member_row(r) for r in rows]
 
     def members_by_project(self, uids: list[str]) -> dict[str, list[dict]]:
         """{project: its members as list_project_members gives them} for `uids`, in one query."""
         ids = sorted({u for u in uids if u})
         if not ids:
             return {}
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT project, person_id, added_by, added_at, reason FROM project_members m "
-                f"WHERE project IN ({', '.join('?' for _ in ids)}) AND {self._MEMBER_ROW} "
-                "ORDER BY added_at, person_id", ids).fetchall()
+        t = members_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.project, t.c.person_id, t.c.added_by, t.c.added_at,
+                                       t.c.reason).where(t.c.project.in_(ids), self._MEMBER_ROW)
+                                .order_by(t.c.added_at, t.c.person_id)).all()
         out: dict[str, list[dict]] = {}
         for r in rows:
-            out.setdefault(r[0], []).append({"person_id": r[1], "added_by": r[2],
-                                             "added_at": r[3], "reason": r[4]})
+            out.setdefault(r[0], []).append(self._member_row(r[1:]))
         return out
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def is_project_member(self, uid: str, person_id: str | None) -> bool:
         """The project's lead, or a person on its member list. Someone who joined by themselves
         counts while the project is a team project."""
-        if not person_id:
-            return False
-        with self._sread:
-            lead = self.sc.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
-                                    [uid]).fetchone()
-            if lead and lead[0] == person_id:
-                return True
-            return bool(self.sc.execute(
-                "SELECT 1 FROM project_members m WHERE project = ? AND person_id = ? "
-                f"AND {self._MEMBER_ROW}", [uid, person_id]).fetchone())
+        return self._leads_or_on(uid, person_id, self._MEMBER_ROW)
 
     # Licence-independent too: what a person who joined by themselves does not get.
     def is_added_member(self, uid: str, person_id: str | None) -> bool:
         """The project's lead, or a member someone put on it (`manual` or `ticket`), as opposed to
         one who joined by themselves. This is who gets the project's secrets."""
+        return self._leads_or_on(uid, person_id, func.coalesce(members_table.c.reason, "") != "self")
+
+    def _leads_or_on(self, uid: str, person_id: str | None, counts) -> bool:
+        """The person is the project's lead, or has a member row that `counts`."""
         if not person_id:
             return False
-        with self._sread:
-            lead = self.sc.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
-                                    [uid]).fetchone()
+        with self.sessions_db.read() as conn:
+            lead = conn.execute(select(projects_table.c.lead_person_id).where(
+                projects_table.c.id == uid)).first()
             if lead and lead[0] == person_id:
                 return True
-            return bool(self.sc.execute(
-                "SELECT 1 FROM project_members WHERE project = ? AND person_id = ? "
-                "AND COALESCE(reason, '') <> 'self'", [uid, person_id]).fetchone())
+            return conn.execute(select(members_table.c.person_id).where(
+                members_table.c.project == uid, members_table.c.person_id == person_id, counts)
+            ).first() is not None
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET kind = ? WHERE id = ?", [kind or None, uid])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                kind=kind or None))
 
     def _factory_kind_upgrade(self) -> None:
         """Once: a project from before project kinds that holds docs and tickets and no agent was
         made by a spec session; it is a software factory project. Lock not needed (init)."""
-        if self.sc.execute("SELECT value FROM settings WHERE key = 'factory_kind_filled'"
-                            ).fetchone():
+        if self.get_setting("factory_kind_filled") is not None:
             return
-        self.sc.execute(
-            "UPDATE usecases SET kind = 'software_factory' WHERE kind IS NULL AND recipe = 'custom' "
-            "AND id IN (SELECT project FROM tickets) "
-            "AND id IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'doc') "
-            "AND id NOT IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'agent')")
-        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
-                         "('factory_kind_filled', '1', ?) ON CONFLICT (key) DO NOTHING",
-                         [now_utc()])
+        t, o = projects_table, objects_table
+        with self.sessions_db.read() as conn:
+            custom = set(conn.execute(select(t.c.id).where(
+                t.c.kind.is_(None), t.c.recipe == "custom")).scalars())
+            with_docs = set(conn.execute(select(o.c.usecase_id).where(o.c.kind == "doc")).scalars())
+            with_agents = set(conn.execute(select(o.c.usecase_id).where(
+                o.c.kind == "agent")).scalars())
+            ticketed = (set(conn.execute(select(tickets_table.c.project).distinct()).scalars())
+                        if custom else set())
+        if custom:
+            hit = sorted((custom & ticketed & with_docs) - with_agents)
+            if hit:
+                with self.sessions_db.begin() as conn:
+                    conn.execute(update(t).where(t.c.id.in_(hit), t.c.kind.is_(None)).values(
+                        kind="software_factory"))
+        self._set_setting_once("factory_kind_filled", "1")
 
     def get_project_by_name(self, name: str) -> dict | None:
         return next((u for u in self.list_projects() if u["name"] == name), None)
@@ -3070,20 +3223,30 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # the state rows first: a delete that stops half way leaves session rows with no
             # project, which every reader ignores
             # its keys stop working and nothing is delivered for it any more (TR-335)
-            self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
-                             "AND revoked_at IS NULL", [now_utc(), uid])
+            # (the keys, members and the project's own rows are in the session store, a second
+            # database: a crash between the two leaves a project whose keys are revoked and whose
+            # rows remain, and a second delete finishes it; the project row goes last)
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(api_keys_table).where(
+                    api_keys_table.c.project == uid, api_keys_table.c.revoked_at.is_(None)
+                ).values(revoked_at=now_utc()))
             self.sc.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
-            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(objects_table).where(objects_table.c.usecase_id == uid))
             self.sc.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
-            self.sc.execute("DELETE FROM project_members WHERE project = ?", [uid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(members_table).where(members_table.c.project == uid))
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
-            self.sc.execute("DELETE FROM pending_writeback WHERE ticket IN "
-                            "(SELECT id FROM tickets WHERE project = ?)", [uid])
-            self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
+            with self.sessions_db.begin() as conn:
+                # the write-backs waiting for its tickets go before the tickets that name them
+                conn.execute(delete(writeback_table).where(writeback_table.c.ticket.in_(
+                    select(tickets_table.c.id).where(tickets_table.c.project == uid))))
+                conn.execute(delete(tickets_table).where(tickets_table.c.project == uid))
             self._factory_forget_project(uid)
-            self.sc.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
-            self.sc.execute("DELETE FROM usecases WHERE id = ?", [uid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(plog_table).where(plog_table.c.usecase_id == uid))
+                conn.execute(delete(projects_table).where(projects_table.c.id == uid))
         self._usage_forget_project(uid, private)   # before a team project's links go, below
         over = sorted({uid, *self.deleted_private_projects()})   # their links keep no state
         with self.sessions_db.begin() as conn:
@@ -3105,7 +3268,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # ── texts Tares writes from its figures (TR-1645, report_words.py) ──
     def get_report_text(self, kind: str, key: str) -> dict | None:
         t = report_texts
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             r = conn.execute(select(t.c.text, t.c.source, t.c.figures, t.c.written_at).where(
                 t.c.kind == kind, t.c.key == key)).first()
         return ({"kind": kind, "key": key, "text": r[0], "source": r[1],
@@ -3126,57 +3289,69 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def get_project_setup(self, uid: str) -> dict | None:
         """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was
         not set up that way."""
-        with self._sread:
-            r = self.sc.execute("SELECT setup FROM usecases WHERE id = ?", [uid]).fetchone()
-        return json.loads(r[0]) if r and r[0] else None
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(projects_table.c.setup).where(
+                projects_table.c.id == uid)).first()
+        return r[0] if r and r[0] else None
 
     def set_project_setup(self, uid: str, setup: dict | None) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET setup = ?, updated_at = ? WHERE id = ?",
-                             [json.dumps(setup, default=str) if setup is not None else None,
-                              now_utc(), uid])
+        # default=str: a value JSON cannot hold (a datetime) is kept as its text, as before
+        clean = json.loads(json.dumps(setup, default=str)) if setup is not None else None
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                setup=clean, updated_at=now_utc()))
 
     def upsert_project_object(self, uid: str, kind: str, key: str, name: str) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, created_at) "
-                "VALUES (?, ?, ?, ?, FALSE, ?) ON CONFLICT (usecase_id, kind, key) DO UPDATE SET "
-                "name = excluded.name", [uid, kind, key, name, now_utc()])
+        t = objects_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(self.sessions_db.upsert(t).values(
+                usecase_id=uid, kind=kind, key=key, name=name, customized=False,
+                created_at=now_utc()).on_conflict_do_update(
+                index_elements=["usecase_id", "kind", "key"], set_={"name": name}))
 
     def list_project_objects(self, uid: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT kind, key, name, customized, created_at FROM usecase_objects "
-                "WHERE usecase_id = ? ORDER BY created_at, kind, key", [uid]).fetchall()
+        t = objects_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.kind, t.c.key, t.c.name, t.c.customized,
+                                       t.c.created_at).where(t.c.usecase_id == uid).order_by(
+                t.c.created_at, t.c.kind, t.c.key)).all()
         return [{"kind": r[0], "key": r[1], "name": r[2], "customized": bool(r[3]),
                  "created_at": r[4]} for r in rows]
 
     def delete_project_object(self, uid: str, kind: str, key: str) -> None:
-        with self._swrite:
-            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
-                             "AND key = ?", [uid, kind, key])
+        t = objects_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.usecase_id == uid, t.c.kind == kind, t.c.key == key))
 
     # ── skills (TR-332): parts of the cell (P-TR-216), used by projects; validated by
     # tares/skills.py before they get here ──
+    def _body_size(self, col):
+        """The size of a text column in bytes (UTF-8), the same on both engines."""
+        if self.sessions_db.dialect == "postgresql":
+            return func.octet_length(col)
+        return func.length(cast(col, LargeBinary))
+
     def list_skills(self, project: str) -> list[dict]:
         """The skills a project uses, without their bodies: name, description, updated_at, size
         (bytes of the body)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT DISTINCT s.name, s.description, s.updated_at, octet_length(encode(s.body)) "
-                "FROM shared_skills s JOIN usecase_objects o ON o.kind = 'skill' AND o.name = s.name "
-                "WHERE o.usecase_id = ? ORDER BY s.name", [project]).fetchall()
+        s, o = shared_skills_table, objects_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(
+                select(s.c.name, s.c.description, s.c.updated_at, self._body_size(s.c.body))
+                .select_from(s.join(o, and_(o.c.kind == "skill", o.c.name == s.c.name)))
+                .where(o.c.usecase_id == project).distinct().order_by(s.c.name)).all()
         return [{"name": r[0], "description": r[1], "updated_at": r[2], "size": int(r[3] or 0)}
                 for r in rows]
 
     def list_all_skills(self) -> list[dict]:
         """Every skill on the cell with its body, the project that made it (`project`) and the
         projects that use it (`projects`)."""
-        with self._sread:
-            rows = self.sc.execute("SELECT name, description, body, made_by FROM shared_skills "
-                                    "ORDER BY name").fetchall()
-            users = self.sc.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
-                                     "kind = 'skill' GROUP BY name, usecase_id").fetchall()
+        s, o = shared_skills_table, objects_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(s.c.name, s.c.description, s.c.body, s.c.made_by)
+                                .order_by(s.c.name)).all()
+            users = conn.execute(select(o.c.name, o.c.usecase_id).where(o.c.kind == "skill")
+                                 .group_by(o.c.name, o.c.usecase_id)).all()
         by: dict[str, list] = {}
         for n, u in users:
             by.setdefault(n, []).append(u)
@@ -3185,34 +3360,38 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def get_skill(self, project: str | None, name: str) -> dict | None:
         """A skill the project uses (any project, with None)."""
-        with self._sread:
-            if project is not None and not self.sc.execute(
-                    "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
-                    "AND name = ?", [project, name]).fetchone():
+        s, o = shared_skills_table, objects_table
+        with self.sessions_db.read() as conn:
+            if project is not None and conn.execute(select(o.c.name).where(
+                    o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name)
+                    .limit(1)).first() is None:
                 return None
-            r = self.sc.execute(
-                "SELECT name, description, body, created_at, updated_at FROM shared_skills "
-                "WHERE name = ?", [name]).fetchone()
+            r = conn.execute(select(s.c.name, s.c.description, s.c.body, s.c.created_at,
+                                    s.c.updated_at).where(s.c.name == name)).first()
         return ({"name": r[0], "description": r[1], "body": r[2], "created_at": r[3],
                  "updated_at": r[4]} if r else None)
 
-    def _use_skill(self, project: str, name: str) -> bool:
-        """The project uses the skill; True when it did not before. Lock held."""
-        if self.sc.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
-                            "AND name = ?", [project, name]).fetchone():
+    def _use_skill(self, conn, project: str, name: str) -> bool:
+        """The project uses the skill; True when it did not before. Runs in `conn`, a session
+        store transaction."""
+        o = objects_table
+        if conn.execute(select(o.c.name).where(
+                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name)
+                .limit(1)).first() is not None:
             return False
-        self.sc.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
-                         "created_at) VALUES (?, 'skill', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
-                         [project, f"skill:{name}", name, now_utc()])
+        conn.execute(self.sessions_db.upsert(o).values(
+            usecase_id=project, kind="skill", key=f"skill:{name}", name=name, customized=False,
+            created_at=now_utc()).on_conflict_do_nothing())
         return True
 
     def use_skill(self, project: str, name: str) -> bool:
         """A skill already on the cell, used by one more project. False when there is no such
         skill; the project already using it is fine."""
-        with self._sread:
-            if not self.sc.execute("SELECT 1 FROM shared_skills WHERE name = ?", [name]).fetchone():
+        with self.sessions_db.begin() as conn:
+            if conn.execute(select(shared_skills_table.c.name).where(
+                    shared_skills_table.c.name == name)).first() is None:
                 return False
-            self._use_skill(project, name)
+            self._use_skill(conn, project, name)
         return True
 
     def upsert_skill(self, project: str, name: str, description: str, body: str,
@@ -3221,43 +3400,57 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         have the project use it. Returns True when the project did not have it before.
         `updated_by` is who changed it, when a person did (a page, TR-753); NULL otherwise."""
         ts = now_utc()
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO shared_skills (name, description, body, made_by, created_at, "
-                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE "
-                "SET description = excluded.description, body = excluded.body, "
-                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-                [name, description, body, project, ts, ts, updated_by])
-            return self._use_skill(project, name)
+        t = shared_skills_table
+        # the write lock: on Postgres a delete_skill beside this could drop the skill just written
+        with self._swrite, self.sessions_db.begin() as conn:
+            ins = self.sessions_db.upsert(t).values(
+                name=name, description=description, body=body, made_by=project, created_at=ts,
+                updated_at=ts, updated_by=updated_by)
+            conn.execute(ins.on_conflict_do_update(index_elements=["name"], set_={
+                "description": ins.excluded.description, "body": ins.excluded.body,
+                "updated_at": ins.excluded.updated_at, "updated_by": ins.excluded.updated_by}))
+            return self._use_skill(conn, project, name)
 
     def delete_skill(self, project: str, name: str) -> bool:
         """The project stops using the skill; the skill goes when no project uses it any more.
         Returns whether the project had it."""
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
-                                   "kind = 'skill' AND name = ?", [project, name]).fetchone()
-            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
-                             "AND name = ?", [project, name])
-            self._forget_unused_skills()
+        o = objects_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            had = conn.execute(select(o.c.name).where(
+                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name)
+                .limit(1)).first()
+            conn.execute(delete(o).where(
+                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name))
+            self._forget_unused_skills(conn)
         return had is not None
 
-    def _forget_unused_skills(self) -> None:
-        """Skills no project uses any more go. Lock held."""
-        self.sc.execute("DELETE FROM shared_skills WHERE name NOT IN (SELECT name FROM "
-                         "usecase_objects WHERE kind = 'skill')")
+    def _forget_unused_skills(self, conn=None) -> None:
+        """Skills no project uses any more go. `conn`: the session store transaction to run in."""
+        s, o = shared_skills_table, objects_table
+        stmt = delete(s).where(s.c.name.not_in(select(o.c.name).where(o.c.kind == "skill")))
+        if conn is not None:
+            conn.execute(stmt)
+            return
+        with self.sessions_db.begin() as c:
+            c.execute(stmt)
 
     def skill_users(self, name: str) -> list[str]:
         return self.projects_using("skill", name)
 
     def mark_skill_customized(self, project: str, name: str) -> None:
         """A skill a template planned was edited by hand: a re-plan keeps the edit."""
-        with self._swrite:
-            self.sc.execute("UPDATE usecase_objects SET customized = TRUE WHERE usecase_id = ? "
-                             "AND kind = 'skill' AND name = ?", [project, name])
+        o = objects_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(o).where(
+                o.c.usecase_id == project, o.c.kind == "skill", o.c.name == name
+            ).values(customized=True))
 
     # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
-    _DOC_COLS = ("d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at, "
-                 "d.owner")
+    @staticmethod
+    def _doc_cols():
+        d = docs_table
+        return (d.c.id, d.c.kind, d.c.title, d.c.made_by, d.c.updated_by, d.c.created_at,
+                d.c.updated_at, d.c.owner)
 
     @staticmethod
     def _doc_row(r, body: str | None = None) -> dict:
@@ -3274,49 +3467,48 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         a project, listed only to them. Returns its id."""
         doc_id = "doc_" + uuid.uuid4().hex[:10]
         ts = now_utc()
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO docs (id, kind, title, body, made_by, updated_by, created_at, "
-                "updated_at, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [doc_id, kind, title, body, project, by or None, ts, ts, owner])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(docs_table).values(
+                id=doc_id, kind=kind, title=title, body=body, made_by=project, updated_by=by or None,
+                created_at=ts, updated_at=ts, owner=owner))
             if project:
-                self._use_doc(project, doc_id)
+                self._use_doc(conn, project, doc_id)
         return doc_id
 
     def update_doc(self, doc_id: str, kind: str | None = None, title: str | None = None,
                    body: str | None = None, by: str = "") -> None:
-        sets, vals = ["updated_at = ?", "updated_by = ?"], [now_utc(), by or None]
+        vals: dict = {"updated_at": now_utc(), "updated_by": by or None}
         for col, v in (("kind", kind), ("title", title), ("body", body)):
             if v is not None:
-                sets.append(f"{col} = ?"); vals.append(v)
-        vals.append(doc_id)
-        with self._swrite:
-            self.sc.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = ?", vals)
+                vals[col] = v
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(docs_table).where(docs_table.c.id == doc_id).values(**vals))
 
     def get_doc(self, project: str | None, doc_id: str) -> dict | None:
         """A doc the project includes (any doc, with None), with its body and the projects that
         include it."""
-        with self._sread:
-            if project is not None and not self.sc.execute(
-                    "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
-                    "AND name = ?", [project, doc_id]).fetchone():
+        o = objects_table
+        with self.sessions_db.read() as conn:
+            if project is not None and conn.execute(select(o.c.name).where(
+                    o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id)
+                    .limit(1)).first() is None:
                 return None
-            r = self.sc.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.id = ?",
-                                 [doc_id]).fetchone()
+            r = conn.execute(select(*self._doc_cols(), docs_table.c.body).where(
+                docs_table.c.id == doc_id)).first()
             if not r:
                 return None
-            users = [u[0] for u in self.sc.execute(
-                "SELECT usecase_id FROM usecase_objects WHERE kind = 'doc' AND name = ? "
-                "ORDER BY usecase_id", [doc_id]).fetchall()]
+            users = list(conn.execute(select(o.c.usecase_id).where(
+                o.c.kind == "doc", o.c.name == doc_id).order_by(o.c.usecase_id)).scalars())
         return {**self._doc_row(r, r[8]), "projects": users}
 
     def personal_doc(self, person_id: str, kind: str) -> dict | None:
         """The doc of `kind` that belongs to this person, with its body, or None until they
         write the first line."""
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.owner = ? "
-                                 "AND d.kind = ? ORDER BY d.created_at LIMIT 1",
-                                 [person_id, kind]).fetchone()
+        d = docs_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(*self._doc_cols(), d.c.body).where(
+                d.c.owner == person_id, d.c.kind == kind).order_by(d.c.created_at, d.c.id)
+                .limit(1)).first()
         return self._doc_row(r, r[8]) if r else None
 
     def doc_titles(self, project: str, doc_ids: list[str]) -> dict[str, str]:
@@ -3324,89 +3516,95 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         project does not include is absent, as get_doc gives None for it."""
         if not doc_ids:
             return {}
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT DISTINCT d.id, d.title FROM docs d JOIN usecase_objects o ON o.kind = 'doc' "
-                f"AND o.name = d.id WHERE o.usecase_id = ? AND d.id IN "
-                f"({', '.join('?' for _ in doc_ids)})", [project, *doc_ids]).fetchall()
+        d, o = docs_table, objects_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(
+                select(d.c.id, d.c.title).select_from(
+                    d.join(o, and_(o.c.kind == "doc", o.c.name == d.c.id)))
+                .where(o.c.usecase_id == project, d.c.id.in_(list(doc_ids))).distinct()).all()
         return {r[0]: r[1] for r in rows}
 
     def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
         """The docs a project includes, without bodies: size in bytes instead."""
-        q = (f"SELECT DISTINCT {self._DOC_COLS}, octet_length(encode(d.body)) FROM docs d "
-             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ? "
-             "AND d.owner IS NULL")
-        vals: list = [project]
+        d, o = docs_table, objects_table
+        q = (select(*self._doc_cols(), self._body_size(d.c.body))
+             .select_from(d.join(o, and_(o.c.kind == "doc", o.c.name == d.c.id)))
+             .where(o.c.usecase_id == project, d.c.owner.is_(None)))
         if kind:
-            q += " AND d.kind = ?"; vals.append(kind)
-        with self._sread:
-            rows = self.sc.execute(q, vals).fetchall()
+            q = q.where(d.c.kind == kind)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.distinct().order_by(d.c.created_at, d.c.id)).all()
         return [{**self._doc_row(r), "size": int(r[8] or 0)} for r in rows]
 
     def list_cell_docs(self, viewer: str | None = None) -> list[dict]:
         """Every doc on the cell (no bodies), with the projects that include it. A personal doc
         is listed only to its person (`viewer`, a people.id): nobody else sees it, whatever their
         rights."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
-                                    "FROM docs d WHERE d.owner IS NULL OR d.owner = ? "
-                                    "ORDER BY d.title", [viewer or ""]).fetchall()
-            users = self.sc.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
-                                     "kind = 'doc' GROUP BY name, usecase_id").fetchall()
+        d, o = docs_table, objects_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(
+                select(*self._doc_cols(), self._body_size(d.c.body))
+                .where(or_(d.c.owner.is_(None), d.c.owner == (viewer or "")))
+                .order_by(d.c.title, d.c.id)).all()
+            users = conn.execute(select(o.c.name, o.c.usecase_id).where(o.c.kind == "doc")
+                                 .group_by(o.c.name, o.c.usecase_id)).all()
         by: dict[str, list] = {}
         for n, u in users:
             by.setdefault(n, []).append(u)
         return [{**self._doc_row(r), "size": int(r[8] or 0), "projects": sorted(by.get(r[0], []))}
                 for r in rows]
 
-    def _use_doc(self, project: str, doc_id: str) -> None:
-        """Lock held."""
-        self.sc.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
-                         "created_at) VALUES (?, 'doc', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
-                         [project, f"doc:{doc_id}", doc_id, now_utc()])
+    def _use_doc(self, conn, project: str, doc_id: str) -> None:
+        """Runs in `conn`, a session store transaction."""
+        conn.execute(self.sessions_db.upsert(objects_table).values(
+            usecase_id=project, kind="doc", key=f"doc:{doc_id}", name=doc_id, customized=False,
+            created_at=now_utc()).on_conflict_do_nothing())
 
     def use_doc(self, project: str, doc_id: str) -> bool:
         """A doc already on the cell, included in one more project. False when there is no such
         doc."""
-        with self._sread:
-            if not self.sc.execute("SELECT 1 FROM docs WHERE id = ? AND owner IS NULL",
-                                    [doc_id]).fetchone():
+        d = docs_table
+        with self.sessions_db.begin() as conn:
+            if conn.execute(select(d.c.id).where(d.c.id == doc_id, d.c.owner.is_(None))
+                            ).first() is None:
                 return False        # no such doc, or a person's own: those join no project
-            self._use_doc(project, doc_id)
+            self._use_doc(conn, project, doc_id)
         return True
 
     def remove_doc(self, project: str, doc_id: str) -> bool:
         """The project stops including the doc; the doc is deleted when no project includes it
         any more and it was made by a project (a doc made on the cell stays). A ticket of this
         project whose working doc it was loses the link. Returns whether the project had it."""
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
-                                   "kind = 'doc' AND name = ?", [project, doc_id]).fetchone()
-            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
-                             "AND name = ?", [project, doc_id])
-            self.sc.execute("UPDATE tickets SET working_doc = NULL WHERE project = ? AND "
-                             "working_doc = ?", [project, doc_id])
-            self._forget_unused_docs()
+        o, t = objects_table, tickets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.project == project, t.c.working_doc == doc_id)
+                         .values(working_doc=None))
+            had = conn.execute(select(o.c.name).where(
+                o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id).limit(1)).first()
+            conn.execute(delete(o).where(
+                o.c.usecase_id == project, o.c.kind == "doc", o.c.name == doc_id))
+            self._forget_unused_docs(conn)
         return had is not None
 
-    def _forget_unused_docs(self) -> None:
-        """Docs a project made that no project includes any more go. Lock held."""
-        self.sc.execute("DELETE FROM docs WHERE made_by IS NOT NULL AND id NOT IN (SELECT name "
-                         "FROM usecase_objects WHERE kind = 'doc')")
-
-    _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
-                    "working_doc, created_at, updated_at, milestone, depends_on, number, holder, "
-                    "stage, stage_reason, pr, repo, assignee_person_id, assignee_raw")
+    def _forget_unused_docs(self, conn=None) -> None:
+        """Docs a project made that no project includes any more go. `conn`: the session store
+        transaction to run in."""
+        d, o = docs_table, objects_table
+        stmt = delete(d).where(d.c.made_by.is_not(None),
+                               d.c.id.not_in(select(o.c.name).where(o.c.kind == "doc")))
+        if conn is not None:
+            conn.execute(stmt)
+            return
+        with self.sessions_db.begin() as c:
+            c.execute(stmt)
 
     @staticmethod
     def _ticket_row(r) -> dict:
-        return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3],
-                "identifier": r[4], "url": r[5], "title": r[6], "status": r[7],
-                "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
-                "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
-                "number": r[14], "holder": r[15], "stage": r[16], "stage_reason": r[17],
-                "pr": json.loads(r[18]) if r[18] else None, "repo": r[19],
-                "assignee_person_id": r[20], "assignee_raw": r[21]}
+        """A row of `select(tickets_table)` as callers read a ticket."""
+        out = dict(r._mapping)
+        del out["pr_repo"], out["pr_number"]        # the index of `pr`, not part of the ticket
+        out["depends_on"] = out["depends_on"] or []
+        return out
 
     def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
                       position: float | None = None, external_id: str | None = None,
@@ -3417,29 +3615,31 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                       assignee_raw: str | None = None) -> str:
         """A ticket at the end of the project's list unless `position` says where. It gets the
         project's next number (T1, T2, ...)."""
-        with self._swrite:
-            return self._insert_ticket(project, owner, title, status, position, external_id,
+        with self._swrite, self.sessions_db.begin() as conn:
+            return self._insert_ticket(conn, project, owner, title, status, position, external_id,
                                        identifier, url, working_doc, milestone, depends_on, repo,
                                        assignee_person_id, assignee_raw)
 
-    def _insert_ticket(self, project, owner, title, status, position, external_id, identifier,
-                       url, working_doc, milestone, depends_on, repo, assignee_person_id,
-                       assignee_raw) -> str:
-        """The INSERT of create_ticket. The write lock is held by the caller."""
+    def _insert_ticket(self, conn, project, owner, title, status, position, external_id,
+                       identifier, url, working_doc, milestone, depends_on, repo,
+                       assignee_person_id, assignee_raw) -> str:
+        """The INSERT of create_ticket, in the caller's transaction."""
+        t = tickets_table
         tid = "tk_" + uuid.uuid4().hex[:10]
         ts = now_utc()
+        # the number first: it holds the project's row until the transaction ends, so a second
+        # writer on Postgres waits here and then sees this ticket's position
+        num = self._next_ticket_number(conn, project)
         if position is None:
-            last = self.sc.execute("SELECT max(position) FROM tickets WHERE project = ?",
-                                    [project]).fetchone()[0]
+            last = conn.execute(select(func.max(t.c.position)).where(
+                t.c.project == project)).scalar()
             position = (last or 0) + 1
-        num = self._next_ticket_number(project)
-        self.sc.execute(
-            f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [tid, project, owner, external_id, identifier, url, title, status,
-             float(position), working_doc, ts, ts, milestone,
-             json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
-             repo, assignee_person_id or None, assignee_raw or None])
+        conn.execute(insert(t).values(
+            id=tid, project=project, owner=owner, external_id=external_id, identifier=identifier,
+            url=url, title=title, status=status, position=float(position),
+            working_doc=working_doc, created_at=ts, updated_at=ts, milestone=milestone,
+            depends_on=depends_on or None, number=num, repo=repo,
+            assignee_person_id=assignee_person_id or None, assignee_raw=assignee_raw or None))
         return tid
 
     def adopt_ticket(self, project: str, owner: str, external_id: str, title: str, status: str,
@@ -3454,24 +3654,25 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         two rows. A row found takes the identifier, the url and the fields given (a field left as
         None keeps its value). The assignee is set only on a new row. The syncs insert through here
         too, so a sync and a write_ticket never leave two rows for one issue. Returns the row's id."""
-        with self._swrite:
-            r = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND owner = ? AND "
-                                "external_id = ? ORDER BY created_at LIMIT 1",
-                                [project, owner, external_id]).fetchone()
+        t = tickets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            # no external id names no row (`== None` would read as IS NULL and match any)
+            r = None if external_id is None else conn.execute(select(t.c.id).where(
+                t.c.project == project, t.c.owner == owner, t.c.external_id == external_id
+            ).order_by(t.c.created_at.nulls_last()).limit(1)).first()
             if r is None:
-                return self._insert_ticket(project, owner, title, status, position, external_id,
-                                           identifier, url, working_doc, milestone, depends_on,
-                                           repo, assignee_person_id, assignee_raw)
+                return self._insert_ticket(conn, project, owner, title, status, position,
+                                           external_id, identifier, url, working_doc, milestone,
+                                           depends_on, repo, assignee_person_id, assignee_raw)
             tid = r[0]
-            sets, vals = ["identifier = ?", "url = ?"], [identifier, url]
+            values = {"identifier": identifier, "url": url, "updated_at": now_utc()}
             for col, v in (("working_doc", working_doc), ("milestone", milestone),
                            ("repo", repo), ("position", position)):
                 if v is not None:
-                    sets.append(f"{col} = ?"); vals.append(float(v) if col == "position" else v)
+                    values[col] = float(v) if col == "position" else v
             if depends_on is not None:
-                sets.append("depends_on = ?"); vals.append(json.dumps(depends_on) if depends_on else None)
-            sets.append("updated_at = ?"); vals.append(now_utc())
-            self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals + [tid])
+                values["depends_on"] = depends_on or None
+            conn.execute(update(t).where(t.c.id == tid).values(values))
         return tid
 
     def update_ticket(self, tid: str, touch: bool = True, why: str | None = None,
@@ -3492,73 +3693,66 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
                    "pr", "repo", "assignee_person_id", "assignee_raw"}
-        sets, vals = (["updated_at = ?"], [now_utc()]) if touch else ([], [])
+        t = tickets_table
+        values = {"updated_at": now_utc()} if touch else {}
         for col, v in fields.items():
             if col == "depends_on":
-                v = json.dumps(v) if v else None
+                v = v or None
             if col == "pr":
-                v = json.dumps(v, default=str) if v else None
+                # default=str: a value JSON cannot hold (a datetime) is kept as its text
+                v = json.loads(json.dumps(v, default=str)) if v else None
+                values["pr_repo"], values["pr_number"] = pr_columns(v)
             if col in allowed:
-                sets.append(f"{col} = ?"); vals.append(v)
+                values[col] = v
         closes = fields.get("status") in DONE_STATUSES and "stage" not in fields
         if closes:
-            sets.append("stage = CASE WHEN stage IN ('merged', 'shipped') THEN stage ELSE NULL END")
-        vals.append(tid)
+            values["stage"] = case((t.c.stage.in_(("merged", "shipped")), t.c.stage), else_=None)
         with self._swrite:
-            if unless_pending and self.sc.execute(
-                    "SELECT 1 FROM pending_writeback WHERE ticket = ?", [tid]).fetchone():
-                return False
-            was = (self.sc.execute("SELECT project, stage FROM tickets WHERE id = ?", [tid]).fetchone()
-                   if closes else None)
-            self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
+            with self.sessions_db.begin() as conn:
+                if unless_pending and conn.execute(select(writeback_table.c.ticket).where(
+                        writeback_table.c.ticket == tid)).first() is not None:
+                    return False
+                was = (conn.execute(select(t.c.project, t.c.stage).where(t.c.id == tid)).first()
+                       if closes else None)
+                if values:
+                    conn.execute(update(t).where(t.c.id == tid).values(values))
         if was and was[1] in OPEN_STAGES:
             self.add_ticket_history(tid, was[0], "stage", None,
                                     why or f"the ticket was marked {fields['status']}",
                                     "tares", "tares", now_utc())
         return True
 
-    def _ticket_stage_repair(self) -> None:
-        """Tickets closed before TR-1008 kept their stage, so a done ticket could still sit in
-        review. Clear those stages once, with a history line; later closes do it in update_ticket.
-        Cheap on every start: one query that finds nothing."""
-        try:
-            marks = ", ".join("?" for _ in OPEN_STAGES)
-            with self._sread:
-                rows = self.sc.execute(
-                    f"SELECT id, status FROM tickets WHERE status IN ('done', 'canceled') "
-                    f"AND stage IN ({marks})", list(OPEN_STAGES)).fetchall()
-            for tid, status in rows:
-                self.update_ticket(tid, touch=False, status=status,
-                                   why=f"closed when the ticket was {status}; it had kept its stage")
-            if rows:
-                print(f"taresd: closed the stage of {len(rows)} done or canceled tickets")
-        except Exception as e:
-            print(f"taresd: ticket stage repair: {type(e).__name__}: {e}")
-
     def update_ticket_owner(self, tid: str, owner: str) -> None:
         """A project stopped using Linear or GitHub: its tickets become Tares's (TR-408)."""
-        with self._swrite:
-            self.sc.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
-                             [owner, now_utc(), tid])
+        t = tickets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == tid).values(owner=owner, updated_at=now_utc()))
+
+    @staticmethod
+    def _ticket_order():
+        """The order of a project's list. NULLs last on SQLite too, as DuckDB and Postgres sort."""
+        return (tickets_table.c.position.nulls_last(), tickets_table.c.created_at.nulls_last(),
+                tickets_table.c.number.nulls_last(), tickets_table.c.id)
 
     def list_tickets(self, project: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
-                                    "ORDER BY position, created_at", [project]).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project == project)
+                                .order_by(*self._ticket_order())).all()
         return [self._ticket_row(r) for r in rows]
 
+    @kept
     def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
         """{project: its tickets as list_tickets gives them} in one query (TR-659)."""
         if not projects:
             return {}
-        marks = ", ".join("?" for _ in projects)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project IN "
-                                    f"({marks}) ORDER BY position, created_at",
-                                    list(projects)).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project.in_(list(projects)))
+                                .order_by(*self._ticket_order())).all()
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
-            out[r[1]].append(self._ticket_row(r))
+            out[r.project].append(self._ticket_row(r))
         return out
 
     def done_ticket_facts(self, project_ids: list[str]) -> dict[str, dict]:
@@ -3574,27 +3768,33 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         yours" line reads."""
         if not project_ids:
             return {}
-        marks = ", ".join("?" for _ in project_ids)
-        args = list(project_ids)
         out = {p: {"merged": 0, "closed": 0, "queued": 0, "stuck": 0, "total": 0, "repos": [],
                    "repo_from_pr": 0, "assignees": {}, "exact": True} for p in project_ids}
-        with self._sread:
-            groups = self.sc.execute(
-                "SELECT project, stage, status, "
-                "CASE WHEN depends_on IS NULL OR CAST(depends_on AS VARCHAR) IN ('', 'null', '[]') "
-                "THEN 0 ELSE 1 END, "
-                "CASE WHEN (repo IS NULL OR repo = '') AND pr IS NOT NULL "
-                "AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') THEN 1 ELSE 0 END, "
-                "CASE WHEN pr IS NOT NULL AND CAST(pr AS VARCHAR) NOT IN ('', 'null', '{}') "
-                "THEN 1 ELSE 0 END, "
-                "assignee_person_id, COUNT(*) "
-                f"FROM tickets WHERE project IN ({marks}) "
-                "GROUP BY project, stage, status, 4, 5, 6, assignee_person_id", args).fetchall()
-            first = self.sc.execute(
-                "SELECT project, repo FROM (SELECT project, repo, position, created_at, "
-                "ROW_NUMBER() OVER (PARTITION BY project, repo ORDER BY position, created_at) AS rn "
-                f"FROM tickets WHERE project IN ({marks}) AND repo IS NOT NULL AND repo <> '') f "
-                "WHERE rn = 1 ORDER BY project, position, created_at", args).fetchall()
+        t = tickets_table
+        mine = t.c.project.in_(list(project_ids))
+        has_pr = and_(t.c.pr.is_not(None), cast(t.c.pr, Text).not_in(("", "null", "{}")))
+        no_deps = or_(t.c.depends_on.is_(None),
+                      cast(t.c.depends_on, Text).in_(("", "null", "[]")))
+        no_repo = or_(t.c.repo.is_(None), t.c.repo == "")
+        # the flags are worked out in a subquery, so the grouping names its columns: Postgres does
+        # not take two copies of an expression with bound values for the same one
+        flags = select(
+            t.c.project, t.c.stage, t.c.status,
+            case((no_deps, 0), else_=1).label("has_deps"),
+            case((and_(no_repo, has_pr), 1), else_=0).label("from_pr"),
+            case((has_pr, 1), else_=0).label("has_pr"),
+            t.c.assignee_person_id).where(mine).subquery()
+        ranked = select(
+            t.c.project, t.c.repo, t.c.position, t.c.created_at,
+            func.row_number().over(partition_by=(t.c.project, t.c.repo),
+                                   order_by=self._ticket_order()).label("rn")
+        ).where(mine, t.c.repo.is_not(None), t.c.repo != "").subquery()
+        with self.sessions_db.consistent_read() as conn:
+            groups = conn.execute(select(*flags.c, func.count()).group_by(*flags.c)).all()
+            first = conn.execute(
+                select(ranked.c.project, ranked.c.repo).where(ranked.c.rn == 1)
+                .order_by(ranked.c.project, ranked.c.position.nulls_last(),
+                          ranked.c.created_at.nulls_last())).all()
         for project, stage, status, has_deps, from_pr, has_pr, who, n in groups:
             facts = out[project]
             if status != "canceled":
@@ -3623,15 +3823,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def get_ticket(self, project: str, ref: str) -> dict | None:
         """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
         issue id, or number (T3, or 3)."""
-        m = re.match(r"^[Tt]?(\d{1,6})$", (ref or "").strip())
+        if project is None or ref is None:       # `== None` would read as IS NULL and match
+            return None
+        m = re.match(r"^[Tt]?(\d{1,6})$", ref.strip())
         num = int(m.group(1)) if m else -1
-        with self._sread:
-            r = self.sc.execute(
-                f"SELECT {self._TICKET_COLS} FROM (SELECT *, 0 AS rank FROM tickets WHERE "
-                "project = ? AND (id = ? OR upper(identifier) = upper(?) OR external_id = ?) "
-                "UNION ALL SELECT *, 1 AS rank FROM tickets WHERE project = ? AND number = ?) "
-                "ORDER BY rank LIMIT 1", [project, ref, ref, ref, project, num]
-            ).fetchone()
+        t = tickets_table
+        # a match by name is preferred to a match by number
+        found = union_all(
+            select(t, literal(0).label("preference")).where(
+                t.c.project == project,
+                or_(t.c.id == ref, func.upper(t.c.identifier) == func.upper(ref),
+                    t.c.external_id == ref)),
+            select(t, literal(1).label("preference")).where(
+                t.c.project == project, t.c.number == num)).subquery()
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(*(found.c[c.name] for c in t.c))
+                             .order_by(found.c.preference).limit(1)).first()
         return self._ticket_row(r) if r else None
 
     def ticket_for_pr(self, repo: str, number: int) -> dict | None:
@@ -3640,38 +3847,33 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         else the first."""
         try:
             number = int(number)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
-        want = str(repo or "").strip().lower()
-        if not want or number <= 0:
+        # read as the columns were filled: lower case, and None for a repo or number they never hold
+        want, number = pr_columns({"repo": str(repo or "").strip(), "number": number})
+        if want is None or number is None:
             return None
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._TICKET_COLS} FROM tickets WHERE pr LIKE ? ORDER BY position, created_at",
-                [f'%"number": {number}%']).fetchall()
-        found = []
-        for r in rows:
-            t = self._ticket_row(r)
-            pr = t["pr"] or {}
-            if str(pr.get("repo") or "").lower() == want and pr.get("number") == number:
-                found.append(t)
-        return next((t for t in found if t["stage"] not in ("merged", "shipped")), found[0] if found else None)
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.pr_repo == want, t.c.pr_number == number)
+                                .order_by(*self._ticket_order())).all()
+        found = [self._ticket_row(r) for r in rows]
+        return next((x for x in found if x["stage"] not in ("merged", "shipped")), found[0] if found else None)
 
     def delete_ticket(self, tid: str) -> None:
         """The ticket goes, and with it the other tickets' dependency on it."""
+        t = tickets_table
         with self._swrite:
-            row = self.sc.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
-            self.sc.execute("DELETE FROM pending_writeback WHERE ticket = ?", [tid])
-            self.sc.execute("DELETE FROM tickets WHERE id = ?", [tid])
-            if row:
-                for oid, deps in self.sc.execute(
-                        "SELECT id, depends_on FROM tickets WHERE project = ? AND depends_on IS "
-                        "NOT NULL", [row[0]]).fetchall():
-                    ids = json.loads(deps) if deps else []
-                    if tid in ids:
-                        ids = [d for d in ids if d != tid]
-                        self.sc.execute("UPDATE tickets SET depends_on = ? WHERE id = ?",
-                                         [json.dumps(ids) if ids else None, oid])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(writeback_table).where(writeback_table.c.ticket == tid))
+                row = conn.execute(select(t.c.project).where(t.c.id == tid)).first()
+                conn.execute(delete(t).where(t.c.id == tid))
+                if row:
+                    for oid, deps in conn.execute(select(t.c.id, t.c.depends_on).where(
+                            t.c.project == row[0], t.c.depends_on.is_not(None))).all():
+                        if tid in (deps or []):
+                            conn.execute(update(t).where(t.c.id == oid).values(
+                                depends_on=[d for d in deps if d != tid] or None))
 
     def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
         """The Claude Code session works in the project. True when it was not linked before."""
@@ -3685,7 +3887,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The sessions linked to any of the projects."""
         out: set[str] = set()
         for i in range(0, len(projects), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(r[0] for r in conn.execute(
                     select(project_sessions.c.session).where(
                         project_sessions.c.project.in_(projects[i:i + 500]))))
@@ -3695,7 +3897,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The projects any of the sessions is linked to."""
         out: set[str] = set()
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(r[0] for r in conn.execute(
                     select(project_sessions.c.project).where(
                         project_sessions.c.session.in_(sessions[i:i + 500]))))
@@ -3724,7 +3926,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                     # never count as the project's build session (a pick-up must not replace them)
                     ps.c.session.not_in(select(ss.c.session).where(
                         ss.c.role.in_(("orchestrator", "reviewer", "releaser", "comms"))))))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(q).all()
         seen, uniq = set(), []
         for r in rows:
@@ -3758,7 +3960,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 continue
             q = select(t.c.session, t.c.started_at, t.c.last_line_at, t.c.line_count).where(
                 t.c.source == source, t.c.session.in_(chunk), t.c.line_count > 0)
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 for sid, first, last, n in conn.execute(q):
                     out[sid] = (first, last, int(n))
         return out
@@ -3795,7 +3997,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def session_state(self, session: str) -> dict | None:
         """The session's stored state {state, reason, state_at}, as reported (not as shown), or
         None when it never reported one."""
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             row = conn.execute(select(session_states.c.state, session_states.c.reason,
                                       session_states.c.state_at).where(
                 session_states.c.session == session)).first()
@@ -3806,7 +4008,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         Read from `session_said`, which keeps the last three of each session (session_ingest,
         TR-1505), so `n` above 3 gives 3."""
         t = session_said.c
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.text, t.at).where(
                 t.source == source, t.session == session).order_by(
                 t.at.desc(), t.line_key.desc()).limit(max(n, 0))).fetchall()
@@ -3816,7 +4018,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The files the session last edited or wrote (its Edit / Write / MultiEdit / NotebookEdit
         calls), most recent first, each once. Read from `session_files` (session_ingest, TR-1505)."""
         t = session_files.c
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(t.path).where(
                 t.source == source, t.session == session).order_by(
                 t.last_at.desc(), t.path).limit(max(limit, 0)))]
@@ -3828,48 +4030,51 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return said[0]["text"] if said else None
 
     def session_projects(self, session: str) -> list[str]:
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(project_sessions.c.project).where(
                 project_sessions.c.session == session))]
 
     def get_project_linear(self, uid: str) -> dict | None:
         """The Linear project a project's tickets live in, with the last sync's state, or None."""
-        with self._sread:
-            r = self.sc.execute("SELECT linear FROM usecases WHERE id = ?", [uid]).fetchone()
-        return json.loads(r[0]) if r and r[0] else None
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(projects_table.c.linear).where(
+                projects_table.c.id == uid)).first()
+        return r[0] if r and r[0] else None
 
     def set_project_linear(self, uid: str, linear: dict | None) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET linear = ? WHERE id = ?",
-                             [json.dumps(linear, default=str) if linear is not None else None,
-                              uid])
+        # default=str: a value JSON cannot hold (a datetime) is kept as its text, as before
+        clean = json.loads(json.dumps(linear, default=str)) if linear is not None else None
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                linear=clean))
 
     def linear_projects(self) -> list[tuple[str, dict]]:
         """(project id, its Linear link) for every project that uses Linear."""
-        with self._sread:
-            rows = self.sc.execute("SELECT id, linear FROM usecases WHERE linear IS NOT NULL"
-                                    ).fetchall()
-        return [(r[0], json.loads(r[1])) for r in rows if r[1]]
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(projects_table.c.id, projects_table.c.linear).where(
+                projects_table.c.linear.is_not(None))).all()
+        return [(r[0], r[1]) for r in rows if r[1]]
 
     def get_project_github(self, uid: str) -> dict | None:
         """The GitHub repo and issue label a project's tickets live in, with the last sync's
         state, or None."""
-        with self._sread:
-            r = self.sc.execute("SELECT github_issues FROM usecases WHERE id = ?",
-                                 [uid]).fetchone()
-        return json.loads(r[0]) if r and r[0] else None
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(projects_table.c.github_issues).where(
+                projects_table.c.id == uid)).first()
+        return r[0] if r and r[0] else None
 
     def set_project_github(self, uid: str, link: dict | None) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE usecases SET github_issues = ? WHERE id = ?",
-                             [json.dumps(link, default=str) if link is not None else None, uid])
+        clean = json.loads(json.dumps(link, default=str)) if link is not None else None
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(projects_table).where(projects_table.c.id == uid).values(
+                github_issues=clean))
 
     def github_projects(self) -> list[tuple[str, dict]]:
         """(project id, its GitHub link) for every project whose tickets live in GitHub Issues."""
-        with self._sread:
-            rows = self.sc.execute("SELECT id, github_issues FROM usecases "
-                                    "WHERE github_issues IS NOT NULL").fetchall()
-        return [(r[0], json.loads(r[1])) for r in rows if r[1]]
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(projects_table.c.id, projects_table.c.github_issues).where(
+                projects_table.c.github_issues.is_not(None))).all()
+        return [(r[0], r[1]) for r in rows if r[1]]
 
     def project_ticket_home(self, uid: str) -> str | None:
         """'linear' or 'github' when the project's tickets live there, None when they are Tares's."""
@@ -3935,11 +4140,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _default_project_if_any(self) -> str | None:
         """The default project's id when the cell has one, never creating it. Called with the
         lock held."""
-        row = self.sc.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
-        if row and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
-            return row[0]
-        found = self.sc.execute("SELECT id FROM usecases WHERE recipe = 'default' "
-                                 "ORDER BY created_at LIMIT 1").fetchone()
+        t = projects_table
+        saved = self.get_setting("default_project")
+        with self.sessions_db.read() as conn:
+            if saved and conn.execute(select(t.c.id).where(t.c.id == saved)).first() is not None:
+                return saved
+            found = conn.execute(select(t.c.id).where(t.c.recipe == "default").order_by(
+                t.c.created_at, t.c.id).limit(1)).first()
         return found[0] if found else None
 
     def _lazy_default_project(self):
@@ -3957,66 +4164,75 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _ensure_default_project(self) -> str:
         """The default project's id, creating the project if the cell has none yet. Called with
         the lock held."""
-        row = self.sc.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
-        if row and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
-            return row[0]
-        found = self.sc.execute("SELECT id FROM usecases WHERE recipe = 'default' "
-                                 "ORDER BY created_at LIMIT 1").fetchone()
+        found = self._default_project_if_any()
         if found:
-            uid = found[0]
+            uid = found
         else:
+            t = projects_table
             uid = "uc_" + uuid.uuid4().hex[:10]
-            taken = {r[0] for r in self.sc.execute("SELECT name FROM usecases").fetchall()}
-            name = self.DEFAULT_PROJECT_NAME if self.DEFAULT_PROJECT_NAME not in taken \
-                else "Default project"
-            ts = now_utc()
-            self.sc.execute(
-                "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
-                "last_error) VALUES (?, 'default', ?, '{}', 'active', ?, ?, NULL)",
-                [uid, name, ts, ts])
-        self.sc.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('default_project', ?, ?) "
-            "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
-            "updated_at = excluded.updated_at", [uid, now_utc()])
+            with self.sessions_db.begin() as conn:
+                taken = set(conn.execute(select(t.c.name)).scalars())
+                name = self.DEFAULT_PROJECT_NAME if self.DEFAULT_PROJECT_NAME not in taken \
+                    else "Default project"
+                ts = now_utc()
+                conn.execute(insert(t).values(
+                    id=uid, recipe="default", name=name, params={}, status="active",
+                    created_at=ts, updated_at=ts, last_error=None))
+        self.set_setting("default_project", uid)
         return uid
 
+    def _part_names(self, kind: str) -> set[str]:
+        """The names of every part of `kind` the cell has (sources are in the session store, the
+        other kinds in DuckDB)."""
+        if kind == "source":
+            with self.sessions_db.read() as conn:
+                return set(conn.execute(select(sources_table.c.name)).scalars())
+        return {r[0] for r in self.sc.execute(
+            f"SELECT name FROM {self._OWNED_TABLES[kind]}").fetchall()}
+
     def _recipes(self) -> dict:
-        return {r[0]: r[1] for r in self.sc.execute("SELECT id, recipe FROM usecases").fetchall()}
+        with self.sessions_db.read() as conn:
+            return {r[0]: r[1] for r in conn.execute(
+                select(projects_table.c.id, projects_table.c.recipe)).all()}
 
     def _custom_objects(self, uid: str, change) -> None:
         """Rewrite a custom project's `objects` param with `change(list) -> list`."""
-        row = self.sc.execute("SELECT params FROM usecases WHERE id = ?", [uid]).fetchone()
-        params = json.loads((row[0] if row else None) or "{}")
-        objs = list(params.get("objects") or [])
-        new = change(objs)
-        if new != objs:
-            params["objects"] = new
-            self.sc.execute("UPDATE usecases SET params = ?, updated_at = ? WHERE id = ?",
-                             [json.dumps(params), now_utc(), uid])
+        t = projects_table
+        with self.sessions_db.begin() as conn:
+            row = conn.execute(select(t.c.params).where(t.c.id == uid)).first()
+            params = dict((row[0] if row else None) or {})
+            objs = list(params.get("objects") or [])
+            new = change(objs)
+            if new != objs:
+                params["objects"] = new
+                conn.execute(update(t).where(t.c.id == uid).values(
+                    params=params, updated_at=now_utc()))
 
     def _add_row(self, uid: str, kind: str, name: str, key: str | None = None) -> None:
         """Record `name` as one of project `uid`'s objects. Without a `key`, an existing row for
         the name is kept as it is (a template's planned key must survive a later move back); a
         new row is keyed `kind:name` in a custom or default project (the key a custom plan uses)
         and `+kind:name` in a template project, where the `+` keeps it apart from the plan."""
+        o = objects_table
         recipe = self._recipes().get(uid)
         if recipe is None:
             raise KeyError(f"unknown project {uid!r}")
-        have = self.sc.execute("SELECT key FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
-                                "AND name = ?", [uid, kind, name]).fetchall()
-        if key is None:
-            if have:
-                return
-            key = f"{kind}:{name}" if recipe in ("custom", "default") else f"+{kind}:{name}"
-        else:
-            for (k,) in have:
-                if k != key:
-                    self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
-                                     "AND key = ?", [uid, kind, k])
-        self.sc.execute(
-            "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, created_at) "
-            "VALUES (?, ?, ?, ?, FALSE, ?) ON CONFLICT (usecase_id, kind, key) DO UPDATE SET "
-            "name = excluded.name", [uid, kind, key, name, now_utc()])
+        with self.sessions_db.begin() as conn:
+            have = conn.execute(select(o.c.key).where(
+                o.c.usecase_id == uid, o.c.kind == kind, o.c.name == name)).all()
+            if key is None:
+                if have:
+                    return
+                key = f"{kind}:{name}" if recipe in ("custom", "default") else f"+{kind}:{name}"
+            else:
+                for (k,) in have:
+                    if k != key:
+                        conn.execute(delete(o).where(
+                            o.c.usecase_id == uid, o.c.kind == kind, o.c.key == k))
+            conn.execute(self.sessions_db.upsert(o).values(
+                usecase_id=uid, kind=kind, key=key, name=name, customized=False,
+                created_at=now_utc()).on_conflict_do_update(
+                index_elements=["usecase_id", "kind", "key"], set_={"name": name}))
         if recipe == "custom":
             self._custom_objects(uid, lambda objs: objs if any(
                 o.get("kind") == kind and o.get("name") == name for o in objs)
@@ -4024,10 +4240,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def _drop_rows(self, kind: str, name: str, uids) -> None:
         """Forget `name` as an object of each project in `uids`."""
+        o = objects_table
         recipes = self._recipes()
         for uid in uids:
-            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
-                             "AND name = ?", [uid, kind, name])
+            with self.sessions_db.begin() as conn:
+                conn.execute(delete(o).where(
+                    o.c.usecase_id == uid, o.c.kind == kind, o.c.name == name))
             if recipes.get(uid) == "custom":
                 self._custom_objects(uid, lambda objs: [
                     o for o in objs if not (o.get("kind") == kind and o.get("name") == name)])
@@ -4039,9 +4257,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                         | {u for u, r in self._recipes().items() if r == "custom"})
 
     def _rows_for(self, kind: str, name: str) -> list[str]:
-        return [r[0] for r in self.sc.execute(
-            "SELECT DISTINCT usecase_id FROM usecase_objects WHERE kind = ? AND name = ?",
-            [kind, name]).fetchall()]
+        o = objects_table
+        with self.sessions_db.read() as conn:
+            return list(conn.execute(select(o.c.usecase_id).where(
+                o.c.kind == kind, o.c.name == name).distinct()).scalars())
 
     def put_in_project(self, kind: str, name: str, uid: str, key: str | None = None,
                        creator: bool = False) -> None:
@@ -4051,22 +4270,23 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         another project leaves it, and the default project's wiring of it comes along (a source
         stays while a default trigger still reads it). `creator` records `uid` as the project
         that made it; a part with no maker takes `uid`."""
-        table = self._OWNED_TABLES[kind]
         with self._swrite:
             # None on a cell that has none: nothing can be leaving it
             default = self._default_project_if_any()
-            row = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
-                                   [name]).fetchone()
+            row = self._owner_of(kind, name)
             owner = row[0] if row else None
             if kind == "source":
                 if creator:
-                    self.sc.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
+                    self._owner_update(kind, name, owned_by=uid)
                 if uid != default and default in self._rows_for("source", name):
                     # a trigger of the default project still reads it: it stays there too
+                    o = objects_table
+                    with self.sessions_db.read() as conn:
+                        in_default = set(conn.execute(select(o.c.name).where(
+                            o.c.kind == "trigger", o.c.usecase_id == default)).scalars())
                     readers = [r[0] for r in self.sc.execute(
-                        "SELECT t.name, t.sources FROM catalog_triggers t JOIN usecase_objects o "
-                        "ON o.kind = 'trigger' AND o.name = t.name AND o.usecase_id = ?",
-                        [default]).fetchall() if name in json.loads(r[1] or "[]")]
+                        "SELECT name, sources FROM catalog_triggers").fetchall()
+                        if r[0] in in_default and name in json.loads(r[1] or "[]")]
                     if not readers:
                         self._drop_rows("source", name, [default])
             else:
@@ -4085,7 +4305,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                             "UPDATE project_wiring SET project = ? WHERE project = ? AND "
                             "kind = 'wake' AND trigger = ?", [uid, default, name])
                 if creator or owner is None or (leaving_default and owner in (None, default)):
-                    self.sc.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
+                    self._owner_update(kind, name, owned_by=uid)
                 if kind == "agent":
                     self._wire_from_definition(name, uid)
             self._add_row(uid, kind, name, key)
@@ -4102,9 +4322,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             elif kind == "trigger":
                 self.sc.execute("DELETE FROM project_wiring WHERE project = ? AND kind = 'wake' "
                                  "AND trigger = ?", [uid, name])
-            table = self._OWNED_TABLES[kind]
-            exists = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
-                                      [name]).fetchone()
+            exists = self._owner_of(kind, name)
             if exists is None:
                 return
             left = self._rows_for(kind, name)
@@ -4113,14 +4331,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 self._add_row(default, kind, name)
                 left = [default]
             if kind != "source" and exists[0] == uid:
-                self.sc.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [left[0], name])
+                self._owner_update(kind, name, owned_by=left[0])
 
     def source_memberships(self) -> dict[str, list[str]]:
         """{source name: [project ids it is in]}, for every source with a membership."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT DISTINCT name, usecase_id FROM usecase_objects WHERE kind = 'source' "
-                "ORDER BY name, usecase_id").fetchall()
+        o = objects_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(o.c.name, o.c.usecase_id).where(
+                o.c.kind == "source").distinct().order_by(o.c.name, o.c.usecase_id)).all()
         out: dict[str, list[str]] = {}
         for name, uid in rows:
             out.setdefault(name, []).append(uid)
@@ -4128,11 +4346,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def project_sources(self, uid: str) -> list[str]:
         """The sources project `uid` is made of: its source rows that name a source that exists."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT DISTINCT o.name FROM usecase_objects o JOIN catalog_sources s "
-                "ON s.name = o.name WHERE o.usecase_id = ? AND o.kind = 'source' ORDER BY o.name",
-                [uid]).fetchall()
+        o, s = objects_table, sources_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(o.c.name).select_from(
+                o.join(s, s.c.name == o.c.name)).where(
+                o.c.usecase_id == uid, o.c.kind == "source").distinct().order_by(o.c.name)).all()
         return [r[0] for r in rows]
 
     def normalize_projects(self) -> None:
@@ -4151,7 +4369,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         default = self._lazy_default_project()
         recipes = self._recipes()
         # views are gone: so are their rows, and their entries in custom projects
-        self.sc.execute("DELETE FROM usecase_objects WHERE kind = 'view'")
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(objects_table).where(objects_table.c.kind == "view"))
         for uid, recipe in recipes.items():
             if recipe == "custom":
                 self._custom_objects(uid, lambda objs: [o for o in objs
@@ -4162,10 +4381,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         # happened before deletes did both
         self.sc.execute("UPDATE catalog_agents SET trigger = '' WHERE trigger IS NULL OR "
                          "(trigger <> '' AND trigger NOT IN (SELECT name FROM catalog_triggers))")
-        for kind, table in self._OWNED_TABLES.items():
-            gone = [r[0] for r in self.sc.execute(
-                f"SELECT DISTINCT name FROM usecase_objects WHERE kind = ? "
-                f"AND name NOT IN (SELECT name FROM {table})", [kind]).fetchall()]
+        for kind in self._OWNED_TABLES:
+            with self.sessions_db.read() as conn:
+                listed = set(conn.execute(select(objects_table.c.name).where(
+                    objects_table.c.kind == kind).distinct()).scalars())
+            gone = sorted(listed - self._part_names(kind))
             for name in gone:
                 self._drop_rows(kind, name, set(self._rows_for(kind, name))
                                 | {u for u, r in recipes.items() if r == "custom"})
@@ -4190,13 +4410,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             by = users.get(name) or set()
             owners[("mcp_server", name)] = valid(owner) or (next(iter(by)) if len(by) == 1
                                                             else default())
-        table = self._OWNED_TABLES
         for (kind, name), owner in owners.items():
-            current = self.sc.execute(f"SELECT owned_by FROM {table[kind]} WHERE name = ?",
-                                       [name]).fetchone()
+            current = self._owner_of(kind, name)
             if current and current[0] != owner:
-                self.sc.execute(f"UPDATE {table[kind]} SET owned_by = ? WHERE name = ?",
-                                 [owner, name])
+                self._owner_update(kind, name, owned_by=owner)
             # a row elsewhere is left alone: it is how a project shows an object it lost (one
             # deleted by hand and recreated, which lands here unowned), and how an edit that
             # still lists it takes it back
@@ -4207,7 +4424,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self._add_row(owner, kind, name)
             if first:
                 self._wire_from_definition(name, owner)
-        existing = {r[0] for r in self.sc.execute("SELECT name FROM catalog_sources").fetchall()}
+        existing = self._part_names("source")
         for name, (_owner, srcs) in triggers.items():
             for src in srcs:
                 if src in existing:
@@ -4228,25 +4445,27 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 self._drop_rows("source", src, [held])
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
-        with self._swrite:
-            self.sc.execute("INSERT INTO usecase_log (usecase_id, logged_at, action, detail) "
-                             "VALUES (?, ?, ?, ?)", [uid, now_utc(), action, detail[:2000]])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(plog_table).values(
+                usecase_id=uid, logged_at=now_utc(), action=action, detail=detail[:2000]))
 
     def list_project_log(self, uid: str, limit: int = 100) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT logged_at, action, detail FROM usecase_log WHERE usecase_id = ? "
-                "ORDER BY logged_at DESC LIMIT ?", [uid, limit]).fetchall()
+        t = plog_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.logged_at, t.c.action, t.c.detail).where(
+                t.c.usecase_id == uid).order_by(t.c.logged_at.desc()).limit(limit)).all()
         return [{"at": r[0], "action": r[1], "detail": r[2]} for r in rows]
     # ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
     # The token (and an App's private key) is held verbatim like every other connector secret;
     # redaction is the API's job. `config` holds the kind-specific fields: for `app` the app id,
     # private key, webhook secret and installations; for `app_broker` the broker URL and secret.
+    @kept
     def list_github_credentials(self) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT name, kind, token, api_url, account, created_at, updated_at, config "
-                "FROM github_credentials ORDER BY name").fetchall()
+        t = github_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                t.c.name, t.c.kind, t.c.token, t.c.api_url, t.c.account, t.c.created_at,
+                t.c.updated_at, t.c.config).order_by(t.c.name)).all()
         out = []
         for r in rows:
             try:
@@ -4268,31 +4487,31 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """Create or replace a credential. `config` None keeps the stored one (a token rotation
         does not wipe an App's installations); pass {} to clear it."""
         ts = now_utc()
-        with self._swrite:
+        t = github_table
+        # the write lock: a config kept from a read must not undo a change made after it
+        with self._swrite, self.sessions_db.begin() as conn:
             if config is None:
-                row = self.sc.execute("SELECT config FROM github_credentials WHERE name = ?",
-                                       [name]).fetchone()
+                row = conn.execute(select(t.c.config).where(t.c.name == name)).first()
                 cfg_json = row[0] if row and row[0] else None
             else:
                 cfg_json = json.dumps(config) if config else None
-            self.sc.execute(
-                "INSERT INTO github_credentials (name, kind, token, api_url, account, "
-                "created_at, updated_at, config) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, token = excluded.token, "
-                "api_url = excluded.api_url, account = excluded.account, "
-                "updated_at = excluded.updated_at, config = excluded.config",
-                [name, kind, token or "", api_url or "", account or "", ts, ts, cfg_json])
+            conn.execute(self.sessions_db.upsert(t).values(
+                name=name, kind=kind, token=token or "", api_url=api_url or "",
+                account=account or "", created_at=ts, updated_at=ts,
+                config=cfg_json).on_conflict_do_update(
+                index_elements=["name"], set_={
+                    "kind": kind, "token": token or "", "api_url": api_url or "",
+                    "account": account or "", "updated_at": ts, "config": cfg_json}))
 
     def update_github_credential_config(self, name: str, config: dict) -> None:
         """Replace only the kind-specific fields (an installation added or removed by a webhook)."""
-        with self._swrite:
-            self.sc.execute(
-                "UPDATE github_credentials SET config = ?, updated_at = ? WHERE name = ?",
-                [json.dumps(config) if config else None, now_utc(), name])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(github_table).where(github_table.c.name == name).values(
+                config=json.dumps(config) if config else None, updated_at=now_utc()))
 
     def delete_github_credential(self, name: str) -> None:
-        with self._swrite:
-            self.sc.execute("DELETE FROM github_credentials WHERE name = ?", [name])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(github_table).where(github_table.c.name == name))
 
     # ── ask sessions (the in-app agent's chat history) ────────────────────────
     # `state` is an opaque JSON blob owned by the console (messages, tool calls, proposal
@@ -4617,11 +4836,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         esql, eparams = self._exclude(exclude, list(sources))
+        held = session_events.view(self, list(sources), since, filters=filters,
+                                   need_payload=bool(exclude) and exclude.get("shared") is None)
         with self._lock:
             r = self.con.execute(
-                f"SELECT key_value, event_time FROM events WHERE source IN ({ph}) AND ingest_time >= ? "
+                f"SELECT key_value, event_time FROM {held.table} WHERE source IN ({ph}) "
+                f"AND ingest_time >= ? "
                 f"AND COALESCE(key_value, '') <> ''{fsql}{esql} ORDER BY ingest_time DESC LIMIT 1",
-                [*sources, since, *fparams, *eparams]).fetchone()
+                [*held.params, *sources, since, *fparams, *eparams]).fetchone()
         return (r[0], r[1]) if r else None
 
     def recent_events(self, source: str | None = None, limit: int = 50,
@@ -4630,28 +4852,43 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         clauses = (["source = ?"] if source else []) + ([esql[5:]] if esql else [])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         params = ([source] if source else []) + eparams + [int(limit)]
+        held = self._newest_view([source] if source else None, int(limit), exclude)
         with self._lock:
             rows = self.con.execute(
-                f"SELECT source, key_value, event_type, text, event_time, ingest_time "
-                f"FROM events {where} ORDER BY ingest_time DESC LIMIT ?", params,
+                f"SELECT source, key_value, event_type, text, event_time, ingest_time, "
+                f"{held.ref} AS ref FROM {held.table} {where} ORDER BY ingest_time DESC"
+                f"{', ref DESC' if held.held else ''} LIMIT ?", [*held.params, *params],
             ).fetchall()
+        text = held.fill([r[6] for r in rows]) if held.held else {}
         return [
-            {"source": r[0], "key": r[1], "event_type": r[2], "text": r[3],
+            {"source": r[0], "key": r[1], "event_type": r[2],
+             "text": r[3] if r[6] is None else text[r[6]][0],
              "event_time": r[4], "ingest_time": r[5]}
             for r in rows
         ]
+
+    def _newest_view(self, sources: list[str] | None, limit: int, exclude: dict | None = None):
+        """session_events.newest for a caller that cannot see some projects: their sessions and
+        lines are not among the newest it counts (the statement still applies `exclude` itself)."""
+        if not exclude or not (exclude.get("ids") or exclude.get("names")):
+            return session_events.newest(self, sources, limit)
+        sessions, digests, moved = self._looked(exclude)
+        return session_events.newest(
+            self, sources, limit, set(sessions),
+            lambda source, labels, payload, at: _line_hidden(exclude, source, digests, moved)(
+                labels, payload, at))
 
     def key_events(self, source: str, key: str, limit: int = 200,
                    offset: int = 0) -> list[dict]:
         """One entity's events on one source, oldest first (a session read top to bottom)."""
         return self.key_events_from(source, key, limit, offset)[0]
 
-    def key_events_from(self, source: str, key: str, limit: int = 200,
-                        offset: int = 0) -> tuple[list[dict], str]:
+    def key_events_from(self, source: str, key: str, limit: int = 200, offset: int = 0,
+                        tail: dict | None = None) -> tuple[list[dict], str]:
         """`key_events` and where the lines came from: `table`, `archive`, `both` (the session's
         own tables and archive, TR-1507) or `events` (DuckDB, for a session they do not hold in
-        full)."""
-        got = session_read.lines(self, source, key, limit, offset)
+        full). `tail`: the page is the session's end (`session_read._fetch`)."""
+        got = session_read.lines(self, source, key, limit, offset, tail)
         if got is not None:
             rows, where = got
             return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
@@ -4669,10 +4906,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         conversation). The payload is the transcript line as it came in."""
         return self.key_payload_rows_from(source, key, limit, offset)[0]
 
-    def key_payload_rows_from(self, source: str, key: str, limit: int = 200,
-                              offset: int = 0) -> tuple[list[dict], str]:
+    def key_payload_rows_from(self, source: str, key: str, limit: int = 200, offset: int = 0,
+                              tail: dict | None = None) -> tuple[list[dict], str]:
         """`key_payload_rows` and where the lines came from (see `key_events_from`)."""
-        got = session_read.lines(self, source, key, limit, offset)
+        got = session_read.lines(self, source, key, limit, offset, tail)
         if got is not None:
             rows, where = got
             return [{"event_type": r["type"], "text": r["text"], "event_time": r["at"],
@@ -4727,17 +4964,34 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 return str(p["finding"])
         return None
 
+    def _table_payloads(self, source: str, limit: int, exclude) -> list[str] | None:
+        """`recent_payloads` from `session_lines`, newest first by the line's time (TR-1613): the
+        lines still in the table, not the archived ones. None when DuckDB answers: a platform
+        edition, another connector's source, or a table with nothing to show while the one-time
+        move is not complete."""
+        if (edition.edition(self)[0] != "factory"
+                or source not in session_ingest.claude_code_sources(self)):
+            return None
+        sessions, digests, moved = self._looked(exclude)
+        got = session_read.newest_payloads(self, source, limit, set(sessions),
+                                           _line_hidden(exclude, source, digests, moved))
+        return got if got or session_move.complete(self) else None
+
     def recent_payloads(self, source: str, limit: int = 500,
                         exclude: dict | None = None) -> list[dict]:
-        """The lossless payloads of a source's most recent events (for field profiling)."""
-        esql, eparams = self._exclude(exclude, [source])
-        with self._lock:
-            rows = self.con.execute(
-                f"SELECT payload FROM events WHERE source = ?{esql} "
-                "ORDER BY ingest_time DESC LIMIT ?",
-                [source, *eparams, int(limit)]).fetchall()
+        """The lossless payloads of a source's most recent events (for field profiling). In the
+        factory edition a claude_code source is read from `session_lines` (`_table_payloads`)."""
+        texts = self._table_payloads(source, int(limit), exclude)
+        if texts is None:
+            esql, eparams = self._exclude(exclude, [source])
+            with self._lock:
+                rows = self.con.execute(
+                    f"SELECT payload FROM events WHERE source = ?{esql} "
+                    "ORDER BY ingest_time DESC LIMIT ?",
+                    [source, *eparams, int(limit)]).fetchall()
+            texts = [r[0] for r in rows]
         out = []
-        for (pj,) in rows:
+        for pj in texts:
             try:
                 out.append(json.loads(pj) if pj else {})
             except (TypeError, ValueError):
@@ -4748,10 +5002,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """Inferred shape of a source's events, sampled from the most recent `sample` rows: the
         event types seen and the typed labels (with the type of the latest value). Number-typed
         labels are the aggregatable ones — a trigger's `field` picks from these."""
+        held = session_events.newest(self, [source], int(sample))
         with self._lock:
             rows = self.con.execute(
-                "SELECT event_type, labels FROM events WHERE source = ? "
-                "ORDER BY ingest_time DESC LIMIT ?", [source, int(sample)],
+                f"SELECT event_type, labels FROM {held.table} WHERE source = ? "
+                "ORDER BY ingest_time DESC LIMIT ?", [*held.params, source, int(sample)],
             ).fetchall()
         event_types, fields = set(), {}
         for etype, ljson in rows:
@@ -4819,22 +5074,24 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         (_list_entities_saved)."""
         if not _FIELD_RE.match(label):
             raise ValueError(f"bad label name {label!r}")
-        xsql, xparams = self._exclude(exclude, sources)
+        hidden, digests, moved = self._looked(exclude)
+        xsql, xparams = _exclude_sql(exclude, sources, hidden, digests, moved)
         if xsql:
-            with self._lock:
-                return self._list_entities_saved(label, sources, int(limit), xsql, xparams)
-        ph = ", ".join(["?"] * len(sources)) if sources else ""
+            return self._list_entities_saved(
+                label, sources, int(limit), xsql, xparams,
+                need_payload=exclude.get("shared") is None, exclude=exclude, hidden=hidden,
+                digests=digests, moved=moved)
         with self._lock:
-            if self._truncated(label, sources):
-                return self._list_entities_scan(label, sources, limit)
-            q = "SELECT value, SUM(events), MAX(last_ingest) FROM entity_counts WHERE label = ?"
-            params: list = [label]
-            if sources:
-                q += f" AND source IN ({ph})"
-                params += sources
-            q += " GROUP BY value ORDER BY SUM(events) DESC LIMIT ?"
-            rows = self.con.execute(q, [*params, int(limit)]).fetchall()
-        return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
+            if not self._truncated(label, sources):
+                q = "SELECT value, SUM(events), MAX(last_ingest) FROM entity_counts WHERE label = ?"
+                params: list = [label]
+                if sources:
+                    q += f" AND source IN ({', '.join(['?'] * len(sources))})"
+                    params += sources
+                q += " GROUP BY value ORDER BY SUM(events) DESC LIMIT ?"
+                rows = self.con.execute(q, [*params, int(limit)]).fetchall()
+                return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
+        return self._list_entities_scan(label, sources, limit)
 
     def is_label_truncated(self, label: str, sources: list[str] | None = None) -> bool:
         """Whether `label` exceeded the cardinality cap (for any relevant source) and is served by a
@@ -4854,32 +5111,35 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return self.con.execute(q + " LIMIT 1", p).fetchone() is not None
 
     def _list_entities_saved(self, label: str, sources: list[str] | None, limit: int,
-                             xsql: str, xparams: list) -> list[dict]:
+                             xsql: str, xparams: list, **scan) -> list[dict]:
         """list_entities with a filter: from the saved counts (SavedCounts) when this one is there,
-        else a live scan whose whole answer is saved. A truncated label, or one with more values
-        than the cardinality cap under this filter, is scanned on every read. Caller holds the
-        lock, so no append lands between a count and its saving."""
+        else a live scan (`scan` is what it takes besides the filter) whose whole answer is saved.
+        A truncated label, or one with more values than the cardinality cap under this filter, is
+        scanned on every read."""
         filt = (xsql, tuple(xparams))
         spot = (frozenset(sources) if sources else None, label)
-        counts = self._saved_counts.get(filt, spot) if limit >= 0 else None
-        if counts is UNSAVED:
-            if self._truncated(label, sources):
-                self._saved_counts.put(filt, spot, None)
-                counts = None
-            else:
-                rows = self._list_entities_scan(
-                    label, sources, max(limit, _ENTITY_CARDINALITY_CAP + 1), xsql, xparams)
-                self._saved_counts.put(
-                    filt, spot, None if len(rows) > _ENTITY_CARDINALITY_CAP else
-                    {r["value"]: [r["events"], r["last_ingest"]] for r in rows})
-                return rows[:limit]
-        if counts is None:
-            return self._list_entities_scan(label, sources, limit, xsql, xparams)
-        top = sorted(counts.items(), key=lambda item: -item[1][0])[:limit]
-        return [{"value": v, "events": n, "last_ingest": last} for v, (n, last) in top]
+        with self._counts_lock:    # no append lands between a count and its saving
+            counts = self._saved_counts.get(filt, spot) if limit >= 0 else None
+            if counts is UNSAVED:
+                if self.is_label_truncated(label, sources):
+                    self._saved_counts.put(filt, spot, None)
+                    counts = None
+                else:
+                    rows = self._list_entities_scan(
+                        label, sources, max(limit, _ENTITY_CARDINALITY_CAP + 1), xsql, xparams,
+                        **scan)
+                    self._saved_counts.put(
+                        filt, spot, None if len(rows) > _ENTITY_CARDINALITY_CAP else
+                        {r["value"]: [r["events"], r["last_ingest"]] for r in rows})
+                    return rows[:limit]
+            if counts is not None:
+                top = sorted(counts.items(), key=lambda item: -item[1][0])[:limit]
+                return [{"value": v, "events": n, "last_ingest": last} for v, (n, last) in top]
+        return self._list_entities_scan(label, sources, limit, xsql, xparams, **scan)
 
     def _keep_saved_counts(self, rows: list[tuple]) -> None:
-        """Add an appended batch to the saved counts. Caller holds the lock; the rows are in."""
+        """Add an appended batch to the saved counts. Caller holds _counts_lock and the lock; the
+        rows are in."""
         try:
             self._saved_counts.appended(self.con, rows, _label_expr, _ENTITY_CARDINALITY_CAP)
         except Exception as ex:      # never fail the ingest for this: the next read counts again
@@ -4888,21 +5148,38 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                   "they are counted again at the next read", flush=True)
 
     def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int,
-                            xsql: str = "", xparams: list | None = None) -> list[dict]:
+                            xsql: str = "", xparams: list | None = None,
+                            need_payload: bool = False, exclude: dict | None = None,
+                            hidden=(), digests=(), moved=()) -> list[dict]:
         """The pre-counter implementation: scan events and GROUP BY the label. Used for a truncated
-        (high-cardinality) label, and to count a filtered read. Caller holds the lock."""
+        (high-cardinality) label, and to count a filtered read (`exclude` with what _looked_up
+        knows of its projects). Takes the lock itself."""
         expr = _label_expr(label)
         where = "WHERE " + expr + " IS NOT NULL"
         params: list = []
         if sources:
             where += f" AND source IN ({', '.join(['?'] * len(sources))})"
             params += sources
+        rows = None
+        # a test that looks into a payload, or at a line's time (a deleted project's name that a
+        # project took again), takes the lines themselves; the digest holds neither
+        if not need_payload and all(until is None for _, until in digests):
+            rows = self._from_digest(
+                session_digest.entities, label, expr, sources, int(limit), xsql, list(xparams or []),
+                _exclude_sql(exclude, sources, None, digests), set(hidden),
+                set((exclude or {}).get("shared") or []) | {source for source, _ in moved})
+        if rows is not None:
+            return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
         where += xsql
         params += xparams or []
-        rows = self.con.execute(
-            f"SELECT {expr} AS v, COUNT(*), MAX(ingest_time) FROM events {where} "
-            f"GROUP BY v ORDER BY COUNT(*) DESC LIMIT ?", [*params, int(limit)],
-        ).fetchall()
+        held = session_events.grouped(self, sources or None, need_payload=need_payload)
+        count = f"SUM({held.weight})::BIGINT" if held.held else "COUNT(*)"
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT {expr} AS v, {count}, MAX(ingest_time) FROM {held.table} {where} "
+                f"GROUP BY v ORDER BY {count} DESC LIMIT ?",
+                [*held.params, *params, int(limit)],
+            ).fetchall()
         return [{"value": r[0], "events": r[1], "last_ingest": r[2]} for r in rows]
 
     def purge_dispatches(self, trigger: str) -> int:
@@ -4928,9 +5205,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def purge_events(self, source: str) -> int:
         # _sess_lock first, as append and the reconcile take it, so no line is counted into the
         # sessions table between the purge and the delete of its rows.
-        with self._sess_lock:
+        with self._sess_lock, self._counts_lock:
+            held = session_events.held_count(self, source)    # lines the events table never got
             with self._lock:
-                n = self.con.execute(
+                n = held + self.con.execute(
                     "SELECT COUNT(*) FROM events WHERE source = ?", [source]).fetchone()[0]
                 self._saved_counts.drop(source)
                 self.con.execute("BEGIN TRANSACTION")
@@ -4955,6 +5233,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 # but a count of them left behind would be added to the numbers of a re-ship
                 conn.execute(delete(session_archive_parts).where(session_archive_parts.c.session.in_(
                     select(sessions_table.c.session).where(sessions_table.c.source == source))))
+                # the drain's marks of those sessions (TR-1665), while their rows still name them
+                for prefix in (session_ingest.DRAIN_TODO, session_ingest.DRAIN_GAVE_UP):
+                    conn.execute(delete(session_ingest_marks).where(session_ingest_marks.c.name.in_(
+                        select(literal(prefix) + sessions_table.c.session).where(
+                            sessions_table.c.source == source))))
                 conn.execute(delete(sessions_table).where(sessions_table.c.source == source))
                 # and so do the facts read from them (TR-1477); a call's results live on its row
                 conn.execute(delete(session_commands).where(session_commands.c.source == source))
@@ -5121,73 +5404,84 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                  "key": r[3], "dispatch_id": r[4], "error": r[5]} for r in rows]
 
     # ── API keys (scoped credentials; only the SHA-256 of the secret is stored) ─
+    # `api_keys` lives in the session store (TR-1608): these methods take no DuckDB or state lock,
+    # so find_api_key, which every authenticated request calls, no longer queues behind them.
     def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str],
                        project: str | None = None, person_id: str | None = None) -> None:
         """`project` makes it a project key: it reads that project only (TR-335). `person_id`
         is the person it belongs to."""
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO api_keys (id, name, prefix, hash, scopes, created_at, last_used_at, "
-                "revoked_at, project, person_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
-                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None,
-                 person_id or None])
+        with self.sessions_db.begin() as conn:
+            conn.execute(api_keys_table.insert().values(
+                id=kid, name=name, prefix=prefix, hash=hash_, scopes=list(scopes),
+                created_at=now_utc(), last_used_at=None, revoked_at=None,
+                project=project or None, person_id=person_id or None))
 
     def list_api_keys(self, project: str | None = None) -> list[dict]:
         """Every key, newest first; with `project`, only that project's keys."""
-        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project, "
-               "person_id FROM api_keys ")
-        params = []
+        t = api_keys_table
+        q = select(t.c.id, t.c.name, t.c.prefix, t.c.scopes, t.c.created_at, t.c.last_used_at,
+                   t.c.revoked_at, t.c.project, t.c.person_id)
         if project is not None:
-            sql += "WHERE project = ? "
-            params.append(project)
-        with self._sread:
-            rows = self.sc.execute(sql + "ORDER BY created_at DESC", params).fetchall()
-        return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": json.loads(r[3]),
+            q = q.where(t.c.project == project)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.created_at.desc(), t.c.id)).all()
+        # a key with no scopes gets none (least privilege), never a crash in the key list
+        return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": r[3] or [],
                  "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
                  "project": r[7], "person_id": r[8]} for r in rows]
 
     def get_api_key(self, kid: str) -> dict | None:
-        return next((k for k in self.list_api_keys() if k["id"] == kid), None)
+        t = api_keys_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.id, t.c.name, t.c.prefix, t.c.scopes, t.c.created_at,
+                                    t.c.last_used_at, t.c.revoked_at, t.c.project,
+                                    t.c.person_id).where(t.c.id == kid)).first()
+        if not r:
+            return None
+        return {"id": r[0], "name": r[1], "prefix": r[2], "scopes": r[3] or [],
+                "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
+                "project": r[7], "person_id": r[8]}
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def find_api_key(self, hash_: str) -> dict | None:
         """Active (non-revoked) key by secret hash, or None."""
-        with self._sread:
-            r = self.sc.execute(
-                "SELECT id, name, scopes, last_used_at, project, person_id FROM api_keys "
-                "WHERE hash = ? AND revoked_at IS NULL", [hash_]).fetchone()
+        t = api_keys_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.id, t.c.name, t.c.scopes, t.c.last_used_at, t.c.project,
+                                    t.c.person_id).where(
+                t.c.hash == hash_, t.c.revoked_at.is_(None))).first()
         if not r:
             return None
-        return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
+        return {"id": r[0], "name": r[1], "scopes": r[2] or [], "last_used_at": r[3],
                 "project": r[4], "person_id": r[5]}
 
     # Licence-independent by design (TR-915): never consult licence or team here.
     def key_person_id(self, kid: str) -> str | None:
         """The person an active key is bound to, None for an unbound or unknown key (unlike a
         credential's person, this never falls back to `local`)."""
-        with self._sread:
-            r = self.sc.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
-                                 [kid]).fetchone()
-        return r[0] if r else None
+        t = api_keys_table
+        with self.sessions_db.read() as conn:
+            return conn.execute(select(t.c.person_id).where(
+                t.c.id == kid, t.c.revoked_at.is_(None))).scalar_one_or_none()
 
     def set_key_person(self, kid: str, person_id: str | None) -> bool:
         """Bind an active key to a person (None unbinds it). False when there is no such key."""
-        with self._swrite:
-            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
-                                   [kid]).fetchone()
-            if not hit:
-                return False
-            self.sc.execute("UPDATE api_keys SET person_id = ? WHERE id = ?", [person_id, kid])
-        return True
+        t = api_keys_table
+        with self.sessions_db.begin() as conn:
+            done = conn.execute(update(t).where(t.c.id == kid, t.c.revoked_at.is_(None)).values(
+                person_id=person_id))
+        return done.rowcount > 0
 
     # ── People: who is on the cell. A key belongs to one; the credential names the person ─
-    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via, picture, removed_at"
+    _PERSON_COLS = tuple(people_table.c[n] for n in (
+        "id", "name", "email", "emails", "github", "is_admin", "created_at", "created_via",
+        "picture", "removed_at"))
     PICTURE_MAX = 2048
 
     @staticmethod
     def _person_row(r) -> dict:
         return {"id": r[0], "name": r[1], "email": r[2],
-                "emails": json.loads(r[3]) if r[3] else [], "github": r[4],
+                "emails": list(r[3] or []), "github": r[4],
                 "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7],
                 "picture": r[8] or None, "removed_at": r[9]}
 
@@ -5241,10 +5535,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             raise ValueError(f"{bad!r} is not an email address")
         return out
 
-    def _taken_emails(self, emails: list[str], besides: str | None = None) -> str | None:
+    def _taken_emails(self, emails: list[str], besides: str | None = None, conn=None) -> str | None:
         """The first of `emails` another person already has (as the main or an extra email)."""
+        people = self._people(conn)
         for e in emails:
-            for p in self._people():
+            for p in people:
                 if p["id"] != besides and e in ([p["email"]] + p["emails"]):
                     return e
         return None
@@ -5260,36 +5555,41 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         email = self.check_email(email)
         extra = self._norm_emails(emails)
         github = str(github or "").strip().lstrip("@").lower() or None
-        with self._swrite:
-            clash = self._taken_emails(([email] if email else []) + extra)
+        pid = "p_" + uuid.uuid4().hex[:10]
+        # the check and the insert are one transaction (one writer at a time on SQLite) and sit
+        # under the write lock so two callers in this process cannot both pass the check on Postgres
+        with self._swrite, self.sessions_db.begin() as conn:
+            clash = self._taken_emails(([email] if email else []) + extra, conn=conn)
             if clash:
                 raise ValueError(f"{clash} already belongs to another person")
-            if github and any(p["github"] == github for p in self._people()):
+            if github and any(p["github"] == github for p in self._people(conn)):
                 raise ValueError(f"the GitHub login {github} already belongs to another person")
-            pid = "p_" + uuid.uuid4().hex[:10]
-            self.sc.execute(
-                "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, "
-                "created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [pid, name, email, json.dumps(extra), github, bool(is_admin), now_utc(), via])
+            conn.execute(people_table.insert().values(
+                id=pid, name=name, email=email, emails=extra, github=github,
+                is_admin=bool(is_admin), created_at=now_utc(), created_via=via))
         return self.get_person(pid)
 
+    @kept
     def get_person(self, pid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._PERSON_COLS} FROM people WHERE id = ?",
-                                 [pid]).fetchone()
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(*self._PERSON_COLS).where(people_table.c.id == pid)).first()
         return self._person_row(r) if r else None
 
-    def _people(self) -> list[dict]:
-        """list_people for a caller that already holds the lock."""
-        rows = self.sc.execute(
-            f"SELECT {self._PERSON_COLS} FROM people WHERE removed_at IS NULL "
-            "ORDER BY created_at, id").fetchall()
+    def _people(self, conn=None) -> list[dict]:
+        """list_people; `conn` is the caller's open session store transaction, if it has one."""
+        q = select(*self._PERSON_COLS).where(people_table.c.removed_at.is_(None)).order_by(
+            people_table.c.created_at, people_table.c.id)
+        if conn is None:
+            with self.sessions_db.read() as c:
+                rows = c.execute(q).all()
+        else:
+            rows = conn.execute(q).all()
         return [self._person_row(r) for r in rows]
 
+    @kept
     def list_people(self) -> list[dict]:
         """Everyone on the cell, oldest first (`local` first on a cell that has it)."""
-        with self._sread:
-            return self._people()
+        return self._people()
 
     def find_person_by_email(self, email: str) -> dict | None:
         """The person with this main or extra email, ignoring case."""
@@ -5326,18 +5626,17 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             new["is_admin"] = bool(fields["is_admin"])
         if "picture" in fields:
             new["picture"] = self.check_picture(fields["picture"])
-        with self._swrite:
+        with self._swrite, self.sessions_db.begin() as conn:
             clash = self._taken_emails(([new["email"]] if new["email"] else []) + new["emails"],
-                                       besides=pid)
+                                       besides=pid, conn=conn)
             if clash:
                 raise ValueError(f"{clash} already belongs to another person")
             if new["github"] and any(p["github"] == new["github"] and p["id"] != pid
-                                     for p in self._people()):
+                                     for p in self._people(conn)):
                 raise ValueError(f"the GitHub login {new['github']} already belongs to another person")
-            self.sc.execute(
-                "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ?, "
-                "picture = ? WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
-                                             new["github"], new["is_admin"], new["picture"], pid])
+            conn.execute(update(people_table).where(people_table.c.id == pid).values(
+                name=new["name"], email=new["email"], emails=new["emails"], github=new["github"],
+                is_admin=new["is_admin"], picture=new["picture"]))
         return self.get_person(pid)
 
     def remove_person(self, pid: str) -> bool:
@@ -5350,19 +5649,25 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         cur = self.get_person(pid)
         if not cur or cur.get("removed_at"):
             return False
-        with self._sread:
-            keys = [r[0] for r in self.sc.execute(
-                "SELECT id FROM api_keys WHERE person_id = ? AND revoked_at IS NULL", [pid]).fetchall()]
+        with self.sessions_db.read() as conn:
+            keys = list(conn.execute(select(api_keys_table.c.id).where(
+                api_keys_table.c.person_id == pid, api_keys_table.c.revoked_at.is_(None))).scalars())
         for kid in keys:
             self.revoke_api_key(kid)
-        with self._swrite:
-            self.sc.execute("UPDATE people SET removed_at = ? WHERE id = ?", [now_utc(), pid])
+        t = tickets_table
+        # one transaction: the guard above answers False once removed_at is set, so a crash must
+        # not leave it set with the tickets still theirs
+        with self._swrite, self.sessions_db.begin() as conn:
+            # open tickets only: a finished one keeps the name of who did it
+            conn.execute(update(t).where(
+                t.c.assignee_person_id == pid, t.c.status.not_in(("done", "canceled")),
+                t.c.stage.not_in(("merged", "shipped"))).values(assignee_person_id=None))
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
-            self.sc.execute("UPDATE usecases SET lead_person_id = NULL WHERE lead_person_id = ?", [pid])
-            # open tickets only: a finished one keeps the name of who did it
-            self.sc.execute("UPDATE tickets SET assignee_person_id = NULL WHERE assignee_person_id = ? "
-                            "AND status NOT IN ('done', 'canceled') AND stage NOT IN ('merged', 'shipped')", [pid])
+            conn.execute(update(projects_table).where(
+                projects_table.c.lead_person_id == pid).values(lead_person_id=None))
+            conn.execute(update(people_table).where(people_table.c.id == pid).values(
+                removed_at=now_utc()))
         return True
 
     def claim_local(self, email: str, name: str | None = None) -> dict | None:
@@ -5373,14 +5678,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         e = self.check_email(email)
         if not e:
             return None
-        with self._swrite:
-            local = next((p for p in self._people() if p["id"] == "local"), None)
+        with self._swrite, self.sessions_db.begin() as conn:
+            local = next((p for p in self._people(conn) if p["id"] == "local"), None)
             if not local or local["email"] or local["emails"]:
                 return None
-            if self._taken_emails([e]):
+            if self._taken_emails([e], conn=conn):
                 return None
-            self.sc.execute("UPDATE people SET name = ?, email = ? WHERE id = 'local'",
-                            [str(name or "").strip() or e.split("@")[0], e])
+            conn.execute(update(people_table).where(people_table.c.id == "local").values(
+                name=str(name or "").strip() or e.split("@")[0], email=e))
         return self.get_person("local")
 
     def person_or_create(self, email: str, name: str | None = None, via: str = "key",
@@ -5407,25 +5712,34 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 return found
             raise
 
+    @kept
     def only_local_person(self) -> bool:
         """True while `local` is the only person on the cell: a key nobody has bound still acts
         as them, so a single-user cell keeps working."""
-        with self._sread:
-            rows = self.sc.execute("SELECT id FROM people WHERE removed_at IS NULL LIMIT 2").fetchall()
-        return [r[0] for r in rows] == ["local"]
+        with self.sessions_db.read() as conn:
+            rows = list(conn.execute(select(people_table.c.id).where(
+                people_table.c.removed_at.is_(None)).limit(2)).scalars())
+        return rows == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now_utc(), kid])
+        with self.sessions_db.begin() as conn:
+            conn.execute(update(api_keys_table).where(api_keys_table.c.id == kid).values(
+                last_used_at=now_utc()))
 
     def revoke_api_key(self, kid: str) -> bool:
         """Revoke the key and delete its subscriptions (a revoked agent must stop receiving
-        trigger dispatches — otherwise its webhook is a post-revocation exfiltration path)."""
+        trigger dispatches — otherwise its webhook is a post-revocation exfiltration path).
+        The subscriptions go first: a crash between the two steps leaves a key still active and a
+        second revoke finishes it, never a revoked key whose webhook still gets deliveries."""
+        t = api_keys_table
         with self._swrite:
-            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
-                                   [kid]).fetchone()
+            with self.sessions_db.read() as conn:
+                hit = conn.execute(select(t.c.id).where(
+                    t.c.id == kid, t.c.revoked_at.is_(None))).first()
             if not hit:
                 return False
-            self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE id = ?", [now_utc(), kid])
             self.sc.execute("DELETE FROM subscriptions WHERE created_by = ?", [f"key:{kid}"])
+            with self.sessions_db.begin() as conn:
+                conn.execute(update(t).where(t.c.id == kid, t.c.revoked_at.is_(None)).values(
+                    revoked_at=now_utc()))
         return True

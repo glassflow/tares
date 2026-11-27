@@ -134,6 +134,7 @@ async def main():
     app = make_app()
     store = app.state.store
     async with app.router.lifespan_context(app):
+        to_duckdb = reads.keep_held(store)
         ids = await seed(app)
         vault = ids["Zephyrvault"]
         ck("same", "the sessions table has caught up", session_ingest.caught_up(store))
@@ -141,6 +142,8 @@ async def main():
         paths = (("caught up", real), ("events scan", lambda s: False))
         before = {}
         for path_name, caught in paths:
+            if path_name == "events scan":
+                to_duckdb()
             session_ingest.caught_up = caught
             try:
                 before[path_name] = await owner_reads(app)

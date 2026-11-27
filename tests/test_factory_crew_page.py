@@ -31,7 +31,7 @@ import httpx
 import tares.mcp_factory as mf
 import tares.mcp_server as m
 from session_helpers import seed_usage
-from tares import words
+from tares import claude_usage, factory_home, words
 from tares.screens import factory_crew as fc
 
 P = F = 0
@@ -140,6 +140,8 @@ async def main():
         r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n",
                           headers={"Content-Type": "application/x-ndjson"})
         assert r.status_code < 300, r.text
+        claude_usage.clear_week_by_project()   # the week is kept 60 s (TR-1627): a read after an ingest sees it
+        factory_home.clear_cache()   # and the page 5 s (TR-1630)
 
     async def page(cx):
         r = await cx.get("/api/factory/crew")
@@ -316,6 +318,7 @@ async def main():
             store.upsert_rule_proposal("example-org/service-a", "<b>markup</b>", None, "all",
                                        "Never merge <i>on a red check</i>.", ["T9"],
                                        datetime.now(timezone.utc) - timedelta(hours=6))
+            factory_home.clear_cache()   # written to the store directly, past the page's 5 s (TR-1630)
             a = await page(cx)
             props = a["rule_proposals"]
             ck("the open ones, each with who proposed it and when",
@@ -373,7 +376,7 @@ async def main():
 async def holes():
     """A cell of its own: a lead gone quiet, and values the crew did not report."""
     import tares.daemon as daemon_mod
-    # a folder of its own: the session store (sessions.sqlite) sits next to the database, and a
+    # a folder of its own: the session store (tares.sqlite) sits next to the database, and a
     # shared one would carry the first cell's sessions and their times over (TR-1499)
     holes_dir = os.path.join(_TMP, "holes")
     os.makedirs(holes_dir, exist_ok=True)
@@ -492,6 +495,8 @@ async def private_shares():
             # a lot more spent on project-a: every other project in view falls under half a percent,
             # and the list has room for six, so only the 1% line keeps them off
             seed_usage(store, "s-a2", "m-a2", project="uc_a", replied_at=an_hour_ago, cost_usd=10000)
+            factory_home.clear_cache()   # written to the store directly, past the page's 5 s (TR-1630)
+            claude_usage.clear_week_by_project()   # and the week's 60 s (TR-1627)
             plan = (await read(key("kbo2", bo))).json()["plan"]
             got = [(x["name"], x["share_text"]) for x in plan["by_project"]]
             ck("a project in view under 1% is left out", got == [("project-a", "99%")], got)
@@ -529,6 +534,7 @@ async def questions_alone(name: str, auth: bool):
                 older = desk(store, "crew-reviewer was refused a command. Allow it?", 2,
                              station="crew-reviewer", command="gh pr comment 12 --body ok")
                 desk(store, "Keep these assumptions?", 3, assumptions=["A1"])
+                factory_home.clear_cache()   # written to the store directly, past the 5 s (TR-1630)
                 a = (await cx.get("/api/factory/crew")).json()
                 got = [(q["label"], q["text"]) for q in a.get("questions_for_you", [])]
                 ck(f"auth {'on' if auth else 'off'}: the question and the permission request, oldest "

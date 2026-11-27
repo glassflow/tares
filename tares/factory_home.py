@@ -66,8 +66,10 @@ def _dt(v) -> datetime | None:
 
 
 def _iso(v) -> str | None:
+    """An ISO string in UTC. In one offset, because the console orders `since` as text, and DuckDB
+    reads a time back in the machine's own offset where the session store reads it in UTC."""
     t = _dt(v)
-    return t.isoformat() if t else None
+    return t.astimezone(timezone.utc).isoformat() if t else None
 
 
 _count = status_words._count
@@ -420,10 +422,14 @@ def _plan_title(store, owner: str | None, fx, request) -> str:
     return f"{name}'s Claude plan" if name else "Claude plan"
 
 
-def _plan(store, now: datetime, names: dict, hidden, fx=None, request=None) -> dict:
+def _plan(store, now: datetime, names: dict, hidden, fx=None, request=None,
+          week: list | None = None) -> dict:
     """The plan's limits and who used it this week. `hidden` is the ids of the projects the caller
-    cannot see: their cost is no part of any share."""
+    cannot see: their cost is no part of any share. `week` is the 7-day usage by project, hidden
+    ones left out, when the caller has it already (Crew shows it twice)."""
     plan = claude_usage.plan(store)
+    if week is None:
+        week = claude_usage.week_by_project(store, now, hidden)
     limits = []
     shown = [x for x in (plan or {}).get("limits") or [] if x["kind"] in _LIMITS]
     for x in shown:
@@ -434,7 +440,7 @@ def _plan(store, now: datetime, names: dict, hidden, fx=None, request=None) -> d
                        "resets_at": _iso(at),
                        "text": f"{pct}% used" + (f" · resets {resets}" if resets else "")})
     shares = [f"{names[r['project']]} {round(r['share'] * 100)}%"
-              for r in claude_usage.by_project(store, now - timedelta(days=7), hidden)
+              for r in week
               if r["kind"] == "project" and r["project"] in names and (r["share"] or 0) >= 0.05]
     return {"known": plan is not None, "limits": limits,
             "share_text": "This week: " + ", ".join(shares) if shares else None,
@@ -454,13 +460,39 @@ def _start_ctx(onboarding: dict) -> start_steps.StartCtx:
         crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "")
 
 
+def _onboarding(store, fx, request, mine: list, settings: dict) -> dict:
+    """The `onboarding` block for the caller: their crew's choices, GitHub, their machine's report
+    and who runs among their own crew's stations (`mine`)."""
+    mk = getattr(fx, "machine_key", None)
+    who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
+    return crew_onboarding.payload(store, mine, settings,
+                                   mk(request) if mk else crew_onboarding.machine_key(), who)
+
+
+def _start_steps(onboarding: dict) -> list:
+    """The Start checklist's steps for an `onboarding` block."""
+    return start_steps.factory_steps(_start_ctx(onboarding))
+
+
+def setup_state(store, fx=None, request=None) -> tuple[dict, list]:
+    """The caller's (`onboarding`, Start steps) without building the home (TR-1634): what Setup
+    reads. `onboarding` is what `home` answers, from the same function. The steps are the
+    factory's; a person joining gets other steps in `home`'s `start` (`_start`), with the same
+    three terminal commands, which are all Setup reads of them. Never kept between calls."""
+    fx = for_caller(fx, request)
+    stations = fx.station_states() if fx else []
+    settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
+    onboarding = _onboarding(store, fx, request, _cut(fx, "own_stations", request, stations), settings)
+    return onboarding, _start_steps(onboarding)
+
+
 def _start(store, onboarding: dict, joiner: dict, me: str | None, who: str) -> dict:
     """The caller's Start checklist, hidden or not for `who`. A person joining (`joiner`) gets the
     new member's steps, and what the team already set as `team` (TR-1314)."""
-    ctx = _start_ctx(onboarding)
     if not joiner["joining"]:
-        return start_steps.checklist(store, start_steps.factory_steps(ctx), who)
+        return start_steps.checklist(store, _start_steps(onboarding), who)
     from .factory_api import CREW_SETTING   # factory_api imports this module
+    ctx = _start_ctx(onboarding)
     # the record's presence counts: an empty one accepts the team's choices and keeps following them
     ctx.own_settings_set = store.get_setting(f"{CREW_SETTING}:{me}") is not None
     ctx.member_of_project = any(x["id"] == me for p in joiner["team"]["projects"]
@@ -492,11 +524,12 @@ def _caller(store, fx, request) -> dict:
             "orphans": False}
 
 
-def team_of(fx, request, now) -> dict:
+def team_of(fx, request, now, stations=None) -> dict:
     """The team home for the caller (`fx.team_home`), or {} on a cell of one person and for a call
-    with no request. A route reads it once and hands it to caller_waiting and the team parts."""
+    with no request. A route reads it once and hands it to caller_waiting and the team parts.
+    `stations` is the roll-up the route already read, which the team home then does not read again."""
     if fx is not None and request is not None and hasattr(fx, "team_home"):
-        return fx.team_home(request, now)
+        return fx.team_home(request, now, stations=stations)
     return {}
 
 
@@ -621,7 +654,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else factory_mod.crew_effective(factory_mod.CREW_DEFAULTS)
-    team = team_of(fx, request, now)
+    team = team_of(fx, request, now, stations)
     # a private project the caller is not on is left out of every count and name
     if hidden is None:
         hidden = fx.hidden_ids() if fx else set()
@@ -667,10 +700,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     joiner = joiner_block(store, fx, request, stations, settings, who, mine)
     if joiner["joining"]:
         joiner["team"] = joiner_team(store, stations, open_ps, who["me"])
-    mk = getattr(fx, "machine_key", None)
-    who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
-    onboarding = crew_onboarding.payload(store, mine, settings,
-                                         mk(request) if mk else crew_onboarding.machine_key(), who)
+    onboarding = _onboarding(store, fx, request, mine, settings)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
@@ -679,7 +709,7 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
-            "start": _start(store, onboarding, joiner, who,
+            "start": _start(store, onboarding, joiner, who["me"],
                             "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
             "joiner": joiner,
@@ -700,13 +730,18 @@ def projects_view(request) -> str:
     return "team" if q is not None and q.get("projects") == "team" else "mine"
 
 
-def _cache_key(store, request) -> tuple:
-    """One kept home per cell, credential, person and project view: two keys of one name, or a
-    key rebound to another person, never share a home that is addressed to a person."""
+def _cache_key(store, request, page: str = "home") -> tuple:
+    """One kept body per cell, caller, page and project view. The caller is the credential (its
+    name, its person and its own id), whether it is an admin, and whether it asked to read as the
+    public (x-tares-viewer, which hides every private project from the cell's own credential): two
+    keys of one name, or a key rebound to another person, never share a body that is addressed to
+    one of them. `drop_cache` reads the first three."""
     state = getattr(request, "state", None)
     cred = getattr(state, "credential", None) or {}
+    headers = getattr(request, "headers", None) or {}
     return (id(store), cred.get("name") or "open", (cred.get("person") or {}).get("id"),
-            projects_view(request))
+            cred.get("id"), "admin" in (getattr(state, "scopes", None) or []),
+            headers.get("x-tares-viewer") == "public", page, projects_view(request))
 
 
 def for_caller(fx, request):
@@ -717,41 +752,49 @@ def for_caller(fx, request):
 
 
 def clear_cache() -> None:
-    """Forget every kept home, so the next read shows a change made just now."""
+    """Forget every kept page (Home, Crew), so the next read shows a change made just now."""
     with _cache_lock:
         _GEN[0] += 1
         _cache.clear()
 
 
 def drop_cache(store, request) -> None:
-    """Forget the kept home of the request's credential, so its next read shows a change made
+    """Forget the kept pages of the request's credential, so its next read shows a change made
     just now (the start block's hide and show)."""
     with _cache_lock:
         key = _cache_key(store, request)
-        for k in [k for k in _cache if k[:3] == key[:3]]:   # every project view of it
+        for k in [k for k in _cache if k[:3] == key[:3]]:   # every page and project view of it
             _cache.pop(k, None)
 
 
-def build(store, fx=None, request=None, now=None) -> dict:
-    """GET /api/home: `home()` kept for 5 seconds per credential (the page polls every 15). A
-    caller who passes `now` (a test) gets a fresh read."""
-    if now is not None:
-        return home(store, fx, now, request=request)
+def cached(page: str, store, request, make, hidden=frozenset()) -> dict:
+    """`make()`, the body of `page` for this caller, kept for CACHE_SECONDS. `hidden` is the ids of
+    the projects the caller cannot see."""
     # the hidden projects are part of the key: one credential can read with more or less in view
     # (`x-tares-viewer: public`), and a body is only for callers who see the same projects
-    hidden = fx.hidden_ids() if fx else set()
-    key = (*_cache_key(store, request), frozenset(hidden))
+    key = (*_cache_key(store, request, page), frozenset(hidden))
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
         gen = _GEN[0]
-    out = home(store, fx, now_utc(), key[1], request, hidden)
+    out = make()
     with _cache_lock:
         # a clear_cache() that landed while this was building means the body may be stale
         if gen == _GEN[0]:
             _cache[key] = (time.monotonic(), out)
     return out
+
+
+def build(store, fx=None, request=None, now=None) -> dict:
+    """GET /api/home: `home()` kept for 5 seconds per caller (the page polls every 15). A
+    caller who passes `now` (a test) gets a fresh read."""
+    if now is not None:
+        return home(store, fx, now, request=request)
+    name = _cache_key(store, request)[1]   # the credential's name: whose Start checklist
+    hidden = fx.hidden_ids() if fx else set()
+    return cached("home", store, request,
+                  lambda: home(store, fx, now_utc(), name, request, hidden), hidden)
 
 
 # the builders of the waiting items register themselves on import (TR-769)

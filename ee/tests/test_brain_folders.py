@@ -9,6 +9,7 @@ background poll that follows an index is switched off. In process, no ports. Wit
 Run: .venv/bin/python ee/tests/test_brain_folders.py
 """
 import asyncio, os, sys, tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings, puts the repo, ee/ and tests/ on sys.path
@@ -71,6 +72,10 @@ def make_tree():
     return e
 
 
+def day(month, of=1):
+    return datetime(2026, month, of, tzinfo=timezone.utc)
+
+
 def unit():
     print("== folder paths ==")
     ck("a path loses its slashes", folders_mod.check_folder(" /docs/adr/ ") == "docs/adr")
@@ -116,28 +121,28 @@ def unit():
 
     print("== the store: the same on DuckDB and Postgres ==")
     from tares.store import Store
-    s = Store(os.path.join(TMP, "unit.duckdb"))
+    s = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "unit.duckdb"))   # its own folder: the daemon's session store is one file per data folder
     who = s.create_person("Kiran", "kiran@x.dev")
-    s.add_brain_repo("acme/web", "src-1", None, "2026-01-01T00:00:00Z")
-    s.add_brain_repo("acme/api", "src-2", None, "2026-01-01T00:00:00Z")
+    s.add_brain_repo("acme/web", "src-1", None, day(1, 1))
+    s.add_brain_repo("acme/api", "src-2", None, day(1, 1))
     ck("a new repo has no folders", s.list_brain_folders("acme/web") == [])
-    ck("choose two: both added, none removed", s.set_brain_folders("acme/web", ["docs/adr", "adr"], who["id"], "2026-01-02T00:00:00Z")
+    ck("choose two: both added, none removed", s.set_brain_folders("acme/web", ["docs/adr", "adr"], who["id"], day(1, 2))
        == (["adr", "docs/adr"], []))
     rows = s.list_brain_folders("acme/web")
     ck("each folder keeps path, who chose it and when, by path",
        [(r["path"], r["chosen_by"], r["chosen_by_name"]) for r in rows] == [("adr", who["id"], "Kiran"), ("docs/adr", who["id"], "Kiran")]
        and all(r["chosen_at"] for r in rows), str(rows))
     ck("another repo is not touched", s.list_brain_folders("acme/api") == [])
-    ck("change: one dropped, one added, one kept", s.set_brain_folders("acme/web", ["docs/adr", "decisions"], None, "2026-02-01T00:00:00Z")
+    ck("change: one dropped, one added, one kept", s.set_brain_folders("acme/web", ["docs/adr", "decisions"], None, day(2, 1))
        == (["decisions"], ["adr"]))
     rows = {r["path"]: r for r in s.list_brain_folders("acme/web")}
     ck("a folder that stayed keeps its chooser and date; the new one has none", rows["docs/adr"]["chosen_by"] == who["id"]
        and str(rows["docs/adr"]["chosen_at"]).startswith("2026-01-02") and rows["decisions"]["chosen_by"] is None
        and rows["decisions"]["chosen_by_name"] is None, str(rows))
-    ck("the same list again changes nothing", s.set_brain_folders("acme/web", ["decisions", "docs/adr"], None, "2026-03-01T00:00:00Z") == ([], []))
+    ck("the same list again changes nothing", s.set_brain_folders("acme/web", ["decisions", "docs/adr"], None, day(3, 1)) == ([], []))
     ck("deleting the repo deletes its folders", s.delete_brain_repo("acme/web") and s.list_brain_folders("acme/web") == [])
-    ck("an empty list clears", s.set_brain_folders("acme/api", ["a"], None, "2026-01-01T00:00:00Z") == (["a"], [])
-       and s.set_brain_folders("acme/api", [], None, "2026-01-01T00:00:00Z") == ([], ["a"]) and s.list_brain_folders("acme/api") == [])
+    ck("an empty list clears", s.set_brain_folders("acme/api", ["a"], None, day(1, 1)) == (["a"], [])
+       and s.set_brain_folders("acme/api", [], None, day(1, 1)) == ([], ["a"]) and s.list_brain_folders("acme/api") == [])
 
     print("== the git trees call ==")
     seen = []

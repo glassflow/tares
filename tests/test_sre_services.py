@@ -432,7 +432,7 @@ async def main():
     # ── the cost of a read ──────────────────────────────────────────────────
     print("== the cost of a read: 24 services, 200,000 events ==")
     import tares.daemon as daemon
-    daemon.DB_PATH = os.path.join(TMP, "load.duckdb")      # a cell of its own; the daemon read the path at import
+    daemon.DB_PATH = os.path.join(tempfile.mkdtemp(dir=TMP), "load.duckdb")      # a cell of its own; the daemon read the path at import
     big = make_app()
     async with big.router.lifespan_context(big):
         store, runtime = big.state.store, big.state.runtime

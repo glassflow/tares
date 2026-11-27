@@ -146,7 +146,7 @@ def of(store, cat, **kw):
 
 
 def cell():
-    store = Store(os.path.join(TMP, "cell.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "cell.duckdb"))
     iid = seed(store)
     cat = catalog_from_db(store)
 
@@ -361,7 +361,7 @@ def other(source, connector, key, kind, text, minutes_ago, labels, payload=None)
 
 def bare(name):
     """A cell with its sources and no timeline items of its own (its lines are 10 days back)."""
-    store = Store(os.path.join(TMP, name + ".duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), name + ".duckdb"))
     build(store, NOW - timedelta(days=10))
     return store, catalog_from_db(store)
 
@@ -582,7 +582,7 @@ def extras():
 
 
 def fresh_seeded(name):
-    store = Store(os.path.join(TMP, name + ".duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), name + ".duckdb"))
     iid = seed(store)
     return store, catalog_from_db(store), iid
 
@@ -640,7 +640,7 @@ async def routes():
 # ── speed ────────────────────────────────────────────────────────────────────
 def speed():
     print("== a 24-hour range on 200,000 events ==")
-    store = Store(os.path.join(TMP, "big.duckdb"))
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "big.duckdb"))
     t0 = time.time()
     made = build(store, NOW, watcher=True, events=200_000, spread=20)
     print(f"  (built the cell in {time.time() - t0:.0f} s)")

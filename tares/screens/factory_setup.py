@@ -48,6 +48,7 @@ from fastapi import Body, HTTPException, Request
 from .. import licence
 from .. import linear as linear_mod
 from .. import github_credentials
+from .. import request_memo
 from ..factory_api import caller
 from ..factory_store import PROJECT_SLOTS, FactoryStore
 from ..integrations import registry, resolve
@@ -295,10 +296,12 @@ def register(app, store, h, ctx):
         if slot not in PROJECT_SLOTS:
             return picks, follow
         hidden = h.hidden_ids()
-        for p in safe(lambda: store.list_projects(exclude_ids=hidden), []) or []:
-            row = safe(lambda: store.get_project_choice(p["id"], slot), None)
-            if row:
-                picks.setdefault(row["name"], []).append({"uid": p["id"], "name": p.get("name") or p["id"]})
+        projects = safe(lambda: store.list_projects(exclude_ids=hidden), []) or []
+        chosen = safe(lambda: store.project_choice_names(slot, [p["id"] for p in projects]), {}) or {}
+        for p in projects:
+            name = chosen.get(p["id"])
+            if name:
+                picks.setdefault(name, []).append({"uid": p["id"], "name": p.get("name") or p["id"]})
             elif p.get("kind") == "software_factory":
                 follow += 1
         return picks, follow
@@ -684,12 +687,12 @@ def register(app, store, h, ctx):
 
     # ── the page ─────────────────────────────────────────────────────────────
     def around(request: Request) -> dict:
-        """The steps around the integrations, from the home's own blocks for this caller: the crew's
-        choices and GitHub (`onboarding`) and the four terminal commands (`terminal`)."""
+        """The steps around the integrations, for this caller, from the same functions as the home's
+        blocks: the crew's choices and GitHub (`onboarding`) and the terminal commands
+        (`terminal`). The home itself is not built (TR-1634)."""
         from .. import factory_home
-        home = factory_home.build(store, getattr(ctx, "fx", None), request)
-        o = home.get("onboarding") or {}
-        terminal = [st for st in (home.get("start") or {}).get("steps") or [] if st.get("where") == "terminal"]
+        o, start = factory_home.setup_state(store, getattr(ctx, "fx", None), request)
+        terminal = [st for st in start if st.get("where") == "terminal"]
         return {"onboarding": o, "terminal": terminal,
                 "set": [bool((o.get("choices") or {}).get("chosen")),
                         bool((o.get("github") or {}).get("connected")),
@@ -731,6 +734,7 @@ def register(app, store, h, ctx):
         return shown([step_of(slot, i + 1, lic, allowed) for i, slot in enumerate(STEPS)])
 
     @app.get("/api/factory/setup/progress")
+    @request_memo.page
     def get_setup_progress(request: Request):
         """How far the factory is set up: the count the console's Setup menu entry shows, and how many
         factory projects the cell has (the console opens on Setup while it has none and setup is not done)."""
@@ -739,6 +743,7 @@ def register(app, store, h, ctx):
         return {**progress_of(all_steps(), around(request)), "projects": projects}
 
     @app.get("/api/factory/setup")
+    @request_memo.page
     def get_setup(request: Request):
         guard(request)
         st = licence.current(store)         # ee_allowed() is False until the first check

@@ -54,38 +54,46 @@ class TaresReview(ReviewGate):
 
     # ── the interface ─────────────────────────────────────────────────────────
     async def verdict(self, pr: PRRef) -> Verdict:
-        ticket, last, open_ = await asyncio.to_thread(self._read, pr)
+        ticket, last, open_, queue_only = await asyncio.to_thread(self._read, pr)
         head = str(getattr(pr, "head", "") or "").strip()
         url = str(getattr(pr, "url", "") or "") or str(((ticket or {}).get("pr") or {}).get("url") or "")
         if ticket is None or not head:
             return Verdict("none", head=head, url=url)
         if last is not None:
+            # Rounds only the merge queue wrote carried a `factory/review` status: they are no
+            # verdict of their own, so a status on a newer head still counts.
+            if queue_only and not factory_mod.same_commit(last.get("head"), head):
+                said = self._from_status((ticket.get("pr") or {}), head, url)
+                if said.state != "none":
+                    return said
             return self._from_record(last, open_, head, url)
         return self._from_status((ticket.get("pr") or {}), head, url)
 
     async def findings(self, pr: PRRef) -> list[str]:
-        _, _, open_ = await asyncio.to_thread(self._read, pr)
+        _, _, open_, _ = await asyncio.to_thread(self._read, pr)
         return self._texts(open_)
 
     # ── from the store ────────────────────────────────────────────────────────
-    def _read(self, pr: PRRef) -> tuple[dict | None, dict | None, list[dict]]:
-        """(the ticket, its latest review round, its open findings from every round). (None, None,
-        []) when the PR reference names no ticket of a project, or the project has no such
-        ticket."""
+    def _read(self, pr: PRRef) -> tuple[dict | None, dict | None, list[dict], bool]:
+        """(the ticket, the review round that stands, its open findings from every round, whether
+        only the merge queue wrote rounds). (None, None, [], False) when the PR reference names no
+        ticket of a project, or the project has no such ticket. The round that stands is
+        `factory.standing_round`'s."""
         if self.store is None:
             raise RuntimeError("the Tares review gate needs the cell's store")
         uid = str(getattr(pr, "project_uid", "") or "").strip()
         ref = str(getattr(pr, "ticket", "") or "").strip()
         if not uid or not ref:
-            return None, None, []
+            return None, None, [], False
         ticket = self.store.get_ticket(uid, ref)
         if ticket is None:
-            return None, None, []
+            return None, None, [], False
         rounds = self.store.ticket_reviews(ticket["id"])
         # a finding stays open across rounds until a later round fixes it, so the open ones come
         # from every round, not only the latest
         open_ = [f for r in rounds for f in r["findings"] if f["state"] == "open"]
-        return ticket, (rounds[-1] if rounds else None), open_
+        return (ticket, factory_mod.standing_round(rounds), open_,
+                factory_mod.reviewer_last(rounds) is None)
 
     @staticmethod
     def _texts(findings: list[dict] | None) -> list[str]:

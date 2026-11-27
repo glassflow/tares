@@ -11,14 +11,62 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import and_, case, false, func, null, or_, select, update
+from sqlalchemy import (Integer, Text, and_, bindparam, case, cast, delete, false, func, insert,
+                        literal, null, or_, select, type_coerce, update)
+from sqlalchemy import text as sql_text
 
-from . import session_ingest
+from . import claude_usage_hourly as hourly
+from . import metrics, session_ingest
 from .envelope import now_utc
 from .integrations import SLOTS
+from .request_memo import kept
+from .session_store.pr_columns import pr_columns
 from .session_store.tables import (project_sessions, session_commands, session_messages,
-                                   session_states, session_stations, session_turns, session_usage)
+                                   session_states, session_stations, session_turns, session_usage,
+                                   session_usage_hourly)
 from .session_store.tables import sessions as sessions_table
+from .session_store.tables import usecases as projects_table
+from .session_store.tables import people as people_table
+from .session_store.tables import ticket_history as history_table
+from .session_store.tables import ticket_numbers as numbers_table
+from .session_store.tables import tickets as tickets_table
+from .session_store.tables import milestones as milestones_table
+from .session_store.tables import milestone_check_results as milestone_results_table
+from .session_store.tables import milestone_acceptances as acceptances_table
+from .session_store.tables import ticket_checks as checks_table
+from .session_store.tables import challenges as challenges_table
+from .session_store.tables import reviews as reviews_table
+from .session_store.tables import review_findings as findings_table
+from .session_store.tables import rule_proposals as proposals_table
+from .session_store.tables import assumptions as assumptions_table
+from .session_store.tables import desk_items as desk_table
+from .session_store.tables import decisions as decisions_table
+from .session_store.tables import handovers as handovers_table
+from .session_store.tables import handover_overrides as overrides_table
+from .session_store.tables import grants as grants_table
+from .session_store.tables import pending_memory as pending_table
+from .session_store.tables import crews as crews_table
+from .session_store.tables import spec_questions as questions_table
+from .session_store.tables import signoffs as signoffs_table
+from .session_store.tables import answers as answers_table
+from .session_store.tables import waiting_told as told_table
+from .session_store.tables import guardrail_rules as rules_table
+from .session_store.tables import guardrail_pairs as pairs_table
+from .session_store.tables import integration_choices as choices_table
+from .session_store.tables import integration_connections as connections_table
+from .session_store.tables import project_integrations as picks_table
+from .session_store.tables import pending_writeback as writeback_table
+from .session_store.tables import project_secrets as secrets_table
+from .session_store.tables import project_required_checks as required_table
+from .session_store.tables import merge_queue as queue_table
+from .session_store.tables import project_merge_method as method_table
+from .session_store.tables import repo_maps as maps_table
+from .session_store.tables import repo_map_history as map_history_table
+from .session_store.tables import brain_repos as brain_table
+from .session_store.tables import brain_repo_folders as brain_folders_table
+from .session_store.tables import brain_repo_updates as brain_updates_table
+from .session_store.tables import brain_calls as brain_calls_table
+from .session_store.types import UTCDateTime
 
 log = logging.getLogger("tares.factory_store")
 
@@ -28,36 +76,35 @@ def _loggable(x) -> str:
     stored row cannot start a forged line."""
     return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group())[1:-1], str(x))
 
+
+def _no_nul(v):
+    """Free text for a text column: Postgres takes no NUL byte in text, so a string is kept without
+    it, on both engines. Anything else comes back as it is."""
+    return v.replace("\x00", "") if isinstance(v, str) else v
+
+
+# A real challenger line nests a few levels. The bound is far under where the parser, a copy or the
+# response encoder raises RecursionError, which varies with the Python version and the call stack.
+CHALLENGE_MAX_DEPTH = 100
+
+
+def challenge_json(text):
+    """`json.loads` for a challenger line's payload. One nested more than CHALLENGE_MAX_DEPTH
+    objects and lists deep raises ValueError, as text that is not JSON does (TR-1712)."""
+    try:
+        o = json.loads(text)
+    except RecursionError:
+        raise ValueError("nested too deeply") from None
+    level = [o]
+    for _ in range(CHALLENGE_MAX_DEPTH + 1):     # level by level: no recursion here
+        level = [x for x in level if isinstance(x, (dict, list))]
+        if not level:
+            return o
+        level = [v for x in level for v in (x.values() if isinstance(x, dict) else x)]
+    raise ValueError("nested too deeply")
+
+
 FACTORY_SCHEMA = [
-    # The Codex challenger's reviews and waivers (TR-719), copied from the events as they arrive
-    # so the review queue, the ticket detail and the merge gate look a ticket's up by branch
-    # instead of scanning every event for them.
-    """CREATE TABLE IF NOT EXISTS challenges (
-      source        TEXT,
-      key_value     TEXT,
-      event_time    TIMESTAMPTZ,
-      event_type    TEXT,
-      branch        TEXT,
-      tares_project TEXT,
-      payload       JSON,
-      PRIMARY KEY (source, key_value, event_time, event_type, branch)
-    )""",
-    "CREATE INDEX IF NOT EXISTS ix_challenges_branch ON challenges(source, branch)",
-    # A factory project's milestones (TR-411): each ships something a person can check, its
-    # acceptance checks ([{check, expect}]). owner 'linear' when it mirrors a Linear project
-    # milestone (external_id), written by the sync; the checks stay Tares's either way.
-    """CREATE TABLE IF NOT EXISTS milestones (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      owner       TEXT,
-      external_id TEXT,
-      name        TEXT,
-      goal        TEXT,
-      checks      JSON,
-      position    DOUBLE,
-      created_at  TIMESTAMPTZ,
-      updated_at  TIMESTAMPTZ
-    )""",
     # Which station a Claude Code session plays (TR-418, TR-420), from the plugin's
     # `session_station` line: the station's stable name, its role, the station that started it
     # (builders and helpers), and the project it was started for (TARES_PROJECT, builders).
@@ -70,534 +117,8 @@ FACTORY_SCHEMA = [
       project     TEXT,
       seen_at     TIMESTAMPTZ
     )""",
-    # The last ticket number a project gave out: numbers are never reused, so T5 keeps meaning
-    # the same ticket in branch names and messages after a ticket is deleted.
-    """CREATE TABLE IF NOT EXISTS ticket_numbers (
-      project     TEXT PRIMARY KEY,
-      last        INTEGER
-    )""",
-    # Every change to a ticket's holder or stage (TR-427), with who made it (a station, or the
-    # caller's name when unlabeled, or "github" when Tares read a merge off the pull request).
-    """CREATE TABLE IF NOT EXISTS ticket_history (
-      ticket      TEXT,
-      project     TEXT,
-      changed_at  TIMESTAMPTZ,
-      field       TEXT,
-      value       TEXT,
-      reason      TEXT,
-      by_station  TEXT,
-      by_role     TEXT
-    )""",
-    # Assumptions a builder made so it did not block (TR-433): numbered per project, never
-    # reused; open until the orchestrator confirms them with the person (kept or overturned).
-    """CREATE TABLE IF NOT EXISTS assumptions (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      number      INTEGER,
-      question    TEXT,
-      choice      TEXT,
-      why         TEXT,
-      affects     TEXT,
-      tickets     JSON,
-      state       TEXT,
-      words       TEXT,
-      batch       TEXT,
-      made_by     TEXT,
-      made_role   TEXT,
-      made_at     TIMESTAMPTZ,
-      decided_at  TIMESTAMPTZ
-    )""",
-    # Checks a builder ran on a ticket (TR-435): the command, what it showed, the commit, the test
-    # proven to bite. Also a line in the ticket's working doc; kept here so they can be matched
-    # against the recording (TR-442).
-    # A milestone's acceptance checks, run and recorded (TR-1017): one row per run, the latest per
-    # (milestone, index) counts. by_kind is crew (a station ran it) or person (they tried it).
-    """CREATE TABLE IF NOT EXISTS milestone_check_results (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      milestone   TEXT,
-      idx         INTEGER,
-      result      TEXT,
-      note        TEXT,
-      by_kind     TEXT,
-      by_name     TEXT,
-      person_id   TEXT,
-      checked_at  TIMESTAMPTZ
-    )""",
-    # A milestone the person accepted as a whole, without (or before) its checks' results.
-    """CREATE TABLE IF NOT EXISTS milestone_acceptances (
-      milestone   TEXT PRIMARY KEY,
-      project     TEXT,
-      by_name     TEXT,
-      person_id   TEXT,
-      accepted_at TIMESTAMPTZ
-    )""",
-    """CREATE TABLE IF NOT EXISTS ticket_checks (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      ticket      TEXT,
-      command     TEXT,
-      result      TEXT,
-      commit_sha  TEXT,
-      broke_test  TEXT,
-      by_station  TEXT,
-      by_session  TEXT,
-      checked_at  TIMESTAMPTZ
-    )""",
-    # The reviewer's verdicts (TR-441), one row per round, on the commit it was given on.
-    """CREATE TABLE IF NOT EXISTS reviews (
-      id           TEXT PRIMARY KEY,
-      project      TEXT,
-      ticket       TEXT,
-      round        INTEGER,
-      pr           TEXT,
-      head         TEXT,
-      verdict      TEXT,
-      verified     TEXT,
-      not_verified TEXT,
-      by_station   TEXT,
-      reviewed_at  TIMESTAMPTZ
-    )""",
-    # Findings of a review (F1, F2... per ticket), each open until a later round marks it fixed.
-    """CREATE TABLE IF NOT EXISTS review_findings (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      ticket      TEXT,
-      review      TEXT,
-      number      INTEGER,
-      severity    TEXT,
-      file        TEXT,
-      line        INTEGER,
-      blocking    BOOLEAN,
-      text        TEXT,
-      kind        TEXT,
-      state       TEXT,
-      fixed_in    TEXT,
-      found_at    TIMESTAMPTZ
-    )""",
-    # Rules offered from findings that keep coming back (TR-443): nothing is kept until the person
-    # accepts one; a rejected one is never offered again (its key stays).
-    """CREATE TABLE IF NOT EXISTS rule_proposals (
-      id          TEXT PRIMARY KEY,
-      repo        TEXT,
-      kind        TEXT,
-      project     TEXT,
-      scope       TEXT,
-      text        TEXT,
-      tickets     JSON,
-      state       TEXT,
-      created_at  TIMESTAMPTZ,
-      decided_at  TIMESTAMPTZ
-    )""",
-    # A map of one GitHub repo (TR-681), shared by every project that names it, with a dated line
-    # for each change.
-    """CREATE TABLE IF NOT EXISTS repo_maps (
-      repo        TEXT PRIMARY KEY,
-      body        TEXT,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    """CREATE TABLE IF NOT EXISTS repo_map_history (
-      repo        TEXT,
-      changed_at  TIMESTAMPTZ,
-      by_station  TEXT,
-      project     TEXT,
-      note        TEXT
-    )""",
-    # The desk (TR-449): questions for the person, one numbering for the cell (D1, D2...), written
-    # only by the orchestrator. A batch of assumptions to confirm is a desk item too (TR-452).
-    """CREATE TABLE IF NOT EXISTS desk_items (
-      id             TEXT PRIMARY KEY,
-      number         INTEGER,
-      project        TEXT,
-      question       TEXT,
-      context        TEXT,
-      options        JSON,
-      recommendation TEXT,
-      why            TEXT,
-      blocks         TEXT,
-      tickets        JSON,
-      blocking       BOOLEAN,
-      asked_by       TEXT,
-      assumptions    JSON,
-      state          TEXT,
-      reason         TEXT,
-      created_at     TIMESTAMPTZ,
-      closed_at      TIMESTAMPTZ
-    )""",
-    # The person's answers (TR-450, TR-451): their words as typed, whether Tares found those words
-    # in what they typed into the orchestrator's session, and whether it stands from now on.
-    """CREATE TABLE IF NOT EXISTS decisions (
-      id          TEXT PRIMARY KEY,
-      project     TEXT,
-      desk_item   TEXT,
-      question    TEXT,
-      words       TEXT,
-      choice      TEXT,
-      standing    BOOLEAN,
-      scope       TEXT,
-      matched     BOOLEAN,
-      session     TEXT,
-      granted     BOOLEAN,
-      tickets     JSON,
-      decided_at  TIMESTAMPTZ
-    )""",
-    # A permission a station was refused: the station and the exact command it ran. An item with a
-    # command is a permission request the person can allow from the console.
-    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS station TEXT",
-    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS command TEXT",
-    # Where the decision was made: "console" for a permission allowed there (the click is the
-    # consent, there are no typed words to match); NULL for words matched in a session.
-    "ALTER TABLE decisions ADD COLUMN IF NOT EXISTS via TEXT",
-    # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
-    """CREATE TABLE IF NOT EXISTS handovers (
-      project     TEXT PRIMARY KEY,
-      repo        TEXT,
-      handed_by   TEXT,
-      handed_at   TIMESTAMPTZ
-    )""",
-    # Every repo a project spans, [{path, name}], each later hand-over adding to the list, and the
-    # autonomy the person handed it over at when stricter than the crew's (TR-456, TR-462).
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS repos JSON",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS autonomy TEXT",
-    # A project the person said is done: when, their words, the desk decision that holds them, and
-    # who recorded it. A later hand-over clears it (the project is open again).
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_words TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_decision TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_by TEXT",
-    # The person took the project back from the crew to build it in their own session (TR-520):
-    # when, their words, who recorded it, and when the orchestrator had released it (its builders
-    # stopped). A later hand-over clears it (the crew has it again).
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_at TIMESTAMPTZ",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_words TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_by TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ",
-    # The person behind every "who did this" (TR-619): the people.id of the credential that made
-    # the call, NULL when the system credential or Tares itself did (GitHub read a merge off the
-    # pull request). The station above stays as it was; the person is who stood behind it.
-    "ALTER TABLE ticket_history ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE decisions ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS person_id TEXT",
-    # The person a desk item is addressed to (TR-634): it shows in their my_work and only words
-    # found in their own recorded sessions answer it. NULL for an item from before this.
-    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS to_person_id TEXT",
-    "ALTER TABLE assumptions ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE ticket_checks ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS person_id TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_person_id TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_person_id TEXT",
-    # The crew (its name) of the session that handed the project over (TR-633), so a hand-over says
-    # who handed it over and to which crew.
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS crew TEXT",
-    # Grants by kind (TR-630): team (what every project starts from), project (what the work may
-    # do; waits for the owner of any repo it reaches into) and personal (what may run on the
-    # holder's machine). areas is a JSON list of repos, consents a JSON list of {person_id, at}.
-    """CREATE TABLE IF NOT EXISTS grants (
-      id               TEXT PRIMARY KEY,
-      kind             TEXT,
-      project          TEXT,
-      holder_person_id TEXT,
-      words            TEXT,
-      given_by         TEXT,
-      given_at         TIMESTAMPTZ,
-      areas            TEXT,
-      consents         TEXT,
-      state            TEXT
-    )""",
-    # Your own deny rules for the crew's guardrails (TR-862): a sentence a station's soft_deny list
-    # gets, for every project (scope factory, project NULL) or one project. Allow rules are the
-    # grants above, read in place; there is no allow row here.
-    """CREATE TABLE IF NOT EXISTS guardrail_rules (
-      id         TEXT PRIMARY KEY,
-      scope      TEXT,
-      project    TEXT,
-      kind       TEXT,
-      text       TEXT,
-      created_by TEXT,
-      created_at TIMESTAMPTZ
-    )""",
-    # Guardrail pairs (TR-863): a hook point paired with a guardrail integration, for every project
-    # (scope factory, project_uid NULL) or one project. `settings` is not used any more (it is
-    # '{}', TR-1380): a pair runs with the integration's connection at the factory. on_fail says
-    # whether a guardrail that denies, or does not answer, blocks or only warns.
-    """CREATE TABLE IF NOT EXISTS guardrail_pairs (
-      id          TEXT PRIMARY KEY,
-      scope       TEXT,
-      project_uid TEXT,
-      hook        TEXT,
-      integration TEXT,
-      settings    TEXT,
-      on_fail     TEXT DEFAULT 'block',
-      created_at  TIMESTAMPTZ,
-      created_by  TEXT
-    )""",
-    # A memory line the Tares doc took but a non-Tares memory integration did not (TR-865): kept
-    # until the integration takes it. scope is a project uid or `factory`; `line` is the line as it
-    # was sent, with its date and name. The background sync retries each row on every round.
-    """CREATE TABLE IF NOT EXISTS pending_memory (
-      id         TEXT PRIMARY KEY,
-      scope      TEXT,
-      line       TEXT,
-      attempts   INTEGER DEFAULT 0,
-      last_error TEXT,
-      created_at TIMESTAMPTZ,
-      tried_at   TIMESTAMPTZ
-    )""",
-    # a project grant from someone who is neither the project's lead nor an admin also waits
-    # for the lead (for an admin when the project has none)
-    "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
-    # A crew (TR-628): one person's crew on one machine, so two crews with the same station names
-    # never merge. Named by the person (FACTORY_CREW, `crew` when unset), made from the first
-    # station line a recording carries; machine is '' when the recording names none.
-    """CREATE TABLE IF NOT EXISTS crews (
-      id          TEXT PRIMARY KEY,
-      name        TEXT,
-      person_id   TEXT,
-      machine     TEXT,
-      first_seen  TIMESTAMPTZ,
-      last_seen   TIMESTAMPTZ,
-      UNIQUE (person_id, name, machine)
-    )""",
+    # The crew (TR-628) the station line belongs to: a row of `crews` (session_store/tables.py).
     "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
-    # Questions a spec asks of the owner of a repo (TR-636): numbered Q1, Q2... per project, asked
-    # by a person and addressed to a person; state open until the addressee answers.
-    """CREATE TABLE IF NOT EXISTS spec_questions (
-      project       TEXT,
-      id            TEXT,
-      to_person_id  TEXT,
-      repo          TEXT,
-      text          TEXT,
-      asked_by      TEXT,
-      asked_at      TIMESTAMPTZ,
-      answer        TEXT,
-      answered_by   TEXT,
-      answered_at   TIMESTAMPTZ,
-      state         TEXT,
-      PRIMARY KEY (project, id)
-    )""",
-    # Where the answer came from: "console" when the person gave it on the page (TR-740).
-    "ALTER TABLE spec_questions ADD COLUMN IF NOT EXISTS via TEXT",
-    # The repos a cell connected to the brain (TR-1197, ee): owner/name in lowercase, the id of the
-    # repo source lore made for it, and how far its index is. The ee routes in
-    # ee/tares_ee/brain/repos.py read and write it; the table exists on every cell.
-    """CREATE TABLE IF NOT EXISTS brain_repos (
-      repo           TEXT PRIMARY KEY,
-      repo_source_id TEXT,
-      state          TEXT,
-      files_done     INTEGER DEFAULT 0,
-      files_total    INTEGER DEFAULT 0,
-      indexed_commit TEXT,
-      last_synced    TIMESTAMPTZ,
-      error          TEXT,
-      added_by       TEXT,
-      added_at       TIMESTAMPTZ
-    )""",
-    # Where a repo's index job stands (TR-1198): the place in the control plane's queue while it
-    # waits, and when the cell asked for the job (NULL until it did, so a repo is asked for once).
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS place INTEGER",
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS job_started_at TIMESTAMPTZ",
-    # How the keep-up sync of a ready repo is doing (TR-1201): the failures in a row and the last
-    # failure's words. A success clears both.
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_failures INTEGER DEFAULT 0",
-    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_error TEXT",
-    # The decision folders an admin chose for a connected repo (TR-1209, ee): one row per folder, with who
-    # chose it and when. The files in them are the repo's decisions in the brain.
-    """CREATE TABLE IF NOT EXISTS brain_repo_folders (
-      repo      TEXT,
-      path      TEXT,
-      chosen_by TEXT,
-      chosen_at TIMESTAMPTZ,
-      PRIMARY KEY (repo, path)
-    )""",
-    # Each first index and each later update of a connected repo (TR-1463, ee): when, which commit, how many
-    # files it changed or deleted, the repo's file count after it, and whether it worked (and why not). The
-    # newest 50 per repo are kept; the Repos page shows the last one and a history.
-    """CREATE TABLE IF NOT EXISTS brain_repo_updates (
-      id            TEXT PRIMARY KEY,
-      repo          TEXT,
-      "at"          TIMESTAMPTZ,
-      kind          TEXT,
-      ok            INTEGER,
-      indexed_commit TEXT,
-      files_changed INTEGER,
-      files_deleted INTEGER,
-      files_total   INTEGER,
-      error         TEXT
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_brain_repo_updates_repo ON brain_repo_updates (repo, \"at\")",
-    # Every question, search and document read a cell sent to the brain (TR-1200, ee): who asked
-    # (the station and person the call came with, `via` mcp or console), what, which repos it used,
-    # how long it took and the tokens lore reported. The daily caps count the ask rows.
-    """CREATE TABLE IF NOT EXISTS brain_calls (
-      id            TEXT PRIMARY KEY,
-      "at"          TIMESTAMPTZ,
-      tool          TEXT,
-      deep          INTEGER DEFAULT 0,
-      question      TEXT,
-      repos         TEXT,
-      duration_ms   INTEGER,
-      input_tokens  INTEGER,
-      output_tokens INTEGER,
-      ok            INTEGER,
-      error         TEXT,
-      station       TEXT,
-      person_id     TEXT,
-      via           TEXT
-    )""",
-    # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
-    # since the hand-over stopped waiting for sign-offs; the rows are kept.
-    """CREATE TABLE IF NOT EXISTS signoffs (
-      project    TEXT,
-      repo       TEXT,
-      person_id  TEXT,
-      "at"       TIMESTAMPTZ,
-      PRIMARY KEY (project, repo)
-    )""",
-    "ALTER TABLE signoffs ADD COLUMN IF NOT EXISTS via TEXT",
-    # A hand-over the project lead pushed through without every sign-off, and why (TR-636).
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_reason TEXT",
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_at TIMESTAMPTZ",
-    # Who pushed it through, so a later hand-over by someone else does not take the override over
-    # (TR-640), and every override kept in a log: a later one does not replace an earlier one.
-    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_person_id TEXT",
-    """CREATE TABLE IF NOT EXISTS handover_overrides (
-      project    TEXT,
-      "at"       TIMESTAMPTZ,
-      reason     TEXT,
-      person_id  TEXT,
-      handed_by  TEXT
-    )""",
-    # The default integration of each slot (TR-839, TR-1380): one row per slot, a pointer to one of
-    # the slot's connections (below). No row means the slot's built-in default. `settings` is
-    # not used any more (it is '{}'): an earlier version kept the integration settings here, and
-    # the upgrade moves them to a connection.
-    """CREATE TABLE IF NOT EXISTS integration_choices (
-      slot        TEXT PRIMARY KEY,
-      name        TEXT,
-      settings    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    # The integrations the factory has connected (TR-1380): one row per slot and integration, with
-    # its integration settings, secrets included. Credentials live only here. memory, monitoring
-    # and runtime keep one connection each.
-    """CREATE TABLE IF NOT EXISTS integration_connections (
-      slot        TEXT,
-      name        TEXT,
-      settings    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT,
-      PRIMARY KEY (slot, name)
-    )""",
-    # A project's own choice for the tickets, review and ci slots: the name of a connected
-    # integration plus the project's own fields. It holds no secret and no address (TR-1380);
-    # those come from the factory's connection.
-    """CREATE TABLE IF NOT EXISTS project_integrations (
-      project_uid TEXT,
-      slot        TEXT,
-      name        TEXT,
-      settings    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT,
-      PRIMARY KEY (project_uid, slot)
-    )""",
-    # A status change a ticket system refused or could not be reached for (TR-845). One row per
-    # ticket and integration, the status wanted last; the row is retried on each refresh and
-    # goes when the write lands. While a row exists a sync leaves the ticket's status alone.
-    """CREATE TABLE IF NOT EXISTS pending_writeback (
-      ticket       TEXT,
-      integration  TEXT,
-      status       TEXT,
-      attempts     INTEGER,
-      last_error   TEXT,
-      updated_at   TIMESTAMPTZ,
-      PRIMARY KEY (ticket, integration)
-    )""",
-    # A project's secrets (TR-775): the value sealed with the cell's TARES_SECRETS_KEY, never in
-    # the clear; who set it and when; who last fetched it for a command and when.
-    """CREATE TABLE IF NOT EXISTS project_secrets (
-      project     TEXT,
-      name        TEXT,
-      value       TEXT,
-      set_by      TEXT,
-      set_at      TIMESTAMPTZ,
-      used_by     TEXT,
-      used_at     TIMESTAMPTZ,
-      PRIMARY KEY (project, name)
-    )""",
-    # The commands a project's local ci integration wants recorded as passing on a pull request's
-    # head (TR-854): one row per project, the commands as a JSON list.
-    """CREATE TABLE IF NOT EXISTS project_required_checks (
-      project     TEXT PRIMARY KEY,
-      commands    JSON,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    # The merge queue (TR-856): one row per pull request Tares itself will merge, in order per
-    # (repo, base). state: queued, waiting_ci, waiting_approval, merging, merged, sent_back, blocked.
-    """CREATE TABLE IF NOT EXISTS merge_queue (
-      id            TEXT PRIMARY KEY,
-      repo          TEXT,
-      base          TEXT,
-      pr            INTEGER,
-      head          TEXT,
-      ticket        TEXT,
-      project_uid   TEXT,
-      state         TEXT,
-      reason        TEXT,
-      desk_item     TEXT,
-      approved_head TEXT,
-      entered_at    TIMESTAMPTZ,
-      updated_at    TIMESTAMPTZ
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
-    # TR-858: the files (and head) a pull request had before its branch was last brought up to
-    # date, as JSON (kept until the row ends: a queued row that has it holds its repo's turn), and
-    # how many ticks in a row GitHub could not say whether it merges.
-    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS before_files TEXT",
-    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS unknown_ticks INTEGER",
-    # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
-    """CREATE TABLE IF NOT EXISTS project_merge_method (
-      project     TEXT PRIMARY KEY,
-      method      TEXT,
-      updated_at  TIMESTAMPTZ,
-      updated_by  TEXT
-    )""",
-    # TR-1451: every answer a person gave to what waited for them, whatever its kind: the home
-    # item it answered (`question:D7`, `grant:G2`), its ask as it read then, yes or no where that
-    # applies, the words or option given, who, and where (console, feed, session, message).
-    """CREATE TABLE IF NOT EXISTS answers (
-      id          TEXT PRIMARY KEY,
-      item        TEXT,
-      kind        TEXT,
-      project     TEXT,
-      ask         TEXT,
-      choice      TEXT,
-      said        TEXT,
-      via         TEXT,
-      person_id   TEXT,
-      answered_at TIMESTAMPTZ
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_answers_at ON answers (answered_at)",
-    # TR-1458: the waiting items a person was already told about on Slack (or that were waiting
-    # when telling them began), so each new one is sent once. The item `*` marks that the person's
-    # list was read once: what waited before that is never sent.
-    """CREATE TABLE IF NOT EXISTS waiting_told (
-      person_id  TEXT,
-      item       TEXT,
-      told_at    TIMESTAMPTZ,
-      sent       BOOLEAN,
-      PRIMARY KEY (person_id, item)
-    )""",
-    # TR-1460: the Slack message that told it (its channel, its ts and the item's place in it), the
-    # ask it showed, and once the item no longer waits, the line the message was edited to show.
-    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS ask TEXT",
-    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS channel TEXT",
-    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS ts TEXT",
-    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS seq INTEGER",
-    "ALTER TABLE waiting_told ADD COLUMN IF NOT EXISTS closed TEXT",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -640,10 +161,9 @@ class FactoryStore:
         ids = sorted({i for i in ids if i})
         if not ids:
             return {}
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT id, name FROM people WHERE id IN ({', '.join('?' for _ in ids)})",
-                ids).fetchall()
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(people_table.c.id, people_table.c.name).where(
+                people_table.c.id.in_(ids))).all()
         return {r[0]: {"id": r[0], "name": r[1]} for r in rows}
 
     def _with_people(self, rows: list[dict], by_key: str | None = "by") -> list[dict]:
@@ -658,42 +178,62 @@ class FactoryStore:
         return rows
 
     # ── upgrade and clean-up ──────────────────────────────────────────────────
+    def _lock_numbering(self, conn, key: str) -> None:
+        """Until the transaction of `conn` ends, a second process doing the same read-then-write
+        under `key` waits. SQLite needs nothing: `begin()` already holds the one write lock."""
+        if self.sessions_db.dialect == "postgresql":
+            conn.execute(sql_text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
+
     def _merge_split_crews(self) -> None:
         """A person's crew recorded without its machine, before the cell had a licence, and the same
         crew recorded with one since are one crew (TR-1223): its sessions move to the crew with the
         machine and the bare record goes. Only when the person has exactly one crew of that name with
-        a machine; with several it can't be told which. Lock held (or no other thread yet).
+        a machine; with several it can't be told which. One transaction."""
+        t = crews_table
+        with self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_crews")
+            groups: dict = {}
+            for r in conn.execute(select(t)).fetchall():
+                groups.setdefault((r.person_id, r.name), []).append(r)
+            for crews in groups.values():
+                bare = [c for c in crews if not c.machine]
+                named = [c for c in crews if c.machine]
+                if len(named) != 1 or not bare:
+                    continue
+                keep = named[0]
+                firsts = [c.first_seen for c in [keep, *bare] if c.first_seen is not None]
+                lasts = [c.last_seen for c in [keep, *bare] if c.last_seen is not None]
+                for b in bare:
+                    conn.execute(update(session_stations).where(session_stations.c.crew_id == b.id)
+                                 .values(crew_id=keep.id))
+                    conn.execute(delete(t).where(t.c.id == b.id))
+                conn.execute(update(t).where(t.c.id == keep.id).values(
+                    first_seen=min(firsts) if firsts else None,
+                    last_seen=max(lasts) if lasts else None))
 
-        On the first start with a state database the crews are still in DuckDB and the session
-        tables are a copy that the next try of a failed start makes again from DuckDB's rows, which
-        name the bare crew. So the bare record stays until the state has moved (the start merges
-        again then): a second try finds it and remaps the stations again."""
-        unmoved = self.sessions_db.dialect == "postgresql" and self.sc is self.con
-        rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen FROM crews").fetchall()
-        groups: dict = {}
-        for r in rows:
-            groups.setdefault((r[2], r[1]), []).append(r)
-        for crews in groups.values():
-            bare = [c for c in crews if not c[3]]
-            named = [c for c in crews if c[3]]
-            if len(named) != 1 or not bare:
-                continue
-            keep = named[0]
-            firsts = [c[4] for c in [keep, *bare] if c[4] is not None]
-            lasts = [c[5] for c in [keep, *bare] if c[5] is not None]
-            for b in bare:
-                with self.sessions_db.begin() as conn:
-                    conn.execute(update(session_stations).where(session_stations.c.crew_id == b[0])
-                                 .values(crew_id=keep[0]))
-                if not unmoved:
-                    self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
-            self.sc.execute("UPDATE crews SET first_seen = ?, last_seen = ? WHERE id = ?",
-                            [min(firsts) if firsts else None, max(lasts) if lasts else None, keep[0]])
+    def _first_override_entries(self) -> None:
+        """An override kept before the log existed is its first entry (TR-640). One with no time of
+        its own takes the hand-over's, else now, so a log entry always has a time, and the
+        hand-over is stamped the same way: get_handover compares the two times to say it was
+        overridden. One transaction."""
+        h, o = handovers_table, overrides_table
+        now = literal(now_utc(), UTCDateTime())
+        with self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_override_log")
+            conn.execute(insert(o).from_select(
+                ["project", "at", "reason", "person_id", "handed_by"],
+                select(h.c.project, func.coalesce(h.c.override_at, h.c.handed_at, now),
+                       h.c.override_reason, func.coalesce(h.c.override_person_id, h.c.person_id),
+                       h.c.handed_by)
+                .where(h.c.override_reason.is_not(None), h.c.project.not_in(
+                    select(o.c.project).where(o.c.project.is_not(None))))))
+            conn.execute(update(h).where(h.c.override_reason.is_not(None), h.c.override_at.is_(None))
+                         .values(override_at=func.coalesce(h.c.handed_at, now)))
 
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             bare = conn.execute(select(session_stations.c.session).where(
                 session_stations.c.crew_id.is_(None)).limit(1)).first()
         if bare:
@@ -702,30 +242,21 @@ class FactoryStore:
                 conn.execute(update(session_stations).where(session_stations.c.crew_id.is_(None))
                              .values(crew_id=cid))
         self._merge_split_crews()
-        # an override kept before the log existed is its first entry (TR-640); one with no time of
-        # its own takes the hand-over's, else now, so a log entry always has a time
-        self.sc.execute(
-            "INSERT INTO handover_overrides (project, \"at\", reason, person_id, handed_by) "
-            "SELECT project, COALESCE(override_at, handed_at, now()), override_reason, "
-            "COALESCE(override_person_id, person_id), "
-            "handed_by FROM handovers WHERE override_reason IS NOT NULL AND project NOT IN "
-            "(SELECT project FROM handover_overrides)")
-        # an override with no time of its own is stamped with its hand-over's, so get_handover
-        # reads that hand-over as overridden (its rule compares the two times)
-        self.sc.execute("UPDATE handovers SET override_at = COALESCE(handed_at, now()) "
-                         "WHERE override_reason IS NOT NULL AND override_at IS NULL")
-        rows = self.sc.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
-                                ).fetchall()
-        for (project,) in rows:
-            top = self.sc.execute("SELECT max(number) FROM tickets WHERE project = ?",
-                                   [project]).fetchone()[0] or 0
-            todo = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND number IS NULL "
-                                    "ORDER BY position, created_at", [project]).fetchall()
-            for i, (tid,) in enumerate(todo, top + 1):
-                self.sc.execute("UPDATE tickets SET number = ? WHERE id = ?", [i, tid])
-            self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON "
-                             "CONFLICT (project) DO UPDATE SET last = greatest(ticket_numbers.last, "
-                             "excluded.last)", [project, top + len(todo)])
+        self._first_override_entries()
+        t, n = tickets_table, numbers_table
+        with self.sessions_db.begin() as conn:
+            for project in conn.execute(select(t.c.project).where(
+                    t.c.number.is_(None), t.c.project.is_not(None)).distinct()).scalars().all():
+                top = conn.execute(select(func.max(t.c.number)).where(
+                    t.c.project == project)).scalar() or 0
+                todo = conn.execute(select(t.c.id).where(
+                    t.c.project == project, t.c.number.is_(None)
+                ).order_by(*self._ticket_order())).scalars().all()
+                for i, tid in enumerate(todo, top + 1):
+                    conn.execute(update(t).where(t.c.id == tid).values(number=i))
+                ins = self.sessions_db.upsert(n).values(project=project, last=top + len(todo))
+                conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+                    "last": self.sessions_db.greatest(n.c.last, ins.excluded["last"])}))
         self._credentials_to_factory()
 
     def _credentials_to_factory(self) -> None:
@@ -745,7 +276,8 @@ class FactoryStore:
              Pairs of one scope and project that are then the same (hook, integration, on_fail)
              are one: the oldest stays.
 
-        Sealed project secrets (TR-775) are not touched. Lock held, or no other thread yet."""
+        Sealed project secrets (TR-775) are not touched. One transaction. Lock held, or no other
+        thread yet."""
         from .integrations import registry
 
         def moves(slot: str, name: str, key: str) -> bool:
@@ -755,122 +287,127 @@ class FactoryStore:
             kinds = {f.name: f.kind for f in cls.settings_schema}
             return kinds.get(key, "secret") in ("secret", "url")
 
-        def connect(slot: str, name: str, settings: dict, at, by, origin: str = "") -> None:
+        def connect(conn, slot: str, name: str, settings: dict, at, by, origin: str = "") -> None:
             """Make the connection unless there is one. When there is, the settings given are
             dropped: each key whose value differs from the kept one is logged, by integration,
             origin and key name only, never the value."""
-            kept = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? "
-                                   "AND name = ?", [slot, name]).fetchone()
-            if kept:
+            t = connections_table
+            kept = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
+            if kept is not None:
                 have = self._load_settings(kept[0])
                 for k in sorted(k for k, v in settings.items() if have.get(k) != v):
                     log.warning("integration upgrade: %s %s: %s from %s differs from the connection "
                                 "kept at the factory and is dropped", slot, _loggable(name), _loggable(k),
                                 _loggable(origin or "a row"))
                 return
-            self.sc.execute("INSERT INTO integration_connections (slot, name, settings, updated_at, "
-                            "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, json.dumps(settings), at, by])
+            conn.execute(insert(t).values(slot=slot, name=name, settings=settings, updated_at=at,
+                                          updated_by=by))
 
         at = now_utc()
         bare: list = []
-        for slot, name, raw, up_at, up_by in self.sc.execute(
-                "SELECT slot, name, settings, updated_at, updated_by FROM integration_choices "
-                "WHERE slot != 'monitoring' ORDER BY slot").fetchall():
-            connect(slot, name, self._load_settings(raw), up_at or at, up_by or "upgrade",
-                    "the factory's earlier choice")
-            if self._load_settings(raw):
-                self.sc.execute("UPDATE integration_choices SET settings = '{}' WHERE slot = ?", [slot])
-        for uid, slot, name, raw in self.sc.execute(
-                "SELECT project_uid, slot, name, settings FROM project_integrations "
-                "ORDER BY project_uid, slot").fetchall():
-            have = self._load_settings(raw)
-            gone = {k: v for k, v in have.items() if moves(slot, name, k)}
-            if not gone:
-                # the pick needs a connection to stand on, made below once every row that holds
-                # something to move has had its turn: an empty one made now would win over it
-                bare.append((slot, name))
-                continue
-            connect(slot, name, gone, at, "upgrade", f"project {uid}")
-            self.sc.execute("UPDATE project_integrations SET settings = ? WHERE project_uid = ? AND slot = ?",
-                            [json.dumps({k: v for k, v in have.items() if k not in gone}), uid, slot])
-        seen: set = set()
-        for pid, scope, uid, hook, name, raw, on_fail, made in sorted(
-                self.sc.execute("SELECT id, scope, project_uid, hook, integration, settings, on_fail, "
-                                "created_at FROM guardrail_pairs").fetchall(),
-                key=lambda r: int(r[0][2:])):
-            have = self._load_settings(raw)
-            if have:
-                connect("guardrails", name, have, made or at, "upgrade", f"guardrail pair {pid}")
-                self.sc.execute("UPDATE guardrail_pairs SET settings = ? WHERE id = ?", ["{}", pid])
-            key = (scope, uid, hook, name, on_fail or "block")
-            if key in seen:
-                self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ?", [pid])
-            seen.add(key)
-        for slot, name in bare:
-            connect(slot, name, {}, at, "upgrade")
+        choices, picks, pairs = choices_table, picks_table, pairs_table
+        with self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            for slot, name, raw, up_at, up_by in conn.execute(
+                    select(choices.c.slot, choices.c.name, choices.c.settings, choices.c.updated_at,
+                           choices.c.updated_by)
+                    .where(choices.c.slot != "monitoring").order_by(choices.c.slot)).fetchall():
+                have = self._load_settings(raw)
+                connect(conn, slot, name, have, up_at or at, up_by or "upgrade",
+                        "the factory's earlier choice")
+                if have:
+                    conn.execute(update(choices).where(choices.c.slot == slot).values(settings={}))
+            for uid, slot, name, raw in conn.execute(
+                    select(picks.c.project_uid, picks.c.slot, picks.c.name, picks.c.settings)
+                    .order_by(picks.c.project_uid, picks.c.slot)).fetchall():
+                have = self._load_settings(raw)
+                gone = {k: v for k, v in have.items() if moves(slot, name, k)}
+                if not gone:
+                    # the pick needs a connection to stand on, made below once every row that holds
+                    # something to move has had its turn: an empty one made now would win over it
+                    bare.append((slot, name))
+                    continue
+                connect(conn, slot, name, gone, at, "upgrade", f"project {uid}")
+                conn.execute(update(picks).where(picks.c.project_uid == uid, picks.c.slot == slot)
+                             .values(settings={k: v for k, v in have.items() if k not in gone}))
+            seen: set = set()
+            for pid, scope, uid, hook, name, raw, on_fail, made in sorted(
+                    conn.execute(select(pairs.c.id, pairs.c.scope, pairs.c.project_uid, pairs.c.hook,
+                                        pairs.c.integration, pairs.c.settings, pairs.c.on_fail,
+                                        pairs.c.created_at)).fetchall(),
+                    key=lambda r: int(r[0][2:])):
+                have = self._load_settings(raw)
+                if have:
+                    connect(conn, "guardrails", name, have, made or at, "upgrade", f"guardrail pair {pid}")
+                    conn.execute(update(pairs).where(pairs.c.id == pid).values(settings={}))
+                key = (scope, uid, hook, name, on_fail or "block")
+                if key in seen:
+                    conn.execute(delete(pairs).where(pairs.c.id == pid))
+                seen.add(key)
+            for slot, name in bare:
+                connect(conn, slot, name, {}, at, "upgrade")
 
-    def _next_ticket_number(self, project: str) -> int:
-        """The project's next ticket number, never one given out before. Lock held."""
-        row = self.sc.execute("SELECT last FROM ticket_numbers WHERE project = ?",
-                               [project]).fetchone()
-        top = self.sc.execute("SELECT max(number) FROM tickets WHERE project = ?",
-                               [project]).fetchone()[0] or 0
-        n = max(row[0] if row else 0, top) + 1
-        self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON CONFLICT "
-                         "(project) DO UPDATE SET last = excluded.last", [project, n])
-        return n
+    def _next_ticket_number(self, conn, project: str) -> int:
+        """The project's next ticket number, never one given out before. One statement in the
+        caller's transaction, so two writers cannot get the same number: the second waits for the
+        project's row until the first commits, and adds to what it finds there."""
+        t, n = tickets_table, numbers_table
+        after_tickets = select(func.coalesce(func.max(t.c.number), 0) + 1).where(
+            t.c.project == project).scalar_subquery()
+        ins = self.sessions_db.upsert(n).values(project=project, last=after_tickets)
+        return conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+            "last": self.sessions_db.greatest(n.c.last + 1, ins.excluded["last"])
+        }).returning(n.c.last)).scalar_one()
 
     def _factory_forget_project(self, uid: str) -> None:
         """A project is deleted: its factory rows go. Lock held."""
-        self.sc.execute("DELETE FROM milestones WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM assumptions WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM milestone_check_results WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM milestone_acceptances WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM reviews WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM guardrail_pairs WHERE project_uid = ?", [uid])
-        self.sc.execute("DELETE FROM pending_memory WHERE scope = ?", [uid])
-        self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", [uid])
-        self.sc.execute("DELETE FROM project_secrets WHERE project = ?", [uid])
-        self.sc.execute("DELETE FROM merge_queue WHERE project_uid = ?", [uid])
-        self.sc.execute("DELETE FROM project_merge_method WHERE project = ?", [uid])
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(numbers_table).where(numbers_table.c.project == uid))
+            for t in (history_table, milestones_table, checks_table, milestone_results_table,
+                      acceptances_table, reviews_table, findings_table, assumptions_table,
+                      desk_table, grants_table, decisions_table, handovers_table, overrides_table,
+                      questions_table, signoffs_table, rules_table, secrets_table,
+                      required_table, method_table):
+                conn.execute(delete(t).where(t.c.project == uid))
+            for t in (pairs_table, picks_table, queue_table):
+                conn.execute(delete(t).where(t.c.project_uid == uid))
+            conn.execute(delete(pending_table).where(pending_table.c.scope == uid))
         self._secrets_changed()
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
-    _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
-
     @staticmethod
     def _ms_row(r) -> dict:
-        return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3], "name": r[4],
-                "goal": r[5] or "", "checks": json.loads(r[6]) if r[6] else [],
-                "position": r[7], "created_at": r[8], "updated_at": r[9]}
+        return {**r._mapping, "goal": r.goal or "", "checks": r.checks or []}
+
+    @staticmethod
+    def _ms_order():
+        t = milestones_table
+        return (t.c.position.asc().nulls_last(), t.c.created_at.asc().nulls_last(), t.c.id)
+
+    @staticmethod
+    def _insert_milestone(conn, project: str, name: str, goal: str, checks: list[dict] | None,
+                          position: float | None, owner: str, external_id: str | None) -> str:
+        """A new row, after the project's last when no position is given. In the caller's
+        transaction."""
+        t = milestones_table
+        if position is None:
+            last = conn.execute(select(func.max(t.c.position)).where(
+                t.c.project == project)).scalar()
+            position = (last or 0) + 1
+        mid = "ms_" + uuid.uuid4().hex[:10]
+        ts = now_utc()
+        conn.execute(insert(t).values(
+            id=mid, project=project, owner=owner, external_id=external_id, name=name,
+            goal=goal or "", checks=checks or [], position=float(position), created_at=ts,
+            updated_at=ts))
+        return mid
 
     def create_milestone(self, project: str, name: str, goal: str = "",
                          checks: list[dict] | None = None, position: float | None = None,
                          owner: str = "tares", external_id: str | None = None) -> str:
-        mid = "ms_" + uuid.uuid4().hex[:10]
-        ts = now_utc()
-        with self._swrite:
-            if position is None:
-                last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
-                                        [project]).fetchone()[0]
-                position = (last or 0) + 1
-            self.sc.execute(
-                f"INSERT INTO milestones ({self._MS_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [mid, project, owner, external_id, name, goal or "",
-                 json.dumps(checks or []), float(position), ts, ts])
-        return mid
+        with self._swrite, self.sessions_db.begin() as conn:
+            return self._insert_milestone(conn, project, name, goal, checks, position, owner,
+                                          external_id)
 
     def adopt_milestone(self, project: str, owner: str, external_id: str, name: str,
                         goal: str | None, checks: list[dict] | None = None,
@@ -882,112 +419,108 @@ class FactoryStore:
         given (a position only when given). `new_goal` is the goal of a new row when `goal` is None,
         so a sync can fill a new row from the tracker without touching a found one. The syncs
         insert through here too. Returns the row's id."""
-        with self._swrite:
-            r = self.sc.execute("SELECT id FROM milestones WHERE project = ? AND owner = ? AND "
-                                "external_id = ? LIMIT 1", [project, owner, external_id]).fetchone()
-            if r is None:
-                r = self.sc.execute("SELECT id FROM milestones WHERE project = ? AND owner = "
-                                    "'tares' AND lower(name) = lower(?) LIMIT 1",
-                                    [project, name]).fetchone()
-            if r is None:
-                mid = "ms_" + uuid.uuid4().hex[:10]
-                ts = now_utc()
-                if position is None:
-                    last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
-                                           [project]).fetchone()[0]
-                    position = (last or 0) + 1
-                self.sc.execute(
-                    f"INSERT INTO milestones ({self._MS_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [mid, project, owner, external_id, name,
-                     (goal if goal is not None else new_goal) or "",
-                     json.dumps(checks or []), float(position), ts, ts])
-                return mid
-            sets, vals = ["owner = ?", "external_id = ?", "updated_at = ?"], [owner, external_id,
-                                                                                now_utc()]
+        t = milestones_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            found = None
+            if external_id is not None:      # `== None` would match every row without one
+                found = conn.execute(select(t.c.id).where(
+                    t.c.project == project, t.c.owner == owner,
+                    t.c.external_id == external_id).order_by(*self._ms_order()).limit(1)).scalar()
+            if found is None:
+                # the name is compared here: SQLite's lower() changes ASCII letters only
+                low = name.lower()
+                found = next((r.id for r in conn.execute(select(t.c.id, t.c.name).where(
+                    t.c.project == project, t.c.owner == "tares").order_by(*self._ms_order()))
+                    if r.name is not None and r.name.lower() == low), None)
+            if found is None:
+                return self._insert_milestone(conn, project, name,
+                                              goal if goal is not None else new_goal, checks,
+                                              position, owner, external_id)
+            values: dict = {"owner": owner, "external_id": external_id, "updated_at": now_utc()}
             if goal is not None:
-                sets.append("goal = ?"); vals.append(goal)
+                values["goal"] = goal
             if checks is not None:
-                sets.append("checks = ?"); vals.append(json.dumps(checks))
+                values["checks"] = checks
             if position is not None:
-                sets.append("position = ?"); vals.append(float(position))
-            self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals + [r[0]])
-            return r[0]
+                values["position"] = float(position)
+            conn.execute(update(t).where(t.c.id == found).values(values))
+            return found
 
     def update_milestone(self, mid: str, **fields) -> None:
         allowed = {"name", "goal", "checks", "position", "owner", "external_id"}
-        sets, vals = ["updated_at = ?"], [now_utc()]
+        values: dict = {"updated_at": now_utc()}
         for col, v in fields.items():
             if col not in allowed:
                 continue
-            if col == "checks":
-                v = json.dumps(v or [])
-            sets.append(f"{col} = ?"); vals.append(v)
-        vals.append(mid)
-        with self._swrite:
-            self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals)
+            values[col] = (v or []) if col == "checks" else v
+        t = milestones_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == mid).values(values))
 
     def record_milestone_check(self, project: str, milestone: str, idx: int, result: str,
                                note: str | None, by_kind: str, by_name: str | None,
                                person_id: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO milestone_check_results (id, project, milestone, idx, result, note, "
-                "by_kind, by_name, person_id, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ["mc_" + uuid.uuid4().hex[:10], project, milestone, int(idx), result,
-                 note or None, by_kind, by_name or None, person_id or None, at])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(milestone_results_table).values(
+                id="mc_" + uuid.uuid4().hex[:10], project=project, milestone=milestone,
+                idx=int(idx), result=result, note=note or None, by_kind=by_kind,
+                by_name=by_name or None, person_id=person_id or None, checked_at=at))
 
     def milestone_check_results(self, milestones: list[str]) -> dict[str, dict[int, dict]]:
         """{milestone: {index: the latest result {result, note, by_kind, by_name, at}}}."""
         if not milestones:
             return {}
-        marks = ", ".join("?" for _ in milestones)
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT milestone, idx, result, note, by_kind, by_name, person_id, checked_at FROM "
-                f"milestone_check_results WHERE milestone IN ({marks}) ORDER BY checked_at, id",
-                list(milestones)).fetchall()
+        t = milestone_results_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                t.c.milestone, t.c.idx, t.c.result, t.c.note, t.c.by_kind, t.c.by_name,
+                t.c.person_id, t.c.checked_at).where(t.c.milestone.in_(list(milestones)))
+                .order_by(t.c.checked_at.asc().nulls_last(), t.c.id)).fetchall()
         out: dict[str, dict[int, dict]] = {}
         for r in rows:
-            out.setdefault(r[0], {})[int(r[1])] = {"result": r[2], "note": r[3], "by_kind": r[4],
-                                                   "by_name": r[5], "person_id": r[6], "at": r[7]}
+            out.setdefault(r.milestone, {})[int(r.idx)] = {
+                "result": r.result, "note": r.note, "by_kind": r.by_kind, "by_name": r.by_name,
+                "person_id": r.person_id, "at": r.checked_at}
         return out
 
     def accept_milestone(self, project: str, milestone: str, by_name: str | None,
                          person_id: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [milestone])
-            self.sc.execute("INSERT INTO milestone_acceptances (milestone, project, by_name, "
-                             "person_id, accepted_at) VALUES (?, ?, ?, ?, ?)",
-                             [milestone, project, by_name or None, person_id or None, at])
+        t = acceptances_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.milestone == milestone))
+            conn.execute(insert(t).values(
+                milestone=milestone, project=project, by_name=by_name or None,
+                person_id=person_id or None, accepted_at=at))
 
     def milestone_acceptances(self, milestones: list[str]) -> dict[str, dict]:
         if not milestones:
             return {}
-        marks = ", ".join("?" for _ in milestones)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT milestone, by_name, person_id, accepted_at FROM "
-                                    f"milestone_acceptances WHERE milestone IN ({marks})",
-                                    list(milestones)).fetchall()
-        return {r[0]: {"by": r[1], "person_id": r[2], "at": r[3]} for r in rows}
+        t = acceptances_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.milestone, t.c.by_name, t.c.person_id, t.c.accepted_at)
+                                .where(t.c.milestone.in_(list(milestones)))).fetchall()
+        return {r.milestone: {"by": r.by_name, "person_id": r.person_id, "at": r.accepted_at}
+                for r in rows}
 
     def list_milestones(self, project: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? "
-                                    "ORDER BY position, created_at", [project]).fetchall()
+        t = milestones_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project == project)
+                                .order_by(*self._ms_order())).fetchall()
         return [self._ms_row(r) for r in rows]
 
+    @kept
     def milestones_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
         """{project: its milestones in order} in one query (the home page)."""
         if not projects:
             return {}
-        marks = ", ".join("?" for _ in projects)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project IN "
-                                    f"({marks}) ORDER BY position, created_at",
-                                    list(projects)).fetchall()
+        t = milestones_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project.in_(list(projects)))
+                                .order_by(*self._ms_order())).fetchall()
         out: dict[str, list[dict]] = {p: [] for p in projects}
         for r in rows:
-            out[r[1]].append(self._ms_row(r))
+            out[r.project].append(self._ms_row(r))
         return out
 
     def get_milestone(self, project: str, ref: str) -> dict | None:
@@ -995,45 +528,51 @@ class FactoryStore:
         ref = (ref or "").strip()
         if not ref:
             return None
-        with self._sread:
-            r = self.sc.execute(
-                f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? AND (id = ? OR "
-                "external_id = ? OR lower(name) = lower(?)) ORDER BY position LIMIT 1",
-                [project, ref, ref, ref]).fetchone()
-        return self._ms_row(r) if r else None
+        # matched here, not in SQL: SQLite's lower() changes ASCII letters only
+        low = ref.lower()
+        return next((m for m in self.list_milestones(project)
+                     if m["id"] == ref or m["external_id"] == ref
+                     or (m["name"] is not None and m["name"].lower() == low)), None)
 
     # ── crews (TR-628) ────────────────────────────────────────────────────────
     def _crew_id(self, name: str, person_id: str, machine: str, at) -> str:
         """The id of the crew (person, name, machine), made on first sight; last_seen moves up
-        to `at`. Lock held (or no other thread yet)."""
-        r = self.sc.execute("SELECT id, last_seen FROM crews WHERE person_id = ? AND name = ? "
-                             "AND machine = ?", [person_id, name, machine]).fetchone()
-        if r:
-            if at is not None and (r[1] is None or at > r[1]):
-                self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
-            return r[0]
-        # A crew recorded without its machine (a cell with no licence keeps none) and the same crew
-        # named with one (once a licence is on, or off again) are one crew (TR-1223): the line joins
-        # the person's only other crew of that name, and a crew without a machine takes the one this
-        # line names. With several machines it can't be told which one it was: a new crew is made.
-        others = self.sc.execute("SELECT id, last_seen, machine FROM crews WHERE person_id = ? AND name = ?",
-                                 [person_id, name]).fetchall()
-        bare = [o for o in others if not o[2]]
-        named = [o for o in others if o[2]]
-        pick = None
-        if machine and bare and not named:
-            pick = bare[0]
-            self.sc.execute("UPDATE crews SET machine = ? WHERE id = ?", [machine, pick[0]])
-        elif not machine and len(named) == 1:
-            pick = named[0]
-        if pick is not None:
-            if at is not None and (pick[1] is None or at > pick[1]):
-                self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, pick[0]])
-            return pick[0]
-        cid = "c_" + uuid.uuid4().hex[:10]
-        self.sc.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
-                         "VALUES (?, ?, ?, ?, ?, ?)", [cid, name, person_id, machine, at, at])
-        return cid
+        to `at`. One transaction, so two writers cannot both make the crew."""
+        t = crews_table
+
+        def seen(conn, cid, last) -> None:
+            if at is not None and (last is None or at > last):
+                conn.execute(update(t).where(t.c.id == cid).values(last_seen=at))
+
+        with self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_crews")
+            r = conn.execute(select(t.c.id, t.c.last_seen).where(
+                t.c.person_id == person_id, t.c.name == name, t.c.machine == machine)).first()
+            if r:
+                seen(conn, r.id, r.last_seen)
+                return r.id
+            # A crew recorded without its machine (a cell with no licence keeps none) and the same
+            # crew named with one (once a licence is on, or off again) are one crew (TR-1223): the
+            # line joins the person's only other crew of that name, and a crew without a machine
+            # takes the one this line names. With several machines it can't be told which one it
+            # was: a new crew is made.
+            others = conn.execute(select(t.c.id, t.c.last_seen, t.c.machine).where(
+                t.c.person_id == person_id, t.c.name == name)).fetchall()
+            bare = [o for o in others if not o.machine]
+            named = [o for o in others if o.machine]
+            pick = None
+            if machine and bare and not named:
+                pick = bare[0]
+                conn.execute(update(t).where(t.c.id == pick.id).values(machine=machine))
+            elif not machine and len(named) == 1:
+                pick = named[0]
+            if pick is not None:
+                seen(conn, pick.id, pick.last_seen)
+                return pick.id
+            cid = "c_" + uuid.uuid4().hex[:10]
+            conn.execute(insert(t).values(id=cid, name=name, person_id=person_id, machine=machine,
+                                          first_seen=at, last_seen=at))
+            return cid
 
     def resolve_crew(self, name: str | None, person_id: str | None, machine: str | None,
                      at) -> str:
@@ -1044,15 +583,18 @@ class FactoryStore:
             return self._crew_id((name or "").strip() or "crew", person_id or "local",
                                  (machine or "").strip(), at)
 
+    @kept
     def list_crews(self) -> list[dict]:
         """Every crew the cell has seen, with its person's name, newest activity first."""
-        with self._sread:
-            rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen "
-                                    "FROM crews ORDER BY last_seen DESC, id").fetchall()
-        refs = self._person_refs(r[2] for r in rows)
-        return [{"id": r[0], "name": r[1], "machine": r[3] or "", "first_seen": r[4],
-                 "last_seen": r[5], "person_id": r[2],
-                 "person": refs.get(r[2]) or {"id": r[2], "name": None}} for r in rows]
+        t = crews_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).order_by(t.c.last_seen.desc().nulls_last(), t.c.id)
+                                ).fetchall()
+        refs = self._person_refs(r.person_id for r in rows)
+        return [{"id": r.id, "name": r.name, "machine": r.machine or "", "first_seen": r.first_seen,
+                 "last_seen": r.last_seen, "person_id": r.person_id,
+                 "person": refs.get(r.person_id) or {"id": r.person_id, "name": None}}
+                for r in rows]
 
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
@@ -1076,7 +618,7 @@ class FactoryStore:
 
     def session_station(self, session: str) -> dict | None:
         t = session_stations
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             r = conn.execute(select(t.c.station, t.c.role, t.c.parent, t.c.project).where(
                 t.c.session == session)).first()
         return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
@@ -1101,7 +643,7 @@ class FactoryStore:
                     st.c.state, st.c.reason, st.c.state_at, named, ss.c.crew_id, *lines,
                     ss.c.runtime, ss.c.model)
              .select_from(j))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(q).all()
         act = None if table else self.session_activity(source, [r[0] for r in rows])
         out = []
@@ -1145,7 +687,7 @@ class FactoryStore:
         tied = func.coalesce(ss.c.project, self._named_project()).in_(sorted(projects))
         out: set[str] = set()
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(conn.execute(select(ss.c.session).where(
                     ss.c.session.in_(list(sessions[i:i + 500])), tied)).scalars())
         return out
@@ -1184,7 +726,7 @@ class FactoryStore:
                     ss.c.crew_id.is_(None) | ss.c.crew_id.not_in(sorted(own)))
 
     def station_rollup(self, source: str, keep: int = EARLIER_KEPT,
-                       hidden=frozenset(), own=frozenset()) -> list[dict]:
+                       hidden=frozenset(), own=frozenset(), totals: bool = True) -> list[dict]:
         """One row per station (crew id and name), however many sessions played it (TR-1500):
         `cur` the newest session (as station_sessions gives it), `earlier` the `keep` most recent
         before it, `earlier_count` how many there are in all, and the totals over every session:
@@ -1195,9 +737,13 @@ class FactoryStore:
         session all the same, and `cur_hidden` says it is one of those, for the caller of this to
         blank. `projects` covers every session.
         Once the sessions table has caught up (TR-1520) these are grouped queries, so the answer
-        stays the size of the stations; before, the same is built from the full list."""
+        stays the size of the stations; before, the same is built from the full list.
+        `totals` False reads only who runs (TR-1634): `crew_id`, `station`, `cur` and `projects`,
+        no earlier session and no total."""
+        if not totals:
+            keep = 0
         if not session_ingest.caught_up(self):
-            return self._rollup_from_rows(source, keep, hidden, own)
+            return self._rollup_from_rows(source, keep, hidden, own, totals)
         ss, sx, u = session_stations, sessions_table, session_usage
         j, named, last = self._station_join(source)
         unread = case((self._hidden_session(hidden, own), 1), else_=0)
@@ -1224,16 +770,11 @@ class FactoryStore:
         sums = select(*key, func.count().filter(read),
                       func.sum(every.c.coordination_calls).filter(read)).group_by(*key)
         worked = self._station_projects()
-        spent = (select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
-                 .group_by(ss.c.crew_id, ss.c.station))
-        if hidden:   # that join starts at the replies, so the ones of no station are put out
-            replies, seen = self._replies_outside(hidden)
-            spent = spent.select_from(replies).where(ss.c.session.is_not(None), seen)
-        else:
-            spent = spent.select_from(ss.join(u, u.c.session == ss.c.session))
-        with self.sessions_db.snapshot() as conn:       # one snapshot: the four answers agree on the stations
-            top_rows, sum_rows = conn.execute(top).all(), conn.execute(sums).all()
-            worked_rows, spent_rows = conn.execute(worked).all(), conn.execute(spent).all()
+        spent = self._station_spend(hidden) if totals else None
+        with self.sessions_db.consistent_read() as conn:    # the answers agree on the stations
+            top_rows, worked_rows = conn.execute(top).all(), conn.execute(worked).all()
+            sum_rows = conn.execute(sums).all() if totals else []
+            spent_rows = conn.execute(spent).all() if totals else []
         out: dict[tuple, dict] = {}
         for r in top_rows:   # a station's newest comes first
             g = out.setdefault((r[10], r[1]), {"crew_id": r[10], "station": r[1], "sessions": [],
@@ -1261,7 +802,7 @@ class FactoryStore:
         ss, ps = session_stations, project_sessions
         for i in range(0, len(sessions), 500):
             chunk = list(sessions[i:i + 500])
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 for sid, project in conn.execute(
                         select(ss.c.session, ss.c.project).where(ss.c.session.in_(chunk))):
                     if project:
@@ -1280,6 +821,33 @@ class FactoryStore:
                   reverse=True)
         return rows
 
+    def _station_spend(self, hidden):
+        """A query of (crew id, station, then `_total_cols`' seven sums) over the sessions each
+        station played, the replies that count for a project in `hidden` left out."""
+        ss, u, h = session_stations, session_usage, session_usage_hourly
+        if hourly.ready(self):    # the kept hourly totals, not every usage row (TR-1632)
+            if hidden:   # an hour holds the project its replies were stamped with, "" for none
+                t = select(h.c.session, h.c.replies, h.c.input_tokens, h.c.output_tokens,
+                           h.c.cache_write_tokens, h.c.cache_read_tokens, h.c.cost_usd,
+                           h.c.unpriced, func.nullif(h.c.project, "").label("project")
+                           ).subquery("hours")
+            else:
+                t = h
+            q = select(ss.c.crew_id, ss.c.station, func.sum(t.c.replies),
+                       func.sum(t.c.input_tokens), func.sum(t.c.output_tokens),
+                       func.sum(t.c.cache_write_tokens), func.sum(t.c.cache_read_tokens),
+                       func.sum(t.c.cost_usd), func.sum(t.c.unpriced))
+        else:
+            t = u
+            q = select(ss.c.crew_id, ss.c.station, *self._total_cols(u))
+        if hidden:   # that join starts at the replies, so the ones of no station are put out
+            replies, project, _ = self._replies_by_project(t)
+            q = q.select_from(replies).where(ss.c.session.is_not(None),
+                                             self._outside(project, hidden))
+        else:
+            q = q.select_from(ss.join(t, t.c.session == ss.c.session))
+        return q.group_by(ss.c.crew_id, ss.c.station)
+
     def _unread_sessions(self, rows: list[dict], hidden, own) -> set[str]:
         """`_hidden_session` for station_sessions rows: the sessions of `rows` the caller must
         not read."""
@@ -1294,19 +862,19 @@ class FactoryStore:
             return found
         t, ids = session_stations, sorted(found)
         for i in range(0, len(ids), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 found -= set(conn.execute(select(t.c.session).where(
                     t.c.session.in_(ids[i:i + 500]), t.c.crew_id.in_(sorted(own)))).scalars())
         return found
 
     def _rollup_from_rows(self, source: str, keep: int, hidden=frozenset(),
-                          own=frozenset()) -> list[dict]:
+                          own=frozenset(), totals: bool = True) -> list[dict]:
         """`station_rollup` for a cell whose sessions table has not caught up: from every row."""
         rows = self._newest_first(self.station_sessions(source))
-        spent = self.usage_by_session([r["session"] for r in rows], hidden)
-        coord = self.coordination_calls(source, [r["session"] for r in rows])
+        spent = self.usage_by_session([r["session"] for r in rows], hidden) if totals else {}
+        coord = self.coordination_calls(source, [r["session"] for r in rows]) if totals else {}
         unread = self._unread_sessions(rows, hidden, own)
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             worked = conn.execute(self._station_projects()).all()
         projects: dict[tuple, set] = {}
         for cid, name, project in worked:
@@ -1352,7 +920,7 @@ class FactoryStore:
             if not rows:
                 return None
             rows = rows[1:]
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 projects = sorted(p for *_, p in conn.execute(self._station_projects().where(mine)) if p)
             unread = self._unread_sessions(rows, hidden, own)
             rows = [r for r in rows if r["session"] not in unread]
@@ -1365,7 +933,7 @@ class FactoryStore:
             return {"earlier_count": total, "projects": projects,
                     "sessions": page,
                     "next_before": page[-1]["last_at"] if len(rows) > len(page) else None}
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             n = conn.execute(select(func.count()).select_from(ss).where(mine)).scalar_one()
             if not n:
                 return None
@@ -1393,18 +961,19 @@ class FactoryStore:
     def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,
                            reason: str | None, by_station: str | None, by_role: str | None,
                            at, person_id: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO ticket_history (ticket, project, changed_at, field, value, reason, "
-                "by_station, by_role, person_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [ticket, project, at, field, value, reason or None, by_station or None,
-                 by_role or None, person_id or None])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(history_table).values(
+                ticket=ticket, project=project, changed_at=at, field=field, value=value,
+                reason=reason or None, by_station=by_station or None, by_role=by_role or None,
+                person_id=person_id or None))
 
     def ticket_history(self, ticket: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT changed_at, field, value, reason, by_station, by_role, person_id "
-                "FROM ticket_history WHERE ticket = ? ORDER BY changed_at", [ticket]).fetchall()
+        h = history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                h.c.changed_at, h.c.field, h.c.value, h.c.reason, h.c.by_station, h.c.by_role,
+                h.c.person_id).where(h.c.ticket == ticket)
+                .order_by(h.c.changed_at.nulls_last())).all()
         return self._with_people([{"at": r[0], "field": r[1], "value": r[2], "reason": r[3],
                                    "by": r[4], "role": r[5], "person_id": r[6]} for r in rows])
 
@@ -1413,44 +982,50 @@ class FactoryStore:
         did are absent."""
         if not tickets:
             return {}
-        marks = ", ".join("?" for _ in tickets)
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, max(changed_at) FROM ticket_history WHERE ticket IN "
-                f"({marks}) AND field = 'stage' AND value = ? GROUP BY ticket",
-                list(tickets) + [stage]).fetchall()
-        return dict(rows)
+        h = history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(h.c.ticket, func.max(h.c.changed_at)).where(
+                h.c.ticket.in_(list(tickets)), h.c.field == "stage", h.c.value == stage
+            ).group_by(h.c.ticket)).all()
+        return {r[0]: r[1] for r in rows}
 
     def review_tickets(self) -> list[tuple[str, dict]]:
         """Every ticket in review with its project's name, in the order the projects were made
         and then the list's own order, in one query (TR-648). "In review" is factory.state_of's:
         stage review and a status that is not done or canceled (TR-1008)."""
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._TICKET_COLS}, pname FROM (SELECT t.*, u.name AS pname, "
-                "u.created_at AS pcreated FROM tickets t JOIN usecases u ON u.id = t.project "
-                "WHERE t.stage = 'review' AND (t.status IS NULL OR t.status NOT IN ('done', 'canceled'))) "
-                "ORDER BY pcreated, position, created_at").fetchall()
-        return [(r[-1], self._ticket_row(r)) for r in rows]
+        t = tickets_table
+        with self.sessions_db.consistent_read() as conn:
+            rows = conn.execute(select(t).where(t.c.stage == "review", or_(
+                t.c.status.is_(None), t.c.status.not_in(("done", "canceled"))))).all()
+            made = {r[0]: (r[1], r[2]) for r in conn.execute(select(
+                projects_table.c.id, projects_table.c.name, projects_table.c.created_at))}
+        rows = [r for r in rows if r.project in made]
+
+        def order(r):
+            return tuple((v is None, v) if v is not None else (True, 0) for v in (
+                made[r.project][1], r.position, r.created_at))
+        rows.sort(key=order)
+        return [(made[r.project][0], self._ticket_row(r)) for r in rows]
 
     def milestone_statuses(self, milestones: list[str]) -> list[dict]:
         """Project, milestone, id and status of every ticket in these milestones (TR-648)."""
         if not milestones:
             return []
-        marks = ", ".join("?" for _ in milestones)
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT project, milestone, id, status FROM tickets WHERE milestone IN ({marks})",
-                list(milestones)).fetchall()
+        t = tickets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.project, t.c.milestone, t.c.id, t.c.status).where(
+                t.c.milestone.in_(list(milestones)))).all()
         return [{"project": r[0], "milestone": r[1], "id": r[2], "status": r[3]} for r in rows]
 
     def history_between(self, since, until) -> list[dict]:
         """Every ticket change in [since, until), oldest first, for every project (the standup)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, project, changed_at, field, value, reason, by_station, person_id "
-                "FROM ticket_history WHERE changed_at >= ? AND changed_at < ? "
-                "ORDER BY changed_at", [since, until]).fetchall()
+        h = history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                h.c.ticket, h.c.project, h.c.changed_at, h.c.field, h.c.value, h.c.reason,
+                h.c.by_station, h.c.person_id
+            ).where(h.c.changed_at >= since, h.c.changed_at < until)
+                .order_by(h.c.changed_at)).all()
         return self._with_people([{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3],
                                    "value": r[4], "reason": r[5], "by": r[6], "person_id": r[7]}
                                   for r in rows])
@@ -1459,36 +1034,40 @@ class FactoryStore:
     def all_stage_changes(self) -> list[dict]:
         """Every stage change of every ticket, deleted tickets too, each ticket's together and
         oldest first. `value` None is a stage taken off."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, project, changed_at, value FROM ticket_history "
-                "WHERE field = 'stage' ORDER BY ticket, changed_at").fetchall()
+        t = history_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.ticket, t.project, t.changed_at, t.value)
+                                .where(t.field == "stage")
+                                .order_by(t.ticket, t.changed_at.asc().nulls_last())).fetchall()
         return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
 
     def all_holder_changes(self) -> list[dict]:
         """Every holder change of every ticket, deleted tickets too, each ticket's together and
         oldest first. `value` is the station that holds the ticket from then on, None for nobody."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT ticket, project, changed_at, value FROM ticket_history "
-                "WHERE field = 'holder' ORDER BY ticket, changed_at").fetchall()
+        t = history_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.ticket, t.project, t.changed_at, t.value)
+                                .where(t.field == "holder")
+                                .order_by(t.ticket, t.changed_at.asc().nulls_last())).fetchall()
         return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
 
     def all_reviews(self) -> list[dict]:
         """Every review round of every ticket, each ticket's together and in round order."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT id, project, ticket, round, verdict, by_station, reviewed_at FROM reviews "
-                "ORDER BY ticket, round, reviewed_at").fetchall()
+        t = reviews_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.id, t.project, t.ticket, t.round, t.verdict, t.by_station,
+                                       t.reviewed_at)
+                                .order_by(t.ticket, t.round.asc().nulls_last(),
+                                          t.reviewed_at.asc().nulls_last())).fetchall()
         return [{"id": r[0], "project": r[1], "ticket": r[2], "round": r[3], "verdict": r[4],
                  "by": r[5], "at": r[6]} for r in rows]
 
     def all_review_findings(self) -> list[dict]:
         """Every finding of every review, with its kind as stored."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT project, severity, blocking, kind, state, fixed_in, found_at "
-                "FROM review_findings").fetchall()
+        t = findings_table.c
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.project, t.severity, t.blocking, t.kind, t.state,
+                                       t.fixed_in, t.found_at)).fetchall()
         return [{"project": r[0], "severity": r[1], "blocking": bool(r[2]), "kind": r[3],
                  "state": r[4], "fixed_in": r[5], "found_at": r[6]} for r in rows]
 
@@ -1523,11 +1102,17 @@ class FactoryStore:
     def factory_ref_elsewhere(self, uid: str, repo: str, ref: str) -> bool:
         """Another project has a ticket called `ref` in the work whose PRs live in `repo`: a
         branch named after the ref could be either's, so it is not linked by name."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT t.project, t.number, t.identifier, t.stage FROM tickets t WHERE "
-                "t.project <> ? AND t.project IN (SELECT project FROM tickets WHERE "
-                "json_extract_string(pr, '$.repo') = ?)", [uid, repo]).fetchall()
+        if repo is None:                 # a pull request with no `repo` is not in "no repo"
+            return False
+        t = tickets_table
+        with self.sessions_db.consistent_read() as conn:
+            # the stored text is searched for the name, then each hit's `repo` is compared
+            there = {r.project for r in conn.execute(select(t.c.project, t.c.pr).where(
+                t.c.project != uid,
+                type_coerce(t.c.pr, Text).contains(json.dumps(repo), autoescape=True)))
+                if (r.pr or {}).get("repo") == repo}
+            rows = conn.execute(select(t.c.project, t.c.number, t.c.identifier, t.c.stage).where(
+                t.c.project.in_(sorted(there)))).all() if there else []
         for project, number, ident, stage in rows:
             lab = ident or (f"T{number}" if number else "")
             if lab.upper() == ref.upper() and stage in ("doing", "review", "changes", "blocked"):
@@ -1540,7 +1125,7 @@ class FactoryStore:
         out = {}
         for i in range(0, len(sessions), 500):
             chunk = sessions[i:i + 500]
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update((r[0], r[1]) for r in conn.execute(select(
                     session_stations.c.session, session_stations.c.station).where(
                     session_stations.c.session.in_(chunk))))
@@ -1553,7 +1138,7 @@ class FactoryStore:
         stored (session_ingest, TR-1477); the sender is looked up now, so a station renamed later
         shows under its new name."""
         t = session_messages.c
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(select(t.session, t.at, t.to_station, t.type, t.text).where(
                 t.source == source).order_by(t.at.desc(), t.tool_use_id.desc()).limit(limit)
             ).fetchall()
@@ -1581,7 +1166,7 @@ class FactoryStore:
                 continue
             q = select(t.c.session, t.c.coordination_calls).where(
                 t.c.source == source, t.c.session.in_(chunk), t.c.coordination_calls > 0)
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update((sid, int(n)) for sid, n in conn.execute(q))
         return out
 
@@ -1612,90 +1197,91 @@ class FactoryStore:
         return found
 
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
-    _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
-                "made_by, made_role, made_at, decided_at, person_id")
-
     @staticmethod
     def _as_row(r) -> dict:
-        return {"person_id": r[15], "id": r[0], "project": r[1], "number": r[2], "label": f"A{r[2]}",
-                "question": r[3], "choice": r[4], "why": r[5], "affects": r[6] or "",
-                "tickets": json.loads(r[7]) if r[7] else [], "state": r[8], "words": r[9],
-                "batch": r[10], "made_by": r[11], "made_role": r[12], "made_at": r[13],
-                "decided_at": r[14]}
+        return {"person_id": r.person_id, "id": r.id, "project": r.project, "number": r.number,
+                "label": f"A{r.number}", "question": r.question, "choice": r.choice, "why": r.why,
+                "affects": r.affects or "", "tickets": r.tickets or [], "state": r.state,
+                "words": r.words, "batch": r.batch, "made_by": r.made_by,
+                "made_role": r.made_role, "made_at": r.made_at, "decided_at": r.decided_at}
 
     def add_assumption(self, project: str, question: str, choice: str, why: str, affects: str,
                        tickets: list[str], made_by: str, made_role: str, at,
                        person_id: str | None = None) -> dict:
         aid = "as_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            n = (self.sc.execute("SELECT max(number) FROM assumptions WHERE project = ?",
-                                  [project]).fetchone()[0] or 0) + 1
-            self.sc.execute(
-                f"INSERT INTO assumptions ({self._AS_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, ?, ?, ?, NULL, ?)",
-                [aid, project, n, question, choice, why, affects or None,
-                 json.dumps(tickets) if tickets else None, made_by or None, made_role or None, at,
-                 person_id or None])
-            r = self.sc.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE id = ?",
-                                 [aid]).fetchone()
+        t = assumptions_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, f"tares_assumption_number:{project}")
+            n = (conn.execute(select(func.max(t.c.number)).where(
+                t.c.project == project)).scalar() or 0) + 1
+            conn.execute(insert(t).values(
+                id=aid, project=project, number=n, question=question, choice=choice, why=why,
+                affects=affects or None, tickets=tickets or None, state="open",
+                made_by=made_by or None, made_role=made_role or None, made_at=at,
+                person_id=person_id or None))
+            r = conn.execute(select(t).where(t.c.id == aid)).one()
         return self._with_people([self._as_row(r)], "made_by")[0]
 
     def list_assumptions(self, project: str, state: str | None = None,
                          ticket: str | None = None) -> list[dict]:
-        q = f"SELECT {self._AS_COLS} FROM assumptions WHERE project = ?"
-        vals: list = [project]
+        t = assumptions_table
+        q = select(t).where(t.c.project == project)
         if state:
-            q += " AND state = ?"; vals.append(state)
-        with self._sread:
-            rows = self.sc.execute(q + " ORDER BY number", vals).fetchall()
+            q = q.where(t.c.state == state)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.number.asc().nulls_last())).fetchall()
         out = [self._as_row(r) for r in rows]
         out = [a for a in out if ticket in a["tickets"]] if ticket else out
         return self._with_people(out, "made_by")
 
     def open_assumptions(self) -> list[dict]:
         """Every open assumption of every project in one query, oldest first (the home page)."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE state = 'open' "
-                                    "ORDER BY made_at, project, number").fetchall()
+        t = assumptions_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.state == "open").order_by(
+                t.c.made_at.asc().nulls_last(), t.c.project.asc().nulls_last(),
+                t.c.number.asc().nulls_last())).fetchall()
         return [self._as_row(r) for r in rows]
 
     def get_assumption(self, project: str, ref: str) -> dict | None:
         m = re.match(r"^[Aa]?(\d{1,6})$", (ref or "").strip())
-        with self._sread:
-            r = self.sc.execute(
-                f"SELECT {self._AS_COLS} FROM assumptions WHERE project = ? AND (id = ? OR "
-                "number = ?)", [project, ref, int(m.group(1)) if m else -1]).fetchone()
+        t = assumptions_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(
+                t.c.project == project,
+                or_(t.c.id == ref, t.c.number == (int(m.group(1)) if m else -1)))).first()
         return self._with_people([self._as_row(r)], "made_by")[0] if r else None
 
     def decide_assumption(self, aid: str, state: str, words: str | None, batch: str | None,
                           at) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE assumptions SET state = ?, words = ?, batch = ?, "
-                             "decided_at = ? WHERE id = ?", [state, words, batch, at, aid])
+        t = assumptions_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == aid).values(
+                state=state, words=words, batch=batch, decided_at=at))
 
     # ── checks (TR-435) ───────────────────────────────────────────────────────
     def add_check(self, project: str, ticket: str, command: str, result: str, commit: str,
                   broke_test: str, by_station: str, by_session: str, at,
                   person_id: str | None = None) -> str:
         cid = "ck_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO ticket_checks (id, project, ticket, command, result, commit_sha, "
-                "broke_test, by_station, by_session, checked_at, person_id) VALUES (?, ?, ?, ?, ?, "
-                "?, ?, ?, ?, ?, ?)", [cid, project, ticket, command, result, commit or None,
-                                      broke_test or None, by_station or None, by_session or None,
-                                      at, person_id or None])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(checks_table).values(
+                id=cid, project=project, ticket=ticket, command=command, result=result,
+                commit_sha=commit or None, broke_test=broke_test or None,
+                by_station=by_station or None, by_session=by_session or None, checked_at=at,
+                person_id=person_id or None))
         return cid
 
     def ticket_checks(self, ticket: str, limit: int = 50) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT id, command, result, commit_sha, broke_test, by_station, checked_at, person_id "
-                "FROM ticket_checks WHERE ticket = ? ORDER BY checked_at DESC LIMIT ?",
-                [ticket, limit]).fetchall()
-        return self._with_people([{"id": r[0], "command": r[1], "result": r[2], "commit": r[3],
-                                   "broke_test": r[4], "by": r[5], "at": r[6], "person_id": r[7]}
-                                  for r in reversed(rows)])
+        t = checks_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(
+                t.c.id, t.c.command, t.c.result, t.c.commit_sha.label("commit"), t.c.broke_test,
+                t.c.by_station.label("by"), t.c.checked_at.label("at"), t.c.person_id)
+                .where(t.c.ticket == ticket)
+                .order_by(t.c.checked_at.desc().nulls_last(), t.c.id.desc())
+                .limit(limit)).fetchall()
+        return self._with_people([dict(r._mapping) for r in reversed(rows)])
 
     # ── reviews (TR-441) ──────────────────────────────────────────────────────
     def add_review(self, project: str, ticket: str, pr: str | None, head: str, verdict: str,
@@ -1704,97 +1290,134 @@ class FactoryStore:
         """A review round: earlier findings marked fixed or still open as `resolved` says
         ({F<n> or id: fixed|open}), the new findings numbered on from the ticket's last."""
         rid = "rv_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            rnd = (self.sc.execute("SELECT max(round) FROM reviews WHERE ticket = ?",
-                                    [ticket]).fetchone()[0] or 0) + 1
-            self.sc.execute(
-                "INSERT INTO reviews (id, project, ticket, round, pr, head, verdict, verified, "
-                "not_verified, by_station, reviewed_at, person_id) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [rid, project, ticket, rnd, pr, head, verdict, verified, not_verified or None,
-                 by or None, at, person_id or None])
+        r, f = reviews_table, findings_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            rnd = (conn.execute(select(func.max(r.c.round)).where(
+                r.c.ticket == ticket)).scalar() or 0) + 1
+            conn.execute(insert(r).values(
+                id=rid, project=project, ticket=ticket, round=rnd, pr=pr, head=head,
+                verdict=verdict, verified=verified, not_verified=not_verified or None,
+                by_station=by or None, reviewed_at=at, person_id=person_id or None))
             for ref, st in (resolved or {}).items():
                 m = re.match(r"^[Ff]?(\d{1,6})$", str(ref).strip())
-                self.sc.execute(
-                    "UPDATE review_findings SET state = ?, fixed_in = ? WHERE ticket = ? AND "
-                    "(id = ? OR number = ?)", [st, rid if st == "fixed" else None, ticket, ref,
-                                               int(m.group(1)) if m else -1])
-            n = self.sc.execute("SELECT max(number) FROM review_findings WHERE ticket = ?",
-                                 [ticket]).fetchone()[0] or 0
-            for f in findings:
-                n += 1
-                self.sc.execute(
-                    "INSERT INTO review_findings (id, project, ticket, review, number, severity, "
-                    "file, line, blocking, text, kind, state, fixed_in, found_at) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?)",
-                    ["rf_" + uuid.uuid4().hex[:10], project, ticket, rid, n, f["severity"],
-                     f["file"] or None, f["line"] or None, f["blocking"], f["text"],
-                     kind_of(f["text"]), at])
+                conn.execute(update(f).where(
+                    f.c.ticket == ticket,
+                    or_(f.c.id == str(ref), f.c.number == (int(m.group(1)) if m else -1))
+                ).values(state=st, fixed_in=rid if st == "fixed" else None))
+            n = conn.execute(select(func.max(f.c.number)).where(f.c.ticket == ticket)).scalar() or 0
+            new = [{"id": "rf_" + uuid.uuid4().hex[:10], "project": project, "ticket": ticket,
+                    "review": rid, "number": n + i, "severity": x["severity"],
+                    "file": x["file"] or None, "line": x["line"] or None,
+                    "blocking": x["blocking"], "text": x["text"], "kind": kind_of(x["text"]),
+                    "state": "open", "fixed_in": None, "found_at": at}
+                   for i, x in enumerate(findings, 1)]
+            if new:
+                conn.execute(insert(f), new)
         return {"id": rid, "round": rnd}
 
+    @staticmethod
+    def _review_cols():
+        r = reviews_table.c
+        return (r.id, r.round, r.pr, r.head, r.verdict, r.verified, r.not_verified,
+                r.by_station.label("by"), r.reviewed_at.label("at"))
+
+    @staticmethod
+    def _finding_cols():
+        f = findings_table.c
+        return (f.id, f.review, f.number, f.severity, f.file, f.line, f.blocking, f.text, f.kind,
+                f.state, f.fixed_in)
+
+    @staticmethod
+    def _finding_row(f) -> dict:
+        return {"id": f.id, "review": f.review, "label": f"F{f.number}", "severity": f.severity,
+                "file": f.file, "line": f.line, "blocking": bool(f.blocking), "text": f.text,
+                "kind": f.kind, "state": f.state, "fixed_in": f.fixed_in}
+
     def ticket_reviews(self, ticket: str) -> list[dict]:
-        with self._sread:
-            revs = self.sc.execute(
-                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
-                "reviewed_at, person_id FROM reviews WHERE ticket = ? ORDER BY round", [ticket]).fetchall()
-            fs = self.sc.execute(
-                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
-                "fixed_in FROM review_findings WHERE ticket = ? ORDER BY number",
-                [ticket]).fetchall()
-        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
-                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
-                  "state": f[9], "fixed_in": f[10]} for f in fs]
+        r, f = reviews_table, findings_table
+        # one snapshot: a round recorded between the two reads must not show half
+        with self.sessions_db.consistent_read() as conn:
+            revs = conn.execute(select(*self._review_cols(), r.c.person_id)
+                                .where(r.c.ticket == ticket)
+                                .order_by(r.c.round.asc().nulls_last(), r.c.id)).fetchall()
+            fs = conn.execute(select(*self._finding_cols()).where(f.c.ticket == ticket)
+                              .order_by(f.c.number.asc().nulls_last(), f.c.id)).fetchall()
+        finds = [self._finding_row(x) for x in fs]
         out = []
-        for r in revs:
-            mine = [f for f in finds if f["review"] == r[0]]
-            fixed_here = [f["label"] for f in finds if f["fixed_in"] == r[0]]
-            out.append({"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
-                        "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
-                        "person_id": r[9], "findings": mine, "fixed": fixed_here})
+        for rv in revs:
+            mine = [x for x in finds if x["review"] == rv.id]
+            fixed_here = [x["label"] for x in finds if x["fixed_in"] == rv.id]
+            out.append({**rv._mapping, "findings": mine, "fixed": fixed_here})
         return self._with_people(out)
 
     def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
-        """Each ticket's latest review round, shaped like an element of ticket_reviews(), in two
-        queries for any number of tickets (TR-657). Tickets never reviewed are absent."""
+        """Each ticket's standing review round (`factory.standing_round`), shaped like an element
+        of ticket_reviews(), in two queries for any number of tickets (TR-657). Tickets never
+        reviewed are absent."""
         if not tickets:
             return {}
-        marks = ", ".join("?" for _ in tickets)
-        with self._sread:
-            revs = self.sc.execute(
-                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
-                "reviewed_at, ticket FROM (SELECT *, row_number() OVER (PARTITION BY ticket "
-                f"ORDER BY round DESC) AS rn FROM reviews WHERE ticket IN ({marks})) r "
-                "WHERE rn = 1",
-                list(tickets)).fetchall()
-            ids = [r[0] for r in revs]
-            fs = self.sc.execute(
-                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
-                f"fixed_in FROM review_findings WHERE review IN ({', '.join('?' for _ in ids)}) "
-                f"OR fixed_in IN ({', '.join('?' for _ in ids)}) ORDER BY number",
-                ids + ids).fetchall() if ids else []
-        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
-                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
-                  "state": f[9], "fixed_in": f[10]} for f in fs]
-        return {r[9]: {"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
-                       "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
-                       "findings": [f for f in finds if f["review"] == r[0]],
-                       "fixed": [f["label"] for f in finds if f["fixed_in"] == r[0]]}
-                for r in revs}
+        from .factory import MERGE_QUEUE, standing_round
+        r, f = reviews_table, findings_table
+        ranked = select(
+            *self._review_cols(), r.c.ticket,
+            func.row_number().over(
+                partition_by=[r.c.ticket, case((r.c.by_station == MERGE_QUEUE, 1), else_=0)],
+                order_by=r.c.round.desc().nulls_last()).label("rn")
+        ).where(r.c.ticket.in_(list(tickets))).subquery()
+        cols = [c for c in ranked.c if c.name != "rn"]
+        with self.sessions_db.consistent_read() as conn:
+            revs = conn.execute(select(*cols).where(ranked.c.rn == 1)
+                                .order_by(ranked.c.round.asc().nulls_last(),
+                                          ranked.c.id)).fetchall()
+            # per ticket the newest round of the merge queue and the newest of everyone else, so
+            # the one that stands is among them
+            newest: dict[str, list[dict]] = {}
+            for rv in revs:
+                newest.setdefault(rv.ticket, []).append(
+                    {"id": rv.id, "by": rv.by, "verdict": rv.verdict})
+            standing = {standing_round(v)["id"] for v in newest.values()}
+            revs = [rv for rv in revs if rv.id in standing]
+            ids = [rv.id for rv in revs]
+            fs = conn.execute(select(*self._finding_cols())
+                              .where(or_(f.c.review.in_(ids), f.c.fixed_in.in_(ids)))
+                              .order_by(f.c.number.asc().nulls_last(), f.c.id)
+                              ).fetchall() if ids else []
+        finds = [self._finding_row(x) for x in fs]
+        return {rv.ticket: {**{k: v for k, v in rv._mapping.items() if k != "ticket"},
+                            "findings": [x for x in finds if x["review"] == rv.id],
+                            "fixed": [x["label"] for x in finds if x["fixed_in"] == rv.id]}
+                for rv in revs}
 
     def open_findings(self, ticket: str) -> list[dict]:
         return [f for r in self.ticket_reviews(ticket) for f in r["findings"] if f["state"] == "open"]
 
     def repo_findings(self, repo: str, since) -> list[dict]:
         """Every reviewer finding on tickets whose PR lives in `repo` since `since`, with the
-        ticket and project (TR-443)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT f.ticket, f.project, f.kind, f.text, f.severity, f.found_at FROM "
-                "review_findings f JOIN tickets t ON t.id = f.ticket WHERE "
-                "json_extract_string(t.pr, '$.repo') = ? AND f.found_at >= ?",
-                [repo, since]).fetchall()
-        return [{"ticket": r[0], "project": r[1], "kind": r[2], "text": r[3], "severity": r[4],
-                 "at": r[5]} for r in rows]
+        ticket and project (TR-443). Each row also carries the ticket's own project, identifier and
+        number (what factory.label needs), so a caller names the tickets without reading each.
+        Oldest first."""
+        if repo is None:
+            return []
+        f, t = findings_table, tickets_table
+        # the repo is inside the ticket's `pr`. The tickets that may have it are found through the
+        # index of `pr_repo` (lower case, NULL for a name it never holds); `pr` itself decides
+        want = pr_columns({"repo": repo})[0]
+        with self.sessions_db.consistent_read() as conn:
+            mine = {tk.id: tk for tk in conn.execute(
+                select(t.c.id, t.c.project, t.c.identifier, t.c.number, t.c.pr)
+                .where(t.c.pr_repo == want))
+                if isinstance(tk.pr, dict) and tk.pr.get("repo") == repo}
+            if not mine:
+                return []
+            rows = conn.execute(select(
+                f.c.ticket, f.c.project, f.c.kind, f.c.text, f.c.severity, f.c.found_at)
+                .where(f.c.found_at >= since)
+                .order_by(f.c.found_at, f.c.ticket, f.c.number)).fetchall()
+        return [{"ticket": r.ticket, "project": r.project, "kind": r.kind, "text": r.text,
+                 "severity": r.severity, "at": r.found_at,
+                 "ticket_project": mine[r.ticket].project,
+                 "ticket_identifier": mine[r.ticket].identifier,
+                 "ticket_number": mine[r.ticket].number} for r in rows if r.ticket in mine]
 
     # ── what the recording says (TR-440, TR-442) ──────────────────────────────
     CHALLENGE_TYPES = ("challenge_commit", "challenge_waived", "challenge_plan")
@@ -1813,27 +1436,24 @@ class FactoryStore:
         pairs = list(dict.fromkeys(tickets))
         out: dict[tuple[str, str], list[dict]] = {p: [] for p in pairs}
         refs = sorted({ref for _, ref in pairs})
+        t = challenges_table
         rows = []
-        with self._sread:
+        with self.sessions_db.consistent_read() as conn:
             for i in range(0, len(refs), 150):
-                chunk = refs[i:i + 150]
-                where = " OR ".join("branch = ? OR branch LIKE ?" for _ in chunk)
-                args = [x for ref in chunk for x in (f"factory/{ref}", f"factory/{ref}-%")]
-                rows += self.sc.execute(
-                    "SELECT event_time, event_type, payload, key_value, branch, tares_project "
-                    f"FROM challenges WHERE source = ? AND ({where}) ORDER BY event_time",
-                    [source, *args]).fetchall()
+                rows += conn.execute(select(
+                    t.c.event_time, t.c.event_type, t.c.payload, t.c.key_value, t.c.branch,
+                    t.c.tares_project).where(self._challenge_branches(source, refs[i:i + 150]))
+                    .order_by(t.c.event_time, t.c.key_value, t.c.event_type,
+                              t.c.branch)).fetchall()
             if not rows:
                 return out
             # a line can match refs in two chunks: keep it once, oldest first as before
             rows = list({(r[0], r[1], r[3], r[4], r[5]): r for r in rows}.values())
             rows.sort(key=lambda r: r[0])
             projects = sorted({p for p, _ in pairs})
-            marks = ", ".join("?" for _ in projects)
-            names = dict(self.sc.execute(
-                f"SELECT id, name FROM usecases WHERE id IN ({marks})", projects).fetchall())
-        sessions: dict[str, set] = {}
-        with self.sessions_db.begin() as conn:
+            names = dict(conn.execute(select(projects_table.c.id, projects_table.c.name).where(
+                projects_table.c.id.in_(projects))).all())
+            sessions: dict[str, set] = {}
             for project, session in conn.execute(select(
                     project_sessions.c.project, project_sessions.c.session).where(
                     project_sessions.c.project.in_(projects))):
@@ -1844,41 +1464,124 @@ class FactoryStore:
                            or (r[4] or "").startswith(f"factory/{ref}-")]
         for project, ref in pairs:
             stamps = {str(project).lower(), str(names.get(project, project)).lower()}
-            for at, typ, pj, sid, _branch, stamped in by_ref[ref]:
+            for at, typ, payload, sid, _branch, stamped in by_ref[ref]:
                 if stamped is not None:
                     if str(stamped).lower() not in stamps:
                         continue
                 elif sid not in sessions.get(project, ()):
                     continue
-                try:
-                    o = json.loads(pj) if isinstance(pj, str) else (pj or {})
-                except ValueError:
-                    o = {}
+                o = self._challenge_payload(payload, source, sid, at, typ, _branch)
                 ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
                 out[(project, ref)].append({"at": at, "type": typ, "session": sid, "challenge": ch})
         return out
 
+    def _challenge_branches(self, source: str, refs: list[str]):
+        """The lines of `source` on these refs' branches, factory/<ref> and factory/<ref>-...
+        It may give more (SQLite) or other-case ones (SQLite's LIKE): the caller keeps the exact
+        branches."""
+        t = challenges_table
+        if self.sessions_db.dialect == "sqlite":
+            # a range, one for each ref, with the source in it: SQLite compares bytes, so
+            # factory/<ref> up to factory/<ref>. holds every <ref>-... branch, and both columns of
+            # ix_challenges_branch are used. Its LIKE ignores case and would use the source alone
+            return or_(*(and_(t.c.source == source, t.c.branch >= f"factory/{ref}",
+                              t.c.branch < f"factory/{ref}.") for ref in refs))
+        # not a range on Postgres: there the database's collation orders text, which need not be
+        # by bytes
+        wanted = []
+        for ref in refs:
+            wanted += [t.c.branch == f"factory/{ref}", t.c.branch.like(f"factory/{ref}-%")]
+        return and_(t.c.source == source, or_(*wanted))
+
+    def _challenge_payload(self, text, source, session, at, typ, branch) -> dict:
+        """A challenger line's stored payload as an object. {} when there is none, when it is JSON
+        but not an object, or when it is not JSON or is nested too deeply (`challenge_json`), which
+        is also logged, once for each line while this process runs, by its ids alone."""
+        if not text or not text.strip():
+            return {}
+        try:
+            o = challenge_json(text)
+        except ValueError:
+            line = (source, session, at, typ, branch)
+            if line not in self._challenges_unreadable:
+                self._challenges_unreadable.add(line)
+                log.warning("a challenger line's payload is not JSON or is nested too deeply, read "
+                            "as empty: source %s session %s type %s branch %s at %s",
+                            *(_loggable(x)[:120] for x in
+                              (source, session or "unknown", typ, branch, at.isoformat())))
+            return {}
+        return o if isinstance(o, dict) else {}
+
     def _record_challenges(self, rows: list[tuple]) -> None:
-        """Keep the challenger's lines (source, key, time, type, branch, project, payload) in
-        `challenges`. Idempotent: a line already kept is skipped."""
+        """Keep the challenger's lines (source, key, time, type, branch, project, payload as JSON
+        text) in `challenges`, the payload as given: one that is not JSON, or is nested too deeply,
+        is read as {}.
+        Idempotent: a line already kept is skipped."""
+        names = ("source", "key_value", "event_time", "event_type", "branch", "tares_project",
+                 "payload")
         for i in range(0, len(rows), 500):
-            self.sc.executemany(
-                "INSERT INTO challenges (source, key_value, event_time, event_type, branch, "
-                "tares_project, payload) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                rows[i:i + 500])
+            chunk = [dict(zip(names, r)) for r in rows[i:i + 500]]
+            with self.sessions_db.begin() as conn:
+                conn.execute(self.sessions_db.upsert(challenges_table).on_conflict_do_nothing(),
+                             chunk)
+
+    def _challenges_not_kept(self, rows: list[tuple], ex: Exception) -> None:
+        """Say that `_record_challenges` could not write `rows` (its shape): session and commit
+        ids and the error's type only, never the payload or the error's text, which can quote the
+        verdict. On the factory edition they are lost and counted."""
+        if not self._factory_writes():
+            print(f"taresd: keeping {len(rows)} challenger line(s) failed ({type(ex).__name__}); "
+                  "they are copied at the next start", flush=True)
+            return
+        named = []
+        for row in rows[:20]:
+            try:
+                sha = challenge_json(row[6])["challenge"].get("sha")
+            except (ValueError, TypeError, KeyError, AttributeError):
+                sha = None
+            named.append(f"session {_loggable(row[1] or 'unknown')[:80]} commit "
+                         f"{_loggable(sha or 'none')[:40]}")
+        metrics.challenges_lost(len(rows))
+        log.warning("%d challenger line(s) lost, the sessions database did not take them (%s): %s",
+                    len(rows), type(ex).__name__, "; ".join(named))
 
     def _challenges_fill(self) -> None:
         """Copy challenger lines stored before `challenges` existed, or while a write to it
-        failed. One scan of the events at open, then only the lines `append` records."""
+        failed. One scan of the events at open, then only the lines `append` records. The factory
+        edition scans once and records it (`challenges_filled`, TR-1613)."""
+        if session_ingest.filled_once(self, session_ingest.CHALLENGES_FILLED):
+            return
         rows = self.con.execute(
             "SELECT source, coalesce(key_value, ''), event_time, event_type, "
             "coalesce(json_extract_string(labels, '$.branch'), ''), "
             "json_extract_string(labels, '$.tares_project'), payload FROM events "
             "WHERE event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan')"
             ).fetchall()
-        rows = [r for r in rows if session_ingest.holds_session(self, r[1])]
+        rows = self._challenges_without_nul(
+            [r for r in rows if session_ingest.holds_session(self, r[1])])
         if rows:
             self._record_challenges(rows)
+        session_ingest.set_filled(self, session_ingest.CHALLENGES_FILLED)
+
+    def _challenges_without_nul(self, rows: list[tuple]) -> list[tuple]:
+        """The fill's rows (`_record_challenges`' shape) with the branch and project a posted line
+        has now: without NULs. DuckDB may hold lines from before they were dropped (TR-1707), and
+        Postgres takes none in text. On SQLite an older version could keep a line under its branch
+        as it was: that one is not kept a second time."""
+        db, t = self.sessions_db, challenges_table.c
+        out = []
+        for source, key, at, typ, branch, project, payload in rows:
+            if "\x00" in branch + (project or ""):
+                if "\x00" in branch and db.dialect == "sqlite":
+                    with db.read() as conn:
+                        if conn.execute(select(t.branch).where(
+                                t.source == source, t.key_value == key, t.event_time == at,
+                                t.event_type == typ, t.branch == branch)).first():
+                            continue
+                branch = branch.replace("\x00", "")
+                project = (project or "").replace("\x00", "") or None
+            out.append((source, key, at, typ, branch, project, payload))
+        return out
 
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000, ends: bool = False) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
@@ -1894,7 +1597,7 @@ class FactoryStore:
         t = session_commands.c
         rows = []
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows += conn.execute(select(t.at, t.session, t.command, t.output_tail, t.exit_code,
                                             t.outcome, t.cwd, t.result_at)
                                      .where(t.source == source, t.session.in_(sessions[i:i + 500]),
@@ -1914,9 +1617,10 @@ class FactoryStore:
     # ── repo maps (TR-681) ────────────────────────────────────────────────────
     def get_repo_map(self, repo: str) -> dict | None:
         repo = repo.lower()   # GitHub names a repo the same whatever the case
-        with self._sread:
-            r = self.sc.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
-                                 [repo]).fetchone()
+        t = maps_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.body, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.repo == repo)).first()
         return {"repo": repo, "body": r[0], "updated_at": r[1], "updated_by": r[2]} if r else None
 
     def set_repo_map(self, repo: str, body: str, note: str, by: str, project: str | None,
@@ -1927,36 +1631,34 @@ class FactoryStore:
         and nothing written, when the map is the one already there."""
         from .factory import map_version
         repo = repo.lower()
-        with self._swrite:
-            cur = self.sc.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
-                                   [repo]).fetchone()
+        body, note, by, project = (_no_nul(v) for v in (body, note, by, project))
+        t = maps_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            # a second process reading the same version waits here, then sees what this one wrote
+            self._lock_numbering(conn, f"tares_repo_map:{repo}")
+            cur = conn.execute(select(t.c.body, t.c.updated_at, t.c.updated_by)
+                               .where(t.c.repo == repo)).first()
             if cur and cur[0] == body:
                 return False
             if map_version(cur[0] if cur else None) != (base or ""):
                 raise MapChanged({"repo": repo, "body": cur[0], "updated_at": cur[1],
                                   "updated_by": cur[2]} if cur else None)
-            self.sc.execute("BEGIN TRANSACTION")
-            try:
-                self.sc.execute(
-                    "INSERT INTO repo_maps (repo, body, updated_at, updated_by) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT (repo) DO UPDATE SET body = excluded.body, "
-                    "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-                    [repo, body, at, by])
-                self.sc.execute("INSERT INTO repo_map_history (repo, changed_at, by_station, project, note) "
-                                 "VALUES (?, ?, ?, ?, ?)", [repo, at, by, project, note])
-                self.sc.execute("COMMIT")
-            except Exception:
-                self.sc.execute("ROLLBACK")
-                raise
+            stmt = self.sessions_db.upsert(t).values(repo=repo, body=body, updated_at=at,
+                                                     updated_by=by)
+            conn.execute(stmt.on_conflict_do_update(index_elements=[t.c.repo], set_={
+                c: stmt.excluded[c] for c in ("body", "updated_at", "updated_by")}))
+            conn.execute(insert(map_history_table).values(repo=repo, changed_at=at, by_station=by,
+                                                          project=project, note=note))
         return True
 
     def repo_map_history(self, repo: str, limit: int = 10) -> list[dict]:
         """Newest first."""
-        repo = repo.lower()
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT changed_at, by_station, project, note FROM repo_map_history WHERE repo = ? "
-                "ORDER BY changed_at DESC LIMIT ?", [repo, limit]).fetchall()
+        t = map_history_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.changed_at, t.c.by_station, t.c.project, t.c.note)
+                                .where(t.c.repo == repo.lower())
+                                .order_by(t.c.changed_at.desc().nulls_last())
+                                .limit(limit)).fetchall()
         return [{"at": r[0], "by": r[1], "project": r[2], "note": r[3]} for r in rows]
 
     # ── rule proposals (TR-443) ───────────────────────────────────────────────
@@ -1964,68 +1666,73 @@ class FactoryStore:
                              text: str, tickets: list[str], at) -> dict | None:
         """Offer a rule for (repo, kind) unless one was already offered; an open offer gets its
         ticket list refreshed. None when it was decided before (never offered again)."""
-        with self._swrite:
-            cur = self.sc.execute("SELECT id, state FROM rule_proposals WHERE repo = ? AND "
-                                   "kind = ?", [repo, kind]).fetchone()
-            if cur and cur[1] != "open":
+        t = proposals_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            cur = conn.execute(select(t.c.id, t.c.state).where(
+                t.c.repo == repo, t.c.kind == kind)
+                .order_by(t.c.created_at.asc().nulls_last(), t.c.id)).first()
+            if cur and cur.state != "open":
                 return None
             if cur:
-                self.sc.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ?, "
-                                 "text = ? WHERE id = ?",
-                                 [json.dumps(tickets), scope, project, text, cur[0]])
-                pid = cur[0]
+                conn.execute(update(t).where(t.c.id == cur.id).values(
+                    tickets=tickets, scope=scope, project=project, text=text))
+                pid = cur.id
             else:
                 pid = "rp_" + uuid.uuid4().hex[:10]
-                self.sc.execute(
-                    "INSERT INTO rule_proposals (id, repo, kind, project, scope, text, tickets, "
-                    "state, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, NULL)",
-                    [pid, repo, kind, project, scope, text, json.dumps(tickets), at])
+                conn.execute(insert(t).values(
+                    id=pid, repo=repo, kind=kind, project=project, scope=scope, text=text,
+                    tickets=tickets, state="open", created_at=at, decided_at=None))
         return self.get_rule_proposal(pid)
 
+    @staticmethod
+    def _proposal_row(r) -> dict:
+        return {**r._mapping, "tickets": r.tickets or []}
+
     def get_rule_proposal(self, pid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute("SELECT id, repo, kind, project, scope, text, tickets, state, "
-                                 "created_at, decided_at FROM rule_proposals WHERE id = ?",
-                                 [pid]).fetchone()
-        return ({"id": r[0], "repo": r[1], "kind": r[2], "project": r[3], "scope": r[4],
-                 "text": r[5], "tickets": json.loads(r[6]) if r[6] else [], "state": r[7],
-                 "created_at": r[8], "decided_at": r[9]} if r else None)
+        t = proposals_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == pid)).first()
+        return self._proposal_row(r) if r else None
 
     def list_rule_proposals(self, state: str | None = "open") -> list[dict]:
-        q = "SELECT id FROM rule_proposals"
-        vals: list = []
+        t = proposals_table
+        q = select(t).order_by(t.c.created_at.asc().nulls_last(), t.c.id)
         if state:
-            q += " WHERE state = ?"; vals.append(state)
-        with self._sread:
-            ids = [r[0] for r in self.sc.execute(q + " ORDER BY created_at", vals).fetchall()]
-        return [self.get_rule_proposal(i) for i in ids]
+            q = q.where(t.c.state == state)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).fetchall()
+        return [self._proposal_row(r) for r in rows]
 
     def decide_rule_proposal(self, pid: str, state: str, text: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE rule_proposals SET state = ?, text = coalesce(?, text), "
-                             "decided_at = ? WHERE id = ?", [state, text, at, pid])
+        t = proposals_table
+        values: dict = {"state": state, "decided_at": at}
+        if text is not None:
+            values["text"] = text
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == pid).values(values))
 
     def station_session_ids(self, station: str) -> list[str]:
         """The sessions that played `station` or a helper it started."""
         t = session_stations
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(t.c.session).where(
                 (t.c.station == station) | (t.c.parent == station)))]
 
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
-    _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
-                "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at, station, "
-                "command, person_id, to_person_id")
-
-    @staticmethod
-    def _dk_row(r) -> dict:
-        return {"id": r[0], "number": r[1], "label": f"D{r[1]}", "project": r[2],
-                "question": r[3], "context": r[4] or "", "options": json.loads(r[5]) if r[5] else [],
-                "recommendation": r[6], "why": r[7], "blocks": r[8] or "",
-                "tickets": json.loads(r[9]) if r[9] else [], "blocking": bool(r[10]),
-                "asked_by": r[11], "assumptions": json.loads(r[12]) if r[12] else [],
-                "state": r[13], "reason": r[14], "created_at": r[15], "closed_at": r[16],
-                "station": r[17], "command": r[18], "person_id": r[19], "to_person_id": r[20]}
+    def _dk_row(self, r) -> dict:
+        # `closed_at` keeps the zone it had in DuckDB, this machine's: /api/desk/answered and the
+        # crew's idle wake compare it as text with a time they kept before the move (TR-1616)
+        closed = r.closed_at
+        if closed is not None and self.sessions_db.dialect == "sqlite":
+            closed = closed.astimezone()
+        return {"id": r.id, "number": r.number, "label": f"D{r.number}", "project": r.project,
+                "question": r.question, "context": r.context or "", "options": r.options or [],
+                "recommendation": r.recommendation, "why": r.why, "blocks": r.blocks or "",
+                "tickets": r.tickets or [], "blocking": bool(r.blocking),
+                "asked_by": r.asked_by, "assumptions": r.assumptions or [],
+                "state": r.state, "reason": r.reason, "created_at": r.created_at,
+                "closed_at": closed, "station": r.station, "command": r.command,
+                "person_id": r.person_id, "to_person_id": r.to_person_id}
 
     def _dk_people(self, rows: list[dict]) -> list[dict]:
         """Desk rows with `person` (who asked) and `to_person` ({id, name} or None, who it is
@@ -2042,77 +1749,82 @@ class FactoryStore:
                       station: str | None = None, command: str | None = None,
                       person_id: str | None = None, to_person_id: str | None = None) -> dict:
         did = "dk_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            n = (self.sc.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
-            self.sc.execute(
-                f"INSERT INTO desk_items ({self._DK_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?, ?, ?)",
-                [did, n, project, question, context or None, json.dumps(options or []),
-                 recommendation, why, blocks or None, json.dumps(tickets or []), blocking,
-                 asked_by or None, json.dumps(assumptions or []), at, station or None,
-                 command or None, person_id or None, to_person_id or None])
+        t = desk_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_desk_number")
+            n = (conn.execute(select(func.max(t.c.number))).scalar() or 0) + 1
+            conn.execute(insert(t).values(
+                id=did, number=n, project=project, question=question, context=context or None,
+                options=options or [], recommendation=recommendation, why=why,
+                blocks=blocks or None, tickets=tickets or [], blocking=blocking,
+                asked_by=asked_by or None, assumptions=assumptions or [], state="open",
+                created_at=at, station=station or None, command=command or None,
+                person_id=person_id or None, to_person_id=to_person_id or None))
         return self.get_desk_item(did)
 
     def get_desk_item(self, ref: str) -> dict | None:
         m = re.match(r"^[Dd]?(\d{1,6})$", (ref or "").strip())
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._DK_COLS} FROM desk_items WHERE id = ? OR "
-                                 "number = ?", [ref, int(m.group(1)) if m else -1]).fetchone()
+        t = desk_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(
+                or_(t.c.id == ref, t.c.number == (int(m.group(1)) if m else -1)))).first()
         return self._dk_people([self._dk_row(r)])[0] if r else None
 
     def list_desk(self, state: str | None = "open", project: str | None = None,
                   closed_since=None) -> list[dict]:
         """Desk items by state and project; `closed_since` (a datetime) keeps only the items closed at or after it."""
-        q, vals = f"SELECT {self._DK_COLS} FROM desk_items WHERE 1 = 1", []
+        t = desk_table
+        q = select(t)
         if state:
-            q += " AND state = ?"; vals.append(state)
+            q = q.where(t.c.state == state)
         if project:
-            q += " AND project = ?"; vals.append(project)
+            q = q.where(t.c.project == project)
         if closed_since is not None:
-            q += " AND closed_at >= ?"; vals.append(closed_since)
-        with self._sread:
-            rows = self.sc.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
+            q = q.where(t.c.closed_at >= closed_since)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(
+                t.c.blocking.desc().nulls_last(), t.c.created_at.asc().nulls_last(),
+                t.c.number.asc().nulls_last())).fetchall()
         return self._dk_people([self._dk_row(r) for r in rows])
 
     def close_desk_item(self, did: str, state: str, reason: str | None, at) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE desk_items SET state = ?, reason = ?, closed_at = ? WHERE "
-                             "id = ?", [state, reason, at, did])
+        t = desk_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == did).values(
+                state=state, reason=reason, closed_at=at))
 
     def add_decision(self, project: str | None, desk_item: str, question: str, words: str,
                      choice: str, standing: bool, scope: str, matched: bool, session: str | None,
                      granted: bool, tickets: list[str], at, via: str | None = None,
                      person_id: str | None = None) -> dict:
         did = "dc_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO decisions (id, project, desk_item, question, words, choice, standing, "
-                "scope, matched, session, granted, tickets, decided_at, via, person_id) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [did, project, desk_item, question, words, choice or None, standing, scope,
-                 matched, session, granted, json.dumps(tickets or []), at, via, person_id or None])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(decisions_table).values(
+                id=did, project=project, desk_item=desk_item, question=question, words=words,
+                choice=choice or None, standing=standing, scope=scope, matched=matched,
+                session=session, granted=granted, tickets=tickets or [], decided_at=at, via=via,
+                person_id=person_id or None))
         return next(d for d in self.list_decisions(project, all_=True) if d["id"] == did)
 
     def list_decisions(self, project: str | None, all_: bool = False) -> list[dict]:
         """A project's decisions, newest first; with `all_`, the cell-wide ones (asked with no
         project) too. `project` None: every decision on the cell."""
-        q = ("SELECT d.id, d.project, d.desk_item, d.question, d.words, d.choice, d.standing, "
-             "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number, d.via, "
-             "d.person_id FROM "
-             "decisions d LEFT JOIN desk_items k ON k.id = d.desk_item")
-        vals: list = []
+        d, k = decisions_table, desk_table
+        q = select(d, k.c.number.label("desk_number")).select_from(
+            d.outerjoin(k, k.c.id == d.c.desk_item))
         if project and not all_:
-            q += " WHERE d.project = ?"; vals.append(project)
+            q = q.where(d.c.project == project)
         elif project:
-            q += " WHERE d.project = ? OR d.project IS NULL"; vals.append(project)
-        with self._sread:
-            rows = self.sc.execute(q + " ORDER BY d.decided_at DESC", vals).fetchall()
+            q = q.where(or_(d.c.project == project, d.c.project.is_(None)))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(d.c.decided_at.desc().nulls_last())).fetchall()
         return self._with_people(
-            [{"id": r[0], "project": r[1], "desk_item": r[2], "question": r[3], "words": r[4],
-              "choice": r[5], "standing": bool(r[6]), "scope": r[7], "matched": bool(r[8]),
-              "session": r[9], "granted": bool(r[10]),
-              "tickets": json.loads(r[11]) if r[11] else [], "at": r[12],
-              "label": f"D{r[13]}" if r[13] else None, "via": r[14], "person_id": r[15]}
+            [{"id": r.id, "project": r.project, "desk_item": r.desk_item, "question": r.question,
+              "words": r.words, "choice": r.choice, "standing": bool(r.standing),
+              "scope": r.scope, "matched": bool(r.matched), "session": r.session,
+              "granted": bool(r.granted), "tickets": r.tickets or [], "at": r.decided_at,
+              "label": f"D{r.desk_number}" if r.desk_number else None, "via": r.via,
+              "person_id": r.person_id}
              for r in rows], None)
 
     ANSWER_VIA = ("console", "feed", "session", "message")
@@ -2126,11 +1838,10 @@ class FactoryStore:
         if via not in self.ANSWER_VIA:
             raise ValueError("via is one of " + ", ".join(self.ANSWER_VIA))
         aid = "an_" + uuid.uuid4().hex[:10]
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO answers (id, item, kind, project, ask, choice, said, via, person_id, answered_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [aid, item, kind, project, ask, choice, said, via, person_id or None, at])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(answers_table).values(
+                id=aid, item=item, kind=kind, project=project, ask=ask, choice=choice, said=said,
+                via=via, person_id=person_id or None, answered_at=at))
         return {"id": aid, "item": item, "kind": kind, "project": project, "ask": ask,
                 "choice": choice, "said": said, "via": via, "at": at,
                 "person": self._person_refs([person_id]).get(person_id)}
@@ -2138,10 +1849,9 @@ class FactoryStore:
     def told_items(self, person_id: str) -> set[str]:
         """The waiting items `person_id` was told about, or that were there when telling began
         (TR-1458). Empty for a person whose list was never read; `*` once it was."""
-        with self._sread:
-            rows = self.sc.execute("SELECT item FROM waiting_told WHERE person_id = ?",
-                                   [person_id]).fetchall()
-        return {r[0] for r in rows}
+        t = told_table
+        with self.sessions_db.read() as conn:
+            return set(conn.execute(select(t.c.item).where(t.c.person_id == person_id)).scalars())
 
     def mark_waiting_told(self, person_id: str, items: list[str], sent: bool, at) -> None:
         """Record `items` as told to `person_id`: `sent` when a message went, False when they were
@@ -2149,66 +1859,72 @@ class FactoryStore:
         keeps its first row."""
         if not items:
             return
-        with self._swrite:
+        with self._swrite, self.sessions_db.begin() as conn:
             for item in dict.fromkeys(items):
-                self.sc.execute(
-                    "INSERT INTO waiting_told (person_id, item, told_at, sent) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT DO NOTHING", [person_id, item, at, sent])
+                conn.execute(self.sessions_db.upsert(told_table).values(
+                    person_id=person_id, item=item, told_at=at, sent=sent).on_conflict_do_nothing())
 
     def forget_waiting_told(self, person_id: str, items: list[str]) -> None:
         """Undo mark_waiting_told for `items` whose message Slack refused for now (busy, down): the
         next read finds them new and sends them. A row that already names its message stays."""
         if not items:
             return
-        with self._swrite:
+        t = told_table
+        with self._swrite, self.sessions_db.begin() as conn:
             for item in dict.fromkeys(items):
-                self.sc.execute("DELETE FROM waiting_told WHERE person_id = ? AND item = ? AND ts IS NULL",
-                                [person_id, item])
+                conn.execute(delete(t).where(t.c.person_id == person_id, t.c.item == item,
+                                             t.c.ts.is_(None)))
 
     def set_told_message(self, person_id: str, items: list[tuple[str, str]], channel: str, ts: str) -> None:
         """The Slack message (`channel`, `ts`) that told `person_id` about `items`, each (id, ask) in
         the order the message shows them (TR-1460), so an answer can edit it later, after a restart too."""
-        with self._swrite:
+        t = told_table
+        with self._swrite, self.sessions_db.begin() as conn:
             for seq, (item, ask) in enumerate(items):
-                self.sc.execute("UPDATE waiting_told SET channel = ?, ts = ?, seq = ?, ask = ? "
-                                "WHERE person_id = ? AND item = ?", [channel, ts, seq, ask, person_id, item])
+                conn.execute(update(t).where(t.c.person_id == person_id, t.c.item == item)
+                             .values(channel=channel, ts=ts, seq=seq, ask=ask))
 
     def open_told(self, person_id: str) -> list[dict]:
         """The items a message told `person_id` about that it does not yet say were answered."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT item, channel, ts FROM waiting_told WHERE person_id = ? AND ts IS NOT NULL "
-                "AND closed IS NULL", [person_id]).fetchall()
-        return [{"item": r[0], "channel": r[1], "ts": r[2]} for r in rows]
+        t = told_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.item, t.c.channel, t.c.ts).where(
+                t.c.person_id == person_id, t.c.ts.is_not(None), t.c.closed.is_(None))).fetchall()
+        return [{"item": r.item, "channel": r.channel, "ts": r.ts} for r in rows]
 
     def told_message(self, person_id: str, channel: str, ts: str) -> list[dict]:
         """Every item one message told about, in its order, with the line it closed with (or None)."""
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT item, ask, closed FROM waiting_told WHERE person_id = ? AND channel = ? AND ts = ? "
-                "ORDER BY seq", [person_id, channel, ts]).fetchall()
-        return [{"item": r[0], "ask": r[1], "closed": r[2]} for r in rows]
+        if channel is None or ts is None:     # no message: `== None` would read the unsent rows
+            return []
+        t = told_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.item, t.c.ask, t.c.closed).where(
+                t.c.person_id == person_id, t.c.channel == channel, t.c.ts == ts
+            ).order_by(t.c.seq.asc().nulls_last())).fetchall()
+        return [{"item": r.item, "ask": r.ask, "closed": r.closed} for r in rows]
 
     def close_told(self, person_id: str, closed: dict[str, str]) -> None:
         """Record that the message now says `closed[item]` for each item: it is not edited again."""
-        with self._swrite:
+        t = told_table
+        with self._swrite, self.sessions_db.begin() as conn:
             for item, line in closed.items():
-                self.sc.execute("UPDATE waiting_told SET closed = ? WHERE person_id = ? AND item = ?",
-                                [line, person_id, item])
+                conn.execute(update(t).where(t.c.person_id == person_id, t.c.item == item)
+                             .values(closed=line))
 
     def last_answer(self, items: list[str]) -> dict | None:
         """The newest answer recorded under any of `items` (one item's ids, see answers.item_ids), with
         who gave it ({id, name} or None), or None when it was never answered."""
         if not items:
             return None
-        with self._sread:
-            row = self.sc.execute(
-                f"SELECT item, choice, said, via, person_id, answered_at FROM answers WHERE item IN "
-                f"({', '.join('?' for _ in items)}) ORDER BY answered_at DESC LIMIT 1", list(items)).fetchone()
+        t = answers_table
+        with self.sessions_db.read() as conn:
+            row = conn.execute(select(t).where(t.c.item.in_(list(items))).order_by(
+                t.c.answered_at.desc().nulls_last()).limit(1)).first()
         if not row:
             return None
-        return {"item": row[0], "choice": row[1], "said": row[2], "via": row[3], "at": row[5],
-                "person": self._person_refs([row[4]]).get(row[4])}
+        return {"item": row.item, "choice": row.choice, "said": row.said, "via": row.via,
+                "at": row.answered_at,
+                "person": self._person_refs([row.person_id]).get(row.person_id)}
 
     def list_answers(self, since, hidden: list[str] | None = None, person: str | None = None,
                      own: str | None = None, items: list[str] | None = None) -> list[dict]:
@@ -2217,24 +1933,23 @@ class FactoryStore:
         the caller's answer to one over a repo they own stays theirs; any other kind would); `person` keeps
         that person's own; `items` only the answers to these home items. All filter in the query, before
         the limit, so a busy day of other people's answers never pushes the caller's out."""
-        q = ("SELECT id, item, kind, project, ask, choice, said, via, person_id, answered_at FROM answers "
-             "WHERE answered_at >= ?")
-        vals: list = [since]
+        t = answers_table
+        q = select(t).where(t.c.answered_at >= since)
         if hidden:
-            q += f" AND (project IS NULL OR project NOT IN ({', '.join('?' for _ in hidden)})" + (
-                " OR (person_id = ? AND kind = 'grant')" if own else "") + ")"
-            vals += list(hidden) + ([own] if own else [])
+            shown = [t.c.project.is_(None), t.c.project.not_in(list(hidden))]
+            if own:
+                shown.append(and_(t.c.person_id == own, t.c.kind == "grant"))
+            q = q.where(or_(*shown))
         if person is not None:
-            q += " AND person_id = ?"
-            vals.append(person)
+            q = q.where(t.c.person_id == person)
         if items:
-            q += f" AND item IN ({', '.join('?' for _ in items)})"
-            vals += list(items)
-        with self._sread:
-            rows = self.sc.execute(q + " ORDER BY answered_at DESC LIMIT 500", vals).fetchall()
+            q = q.where(t.c.item.in_(list(items)))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.answered_at.desc().nulls_last()).limit(500)).fetchall()
         return self._with_people(
-            [{"id": r[0], "item": r[1], "kind": r[2], "project": r[3], "ask": r[4], "choice": r[5],
-              "said": r[6], "via": r[7], "person_id": r[8], "at": r[9]} for r in rows], None)
+            [{"id": r.id, "item": r.item, "kind": r.kind, "project": r.project, "ask": r.ask,
+              "choice": r.choice, "said": r.said, "via": r.via, "person_id": r.person_id,
+              "at": r.answered_at} for r in rows], None)
 
     def person_turns(self, source: str, sessions: list[str] | None, since,
                      person: str | None = None) -> list[dict]:
@@ -2253,13 +1968,13 @@ class FactoryStore:
             if not sessions:
                 return []
             q = q.where(t.session.in_(list(sessions)))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(q.order_by(t.at.desc(), t.session.desc(), t.line_key.desc())
                                 .limit(2000)).fetchall()
         return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
 
     def role_sessions(self, role: str) -> list[str]:
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             return [r[0] for r in conn.execute(select(session_stations.c.session).where(
                 session_stations.c.role == role))]
 
@@ -2274,40 +1989,32 @@ class FactoryStore:
         stays attributed to `person_id` of the hand-over that gave it. Every override is also
         appended to a log (`list_handover_overrides`), so a later one does not replace it."""
         first = next((r["path"] for r in repos if r.get("path")), None)
+        t = handovers_table
+        ins = self.sessions_db.upsert(t).values(
+            project=project, repo=first, handed_by=by or None, handed_at=at, repos=repos,
+            autonomy=autonomy or None, person_id=person_id or None, crew=crew or None,
+            override_reason=override_reason or None,
+            override_at=at if override_reason else None,
+            override_person_id=(person_id or None) if override_reason else None)
+        new = ins.excluded
+        ins = ins.on_conflict_do_update(index_elements=["project"], set_={
+            "repo": new.repo, "handed_by": new.handed_by, "person_id": new.person_id,
+            "crew": new.crew,
+            "override_reason": func.coalesce(new.override_reason, t.c.override_reason),
+            "override_at": func.coalesce(new.override_at, t.c.override_at),
+            "override_person_id": func.coalesce(new.override_person_id, t.c.override_person_id),
+            "finished_person_id": null(), "taken_person_id": null(),
+            "handed_at": new.handed_at, "repos": new.repos, "autonomy": new.autonomy,
+            "finished_at": null(), "finished_words": null(), "finished_decision": null(),
+            "finished_by": null(), "taken_at": null(), "taken_words": null(),
+            "taken_by": null(), "released_at": null()})
         # the hand-over and its entry in the override log are saved together or not at all
-        with self._swrite:
-            self.sc.execute("BEGIN TRANSACTION")
-            try:
-                self.sc.execute(
-                    "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
-                    "person_id, crew, override_reason, override_at, override_person_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT (project) DO UPDATE SET "
-                    "repo = excluded.repo, handed_by = excluded.handed_by, "
-                    "person_id = excluded.person_id, crew = excluded.crew, "
-                    "override_reason = COALESCE(excluded.override_reason, handovers.override_reason), "
-                    "override_at = COALESCE(excluded.override_at, handovers.override_at), "
-                    "override_person_id = COALESCE(excluded.override_person_id, "
-                    "handovers.override_person_id), "
-                    "finished_person_id = NULL, "
-                    "taken_person_id = NULL, "
-                    "handed_at = excluded.handed_at, repos = excluded.repos, "
-                    "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
-                    "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
-                    "taken_words = NULL, taken_by = NULL, released_at = NULL",
-                    [project, first, by or None, at, json.dumps(repos), autonomy or None,
-                     person_id or None, crew or None, override_reason or None,
-                     at if override_reason else None,
-                     (person_id or None) if override_reason else None])
-                if override_reason:
-                    self.sc.execute(
-                        "INSERT INTO handover_overrides (project, \"at\", reason, person_id, "
-                        "handed_by) VALUES (?, ?, ?, ?, ?)",
-                        [project, at, override_reason, person_id or None, by or None])
-                self.sc.execute("COMMIT")
-            except Exception:
-                self.sc.execute("ROLLBACK")
-                raise
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins)
+            if override_reason:
+                conn.execute(insert(overrides_table).values(
+                    project=project, at=at, reason=override_reason, person_id=person_id or None,
+                    handed_by=by or None))
 
     def list_handover_overrides(self, project: str) -> list[dict]:
         """Every hand-over the lead pushed through without all sign-offs, oldest first:
@@ -2318,69 +2025,63 @@ class FactoryStore:
         """{project: its overrides, oldest first} for `projects`, in one query."""
         if not projects:
             return {}
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT project, \"at\", reason, person_id, handed_by FROM handover_overrides "
-                f"WHERE project IN ({', '.join('?' for _ in projects)}) "
-                "ORDER BY \"at\", handed_by, person_id, reason", list(projects)).fetchall()
-        refs = self._person_refs(r[3] for r in rows)
+        t = overrides_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project.in_(list(projects))).order_by(
+                t.c["at"].asc().nulls_last(), t.c.handed_by.asc().nulls_last(),
+                t.c.person_id.asc().nulls_last(), t.c.reason.asc().nulls_last())).fetchall()
+        refs = self._person_refs(r.person_id for r in rows)
         out: dict[str, list[dict]] = {}
         for r in rows:
-            out.setdefault(r[0], []).append({"at": r[1], "reason": r[2], "person": refs.get(r[3]),
-                                             "by_label": by_label(refs.get(r[3]), r[4])})
+            out.setdefault(r.project, []).append(
+                {"at": r._mapping["at"], "reason": r.reason, "person": refs.get(r.person_id),
+                 "by_label": by_label(refs.get(r.person_id), r.handed_by)})
         return out
 
+    @kept
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
         """The projects handed to the crew; `finished` False: only the open ones, True: only the
         ones the person said are done. `taken` False: only the ones the crew still has, True: only
         the ones the person took over (TR-520)."""
-        q = "SELECT project FROM handovers"
-        where = []
+        t = handovers_table
+        q = select(t.c.project)
         if finished is True:
-            where.append("finished_at IS NOT NULL")
+            q = q.where(t.c.finished_at.is_not(None))
         elif finished is False:
-            where.append("finished_at IS NULL")
+            q = q.where(t.c.finished_at.is_(None))
         if taken is True:
-            where.append("taken_at IS NOT NULL")
+            q = q.where(t.c.taken_at.is_not(None))
         elif taken is False:
-            where.append("taken_at IS NULL")
-        if where:
-            q += " WHERE " + " AND ".join(where)
-        with self._sread:
-            return [r[0] for r in self.sc.execute(q).fetchall()]
+            q = q.where(t.c.taken_at.is_(None))
+        with self.sessions_db.read() as conn:
+            return list(conn.execute(q).scalars())
+
+    def _set_handover_fields(self, project: str, **values) -> None:
+        t = handovers_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.project == project).values(**values))
 
     def finish_handover(self, project: str, words: str, decision: str | None, by: str | None,
                         at, person_id: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE handovers SET finished_at = ?, finished_words = ?, "
-                             "finished_decision = ?, finished_by = ?, finished_person_id = ? "
-                             "WHERE project = ?",
-                             [at, words, decision, by, person_id or None, project])
+        self._set_handover_fields(project, finished_at=at, finished_words=words,
+                                  finished_decision=decision, finished_by=by,
+                                  finished_person_id=person_id or None)
 
     def take_over(self, project: str, words: str, by: str | None, at,
                   person_id: str | None = None) -> None:
         """The person takes the project back from the crew (TR-520); released once the
         orchestrator has stopped its builders."""
-        with self._swrite:
-            self.sc.execute("UPDATE handovers SET taken_at = ?, taken_words = ?, taken_by = ?, "
-                             "taken_person_id = ?, released_at = NULL WHERE project = ?",
-                             [at, words, by, person_id or None, project])
+        self._set_handover_fields(project, taken_at=at, taken_words=words, taken_by=by,
+                                  taken_person_id=person_id or None, released_at=None)
 
     def release_takeover(self, project: str, at) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE handovers SET released_at = ? WHERE project = ?",
-                             [at, project])
-
-    _HANDOVER_COLS = ("project, repo, handed_by, handed_at, repos, autonomy, "
-                      "finished_at, finished_words, finished_decision, finished_by, "
-                      "taken_at, taken_words, taken_by, released_at, person_id, "
-                      "finished_person_id, taken_person_id, crew, override_reason, "
-                      "override_at, override_person_id")
+        self._set_handover_fields(project, released_at=at)
 
     def get_handover(self, project: str) -> dict | None:
         return self.handovers_by_project([project]).get(project)
 
+    @kept
     def handovers_by_project(self, projects: list[str] | None = None) -> dict[str, dict]:
         """{project id: hand-over, as get_handover gives it} for the projects handed over, among
         `projects` (all of them for None), in one query plus one for the people and one for the
@@ -2388,22 +2089,30 @@ class FactoryStore:
         ids = None if projects is None else sorted({p for p in projects if p})
         if ids is not None and not ids:
             return {}
-        q = f"SELECT {self._HANDOVER_COLS} FROM handovers"
+        t = handovers_table
+        q = select(t)
         if ids is not None:
-            q += f" WHERE project IN ({', '.join('?' for _ in ids)})"
-        with self._sread:
-            rows = self.sc.execute(q, ids or []).fetchall()
+            q = q.where(t.c.project.in_(ids))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).fetchall()
         if not rows:
             return {}
-        refs = self._person_refs(x for r in rows for x in (r[14], r[15], r[16], r[20]))
-        overridden = [r[0] for r in rows if r[18]]
+        refs = self._person_refs(x for r in rows for x in (
+            r.person_id, r.finished_person_id, r.taken_person_id, r.override_person_id))
+        overridden = [r.project for r in rows if r.override_reason]
         overrides = self._handover_overrides(overridden)
         out = {}
         for r in rows:
-            (project, repo, handed_by, handed_at, repos_json, autonomy, fin_at, fin_words, fin_decision,
-             fin_by, taken_at, taken_words, taken_by, released_at, person_id, fin_person, taken_person,
-             crew, o_reason, o_at, o_person) = r
-            repos = json.loads(repos_json) if repos_json else ([{"path": repo, "name": None}] if repo else [])
+            project, repo, handed_by, handed_at = r.project, r.repo, r.handed_by, r.handed_at
+            autonomy, crew, person_id = r.autonomy, r.crew, r.person_id
+            fin_at, fin_words, fin_decision = r.finished_at, r.finished_words, r.finished_decision
+            fin_by, fin_person = r.finished_by, r.finished_person_id
+            taken_at, taken_words, taken_by = r.taken_at, r.taken_words, r.taken_by
+            released_at, taken_person = r.released_at, r.taken_person_id
+            o_reason, o_at, o_person = r.override_reason, r.override_at, r.override_person_id
+            # an empty list is a list: only a hand-over with no `repos` falls back to `repo`
+            repos = (r.repos if r.repos is not None
+                     else ([{"path": repo, "name": None}] if repo else []))
             # who pushed the override through: the hand-over that gave it, not a later one; rows
             # from before override_person_id fall back to the handing person
             op, oby = (o_person, None) if o_person else (person_id, handed_by)
@@ -2426,13 +2135,8 @@ class FactoryStore:
         return out
 
     # ── questions to an area owner (TR-636) ───────────────────────────────────
-    _SQ_COLS = ("project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
-                "answered_at, state, via")
-
     def _sq_rows(self, rows) -> list[dict]:
-        out = [{"project": r[0], "id": r[1], "to_person_id": r[2], "repo": r[3], "text": r[4],
-                "asked_by": r[5], "asked_at": r[6], "answer": r[7], "answered_by": r[8],
-                "answered_at": r[9], "state": r[10], "via": r[11]} for r in rows]
+        out = [dict(r._mapping) for r in rows]
         refs = self._person_refs([x for r in out for x in (r["to_person_id"], r["asked_by"],
                                                            r["answered_by"])])
         for r in out:
@@ -2443,23 +2147,17 @@ class FactoryStore:
 
     def add_spec_question(self, project: str, to_person_id: str, repo: str, text: str,
                           asked_by: str | None, at) -> dict:
-        """Q<n>, n one past the project's highest, chosen and inserted in one transaction under
-        the lock, so parallel asks never share a number."""
-        with self._swrite:
-            self.sc.execute("BEGIN TRANSACTION")
-            try:
-                top = self.sc.execute(
-                    "SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM spec_questions "
-                    "WHERE project = ?", [project]).fetchone()[0] or 0
-                qid = f"Q{top + 1}"
-                self.sc.execute(
-                    f"INSERT INTO spec_questions ({self._SQ_COLS}) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'open', NULL)",
-                    [project, qid, to_person_id, repo, text, asked_by or None, at])
-                self.sc.execute("COMMIT")
-            except Exception:
-                self.sc.execute("ROLLBACK")
-                raise
+        """Q<n>, n one past the project's highest, chosen and inserted in one transaction, so
+        parallel asks never share a number."""
+        t = questions_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, f"tares_spec_question_number:{project}")
+            top = conn.execute(select(func.max(cast(func.substr(t.c.id, 2), Integer))).where(
+                t.c.project == project)).scalar() or 0
+            qid = f"Q{top + 1}"
+            conn.execute(insert(t).values(
+                project=project, id=qid, to_person_id=to_person_id, repo=repo, text=text,
+                asked_by=asked_by or None, asked_at=at, state="open"))
         return self.get_spec_question(project, qid)
 
     def get_spec_question(self, project: str, ref: str) -> dict | None:
@@ -2467,151 +2165,171 @@ class FactoryStore:
         m = re.match(r"^[Qq]?(\d{1,6})$", (ref or "").strip())
         if not m:
             return None
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._SQ_COLS} FROM spec_questions WHERE project = ? "
-                                 "AND id = ?", [project, f"Q{int(m.group(1))}"]).fetchone()
+        t = questions_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.project == project,
+                                             t.c.id == f"Q{int(m.group(1))}")).first()
         return self._sq_rows([r])[0] if r else None
 
+    @kept
     def list_spec_questions(self, project: str | None = None, state: str | None = None,
                             to_person_id: str | None = None) -> list[dict]:
-        q, vals = f"SELECT {self._SQ_COLS} FROM spec_questions WHERE 1 = 1", []
-        for col, v in (("project", project), ("state", state), ("to_person_id", to_person_id)):
+        t = questions_table
+        q = select(t)
+        for col, v in ((t.c.project, project), (t.c.state, state), (t.c.to_person_id, to_person_id)):
             if v:
-                q += f" AND {col} = ?"
-                vals.append(v)
-        with self._sread:
-            rows = self.sc.execute(
-                q + " ORDER BY asked_at, project, CAST(substr(id, 2) AS INTEGER)", vals).fetchall()
+                q = q.where(col == v)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(
+                t.c.asked_at.asc().nulls_last(), t.c.project,
+                cast(func.substr(t.c.id, 2), Integer))).fetchall()
         return self._sq_rows(rows)
 
     def answer_spec_question(self, project: str, qid: str, answer: str, by: str | None,
                              at, via: str | None = None) -> bool:
         """Record the answer of an open question, and where it came from (`via`, "console" for
         the page); False when it was not open."""
-        with self._swrite:
-            hit = self.sc.execute(
-                "UPDATE spec_questions SET answer = ?, answered_by = ?, answered_at = ?, "
-                "state = 'answered', via = ? WHERE project = ? AND id = ? AND state = 'open' "
-                "RETURNING id",
-                [answer, by or None, at, via, project, qid]).fetchone()
+        t = questions_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(update(t).where(
+                t.c.project == project, t.c.id == qid, t.c.state == "open").values(
+                answer=answer, answered_by=by or None, answered_at=at, state="answered",
+                via=via).returning(t.c.id)).first()
         return hit is not None
 
     # ── the repos connected to the brain (TR-1197) ────────────────────────────
-    _BR_COLS = ("repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
-                "error, added_by, added_at, place, job_started_at, sync_failures, sync_error")
-
     def _br_rows(self, rows) -> list[dict]:
-        out = [{"repo": r[0], "repo_source_id": r[1], "state": r[2], "files_done": r[3] or 0,
-                "files_total": r[4] or 0, "indexed_commit": r[5], "last_synced": r[6],
-                "error": r[7], "added_by": r[8], "added_at": r[9], "place": r[10],
-                "job_started_at": r[11], "sync_failures": r[12] or 0, "sync_error": r[13]}
-               for r in rows]
+        out = [dict(r._mapping) for r in rows]
+        for r in out:
+            for k in ("files_done", "files_total", "sync_failures"):
+                r[k] = r[k] or 0
         refs = self._person_refs(r["added_by"] for r in out)
         for r in out:
             r["added_by_name"] = (refs.get(r["added_by"]) or {}).get("name")
         return out
 
     def list_brain_repos(self) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._BR_COLS} FROM brain_repos ORDER BY added_at, repo").fetchall()
+        t = brain_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).order_by(t.c.added_at.asc().nulls_last(),
+                                                   t.c.repo)).fetchall()
         return self._br_rows(rows)
 
     def get_brain_repo(self, repo: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._BR_COLS} FROM brain_repos WHERE repo = ?",
-                                [repo]).fetchone()
+        t = brain_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.repo == repo)).first()
         return self._br_rows([r])[0] if r else None
 
     def add_brain_repo(self, repo: str, repo_source_id: str | None, added_by: str | None,
                        at, state: str = "queued") -> bool:
         """Keep a connected repo; False when it was already there (the row is left as it was)."""
-        with self._swrite:
-            hit = self.sc.execute(
-                f"INSERT INTO brain_repos ({self._BR_COLS}) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, "
-                "?, ?, NULL, NULL, 0, NULL) ON CONFLICT DO NOTHING RETURNING repo",
-                [repo, repo_source_id or None, state, added_by or None, at]).fetchone()
+        t = brain_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(self.sessions_db.upsert(t).values(
+                repo=repo, repo_source_id=_no_nul(repo_source_id) or None, state=state,
+                files_done=0, files_total=0, added_by=added_by or None, added_at=at,
+                sync_failures=0).on_conflict_do_nothing().returning(t.c.repo)).first()
         return hit is not None
 
+    def _lock_brain_repo(self, conn, repo: str) -> None:
+        """Taken by the writes that read a repo's rows and then change them (its folders, its
+        history, its removal), so two processes do them one at a time."""
+        self._lock_numbering(conn, f"tares_brain_repo:{repo}")
+
     def delete_brain_repo(self, repo: str) -> bool:
-        with self._swrite:
-            hit = self.sc.execute("DELETE FROM brain_repos WHERE repo = ? RETURNING repo",
-                                  [repo]).fetchone()
-            self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ?", [repo])
-            self.sc.execute("DELETE FROM brain_repo_updates WHERE repo = ?", [repo])
+        """The repo, its chosen folders and its history go in one transaction."""
+        t = brain_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_brain_repo(conn, repo)
+            hit = conn.execute(delete(t).where(t.c.repo == repo).returning(t.c.repo)).first()
+            for child in (brain_folders_table, brain_updates_table):
+                conn.execute(delete(child).where(child.c.repo == repo))
         return hit is not None
 
     BRAIN_UPDATES_KEPT = 50
-    _BU_COLS = 'id, repo, "at", kind, ok, indexed_commit, files_changed, files_deleted, files_total, error'
 
     def add_brain_repo_update(self, repo: str, kind: str, ok: bool, at, *, commit: str | None = None,
                               files_changed: int = 0, files_deleted: int = 0, files_total: int = 0,
                               error: str | None = None) -> None:
         """Keep one first index (`kind` "index") or later update ("update") of a repo, and drop all but
         the newest BRAIN_UPDATES_KEPT of that repo."""
-        with self._swrite:
-            self.sc.execute(f"INSERT INTO brain_repo_updates ({self._BU_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            [uuid.uuid4().hex, repo, at, kind, 1 if ok else 0, commit or None,
-                             int(files_changed or 0), int(files_deleted or 0), int(files_total or 0), error or None])
-            old = self.sc.execute('SELECT id FROM brain_repo_updates WHERE repo = ? ORDER BY "at" DESC, id DESC',
-                                  [repo]).fetchall()[self.BRAIN_UPDATES_KEPT:]
-            for (i,) in old:
-                self.sc.execute("DELETE FROM brain_repo_updates WHERE id = ?", [i])
+        t = brain_updates_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_brain_repo(conn, repo)
+            conn.execute(insert(t).values(
+                id=uuid.uuid4().hex, repo=repo, at=at, kind=kind, ok=1 if ok else 0,
+                indexed_commit=_no_nul(commit) or None, files_changed=int(files_changed or 0),
+                files_deleted=int(files_deleted or 0), files_total=int(files_total or 0),
+                error=_no_nul(error) or None))
+            old = (select(t.c.id).where(t.c.repo == repo)
+                   .order_by(t.c["at"].desc().nulls_last(), t.c.id.desc())
+                   .offset(self.BRAIN_UPDATES_KEPT))
+            conn.execute(delete(t).where(t.c.id.in_(old)))
 
     @staticmethod
     def _bu_row(r) -> dict:
-        return {"at": r[2], "kind": r[3], "ok": bool(r[4]), "indexed_commit": r[5], "files_changed": r[6] or 0,
-                "files_deleted": r[7] or 0, "files_total": r[8] or 0, "error": r[9]}
+        return {"at": r.at, "kind": r.kind, "ok": bool(r.ok), "indexed_commit": r.indexed_commit,
+                "files_changed": r.files_changed or 0, "files_deleted": r.files_deleted or 0,
+                "files_total": r.files_total or 0, "error": r.error}
 
     def list_brain_repo_updates(self, repo: str, limit: int = 20) -> list[dict]:
         """The repo's first index and later updates, newest first."""
-        with self._sread:
-            rows = self.sc.execute(f'SELECT {self._BU_COLS} FROM brain_repo_updates WHERE repo = ? '
-                                   'ORDER BY "at" DESC, id DESC LIMIT ?', [repo, int(limit)]).fetchall()
+        t = brain_updates_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.repo == repo)
+                                .order_by(t.c["at"].desc().nulls_last(), t.c.id.desc())
+                                .limit(int(limit))).fetchall()
         return [self._bu_row(r) for r in rows]
 
     def last_brain_repo_updates(self) -> dict[str, dict]:
         """The newest update of every repo that has one, by repo."""
-        with self._sread:
-            rows = self.sc.execute(f'SELECT {self._BU_COLS} FROM brain_repo_updates ORDER BY repo, "at" DESC, id DESC').fetchall()
+        t = brain_updates_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).order_by(
+                t.c.repo, t.c["at"].desc().nulls_last(), t.c.id.desc())).fetchall()
         out: dict[str, dict] = {}
         for r in rows:
-            out.setdefault(r[1], self._bu_row(r))
+            out.setdefault(r.repo, self._bu_row(r))
         return out
 
     def list_brain_folders(self, repo: str) -> list[dict]:
         """The decision folders chosen for `repo`, by path: {path, chosen_by, chosen_by_name, chosen_at}."""
-        with self._sread:
-            rows = self.sc.execute("SELECT path, chosen_by, chosen_at FROM brain_repo_folders "
-                                   "WHERE repo = ? ORDER BY path", [repo]).fetchall()
+        t = brain_folders_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.path, t.c.chosen_by, t.c.chosen_at)
+                                .where(t.c.repo == repo).order_by(t.c.path)).fetchall()
         refs = self._person_refs(r[1] for r in rows)
         return [{"path": r[0], "chosen_by": r[1], "chosen_by_name": (refs.get(r[1]) or {}).get("name"),
                  "chosen_at": r[2]} for r in rows]
 
     def set_brain_folders(self, repo: str, paths: list[str], by: str | None, at) -> tuple[list[str], list[str]]:
         """Make `paths` the repo's chosen folders. A folder already chosen keeps its chooser and date.
-        Returns (added, removed), each sorted. The read, the deletes and the inserts are one step under
-        the write lock."""
-        with self._swrite:
-            have = {r[0] for r in self.sc.execute(
-                "SELECT path FROM brain_repo_folders WHERE repo = ?", [repo]).fetchall()}
+        Returns (added, removed), each sorted. The read, the deletes and the inserts are one
+        transaction, and two processes take turns."""
+        t = brain_folders_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_brain_repo(conn, repo)
+            have = set(conn.execute(select(t.c.path).where(t.c.repo == repo)).scalars())
             want = set(paths)
-            for p in sorted(have - want):
-                self.sc.execute("DELETE FROM brain_repo_folders WHERE repo = ? AND path = ?", [repo, p])
-            for p in sorted(want - have):
-                self.sc.execute("INSERT INTO brain_repo_folders (repo, path, chosen_by, chosen_at) "
-                                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [repo, p, by or None, at])
-        return sorted(want - have), sorted(have - want)
+            added, removed = sorted(want - have), sorted(have - want)
+            if removed:
+                conn.execute(delete(t).where(t.c.repo == repo, t.c.path.in_(removed)))
+            if added:
+                conn.execute(self.sessions_db.upsert(t).on_conflict_do_nothing(), [
+                    {"repo": repo, "path": p, "chosen_by": by or None, "chosen_at": at}
+                    for p in added])
+        return added, removed
 
     def requeue_brain_repo(self, repo: str, from_state: str = "failed") -> bool:
         """Put a repo that is in `from_state` back to queued for a new index job: the error, the
         place, the counts and the job's start are cleared. False when it is not in that state (or
         not there), and then the row is left as it was."""
-        with self._swrite:
-            hit = self.sc.execute(
-                "UPDATE brain_repos SET state = 'queued', error = NULL, place = NULL, "
-                "files_done = 0, files_total = 0, job_started_at = NULL, sync_failures = 0, "
-                "sync_error = NULL WHERE repo = ? AND state = ? RETURNING repo", [repo, from_state]).fetchone()
+        t = brain_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(update(t).where(t.c.repo == repo, t.c.state == from_state).values(
+                state="queued", error=None, place=None, files_done=0, files_total=0,
+                job_started_at=None, sync_failures=0, sync_error=None).returning(t.c.repo)).first()
         return hit is not None
 
     _BR_SETTABLE = ("state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
@@ -2624,230 +2342,209 @@ class FactoryStore:
         bad = sorted(set(fields) - set(self._BR_SETTABLE))
         if bad or not fields:
             raise ValueError(f"cannot set {bad or 'nothing'} on a brain repo")
-        sets = ", ".join(f"{k} = ?" for k in fields)
-        args = [*fields.values(), repo]
-        where = "repo = ?"
+        t = brain_table
+        stmt = update(t).where(t.c.repo == repo)
         if only_in:
-            where += f" AND state IN ({', '.join('?' for _ in only_in)})"
-            args += list(only_in)
-        with self._swrite:
-            hit = self.sc.execute(f"UPDATE brain_repos SET {sets} WHERE {where} RETURNING repo",
-                                  args).fetchone()
+            stmt = stmt.where(t.c.state.in_(list(only_in)))
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(stmt.values({k: _no_nul(v) for k, v in fields.items()})
+                               .returning(t.c.repo)).first()
         return hit is not None
 
     # ── the calls made to the brain (TR-1200) ─────────────────────────────────
-    _BC_COLS = ('id, "at", tool, deep, question, repos, duration_ms, input_tokens, output_tokens, '
-                "ok, error, station, person_id, via")
-
     def reserve_brain_call(self, call: dict, cap: int | None = None, since=None) -> bool:
         """Keep a call that is about to start. With `cap`, only while fewer than `cap` calls of the
         same tool and depth have started since `since`; False when the cap is reached (nothing is
-        kept). The count and the insert are one step under this process's write lock, so two calls in
-        this process cannot both take the last place; the cap is not shared between daemons."""
-        with self._swrite:
+        kept). The count and the insert are one transaction, and two calls of one tool and depth
+        take turns, in this process or another, so they cannot both take the last place."""
+        t = brain_calls_table
+        deep = 1 if call.get("deep") else 0
+        with self._swrite, self.sessions_db.begin() as conn:
             if cap is not None:
-                n = self.sc.execute(
-                    'SELECT count(*) FROM brain_calls WHERE tool = ? AND deep = ? AND "at" >= ?',
-                    [call["tool"], 1 if call.get("deep") else 0, since]).fetchone()[0]
+                self._lock_numbering(conn, f"tares_brain_calls:{call['tool']}:{deep}")
+                # no `since` compares with NULL and counts nothing
+                n = conn.execute(select(func.count()).select_from(t).where(
+                    t.c.tool == call["tool"], t.c.deep == deep,
+                    t.c["at"] >= bindparam("since", since, type_=UTCDateTime))).scalar_one()
                 if n >= cap:
                     return False
-            self.sc.execute(
-                f"INSERT INTO brain_calls ({self._BC_COLS}) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, "
-                "NULL, NULL, ?, ?, ?)",
-                [call["id"], call["at"], call["tool"], 1 if call.get("deep") else 0, call.get("question"),
-                 json.dumps(call.get("repos") or []), call.get("station") or None,
-                 call.get("person_id") or None, call.get("via") or None])
+            conn.execute(insert(t).values(
+                id=call["id"], at=call["at"], tool=call["tool"], deep=deep,
+                question=_no_nul(call.get("question")), repos=json.dumps(call.get("repos") or []),
+                station=_no_nul(call.get("station")) or None,
+                person_id=call.get("person_id") or None, via=call.get("via") or None))
         return True
 
     def finish_brain_call(self, call_id: str, duration_ms: int, ok: bool, input_tokens: int | None = None,
                           output_tokens: int | None = None, error: str | None = None) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "UPDATE brain_calls SET duration_ms = ?, input_tokens = ?, output_tokens = ?, ok = ?, "
-                "error = ? WHERE id = ?",
-                [duration_ms, input_tokens, output_tokens, 1 if ok else 0, error, call_id])
+        t = brain_calls_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == call_id).values(
+                duration_ms=duration_ms, input_tokens=input_tokens, output_tokens=output_tokens,
+                ok=1 if ok else 0, error=_no_nul(error)))
 
     def list_brain_calls(self, since=None, tool: str | None = None, station: str | None = None,
                          limit: int = 1000) -> list[dict]:
         """The calls made to the brain, newest first."""
-        where, args = [], []
+        t = brain_calls_table
+        q = select(t).order_by(t.c["at"].desc().nulls_last(), t.c.id).limit(limit)
         if since is not None:
-            where.append('"at" >= ?')
-            args.append(since)
+            q = q.where(t.c["at"] >= since)
         if tool:
-            where.append("tool = ?")
-            args.append(tool)
+            q = q.where(t.c.tool == tool)
         if station:
-            where.append("station = ?")
-            args.append(station)
-        sql = f"SELECT {self._BC_COLS} FROM brain_calls" + (f" WHERE {' AND '.join(where)}" if where else "")
-        with self._sread:
-            rows = self.sc.execute(sql + ' ORDER BY "at" DESC, id LIMIT ?', [*args, limit]).fetchall()
+            q = q.where(t.c.station == station)
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q).fetchall()
         out = []
         for r in rows:
+            row = dict(r._mapping)
             try:
-                repos = json.loads(r[5]) if r[5] else []
+                row["repos"] = json.loads(row["repos"]) if row["repos"] else []
             except ValueError:
-                repos = []
-            out.append({"id": r[0], "at": r[1], "tool": r[2], "deep": bool(r[3]), "question": r[4],
-                        "repos": repos, "duration_ms": r[6], "input_tokens": r[7],
-                        "output_tokens": r[8], "ok": None if r[9] is None else bool(r[9]),
-                        "error": r[10], "station": r[11], "person_id": r[12], "via": r[13]})
+                row["repos"] = []
+            row["deep"] = bool(row["deep"])
+            row["ok"] = None if row["ok"] is None else bool(row["ok"])
+            out.append(row)
         return out
+
+    def _update_waiting_grant(self, gid: str, **values) -> bool:
+        """One statement that changes a grant only while it still waits."""
+        t = grants_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            hit = conn.execute(update(t).where(t.c.id == gid, t.c.state == "waiting")
+                               .values(**values).returning(t.c.id)).first()
+        return hit is not None
 
     def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
         """End a grant that still waits and keep who said no; False when it was no longer waiting
         (another consent settled it first)."""
-        with self._swrite:
-            hit = self.sc.execute(
-                "UPDATE grants SET state = 'revoked', consents = ? WHERE id = ? AND state = 'waiting' "
-                "RETURNING id", [json.dumps(consents), gid]).fetchone()
-        return hit is not None
+        return self._update_waiting_grant(gid, state="revoked", consents=consents)
 
     def consent_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
         """Keep a consent on a grant that still waits; False when it was no longer waiting (a
         decline or a revoke came first), and then the row is left as it was."""
-        with self._swrite:
-            hit = self.sc.execute(
-                "UPDATE grants SET consents = ? WHERE id = ? AND state = 'waiting' RETURNING id",
-                [json.dumps(consents), gid]).fetchone()
-        return hit is not None
+        return self._update_waiting_grant(gid, consents=consents)
 
     def activate_waiting_grant(self, gid: str, areas: list[str] | None = None,
                                needs_lead: bool | None = None) -> bool:
         """Put a grant in effect only while it still waits; False when it was declined, revoked
         or put in effect meanwhile. `areas` and `needs_lead`, when given, are written in the
         same statement, so a grant that is no longer waiting keeps what it had."""
-        sets, args = ["state = 'active'"], []
+        values: dict = {"state": "active"}
         if areas is not None:
-            sets.append("areas = ?")
-            args.append(json.dumps(areas))
+            values["areas"] = areas
         if needs_lead is not None:
-            sets.append("needs_lead = ?")
-            args.append(needs_lead)
-        with self._swrite:
-            hit = self.sc.execute(
-                f"UPDATE grants SET {', '.join(sets)} WHERE id = ? AND state = 'waiting' "
-                "RETURNING id", [*args, gid]).fetchone()
-        return hit is not None
+            values["needs_lead"] = needs_lead
+        return self._update_waiting_grant(gid, **values)
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""
-        with self._swrite:
-            self.sc.execute("UPDATE tickets SET milestone = NULL WHERE milestone = ?", [mid])
-            self.sc.execute("DELETE FROM milestones WHERE id = ?", [mid])
+        t, m = tickets_table, milestones_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.milestone == mid).values(milestone=None))
+            conn.execute(delete(m).where(m.c.id == mid))
 
     # ── grants by kind (TR-630) ───────────────────────────────────────────────
-    _GRANT_COLS = ("id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, "
-                   "state, needs_lead")
-
     @staticmethod
     def _grant_row(r) -> dict:
-        return {"id": r[0], "kind": r[1], "project": r[2], "holder_person_id": r[3],
-                "words": r[4], "given_by": r[5], "given_at": r[6],
-                "areas": json.loads(r[7]) if r[7] else [],
-                "consents": json.loads(r[8]) if r[8] else [], "state": r[9],
-                "needs_lead": bool(r[10])}
+        return {"id": r.id, "kind": r.kind, "project": r.project,
+                "holder_person_id": r.holder_person_id, "words": r.words,
+                "given_by": r.given_by, "given_at": r.given_at, "areas": r.areas or [],
+                "consents": r.consents or [], "state": r.state, "needs_lead": bool(r.needs_lead)}
 
     def add_grant_row(self, kind: str, words: str, project: str | None = None,
                       holder: str | None = None, given_by: str | None = None,
                       areas: list[str] | None = None, consents: list[dict] | None = None,
                       state: str = "active", given_at=None, needs_lead: bool = False) -> dict:
         """One grant, numbered G1, G2... for the cell; nothing is checked here."""
-        with self._swrite:
-            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM grants"
-                                   ).fetchone()[0] or 0
+        t = grants_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_grant_number")
+            top = conn.execute(select(func.max(cast(func.substr(t.c.id, 2), Integer)))
+                               ).scalar() or 0
             gid = f"G{top + 1}"
-            self.sc.execute(
-                f"INSERT INTO grants ({self._GRANT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [gid, kind, project, holder, words, given_by, given_at or now_utc(),
-                 json.dumps(areas or []), json.dumps(consents or []), state, needs_lead])
+            conn.execute(insert(t).values(
+                id=gid, kind=kind, project=project, holder_person_id=holder, words=words,
+                given_by=given_by, given_at=given_at or now_utc(), areas=areas or [],
+                consents=consents or [], state=state, needs_lead=needs_lead))
         return self.get_grant_row(gid)
 
     def get_grant_row(self, gid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._GRANT_COLS} FROM grants WHERE id = ?",
-                                 [str(gid or "").strip().upper()]).fetchone()
+        t = grants_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == str(gid or "").strip().upper())).first()
         return self._grant_row(r) if r else None
 
     def all_grant_rows(self) -> list[dict]:
         """Every grant of every kind and state, oldest first."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._GRANT_COLS} FROM grants").fetchall()
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(grants_table)).fetchall()
         return sorted((self._grant_row(r) for r in rows),
                       key=lambda g: int(g["id"][1:]))
 
     def update_grant_row(self, gid: str, state: str | None = None,
                          consents: list[dict] | None = None, areas: list[str] | None = None,
                          needs_lead: bool | None = None) -> None:
-        with self._swrite:
-            if areas is not None:
-                self.sc.execute("UPDATE grants SET areas = ? WHERE id = ?",
-                                 [json.dumps(areas), gid])
-            if needs_lead is not None:
-                self.sc.execute("UPDATE grants SET needs_lead = ? WHERE id = ?",
-                                 [needs_lead, gid])
-            if state is not None:
-                self.sc.execute("UPDATE grants SET state = ? WHERE id = ?", [state, gid])
-            if consents is not None:
-                self.sc.execute("UPDATE grants SET consents = ? WHERE id = ?",
-                                 [json.dumps(consents), gid])
+        values = {k: v for k, v in (("areas", areas), ("needs_lead", needs_lead),
+                                    ("state", state), ("consents", consents)) if v is not None}
+        if not values:
+            return
+        t = grants_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == gid).values(**values))
 
     # ── your own guardrail rules (TR-862) ─────────────────────────────────────
-    _RULE_COLS = "id, scope, project, kind, text, created_by, created_at"
-
     @staticmethod
     def _rule_row(r) -> dict:
-        return {"id": r[0], "scope": r[1], "project": r[2], "kind": r[3], "text": r[4],
-                "created_by": r[5], "created_at": r[6]}
+        return dict(r._mapping)
 
     def add_guardrail_rule(self, scope: str, project: str | None, kind: str, text: str,
                            by: str | None = None) -> dict:
         """One rule, numbered R1, R2... for the cell; nothing is checked here."""
-        with self._swrite:
-            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM guardrail_rules"
-                                   ).fetchone()[0] or 0
+        t = rules_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_guardrail_rules")
+            top = conn.execute(select(func.max(cast(func.substr(t.c.id, 2), Integer)))).scalar() or 0
             rid = f"R{top + 1}"
-            self.sc.execute(
-                f"INSERT INTO guardrail_rules ({self._RULE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [rid, scope, project, kind, text, by, now_utc()])
+            conn.execute(insert(t).values(id=rid, scope=scope, project=project, kind=kind, text=text,
+                                          created_by=by, created_at=now_utc()))
         return self.get_guardrail_rule(rid)
 
     def get_guardrail_rule(self, rid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules WHERE id = ?",
-                                 [str(rid or "").strip().upper()]).fetchone()
-        return self._rule_row(r) if r else None
+        t = rules_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == str(rid or "").strip().upper())).first()
+        return self._rule_row(r) if r is not None else None
 
     def list_guardrail_rules(self) -> list[dict]:
         """Every rule of every scope, oldest first."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules").fetchall()
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(rules_table)).fetchall()
         return sorted((self._rule_row(r) for r in rows), key=lambda g: int(g["id"][1:]))
 
     def set_guardrail_rule_text(self, rid: str, text: str) -> dict | None:
-        with self._swrite:
-            self.sc.execute("UPDATE guardrail_rules SET text = ? WHERE id = ?",
-                             [text, str(rid or "").strip().upper()])
+        t = rules_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == str(rid or "").strip().upper()).values(text=text))
         return self.get_guardrail_rule(rid)
 
     def delete_guardrail_rule(self, rid: str) -> bool:
         """True when a rule was removed."""
-        with self._swrite:
-            gone = self.sc.execute("DELETE FROM guardrail_rules WHERE id = ? RETURNING id",
-                                    [str(rid or "").strip().upper()]).fetchone()
-        return gone is not None
+        t = rules_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.id == str(rid or "").strip().upper())
+                                .returning(t.c.id)).fetchall()
+        return bool(gone)
 
     # ── guardrail pairs (TR-863) ──────────────────────────────────────────────
-    _PAIR_COLS = "id, scope, project_uid, hook, integration, settings, on_fail, created_at, created_by"
-
     @staticmethod
     def _pair_raw(r) -> dict:
         """A pair row. It holds no integration settings (TR-1380): `settings` is always {}, and the
         runner takes the integration's connection at the factory (`stored_settings`)."""
-        return {"id": r[0], "scope": r[1], "project_uid": r[2], "hook": r[3], "integration": r[4],
-                "settings": {}, "on_fail": r[6] or "block",
-                "created_at": r[7], "created_by": r[8]}
+        return {"id": r.id, "scope": r.scope, "project_uid": r.project_uid, "hook": r.hook,
+                "integration": r.integration, "settings": {}, "on_fail": r.on_fail or "block",
+                "created_at": r.created_at, "created_by": r.created_by}
 
     @classmethod
     def _pair_view(cls, raw: dict) -> dict:
@@ -2861,39 +2558,37 @@ class FactoryStore:
                 "settings": {}, "secrets": {}, "on_fail": raw["on_fail"],
                 "created_at": raw["created_at"], "created_by": raw["created_by"]}
 
-    def _pair_rows(self) -> list[dict]:
-        """Every pair, oldest first. Lock held, or a read."""
-        rows = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs").fetchall()
+    def _pair_rows(self, conn) -> list[dict]:
+        """Every pair, oldest first, read on `conn`."""
+        rows = conn.execute(select(pairs_table)).fetchall()
         return sorted((self._pair_raw(r) for r in rows), key=lambda p: int(p["id"][2:]))
 
     def list_guardrail_pairs(self, scope: str | None = None, project_uid: str | None = None) -> list[dict]:
         """The pairs of one scope as a read shows them, oldest first: every pair when `scope` is
         None, the factory's for "factory", one project's for "project"."""
-        with self._sread:
-            rows = self._pair_rows()
+        with self.sessions_db.read() as conn:
+            rows = self._pair_rows(conn)
         return [self._pair_view(p) for p in rows
                 if (scope is None or p["scope"] == scope)
                 and (scope != "project" or p["project_uid"] == project_uid)]
 
     def get_guardrail_pair(self, pid: str) -> dict | None:
         """One pair as a read shows it, or None."""
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
-                                [str(pid or "").strip().upper()]).fetchone()
-        return self._pair_view(self._pair_raw(r)) if r else None
+        raw = self.guardrail_pair_stored(pid)
+        return self._pair_view(raw) if raw else None
 
     def guardrail_pair_stored(self, pid: str) -> dict | None:
         """One pair as the store holds it, or None. For the routes to compare an edit with."""
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
-                                [str(pid or "").strip().upper()]).fetchone()
-        return self._pair_raw(r) if r else None
+        t = pairs_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == str(pid or "").strip().upper())).first()
+        return self._pair_raw(r) if r is not None else None
 
     def guardrail_pairs_for_run(self, hook: str, project_uid: str | None) -> list[dict]:
         """The pairs to run at `hook`: the factory's first, then the project's own, each oldest
         first. The hook runner reads each one's connection with `stored_settings`."""
-        with self._sread:
-            rows = self._pair_rows()
+        with self.sessions_db.read() as conn:
+            rows = self._pair_rows(conn)
         mine = [p for p in rows if p["hook"] == hook]
         return ([p for p in mine if p["scope"] == "factory"]
                 + [p for p in mine if p["scope"] == "project" and project_uid
@@ -2907,22 +2602,23 @@ class FactoryStore:
         settings (TR-1380): it uses the integration's connection at the factory. An exact twin
         (same scope, project, hook, integration and on_fail) adds nothing. A `pair_id` that names no
         pair of this scope and project raises LookupError. With `require_connected` a guardrail that
-        is not connected raises ValueError, checked in the same step as the write, within this
-        process (the route asks for it). Nothing else is checked here."""
+        is not connected raises ValueError, checked in the same step as the write (the route asks
+        for it). Nothing else is checked here."""
         takes = self._takes_settings("guardrails", integration)   # before the write lock: it loads the registry
-        with self._swrite:
-            if require_connected and not self._connected("guardrails", integration, takes):
+        t = pairs_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            if require_connected and not self._connected(conn, "guardrails", integration, takes):
                 raise ValueError(f"{integration} is not connected: connect it in the factory's "
                                  "integrations first")
-            rows = self._pair_rows()
+            rows = self._pair_rows(conn)
             if pair_id:
                 cur = next((p for p in rows if p["id"] == str(pair_id).strip().upper()
                             and p["scope"] == scope and p["project_uid"] == project_uid), None)
                 if cur is None:
                     raise LookupError(f"there is no pair {pair_id}")
-                self.sc.execute("UPDATE guardrail_pairs SET hook = ?, integration = ?, settings = ?, "
-                                "on_fail = ? WHERE id = ?",
-                                [hook, integration, "{}", on_fail, cur["id"]])
+                conn.execute(update(t).where(t.c.id == cur["id"]).values(
+                    hook=hook, integration=integration, settings={}, on_fail=on_fail))
                 raw, how = {**cur, "hook": hook, "integration": integration,
                             "on_fail": on_fail}, "updated"
             else:
@@ -2936,58 +2632,52 @@ class FactoryStore:
                     raw, how = {"id": f"GP{top + 1}", "scope": scope, "project_uid": project_uid,
                                 "hook": hook, "integration": integration, "settings": {},
                                 "on_fail": on_fail, "created_at": now_utc(), "created_by": by}, "added"
-                    self.sc.execute(
-                        f"INSERT INTO guardrail_pairs ({self._PAIR_COLS}) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        [raw["id"], scope, project_uid, hook, integration, "{}", on_fail,
-                         raw["created_at"], by])
+                    conn.execute(insert(t).values(**raw))
         return self._pair_view(raw), how
 
     def delete_guardrail_pair(self, pid: str) -> bool:
         """True when a pair was removed."""
-        with self._swrite:
-            gone = self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ? RETURNING id",
-                                   [str(pid or "").strip().upper()]).fetchone()
-        return gone is not None
+        t = pairs_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.id == str(pid or "").strip().upper())
+                                .returning(t.c.id)).fetchall()
+        return bool(gone)
 
     # ── memory lines waiting for a non-Tares memory integration (TR-865) ──────
-    _PENDING_COLS = "id, scope, line, attempts, last_error, created_at, tried_at"
-
-    @staticmethod
-    def _pending_view(r) -> dict:
-        return dict(zip(("id", "scope", "line", "attempts", "last_error", "created_at", "tried_at"), r))
-
     def add_pending_memory(self, scope: str, line: str, error: str = "") -> str:
         """Keep a line the integration did not take; returns the row's id. attempts starts at 1:
         the write that just failed."""
         pid = "pm_" + uuid.uuid4().hex[:10]
         at = now_utc()
-        with self._swrite:
-            self.sc.execute(
-                f"INSERT INTO pending_memory ({self._PENDING_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [pid, str(scope), str(line), 1, str(error or "")[:500], at, at])
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(insert(pending_table).values(
+                id=pid, scope=str(scope), line=str(line), attempts=1,
+                last_error=str(error or "")[:500], created_at=at, tried_at=at))
         return pid
 
     def list_pending_memory(self, scope: str | None = None) -> list[dict]:
         """The waiting lines, oldest first; one scope's when `scope` is given."""
-        sql, args = f"SELECT {self._PENDING_COLS} FROM pending_memory", []
+        t = pending_table
+        q = select(t.c.id, t.c.scope, t.c.line, t.c.attempts, t.c.last_error, t.c.created_at,
+                   t.c.tried_at)
         if scope is not None:
-            sql, args = sql + " WHERE scope = ?", [str(scope)]
-        with self._sread:
-            rows = self.sc.execute(sql + " ORDER BY created_at, id", args).fetchall()
-        return [self._pending_view(r) for r in rows]
+            q = q.where(t.c.scope == str(scope))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.created_at.asc().nulls_last(), t.c.id)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def retried_pending_memory(self, pid: str, error: str) -> None:
         """A retry failed again: count it and keep the reason."""
-        with self._swrite:
-            self.sc.execute("UPDATE pending_memory SET attempts = attempts + 1, last_error = ?, "
-                            "tried_at = ? WHERE id = ?", [str(error or "")[:500], now_utc(), pid])
+        t = pending_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == pid).values(
+                attempts=t.c.attempts + 1, last_error=str(error or "")[:500], tried_at=now_utc()))
 
     def delete_pending_memory(self, pid: str) -> bool:
         """True when a row was removed (the integration took the line, or it is no longer needed)."""
-        with self._swrite:
-            gone = self.sc.execute("DELETE FROM pending_memory WHERE id = ? RETURNING id",
-                                   [pid]).fetchone()
+        t = pending_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.id == pid).returning(t.c.id)).first()
         return gone is not None
 
     # ── integration connections, defaults and a project's own choice (TR-839, TR-1380) ──
@@ -3073,43 +2763,57 @@ class FactoryStore:
     # the slots that keep exactly one connection: connecting another replaces the old one
     ONE_CONNECTION = ("memory", "monitoring", "runtime")
 
-    def _default_name(self, slot: str) -> str:
+    def _default_name(self, conn, slot: str) -> str:
         """The name of the slot's default integration: the factory's pointer, else the built-in
-        default. Lock held, or a read."""
+        default. Read on `conn`."""
         from .integrations import resolve
-        r = self.sc.execute("SELECT name FROM integration_choices WHERE slot = ?", [slot]).fetchone()
-        return r[0] if r else resolve.DEFAULTS[slot]
+        t = choices_table
+        r = conn.execute(select(t.c.name).where(t.c.slot == slot)).first()
+        return r[0] if r is not None else resolve.DEFAULTS[slot]
+
+    @kept
+    def _default_read(self, slot: str) -> str:
+        """_default_name in a transaction of its own, for a read: asked once per page read for each
+        slot. Not for use inside an open transaction."""
+        with self.sessions_db.read() as conn:
+            return self._default_name(conn, slot)
 
     def _connection_view(self, slot: str, name: str, raw, at, by, default: bool) -> dict:
         return {**self._integration_view(slot, name, raw, at, by), "default": default}
 
+    @kept
     def get_choice(self, slot: str) -> dict | None:
         """The factory's default for the slot, secrets redacted: {slot, name, settings, secrets,
         updated_at, updated_by, default}, the settings those of its connection; None when the slot
         has none chosen (it uses its built-in default)."""
         self._integration_slot(slot)
-        with self._sread:
-            r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
-                                "integration_choices WHERE slot = ?", [slot]).fetchone()
+        ch, t = choices_table, connections_table
+        with self.sessions_db.consistent_read() as conn:    # the default and its connection agree
+            r = conn.execute(select(ch.c.name, ch.c.updated_at, ch.c.updated_by)
+                             .where(ch.c.slot == slot)).first()
             if r is None:
                 return None
-            c = self.sc.execute("SELECT settings, updated_at, updated_by FROM integration_connections "
-                                "WHERE slot = ? AND name = ?", [slot, r[0]]).fetchone()
-        if c:
-            return self._connection_view(slot, r[0], c[0], c[1], c[2], True)
-        return self._connection_view(slot, r[0], {}, r[2], r[3], True)
+            c = conn.execute(select(t.c.settings, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.slot == slot, t.c.name == r.name)).first()
+        if c is not None:
+            return self._connection_view(slot, r.name, c.settings, c.updated_at, c.updated_by, True)
+        return self._connection_view(slot, r.name, {}, r.updated_at, r.updated_by, True)
 
     def get_connection(self, slot: str, name: str) -> dict | None:
         """One connection of the factory, secrets redacted: {slot, name, settings, secrets,
         updated_at, updated_by, default}; None when it is not connected (a row only: an
         integration with no integration settings has none)."""
         self._integration_slot(slot)
-        with self._sread:
-            c = self.sc.execute("SELECT settings, updated_at, updated_by FROM integration_connections "
-                                "WHERE slot = ? AND name = ?", [slot, name]).fetchone()
-            default = self._default_name(slot) == name if c else False
-        return self._connection_view(slot, name, c[0], c[1], c[2], default) if c else None
+        t = connections_table
+        with self.sessions_db.consistent_read() as conn:    # the row and the flag agree
+            c = conn.execute(select(t.c.settings, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.slot == slot, t.c.name == name)).first()
+            default = self._default_name(conn, slot) == name if c is not None else False
+        if c is None:
+            return None
+        return self._connection_view(slot, name, c.settings, c.updated_at, c.updated_by, default)
 
+    @kept
     def list_connections(self, slot: str) -> list[dict]:
         """The slot's connections, secrets redacted, by name, each with `default` true for the one
         the slot uses. Monitoring keeps its one in the tracing settings: it is listed when
@@ -3123,23 +2827,28 @@ class FactoryStore:
                 return []
             return [self._connection_view(slot, cfg.provider, mon.stored(self, cfg.provider),
                                           None, None, True)]
-        with self._sread:
-            rows = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
-                                   "integration_connections WHERE slot = ? ORDER BY name",
-                                   [slot]).fetchall()
-            default = self._default_name(slot)
-        return [self._connection_view(slot, r[0], r[1], r[2], r[3], r[0] == default) for r in rows]
+        from .integrations import resolve
+        t, ch = connections_table, choices_table
+        # one query, not _default_read: the rows and the default must be from one state
+        chosen = select(ch.c.name).where(ch.c.slot == slot).scalar_subquery().label("chosen")
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t.c.name, t.c.settings, t.c.updated_at, t.c.updated_by, chosen)
+                                .where(t.c.slot == slot).order_by(t.c.name)).fetchall()
+        return [self._connection_view(slot, r.name, r.settings, r.updated_at, r.updated_by,
+                                      r.name == (r.chosen or resolve.DEFAULTS[slot])) for r in rows]
 
-    def _connected(self, slot: str, name: str, takes_settings: bool) -> bool:
-        """is_connected with the lock held (a read lock or the write lock), so a write can check
-        it in the same step as the write (within this process). `takes_settings` is False for an installed integration
-        whose settings_schema is empty. Read the registry before taking the lock."""
-        if not takes_settings:
-            return True
-        if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
-                           [slot, name]).fetchone():
-            return True
-        return self._default_name(slot) == name
+    @staticmethod
+    def _has_row(conn, slot: str, name: str) -> bool:
+        t = connections_table
+        return conn.execute(select(t.c.name).where(t.c.slot == slot,
+                                                   t.c.name == name)).first() is not None
+
+    def _connected(self, conn, slot: str, name: str, takes_settings: bool) -> bool:
+        """is_connected on `conn`, so a write can check it in the same step as the write.
+        `takes_settings` is False for an installed integration whose settings_schema is empty. Read
+        the registry before taking the lock."""
+        return (not takes_settings or self._has_row(conn, slot, name)
+                or self._default_name(conn, slot) == name)
 
     @staticmethod
     def _takes_settings(slot: str, name: str) -> bool:
@@ -3151,9 +2860,12 @@ class FactoryStore:
         """The integration is connected: it has a connection row, or it takes no integration
         settings (nothing to connect), or it is the slot's default."""
         self._integration_slot(slot)
-        takes = self._takes_settings(slot, name)
-        with self._sread:
-            return self._connected(slot, name, takes)
+        if not self._takes_settings(slot, name):
+            return True
+        with self.sessions_db.read() as conn:
+            if self._has_row(conn, slot, name):
+                return True
+        return self._default_read(slot) == name
 
     def set_choice(self, slot: str, name: str, settings: dict | None, by: str,
                    default: bool = True) -> dict:
@@ -3169,35 +2881,31 @@ class FactoryStore:
         secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
         if slot == "monitoring" and name in MONITORING_NAMES:
             return self._set_monitoring(name, settings, secret, by)
-        with self._swrite:
-            cur = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? "
-                                  "AND name = ?", [slot, name]).fetchone()
-            stored = self._load_settings(cur[0]) if cur else {}
+        t = connections_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            cur = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
+            stored = self._load_settings(cur[0]) if cur is not None else {}
             merged = self._merge_integration_settings(secret, settings, stored)
             at = now_utc()
-            self.sc.execute(
-                "INSERT INTO integration_connections (slot, name, settings, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (slot, name) DO UPDATE SET "
-                "settings = excluded.settings, updated_at = excluded.updated_at, "
-                "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
+            ins = self.sessions_db.upsert(t).values(slot=slot, name=name, settings=merged,
+                                                    updated_at=at, updated_by=by)
+            conn.execute(ins.on_conflict_do_update(index_elements=["slot", "name"], set_={
+                k: ins.excluded[k] for k in ("settings", "updated_at", "updated_by")}))
             one = slot in self.ONE_CONNECTION
             if one:
-                self.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name != ?",
-                                [slot, name])
+                conn.execute(delete(t).where(t.c.slot == slot, t.c.name != name))
             if default or one:
-                self._point_default(slot, name, at, by)
-            is_default = self._default_name(slot) == name
+                self._point_default(conn, slot, name, at, by)
+            is_default = self._default_name(conn, slot) == name
         return self._connection_view(slot, name, merged, at, by, is_default)
 
-    def _point_default(self, slot: str, name: str, at, by) -> None:
-        """Make `name` the slot's default. Lock held."""
-        cur = self.sc.execute("SELECT 1 FROM integration_choices WHERE slot = ?", [slot]).fetchone()
-        if cur:
-            self.sc.execute("UPDATE integration_choices SET name = ?, settings = ?, updated_at = ?, "
-                            "updated_by = ? WHERE slot = ?", [name, "{}", at, by, slot])
-        else:
-            self.sc.execute("INSERT INTO integration_choices (slot, name, settings, updated_at, "
-                            "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, "{}", at, by])
+    def _point_default(self, conn, slot: str, name: str, at, by) -> None:
+        """Make `name` the slot's default, in the transaction of `conn`."""
+        ins = self.sessions_db.upsert(choices_table).values(slot=slot, name=name, settings={},
+                                                            updated_at=at, updated_by=by)
+        conn.execute(ins.on_conflict_do_update(index_elements=["slot"], set_={
+            k: ins.excluded[k] for k in ("name", "settings", "updated_at", "updated_by")}))
 
     def set_default(self, slot: str, name: str, by: str) -> dict:
         """Make a connected integration the slot's default. Raises ValueError when it is not
@@ -3209,39 +2917,39 @@ class FactoryStore:
         if slot == "monitoring":
             raise ValueError("monitoring keeps one connection: connect another integration to replace it")
         takes = self._takes_settings(slot, name)
-        with self._swrite:
-            # checked in the same step as the write (within this process): a connection deleted meanwhile cannot slip by
-            if not self._connected(slot, name, takes):
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            # checked in the same step as the write: a connection deleted meanwhile cannot slip by
+            if not self._connected(conn, slot, name, takes):
                 raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
-            self._point_default(slot, name, now_utc(), by)
+            self._point_default(conn, slot, name, now_utc(), by)
         return self.get_connection(slot, name) or self._connection_view(slot, name, {}, now_utc(), by, True)
 
     def delete_connection(self, slot: str, name: str) -> bool:
         """Remove a connection. False when there is none. Raises ValueError, naming what uses it,
         while it is the slot's default, a project uses it, or a guardrail pair uses it."""
         self._integration_slot(slot)
-        with self._swrite:
-            if not self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
-                                   [slot, name]).fetchone():
+        t, picks, pt = connections_table, picks_table, pairs_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            if conn.execute(select(t.c.name).where(t.c.slot == slot, t.c.name == name)).first() is None:
                 return False
-            if self._default_name(slot) == name:
+            if self._default_name(conn, slot) == name:
                 raise ValueError(f"{name} is the default for {slot}: make another connection the "
                                  "default first")
             if slot in PROJECT_SLOTS:
-                used = [r[0] for r in self.sc.execute(
-                    "SELECT project_uid FROM project_integrations WHERE slot = ? AND name = ? "
-                    "ORDER BY project_uid", [slot, name]).fetchall()]
+                used = conn.execute(select(picks.c.project_uid).where(
+                    picks.c.slot == slot, picks.c.name == name)
+                    .order_by(picks.c.project_uid)).scalars().all()
                 if used:
                     raise ValueError(f"{name} is used by project {', '.join(used)} for {slot}: "
                                      "change what the project uses first")
             if slot == "guardrails":
-                pairs = [r[0] for r in self.sc.execute(
-                    "SELECT id FROM guardrail_pairs WHERE integration = ?", [name]).fetchall()]
+                pairs = conn.execute(select(pt.c.id).where(pt.c.integration == name)).scalars().all()
                 if pairs:
                     raise ValueError(f"{name} is used by guardrail pair {', '.join(sorted(pairs))}: "
                                      "remove the pair first")
-            self.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name = ?",
-                            [slot, name])
+            conn.execute(delete(t).where(t.c.slot == slot, t.c.name == name))
         return True
 
     def _set_monitoring(self, name: str, settings: dict | None, secret: set | None, by: str) -> dict:
@@ -3252,12 +2960,12 @@ class FactoryStore:
         from .integrations.builtin import monitoring_tares as mon
         merged = self._merge_integration_settings(secret, settings, mon.stored(self, name))
         mon.save(self, name, merged)
-        with self._swrite:
-            self.sc.execute("DELETE FROM integration_choices WHERE slot = ?", ["monitoring"])
+        t = choices_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.slot == "monitoring"))
         return self._connection_view("monitoring", name, merged, now_utc(), by, True)
 
     # ── a project's secrets (TR-775): sealed values; tares/project_secrets.py seals and opens them ──
-    _SECRET_COLS = "project, name, value, set_by, set_at, used_by, used_at"
     _secrets_gen = 0
 
     def _secrets_changed(self) -> None:
@@ -3267,47 +2975,44 @@ class FactoryStore:
         """A number that changes whenever a secret is set or removed (for a cache of the values)."""
         return FactoryStore._secrets_gen
 
-    def _secret_row(self, r) -> dict:
-        return dict(zip(self._SECRET_COLS.split(", "), r))
-
     def secret_rows(self, uid: str) -> list[dict]:
         """The project's secrets by name, the sealed value included: never return it from a route."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._SECRET_COLS} FROM project_secrets WHERE project = ? "
-                                   "ORDER BY name", [uid]).fetchall()
-        return [self._secret_row(r) for r in rows]
+        t = secrets_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(t.c.project == uid).order_by(t.c.name)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def all_secret_rows(self) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._SECRET_COLS} FROM project_secrets").fetchall()
-        return [self._secret_row(r) for r in rows]
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(secrets_table)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def set_secret(self, uid: str, name: str, sealed: str, by: str) -> None:
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO project_secrets (project, name, value, set_by, set_at, used_by, used_at) "
-                "VALUES (?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT (project, name) DO UPDATE SET "
-                "value = excluded.value, set_by = excluded.set_by, set_at = excluded.set_at",
-                [uid, name, sealed, by, now_utc()])
+        ins = self.sessions_db.upsert(secrets_table).values(
+            project=uid, name=name, value=sealed, set_by=by, set_at=now_utc(), used_by=None,
+            used_at=None)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins.on_conflict_do_update(index_elements=["project", "name"], set_={
+                k: ins.excluded[k] for k in ("value", "set_by", "set_at")}))
         self._secrets_changed()
 
     def delete_secret(self, uid: str, name: str) -> bool:
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM project_secrets WHERE project = ? AND name = ?",
-                                  [uid, name]).fetchone()
-            if had:
-                self.sc.execute("DELETE FROM project_secrets WHERE project = ? AND name = ?", [uid, name])
+        t = secrets_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.project == uid, t.c.name == name)
+                                .returning(t.c.name)).fetchall()
         self._secrets_changed()
-        return bool(had)
+        return bool(gone)
 
     def secrets_used(self, uid: str, names: list[str], by: str) -> None:
         if not names:
             return
         at = now_utc()
-        with self._swrite:
+        t = secrets_table
+        with self._swrite, self.sessions_db.begin() as conn:
             for n in names:
-                self.sc.execute("UPDATE project_secrets SET used_by = ?, used_at = ? WHERE project = ? "
-                                "AND name = ?", [by, at, uid, n])
+                conn.execute(update(t).where(t.c.project == uid, t.c.name == n)
+                             .values(used_by=by, used_at=at))
 
     # ── the project's required checks (TR-854) ────────────────────────────────
     @staticmethod
@@ -3327,98 +3032,94 @@ class FactoryStore:
 
     def get_required_checks(self, uid: str) -> list[str]:
         """The commands the project requires recorded as passing; [] when it has none."""
-        with self._sread:
-            r = self.sc.execute("SELECT commands FROM project_required_checks WHERE project = ?",
-                                [uid]).fetchone()
-        v = json.loads(r[0]) if r and isinstance(r[0], str) else (r[0] if r else None)
+        t = required_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.commands).where(t.c.project == uid)).first()
+        v = r[0] if r is not None else None
         return [c for c in v if isinstance(c, str)] if isinstance(v, list) else []
 
     def set_required_checks(self, uid: str, commands, by: str) -> list[str]:
         """Replace the project's required checks with `commands` (cleaned as clean_commands);
         an empty list is "no required checks". Returns what was saved."""
         saved = self.clean_commands(commands)
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO project_required_checks (project, commands, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
-                "commands = excluded.commands, updated_at = excluded.updated_at, "
-                "updated_by = excluded.updated_by", [uid, json.dumps(saved), now_utc(), by])
+        ins = self.sessions_db.upsert(required_table).values(
+            project=uid, commands=saved, updated_at=now_utc(), updated_by=by)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+                k: ins.excluded[k] for k in ("commands", "updated_at", "updated_by")}))
         return saved
 
     # ── merge queue (TR-856) ──────────────────────────────────────────────────
     MERGE_METHODS = ("squash", "merge", "rebase")
     MERGE_OPEN = ("queued", "waiting_ci", "waiting_approval", "merging", "blocked")
-    _MQ_COLS = ("id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
-                "approved_head, entered_at, updated_at, before_files, unknown_ticks")
     _MQ_FIELDS = ("repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
                   "desk_item", "approved_head", "before_files", "unknown_ticks")
 
     @staticmethod
     def _mq_row(r) -> dict:
-        return {"id": r[0], "repo": r[1], "base": r[2], "pr": r[3], "head": r[4], "ticket": r[5],
-                "project_uid": r[6], "state": r[7], "reason": r[8], "desk_item": r[9],
-                "approved_head": r[10], "entered_at": r[11], "updated_at": r[12],
-                "before_files": r[13], "unknown_ticks": r[14] or 0}
+        return {**r._mapping, "unknown_ticks": r.unknown_ticks or 0}
+
+    @staticmethod
+    def _mq_order():
+        t = queue_table
+        return (t.c.entered_at.asc().nulls_last(), t.c.id)
+
+    def _mq_rows(self, *where) -> list[dict]:
+        """The rows that match, oldest entry first."""
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(queue_table).where(*where).order_by(*self._mq_order())).fetchall()
+        return [self._mq_row(r) for r in rows]
 
     def merge_queue_add(self, repo: str, base: str, pr: int, head: str, ticket: str | None,
                         project_uid: str | None, state: str = "queued",
                         reason: str | None = None) -> dict:
         mid = "mq_" + uuid.uuid4().hex[:10]
         now = now_utc()
-        marks = ", ".join("?" for _ in self.MERGE_OPEN)
-        with self._swrite:
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_merge_queue")
             # one open row per pull request: two ticks that both saw it ready add it once
-            have = self.sc.execute(
-                f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND pr = ? AND "
-                f"state IN ({marks})", [repo, pr, *self.MERGE_OPEN]).fetchone()
-            if have:
+            have = conn.execute(select(t).where(
+                t.c.repo == repo, t.c.pr == pr, t.c.state.in_(self.MERGE_OPEN))).first()
+            if have is not None:
                 return self._mq_row(have)
-            self.sc.execute(
-                f"INSERT INTO merge_queue ({self._MQ_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [mid, repo, base, pr, head, ticket, project_uid, state, reason, None, None, now,
-                 now, None, 0])
+            conn.execute(insert(t).values(
+                id=mid, repo=repo, base=base, pr=pr, head=head, ticket=ticket,
+                project_uid=project_uid, state=state, reason=reason, desk_item=None,
+                approved_head=None, entered_at=now, updated_at=now, before_files=None,
+                unknown_ticks=0))
         return self.merge_queue_get(mid)
 
     def merge_queue_get(self, mid: str) -> dict | None:
-        with self._sread:
-            r = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE id = ?",
-                                [mid]).fetchone()
-        return self._mq_row(r) if r else None
+        t = queue_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(t.c.id == mid)).first()
+        return self._mq_row(r) if r is not None else None
 
     def merge_queue_list(self, repo: str, base: str) -> list[dict]:
         """The rows of one (repo, base), oldest entry first (the queue's own order is the
         caller's)."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
-                                    "base = ? ORDER BY entered_at, id", [repo, base]).fetchall()
-        return [self._mq_row(r) for r in rows]
+        t = queue_table
+        return self._mq_rows(t.c.repo == repo, t.c.base == base)
 
     def merge_queue_open(self) -> list[dict]:
         """Every row that is not finished: queued, waiting_ci, waiting_approval, merging, blocked."""
-        marks = ", ".join("?" for _ in self.MERGE_OPEN)
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state IN "
-                                    f"({marks}) ORDER BY entered_at, id",
-                                    list(self.MERGE_OPEN)).fetchall()
-        return [self._mq_row(r) for r in rows]
+        return self._mq_rows(queue_table.c.state.in_(self.MERGE_OPEN))
 
     def merge_queue_sent_back(self) -> list[dict]:
         """Every row that was sent back to its builder (or ended with the ticket's review)."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state = "
-                                    "'sent_back' ORDER BY entered_at, id").fetchall()
-        return [self._mq_row(r) for r in rows]
+        return self._mq_rows(queue_table.c.state == "sent_back")
 
     def merge_queue_last_merged(self, repo: str, base: str, not_pr: int | None = None) -> dict | None:
         """The row of the pull request merged most recently into (repo, base), or None. `not_pr`
         leaves one pull request out."""
-        with self._sread:
-            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
-                                    "base = ? AND state = 'merged' ORDER BY updated_at DESC, id "
-                                    "DESC", [repo, base]).fetchall()
+        t = queue_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(
+                t.c.repo == repo, t.c.base == base, t.c.state == "merged")
+                .order_by(t.c.updated_at.desc().nulls_last(), t.c.id.desc())).fetchall()
         for r in rows:
-            if not_pr is None or r[3] != not_pr:
+            if not_pr is None or r.pr != not_pr:
                 return self._mq_row(r)
         return None
 
@@ -3427,11 +3128,11 @@ class FactoryStore:
         rows."""
         if not project_uids:
             return []
-        marks = ", ".join("?" for _ in project_uids)
-        with self._sread:
-            rows = self.sc.execute(
-                f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state = 'merged' AND project_uid IN "
-                f"({marks}) ORDER BY updated_at DESC, id", list(project_uids)).fetchall()
+        t = queue_table
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(select(t).where(
+                t.c.state == "merged", t.c.project_uid.in_(list(project_uids)))
+                .order_by(t.c.updated_at.desc().nulls_last(), t.c.id)).fetchall()
         return [self._mq_row(r) for r in rows]
 
     def merge_approvers(self, person_ids: list[str]) -> dict:
@@ -3444,76 +3145,88 @@ class FactoryStore:
             raise ValueError(f"not a merge queue field: {', '.join(bad)}")
         if not fields:
             return
-        sets = ", ".join(f"{k} = ?" for k in fields) + ", updated_at = ?"
-        with self._swrite:
-            self.sc.execute(f"UPDATE merge_queue SET {sets} WHERE id = ?",
-                             [*fields.values(), now_utc(), mid])
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == mid).values(**fields, updated_at=now_utc()))
 
     def merge_queue_delete(self, mid: str) -> None:
-        with self._swrite:
-            self.sc.execute("DELETE FROM merge_queue WHERE id = ?", [mid])
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.id == mid))
 
     def merge_queue_claim(self, mid: str, approved_only: bool = False) -> bool:
         """Take the row for merging: it becomes `merging` only when it is `queued` and no other
         row of its (repo, base) is `merging` (one merge at a time across the cell). With
         `approved_only` (autonomy L3-review) the row also needs approved_head == head. One
         write-locked step, so two ticks cannot both take it."""
-        with self._swrite:
-            r = self.sc.execute("SELECT repo, base, state, head, approved_head FROM merge_queue "
-                                "WHERE id = ?", [mid]).fetchone()
-            if not r or r[2] != "queued":
+        t = queue_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_merge_queue")
+            r = conn.execute(select(t.c.repo, t.c.base, t.c.state, t.c.head, t.c.approved_head)
+                             .where(t.c.id == mid)).first()
+            if r is None or r.state != "queued":
                 return False
-            if approved_only and (not r[4] or r[4] != r[3]):
+            if approved_only and (not r.approved_head or r.approved_head != r.head):
                 return False
-            busy = self.sc.execute("SELECT 1 FROM merge_queue WHERE repo = ? AND base = ? AND "
-                                   "state = 'merging' AND id != ?", [r[0], r[1], mid]).fetchone()
-            if busy:
+            busy = conn.execute(select(t.c.id).where(
+                t.c.repo == r.repo, t.c.base == r.base, t.c.state == "merging", t.c.id != mid)).first()
+            if busy is not None:
                 return False
-            self.sc.execute("UPDATE merge_queue SET state = 'merging', updated_at = ? WHERE "
-                             "id = ?", [now_utc(), mid])
+            conn.execute(update(t).where(t.c.id == mid).values(state="merging", updated_at=now_utc()))
         return True
 
     def get_merge_method(self, uid: str) -> str:
         """squash, merge or rebase; squash when the project never chose."""
-        with self._sread:
-            r = self.sc.execute("SELECT method FROM project_merge_method WHERE project = ?",
-                                [uid]).fetchone()
-        return r[0] if r and r[0] in self.MERGE_METHODS else "squash"
+        t = method_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.method).where(t.c.project == uid)).first()
+        return r[0] if r is not None and r[0] in self.MERGE_METHODS else "squash"
 
     def set_merge_method(self, uid: str, method: str, by: str) -> str:
         method = (method or "").strip().lower()
         if method not in self.MERGE_METHODS:
             raise ValueError("merge_method is squash, merge or rebase")
-        with self._swrite:
-            self.sc.execute(
-                "INSERT INTO project_merge_method (project, method, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
-                "method = excluded.method, updated_at = excluded.updated_at, "
-                "updated_by = excluded.updated_by", [uid, method, now_utc(), by])
+        ins = self.sessions_db.upsert(method_table).values(
+            project=uid, method=method, updated_at=now_utc(), updated_by=by)
+        with self._swrite, self.sessions_db.begin() as conn:
+            conn.execute(ins.on_conflict_do_update(index_elements=["project"], set_={
+                k: ins.excluded[k] for k in ("method", "updated_at", "updated_by")}))
         return method
 
+    @kept
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, as get_choice; None when it has none. Its settings
         are the project's own fields only. It never falls back to the factory's default: that is
         the caller's rule."""
         self._integration_slot(slot, PROJECT_SLOTS)
-        with self._sread:
-            r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
-                                "project_integrations WHERE project_uid = ? AND slot = ?",
-                                [uid, slot]).fetchone()
-        return self._integration_view(slot, r[0], r[1], r[2], r[3], project_uid=uid) if r else None
+        t = picks_table
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t.c.name, t.c.settings, t.c.updated_at, t.c.updated_by)
+                             .where(t.c.project_uid == uid, t.c.slot == slot)).first()
+        if r is None:
+            return None
+        return self._integration_view(slot, r.name, r.settings, r.updated_at, r.updated_by,
+                                      project_uid=uid)
 
     def projects_with_choice(self, slot: str, uids: list[str]) -> set[str]:
-        """The projects among `uids` that hold their own choice for the slot, in one query."""
+        """The projects among `uids` that hold their own choice for the slot, in one query per 500
+        projects."""
+        return set(self.project_choice_names(slot, uids))
+
+    def project_choice_names(self, slot: str, uids: list[str]) -> dict[str, str]:
+        """{project uid: name of its own choice} for the projects among `uids` that hold one for the
+        slot, in one query per 500 projects. It is get_project_choice's name for each project, with
+        no settings read, and never falls back to the factory's default."""
         self._integration_slot(slot, PROJECT_SLOTS)
         ids = sorted({u for u in uids if u})
-        if not ids:
-            return set()
-        with self._sread:
-            rows = self.sc.execute(
-                "SELECT project_uid FROM project_integrations WHERE slot = ? AND project_uid IN "
-                f"({', '.join('?' for _ in ids)})", [slot, *ids]).fetchall()
-        return {r[0] for r in rows}
+        out: dict[str, str] = {}
+        t = picks_table
+        for i in range(0, len(ids), 500):
+            with self.sessions_db.read() as conn:
+                rows = conn.execute(select(t.c.project_uid, t.c.name).where(
+                    t.c.slot == slot, t.c.project_uid.in_(ids[i:i + 500]))).fetchall()
+            out.update({r.project_uid: r.name for r in rows})
+        return out
 
     @classmethod
     def project_field_refusal(cls, slot: str, name: str, key: str) -> str | None:
@@ -3538,7 +3251,7 @@ class FactoryStore:
         """Save the project's own choice for the slot: a connected integration's name and the
         project's own fields. A secret or an address in `settings` raises ValueError: those live at
         the factory (TR-1380), so a project never holds one. With `require_connected` an integration
-        that is not connected raises ValueError too, checked in the same step as the write, within this process (the
+        that is not connected raises ValueError too, checked in the same step as the write (the
         route asks for it). Only tickets, review and ci take one."""
         self._integration_slot(slot, PROJECT_SLOTS)
         name = str(name or "").strip()
@@ -3553,20 +3266,15 @@ class FactoryStore:
             if why:
                 raise ValueError(why)
         takes = self._takes_settings(slot, name)
-        with self._swrite:
-            if require_connected and not self._connected(slot, name, takes):
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_integrations")
+            if require_connected and not self._connected(conn, slot, name, takes):
                 raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
             at = now_utc()
-            cur = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? AND slot = ?",
-                                  [uid, slot]).fetchone()
-            if cur:
-                self.sc.execute("UPDATE project_integrations SET name = ?, settings = ?, updated_at = ?, "
-                                "updated_by = ? WHERE project_uid = ? AND slot = ?",
-                                [name, json.dumps(settings), at, by, uid, slot])
-            else:
-                self.sc.execute("INSERT INTO project_integrations (project_uid, slot, name, settings, "
-                                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?)",
-                                [uid, slot, name, json.dumps(settings), at, by])
+            ins = self.sessions_db.upsert(picks_table).values(
+                project_uid=uid, slot=slot, name=name, settings=settings, updated_at=at, updated_by=by)
+            conn.execute(ins.on_conflict_do_update(index_elements=["project_uid", "slot"], set_={
+                k: ins.excluded[k] for k in ("name", "settings", "updated_at", "updated_by")}))
         return self._integration_view(slot, name, settings, at, by, project_uid=uid)
 
     def stored_settings(self, slot: str, name: str, uid: str | None = None) -> dict:
@@ -3582,86 +3290,74 @@ class FactoryStore:
         from .integrations import registry
         found = registry.get(slot, name)           # before the lock: it loads the registry
         plain = {f.name for f in found.settings_schema if f.kind not in ("secret", "url")} if found else set()
-        with self._sread:
-            c = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? AND name = ?",
-                                [slot, name]).fetchone()
-            own = self.sc.execute("SELECT name, settings FROM project_integrations WHERE project_uid = ? "
-                                  "AND slot = ?", [uid, slot]).fetchone() if uid is not None else None
-        out = self._load_settings(c[0]) if c else {}
-        if own and own[0] == name:
+        t, picks = connections_table, picks_table
+        with self.sessions_db.consistent_read() as conn:    # the connection and the pick agree
+            c = conn.execute(select(t.c.settings).where(t.c.slot == slot, t.c.name == name)).first()
+            own = conn.execute(select(picks.c.name, picks.c.settings).where(
+                picks.c.project_uid == uid, picks.c.slot == slot)).first() if uid is not None else None
+        out = self._load_settings(c[0]) if c is not None else {}
+        if own is not None and own.name == name:
             # a project's own fields; a secret or an address left in a row from before is not read
-            out.update({k: v for k, v in self._load_settings(own[1]).items() if k in plain})
+            out.update({k: v for k, v in self._load_settings(own.settings).items() if k in plain})
         return out
 
     # ── status changes waiting to reach the ticket system (TR-845) ────────────
-    _PW_COLS = "ticket, integration, status, attempts, last_error, updated_at"
-
-    @staticmethod
-    def _pw_row(r) -> dict:
-        return {"ticket": r[0], "integration": r[1], "status": r[2], "attempts": r[3],
-                "last_error": r[4], "updated_at": r[5]}
-
     def pending_writeback_fail(self, ticket: str, integration: str, status: str, error: str,
                                at) -> int:
         """A write of `status` to the ticket system failed: add the ticket's row, or update it
         with the status wanted now and the error, one attempt more (the count starts again when the
         status wanted is not the one the row held). Returns the attempts so far.
-        Select, then insert or update, under one lock: no ON CONFLICT, so it runs on Postgres."""
-        with self._swrite:
-            cur = self.sc.execute("SELECT attempts, status FROM pending_writeback WHERE "
-                                  "ticket = ? AND integration = ?", [ticket, integration]).fetchone()
+        Select, then insert or update, in one locked transaction."""
+        t = writeback_table
+        mine = (t.c.ticket == ticket, t.c.integration == integration)
+        with self._swrite, self.sessions_db.begin() as conn:
+            self._lock_numbering(conn, "tares_writeback")
+            cur = conn.execute(select(t.c.attempts, t.c.status).where(*mine)).first()
             # a different status wanted now is a new write: its attempts start again
-            attempts = int(cur[0] or 0) + 1 if cur and cur[1] == status else 1
-            if cur:
-                self.sc.execute("UPDATE pending_writeback SET status = ?, attempts = ?, "
-                                "last_error = ?, updated_at = ? WHERE ticket = ? AND "
-                                "integration = ?", [status, attempts, error, at, ticket,
-                                                    integration])
+            attempts = int(cur.attempts or 0) + 1 if cur is not None and cur.status == status else 1
+            values = {"status": status, "attempts": attempts, "last_error": error, "updated_at": at}
+            if cur is not None:
+                conn.execute(update(t).where(*mine).values(**values))
             else:
-                self.sc.execute(f"INSERT INTO pending_writeback ({self._PW_COLS}) VALUES "
-                                "(?, ?, ?, ?, ?, ?)",
-                                [ticket, integration, status, attempts, error, at])
+                conn.execute(insert(t).values(ticket=ticket, integration=integration, **values))
         return attempts
 
     def pending_writeback_clear(self, ticket: str, integration: str | None = None) -> bool:
         """The ticket's row goes (the write landed, or the ticket left the system). False when
         there was none."""
-        sql, args = "FROM pending_writeback WHERE ticket = ?", [ticket]
-        if integration:
-            sql, args = sql + " AND integration = ?", args + [integration]
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 " + sql, args).fetchone()
-            self.sc.execute("DELETE " + sql, args)
-        return bool(had)
+        t = writeback_table
+        where = [t.c.ticket == ticket] + ([t.c.integration == integration] if integration else [])
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(*where).returning(t.c.ticket)).fetchall()
+        return bool(gone)
 
     def get_pending_writeback(self, ticket: str, integration: str | None = None) -> dict | None:
-        sql, args = (f"SELECT {self._PW_COLS} FROM pending_writeback WHERE ticket = ?", [ticket])
-        if integration:
-            sql, args = sql + " AND integration = ?", args + [integration]
-        with self._sread:
-            r = self.sc.execute(sql, args).fetchone()
-        return self._pw_row(r) if r else None
+        t = writeback_table
+        where = [t.c.ticket == ticket] + ([t.c.integration == integration] if integration else [])
+        with self.sessions_db.read() as conn:
+            r = conn.execute(select(t).where(*where)).first()
+        return dict(r._mapping) if r is not None else None
 
     def list_pending_writebacks(self, integration: str | None = None,
                                 project: str | None = None) -> list[dict]:
         """The rows waiting, oldest first; `project` keeps those of that project's tickets."""
-        sql, args = f"SELECT {self._PW_COLS} FROM pending_writeback WHERE 1 = 1", []
+        t = writeback_table
+        q = select(t)
         if integration:
-            sql, args = sql + " AND integration = ?", args + [integration]
+            q = q.where(t.c.integration == integration)
         if project:
-            sql += " AND ticket IN (SELECT id FROM tickets WHERE project = ?)"
-            args.append(project)
-        with self._sread:
-            rows = self.sc.execute(sql + " ORDER BY updated_at, ticket", args).fetchall()
-        return [self._pw_row(r) for r in rows]
+            q = q.where(t.c.ticket.in_(
+                select(tickets_table.c.id).where(tickets_table.c.project == project)))
+        with self.sessions_db.read() as conn:
+            rows = conn.execute(q.order_by(t.c.updated_at.asc().nulls_last(), t.c.ticket)).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def clear_project_choice(self, uid: str, slot: str) -> bool:
         """Drop the project's own choice, so the slot follows the factory's again. False when
         there was none."""
         self._integration_slot(slot, PROJECT_SLOTS)
-        with self._swrite:
-            had = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? "
-                                  "AND slot = ?", [uid, slot]).fetchone()
-            self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ? AND slot = ?",
-                            [uid, slot])
-        return bool(had)
+        t = picks_table
+        with self._swrite, self.sessions_db.begin() as conn:
+            gone = conn.execute(delete(t).where(t.c.project_uid == uid, t.c.slot == slot)
+                                .returning(t.c.slot)).fetchall()
+        return bool(gone)

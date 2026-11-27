@@ -15,12 +15,17 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 
-from sqlalchemy import bindparam, case, distinct, false, func, select, union, update
+from sqlalchemy import (BigInteger, bindparam, case, distinct, false, func, literal, select, union,
+                        union_all, update)
 
+from . import claude_usage_hourly as hourly
 from . import session_ingest
 from .pricing import cost_usd
+from .request_memo import kept
+from .session_store.tables import catalog_sources as sources_table
 from .session_store.tables import (project_sessions, session_meters, session_stations,
-                                   session_usage)
+                                   session_usage, session_usage_hourly)
+from .session_store.tables import usecases as projects_table
 
 CLAUDE_USAGE_SCHEMA = [
     # One row per model reply in a Claude Code session. Claude Code repeats a reply's usage on each
@@ -92,19 +97,24 @@ class ClaudeUsageStore:
         """Replies stored as claude_code events without a usage row get one: every one on the
         first start, then those from a day before the newest row on (a version that did not count
         them may have run in between). Lock not needed (init). The usage rows are in the session
-        store and the replies are events, so they are read from DuckDB and written there."""
+        store and the replies are events, so they are read from DuckDB and written there. The
+        factory edition reads the events once and records it (`claude_usage_filled`, TR-1613); the
+        SYNTHETIC rows are removed and unpriced rows priced at every start, as before."""
         u = session_usage
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             newest = conn.execute(select(func.max(u.c.replied_at))).scalar_one()
         since = newest - timedelta(days=1) if newest is not None else None
-        sources = [r[0] for r in self.sc.execute(
-            "SELECT name FROM catalog_sources WHERE connector = 'claude_code'").fetchall()]
+        with self.sessions_db.read() as conn:
+            sources = list(conn.execute(select(sources_table.c.name).where(
+                sources_table.c.connector == "claude_code")).scalars())
+            names = conn.execute(select(projects_table.c.id, projects_table.c.name)).all()
         projects = {}
-        for pid, pname in self.sc.execute("SELECT id, name FROM usecases").fetchall():
+        for pid, pname in names:
             projects.setdefault(pname, pid)
             projects[pid] = pid                            # an id wins over a same-named project
         j = "json_extract(e.payload, '$.message.usage')"
-        rows = self.con.execute(
+        done = session_ingest.filled_once(self, session_ingest.USAGE_FILLED)
+        rows = [] if done else self.con.execute(
             "SELECT e.key_value, json_extract_string(e.payload, '$.message.id'), min(e.event_time), "
             "any_value(json_extract_string(e.payload, '$.message.model')), "
             "any_value(json_extract_string(e.payload, '$.tares_project')), "
@@ -122,32 +132,68 @@ class ClaudeUsageStore:
             "GROUP BY 1, 2", [*sources, SYNTHETIC, since, since]).fetchall()
         cols = ("session", "message", "replied_at", "model", "project", "subagent", "input_tokens",
                 "output_tokens", "cache_write_tokens", "cache_read_tokens", "cache_write_1h_tokens")
+        rows = self._usage_without_nul([dict(zip(cols, r)) for r in rows
+                                        if session_ingest.holds_session(self, r[0])])
         deleted = self.deleted_private_projects()   # a reply stamped with one stays its own
-        for ref in {r[4] for r in rows if r[4]} - projects.keys():
+        for ref in {r["project"] for r in rows if r["project"]} - projects.keys():
             projects[ref] = self.deleted_private_ref(ref, deleted)
-        rows = [dict(zip(cols, (*r[:4], projects.get(r[4]), *r[5:]))) for r in rows
-                if session_ingest.holds_session(self, r[0])]
+        for r in rows:
+            r["project"] = projects.get(r["project"])
+        # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
+        # another version number after the prefix is left unpriced)
+        def price(model, *tokens):
+            return cost_usd(model or "", *(t or 0 for t in tokens))
+        for r in rows:
+            r["cost_usd"] = price(r["model"], *(r[c] for c in cols[6:]))
         stmt = self.sessions_db.upsert(u).on_conflict_do_nothing(
             index_elements=["session", "message"])
         with self.sessions_db.begin() as conn:
-            for i in range(0, len(rows), 1000):
-                conn.execute(stmt, rows[i:i + 1000])
-            conn.execute(u.delete().where(u.c.model == SYNTHETIC))
-            # priced by family as pricing.cost_usd prices them (longest prefix first, a model with
-            # another version number after the prefix is left unpriced)
-            todo = conn.execute(select(
+            hourly.hold(self, conn)
+            # every session this transaction changes, found before it writes a row, so that their
+            # locks are taken in one ordered pass (TR-1661); the kept hourly totals follow (TR-1632)
+            unpriced = conn.execute(select(
                 u.c.session, u.c.message, u.c.model, u.c.input_tokens, u.c.output_tokens,
                 u.c.cache_write_tokens, u.c.cache_read_tokens, u.c.cache_write_1h_tokens
             ).where(u.c.cost_usd.is_(None), u.c.model.is_not(None))).all()
-            priced = []
-            for r in todo:
-                cost = cost_usd(r[2], r[3] or 0, r[4] or 0, r[5] or 0, r[6] or 0, r[7] or 0)
-                if cost is not None:
-                    priced.append({"b_session": r[0], "b_message": r[1], "b_cost": cost})
+            priced = [{"b_session": r[0], "b_message": r[1], "b_cost": cost} for r in unpriced
+                      if (cost := price(*r[2:])) is not None]
+            touched = {r["session"] for r in rows}
+            touched.update(p["b_session"] for p in priced)
+            touched.update(r[0] for r in conn.execute(
+                select(u.c.session).where(u.c.model == SYNTHETIC).distinct()))
+            covered = hourly.lock_covered(self, conn, touched)
+            for i in range(0, len(rows), 1000):
+                conn.execute(stmt, rows[i:i + 1000])
+            conn.execute(u.delete().where(u.c.model == SYNTHETIC))
             if priced:
                 conn.execute(update(u).where(u.c.session == bindparam("b_session"),
                                              u.c.message == bindparam("b_message"))
                              .values(cost_usd=bindparam("b_cost")), priced)
+            hourly.after_write(self, conn, covered)
+        if not done:
+            session_ingest.set_filled(self, session_ingest.USAGE_FILLED)
+
+    def _usage_without_nul(self, rows: list[dict]) -> list[dict]:
+        """The fill's replies as a posted line reads now: without NULs. DuckDB may hold lines from
+        before they were dropped (TR-1707), and Postgres takes none in text. A reply with an empty
+        id, or one of nothing but NULs, is left out, as ingest leaves it out. On SQLite an older
+        version could count a reply under its id as it was: that one is not counted a second time."""
+        db, u = self.sessions_db, session_usage.c
+        out = []
+        for r in rows:
+            raw = r["message"]
+            for k in ("message", "model", "project", "subagent"):
+                if r[k] and "\x00" in r[k]:
+                    r[k] = r[k].replace("\x00", "") or None
+            if not r["message"]:
+                continue
+            if r["message"] != raw and db.dialect == "sqlite":
+                with db.read() as conn:
+                    if conn.execute(select(u.message).where(u.session == r["session"],
+                                                            u.message == raw)).first():
+                        continue
+            out.append(r)
+        return out
 
     def _usage_forget_project(self, uid: str, private: bool = False) -> None:
         """A project is deleted. A team project's replies stay, counted as the session's own. A
@@ -168,7 +214,12 @@ class ClaudeUsageStore:
         else:
             change = update(u).where(u.c.project == uid).values(project=None)
         with self.sessions_db.begin() as conn:
+            hourly.hold(self, conn)
+            # the sessions it changes, locked first, so that their kept hourly totals follow
+            theirs = select(u.c.session).where(change.whereclause).distinct()
+            covered = hourly.lock_covered(self, conn, conn.execute(theirs).scalars().all())
             conn.execute(change)
+            hourly.after_write(self, conn, covered)
 
     # ── writes, from the claude_code source ───────────────────────────────────
     def record_reply_usage(self, session: str, message: str, at, model: str | None,
@@ -191,8 +242,12 @@ class ClaudeUsageStore:
             "cost_usd": db.greatest(u.c.cost_usd, x.cost_usd),
             "project": func.coalesce(u.c.project, x.project),
             "model": func.coalesce(u.c.model, x.model)})
-        with db.begin() as conn:
+        with db.begin() as conn:                     # the reply and its hour's total, one transaction
+            hourly.hold(self, conn)
+            covered = hourly.lock_covered(self, conn, [session])
             conn.execute(stmt)
+            if covered:
+                hourly.after_reply(self, conn, session, message)
 
     def record_reported_usage(self, session: str, message: str, at, model: str | None,
                               project: str | None, counts: dict) -> None:
@@ -211,8 +266,12 @@ class ClaudeUsageStore:
             session=session, message=message, replied_at=at, model=model or None, project=project or None,
             subagent=None, input_tokens=i, output_tokens=o, cache_write_tokens=cw, cache_read_tokens=cr,
             cache_write_1h_tokens=None if cw is None else 0, cost_usd=cost)
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.begin() as conn:       # the reply and its hour's total, one transaction
+            hourly.hold(self, conn)
+            covered = hourly.lock_covered(self, conn, [session])
             conn.execute(stmt.on_conflict_do_nothing(index_elements=["session", "message"]))
+            if covered:
+                hourly.after_reply(self, conn, session, message)
 
     def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
         """The status line's report and the person of the credential that sent it; an older one
@@ -251,20 +310,21 @@ class ClaudeUsageStore:
     def context_asks(self, since) -> list[str]:
         """Sessions a person asked a reading of, since `since`, that have none newer yet."""
         m = session_meters
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(select(m.c.session).where(
                 m.c.context_asked_at >= since,
                 m.c.context_at.is_(None) | (m.c.context_at < m.c.context_asked_at)
             ).order_by(m.c.context_asked_at)).all()
         return [r[0] for r in rows]
 
+    @kept
     def session_meters(self, sessions: list[str]) -> dict[str, dict]:
         if not sessions:
             return {}
         m = session_meters
         out: dict[str, dict] = {}
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows = conn.execute(select(
                     m.c.session, m.c.status, m.c.status_at, m.c.context, m.c.context_at,
                     m.c.context_asked_at).where(m.c.session.in_(list(sessions[i:i + 500])))).all()
@@ -273,6 +333,7 @@ class ClaudeUsageStore:
                              "context_at": r[4], "context_asked_at": r[5]}
         return out
 
+    @kept
     def latest_rate_limits(self) -> tuple | None:
         """(when, rate_limits, person id or None) from the newest status line report that carried
         the plan's limits."""
@@ -283,7 +344,7 @@ class ClaudeUsageStore:
         # the JSON is read here, not in SQL (the two databases spell JSON paths differently); the
         # newest report nearly always carries the limits, so the first batch is the only one read
         for offset in range(0, 10_000, 20):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows = conn.execute(q.limit(20).offset(offset)).all()
             for at, status, person in rows:
                 limits = (_json(status) or {}).get("rate_limits") if isinstance(_json(status), dict) else None
@@ -318,7 +379,7 @@ class ClaudeUsageStore:
             q = q.select_from(replies).where(seen)
         out: dict[str, dict] = {}
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 rows = conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).all()
             out.update({r[0]: self._totals(r[1:]) for r in rows})
         return out
@@ -330,7 +391,7 @@ class ClaudeUsageStore:
         q = select(u.c.session).select_from(replies).where(project.in_(sorted(projects))).distinct()
         out: set[str] = set()
         for i in range(0, len(sessions), 500):
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(conn.execute(q.where(u.c.session.in_(list(sessions[i:i + 500])))).scalars())
         return out
 
@@ -347,26 +408,30 @@ class ClaudeUsageStore:
                      select(u.c.session).select_from(replies).where(project.in_(ids)))
 
     def sessions_in(self, sessions: list[str], projects) -> set[str]:
-        """Those of `sessions` that worked in one of `projects` (`_sessions_in`)."""
+        """Those of `sessions` that worked in one of `projects` (`_sessions_in`). An id the
+        sessions database cannot hold (a NUL, on Postgres) worked in none: it has no row there, and
+        in the IN() below it would fail the whole read."""
         if not projects:
             return set()
+        sessions = [s for s in sessions if session_ingest.holds_session(self, s)]
         found = self._sessions_in(projects).cte("worked_in")
         out: set[str] = set()
         for i in range(0, len(sessions), 500):
             chunk = list(sessions[i:i + 500])
-            with self.sessions_db.begin() as conn:
+            with self.sessions_db.read() as conn:
                 out.update(conn.execute(select(found.c.session).where(
                     found.c.session.in_(chunk))).scalars())
         return out
 
-    def _replies_by_project(self):
-        """(the replies joined to their station and the project their session worked in, the
+    def _replies_by_project(self, rows=None):
+        """(the replies (`rows`: anything with a session and a stamped project, session_usage
+        when None) joined to their station and the project their session worked in, the
         project each reply counts for, whether it is a crew station's). The one definition of
         which project a reply belongs to: the one it was stamped with, else the station's project,
         else, for a session that is no crew station, the (lowest) one it worked in, else none.
         A deleted private project keeps its links, for what they hide, and no new reply counts
         for it through one."""
-        u, ss, ps = session_usage, session_stations, project_sessions
+        u, ss, ps = session_usage if rows is None else rows, session_stations, project_sessions
         deleted = sorted(self.deleted_private_projects())
         worked = select(ps.c.session, func.min(ps.c.project).label("project")).where(
             ps.c.project.not_in(deleted)).group_by(ps.c.session).subquery()
@@ -438,7 +503,7 @@ class ClaudeUsageStore:
         final = select(r.c.proj, r.c.role, r.c.week, func.count(), func.sum(r.c.cost_usd),
                        func.count().filter(r.c.cost_usd.is_(None))
                        ).group_by(r.c.proj, r.c.role, r.c.week)
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(final).all()
         return [{"project": x[0], "role": x[1], "week": date.fromisoformat(x[2]),
                  "replies": int(x[3]), "cost_usd": float(x[4] or 0), "unpriced": int(x[5])}
@@ -449,23 +514,48 @@ class ClaudeUsageStore:
         reply was stamped with, else the station's project (a builder), else the project the
         session worked in. The crew's own stations serve every project, so their unstamped replies
         are the crew's (`kind` crew); anything else unclaimed is `other`."""
-        u = session_usage
-        replies, project, is_crew = self._replies_by_project()
-        q = select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
-                   u.c.cache_read_tokens, u.c.cost_usd, project.label("proj"),
-                   is_crew.label("crew")).select_from(replies)
-        if since is not None:
-            q = q.where(u.c.replied_at >= since)
-        r = q.cte("r")
+        u, h = session_usage, session_usage_hourly
+        if hourly.ready(self):
+            # the kept hourly totals from the first whole hour of the window on, and the replies of
+            # the partial hour before it from the rows (TR-1632); one query, one snapshot
+            parts = []
+            first = hourly.first_whole_hour(since) if since is not None else None
+            b = select(h.c.session, h.c.replies, h.c.input_tokens, h.c.output_tokens,
+                       h.c.cache_write_tokens, h.c.cache_read_tokens, h.c.cost_usd, h.c.unpriced,
+                       func.nullif(h.c.project, "").label("project"))
+            parts.append(b if first is None else b.where(h.c.hour >= first))
+            if since is not None and first > since:
+                parts.append(select(
+                    u.c.session, literal(1, BigInteger), u.c.input_tokens, u.c.output_tokens,
+                    u.c.cache_write_tokens, u.c.cache_read_tokens, u.c.cost_usd,
+                    case((u.c.cost_usd.is_(None), 1), else_=0), u.c.project)
+                    .where(u.c.replied_at >= since, u.c.replied_at < first))
+            src = (parts[0] if len(parts) == 1 else union_all(*parts)).subquery("src")
+            replies, project, is_crew = self._replies_by_project(src)
+            q = select(src.c.session, src.c.replies, src.c.input_tokens, src.c.output_tokens,
+                       src.c.cache_write_tokens, src.c.cache_read_tokens, src.c.cost_usd,
+                       src.c.unpriced, project.label("proj"),
+                       is_crew.label("crew")).select_from(replies)
+            r = q.cte("r")
+            n_replies, n_unpriced = func.sum(r.c.replies), func.sum(r.c.unpriced)
+        else:
+            replies, project, is_crew = self._replies_by_project()
+            q = select(u.c.session, u.c.input_tokens, u.c.output_tokens, u.c.cache_write_tokens,
+                       u.c.cache_read_tokens, u.c.cost_usd, project.label("proj"),
+                       is_crew.label("crew")).select_from(replies)
+            if since is not None:
+                q = q.where(u.c.replied_at >= since)
+            r = q.cte("r")
+            n_replies, n_unpriced = func.count(), func.count().filter(r.c.cost_usd.is_(None))
         kind = case((r.c.proj.is_not(None), "project"),
                     (func.coalesce(r.c.crew, false()), "crew"), else_="other")
-        totals = [func.count(), func.sum(r.c.input_tokens), func.sum(r.c.output_tokens),
+        totals = [n_replies, func.sum(r.c.input_tokens), func.sum(r.c.output_tokens),
                   func.sum(r.c.cache_write_tokens), func.sum(r.c.cache_read_tokens),
-                  func.sum(r.c.cost_usd), func.count().filter(r.c.cost_usd.is_(None))]
+                  func.sum(r.c.cost_usd), n_unpriced]
         final = (select(r.c.proj, kind.label("kind"), func.count(distinct(r.c.session)), *totals)
                  .group_by(r.c.proj, kind)
                  .order_by(func.sum(r.c.cost_usd).desc().nulls_last()))
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.read() as conn:
             rows = conn.execute(final).all()
         return [{"project": x[0], "kind": x[1], "sessions": int(x[2] or 0), **self._totals(x[3:])}
                 for x in rows]

@@ -7,7 +7,8 @@ source's rows drops the counts that read it. Nothing is kept across a restart, a
 the filter leaves out makes new SQL or parameters, so a new key.
 
 A filter is (sql, params); a spot under it is (the sources read as a frozenset, or None for all,
-and the label). The caller holds the store's lock for every method."""
+and the label). The caller holds the store's _counts_lock for every method, and its lock too for
+`appended`."""
 from __future__ import annotations
 
 from collections import OrderedDict

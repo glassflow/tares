@@ -28,6 +28,7 @@ import httpx
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
+from tares import factory_home
 
 P = F = 0
 
@@ -53,12 +54,16 @@ async def main():
         from tares import factory as factory_mod
         ids = {factory_mod.label(t): t["id"] for uid in store.handed_over_projects()
                for t in store.list_tickets(uid)}
-        with store._swrite:
+        from sqlalchemy import update
+        from tares.session_store.tables import ticket_history as history_t
+        with store.sessions_db.begin() as c:
             for t in tickets:
-                store.sc.execute("UPDATE ticket_history SET changed_at = ? WHERE ticket = ?",
-                                 [long_ago, ids[t]])
+                c.execute(update(history_t).where(history_t.c.ticket == ids[t]).values(changed_at=long_ago))
+        from tares.session_store.tables import desk_items as desk_t
+        with store.sessions_db.begin() as c:
             for q in desk_questions:
-                store.sc.execute("UPDATE desk_items SET created_at = ? WHERE question = ?", [long_ago, q])
+                c.execute(update(desk_t).where(desk_t.c.question == q).values(created_at=long_ago))
+        factory_home.clear_cache()   # written to the store directly, past the page's 5 s (TR-1630)
 
     async def standup(cx):
         r = await cx.get("/api/factory/crew")

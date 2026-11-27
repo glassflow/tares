@@ -11,6 +11,9 @@ the parts of each report the console shows, and answers /api/claude-code/usage.
 from __future__ import annotations
 
 import json
+import threading
+import time
+import weakref
 from datetime import datetime, timedelta, timezone
 
 from .claude_usage_store import PLAN_SETTING
@@ -234,15 +237,50 @@ def by_project(store, since=None, hidden=frozenset()) -> list[dict]:
     names = {p["id"]: p["name"] for p in store.list_projects()}
     out = []
     for r in store.usage_by_project(since):
-        if r["project"] in hidden:
-            continue
         name = (names.get(r["project"], "a deleted project") if r["kind"] == "project"
                 else "The crew (shared)" if r["kind"] == "crew" else "Other sessions")
         out.append({**r, "name": name})
+    return _shares(out, hidden)
+
+
+def _shares(rows: list[dict], hidden) -> list[dict]:
+    """Copies of `rows` without the hidden projects, each with its share of what is left."""
+    out = [dict(r) for r in rows if r["project"] not in hidden]
     total = sum(r["cost_usd"] for r in out) or 0
     for r in out:
         r["share"] = (r["cost_usd"] / total) if total else None
     return out
+
+
+WEEK_KEEP_SECONDS = 60
+_week: dict = {}        # id(store) -> (monotonic time, weakref to the store, rows)
+_week_lock = threading.Lock()
+
+
+def week_by_project(store, now, hidden=frozenset()) -> list[dict]:
+    """`by_project` over the 7 days up to `now`, kept in this process for 60 seconds per store
+    (TR-1627). Home, Crew and Setup each show it; the query behind it costs about 150 ms on a
+    factory-sized cell, and a share of the week does not change in a minute. The kept rows do not
+    depend on who asks: `hidden` (as in `by_project`) is taken off them on every read. Losing the
+    entry changes no answer, only the time the next read takes. A read within the minute shows the
+    week as of the first one."""
+    key, at = id(store), time.monotonic()
+    with _week_lock:
+        hit = _week.get(key)
+        if hit and hit[1]() is store and at - hit[0] < WEEK_KEEP_SECONDS:
+            return _shares(hit[2], hidden)
+    rows = by_project(store, now - timedelta(days=7))
+    with _week_lock:
+        for k in [k for k, v in _week.items() if v[1]() is None]:
+            del _week[k]            # a store that is gone leaves nothing behind
+        _week[key] = (at, weakref.ref(store), rows)
+    return _shares(rows, hidden)
+
+
+def clear_week_by_project() -> None:
+    """Forget the kept week, so the next read asks the store."""
+    with _week_lock:
+        _week.clear()
 
 
 def usage(store, days: int = 7, hidden=frozenset()) -> dict:

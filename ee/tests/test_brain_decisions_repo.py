@@ -26,6 +26,7 @@ Run: .venv/bin/python ee/tests/test_brain_decisions_repo.py
 """
 import asyncio, base64, logging, os, sys, tempfile
 from collections import Counter
+from datetime import datetime, timezone
 from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -66,7 +67,7 @@ def H(tok):
 BRAIN_KEY = fake_lore.FakeLore().key   # the key the fake lore accepts and the client sends
 GH_TOKEN = "gh-token-" + "for-the-tests-9f3a"       # gitleaks:allow
 SOURCE = "repo_decisions"
-NOW = "2026-01-01T00:00:00Z"
+NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 class Logs(logging.Handler):

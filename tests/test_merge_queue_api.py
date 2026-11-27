@@ -40,6 +40,7 @@ os.environ["TARES_EDITION"] = "factory"
 os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx
+from sqlalchemy import text, update
 
 from tares import status_words as sw
 from tares import factory as factory_mod
@@ -47,6 +48,7 @@ from tares import factory_github, merge_queue, merge_ready, words
 from tares.integrations import registry
 from tares.integrations.guardrails import Guardrail
 from tares.screens import factory_merge_queue as fmq
+from tares.session_store.tables import metadata
 from tares.store import now_utc
 
 P = F = 0
@@ -125,9 +127,10 @@ async def main():
 
         def back(table, col, rid, minutes=0, seconds=0):
             """Move a time of the past in the store: the store stamps `now` on its own writes."""
-            with store._swrite:
-                store.sc.execute(f"UPDATE {table} SET {col} = ? WHERE id = ?",
-                                 [now_utc() - timedelta(minutes=minutes, seconds=seconds), rid])
+            t = metadata.tables[table]
+            with store.sessions_db.begin() as conn:
+                conn.execute(update(t).where(t.c.id == rid)
+                             .values({col: now_utc() - timedelta(minutes=minutes, seconds=seconds)}))
 
         counter = {"n": 0}
 
@@ -856,11 +859,9 @@ async def main():
                   "usecases", "milestones")
 
         def snapshot():
-            out = {}
-            with store._sread:
-                for tname in TABLES:
-                    out[tname] = store.sc.execute(f"SELECT * FROM {tname} ORDER BY 1, 2").fetchall()
-            return out
+            with store.sessions_db.read() as conn:
+                return {tname: conn.execute(text(f"SELECT * FROM {tname} ORDER BY 1, 2")).fetchall()
+                        for tname in TABLES}
 
         calls = []
         real_ready = merge_ready.merge_ready

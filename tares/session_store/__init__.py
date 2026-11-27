@@ -1,8 +1,8 @@
 """The session store: a second store, beside DuckDB, for session data (P-TR-295).
 
-SQLAlchemy Core (no ORM) and Alembic. SQLite (`sessions.sqlite` next to the DuckDB file) locally,
+SQLAlchemy Core (no ORM) and Alembic. SQLite (`tares.sqlite` next to the DuckDB file) locally,
 the cell's state Postgres when TARES_STATE_DSN is set. Later tickets add the tables, one Alembic
-revision each; nothing lives here yet beyond the revision table.
+revision each; a table that has moved out of DuckDB is listed in `tables.MOVED_TABLES`.
 """
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, func, text
+from sqlalchemy import Connection, event, func, text
 from sqlalchemy.dialects.postgresql import insert as _pg_insert
 from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 
+from .. import request_memo
 from .engine import MEMORY, make_engine
 
 log = logging.getLogger("tares.session_store")
@@ -28,9 +29,14 @@ VERSION_TABLE = "session_store_version"
 _LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('tares_session_store_migrate'))"
 
 
+def _seen(conn, cursor, statement, parameters, context, executemany) -> None:
+    request_memo.statement(statement)      # a write ends what a page read has kept (TR-1631)
+
+
 class SessionStore:
     def __init__(self, data_dir: str, state_dsn: str | None = None):
         self.engine = make_engine(data_dir, state_dsn)
+        event.listen(self.engine, "before_cursor_execute", _seen)
         # An in-memory SQLite is one shared connection (StaticPool): two threads in a transaction
         # at once would interleave on it, so they take turns. A file or Postgres needs no lock.
         self._turns = threading.RLock() if data_dir == MEMORY and not state_dsn else None
@@ -47,18 +53,37 @@ class SessionStore:
                 yield conn
 
     @contextlib.contextmanager
+    def read(self) -> Iterator[Connection]:
+        """One read-only transaction; never write in it. On SQLite it does not take the write lock,
+        so it does not queue behind a writer and no writer queues behind it (WAL gives it the last
+        committed state, the same one from its first query to its end). On Postgres it is a plain
+        transaction like `begin()`, each statement seeing what had committed when it ran; a read
+        whose queries must agree uses `consistent_read()`."""
+        with self._turns or contextlib.nullcontext():
+            with self.engine.connect() as conn:
+                conn = conn.execution_options(deferred=True)
+                with conn.begin():
+                    yield conn
+
+    @contextlib.contextmanager
     def snapshot(self) -> Iterator[Connection]:
-        """One transaction whose statements all see the same data, for a read that joins the answers
-        of several queries. SQLite already gives that (every transaction takes the write lock, so
-        no writer runs meanwhile). Postgres would let a row committed between two statements show
-        in the second only, so the transaction runs at REPEATABLE READ: set for this transaction
-        only, which is what PgBouncer in transaction mode allows."""
+        """One transaction whose statements all see the same data. On SQLite it takes the write
+        lock, like `begin()`, so a read-only caller uses `consistent_read()` instead. Postgres
+        would let a row committed between two statements show in the second only, so the
+        transaction runs at REPEATABLE READ: set for this transaction only, which is what
+        PgBouncer in transaction mode allows."""
         with self._turns or contextlib.nullcontext():
             with self.engine.connect() as conn:
                 if self.dialect == "postgresql":
                     conn = conn.execution_options(isolation_level="REPEATABLE READ")
                 with conn.begin():
                     yield conn
+
+    def consistent_read(self):
+        """`snapshot()` without SQLite's write lock, for a read that joins several queries and
+        writes nothing: SQLite's deferred transaction already sees one state from its first read to
+        its end."""
+        return self.snapshot() if self.dialect == "postgresql" else self.read()
 
     def upsert(self, table):
         """An INSERT for `table` that takes `.on_conflict_do_update(...)` and

@@ -2,16 +2,22 @@
 (TR-657), are in review (TR-648) or projects a cell has (TR-659), and the batched answers are exactly what the per-ticket code gave: a golden file recorded
 from the code before batching.
 
+Counted (TR-1728): the queries of the measured request on the session store's engine, where these
+routes read now, and on the old connections. SQLite's BEGIN is not counted. A count of 0 fails, so
+reads that leave the hooked connections cannot pass unnoticed.
+
 Run:    .venv/bin/python tests/test_factory_batching.py
 Record: .venv/bin/python tests/test_factory_batching.py --record   (only before a refactor, from
         the code whose answers are the reference)
 """
 import asyncio
+import contextvars
 import json
 import os
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,6 +32,7 @@ for var in ("TARES_AUTH_TOKEN", "TARES_CATALOG", "ANTHROPIC_API_KEY", "ANTHROPIC
     os.environ.pop(var, None)
 
 import httpx  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "factory_batching")
 RECORD = "--record" in sys.argv
@@ -82,20 +89,52 @@ def golden(got, name: str) -> None:
        f"differs from tests/fixtures/factory_batching/{name}")
 
 
+_COUNTER: contextvars.ContextVar = contextvars.ContextVar("query_counter", default=None)
+
+
+def hit(statement) -> None:
+    """Count one statement of the request being measured; a thread of the daemon that is not
+    serving it has no counter. SQLite's BEGIN is a statement to the engine but not a query."""
+    c = _COUNTER.get()
+    if c is not None and not str(statement).lstrip().upper().startswith("BEGIN"):
+        c[0] += 1
+
+
 class CountingCon:
-    """Stands in for store.con and counts execute calls (a DuckDB connection's own execute
-    cannot be patched)."""
+    """Stands in for the DuckDB connection and counts execute and executemany (a DuckDB
+    connection's own execute cannot be patched)."""
 
     def __init__(self, con):
         self._con = con
-        self.n = 0
 
     def execute(self, *a, **kw):
-        self.n += 1
+        hit(a[0] if a else "")
         return self._con.execute(*a, **kw)
+
+    def executemany(self, *a, **kw):
+        hit(a[0] if a else "")
+        return self._con.executemany(*a, **kw)
 
     def __getattr__(self, name):
         return getattr(self._con, name)
+
+
+def install_counters(store) -> None:
+    """Hook the session store's engine and the old connections (DuckDB, or the state Postgres)."""
+    event.listen(store.sessions_db.engine, "before_cursor_execute",
+                 lambda conn, cursor, statement, *a: hit(statement))
+    shared = store.sc is store.con
+    store.con = CountingCon(store.con)
+    if shared:
+        store.sc = store.con          # one connection, counted once per call
+        return
+    for name in ("execute", "executemany"):
+        real = getattr(store.sc, name)
+
+        def counted(*a, _real=real, **kw):
+            hit(a[0] if a else "")
+            return _real(*a, **kw)
+        setattr(store.sc, name, counted)
 
 
 def build(store, name: str, n: int) -> str:
@@ -131,7 +170,7 @@ def build(store, name: str, n: int) -> str:
                                  [{"severity": "major", "file": "a.py", "line": rnd + 1,
                                    "blocking": rnd == 0, "text": f"finding {i}.{rnd}"}],
                                  {"F1": "fixed"} if rnd else {}, lambda t: "bug",
-                                 "2026-10-22T10:00:00Z")
+                                 datetime(2026, 10, 22, 10, tzinfo=timezone.utc))
     return uid
 
 
@@ -185,17 +224,20 @@ async def main():
     t0 = now_utc()
     for uid, name in ((small, "small"), (big, "big"), (solo, "solo")):
         add_review_work(store, uid, name, t0)
-    counting = CountingCon(store.con)
-    store.con = counting
+    install_counters(store)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                  timeout=60) as cx:
 
         async def get(path):
-            before = counting.n
-            r = await cx.get(path)
+            counter = [0]
+            token = _COUNTER.set(counter)
+            try:
+                r = await cx.get(path)
+            finally:
+                _COUNTER.reset(token)
             assert r.status_code == 200, (path, r.status_code, r.text[:300])
-            return r.json(), counting.n - before
+            return r.json(), counter[0]
 
         print("== tickets list (TR-657) ==")
         out, _ = await get(f"/api/projects/{big}/tickets")
@@ -203,9 +245,9 @@ async def main():
         # the list makes no GitHub call (TR-1474), so its count is the list itself
         _, q_small = await get(f"/api/projects/{small}/tickets")
         _, q_big = await get(f"/api/projects/{big}/tickets")
-        ck("queries do not grow with the tickets (10 vs 30)", q_small == q_big,
+        ck("queries do not grow with the tickets (10 vs 30)", 0 < q_small == q_big,
            f"{q_small} queries for 10 tickets, {q_big} for 30")
-        print(f"  {q_big} queries for 30 tickets")
+        print(f"  {q_small} queries for 10 tickets, {q_big} for 30 tickets")
 
         print("== review queue (TR-648) ==")
         out, _ = await get("/api/review-queue")
@@ -237,8 +279,8 @@ async def main():
             store.update_ticket(t["id"], stage="review")
         _, q_many = await get("/api/review-queue")
         ck(f"queries do not grow with the tickets in review (6 vs {6 + len(more)})",
-           q_few == q_many, f"{q_few} vs {q_many}")
-        print(f"  {q_many} queries for {6 + len(more)} tickets in review")
+           0 < q_few == q_many, f"{q_few} vs {q_many}")
+        print(f"  {q_few} queries for 6 tickets in review, {q_many} for {6 + len(more)}")
 
         print("== projects list (TR-659) ==")
         out, _ = await get("/api/projects")
@@ -253,13 +295,15 @@ async def main():
         _, q1 = await get("/api/projects")
         build(store, "more", 12)
         _, q2 = await get("/api/projects")
+        ck("the projects list's queries are counted (0 means the counter saw nothing)",
+           min(q0, q1, q2) > 0, f"{q0}, +plain {q1}, +factory {q2}")
         ck("a factory project adds no more queries than a plain one",
            q2 - q1 == q1 - q0, f"{q0}, +plain {q1}, +factory {q2}")
         # the catalog is read once for the list, not once per project
         ck("a project adds at most 4 queries", q1 - q0 <= 4, f"{q1 - q0}")
-        print(f"  {q2} queries for {len(out['projects']) + 2} projects")
+        print(f"  {q0} queries, {q1} with one more plain project, {q2} with one more factory project "
+              f"({len(out['projects']) + 2} projects)")
 
-    store.con = counting._con
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 

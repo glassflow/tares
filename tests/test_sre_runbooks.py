@@ -39,6 +39,7 @@ os.environ["TARES_WATCH_SECONDS"] = "3600"
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
+from sqlalchemy import text as sql_text
 
 from fixtures.sre_cell import PROJECT, _otlp, build
 from tares import edition as edition_mod
@@ -152,8 +153,9 @@ async def main():
         ck("the shared skill exists", sk is not None)
         ck("its body ends the line with who and the day",
            f"- Restart the job runner before the failover (by oncall, {today})" in sk["body"].splitlines(), sk["body"])
-        row = store.sc.execute("SELECT updated_by, made_by FROM shared_skills WHERE name = ?",
-                               [f"runbook-{SVC}"]).fetchone()
+        with store.sessions_db.read() as c:
+            row = c.execute(sql_text("SELECT updated_by, made_by FROM shared_skills WHERE name = :n"),
+                            {"n": f"runbook-{SVC}"}).fetchone()
         eq("updated_by is the person", row[0], "oncall")
         ck("the investigator is offered the runbook", f"runbook-{SVC}" in listed(store, UID))
         ck("the second project's watcher is offered it too", f"runbook-{SVC}" in listed(store, uid2),
@@ -172,9 +174,9 @@ async def main():
         ck("the root token's lines carry a name too", bool(who), who)
         # an older line, written by hand into the skill, is read back with its day
         old = (now - timedelta(days=3)).date().isoformat()
-        with store._swrite:
-            store.sc.execute("UPDATE shared_skills SET body = body || ? WHERE name = ?",
-                             [f"- Old advice (by Dana, {old})\n- A line nobody stamped\n", f"runbook-{SVC}"])
+        with store.sessions_db.begin() as c:
+            c.execute(sql_text("UPDATE shared_skills SET body = body || :b WHERE name = :n"),
+                      {"b": f"- Old advice (by Dana, {old})\n- A line nobody stamped\n", "n": f"runbook-{SVC}"})
         rb = entry((await cx.get("/api/sre/runbooks")).json(), SVC)["runbook"]
         eq("an older line says how many days ago", (rb[-2]["by"], rb[-2]["when_words"]), ("Dana", "3 days ago"))
         eq("a line without a stamp has no author or day", (rb[-1]["text"], rb[-1]["by"], rb[-1]["when_words"]),
@@ -375,7 +377,9 @@ async def main():
         eq("the runbook was not touched", len(entry_lines(store)), 1)
         store.upsert_skill(UID, "plain-skill", "A skill.", "Do the thing.")
         eq("a skill saved the old way works", store.get_skill(UID, "plain-skill")["body"], "Do the thing.")
-        eq("and has no updated_by", store.sc.execute("SELECT updated_by FROM shared_skills WHERE name = 'plain-skill'").fetchone()[0], None)
+        with store.sessions_db.read() as c:
+            plain_by = c.execute(sql_text("SELECT updated_by FROM shared_skills WHERE name = 'plain-skill'")).fetchone()[0]
+        eq("and has no updated_by", plain_by, None)
         ck("it is listed to its project", "plain-skill" in listed(store, UID))
         store.set_setting(edition_mod.EDITION_SETTING, "sre")
         eq("back on an AI SRE cell the page is there", (await cx.get("/api/sre/runbooks")).status_code, 200)

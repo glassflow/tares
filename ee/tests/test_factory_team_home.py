@@ -146,7 +146,7 @@ async def main():
         ck("the single-person kinds, not the team ones", {i["kind"] for i in one["waiting_for_you"]}
            == {"permission", "question"}, [i["kind"] for i in one["waiting_for_you"]])
         real = th.team_home
-        th.team_home = lambda c, request, now: {}
+        th.team_home = lambda c, request, now, stations=None: {}
         try:
             plain = await home("root")
         finally:

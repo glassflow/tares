@@ -22,6 +22,7 @@ script keeps its state in Postgres.
 Run: .venv/bin/python ee/tests/test_brain_decisions_repo_remove.py
 """
 import asyncio, base64, hashlib, logging, os, sys, tempfile
+from datetime import datetime, timezone
 from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +43,7 @@ from tares import github_credentials
 from tares.config import SourceCfg
 from tares.connectors import github_events as gh_events
 from tares.envelope import Envelope
+from tares_ee.brain import decisions as project_docs_mod
 from tares_ee.brain import decisions_repo as dr
 from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
@@ -64,7 +66,7 @@ def H(tok):
 BRAIN_KEY = fake_lore.FakeLore().key
 GH_TOKEN = "gh-token-" + "for-the-sync-tests"       # gitleaks:allow
 SOURCE = "repo_decisions"
-NOW = "2026-01-01T00:00:00Z"
+NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 class Logs(logging.Handler):
@@ -142,6 +144,9 @@ async def main():
         await asyncio.Event().wait()
     index_mod.Indexer.run = never
     sync_mod.Syncer.run = never
+    # A removal wakes the project docs loop, which lists lore at a time of its own; a late listing would be
+    # counted against a later step, or take a failure meant for the importer. Nothing here needs its passes.
+    project_docs_mod.Decisions.run = never
 
     async def readable_repos(cred, query=""):
         return [{"full_name": r} for r in gh.repos]

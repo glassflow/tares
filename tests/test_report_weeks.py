@@ -38,12 +38,12 @@ def ck(l, c, d=""):
 
 
 from alembic import command
-from sqlalchemy import inspect, insert, text
+from sqlalchemy import inspect, insert, text, update
 
 from tares import factory as factory_mod
 from tares import merge_queue, report
 from tares.session_store import SessionStore
-from tares.session_store.tables import report_weeks
+from tares.session_store.tables import report_weeks, ticket_history
 from tares.store import Store
 from session_helpers import seed_link, seed_station, seed_usage
 
@@ -262,9 +262,8 @@ def rules():
 def figures(s):
     print("== rebuild: every figure ==")
     stage_at = s.all_stage_changes()[0]["at"]
-    if hasattr(time, "tzset") and s.sessions_db.dialect == "sqlite":
-        ck("the fixture bites: DuckDB hands times back in a local zone",
-           stage_at.utcoffset() not in (None, timedelta()), stage_at)
+    ck("the sessions database hands times back in UTC, whatever zone the process is in",
+       stage_at.utcoffset() == timedelta(), stage_at)
     ck("nothing before the first rebuild", report.read_weeks(s) == [])
     out = report.rebuild_all(s)
     ck("the rebuild says what it wrote", out == {"rows": 7, "changed": 7, "removed": 0}, out)
@@ -326,9 +325,11 @@ def again(s):
 def late(s, ids):
     print("== refresh_recent: a changed stage row and late events ==")
     written = stamps(s)
-    with s._swrite:
-        s.sc.execute("UPDATE ticket_history SET changed_at = ? WHERE ticket = ? AND value = 'doing' "
-                     "AND changed_at = ?", [at(6, 8), ids["a1"], at(6, 10)])
+    with s.sessions_db.begin() as conn:
+        h = ticket_history.c
+        conn.execute(update(ticket_history).where(h.ticket == ids["a1"], h.value == "doing",
+                                                  h.changed_at == at(6, 10))
+                     .values(changed_at=at(6, 8)))
     out = report.refresh_recent(s)
     ck("the stage row changes its week only", out["changed"] == 1 and out["removed"] == 0, out)
     want = dict(EXPECTED)
@@ -599,7 +600,7 @@ def background():
     ck("a first build says so", "report weeks built (1 rows)" in said.getvalue(), said.getvalue())
 
 
-HEAD = "0012_merge_ledger"  # the newest session store revision: an upgrade ends there
+HEAD = "0024_merge_ledger"  # the newest session store revision: an upgrade ends there
 
 
 def migration():

@@ -141,7 +141,7 @@ def percentiles(values: list[float]) -> dict[str, float | None]:
 
 # ── working the figures out ───────────────────────────────────────────────────
 def _utc(at: datetime) -> datetime:
-    """DuckDB hands times back in the local zone; a time with no zone is UTC."""
+    """The same moment in UTC; a time with no zone is UTC."""
     return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
 
 
@@ -709,7 +709,7 @@ def read_weeks(store, projects: list[str] | None = None, from_: date | datetime 
         q = q.where(t.c.week >= week_of(from_))
     if to is not None:
         q = q.where(t.c.week <= week_of(to))
-    with store.sessions_db.begin() as conn:
+    with store.sessions_db.read() as conn:
         rows = [dict(r._mapping) for r in conn.execute(q)]
     for row in rows:
         for column in JSON_COLUMNS:

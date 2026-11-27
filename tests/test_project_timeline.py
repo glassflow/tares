@@ -13,6 +13,7 @@ Run: .venv/bin/python tests/test_project_timeline.py
 import asyncio
 import json
 import os
+from _env import remove_db
 
 DB = "/tmp/tares-timeline.duckdb"
 OLD_DB = "/tmp/tares-timeline-old.duckdb"
@@ -22,9 +23,9 @@ os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 # enable checks that a key resolves; the stand-in loop below never calls a model
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
-for _p in (DB, DB + ".wal", OLD_DB, OLD_DB + ".wal", os.environ["TARES_CATALOG"]):
-    if os.path.exists(_p):
-        os.remove(_p)
+remove_db(DB, OLD_DB)
+if os.path.exists(os.environ["TARES_CATALOG"]):
+    os.remove(os.environ["TARES_CATALOG"])
 
 import duckdb
 import httpx
@@ -334,8 +335,10 @@ async def main():
             ck("the cursor is the same instant with and without a zone, and has a zone to drop",
                nb.tzinfo is not None and datetime.fromisoformat(naive) == nb.astimezone(timezone.utc).replace(tzinfo=None), naive)
             # an override a microsecond before the cursor belongs on the page that starts there
-            store.sc.execute("INSERT INTO handover_overrides (project, \"at\", reason, handed_by) "
-                              "VALUES (?, ?, 'zone check', 'lead')", [a, nb - timedelta(microseconds=1)])
+            from tares.session_store.tables import handover_overrides as overrides_t
+            with store.sessions_db.begin() as c:
+                c.execute(overrides_t.insert().values(project=a, at=nb - timedelta(microseconds=1),
+                                                      reason="zone check", handed_by="lead"))
             pa = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": aware})).json()
             pn = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": naive})).json()
             ck("a naive before pages like the same instant with a zone: same threads, same next_before",
@@ -388,7 +391,7 @@ async def main():
         con.execute(f"ALTER TABLE agent_runs DROP COLUMN {col}")
     for col in ("project", "parent_run_id", "practice"):
         con.execute(f"ALTER TABLE dispatch_log DROP COLUMN {col}")
-    con.execute("DELETE FROM settings WHERE key = 'lineage_backfilled'")   # set by a release with lineage
+    old.set_setting("lineage_backfilled", None)   # set by a release with lineage (the session store holds it)
     con.execute("INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "
                 "started_at) VALUES ('r_old', 'ag', 't', 'd_old', 'x', 'ok', now()), "
                 "('r_gone', 'deleted-agent', 't', '', 'x', 'ok', now())")

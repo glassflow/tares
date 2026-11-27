@@ -39,8 +39,8 @@ from sqlalchemy import delete, select, update  # noqa: E402
 
 from tares import factory, factory_waiting, merge_queue, start_steps  # noqa: E402
 from tares.envelope import now_utc  # noqa: E402
-from tares.session_store.tables import (project_sessions, session_states,  # noqa: E402
-                                        session_stations, session_usage)
+from tares.session_store.tables import (answers, metadata, project_sessions,  # noqa: E402
+                                        session_states, session_stations, session_usage)
 from tares.store import Store, StoreUnavailable  # noqa: E402
 
 SEED = 1674
@@ -202,9 +202,9 @@ class Seeder:
 
     def stamp(self, table: str, rid: str, **times) -> None:
         """Set the times of a row whose store function stamps its own."""
-        sets = ", ".join(f"{c} = ?" for c in times)
-        with self.store._swrite:
-            self.store.sc.execute(f"UPDATE {table} SET {sets} WHERE id = ?", [*times.values(), rid])
+        t = metadata.tables[table]
+        with self.store.sessions_db.begin() as conn:
+            conn.execute(update(t).where(t.c.id == rid).values(**times))
 
     # ── sessions and usage ────────────────────────────────────────────────────
     def session(self, role: str, p: dict | None, at, w: int | None = None) -> str:
@@ -634,10 +634,9 @@ def wipe(store: Store) -> None:
     for uid in uids:
         if store.get_project(uid):
             store.delete_project(uid)
-    marks = ", ".join("?" for _ in uids)
-    with store._swrite:      # answers stay when a project is deleted
-        store.sc.execute(f"DELETE FROM answers WHERE project IN ({marks})", uids)
     with store.sessions_db.begin() as conn:
+        # answers stay when a project is deleted
+        conn.execute(delete(answers).where(answers.c.project.in_(uids)))
         for t in (session_usage, session_stations, session_states, project_sessions):
             conn.execute(delete(t).where(t.c.session.like(f"{SESSION_PREFIX}%")))
 

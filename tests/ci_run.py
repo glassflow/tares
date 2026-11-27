@@ -13,9 +13,11 @@ WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
 failure. The environment is passed on as it is."""
 import argparse
+import glob
 import os
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY_LIST = os.path.join(HERE, "ci_list.txt")
@@ -35,7 +37,9 @@ WEIGHT = {
     "test_parity": 900, "test_watch_escalate": 70, "test_slack": 65,
     "test_project_keys": 19, "test_agents": 15, "test_plugin_challenger": 11, "test_tracing": 11,
     "test_seed": 10, "test_login": 9, "test_usage": 9,
-    "test_slack_ask": 9, "test_github_tickets": 8, "test_degraded": 8,
+    "test_slack_ask": 9, "test_github_tickets": 8, "test_degraded": 8, "test_factory_seed": 45, "test_factory_page_times": 90,
+    "test_session_move_archive": 19, "test_merge_queue_ci_rerun": 12,
+    "test_session_digest": 40, "test_session_digest_times": 20,
 }
 
 
@@ -64,7 +68,21 @@ def shard(all_items, n, of):
     return sorted(bins[n - 1][1], key=order.get)
 
 
+def forget_settings_file():
+    """A cell's settings live in tares.sqlite beside its DuckDB file (TR-1480), and 31 tests keep that
+    file at a fixed place in the temp folder, so every one of them shares one tares.sqlite there. Each
+    test starts without what the one before it saved (a seed marker, a provider, an edition).
+    /tmp is cleared too: on macOS it is not the temp folder, and many tests keep their files there."""
+    for folder in (tempfile.gettempdir(), "/tmp"):
+        for f in glob.glob(os.path.join(folder, "tares.sqlite*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
 def run(t, suite="duckdb"):
+    forget_settings_file()
     base = EE_DIR if suite in ("ee", "ee-postgres") else HERE
     print(f"== {t} ==", flush=True)
     return subprocess.call([sys.executable, os.path.join(base, f"{t}.py")])

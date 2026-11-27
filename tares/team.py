@@ -133,8 +133,10 @@ class Team:
         raise NotImplementedError
 
     # ── team home (the team home itself is ee code, the three row filters are core) ──
-    def team_home(self, c, request, now) -> dict:
-        """The team page's body for the caller, or {} when the cell has no team page."""
+    def team_home(self, c, request, now, stations=None) -> dict:
+        """The team page's body for the caller, or {} when the cell has no team page. `stations`
+        is the stations roll-up the caller already read (`fx.stations()`), so the team page does not
+        read it again; None when the caller has none to give."""
         raise NotImplementedError
 
     def waiting_for_person(self, c, person: dict, hidden: set, now) -> list[dict] | None:
@@ -232,7 +234,7 @@ class SingleTeam(Team):
     def resolve_crew(self, name, person_id, machine):
         return (name or "").strip() or "crew", ""
 
-    def team_home(self, c, request, now):
+    def team_home(self, c, request, now, stations=None):
         return {}
 
     def project_waiting(self, c, request, now, project):

@@ -360,12 +360,14 @@ def rows(store, uid):
 
 
 def row_count(store, uid):
-    """Raw, on the state store (store.sc: DuckDB, or Postgres), under its read lock: the rows, and
-    how many carry an external id twice."""
-    with store._sread:
-        n = store.sc.execute("SELECT count(*) FROM tickets WHERE project = ?", [uid]).fetchone()[0]
-        dup = store.sc.execute("SELECT count(*) - count(DISTINCT external_id) FROM tickets "
-                               "WHERE project = ? AND external_id IS NOT NULL", [uid]).fetchone()[0]
+    """Raw, on the session store (SQLite, or Postgres): the rows, and how many carry an external id
+    twice."""
+    from sqlalchemy import text
+    with store.sessions_db.read() as c:
+        n = c.execute(text("SELECT count(*) FROM tickets WHERE project = :p"), {"p": uid}).scalar()
+    with store.sessions_db.read() as c:
+        dup = c.execute(text("SELECT count(*) - count(DISTINCT external_id) FROM tickets "
+                             "WHERE project = :p AND external_id IS NOT NULL"), {"p": uid}).scalar()
     return n, dup
 
 
