@@ -160,6 +160,14 @@ class RuntimeCodex(Runtime):
     Returns a LaunchSpec: `command`, `env`, `settings` (see the module's note) and `placeholders` (each one
     the spec uses, with what it stands for)."""
     name = "codex"
+
+    def push_lines(self, payload, *, store=None, person_id: str | None = None) -> list:
+        """A push to /ingest/codex (TR-1595): what a crew's recorder read of its Codex stations, made
+        into session lines and stored with the Claude Code ones, where every session reader looks."""
+        from ...session_codex import session_lines
+        from ...session_map import ClaudeCodeLines
+        lines = session_lines(payload)
+        return self._stamp(ClaudeCodeLines(store, person_id=person_id).map_payload(lines), person_id)
     title = "Codex"
     ee = False
     settings_schema: list = []

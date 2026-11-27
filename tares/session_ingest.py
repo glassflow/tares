@@ -296,7 +296,7 @@ def message_facts(event_type: str, text: str | None, payload, session: str, at: 
 
 
 def _codex(payload) -> dict:
-    """What a line of a Codex station keeps of Codex's own (`tares.connectors.codex`): the command's real
+    """What a line of a Codex station keeps of Codex's own (`tares.session_codex`): the command's real
     exit code, its folder and how it ended. {} for a Claude Code line."""
     if isinstance(payload, (str, bytes)):
         try:

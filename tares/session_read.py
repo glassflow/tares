@@ -187,12 +187,12 @@ def _fetch(store, source: str, session: str, tool_needle: str | None, limit: int
 
 
 def _text(r: dict) -> str:
-    from .connectors.claude_code import ClaudeCodeConnector
+    from .session_map import ClaudeCodeLines
     flags = json.loads(r["render"] or "{}")
     o = json.loads(r["payload"])
     if not isinstance(o, dict):
         raise ValueError("payload is not an object")
-    return ClaudeCodeConnector.line_text(o, r["type"], bool(flags.get("redact", True)),
+    return ClaudeCodeLines.line_text(o, r["type"], bool(flags.get("redact", True)),
                                          bool(flags.get("include_thinking", False)))
 
 

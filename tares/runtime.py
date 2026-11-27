@@ -18,7 +18,7 @@ from .envelope import now_utc
 from . import metrics
 from .triggers import clear_cooldowns, eval_triggers
 
-CODEX_INGEST = "codex"   # /ingest/codex: a crew's record of its Codex stations (tares.connectors.codex)
+CODEX_INGEST = "codex"   # /ingest/codex: a crew's record of its Codex stations (tares.session_codex)
 
 
 @dataclass
@@ -326,7 +326,7 @@ class Runtime:
         if token == CODEX_INGEST and not self._names_source(token):
             # /ingest/codex (TR-1595): what a crew's recorder read of its Codex stations, turned into
             # session lines and stored in the cell's session source, where every session reader looks
-            from .connectors import codex as codex_lines
+            from . import session_codex as codex_lines
             payload, token = codex_lines.session_lines(payload), self.session_source()
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)

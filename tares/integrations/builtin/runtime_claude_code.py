@@ -84,6 +84,11 @@ class RuntimeClaudeCode(Runtime):
     Returns a LaunchSpec: `command` (the `claude` arguments up to and including --plugin-dir), `env`,
     `settings` and `placeholders` (each one the spec uses, with what it stands for)."""
     name = "claude_code"
+
+    def push_lines(self, payload, *, store=None, person_id: str | None = None) -> list:
+        """A push to /ingest/claude_code: transcript lines the Claude Code plugin sent."""
+        from ...session_map import ClaudeCodeLines
+        return self._stamp(ClaudeCodeLines(store, person_id=person_id).map_payload(payload), person_id)
     title = "Claude Code"
     ee = False
     settings_schema: list = []

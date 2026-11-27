@@ -47,6 +47,20 @@ def fill_placeholders(value, values: dict):
 class Runtime(Integration):
     slot = "runtime"
 
+    def push_lines(self, payload, *, store=None, person_id: str | None = None) -> list:
+        """The session lines (Envelopes) a push to this runtime's intake (/ingest/<name>) holds.
+        `payload` is the parsed body; `person_id` is the person of the credential that sent it,
+        stamped on every line as `tares_person` (never taken from the body). The route stores
+        them. A runtime without an intake raises NotImplementedError."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _stamp(envs: list, person_id: str | None) -> list:
+        if person_id:
+            for e in envs:
+                e.labels["tares_person"] = person_id
+        return envs
+
     def launch_spec(self, role: str, station: str, ctx: dict) -> LaunchSpec:
         """How to start the station `station` playing `role`. `ctx` carries the project, repo
         and cell address. Returns a LaunchSpec. Raises ValueError for a role this runtime

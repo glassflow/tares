@@ -1,0 +1,527 @@
+"""Claude Code session lines (Tares 2.0, TR-1804): how a line the Claude Code plugin pushes to
+/ingest/claude_code becomes a stored session line. The runtime slot's integrations call this; it reads
+no source catalog. (Moved from tares/connectors/claude_code.py, which re-exports it until the
+connectors go.)
+
+Claude Code writes one structured JSONL event per line (user / assistant / tool_use / tool_result /
+summary, each with a timestamp, sessionId, cwd, gitBranch, and — for assistant turns — model + token
+usage). The plugin's hook POSTs new transcript lines to /ingest/claude_code (local *or* remote); each
+line becomes an Envelope keyed by `session`, with repo/branch/model labels. A model reply's token
+usage is also counted once per reply (session_usage, tares/claude_usage_store.py). Sub-agent
+(sidechain) transcripts land in the SAME source, tagged `sidechain=true`. Secrets are redacted
+before storage (thin PII guard).
+
+Push-only: install the plugin (claude-plugin/) to feed it. Local file tailing was removed in favor of
+the plugin, which covers both local and remote Tares with one path.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+from . import team as team_mod
+from .envelope import Envelope, now_utc
+
+# Thin PII guard: redact obvious secrets/tokens before anything is stored. Not exhaustive — a real
+# ship would add a configurable redaction pass — but it covers the common credential shapes that
+# show up in agent transcripts (provider keys, GH/Slack/AWS tokens, JWTs, bearer headers, PEM keys).
+_SECRET = re.compile(
+    r"sk-ant-[A-Za-z0-9_-]{8,}"
+    r"|sk-[A-Za-z0-9]{16,}"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|AKIA[0-9A-Z]{12,}"
+    r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"
+    r"|Bearer\s+[A-Za-z0-9._\-]{12,}"
+    r"|-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----"
+)
+
+
+def _redact(s: str) -> str:
+    return _SECRET.sub("[REDACTED]", s)
+
+
+def _redact_obj(o):
+    if isinstance(o, str):
+        return _redact(o)
+    if isinstance(o, list):
+        return [_redact_obj(x) for x in o]
+    if isinstance(o, dict):
+        return {k: _redact_obj(v) for k, v in o.items()}
+    return o
+
+
+def _holds_nul(o) -> bool:
+    """Whether any string in `o` holds a NUL, dict keys included."""
+    stack = [o]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            if "\x00" in v:
+                return True
+        elif isinstance(v, dict):
+            if "\x00" in "".join(v):
+                return True
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+    return False
+
+
+def _without_nul(o):
+    """`o` with every NUL dropped from every string, dict keys included, so no later reader meets
+    one: Postgres text takes none, and SQLite must store the same text (TR-1707). A line without
+    one, which is nearly every line, is returned as it is. No recursion, so a deeply nested line
+    does not fail its batch here. Keys that differ only in NULs become one, the later value wins."""
+    if not _holds_nul(o):
+        return o
+    top = [o]
+    stack = [(top, 0)]                  # (a new container, where in it a value is still to clean)
+    while stack:
+        box, at = stack.pop()
+        v = box[at]
+        if isinstance(v, str):
+            box[at] = v.replace("\x00", "")
+        elif isinstance(v, dict):
+            box[at] = new = {k.replace("\x00", ""): x for k, x in v.items()}
+            stack.extend((new, k) for k in new)
+        elif isinstance(v, list):
+            box[at] = new = list(v)
+            stack.extend((new, i) for i in range(len(new)))
+    return top[0]
+
+
+def _short(v, n: int = 80) -> str:
+    s = v if isinstance(v, str) else json.dumps(v, default=str)
+    return s if len(s) <= n else s[:n] + "…"
+
+
+SOURCE = "claude_code"            # the source every session line is stored under
+SOURCE_TYPE = "agent_session"
+
+
+class ClaudeCodeLines:
+    """Maps pushed transcript objects to session-line Envelopes. `store` is the cell's store (for
+    the station, usage and project writes a line carries); `person_id` is the person of the
+    credential that pushed them, set by the route, None for the cell itself."""
+
+    def __init__(self, store=None, *, redact: bool = True, include_thinking: bool = False,
+                 source: str = SOURCE, source_type: str = SOURCE_TYPE, person_id: str | None = None):
+        self.store = store
+        self.config = {"redact": redact, "include_thinking": include_thinking}
+        self.source = source
+        self.source_type = source_type
+        self.person_id = person_id
+
+    CONFIG_SCHEMA = {
+        "redact": {"type": "bool", "default": True,
+                   "help": "redact obvious secrets/tokens before storing (PII guard)"},
+        "include_thinking": {"type": "bool", "default": False,
+                             "help": "include assistant <thinking> blocks in the rendered text"},
+        # Set by the plugin when it auto-creates the source; kept for compatibility. This connector
+        # is push-only, so poll() is a no-op regardless.
+        "push": {"type": "bool", "default": True, "advanced": True,
+                 "help": "fed by the Claude Code plugin via /ingest (this connector is push-only)"},
+    }
+    # synthesized correlation axes (surfaced in the source form; set on every event)
+    PROVIDES = [
+        {"name": "session", "primary": True, "help": "Claude Code session id (the key)"},
+        {"name": "repo", "help": "repository the session ran in (working directory name)"},
+        {"name": "branch", "help": "git branch"},
+        {"name": "model", "help": "model on assistant turns"},
+        {"name": "type", "help": "message type (user / assistant / tool_use / …)"},
+        {"name": "sidechain", "help": "sub-agent (sidechain) message"},
+        {"name": "meta", "help": "a user line Claude Code wrote itself (compaction summary, skill "
+                                 "body, peer message, task notification), not typed by the person"},
+        {"name": "flow", "help": "session flow set from inside Claude Code (e.g. challenger); "
+                                 "the plugin stamps it on every line of a marked session"},
+        {"name": "tares_project", "help": "the Tares project the session works in; the plugin "
+                                          "stamps it once the session creates or names one"},
+        {"name": "station", "help": "the tares-factory station the session plays (crew-reviewer, "
+                                    "<project>-build-<slug>); the plugin stamps it from "
+                                    "FACTORY_STATION"},
+        {"name": "crew", "help": "the tares-factory crew the station belongs to (its name, "
+                                 "`crew` by default); the plugin stamps it from FACTORY_CREW"},
+        {"name": "machine", "help": "the machine the crew runs on (`hostname -s`); the plugin "
+                                    "stamps it from the host, or FACTORY_MACHINE"},
+        {"name": "subagent", "help": "the subagent a line belongs to (its id), for lines from a "
+                                     "subagent's own transcript; the session key stays the "
+                                     "parent's"},
+        {"name": "verdict", "help": "challenge events: PASS / FAIL / ERROR / TIMEOUT / INCONCLUSIVE"},
+        {"name": "sha", "help": "challenge_commit: the reviewed commit"},
+        {"name": "finding_count", "help": "challenge events: findings reported (number)"},
+        {"name": "blocking_count", "help": "challenge events: unwaived P1/P2 findings (number)"},
+        {"name": "round", "help": "challenge_commit: fix round since the last pass (number)"},
+        {"name": "duration_seconds", "help": "challenge events: how long the challenger ran (number)"},
+    ]
+    # Lines the plugin's challenger hooks write next to the transcript. Each carries a
+    # `challenge` object: {verdict, sha?, plan?, findings: [{priority, title, waived}],
+    # finding_count, blocking_count, waived_count, round?, duration_seconds, prose}.
+    CHALLENGE_TYPES = ("challenge_plan", "challenge_commit", "challenge_waived")
+    USER_TURN_CAP = 20000
+    # Push-only: the Claude Code plugin POSTs transcript lines to /ingest/claude_code; events are
+    # mapped by map_payload(). There is no local file tail.
+    ACCEPTS_PUSH = True
+    # The cell labels every pushed event with the person of the credential that sent it
+    # (`tares_person`); see Runtime.ingest. Events the cell reads itself carry none.
+    STAMPS_PERSON = True
+    # The person of the credential of the push being mapped (set by the route before map_payload,
+    # None for the system credential): the crew a station line belongs to is theirs.
+    person_id: str | None = None
+
+    def _scrub_secrets(self, items: list) -> list:
+        """Every value of a project secret replaced with [secret NAME] before anything is stored or
+        counted (TR-775), whatever the redact setting. A store without secrets changes nothing."""
+        if self.store is None or not hasattr(self.store, "all_secret_rows"):
+            return items
+        from . import project_secrets
+        pairs = project_secrets.scrub_pairs(self.store)
+        return [project_secrets.scrub(o, pairs) for o in items] if pairs else items
+
+    # ── push ingestion (the Claude Code plugin posts transcript lines to /ingest) ──
+    def map_payload(self, payload) -> list[Envelope]:
+        """Map pushed transcript events → Envelopes. `payload` is a single JSONL object or a list of
+        them (the daemon parses a posted NDJSON body into a list). Reuses the same mapping as the
+        file tail, so plugin-push and local-tail produce identical events."""
+        c = self.config
+        redact = c.get("redact", True)
+        include_thinking = c.get("include_thinking", False)
+        items = payload if isinstance(payload, list) else [payload]
+        # NULs first, before anything counts or stores a line (TR-1703, TR-1707), and before the
+        # secrets are looked for, so one with a NUL inside it is found once it is whole again
+        items = self._scrub_secrets([_without_nul(o) for o in items])
+        out = []
+        projects: dict[tuple, str | None] = {}   # (stamp, session) -> the project it stands for
+        for o in items:
+            if isinstance(o, dict) and str(o.get("type") or "").startswith(self.REQUEST_PREFIX):
+                continue   # Claude Code's record of an API request, a copy of lines already sent
+            if isinstance(o, dict) and o.get("type") in self.METER_TYPES:
+                self._record_meter(o)   # a meter reading, not something the session said
+                continue
+            if isinstance(o, dict) and o.get("type") == self.USAGE_TYPE:
+                self._record_reported(o, projects)   # counted, and not a line of the timeline
+                continue
+            if isinstance(o, dict):
+                self._record_usage(o, projects)
+            if isinstance(o, dict) and o.get("type") == "session_station":
+                self._record_station(o)
+            if isinstance(o, dict) and o.get("type") == "session_project":
+                if not self._link_project(o) and o.get("from_env"):
+                    # TARES_PROJECT named a project Tares does not have: say so on the session's
+                    # timeline instead of making one
+                    o = {**o, "type": "session_warning",
+                         "warning": f"TARES_PROJECT names project {o.get('tares_project')!r}, "
+                                    "which is not on Tares; the session is not tied to a project"}
+            if isinstance(o, dict) and o.get("type") == "session_state":
+                self._record_state(o)
+            if isinstance(o, dict):
+                env = self._obj_to_envelope(o, redact, include_thinking)
+                if env is not None:
+                    out.append(env)
+        return out
+
+    def _record_station(self, o: dict) -> None:
+        """A `session_station` line (TR-418): the session plays a station of a tares-factory crew
+        (its environment said FACTORY_STATION). Kept so Tares groups the crew's sessions by
+        station."""
+        sid = str(o.get("sessionId") or "")
+        if not sid or self.store is None:
+            return
+        from .factory import DocError, station_ok
+        try:
+            name, role, parent = station_ok(o.get("station"), o.get("role"), o.get("parent"))
+        except DocError:
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        project = self.store.usage_project(ref, sid) if ref else None
+        at = self._ts(o)
+        # the crew (TR-628): this recording's person, the crew's name and the machine; a line
+        # with no person (the system credential) joins the crew of `local`
+        # (without an enterprise licence the team drops the machine: one crew per name)
+        crew_name, machine = team_mod.get().resolve_crew(
+            str(o.get("factory_crew") or o.get("crew") or ""), self.person_id,
+            str(o.get("factory_machine") or o.get("machine") or ""))
+        crew_id = self.store.resolve_crew(crew_name, self.person_id, machine, at)
+        # a Codex station's lines say so, and name the model it was started on (TR-1600)
+        self.store.set_session_station(sid, name, role, parent, project, at, crew_id,
+                                       runtime=str(o.get("runtime") or "") or None,
+                                       model=str(o.get("model") or "") or None)
+
+    def _link_project(self, o: dict) -> bool:
+        """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
+        (it created it, or a Tares tool named it). Tie the session to the project, and put this
+        source in the project so the session's lines read as the project's, the ones from before
+        the project existed included (they share the session key). An unknown project is
+        ignored: the line still lands on the session's timeline. A deleted private one gets the
+        tie too, so that the session's lines stay unread, and the answer is False as for an
+        unknown one."""
+        ref, sid = str(o.get("tares_project") or "").strip(), str(o.get("sessionId") or "")
+        if not ref or not sid or self.store is None:
+            return False
+        uid = self.store.usage_project(ref, sid)
+        if uid is None:
+            return False
+        cwd = o.get("cwd")
+        self.store.link_session(uid, sid, Path(str(cwd)).name if cwd else None)
+        if self.store.get_project(uid) is None:
+            return False
+        self.store.upsert_project_object(uid, "source", f"+source:{self.source}",
+                                         self.source)
+        return True
+
+    # Claude Code (2.1.3xx) records each API request in the transcript: api-request,
+    # api-request-shape, and api-request-blob, which holds a copy of the previous assistant message
+    # (every tool call in it) with no timestamp. An older plugin still sends them; they are dropped.
+    REQUEST_PREFIX = "api-request"
+
+    # Lines that read a meter rather than say something: the status line's report on the session
+    # (claude-plugin/scripts/statusline.py), a /context reading of it and the plan's limits from
+    # /usage (both from `factory`). Kept on the session and the plan, never on the timeline.
+    METER_TYPES = ("session_status", "session_context", "claude_plan")
+
+    def _record_meter(self, o: dict) -> None:
+        if self.store is None:
+            return
+        from . import claude_usage as cu
+        sid, at, typ = str(o.get("sessionId") or ""), self._ts(o), o.get("type")
+        if typ == "session_status" and sid and isinstance(o.get("status"), dict):
+            self.store.set_session_status(sid, cu.compact_status(o["status"]), at, self.person_id)
+        elif typ == "session_context" and sid and isinstance(o.get("context_usage"), dict):
+            self.store.set_session_context(sid, cu.compact_context(o["context_usage"]), at)
+        elif typ == "claude_plan" and isinstance(o.get("usage_report"), dict):
+            self.store.set_setting(cu.PLAN_SETTING, json.dumps(
+                {"at": at.isoformat(), "plan": cu.compact_plan(o["usage_report"]),
+                 "person_id": self.person_id}))
+
+    def _record_usage(self, o: dict, projects: dict) -> None:
+        """A model reply's line: its token usage, counted once per reply, for the project the line
+        was stamped with (`projects` caches name lookups for one push)."""
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        usage, mid, sid = msg.get("usage"), msg.get("id"), o.get("sessionId")
+        if not isinstance(usage, dict) or not mid or not sid or self.store is None:
+            return
+        from .claude_usage_store import SYNTHETIC
+        if msg.get("model") == SYNTHETIC:   # Claude Code's own notice, not a model reply
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        key = (ref, str(sid))
+        if ref and key not in projects:
+            projects[key] = self.store.usage_project(*key)
+        self.store.record_reply_usage(
+            str(sid), str(mid), self._ts(o), msg.get("model"), projects.get(key) if ref else None,
+            str(o.get("subagent") or o.get("agentId") or "") or None
+            if o.get("isSidechain") or o.get("subagent") else None, usage)
+
+    # A reply's tokens as a line of their own (TR-1595): a runtime whose lines carry no usage (a Codex
+    # station, whose recorder reads them from Codex's own count) sends one per reply. Claude Code's
+    # replies carry theirs in the reply's line (`_record_usage`) and send none of these.
+    USAGE_TYPE = "session_usage"
+
+    def _record_reported(self, o: dict, projects: dict) -> None:
+        sid, mid, usage = o.get("sessionId"), o.get("message_id"), o.get("usage")
+        if not isinstance(usage, dict) or not mid or not sid or self.store is None:
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        key = (ref, str(sid))
+        if ref and key not in projects:
+            projects[key] = self.store.usage_project(*key)
+        self.store.record_reported_usage(str(sid), str(mid), self._ts(o), o.get("model"),
+                                         projects.get(key) if ref else None, usage)
+
+    STATES = ("working", "idle", "waiting", "ended")
+
+    def _record_state(self, o: dict) -> None:
+        """A `session_state` line: the plugin saw the session start working, end a turn (idle),
+        need the person (a permission prompt, a question: waiting), or end. Kept as the session's state now."""
+        sid, state = str(o.get("sessionId") or ""), str(o.get("state") or "")
+        if not sid or state not in self.STATES or self.store is None:
+            return
+        self.store.set_session_state(sid, state, str(o.get("reason") or "")[:300] or None,
+                                     self._ts(o))
+
+    def label_context(self, o: dict | None) -> dict:
+        """Synthesized label axes from a raw transcript object — the SAME mapping ingest uses
+        (base-class contract: profiling and retroactive relabel must reproduce ingest labels;
+        without this override the field profile showed the raw transcript keys and 0-coverage
+        phantoms for session/repo/…)."""
+        o = o or {}
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        cwd = o.get("cwd")
+        sid = o.get("sessionId")
+        return {"session": str(sid) if sid else None,
+                "repo": Path(str(cwd)).name if cwd else None,
+                "branch": str(o["gitBranch"]) if o.get("gitBranch") else None,
+                "model": str(msg["model"]) if msg.get("model") else None,
+                "type": str(o.get("type")) if o.get("type") else None,
+                "sidechain": "true" if o.get("isSidechain") else "false",
+                "meta": "true" if self._written_by_harness(o) else None,
+                "flow": str(o["flow"]) if o.get("flow") else None,
+                "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
+                "station": str(o["factory_station"]) if o.get("factory_station") else None,
+                "crew": str(o["factory_crew"]) if o.get("factory_crew") else None,
+                "machine": str(o["factory_machine"]) if o.get("factory_machine") else None,
+                "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
+                if o.get("isSidechain") or o.get("subagent") else None}
+
+    @staticmethod
+    def _written_by_harness(o: dict) -> bool:
+        """A `user` line the person did not type: a compaction summary, a skill body, a peer
+        message, a task notification. Any origin but a human one counts, so a new kind Claude
+        Code adds stays out by default (TR-697)."""
+        if o.get("isMeta") or o.get("isCompactSummary"):
+            return True
+        origin = o.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else origin
+        return bool(origin) and kind != "human"
+
+    # ── mapping: one JSONL object → one Envelope ───────────────────────────────
+    def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
+        sid = o.get("sessionId")
+        if not sid:
+            return None  # can't key it to a timeline
+
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        labels = {k: v for k, v in self.label_context(o).items() if v not in (None, "")}
+        labels.setdefault("type", "event")
+        if o.get("type") in self.CHALLENGE_TYPES:
+            labels.update(self._challenge_labels(o))
+
+        # challenge events carry the whole review; chopping them mid-finding is what the 500-char
+        # cap would do, and the summarizer reads this text
+        # a person's turn is what a desk answer is matched against line by line (TR-697), so a long
+        # paste is kept whole
+        etype = self._event_type(o, msg)
+        text = self.line_text(o, etype, redact, include_thinking)
+
+        payload = _redact_obj(o) if redact else o
+
+        env = Envelope(
+            source=self.source,
+            source_type=self.source_type,
+            key_value=str(sid),
+            event_type=etype,
+            text=text,
+            event_time=self._ts(o),
+            payload=payload,
+            labels=labels,
+        )
+        return env
+
+    @staticmethod
+    def _challenge_labels(o: dict) -> dict:
+        ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
+        out = {}
+        if ch.get("verdict"):
+            out["verdict"] = str(ch["verdict"]).upper()
+        if ch.get("sha"):
+            out["sha"] = str(ch["sha"])[:12]
+        for k in ("finding_count", "blocking_count", "round", "duration_seconds"):
+            v = ch.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = v
+        return out
+
+    @classmethod
+    def line_text(cls, o: dict, etype: str, redact: bool, include_thinking: bool) -> str:
+        """The text of one line: what `_obj_to_envelope` stores in the events table, and what the
+        session readers rebuild from the stored payload and `render` flags (TR-1507)."""
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        cap = (4000 if o.get("type") in cls.CHALLENGE_TYPES
+               else cls.USER_TURN_CAP if etype == "user" else 500)
+        text = cls._render_text(o, msg, include_thinking)[:cap]
+        return _redact(text) if redact else text
+
+    @staticmethod
+    def _ts(o: dict) -> datetime:
+        ts = o.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        return now_utc()
+
+    @staticmethod
+    def _event_type(o: dict, msg: dict) -> str:
+        typ = o.get("type") or "event"
+        content = msg.get("content")
+        if isinstance(content, list):
+            kinds = {b.get("type") for b in content if isinstance(b, dict)}
+            if "tool_use" in kinds:
+                return "tool_use"
+            if "tool_result" in kinds:
+                return "tool_result"
+        return str(typ)
+
+
+    @staticmethod
+    def _render_challenge(o: dict) -> str:
+        ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
+        typ = o.get("type")
+        verdict = str(ch.get("verdict") or "?").upper()
+        n, b = ch.get("finding_count", 0), ch.get("blocking_count", 0)
+        findings = "\n".join(f"[{f.get('priority')}] {f.get('title')}"
+                              for f in (ch.get("findings") or []) if isinstance(f, dict))
+        tail = f"\n{findings}" if findings else ""
+        # plugin 0.6.0+ names the reviewer; the summarizer reads this text, so it says which model
+        name = {"codex": "Codex", "grok": "Grok"}.get(str(ch.get("reviewer") or "").lower())
+        who = f"Challenger ({name})" if name else "Challenger"
+        if typ == "challenge_plan":
+            what = f"{who} reviewed the plan {ch.get('plan') or ''}".rstrip()
+        elif typ == "challenge_commit":
+            rnd = f", round {ch['round']}" if ch.get("round") else ""
+            what = f"{who} reviewed commit {str(ch.get('sha') or '')[:8]}{rnd}"
+        else:
+            return f"Challenger finding waived{tail}"
+        # say what happened, not Codex's verdict word: "FAIL" reads as a broken run elsewhere
+        # in the console (a run that did not finish, a delivery that did not arrive)
+        if verdict == "PASS":
+            outcome = "no findings"
+        elif verdict == "FAIL":
+            outcome = f"{n} finding{'s' if n != 1 else ''} ({b} blocking)"
+        else:
+            outcome = f"no verdict ({verdict.lower()})"
+        return f"{what}: {outcome}{tail}"
+
+    @staticmethod
+    def _render_text(o: dict, msg: dict, include_thinking: bool) -> str:
+        if o.get("type") == "summary" and o.get("summary"):
+            return str(o["summary"])
+        if o.get("type") == "session_flow":
+            # written by the plugin when Claude calls set_session_flow; `flow` empty = cleared
+            return f"session flow: {o.get('flow') or 'cleared'}"
+        if o.get("type") == "session_project":
+            return f"session works in project {o.get('tares_project')}"
+        if o.get("type") == "session_state":
+            why = f": {o.get('reason')}" if o.get("reason") else ""
+            return f"session {o.get('state')}{why}"
+        if o.get("type") == "session_station":
+            role = f" ({o.get('role')})" if o.get("role") else ""
+            return f"session plays station {o.get('station')}{role}"
+        if o.get("type") == "session_warning":
+            return f"warning: {o.get('warning')}"
+        if o.get("type") == "subagent_truncated":
+            return str(o.get("note") or "a subagent's transcript was cut off")
+        if o.get("type") in ClaudeCodeLines.CHALLENGE_TYPES:
+            return ClaudeCodeLines._render_challenge(o)
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                t = b.get("type")
+                if t == "text":
+                    parts.append(str(b.get("text", "")))
+                elif t == "thinking" and include_thinking:
+                    parts.append("[thinking] " + str(b.get("thinking", "")))
+                elif t == "tool_use":
+                    parts.append(f"→ {b.get('name')}({_short(b.get('input'))})")
+                elif t == "tool_result":
+                    parts.append("[tool_result] " + _short(b.get("content")))
+            return " ".join(p for p in parts if p)
+        return str(o.get("type") or "")
