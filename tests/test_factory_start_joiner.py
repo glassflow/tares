@@ -274,6 +274,16 @@ async def main():
                done_of(await start(ana_key))["project"] is False)
             store.add_project_member(two, ana)
             ck("a private project they are on does", done_of(await start(ana_key))["project"] is True)
+            store.remove_project_member(two, ana)
+            store.set_project_scope(two, "team")
+            store.add_project_member(two, ana, ana, reason="self")
+            ck("a team project they joined by themselves counts",
+               done_of(await start(ana_key))["project"] is True)
+            store.set_project_scope(two, "private")
+            ck("it stops counting once the project is private",
+               done_of(await start(ana_key))["project"] is False)
+            store.add_project_member(two, ana)
+            ck("and counts again once someone adds them", done_of(await start(ana_key))["project"] is True)
 
             print("== what it costs ==")
             real, asked = store.members_by_project, []
