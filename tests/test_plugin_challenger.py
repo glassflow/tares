@@ -2,8 +2,7 @@
 session when it sees the set_session_flow call, stamps flow on every line and writes the
 session_flow / session_end lines; the challenger hooks review plans and commits with a fake Codex
 (and with Grok against a fake xAI endpoint), block and loop like codex-review, ship challenge events to a fake Tares, and stay inert for an
-unmarked session; SessionStart prints nothing (2.0 has no memory block) and asks the cell for nothing
-but its own announce.
+unmarked session; SessionStart prints no memory block (Tares 2.0 removes it) and reads no source events.
 Run: .venv/bin/python tests/test_plugin_challenger.py   (no Codex, no xAI, no daemon, no network)
 """
 import json
@@ -33,14 +32,11 @@ def check(label, cond, detail=""):
         FAIL += 1; print(f"  FAIL {label}  {detail}")
 
 
-# ── a fake Tares: records what lands on /ingest/claude_code, serves memory ───
+# ── a fake Tares: records what lands on /ingest/claude_code and every GET ───
 INGESTED = []
 GETS = []                                  # every GET path the shipper sent
 SOURCE_POSTS = []                          # POST /api/sources (2.0 has no source catalog)
 STOPPED = []
-MEMORY = [{"key": "shop", "event_type": "decision", "text": "The shop repo runs tests with make test."},
-          {"key": "other", "event_type": "decision", "text": "not this repo"},
-          {"key": "shop", "event_type": "observation", "text": "not accepted memory"}]
 # ── and a fake xAI chat-completions endpoint for the Grok backend ────────────
 XAI = []                                   # (path, authorization, request body) per call
 GROK = {"status": 200, "reply": ""}
@@ -52,12 +48,7 @@ class FakeTares(BaseHTTPRequestHandler):
 
     def do_GET(self):
         GETS.append(self.path)
-        if self.path.startswith("/api/sources/agent_memory/events"):
-            body = json.dumps(MEMORY).encode()
-            self.send_response(200); self.send_header("content-type", "application/json")
-            self.end_headers(); self.wfile.write(body)
-        else:
-            self.send_response(404); self.end_headers()
+        self.send_response(404); self.end_headers()
 
     def do_POST(self):
         n = int(self.headers.get("content-length") or 0)

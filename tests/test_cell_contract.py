@@ -37,7 +37,7 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 
-# (method, path, caller). {x} is any path segment. "*" as the method: any method the caller uses.
+# (method, path, caller). {x} is any path segment. One row per method a caller sends.
 FROZEN = [
     # the Claude Code plugin (claude-plugin/scripts)
     ("POST", "/ingest/claude_code", "plugin ship.py, crew"),
@@ -48,31 +48,34 @@ FROZEN = [
     ("GET", "/api/whoami", "crew"),
     ("GET", "/api/home", "crew"),
     ("GET", "/api/people", "crew, control plane"),
-    ("*", "/api/answers", "crew"),
-    ("GET", "/api/crew/codex-limits", "crew"),
-    ("*", "/api/crew/context/asks", "crew"),
-    ("*", "/api/crew/machine", "crew"),
+    ("GET", "/api/answers", "crew"),
+    ("PUT", "/api/crew/codex-limits", "crew codex_pace.py"),
+    ("GET", "/api/crew/context/asks", "crew readings.py"),
+    ("POST", "/api/crew/machine", "crew"),
     ("GET", "/api/crew/my-work", "crew"),
-    ("*", "/api/crew/pace", "crew"),
+    ("GET", "/api/crew/pace", "crew pace.py"),
     ("GET", "/api/crew/projects", "crew"),
-    ("*", "/api/crew/settings", "crew"),
-    ("*", "/api/desk", "crew"),
+    ("GET", "/api/crew/settings", "crew"),
+    ("PUT", "/api/crew/settings", "crew"),
+    ("GET", "/api/desk", "crew"),
+    ("POST", "/api/desk", "crew"),
     ("GET", "/api/desk/answered", "crew"),
     ("POST", "/api/desk/{x}/withdraw", "crew codex_asks.py"),
-    ("*", "/api/factory/guardrails/rules", "crew"),
+    ("GET", "/api/factory/guardrails/rules", "crew"),
     ("GET", "/api/factory/integrations/effective", "crew"),
-    ("*", "/api/factory/integrations/runtime", "crew"),
-    ("*", "/api/factory/integrations/{x}", "crew"),
-    ("*", "/api/factory/integrations/{x}/default", "crew"),
-    ("*", "/api/factory/setup", "crew"),
+    ("PUT", "/api/factory/integrations/runtime", "crew runtime_cmd.py"),
+    ("PUT", "/api/factory/integrations/{x}", "crew person.py setup save"),
+    ("PUT", "/api/factory/integrations/{x}/default", "crew person.py setup default"),
+    ("GET", "/api/factory/setup", "crew person.py"),
     ("GET", "/api/factory/setup/github/repos", "crew"),
     ("GET", "/api/factory/setup/progress", "crew"),
-    ("*", "/api/factory/setup/{x}/keep", "crew"),
-    ("*", "/api/factory/stations/{x}/launch", "crew"),
-    ("*", "/api/grants", "crew"),
-    ("*", "/api/projects", "crew"),
-    ("*", "/api/projects/{x}/crew", "crew"),
-    ("*", "/api/projects/{x}/tickets", "crew"),
+    ("PUT", "/api/factory/setup/{x}/keep", "crew person.py setup keep"),
+    ("GET", "/api/factory/stations/{x}/launch", "crew"),
+    ("GET", "/api/grants", "crew"),
+    ("POST", "/api/grants", "crew"),
+    ("GET", "/api/projects", "crew"),
+    ("GET", "/api/projects/{x}/crew", "crew person.py"),
+    ("GET", "/api/projects/{x}/tickets", "crew idle_wake.py"),
     ("GET", "/api/projects/{x}/secrets", "crew with_secrets.py"),
     ("POST", "/api/projects/{x}/secrets/use", "crew with_secrets.py"),
     ("GET", "/api/review-queue", "crew"),
@@ -123,20 +126,19 @@ def check_routes():
     from starlette.routing import Match
     from tares.daemon import make_app
     app = make_app()
-    routes = [r for r in app.routes
-              if getattr(r, "path", "") not in ("/{path:path}", "/{full_path:path}")]
+    ck("make_app built the full app, not the degraded one", "degraded" not in (app.title or ""), app.title)
+    catch_all = {"/{path:path}", "/{full_path:path}", "/api/{rest:path}", "/ingest/{rest:path}",
+                 "/catalog/{rest:path}"}
+    routes = [r for r in app.routes if getattr(r, "path", "") not in catch_all]
     for method, path, caller in FROZEN:
         want = _concrete(path)
         hit = False
         for r in routes:
             methods = getattr(r, "methods", None) or set()
-            for m in ([method] if method != "*" else sorted(methods) or ["GET"]):
-                scope = {"type": "http", "path": want, "method": m, "root_path": ""}
-                match, _ = r.matches(scope)
-                if match == Match.FULL:
-                    hit = True
-                    break
-            if hit:
+            scope = {"type": "http", "path": want, "method": method, "root_path": ""}
+            match, _ = r.matches(scope)
+            if match == Match.FULL and method in methods:
+                hit = True
                 break
         ck(f"route {method} {path} ({caller})", hit, "no route serves it")
 
