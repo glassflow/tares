@@ -454,6 +454,23 @@ def _start_ctx(onboarding: dict) -> start_steps.StartCtx:
         crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "")
 
 
+def _start(store, onboarding: dict, joiner: dict, me: str | None, open_ps: list[dict], who: str) -> dict:
+    """The caller's Start checklist, hidden or not for `who`. A person joining (`joiner`) gets the
+    new member's steps, and what the team already set as `team` (TR-1314)."""
+    ctx = _start_ctx(onboarding)
+    if not joiner["joining"]:
+        return start_steps.checklist(store, start_steps.factory_steps(ctx), who)
+    from .factory_api import CREW_SETTING   # factory_api imports this module
+    # the record's presence counts: an empty one accepts the team's choices and keeps following them
+    ctx.own_settings_set = store.get_setting(f"{CREW_SETTING}:{me}") is not None
+    ctx.member_of_project = any(p["lead_person_id"] == me for p in open_ps) or any(
+        m["person_id"] == me
+        for rows in store.members_by_project([p["id"] for p in open_ps]).values() for m in rows)
+    return {**start_steps.checklist(store, start_steps.joiner_steps(ctx), who),
+            "team": {"settings_text": crew_onboarding.choices_text(joiner["team_settings"]),
+                     "github": onboarding["github"]["text"]}}
+
+
 def _cut(fx, name: str, request, rows, *more):
     """`rows` cut to the caller by the team interface's filter `name` (own_stations, own_desk,
     own_tickets). Unchanged on a cell of one person, without a request, or for an `fx` with no
@@ -563,7 +580,8 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
     is addressed to the caller's person (TR-739); its keys replace the single-person ones.
-    `joiner` says whether the caller is joining a factory someone else set up (TR-1719).
+    `joiner` says whether the caller is joining a factory someone else set up (TR-1719); if so,
+    `start` holds a new member's steps.
     `hidden` is the caller's hidden project ids when the caller of this has read them already."""
     fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
@@ -624,9 +642,8 @@ def home(store, fx, now, credential_key: str = "open", request=None, hidden=None
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, hidden, fx, request),
             # how a project is planned with the crew: the home's empty Projects list shows it
             "plan_command": start_steps.SPEC_COMMAND,
-            "start": start_steps.checklist(
-                store, start_steps.factory_steps(_start_ctx(onboarding)),
-                "console" if credential_key == "open" else credential_key),
+            "start": _start(store, onboarding, joiner, who, open_ps,
+                            "console" if credential_key == "open" else credential_key),
             "onboarding": onboarding,
             "joiner": joiner,
             "now": now.isoformat()}

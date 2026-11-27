@@ -82,11 +82,19 @@ def choices(settings: dict) -> dict:
 
 
 def choices_text(c: dict) -> str:
-    """The one line a finished step 1 shows."""
-    merges = "You approve each merge" if c["autonomy"] == "L3-review" else "The crew merges on its own"
-    n = c["builders_max"] or 0
-    builders = f"{n} builder" + ("" if n == 1 else "s")
-    return f"{merges}, {builders}, " + ("releases on" if c["releaser"] else "no releases")
+    """Saved choices as one line, naming only the ones that are set: what a finished step 1 shows,
+    and what a team saved (which may be only some of them)."""
+    parts = []
+    if c.get("autonomy"):
+        parts.append("You approve each merge" if c["autonomy"] == "L3-review" else "The crew merges on its own")
+    n = c.get("builders_max")
+    if n is not None:
+        parts.append(f"{n} builder" + ("" if n == 1 else "s"))
+    if c.get("releaser") is not None:
+        parts.append("releases on" if c["releaser"] else "no releases")
+    if c.get("challenger") is not None:
+        parts.append("second check on" if c["challenger"] else "second check off")
+    return ", ".join(parts)
 
 
 def github_text(store) -> str:
