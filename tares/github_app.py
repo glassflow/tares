@@ -11,7 +11,9 @@ github_credentials.py; callers only ever ask that module for a token):
   to `token_url` with its own bearer secret and caches what comes back exactly like a minted one.
 
 An installation token lives one hour. Tokens are cached per (credential, installation) and refreshed
-when under five minutes remain, one refresh in flight at a time.
+when under five minutes remain, one refresh in flight at a time. A token asked for with fewer
+permissions than the installation's full set (or, from an `app`, for one repository) is cached apart
+from the full ones.
 
 The browser redirects GitHub sends back (the manifest callback, the install callback) carry no
 Tares bearer token, so they are authenticated by a signed `state` instead (`sign_state`).
@@ -25,6 +27,7 @@ import hmac
 import json
 import secrets
 import time
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -46,8 +49,25 @@ APP_EVENTS = [
     "issue_comment", "release", "workflow_run",
 ]
 
-_tokens: dict[tuple[str, int], tuple[str, float]] = {}     # (cred, installation) -> (token, exp)
-_locks: dict[tuple[str, int], asyncio.Lock] = {}
+
+@dataclass(frozen=True)
+class Grant:
+    """A minted installation token, when it expires (epoch seconds) and, from a broker, the App's
+    slug and bot user id."""
+    token: str = field(repr=False)
+    exp: float
+    app_slug: str | None = None
+    bot_id: int | None = None
+
+
+class PermissionsMissing(ValueError):
+    """The App does not hold a permission that was asked for."""
+
+
+# (cred, installation) for the full set; a narrowed token adds (permissions, repository). The
+# credential name stays first, which is what forget() matches on.
+_tokens: dict[tuple, Grant] = {}
+_locks: dict[tuple, asyncio.Lock] = {}
 _repos: dict[tuple[str, int], tuple[float, list[dict]]] = {}
 
 
@@ -115,8 +135,36 @@ def _explain(r: httpx.Response, what: str) -> str:
     return f"GitHub returned {r.status_code} for {what}{': ' + msg if msg else ''}"
 
 
-async def _mint(cred: dict, installation_id: int) -> tuple[str, float]:
-    """A fresh installation token and its expiry (epoch seconds)."""
+def _cause(e: Exception) -> str:
+    """Why a request failed, in words that cannot carry a secret: the HTTP library's error about a
+    malformed header quotes the header, so that kind is named by its type only."""
+    if isinstance(e, (httpx.LocalProtocolError, ValueError)):
+        return type(e).__name__
+    return str(e) or type(e).__name__
+
+
+def _body(r: httpx.Response) -> dict:
+    try:
+        body = r.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def positive_int(v) -> int | None:
+    """`v` as a GitHub id (a positive whole number, also as digits in text), else None."""
+    if isinstance(v, str) and v.isascii() and v.isdigit():
+        v = int(v)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+async def _mint(cred: dict, installation_id: int, permissions: dict | None = None,
+                repo: str | None = None) -> Grant:
+    """A fresh installation token. `permissions` narrows what it may do and `repo` (a repository
+    name without the owner) which repository it reaches; a broker is sent the permissions only.
+    PermissionsMissing when the App does not hold what was asked for."""
+    narrowed: dict = {"permissions": dict(permissions)} if permissions else {}
+    identity: dict = {}
     if cred.get("kind") == "app_broker":
         cfg = cred.get("config") or {}
         url, secret = cfg.get("token_url"), cfg.get("broker_secret")
@@ -125,28 +173,40 @@ async def _mint(cred: dict, installation_id: int) -> tuple[str, float]:
         async with httpx.AsyncClient(timeout=20) as cx:
             try:
                 r = await cx.post(url, headers={"Authorization": f"Bearer {secret}"},
-                                  json={"installation_id": installation_id})
+                                  json={"installation_id": installation_id, **narrowed})
             except Exception as e:
-                raise ValueError(f"could not reach the GitHub token broker: {e}")
+                raise ValueError(f"could not reach the GitHub token broker: {_cause(e)}")
+        if permissions and r.status_code == 409 \
+                and _body(r).get("detail") == "app_permissions_missing":
+            raise PermissionsMissing("the App lacks a permission that was asked for")
         if r.status_code != 200:
             raise ValueError(f"the GitHub token broker returned {r.status_code}")
-        body = r.json() or {}
+        body = _body(r)
+        slug = body.get("app_slug")
+        identity = {"app_slug": slug if isinstance(slug, str) and slug else None,
+                    "bot_id": positive_int(body.get("bot_id"))}
     else:
         cfg = _app_cfg(cred)
         token = app_jwt(cfg["app_id"], cfg["private_key"])
+        if repo:
+            narrowed["repositories"] = [repo]
         async with httpx.AsyncClient(timeout=20) as cx:
             try:
                 r = await cx.post(f"{_api(cred)}/app/installations/{installation_id}/access_tokens",
-                                  headers=_headers(bearer=token))
+                                  headers=_headers(bearer=token),
+                                  **({"json": narrowed} if narrowed else {}))
             except Exception as e:
-                raise ValueError(f"could not reach GitHub: {e}")
+                raise ValueError(f"could not reach GitHub: {_cause(e)}")
+        if permissions and r.status_code == 422:
+            forget_repos(cred["name"], installation_id)   # the repo list may be what is stale
+            raise PermissionsMissing("the App lacks a permission that was asked for")
         if r.status_code != 201:
             raise ValueError(_explain(r, f"installation {installation_id}"))
-        body = r.json() or {}
+        body = _body(r)
     tok = body.get("token")
-    if not tok:
+    if not tok or not isinstance(tok, str):
         raise ValueError("GitHub returned no installation token")
-    return tok, _parse_exp(body.get("expires_at"))
+    return Grant(tok, _parse_exp(body.get("expires_at")), **identity)
 
 
 def _parse_exp(s) -> float:
@@ -157,25 +217,37 @@ def _parse_exp(s) -> float:
         return time.time() + 3000      # GitHub says one hour; assume a little less
 
 
+async def installation_grant(cred: dict, installation_id: int, min_life: int = REFRESH_MARGIN,
+                             permissions: dict | None = None, repo: str | None = None) -> Grant:
+    """A Grant for `installation_id` with at least `min_life` seconds left, cached until then. With
+    neither `permissions` nor `repo` it holds the installation's full set; otherwise it is narrowed
+    to them (see _mint) and cached apart. Raises ValueError naming the cause."""
+    if cred.get("kind") == "app_broker":
+        repo = None                     # the broker's request has no repository field
+    key: tuple = (cred["name"], int(installation_id))
+    if permissions or repo:
+        key += (tuple(sorted((permissions or {}).items())), (repo or "").lower())
+    hit = _tokens.get(key)
+    if hit and hit.exp - time.time() > min_life:
+        return hit
+    lock = _locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        hit = _tokens.get(key)      # a refresh that finished while this one waited
+        if hit and hit.exp - time.time() > min_life:
+            return hit
+        grant = await _mint(cred, int(installation_id), permissions, repo)
+        if hit:
+            print(f"[github {cred['name']}] installation {installation_id}: token refreshed")
+        _tokens[key] = grant
+        return grant
+
+
 async def installation_token(cred: dict, installation_id: int,
                              min_life: int = REFRESH_MARGIN) -> str:
     """An installation token for `installation_id` with at least `min_life` seconds left (cached
     until then; an MCP connection that keeps one token for a whole run asks for more). Raises
     ValueError naming the cause (bad key, not installed, broker down)."""
-    key = (cred["name"], int(installation_id))
-    hit = _tokens.get(key)
-    if hit and hit[1] - time.time() > min_life:
-        return hit[0]
-    lock = _locks.setdefault(key, asyncio.Lock())
-    async with lock:
-        hit = _tokens.get(key)      # a refresh that finished while this one waited
-        if hit and hit[1] - time.time() > min_life:
-            return hit[0]
-        tok, exp = await _mint(cred, int(installation_id))
-        if hit:
-            print(f"[github {cred['name']}] installation {installation_id}: token refreshed")
-        _tokens[key] = (tok, exp)
-        return tok
+    return (await installation_grant(cred, installation_id, min_life)).token
 
 
 async def installation_repos(cred: dict, installation_id: int, use_cache: bool = True) -> list[dict]:
@@ -193,7 +265,7 @@ async def installation_repos(cred: dict, installation_id: int, use_cache: bool =
                 r = await cx.get(f"{_api(cred)}/installation/repositories", headers=_headers(token),
                                  params={"per_page": 100, "page": page})
             except Exception as e:
-                raise ValueError(f"could not reach GitHub: {e}")
+                raise ValueError(f"could not reach GitHub: {_cause(e)}")
             if r.status_code != 200:
                 raise ValueError(_explain(r, "the installation's repositories"))
             batch = (r.json() or {}).get("repositories") or []

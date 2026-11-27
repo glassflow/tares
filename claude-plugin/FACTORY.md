@@ -220,6 +220,35 @@ tares factory finish <project> "your words"
 
 Handing it to the crew again opens it. With no project left, stop the crew (below).
 
+## A GitHub token from the cell
+
+The cell can hand a crew a GitHub token for one repository, made from a github.com credential stored
+under Settings > GitHub, so a machine needs no GitHub secret of its own to ask for one. This is the
+cell's side only: it does not change how the stations sign in to GitHub today (`gh`, above).
+
+`GET /api/factory/github/token?repo=owner/name`, sent with a person's key (a station's key is its
+person's) or the cell's own token, answers `{token, expires_at, kind, login, name, email}` with
+`Cache-Control: no-store`. A read-only key and a project key are refused.
+
+- The repository must be named on the hand-over or on a ticket of a project that person can see. A
+  pull request link alone does not count.
+- A credential must follow the repository. A GitHub App is used before a personal token. A token from
+  an App (`kind` `app` or `app_broker`) has at least 10 minutes left and is limited to contents, pull
+  requests and checks (write) and metadata (read). A self-held App also limits it to that one
+  repository. With Tares Cloud's App the cell asks the token service for those permissions.
+- A personal token (`kind` `pat`) goes to an admin key only (or the cell's own token). It is handed
+  out as stored and `expires_at` is null. Another key gets `403 repo_not_allowed` for a repository
+  that no App credential follows.
+- `login`, `name` and `email` say who to commit as: the App's bot, or the token's user. A field the
+  cell cannot tell is null.
+- Refusals: `404 no_credential` (no github.com credential), `403 repo_not_allowed` (the repository or
+  the key does not qualify), `409 app_permissions_missing` (approve the permissions for the App on
+  GitHub), `400` (a `repo` that is not `owner/name`), `502` (GitHub or the token service failed).
+- With auth off, only a program that calls the cell by `localhost` or an IP address is answered:
+  a request from a browser, or to any other host name, is refused.
+
+The cell lists `github_token` in the capabilities it reports on `/health`.
+
 ## Stop and clean up
 
 - `tares factory crew halt "why"` stops merges, pushes and new sessions until `tares factory crew resume`.
