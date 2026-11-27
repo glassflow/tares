@@ -14,10 +14,11 @@ newest stored line instead.
 
 Run: python tests/test_ingest_runtime_slot.py
 """
-import asyncio, json, os, sqlite3, subprocess, sys, tempfile
+import asyncio, json, os, subprocess, sys, tempfile
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _env import clean_env
 
 import httpx
@@ -44,28 +45,26 @@ async def _wait(url):
     return False
 
 
-def _sessions(data: str) -> dict:
-    """{session: (line_count, source)} from the SQLite session store of the data dir."""
-    db = os.path.join(data, "tares.sqlite")
-    if not os.path.exists(db):
-        return {}
-    c = sqlite3.connect(db)
+def _stored(db_path: str, session: str) -> tuple[dict, list]:
+    """({session: (line_count, source)}, the tares_person of each line of `session`) from the store the
+    daemon used: opened in this process on the same file, so the Postgres harness finds its schema too."""
+    from sqlalchemy import select
+    from tares.session_store.tables import session_lines, sessions
+    from tares.store import Store
+    st = Store(db_path)
     try:
-        return {r[0]: (r[1], r[2]) for r in c.execute("select session, line_count, source from sessions")}
+        with st.sessions_db.read() as conn:
+            got = {r[0]: (r[1], r[2]) for r in conn.execute(
+                select(sessions.c.session, sessions.c.line_count, sessions.c.source)).all()}
+            cols = set(session_lines.c.keys())
+            people = []
+            if "labels" in cols:
+                for (lab,) in conn.execute(select(session_lines.c.labels).where(session_lines.c.session == session)):
+                    lab = json.loads(lab) if isinstance(lab, str) else (lab or {})
+                    people.append(lab.get("tares_person"))
+        return got, people
     finally:
-        c.close()
-
-
-def _person_lines(data: str, session: str) -> list:
-    c = sqlite3.connect(os.path.join(data, "tares.sqlite"))
-    try:
-        cols = [r[1] for r in c.execute("pragma table_info(session_lines)")]
-        if "labels" not in cols:
-            return []
-        return [json.loads(r[0] or "{}").get("tares_person")
-                for r in c.execute("select labels from session_lines where session = ?", (session,))]
-    finally:
-        c.close()
+        st.close()
 
 
 async def main():
@@ -141,11 +140,10 @@ async def main():
             proc.kill()
 
     print("== stored ==")
-    got = _sessions(data)
+    got, stamped = _stored(os.path.join(data, "t.duckdb"), "cc-1")
     ck("the Claude Code session is in the sessions table with its 2 lines",
        got.get("cc-1", (0, ""))[0] == 2 and got["cc-1"][1] == "claude_code", str(got))
     ck("the Codex session is stored under claude_code too", got.get("cx-1", (0, ""))[1] == "claude_code", str(got))
-    stamped = _person_lines(data, "cc-1")
     ck("every line carries the person of the key that sent it, as the old intake did",
        len(stamped) == 2 and all(s and (pid is None or s == pid) for s in stamped), f"{stamped} {pid}")
 
