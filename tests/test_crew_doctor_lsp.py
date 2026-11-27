@@ -338,7 +338,7 @@ def collect_with(tares_on: bool) -> list:
     d, _ = make(f"doc-collect-{tares_on}")
     seen = []
     for name in ("check_basics", "check_key_files", "check_sessions", "check_trust_and_plugin", "check_mcp",
-                 "check_crew_offline", "check_git", "check_gh", "check_stations", "check_cmux"):
+                 "check_github_console", "check_crew_offline", "check_git", "check_gh", "check_stations", "check_cmux"):
         setattr(d, name, lambda *a: None)
     d.check_tares = lambda c: tares_on
     d.check_crew = lambda c: None
