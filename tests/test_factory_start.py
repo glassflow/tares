@@ -4,7 +4,8 @@ GET /api/home, and hiding it per credential (POST and DELETE /api/home/start/hid
 Four steps in a fixed order with fixed words (TR-1312): Set up your factory, done on /setup, then three
 terminal commands (planning the first project comes after setup, on the home); each is done from one read of the store; the block hides when everything is done or
 when the caller hid it, for that caller only; the words pass tares/words.py. A terminal step keeps its
-command once done, so /setup can always show it.
+command once done, so /setup can always show it. A person joining a factory has five steps of their own
+(TR-1314); here are the steps and their words, tests/test_factory_start_joiner.py reads them from the home.
 
 Run: .venv/bin/python tests/test_factory_start.py
 """
@@ -40,6 +41,7 @@ except ImportError:
 import httpx
 from fastapi import FastAPI
 
+from tares import crew_onboarding
 from tares import factory_api
 from tares import factory_home as fh
 from tares import start_steps as ss
@@ -181,6 +183,100 @@ def units():
     ck("unhide shows it again and leaves no setting", ss.checklist(st, some, "ana")["show"] is True and st.d == {})
 
 
+JOIN_KEYS = ["settings", "install", "login", "crew", "project"]
+
+
+def joiner_units():
+    def done(c):
+        return [s["key"] for s in ss.joiner_steps(c) if s["done"]]
+
+    def row(c, key):
+        return next(s for s in ss.joiner_steps(c) if s["key"] == key)
+
+    joined = dict(ALL, own_settings_set=True, member_of_project=True)
+
+    print("== a joiner: the steps ==")
+    steps = ss.joiner_steps({})
+    ck("five steps in order", [s["key"] for s in steps] == JOIN_KEYS, [s["key"] for s in steps])
+    ck("their titles and what each gives, word for word",
+       [(s["title"], s["gets"]) for s in steps] == [
+           ("Choose how your crew works", "Your team's choices, or stricter ones for your machine."),
+           ("Install Tares", "The command that starts and watches the crew."),
+           ("Sign your machine in", "So the crew on your machine reports here."),
+           ("Start the crew",
+            "It reads your choices from this workspace and asks only what belongs to your machine."),
+           ("Join a project", "So the project shows up as yours, with its plan and tickets.")],
+       [(s["title"], s["gets"]) for s in steps])
+    ck("the first and the last are done in the console, the others in a terminal",
+       [s["where"] for s in steps] == ["workspace", "terminal", "terminal", "terminal", "workspace"])
+    ck("the three terminal steps are the owner's own, done or not",
+       all(ss.joiner_steps(c)[1:4] == ss.factory_steps(c)[1:4]
+           for c in ({}, {"cli_version": "1.2.3"}, {"machine_name": "example-laptop"}, ALL)))
+    ck("a ctx as a dict or as the dataclass is the same",
+       ss.joiner_steps(ss.StartCtx(**joined)) == ss.joiner_steps(joined))
+    ck("the owner's steps do not read a joiner's fields",
+       ss.factory_steps({"own_settings_set": True, "member_of_project": True}) == ss.factory_steps({}))
+
+    print("== a joiner: each rule of done ==")
+    ck("nothing known: nothing done", done({}) == [], done({}))
+    ck("settings of their own finish the settings step only",
+       done({"own_settings_set": True}) == ["settings"], done({"own_settings_set": True}))
+    ck("the team's choices and GitHub finish nothing",
+       done({"choices_made": True, "github_connected": True}) == [])
+    ck("a reported version finishes install only", done({"cli_version": "1.2.3"}) == ["install"])
+    ck("a machine that signed in finishes install and sign in",
+       done({"machine_name": "example-laptop"}) == ["install", "login"])
+    ck("a crew that is up finishes the settings step too, and leaves the project",
+       done({"crew_up": True}) == ["settings", "install", "login", "crew"], done({"crew_up": True}))
+    ck("a membership finishes the project step only", done({"member_of_project": True}) == ["project"])
+    ck("everything true: everything done, no action anywhere",
+       done(joined) == JOIN_KEYS and all(s["actions"] == [] for s in ss.joiner_steps(joined)))
+
+    print("== a joiner: what a person can do on each row ==")
+    ck("the settings step opens the choices",
+       row({}, "settings")["actions"] == [{"label": "Review the choices", "to": "/start#settings"}],
+       row({}, "settings")["actions"])
+    ck("the project step opens the team's projects",
+       row({}, "project")["actions"] == [{"label": "See the team's projects", "to": "/projects"}],
+       row({}, "project")["actions"])
+    ck("the two console steps have no command",
+       not any("command" in row(c, k) for c in ({}, joined) for k in ("settings", "project")))
+    for label, c in (("nothing done", {}), ("all done", joined)):
+        texts = strings(ss.joiner_steps(c))
+        found = {w for x in texts for w in words.offenders(x)}
+        ck(f"a joiner, {label}: no forbidden word and no em dash",
+           not found and not any(chr(0x2014) in x for x in texts), found)
+
+    print("== a joiner: the counts and hiding ==")
+    st = Store()
+    c = ss.checklist(st, ss.joiner_steps({"own_settings_set": True}), "ana")
+    ck("one of five, shown", (c["done"], c["total"], c["show"]) == (1, 5, True), c)
+    ss.hide(st, "ana")
+    ck("hidden for that person only",
+       ss.checklist(st, ss.joiner_steps({}), "ana")["show"] is False
+       and ss.checklist(st, ss.joiner_steps({}), "bo")["show"] is True)
+    ck("all five done: not shown", ss.checklist(Store(), ss.joiner_steps(joined), "ana")["show"] is False)
+
+    print("== the saved choices as words ==")
+    text = crew_onboarding.choices_text
+    none = {"autonomy": None, "releaser": None, "builders_max": None, "challenger": None}
+    for values, want in (
+            ({}, ""),
+            ({"autonomy": "L3-review"}, "You approve each merge"),
+            ({"autonomy": "L4-ship"}, "The crew merges on its own"),
+            ({"autonomy": "L3-review", "releaser": False}, "You approve each merge, no releases"),
+            ({"autonomy": "L3-review", "builders_max": 1}, "You approve each merge, 1 builder"),
+            ({"autonomy": "L3-review", "challenger": False}, "You approve each merge, second check off"),
+            ({"autonomy": "L4-ship", "releaser": True, "builders_max": 4, "challenger": True},
+             "The crew merges on its own, 4 builders, releases on, second check on")):
+        got = text({**none, **values})
+        ck(f"only what is saved: {want or '(nothing)'}", got == want, got)
+        ck(f"clean words: {want or '(nothing)'}", words.offenders(got) == [], words.offenders(got))
+    got = text(crew_onboarding.choices({"autonomy": "L4-ship", "releaser": True, "builders_max": 1}))
+    ck("the owner's three choices are worded as before",
+       got == "The crew merges on its own, 1 builder, releases on", got)
+
+
 async def main():
     from tares.daemon import make_app
     app = make_app()
@@ -304,6 +400,7 @@ async def main():
 
 
 units()
+joiner_units()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
