@@ -237,8 +237,7 @@ class TicketsGithub(tickets.TicketBackend):
 
     async def sync(self, project) -> int:
         """Retries the status changes waiting to reach GitHub, reads the project's issues into
-        its tickets, and
-        returns how many tickets GitHub owns in the project now. Raises GitHubTicketsError when
+        its tickets, and returns how many tickets GitHub owns in the project now. Raises GitHubTicketsError when
         GitHub cannot be read; the tickets stay as they were."""
         uid = self._project(project)
         await self.retry_pending(uid)

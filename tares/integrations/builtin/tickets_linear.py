@@ -184,8 +184,7 @@ class TicketsLinear(tickets.TicketBackend):
 
     async def sync(self, project) -> int:
         """Retries the status changes waiting to reach Linear, reads the project's issues into
-        its tickets, and
-        returns how many tickets Linear owns in the project now. Raises LinearError when Linear
+        its tickets, and returns how many tickets Linear owns in the project now. Raises LinearError when Linear
         cannot be read; the tickets stay as they were."""
         uid = self._project(project)
         await self.retry_pending(uid)

@@ -44,6 +44,7 @@ class FakeStore:
 
 CALLS = []
 BROKEN = set()
+SLOW = set()
 
 
 async def fake_sync(self, project):
@@ -51,6 +52,8 @@ async def fake_sync(self, project):
     CALLS.append((self.name, uid))
     if uid in BROKEN:
         raise RuntimeError(f"{uid}: the ticket system did not answer")
+    if uid in SLOW:
+        await asyncio.sleep(10)
     return 1
 
 
@@ -86,6 +89,49 @@ async def main():
     ck("GitHub's project list fails: Linear still syncs", sorted(done) == [("tickets:linear", "p1"),
                                                                           ("tickets:linear", "p2")], done)
     store.fail_github_list = False
+
+    print("== a slow project ==")
+    CALLS.clear()
+    SLOW.add("p2")
+    runner.SYNC_TIMEOUT_S = 0.2
+    done = await runner.sync_once(store)
+    ck("p2 hangs: it is cut off at the time limit and p1, p3 still sync",
+       sorted(done) == [("tickets:github", "p3"), ("tickets:linear", "p1")], done)
+    SLOW.clear()
+    runner.SYNC_TIMEOUT_S = 120.0
+
+    print("== backoff ==")
+    BROKEN.add("p1")
+    fails = runner._Failures()
+    await runner.sync_once(store, now=0.0, failures=fails)
+    CALLS.clear()
+    await runner.sync_once(store, now=30.0, failures=fails)
+    ck("a project that failed is not tried again before its backoff", ("linear", "p1") not in CALLS, CALLS)
+    await runner.sync_once(store, now=61.0, failures=fails)
+    ck("it is tried again once the backoff has passed", ("linear", "p1") in CALLS, CALLS)
+    ck("a second failure (at 61 s) doubles the wait to 120 s", fails.next_at[("tickets:linear", "p1")] == 61.0 + 120,
+       fails.next_at)
+    BROKEN.clear()
+    await runner.sync_once(store, now=10_000.0, failures=fails)
+    ck("a sync that works clears the backoff", ("tickets:linear", "p1") not in fails.count, fails.count)
+
+    print("== an integration that cannot be built ==")
+    from tares.integrations import registry
+
+    class Broken:
+        slot, name = "tickets", "broken"
+        def __init__(self, store):
+            raise ValueError("no settings")
+        def linked(self): return []
+        async def sync(self, p): return 0
+    real = registry.available
+    registry.available = lambda slot: [*real(slot), Broken]
+    try:
+        CALLS.clear()
+        done = await runner.sync_once(store)
+        ck("one integration that raises when built is skipped; the others sync", len(done) == 3, done)
+    finally:
+        registry.available = real
 
     print("== the task ==")
     CALLS.clear()

@@ -6711,7 +6711,10 @@ def make_app() -> FastAPI:
             _linear_err(e)
 
     async def _linear_sync_now(uid: str) -> None:
-        await _linear.sync_project(store, uid)   # its change events are not stored (TR-1806)
+        # the same lock the sync runner holds, so the two never write one project's tickets at once
+        from .integrations.sync import project_lock
+        async with project_lock("linear", uid):
+            await _linear.sync_project(store, uid)   # its change events are not stored (TR-1806)
 
     @app.post("/api/projects/{uid}/linear/sync")
     async def sync_linear_project(uid: str):
@@ -6749,7 +6752,10 @@ def make_app() -> FastAPI:
         _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
 
     async def _github_sync_now(uid: str) -> None:
-        await _gh_tickets.sync_project(store, uid)   # its change events are not stored (TR-1806)
+        # the same lock the sync runner holds, so the two never write one project's tickets at once
+        from .integrations.sync import project_lock
+        async with project_lock("github", uid):
+            await _gh_tickets.sync_project(store, uid)   # its change events are not stored (TR-1806)
 
     @app.post("/api/projects/{uid}/github/sync")
     async def sync_github_issues(uid: str):

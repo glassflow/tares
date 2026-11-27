@@ -1,7 +1,8 @@
 """Linear connector (TR-408): keeps the tickets of every project that uses Linear in sync, and
 emits one event per change (added, renamed, moved to another status, reordered, left the project).
 
-Provisioned by Tares when a project is linked to a Linear project; there is one per cell. It polls
+Made by Tares 1.x when a project was linked to Linear; Tares 2.0 makes none, and the runtime no longer
+polls it: the integration sync runner keeps the tickets in step (TR-1806). Goes with the connectors (TR-1811). It polls
 with the cell's Linear connection (Settings), never with a credential of its own, and only reads.
 The sync itself lives in tares/linear.py so linking a project can run it at once.
 """

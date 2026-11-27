@@ -18,6 +18,8 @@ from .envelope import now_utc
 from . import metrics
 from .triggers import clear_cooldowns, eval_triggers
 
+# Catalog sources of an older cell that the integrations sync themselves now (TR-1806): never polled.
+SYNCED_BY_INTEGRATIONS = frozenset({"linear", "github_issues"})
 CODEX_INGEST = "codex"   # /ingest/codex: a crew's record of its Codex stations (tares.session_codex)
 
 
@@ -76,6 +78,8 @@ class Runtime:
         self.sources.clear()
 
     def _start(self, cfg: SourceCfg) -> None:
+        if cfg.connector in SYNCED_BY_INTEGRATIONS:
+            return   # kept in step by the integration sync runner now (TR-1806), never polled
         rt = SourceRuntime(cfg=cfg)
         mode = SPECS.get(cfg.connector, {}).get("mode")
         if cfg.paused:

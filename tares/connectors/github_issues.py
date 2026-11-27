@@ -2,7 +2,8 @@
 in sync, and emits one event per change (added, renamed, moved to another status, reordered,
 left the project).
 
-Provisioned by Tares when a project is linked to a repo and issue label; there is one per cell.
+Made by Tares 1.x when a project was linked to GitHub Issues; Tares 2.0 makes none, and the runtime no
+longer polls it: the integration sync runner keeps the tickets in step (TR-1806). Goes with the connectors (TR-1811).
 It polls with the cell's stored GitHub credentials, never one of its own, and only reads. The
 sync itself lives in tares/github_tickets.py so linking a project can run it at once.
 """

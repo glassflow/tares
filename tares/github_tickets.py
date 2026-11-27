@@ -3,9 +3,9 @@
 When a project uses GitHub Issues, GitHub owns its tickets. Sessions create and change the issues
 with `gh`; Tares keeps a record of each (tickets table, owner 'github') and notices changes by
 polling, since a local cell has no public address for GitHub's webhooks. A project is linked to
-one repo and one issue label: every issue of the repo carrying that label is a ticket. Each change
-is also an event on the `github_issues` source, so it shows on the timeline and triggers can
-react.
+one repo and one issue label: every issue of the repo carrying that label is a ticket. The
+integration sync runner (tares/integrations/sync.py) calls the sync once a minute; the change events
+it returns are not stored (Tares 2.0, TR-1806).
 
 Credentials are the cell's stored GitHub ones (Settings > GitHub), github.com only. Each is tried
 until one can read the repo; the one that worked is remembered on the link.
