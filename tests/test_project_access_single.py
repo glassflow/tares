@@ -1,6 +1,6 @@
 """Core with no licence: changing a project's lead, privacy and members belongs to ee (TR-921).
 
-Without an ee team, `PATCH /api/projects/{uid}` and the two `/members` routes answer 402
+Without an ee team, `PATCH /api/projects/{uid}`, the two `/members` routes and `/join` answer 402
 `licence_required` (they are FALLBACKS rows, so the person sees "needs a licence" and not a 404 or
 the console page), and the MCP tool `set_project_access` is not in the tool list. What stays in
 core keeps working: the person who makes a project leads it, and a project shows its lead, scope
@@ -76,7 +76,8 @@ async def routes():
                 ("make it private", "PATCH", f"/api/projects/{uid}", {"scope": "private"}),
                 ("hand it to a lead", "PATCH", f"/api/projects/{uid}", {"lead_person_id": mine}),
                 ("add a member", "POST", f"/api/projects/{uid}/members", {"person_id": mine}),
-                ("remove a member", "DELETE", f"/api/projects/{uid}/members/{mine}", None)):
+                ("remove a member", "DELETE", f"/api/projects/{uid}/members/{mine}", None),
+                ("join it", "POST", f"/api/projects/{uid}/join", None)):
             r = await cx.request(method, path, json=body)
             ck(f"{label}: {method} answers 402 licence_required with {{code, message, url}}", exact_402(r),
                f"{r.status_code} {r.text[:100]}")

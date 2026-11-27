@@ -901,7 +901,7 @@ export interface Project {
   ready_to_close?: boolean;            // a software factory project, still open, whose tickets are all merged or otherwise finished (GET /api/projects and the summary)
 }
 export type ProjectScope = "team" | "private";
-export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
+export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" | "self" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
 // `progress`): merged only for a merge, closed for done without one, queued (waits on a ticket)
 // apart from stuck (a station stopped); total is every group but canceled

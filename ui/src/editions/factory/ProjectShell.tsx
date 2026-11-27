@@ -9,7 +9,8 @@ import { placeBeforeProject } from "../settingsBack";
 import { useOwnMenu } from "../Shell";
 import { useSample } from "../sample";
 import {
-  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectIcon, setProjectLead,
+  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, joinProject, setLater, setProjectIcon,
+  setProjectLead,
   type FactoryProjectData, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
 import type { HomeItem } from "./home.types";
@@ -99,6 +100,8 @@ export interface ProjectActions {
   accept: (m: ProjectMilestone) => Promise<void>;
   lead: (person: string) => Promise<void>;
   add: (person: string) => Promise<void>;
+  /** The person looking puts themself on the project. */
+  join: () => Promise<void>;
   later: (on: boolean) => Promise<void>;
   /** Left out on a sample: there is no cell to keep the icon. */
   icon?: (next: string | null) => Promise<void>;
@@ -146,6 +149,7 @@ function useProject(id: string, onOther?: () => void) {
     accept: (m) => live(() => acceptMilestone(id, m.id))(),
     lead: (person) => live(() => setProjectLead(id, person))(),
     add: (person) => live(() => addProjectMember(id, person))(),
+    join: live(() => joinProject(id)),
     later: (on) => live(() => setLater(id, on))(),
     icon: sample ? undefined : async (next) => { await setProjectIcon(id, next); reload(); },
     remove: async () => {

@@ -99,8 +99,8 @@ class Engine:
 
     def _who(self, inst: dict) -> tuple[dict | None, list[dict]]:
         """A project's lead ({id, name}, None when it has none) and its members: the lead first
-        with reason "lead", then the stored ones ("manual" or "ticket"). Not enforced anywhere
-        yet; this is what the project says."""
+        with reason "lead", then the stored ones ("manual", "ticket" or "self"). This is what the
+        project says; who may do what is asked of the store."""
         people = {p["id"]: p for p in self.store.list_people()}
 
         def ref(pid):

@@ -79,7 +79,12 @@ export function ChangeLead({ id, lead, people, onDone }: {
 
 const REASON: Record<ProjectMember["reason"], string> = {
   lead: "lead", manual: "added by hand", ticket: "assignee of a ticket",
+  self: "joined by themselves, no secrets",
 };
+
+/** `local`, the one person of a cell with auth off, has the secrets however they joined. */
+const reasonOf = (m: ProjectMember) =>
+  m.reason === "self" && m.id === "local" ? "joined by themselves" : REASON[m.reason] ?? m.reason;
 
 /** "Lead: <name>" with its controls, under the project's name. */
 export function ProjectAccess({ ctx }: { ctx: Ctx }) {
@@ -147,7 +152,8 @@ export function ProjectMembers({ ctx }: { ctx: Ctx }) {
   const [busy, setBusy] = useState<string>();
   const [err, setErr] = useState<unknown>();
   const members = ctx.s.members ?? [];
-  const onIt = new Set(members.map((m) => m.id));
+  // someone who joined by themselves can still be added: that is what gives them the secrets
+  const onIt = new Set(members.filter((m) => m.reason !== "self").map((m) => m.id));
   const candidates = list.filter((p) => !onIt.has(p.id));
   const chosen = candidates.some((p) => p.id === pick) ? pick : "";
 
@@ -172,7 +178,7 @@ export function ProjectMembers({ ctx }: { ctx: Ctx }) {
             {members.map((m) => (
               <tr key={m.id}>
                 <td><strong>{m.name}</strong></td>
-                <td className="help">{REASON[m.reason] ?? m.reason}</td>
+                <td className="help">{reasonOf(m)}</td>
                 <td style={{ textAlign: "right" }}>
                   {canMembers && m.reason !== "lead" && (
                     <button type="button" className="danger" disabled={busy === m.id}
