@@ -22,6 +22,11 @@ for: one that fails says why in its results file, and is worth a second run befo
 the checkout's interpreter and its folder first on PATH, so a station's `tares` is this checkout's. Without
 TARES_PROBE_CODEX it says how to run it and fails.
 
+probe_asks (TR-1593) is not run: it waits for a station to stop on an approval its sandbox needs, and since
+TR-1599 a station is started with Codex's own reviewer, which decides such a request by the station's rules
+(probe_review runs that). The desk still takes a station's questions in words, which test_crew_codex_station
+covers. Run it by itself to look at the desk path of a station started before TR-1599.
+
 The acceptance runs of the whole crew (a plan to a merge on a disposable cell and repository) are by hand too;
 their results are on TR-1598, TR-1599 and TR-1600.
 """
@@ -42,7 +47,6 @@ ORDER = [
     ("probe_guard", "TR-1576: halt mid-turn, wrong role, heavy commands, MCP tools, helpers, typed input, broken hooks"),
     ("probe_transport", "TR-1576: socket against stdio, a controller lost, two controllers, a crash, crew down"),
     ("probe_mcp_station", "TR-1596: Tares over MCP as the station, a wrong key, no key, the endpoint down"),
-    ("probe_asks", "TR-1593: a question on a real desk: approved, declined, and no longer asked"),
     ("probe_record", "TR-1595: recording by visits on a cell, claims matched against real commands"),
     ("probe_pace_station", "TR-1597: the account's own limits through the pace step and a cell"),
     ("probe_review", "TR-1599: Codex's reviewer with a station's rules, a grant through a restart, halt first"),
