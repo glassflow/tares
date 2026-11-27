@@ -156,6 +156,12 @@ def writers_keep_the_totals():
     agree("an unpriced reply is counted as unpriced")
     s.record_reply_usage("s5", "no-clock", None, "claude-opus-5-5", None, None, {"input_tokens": 4})
     agree("a reply with no time is in the all-time totals only")
+    # a Codex station's replies are written by another writer, with only the counts Codex gave (TR-1595)
+    s.record_reported_usage("s3", "codex:usage:1", T0 + timedelta(hours=33), "gpt-5.6-luna", None,
+                            {"input_tokens": 1200, "output_tokens": 300})
+    agree("a reply a runtime reported is in the totals")
+    s.record_reported_usage("s3", "codex:usage:2", None, "gpt-5.6-luna", None, {"output_tokens": 9})
+    agree("so is one with no time and a count that was not reported")
 
     s._usage_forget_project("p3")
     agree("a project forgotten moves its replies to the session's own project")

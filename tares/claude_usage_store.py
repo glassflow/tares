@@ -265,8 +265,12 @@ class ClaudeUsageStore:
             session=session, message=message, replied_at=at, model=model or None, project=project or None,
             subagent=None, input_tokens=i, output_tokens=o, cache_write_tokens=cw, cache_read_tokens=cr,
             cache_write_1h_tokens=None if cw is None else 0, cost_usd=cost)
-        with self.sessions_db.begin() as conn:
+        with self.sessions_db.begin() as conn:       # the reply and its hour's total, one transaction
+            hourly.hold(self, conn)
+            covered = hourly.lock_covered(self, conn, [session])
             conn.execute(stmt.on_conflict_do_nothing(index_elements=["session", "message"]))
+            if covered:
+                hourly.after_reply(self, conn, session, message)
 
     def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
         """The status line's report and the person of the credential that sent it; an older one
