@@ -48,6 +48,7 @@ CREW_SETTING = "crew_settings"
 CLAUDE_RETRY_SETTING = "crew_claude_retry"   # stations the watch is retrying onto a new Claude Code
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
 GRANTS_MIGRATED_SETTING = "grants_migrated"   # set once the old grants docs became rows (TR-630)
+NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."
 
 
 def caller(request: Request) -> dict:
@@ -1412,8 +1413,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         system credential) is filed under `local`, so a caller with no person is `local` too."""
         p = h.current_person(request)
         return p["id"] if p else "local"
-
-    NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."
 
     def work_person(request: Request) -> dict:
         """The person whose work the caller means (TR-633): the key's person; the system

@@ -106,6 +106,8 @@ NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
 # home 186 to 94, projects 155 to 76, setup 128 to 94, setup progress 120 to 90, crew 85 to 53 (Setup
 # keeps its state-table reads there: they cost no round trip and their writes are not watched). The
 # budgets are those counts plus 2 percent. The project and ticket pages keep no reads yet.
+# TR-1719 (the joiner block of the home): a person other than the owner reads the cell's own crew
+# settings once, apart from the settings that lay their own values over them.
 _TODAY = {"home": 54, "projects": 44, "project": 90, "ticket": 28, "raw_tickets": 9, "raw_ticket": 14}
 # The Projects list with 12 finished projects added to the cell (the team path, TR-1503: a finished
 # project's row and its "tickets yours" line come from grouped counts, not its tickets): at most

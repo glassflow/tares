@@ -128,6 +128,7 @@ test_factory_crew_standup
 test_factory_desk
 test_factory_docs_page
 test_factory_home
+test_factory_home_joiner
 test_factory_home_single
 test_factory_home_waiting
 test_factory_ledger
@@ -158,6 +159,7 @@ test_github
 test_github_app
 test_github_credentials
 test_github_tickets
+test_github_token_endpoint
 test_goal_first
 test_grants_single
 test_guardrail_pairs
