@@ -2,7 +2,8 @@
 session when it sees the set_session_flow call, stamps flow on every line and writes the
 session_flow / session_end lines; the challenger hooks review plans and commits with a fake Codex
 (and with Grok against a fake xAI endpoint), block and loop like codex-review, ship challenge events to a fake Tares, and stay inert for an
-unmarked session; SessionStart hands accepted memory to Claude.
+unmarked session; SessionStart prints nothing (2.0 has no memory block) and asks the cell for nothing
+but its own announce.
 Run: .venv/bin/python tests/test_plugin_challenger.py   (no Codex, no xAI, no daemon, no network)
 """
 import json
@@ -34,6 +35,8 @@ def check(label, cond, detail=""):
 
 # ── a fake Tares: records what lands on /ingest/claude_code, serves memory ───
 INGESTED = []
+GETS = []                                  # every GET path the shipper sent
+SOURCE_POSTS = []                          # POST /api/sources (2.0 has no source catalog)
 STOPPED = []
 MEMORY = [{"key": "shop", "event_type": "decision", "text": "The shop repo runs tests with make test."},
           {"key": "other", "event_type": "decision", "text": "not this repo"},
@@ -48,6 +51,7 @@ class FakeTares(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        GETS.append(self.path)
         if self.path.startswith("/api/sources/agent_memory/events"):
             body = json.dumps(MEMORY).encode()
             self.send_response(200); self.send_header("content-type", "application/json")
@@ -72,6 +76,7 @@ class FakeTares(BaseHTTPRequestHandler):
             STOPPED.append(json.loads(raw))
             self.send_response(200); self.end_headers(); self.wfile.write(b"{}"); return
         if self.path == "/api/sources":
+            SOURCE_POSTS.append(raw)
             self.send_response(409); self.end_headers(); return
         if self.path == "/ingest/claude_code":
             for line in raw.splitlines():
@@ -174,11 +179,12 @@ def main():
                 "tool_input": {"command": f"git commit -m '{msg}'"},
                 "tool_response": {"stdout": f"[main abc] {msg}", "stderr": ""}}
 
-    print("== session start: memory ==")
+    print("== session start: no memory block ==")
     o, p = run(SHIP, {**hook, "hook_event_name": "SessionStart", "source": "startup"}, env)
-    check("accepted memory for this repo printed as context",
-          "make test" in p.stdout and "not this repo" not in p.stdout and "not accepted" not in p.stdout,
-          p.stdout[:300] + p.stderr[:300])
+    check("SessionStart prints no memory block and reads no source events",
+          "make test" not in p.stdout and not any(g.startswith("/api/sources") for g in GETS),
+          p.stdout[:300] + p.stderr[:300] + str(GETS))
+    check("the shipper never creates a source", SOURCE_POSTS == [], str(SOURCE_POSTS[:1]))
 
     print("== unmarked session ==")
     with open(transcript, "a") as f:
