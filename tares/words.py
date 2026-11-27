@@ -33,6 +33,24 @@ def load() -> dict:
     return _data
 
 
+# The crew's autonomy levels, as a sentence about a team's choice says them.
+CREW_AUTONOMY = {"L3-review": "you approve each merge", "L4-ship": "the crew merges on its own"}
+
+
+def team_choices(team: dict, mine: dict) -> str:
+    """The line `crew up` says before its questions: the team's autonomy and number of builders, each
+    only when the team set it and the person's crew uses it (`mine`, the effective settings, may be
+    stricter than the team's). "" when neither."""
+    parts = []
+    autonomy = team.get("autonomy")
+    if isinstance(autonomy, str) and autonomy in CREW_AUTONOMY and mine.get("autonomy") == autonomy:
+        parts.append(CREW_AUTONOMY[autonomy])
+    n = team.get("builders_max")
+    if n is not None and mine.get("builders_max") == n:
+        parts.append(f"{n} builder{'' if n == 1 else 's'}")
+    return f"Using your team's choices: {', '.join(parts)}." if parts else ""
+
+
 def _compiled() -> list:
     global _rules
     if _rules is None:

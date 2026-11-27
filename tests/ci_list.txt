@@ -84,6 +84,7 @@ test_crew_scratch_home
 test_crew_session
 test_crew_session_brain
 test_crew_session_start
+test_crew_settings_missing
 test_crew_setup_apply
 test_crew_setup_contract
 test_crew_standup
