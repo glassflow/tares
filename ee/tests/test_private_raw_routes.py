@@ -5,7 +5,7 @@ Lee leads Zephyrwatch, a private project that holds a source (zephyr-logs), a wa
 doc and findings on the service zephyr-api. Kim is a teammate with an admin key who is not on it.
 Every route below answers for the person asking (the AI SRE routes this test also covered went
 with the edition, TR-1809): usage does not count its source, the dependents of its source and trigger are unknown, and a use
-of its skill or doc is a 404. Lee and the cell's own key still see all of it, and an object shared
+of its doc is a 404 (the skill routes went in TR-1810). Lee and the cell's own key still see all of it, and an object shared
 with a project Kim can see stays visible to her.
 
 Run: .venv/bin/python ee/tests/test_private_raw_routes.py
@@ -202,12 +202,6 @@ async def main():
            f"{r.status_code} {r.text[:200]}")
 
         print("== use ==")
-        r = await call("kim", "POST", f"/api/projects/{open_uid}/skills/zephyr-playbook/use")
-        ck("using the private skill is a 404", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
-        ck("and the open project does not get it", "zephyr-playbook" not in
-           [s["name"] for s in store.list_skills(open_uid)])
-        r = await call("kim", "POST", f"/api/projects/{open_uid}/skills/shared-playbook/use")
-        ck("a skill both projects have can be used", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
         r = await call("kim", "POST", f"/api/projects/{open_uid}/docs/{doc}/use")
         ck("using the private doc is a 404", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
         ck("and the open project does not get it", doc not in [d["id"] for d in store.list_docs(open_uid)])

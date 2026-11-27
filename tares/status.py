@@ -165,22 +165,7 @@ def collect(base: str, token: str | None = None, mcp_url: str | None = None,
         names = [p.get("name") for p in projects["projects"]]
         st["projects"] = {"count": len(names), "names": names}
 
-    triggers = _get(base, "/api/triggers", token)
-    if isinstance(triggers, list):
-        st["triggers"]["enabled"] = sum(1 for t in triggers if not t.get("paused"))
-    dispatches = _get(base, "/api/activity/dispatches?limit=1", token)
-    if isinstance(dispatches, list) and dispatches:
-        st["triggers"]["last_fired_at"] = dispatches[0].get("fired_at")
-
-    agents = _get(base, "/api/agents/builtin", token)
-    if isinstance(agents, dict):
-        rows = agents.get("agents") or []
-        enabled = [a for a in rows if a.get("enabled")]
-        st["agents"] = {"configured": len(rows), "enabled": len(enabled),
-                        "model": next((a.get("model") for a in enabled if a.get("model")), None)
-                        or agents.get("default_model"),
-                        "key_configured": bool(agents.get("key_configured"))}
-        st["slack"]["configured"] = bool(agents.get("slack_workspace"))
+    # triggers and Tares agents went (TR-1810): their parts of the status keep their empty defaults
 
     if mcp_url:
         st["mcp"]["running"] = _probe(mcp_url)

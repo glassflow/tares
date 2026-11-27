@@ -59,7 +59,7 @@ def _spy(name, real):
     return read
 
 
-for _name in ("aggregate", "newest_times", "hours", "entities"):
+for _name in ("aggregate", "newest_times", "hours"):
     setattr(session_digest, _name, _spy(_name, getattr(session_digest, _name)))
 
 
@@ -231,15 +231,17 @@ def rhythm(s, source=SRC) -> dict:
     return out
 
 
+def by_label(s, label, sources, since=None) -> list:
+    """The lines counted by one label's values: the read the entity listing made through the digest
+    (the listing went with entity counts, TR-1810), as an aggregate grouped by the label."""
+    got = s.aggregate(list(sources), None, "count", since or LONG, group_by=label)
+    return sorted(got.items(), key=repr)
+
+
 def labels_read(s) -> dict:
     out = {}
     for label in ("repo", "key_value", "flow", "type", "branch"):
-        out[label] = listing(s._list_entities_scan(label, [SRC], 50))
-        out[f"{label}, every source"] = listing(s._list_entities_scan(label, None, 50))
-        s._saved_counts.clear()          # each side counts its own, not the saved ones (TR-1716)
-        out[f"{label}, hidden project"] = listing(s.list_entities(label, [SRC], exclude=HIDDEN))
-        out[f"{label}, hidden, shared unknown"] = listing(s.list_entities(
-            label, [SRC], exclude={"ids": ["uc_hidden"], "names": ["secret"]}))
+        out[label] = by_label(s, label, [SRC])
     return out
 
 
@@ -268,7 +270,7 @@ def quick(s) -> dict:
     out["gaps"] = gaps(s, SRC, LONG)
     out["hours"] = sorted(s.recent_ingest_hours(SRC, LONG))
     for label in ("repo", "key_value"):
-        out[label] = listing(s._list_entities_scan(label, [SRC], 50))
+        out[label] = by_label(s, label, [SRC])
     return out
 
 
@@ -292,8 +294,7 @@ def equality():
     USED.clear()
     got = same(s, "every read, factory cell", everything)
     ck("the digest answered them (all but the text conditions)",
-       USED["aggregate", True] > 500 and USED["newest_times", True] and USED["hours", True]
-       and USED["entities", True], USED)
+       USED["aggregate", True] > 500 and USED["newest_times", True] and USED["hours", True], USED)
     ck("and they are not empty", sum(1 for v in got.values() if v) > len(got) * 0.5,
        (sum(1 for v in got.values() if v), len(got)))
     want = everything(p)
@@ -481,7 +482,7 @@ def two_sources():
                 out[f"{k} by repo"] = s.aggregate(srcs, None, "count", since, group_by="repo")
                 out[f"{k} window"] = len(s.read_window(srcs, None, since, cap=100))
             for label in ("repo", "key_value"):
-                out[f"{name} {label}"] = [e[:2] for e in listing(s._list_entities_scan(label, srcs, 50))]
+                out[f"{name} {label}"] = by_label(s, label, srcs)
         for source in (SRC, OTHER):
             out[f"{source} gaps"] = gaps(s, source, LONG)
             out[f"{source} hours"] = sorted(s.recent_ingest_hours(source, LONG))
@@ -581,7 +582,7 @@ def bounded():
 
     def read():
         agg(s, LONG)
-        s._list_entities_scan("repo", [SRC], 10)
+        by_label(s, "repo", [SRC])
 
     old(200, 0)
     read()
@@ -806,7 +807,7 @@ def full_cache():
     def only(*sids):
         return [count(where={"key_value": sid}) for sid in sids]
 
-    count(), count(group_by="repo"), s._list_entities_scan("repo", [SRC], 10)
+    count(), count(group_by="repo"), by_label(s, "repo", [SRC])
     q = list(digest(s).queries.values())
     ck("the queries' memos and shares are counted", digest(s).query_bytes > 0
        and any(x.memo for x in q) and any(x.sessions for x in q) and sound(s) == ok, sound(s))
@@ -845,7 +846,7 @@ def full_cache():
         for i in range(30):                              # many shapes
             count(where={"repo": "shop"}, group_by="repo",
                   filters=[f("branch", "neq", f"b{i}")])
-            s._list_entities_scan("repo", [SRC], 10 + i)
+            by_label(s, "repo", [SRC])
         ck("many query shapes stay within their room", sound(s) == ok, sound(s))
         forget(s)
         session_digest.warm(s)
@@ -860,7 +861,7 @@ def full_cache():
             try:
                 while not stop.is_set():
                     count(), only(mine[n], hot), count(OTHER)
-                    s._list_entities_scan("repo", [SRC], 10)
+                    by_label(s, "repo", [SRC])
             except Exception as e:
                 failed.append(f"{type(e).__name__}: {e}")
 
@@ -937,7 +938,7 @@ def threads():
                 agg(s, LONG)
                 agg(s, NOW - timedelta(seconds=600), shape=SHAPES["by repo"])
                 s.recent_ingest_gaps(SRC, LONG)
-                s._list_entities_scan("repo", [SRC], 10)
+                by_label(s, "repo", [SRC])
         except Exception as e:
             failed.append(f"{type(e).__name__}: {e}")
 
@@ -987,8 +988,8 @@ def two_processes():
     ck("and the second one's at its next read", got == {"S": 2, "theirs": 1} and kept is not None,
        (got, kept))
     got = (agg(a, LONG, shape=SHAPES["by repo"]), gaps(a, SRC, LONG),
-           listing(a._list_entities_scan("repo", [SRC], 10))[1][:2])
-    ck("in every read", got == ({"a": 1, "b": 2}, [100.0, 100.0], ("b", 2)), got)
+           by_label(a, "repo", [SRC]))
+    ck("in every read", got == ({"a": 1, "b": 2}, [100.0, 100.0], [("a", 1), ("b", 2)]), got)
     written = session_ingest.record_first(b, [one("S", ago=50, repo="b")])
     agg(a, LONG)
     session_ingest.take_back(b, written)

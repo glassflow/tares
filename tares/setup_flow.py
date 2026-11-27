@@ -20,8 +20,10 @@ import re
 from datetime import datetime, timezone
 
 from . import goal as G
-from . import skills as _skills
-from .builtin_agents import CONCLUDE
+from .config import SkillError, validate_skill
+
+# the word an agent prompt names to be offered the conclude tool (it was builtin_agents.CONCLUDE)
+CONCLUDE = "conclude"
 from .config import (CatalogError, _source_from_dict, _trigger_from_dict, check_handoff_targets,
                      normalize_handoffs, normalize_trigger_description, parse_duration,
                      validate_agent_dict, validate_slack_channel,
@@ -35,6 +37,28 @@ MAX_AGENTS = 3
 MAX_ROUNDS = 4            # model calls for one plan: reads, then the forced propose_plan
 PRACTICE_WINDOW_S = 600   # an outside agent's finding this soon after a practice firing is practice
 READ_TOOL_NAMES = ("list_connectors", "list_sources", "source_fields", "list_templates")
+# The planner's read tools, in the shape a provider takes (the Ask agent's own list held them).
+READ_TOOLS = (
+    {"name": "list_sources",
+     "description": "List every configured source with its connector, type and live health "
+                    "(status, events ingested, last error). Start here to see what's flowing.",
+     "input_schema": {"type": "object", "properties": {}}},
+    {"name": "list_connectors",
+     "description": "List the connector types and their config/fields/mode.",
+     "input_schema": {"type": "object", "properties": {}}},
+    {"name": "source_fields",
+     "description": "Profile a source's normalized fields from real data: each field's coverage "
+                    "(how many sampled events carry it), distinct count, and top values. Use this to "
+                    "judge whether a field is a good key, or to spot a sparse/empty one.",
+     "input_schema": {"type": "object", "properties": {
+         "name": {"type": "string"}}, "required": ["name"]}},
+    {"name": "list_templates",
+     "description": "The project templates installed here: key, title, what each sets up, its "
+                    "parameters (with help text, required, secret) and the sentence a user would "
+                    "type to get it. A template creates its whole project in one step; prefer one "
+                    "over assembling the same thing from parts.",
+     "input_schema": {"type": "object", "properties": {}}},
+)
 KNOB_IDS = ("threshold", "window_minutes", "cooldown_minutes", "every_minutes")
 NO_PROVIDER = ("Add a model provider under Settings to plan a project; or start from a "
                "template.")
@@ -194,8 +218,7 @@ GITHUB_REPOS_SHOWN = 20
 
 def read_tools(github: bool = False) -> list:
     """The planner's reads; `github` (a GitHub credential is stored) adds github_repo."""
-    from .agent import TOOLS
-    return [t for t in TOOLS if t["name"] in READ_TOOL_NAMES] + ([GITHUB_REPO_TOOL] if github else [])
+    return list(READ_TOOLS) + ([GITHUB_REPO_TOOL] if github else [])
 
 
 _REPO_LINES: dict = {}            # {"at": monotonic, "creds": key, "repos": [...]}
@@ -858,9 +881,9 @@ def _normalize(raw, store, catalog, prev: dict | None,
         sk["name"] = _unique(slug(orig) or f"skill-{i + 1}", seen_skills | set(all_skills))
         seen_skills.add(sk["name"])
         try:
-            _n, sk["description"], sk["body"] = _skills.validate(sk["name"], sk.get("description"),
+            _n, sk["description"], sk["body"] = validate_skill(sk["name"], sk.get("description"),
                                                                  sk.get("body"))
-        except _skills.SkillError as e:
+        except SkillError as e:
             probs.add(f"skills.{sk['key']}", _plain(e), f"Skill {sk['name']}")
         skills.append(sk)
     out["skills"] = skills
@@ -1181,13 +1204,8 @@ async def model_plan(provider, model: str, first_message: str, store, catalog, r
     mistakes, up to FIX_ROUNDS retries with them. Raises SetupError(422) when what is left has
     nothing to show. `who`: the choice the person made,
     which the plan must keep. `progress(text, running)` hears each step as it happens."""
-    from . import tracing as _tracing
-    with _tracing.run_span(tracer, "project-setup", kind="CHAIN", agent="project-setup") as obs:
-        obs.set_input(first_message)
-        plan = await _model_plan(provider, model, first_message, store, catalog, read_tool,
-                                 tracer, on_usage, prev, who, progress)
-        obs.set_output(json.dumps(plan, default=str)[:4000])
-        return plan
+    return await _model_plan(provider, model, first_message, store, catalog, read_tool,
+                             tracer, on_usage, prev, who, progress)
 
 
 # How many times the planner is handed the check's findings to fix before the plan is shown with
@@ -1536,12 +1554,8 @@ def connect_info(store, catalog, uid: str, plan: dict, base: str, key: dict | No
     if key is not None or (plan.get("who") == "own" and plan.get("own_agent")):
         secret = key["secret"] if key is not None else None
         url = mcp_url(base)
-        wake = (plan.get("own_agent") or {}).get("wake") or "webhook"
-        hint = (f"Your agent subscribes once: POST {base}/api/projects/{uid}/subscribe with the "
-                "body {\"url\": \"<its webhook>\"} and the key. Tares then posts to that URL each "
-                "time the project wakes." if wake == "webhook" else
-                f"Your agent checks the project with GET {base}/api/projects/{uid}/timeline and "
-                f"records what it finds with POST {base}/api/projects/{uid}/findings, both "
+        # subscribing and recording findings went with triggers and agents (TR-1810)
+        hint = (f"Your agent checks the project with GET {base}/api/projects/{uid}/timeline "
                 "with the key.")
         own = {"key": secret, "mcp_url": url,
                "claude_command": (f"claude mcp add --transport http tares {url} --header "

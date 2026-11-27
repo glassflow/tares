@@ -611,10 +611,45 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True, hide
 DEFAULT_PROJECT_NAME = "Default"
 
 
+# A skill: a name, a one-paragraph description and a markdown body, kept per project. Agents read
+# them once; the catalog still imports and templates still plan them until the catalog goes.
+SKILL_NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+SKILL_MAX_DESCRIPTION = 1024
+SKILL_MAX_BODY_BYTES = 64 * 1024
+
+
+class SkillError(ValueError):
+    pass
+
+
+def validate_skill(name, description, body) -> tuple[str, str, str]:
+    """The skill's fields, trimmed, or a SkillError saying what is wrong in plain words."""
+    name = str(name or "").strip()
+    if not SKILL_NAME_RE.match(name):
+        raise SkillError("name must be 1 to 64 lowercase letters, digits or dashes, "
+                         f"got {name!r}")
+    description = str(description or "").strip()
+    if not description:
+        raise SkillError(f"skill {name!r}: a description is required")
+    if len(description) > SKILL_MAX_DESCRIPTION:
+        raise SkillError(f"skill {name!r}: the description is {len(description)} characters, "
+                         f"the limit is {SKILL_MAX_DESCRIPTION}")
+    if re.search(r"\n\s*\n", description):
+        raise SkillError(f"skill {name!r}: the description must be one paragraph; put the "
+                         "detail in the body")
+    body = str(body or "").strip("\n")
+    if not body.strip():
+        raise SkillError(f"skill {name!r}: the body is empty")
+    size = len(body.encode("utf-8"))
+    if size > SKILL_MAX_BODY_BYTES:
+        raise SkillError(f"skill {name!r}: the body is {size} bytes, the limit is "
+                         f"{SKILL_MAX_BODY_BYTES} (64 KB)")
+    return name, description, body
+
+
 def _validated_skills(raw) -> list[dict]:
-    """The `skills:` section: [{project, name, description, body}], each checked like the API
-    checks one (tares/skills.py). `project` is a name or id; absent means the default project."""
-    from .skills import SkillError, validate as validate_skill
+    """The `skills:` section: [{project, name, description, body}], each checked with
+    validate_skill. `project` is a name or id; absent means the default project."""
     if not isinstance(raw, list):
         raise CatalogError("skills must be a list of {project, name, description, body}")
     out, seen = [], set()

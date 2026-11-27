@@ -1,6 +1,6 @@
 """TARES_SEED_USECASE: a cell born with its project already running.
 
-Boots real daemons (subprocess, like test_agents) against the hosted-demo stubs and checks the
+Boots real daemons (subprocess) against the hosted-demo stubs and checks the
 one-shot semantics: seeded on first boot, marker written, a user's deletion never resurrected,
 an unknown template fixable (no marker), and no seeding at all when the var is unset.
 """
@@ -89,16 +89,14 @@ async def main():
     threading.Thread(target=stack.serve_forever, daemon=True).start()
 
     # ── first boot with the var: seeded exactly once ─────────────────────────
-    proc, up = await boot(daemon_env(stack.server_port, "challenger_workflow"))
+    proc, up = await boot(daemon_env(stack.server_port, "custom"))
     try:
         ck("daemon up", up)
         async with httpx.AsyncClient(timeout=20) as cx:
             uc = await projects(cx)
-            ck("project seeded on first boot", len(uc) == 1 and uc[0]["template"] == "challenger_workflow",
+            ck("project seeded on first boot", len(uc) == 1 and uc[0]["template"] == "custom",
                json.dumps(uc)[:200])
             uid = uc[0]["id"] if uc else ""
-            srcs = {s["name"] for s in (await cx.get(f"{B}/api/sources")).json()}
-            ck("seeded objects exist (its claude_code source included)", "claude_code" in srcs, str(srcs))
             # a user deletes it on purpose
             r = await cx.delete(f"{B}/api/projects/{uid}")
             ck("user can delete the seeded project", r.status_code == 200, r.text[:200])
@@ -106,7 +104,7 @@ async def main():
         stop(proc)
 
     # ── second boot, same var: the deletion sticks ───────────────────────────
-    proc, up = await boot(daemon_env(stack.server_port, "challenger_workflow"))
+    proc, up = await boot(daemon_env(stack.server_port, "custom"))
     try:
         ck("daemon back up", up)
         async with httpx.AsyncClient(timeout=20) as cx:
@@ -124,7 +122,7 @@ async def main():
             ck("nothing seeded for an unknown template", await projects(cx) == [])
     finally:
         stop(proc)
-    proc, up = await boot(daemon_env(stack.server_port, "challenger_workflow"))
+    proc, up = await boot(daemon_env(stack.server_port, "custom"))
     try:
         ck("daemon up after fixing the config", up)
         async with httpx.AsyncClient(timeout=20) as cx:

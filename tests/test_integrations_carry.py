@@ -40,7 +40,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
 
-from tares import licence, tracing
+from tares import licence
 from tares.integrations import registry, resolve
 from tares.integrations.ci import CISource
 from tares.integrations.monitoring import Monitoring

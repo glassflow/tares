@@ -25,6 +25,13 @@ OTLP = {"resourceLogs": [
       {"timeUnixNano": ns(2000), "severityText":"WARN", "body":{"stringValue":"slow upstream"}}]}]},
 ]}
 
+def label_counts(app, source, label):
+    """{value: lines} for one label of a source, over all time (the entity listing went, TR-1810)."""
+    from datetime import datetime, timezone
+    return app.state.store.aggregate([source], None, "count", datetime(2000, 1, 1, tzinfo=timezone.utc),
+                                     group_by=label)
+
+
 async def main():
     app=make_app()
     async with app.router.lifespan_context(app):
@@ -39,12 +46,9 @@ async def main():
         ck("3 events ingested", (srcs["otlp"]["health"] or {}).get("events_total")==3, str((srcs["otlp"]["health"] or {})))
 
         # entities: service is the primary facet, keyed per service from resource attrs
-        facets={f["label"]:f for f in (await cx.get("/api/entities")).json()["labels"]}
-        ck("service facet is primary", facets.get("service",{}).get("primary") is True, str(list(facets)))
-        sv={v["value"]:v["events"] for v in facets["service"]["values"]}
-        ck("per-service entities checkout=2, payments=1", sv=={"checkout":2,"payments":1}, str(sv))
-        ck("only declared labels become facets (env not declared)", "deployment.environment" not in facets and "env" not in facets, str(list(facets)))
-        # (env isn't a declared label so it's not a facet — expected; labels are config-declared)
+        sv=label_counts(app, "otlp", "service")
+        ck("per-service lines checkout=2, payments=1", sv=={"checkout":2,"payments":1}, str(sv))
+        ck("only declared labels are labels (env not declared)", label_counts(app, "otlp", "env") in ({}, {None: 3}), str(label_counts(app, "otlp", "env")))
 
         # event mapping: text, event_type from severity, intValue decoded into fields
         evs=(await cx.get("/api/sources/otlp/events?limit=10")).json()

@@ -306,9 +306,9 @@ async def daemon_checks(path, default):
             custom = next(p for p in ps if p["id"] == CUSTOM)
             check("the custom project lists no view",
                   not any(o["kind"] == "view" for o in custom["objects"]), json.dumps(custom["objects"]))
-            t = {x["name"]: x for x in (await cx.get("/api/triggers")).json()}["t_logs"]
-            check("GET /api/triggers speaks the new shape",
-                  t["project"] == CUSTOM and t["sources"] == ["logs"] and "view" not in t, str(t))
+            t = {x["name"]: x for x in app.state.store.list_catalog_triggers()}["t_logs"]
+            check("the trigger row speaks the new shape",
+                  t.get("owned_by") == CUSTOM and t["sources"] == ["logs"] and "view" not in t, str(t))
             r = await cx.get("/api/views")
             check("/api/views is gone", r.status_code == 404, r.text[:100])
             src = {s["name"]: s for s in (await cx.get("/api/sources")).json()}
@@ -316,11 +316,9 @@ async def daemon_checks(path, default):
             st = app.state.store
             r = await cx.post("/ingest/ik_logs", json={"service": "checkout", "msg": "boom"})
             check("ingest into a folded trigger's source works", r.status_code == 202, r.text[:200])
-            check("the folded trigger fires on its sources",
-                  st.last_fired("t_logs", "checkout") is not None)
-            r = await cx.post("/ingest/ik_logs", json={"service": "healthcheck", "msg": "ok"})
-            check("and its filters still keep out what the view kept out",
-                  r.status_code == 202 and st.last_fired("t_logs", "healthcheck") is None)
+            check("the folded trigger is a row only: nothing fires on an ingest (TR-1810)",
+                  st.last_fired("t_logs", "checkout") is None)
+            check("and it keeps the view's filters", bool(t["filters"]), str(t["filters"]))
             y = (await cx.get("/api/catalog/export")).text
             doc = yaml.safe_load(y)
             check("the export has no views and every trigger names its project and sources",

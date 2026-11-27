@@ -19,7 +19,7 @@ What it makes, in the order it runs (each group prints its seconds):
   events                 300 session lines through `Store.append`, the rest as one INSERT ... SELECT
                          (DuckDB writes a million rows in seconds; row by row it would take an hour)
   sessions               the sessions database: sessions, lines, facts, stations, states, usage
-  event counts           source_stats, entity_counts
+  event counts           source_stats (entity counts went in TR-1810)
 
 Rows go in with `executemany` (state tables) or SQLAlchemy Core `insert()` (the sessions database),
 never one Store call per row: only the first project, its three tickets, one review, one desk item
@@ -47,7 +47,7 @@ SHAPE = {
         "answers": 20, "api_keys": 37, "ask_sessions": 1, "assumptions": 323, "brain_calls": 19,
         "brain_repo_updates": 39, "brain_repos": 3, "catalog_agents": 1, "catalog_sources": 3,
         "catalog_triggers": 1, "challenges": 2, "crews": 9, "decisions": 360, "desk_items": 415,
-        "docs": 899, "entity_counts": 17435, "entity_label_state": 1, "github_credentials": 2,
+        "docs": 899, "github_credentials": 2,
         "grants": 22, "handovers": 21, "integration_choices": 1, "integration_connections": 2,
         "merge_queue": 271, "milestone_check_results": 191, "milestones": 121, "model_usage": 20,
         "people": 5, "project_members": 4, "project_required_checks": 3, "project_sessions": 2270,
@@ -113,16 +113,6 @@ SHAPE = {
     "sessions": {"total": 2145, "last_7_days": 1792, "complete": 868, "complete_lines": 260024,
                  "incomplete_lines": 1153263, "partial": 14, "partial_lines": 2953,
                  "tool_calls_per_line": 0.2, "coordination_per_tool_call": 0.34},
-    # entity_counts rows by source and label; what is left of a source's total goes to the last label
-    "entity_labels": {
-        "claude_code": {"key_value": 2145, "session": 2145, "repo": 1409, "subagent": 1238,
-                        "branch": 628, "station": 120, "tares_project": 53, "type": 26, "crew": 7,
-                        "machine": 6, "model": 5, "tares_person": 3, "tag": 5},
-        "github": {"sha": 4074, "branch": 1349, "title": 1338, "key_value": 1172, "release_tag": 111,
-                   "base": 58, "workflow": 30, "action": 22, "author": 12, "repo": 9,
-                   "conclusion": 5, "state": 2, "draft": 2, "on_default_branch": 2},
-        "linear": {"key_value": 705, "ticket": 705, "project": 25, "linear_project": 24},
-    },
 }
 
 ANCHOR_SESSIONS = 3          # the sessions whose lines go through Store.append
@@ -1327,7 +1317,7 @@ class _Gen:
 
     # ── event counts ───────────────────────────────────────────────────────────────────────────
     def event_counts_group(self):
-        rng, st = self.rng, self.store
+        st = self.store
         sh = self.shape
         totals = {s: _events(st, s) for s in sh["events"]}
         with st._lock:
@@ -1336,23 +1326,6 @@ class _Gen:
                 con.execute("INSERT INTO source_stats (source, events, last_ingest) VALUES (?, ?, ?) "
                             "ON CONFLICT (source) DO UPDATE SET events = excluded.events, last_ingest = excluded.last_ingest",
                             [s, n, NOW - timedelta(minutes=1)])
-            rows = []
-            for src, labels in sh["entity_labels"].items():
-                for label, want in labels.items():
-                    have = con.execute("SELECT count(*) FROM entity_counts WHERE source = ? AND label = ?",
-                                       [src, label]).fetchone()[0]
-                    if src == "claude_code" and label in ("key_value", "session"):
-                        # the 3 sessions Store.append counted come last: they are the ones already there
-                        values = [(s["id"], s["n"]) for s in self.sessions] + \
-                                 [(sid, ANCHOR_LINES) for sid in self.session_ids[:ANCHOR_SESSIONS]]
-                    else:
-                        values = [(f"{label}-{k:05d}", 1 + (k * 7) % 30) for k in range(want)]
-                    for v, e in values[:max(want - have, 0)]:
-                        rows.append([src, label, v, e, NOW - timedelta(minutes=rng.randint(1, 80000))])
-            con.executemany("INSERT INTO entity_counts (source, label, value, events, last_ingest) VALUES (?, ?, ?, ?, ?) "
-                            "ON CONFLICT DO NOTHING", rows)
-            con.execute("INSERT INTO entity_label_state (source, label, truncated) VALUES ('claude_code', 'cwd', TRUE) "
-                        "ON CONFLICT DO NOTHING")
             for v in ("_seed_e", "_seed_l"):
                 con.execute(f"DROP VIEW IF EXISTS {v}")
             con.execute("DROP TABLE IF EXISTS _seed_s")

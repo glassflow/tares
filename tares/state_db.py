@@ -23,6 +23,8 @@ import time
 
 from . import request_memo
 
+# entity_counts and entity_label_state are no longer written (TR-1810); an old database still has
+# them, and they stay DuckDB's, never copied to Postgres
 EVENT_TABLES = frozenset({"events", "cursors", "source_stats", "entity_counts",
                           "entity_label_state"})
 

@@ -1,6 +1,6 @@
 ---
 name: tares
-description: Use when you need cross-source context about this project's systems (recent deploys, logs, metrics, entities, correlated timelines), OR when organizing Tares itself by creating sources, labels and triggers. Tares is the data plane; read it via the tares MCP tools for one correlated timeline per entity, and author its catalog with the create tools following the rules below.
+description: Use when you need cross-source context about this project's systems (recent deploys, logs, metrics, entities, correlated timelines), OR when organizing Tares itself by creating sources and labels. Tares is the data plane; read it via the tares MCP tools for one correlated timeline per entity, and author its catalog with the create tools following the rules below.
 ---
 
 # Tares
@@ -14,11 +14,11 @@ session, …). The **tares** MCP server is connected (this plugin registers it).
 When a question needs real context about running systems — "what changed before this error", "is
 this service healthy", "what has this customer done recently" — read Tares instead of guessing:
 
-- Start by discovering what's there: `list_sources`, `catalog_list`, `entities`.
+- Start by discovering what's there: `list_sources`, `catalog_list`.
 - Read a timeline with `read` (a `{label: value}` selector), narrowed to a `project`'s sources or
   to named `sources` when you know which matter.
 - Treat the timeline as ground truth for *what happened and when*; cite specific events.
-- On a Software Factory cell the building-block tools (`read`, `create_source`, `create_trigger` and
+- On a Software Factory cell the building-block tools (`read`, `create_source` and
   the like) appear only when an admin turns them on under Settings, Access and API keys, Agent tools. Use
   `what_needs_me`, `how_is_project`, `start_project` and `hand_project_to_crew` instead.
 
@@ -53,9 +53,9 @@ when the `challenger_backend` option is `grok`, and each review names which. The
 challenge the plan when you leave plan mode and every commit you make, and hand you the findings.
 `set_session_flow` with an empty `flow` turns it off.
 
-## Authoring: sources, labels, and triggers
+## Authoring: sources and labels
 
-Tares's data model has three layers. Get them right and correlation just works; guess and it
+Tares's data model has two layers. Get them right and correlation just works; guess and it
 silently doesn't:
 
 - **Fields** — the *candidate menu*. A source's raw payload is stored losslessly; `source_fields`
@@ -63,9 +63,6 @@ silently doesn't:
   and top values. Fields are not queryable on their own.
 - **Labels** — the *declared axes* you promote from fields (or a const, or a regex over a field).
   Labels are what you filter, group, key, and correlate by. One label is the **primary key**.
-- **Triggers**: watch one or more sources (narrowed by filters) for a condition, keyed by a
-  **label** the sources share, and wake agents with the correlated timeline. Every trigger belongs
-  to a project (the default project when you name none); its sources join that project.
 
 ### Rule 1 — Labels must come from real fields (never invent one)
 
@@ -77,20 +74,13 @@ label reads from one of three things, all grounded in real data:
 - `const`: a fixed value stamped on every event (for a source with no natural field for an axis).
 - a **regex** over a field — set `pattern` + `replace` (and/or `map`) on the label to normalize
   messy values. Regex/alias normalization is a first-class feature: use it instead of guessing at a
-  clean field. `type: "number"` makes a label aggregatable (for triggers); the primary key must be a
+  clean field. `type: "number"` makes a label a number; the primary key must be a
   string.
 
 Never name a `field` that isn't in the profile — it extracts nothing. Set labels by creating the
 source (`create_source`) or updating its config with the full `labels` list.
 
-### Rule 2: triggers key and filter on LABELS only, never raw fields
-
-A trigger's `key_field` (and any filters) must be a **label the chosen sources expose**, not an
-arbitrary payload field. If you want to correlate on something that isn't a label yet, **promote it
-to a label first** (Rule 1), then `create_trigger` over the sources, keyed by that label. Confirm a
-source's current labels with `catalog_describe("source:<name>")` before creating it.
-
-### Rule 3 — To match a label across sources, add a NEW label — don't rename
+### Rule 2 — To match a label across sources, add a NEW label — don't rename
 
 To join source B to source A on a shared axis (say `service`), source B needs a label **named
 `service`** too. Declare a **new** label on B (reading B's matching field) — do **not** try to

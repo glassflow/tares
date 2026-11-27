@@ -6,8 +6,7 @@ description: Installs Tares, the open-source platform for always-on AI agents, s
 # Tares
 
 Install and connect **Tares** (docs: https://docs.glassflow.ai/tares). Tares puts every event
-from a user's systems on one timeline per thing, wakes an agent when a trigger fires, and keeps
-the finding for the next reader. This skill takes a machine from nothing to: daemon running, one
+from a user's systems on one timeline per thing. This skill takes a machine from nothing to: daemon running, one
 source receiving, this agent connected over MCP, one successful `read`.
 
 ## Operating rules
@@ -189,27 +188,20 @@ curl -sf -X POST http://127.0.0.1:8787/read -H 'Content-Type: application/json' 
 
 ## Joining one project
 
-When the user wants this agent to work inside one Tares project (be woken by its triggers, read
-its sources, follow its skills, and leave findings next to the Tares agents' ones):
+When the user wants this agent to work inside one Tares project (read its sources and see what
+happened in it):
 
 1. Get a project key. The user makes it on the project page, Setup, Keys (or an admin calls
-   `POST /api/projects/<id>/keys {"name": "claude-code"}`). The key's name is the name your
-   findings carry. It reads that project only and records findings in it; nothing else.
+   `POST /api/projects/<id>/keys {"name": "claude-code"}`). It reads that project only; nothing
+   else.
 2. Connect with the key. Over HTTP the client presents it:
    `claude mcp add --transport http tares http://localhost:8788/mcp --header "Authorization: Bearer <key>"`.
    Over stdio, spawn `tares-mcp` with `TARES_AUTH_TOKEN=<key>` in its environment. Never print
    the key.
 3. With a key the project is implied. On an instance without auth there are no keys: pass
    `project` (its name or id) to each tool below; it may be left out while there is only one.
-4. `list_skills`, then `get_skill` for any whose description matches the task, before relying on
-   it.
-5. `read` (the project's sources and findings), `stats` (what moved), `list_findings` (what is
-   already known about the entity), `project_timeline` (what happened lately).
-6. `record_finding(entity, finding, verdict)` when you conclude: the entity is the thing the
-   finding is about (a service, a repo), the finding is markdown, the verdict one lowercase word.
-7. To be woken by the project's triggers, `join_project(url)` with a webhook URL your agent
-   listens on. Every firing of every trigger in the project is POSTed there, with `project`,
-   `dispatch_id`, `key` (the entity), `payload` (the timeline) and `run_ids`.
+4. `read` (the project's sources), `stats` (what moved), `project_timeline` (what happened
+   lately).
 
 ## 8. Report
 

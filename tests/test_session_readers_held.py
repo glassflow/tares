@@ -5,8 +5,7 @@ are given to a platform cell (everything in DuckDB: what every reader answered b
 cells that hold them in each of the ways they can be held: in the store alone, in the store after the
 DuckDB rows are deleted (in this test only), partly in the archive, and in a session a failed write
 left incomplete. Every reader of `events` answers each factory cell as it answers the platform one.
-Then, through the app: the challenger's `session_ended` trigger fires on a marked session's end, and
-the project page lists the session, with no claude_code row in DuckDB.
+Then, through the app: a session's lines are read back with no claude_code row in DuckDB.
 
 One difference is expected and left out of the comparison: a line the store holds has no ingest time
 of its own, so it is read as the line's own time. The platform cell's rows are set to that. Nothing
@@ -219,13 +218,6 @@ def rows(got) -> list:
     return [(r[0], r[1], r[2], obj(r[3]), *([obj(r[4])] if len(r) > 4 else [])) for r in got]
 
 
-def entity(got, stamp=True) -> list:
-    # `stamp=False`: the counter's last_ingest is the clock of the write, so each cell has its own
-    return sorted(((e["value"], e["events"],
-                    e["last_ingest"] if stamp else e["last_ingest"] >= NOW) for e in got),
-                  key=repr)
-
-
 ENDED = [{"field": "event_type", "op": "eq", "value": "session_end"},
          {"field": "flow", "op": "eq", "value": "challenger"}]
 HIDDEN = {"ids": ["uc_hidden"], "names": ["secret"], "shared": []}
@@ -285,14 +277,6 @@ def readers() -> dict:
         "recent_events: every source": lambda s: s.recent_events(None, 7),
         "recent_events: hidden project left out": lambda s: s.recent_events(SRC, 3, exclude=HIDDEN),
         "source_schema": lambda s: (s.source_schema(SRC), s.source_schema(SRC, sample=2)),
-        "list_entities: the counter": lambda s: [
-            entity(s.list_entities(label, [SRC]), stamp=False) for label in ("repo", "key_value", "flow")],
-        "list_entities: the scan": lambda s: [
-            entity(s._list_entities_scan(label, [SRC], 50)) for label in ("repo", "key_value", "flow")],
-        "list_entities: hidden project left out": lambda s: (
-            entity(s.list_entities("repo", [SRC], exclude=HIDDEN)),
-            entity(s.list_entities("repo", None, exclude=HIDDEN)),
-            entity(s.list_entities("repo", [SRC], exclude={"ids": ["uc_hidden"], "names": ["secret"]}))),
         "ingest gaps and hours": lambda s: (
             s.recent_ingest_gaps(SRC, HOUR), sorted(s.recent_ingest_hours(SRC, HOUR)),
             s.recent_ingest_gaps(SRC, MONTH, 3)),
@@ -385,7 +369,7 @@ def edges():
        s.aggregate([SRC], None, "count", MONTH) == {} and s.read_window([SRC], "S", MONTH) == []
        and s.newest_key([SRC], None, MONTH) is None and s.recent_events(SRC) == []
        and s.source_schema(SRC)["sampled_events"] == 0
-       and s._list_entities_scan("repo", [SRC], 10) == [] and s.recent_ingest_gaps(SRC, MONTH) == [])
+       and s.recent_ingest_gaps(SRC, MONTH) == [])
     s.append([line("E", "user", "hello", 60)])
     with s.sessions_db.begin() as c:
         c.execute(delete(session_lines))
@@ -455,11 +439,9 @@ def no_write_lock():
 
 
 async def app_checks():
-    print("== the challenger's trigger and page, through the app ==")
+    print("== the session's lines, through the app ==")
     from tares.daemon import make_app
-    from tares.projects.challenger_workflow import SOURCE, TRIGGER
-    from tares.reads import resolve_trigger
-    from tares.triggers import eval_triggers
+    SOURCE = "claude_code"
     app = make_app()
 
     def wire(sid, etype, ago_s, flow="challenger", **extra):
@@ -482,26 +464,14 @@ async def app_checks():
                 assert r.status_code == 202, r.text
 
             await ingest(wire("s0", "session_flow", 600))
-            projects = (await cx.get("/api/projects")).json()["projects"]
-            uid = next(p["id"] for p in projects if p["template"] == "challenger_workflow")
-            await ingest(wire("s1", "user", 300, message={"role": "user", "content": "a pricing page"}),
-                         wire("s1", "session_end", 60), wire("s2", "session_end", 50, flow=None))
+            await ingest(wire("s1", "user", 300, message={"role": "user", "content": "a pricing page"}))
             st = app.state
             ck("DuckDB holds no claude_code row", duck(st.store) == 0, duck(st.store))
-            await eval_triggers(st.store, st.runtime.catalog, st.runtime.dispatcher, None)
-            await asyncio.sleep(0.5)
-            ck("challenger_session_ended fired for the marked session",
-               st.store.last_fired(TRIGGER, "s1") is not None)
-            ck("and not for the unmarked one", st.store.last_fired(TRIGGER, "s2") is None)
-            trig = next(t for t in st.runtime.catalog.triggers if t.name == TRIGGER)
-            handed = resolve_trigger(st.store, trig, key="s1", window="24h")
-            ck("it hands over the session's end line", "session_end" in handed, handed[:300])
-            r = await cx.post("/read", json={"selector": {"session": "s1"}, "window": "30d",
-                                             "project": uid})
+            projects = (await cx.get("/api/projects")).json()["projects"]
+            ck("a challenger session no longer makes a project (TR-1810)",
+               not any(p["template"] == "challenger_workflow" for p in projects), projects)
+            r = await cx.post("/read", json={"selector": {"session": "s1"}, "window": "30d"})
             ck("a read of the session has its transcript", "a pricing page" in r.text, r.text[:300])
-            got = (await cx.get(f"/api/projects/{uid}/summary")).json()
-            ck("the project page lists the marked sessions",
-               {x["session"] for x in got["sessions"]} == {"s0", "s1"}, got["sessions"])
             r = await cx.get(f"/api/sources/{SOURCE}/events")
             ck("the source's recent events show the lines", "a pricing page" in r.text, r.text[:300])
 

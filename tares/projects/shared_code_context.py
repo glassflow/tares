@@ -386,18 +386,9 @@ class SharedCodeContext(Template):
 
     # ── bootstrap: first pages right after Start ─────────────────────────────
     def after_create(self, instance: dict, store, runtime) -> None:
-        """Run the agent once per source repo over the last 7 days of commits so the context repo
-        gets its first pages now instead of at the next commit. Best effort: the sources need a
-        first poll to have anything to read, so this schedules the runs a little later and skips
-        repos with no commits yet."""
-        if instance["params"].get("bootstrap") is False:
-            return
-        agents = getattr(getattr(runtime, "dispatcher", None), "agents", None)
-        if agents is None or not hasattr(agents, "run_now"):
-            return
-        n = self.names(instance["params"])
-        repos = [r["repo"] for r in instance["params"]["source_repos"]]
-        agents.bootstrap(n["agent"], n["trigger"], repos, window="7d", limit=20)
+        """Nothing: the first run over each source repo was a Tares agent run, and agent runs went
+        in TR-1810. The `bootstrap` parameter is still read, so an older project keeps it."""
+        return
 
 
 _PR_RE = re.compile(r"https://github\.com/[^\s)\]]+/(?:pull|commit)/[^\s)\]]+")

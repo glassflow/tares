@@ -187,48 +187,12 @@ async def main():
                                                              "config": {"repo": "acme/app", "credential": "nope"}})
             check("discover with unknown credential -> 404", r.status_code == 404, r.text)
 
-            print("== MCP servers: headers + credential reference ==")
-            r = await cx.post("/api/mcp-servers", json={
-                "name": "github", "url": "https://mcp.github.test/mcp",
-                "auth_value": "credential:github/gh",
-                "headers": {"X-MCP-Toolsets": "repos,pull_requests", "X-MCP-Readonly": "true"}})
-            check("mcp server with credential ref + headers -> 201", r.status_code == 201, r.text)
-            r = await cx.post("/api/mcp-servers", json={
-                "name": "bad", "url": "https://x/mcp", "auth_value": "credential:github/nope"})
-            check("unknown credential ref -> 404", r.status_code == 404, r.text)
-            r = await cx.post("/api/mcp-servers", json={
-                "name": "bad2", "url": "https://x/mcp", "headers": {"not a header": "v"}})
-            check("bad header name -> 400", r.status_code == 400, r.text)
-            r = await cx.get("/api/mcp-servers")
-            row = r.json()["servers"][0]
-            check("row exposes headers and the credential name, not the token",
-                  row["headers"].get("X-MCP-Toolsets") == "repos,pull_requests"
-                  and row["auth_credential"] == "gh" and row["auth_value_configured"], r.text)
+            print("== an MCP server row with a credential reference (catalog only since TR-1810) ==")
+            store.upsert_mcp_server("github", "https://mcp.github.test/mcp", "",
+                                    "credential:github/gh", {"X-MCP-Toolsets": "repos"})
             r = await cx.get("/api/integrations/github")
             check("credential usage lists the MCP server",
                   r.json()["credentials"][0]["mcp_servers"] == ["github"], r.text)
-
-            from tares.mcp_client import _headers, resolve_servers
-            resolved = await resolve_servers(store, store.list_mcp_servers())
-            hdrs = _headers(resolved[0])
-            check("resolved headers: bearer from credential + extra headers",
-                  hdrs.get("Authorization") == "Bearer tok-2"
-                  and hdrs.get("X-MCP-Toolsets") == "repos,pull_requests"
-                  and hdrs.get("X-MCP-Readonly") == "true", str(hdrs))
-            store.upsert_mcp_server("orphan", "https://x/mcp", "", "credential:github/gone", {})
-            bad = [s for s in await resolve_servers(store, store.list_mcp_servers())
-                   if s["name"] == "orphan"][0]
-            check("missing credential -> named auth error, no header",
-                  bad.get("_auth_error") and "gone" in bad["_auth_error"] and not _headers(bad),
-                  str(bad))
-            store.delete_mcp_server("orphan")
-            r = await cx.put("/api/mcp-servers/github", json={
-                "name": "github", "url": "https://mcp.github.test/mcp", "auth_value": "",
-                "headers": {"X-MCP-Toolsets": "repos"}})
-            r = await cx.get("/api/mcp-servers")
-            row = r.json()["servers"][0]
-            check("update: blank auth keeps the credential ref, headers replaced",
-                  row["auth_credential"] == "gh" and row["headers"] == {"X-MCP-Toolsets": "repos"}, r.text)
 
             print("== catalog export / import ==")
             r = await cx.get("/api/catalog/export")

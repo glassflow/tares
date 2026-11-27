@@ -14,7 +14,9 @@ from tares import state_db                                      # noqa: E402
 from tares.session_store.tables import MOVED_TABLE_NAMES        # noqa: E402
 from tares.store import Store                                   # noqa: E402
 
-EVENT_TABLES = {"events", "cursors", "source_stats", "entity_counts", "entity_label_state"}
+# entity_counts and entity_label_state went in TR-1810: an old database keeps them, a new one has none
+EVENT_TABLES = {"events", "cursors", "source_stats"}
+ENTITY_TABLES = {"entity_counts", "entity_label_state"}
 PLATFORM_AND_EVENT_TABLES = EVENT_TABLES | {
     # only the platform uses these
     "trigger_state", "subscriptions", "dispatch_deliveries", "catalog_triggers", "catalog_agents",
@@ -70,12 +72,13 @@ def main():
     ck("and it makes every one of them", not PLATFORM_AND_EVENT_TABLES - set(made),
        sorted(PLATFORM_AND_EVENT_TABLES - set(made)))
     ck("each once", len(made) == len(set(made)), sorted(t for t in set(made) if made.count(t) > 1))
+    ck("no entity count table is made", not ENTITY_TABLES & set(made), sorted(ENTITY_TABLES & set(made)))
     touched = set(found["alter"]) | set(found["index"])
     ck("no ALTER or index of the old DDL is for another table",
        not touched - PLATFORM_AND_EVENT_TABLES, sorted(touched - PLATFORM_AND_EVENT_TABLES))
     ck("it drops only the two tables of a removed feature", set(found["drop"]) == DROPPED,
        found["drop"])
-    ck("the event tables here are state_db's", EVENT_TABLES == set(state_db.EVENT_TABLES),
+    ck("the event tables here are state_db's", EVENT_TABLES | ENTITY_TABLES == set(state_db.EVENT_TABLES),
        sorted(state_db.EVENT_TABLES))
     ck("none of them is also a table of the session store",
        not PLATFORM_AND_EVENT_TABLES & MOVED_TABLE_NAMES,

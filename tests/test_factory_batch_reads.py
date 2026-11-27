@@ -10,8 +10,8 @@ keeps its own. `autonomy_of`'s memo is checked for two people with different cre
 
 A challenger line whose payload is not JSON, or is JSON but not an object, reads as {} among good
 ones: the review queue and the ticket still answer, and the one that is not JSON is logged once, by
-its ids alone (TR-1705). A payload nested past `CHALLENGE_MAX_DEPTH` reads the same way, there, in
-the lost-lines warning and in the challenger workflow's sessions. A read of one source's lines
+its ids alone (TR-1705). A payload nested past `CHALLENGE_MAX_DEPTH` reads the same way, there and in
+the lost-lines warning. A read of one source's lines
 gives none of another source's on the same refs (TR-1712).
 
 Run: .venv/bin/python tests/test_factory_batch_reads.py
@@ -38,16 +38,13 @@ os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
-from fastapi.encoders import jsonable_encoder
 from sqlalchemy import event, select
 
 from tares import factory_api
 from tares.daemon import make_app
-from tares.envelope import Envelope
 from tares.factory_store import CHALLENGE_MAX_DEPTH
 from tares.integrations import registry
 from tares.integrations.review import ReviewGate
-from tares.projects.challenger_workflow import recent_sessions
 from tares.session_store.tables import challenges as challenges_table
 
 
@@ -242,35 +239,6 @@ def lost_deep_lines(store, t0):
     ck("every line is named, the deep ones with no commit, the good one with its",
        len(said) == 1 and all(f"session s-lost{i} commit none" in line for i in range(len(TOO_DEEP)))
        and f"session s-lost{len(TOO_DEEP)} commit feed123" in line, str(said)[:600])
-
-
-def deep_workflow_session(store):
-    """TR-1712: the challenger workflow's sessions are built from the lines' stored payloads."""
-    print("== the challenger workflow with a deep line ==")
-    now = datetime.now(timezone.utc)
-
-    def envelope(sid, minutes, title):
-        return Envelope(source="claude_code", source_type="claude_code", key_value=sid,
-                        event_type="challenge_plan", text="plan", event_time=now - timedelta(minutes=minutes),
-                        ingest_time=now,
-                        payload={"sessionId": sid, "type": "challenge_plan", "cwd": "/w/shop",
-                                 "challenge": {"findings": [{"priority": "P1", "title": title}]}},
-                        labels={"flow": "challenger"})
-
-    deep = "x"
-    for _ in range(300):                    # past the bound; Python 3.11 cannot dump much more
-        deep = {"a": deep}
-    store.append([envelope("wf-good", 2, "a good finding"), envelope("wf-deep", 1, deep)])
-    try:
-        got = recent_sessions(store)
-        jsonable_encoder(got)               # what the project page's response does with them
-    except Exception as ex:
-        got = type(ex).__name__
-    ck("the deep line is read as {}, so only the good session is listed",
-       isinstance(got, list) and [x["session"] for x in got] == ["wf-good"], str(got)[:300])
-    ck("with its finding", isinstance(got, list) and bool(got) and
-       [f["title"] for t in got[0]["thread"] for f in t.get("findings", [])] == ["a good finding"],
-       str(got)[:300])
 
 
 def one_source_only(store, t0):
@@ -487,7 +455,6 @@ def main():
     payloads_that_are_not_objects(app, store, t0)
     depth_bound(store, t0)
     lost_deep_lines(store, t0)
-    deep_workflow_session(store)
     one_source_only(store, t0)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

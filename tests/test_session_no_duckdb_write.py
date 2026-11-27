@@ -3,7 +3,7 @@
 `Store.append` leaves the lines of a claude_code source out of the DuckDB events table when the cell's
 edition is factory and an archive backend exists (the folder archive always does on SQLite; a Postgres
 cell needs TARES_ARCHIVE_URL). The lines are still counted in `source_stats`, a challenger line is
-still kept in `challenges`, and counted in `entity_counts` as a line written to DuckDB is: the readers
+still kept in `challenges` (entity counts went in TR-1810; a new database has no table for them): the readers
 of `events` answer from the session store for them (TR-1647). Every other case writes to DuckDB as
 before, and a factory cell on Postgres with no archive says so once and keeps writing there.
 
@@ -76,10 +76,11 @@ def stats(s, source=SRC):
     return r
 
 
-def entities(s, source=SRC):
+def entity_tables(s):
     with s._lock:
-        return sorted(s.con.execute("SELECT * EXCLUDE (source) FROM entity_counts WHERE source = ?",
-                                    [source]).fetchall(), key=repr)
+        return [r[0] for r in s.con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name IN ('entity_counts', 'entity_label_state')").fetchall()]
 
 
 def challenges(s):
@@ -117,8 +118,9 @@ def main():
     ck("the DuckDB counter did not move", counter() == before, (before, counter()))
     plat = open_store("platform")
     plat.append(batch)
-    ck("entity_counts counts the held lines as a platform cell counts them",
-       entities(s) and entities(s) == entities(plat) and duck_count(plat) == 50, (entities(s), entities(plat)))
+    ck("a new database has no entity count tables (TR-1810), and the platform cell writes DuckDB",
+       entity_tables(s) == [] and entity_tables(plat) == [] and duck_count(plat) == 50,
+       (entity_tables(s), entity_tables(plat)))
     s.append([line("s1") for _ in range(5)])
     st = stats(s)
     ck("a second batch adds to source_stats", st[0] == 55, st)

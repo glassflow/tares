@@ -106,11 +106,7 @@ ROUTES = [
     ("capabilities", "/api/capabilities", lambda d: d["version"] and d["slack_configured"]),
     ("brain", "/api/brain", lambda d: d["configured"] and d["repos"]),
     ("setup_progress", "/api/factory/setup/progress", lambda d: d["total"] > 0 and d["projects"] > 0),
-    # the Ask overlay, opened from any page (components/CommandPalette.tsx, AskChat.tsx, proposals.tsx)
-    ("ask_sessions", "/api/ask/sessions", lambda d: d["sessions"]),
-    ("ask_session", "/api/ask/sessions/{ask}", lambda d: d["state"]),
     ("source", "/api/sources/{source}", lambda d: d["connector"]),
-    ("triggers", "/api/triggers", lambda d: d[0]["name"]),
     # Home (editions/factory/FactoryHome.api.ts)
     ("home", "/api/home", lambda d: d["projects"] and d["waiting_for_you"] and d["crew"]["members"]),
     ("answers", "/api/answers", lambda d: d["answers"]),
@@ -153,13 +149,11 @@ ROUTES = [
     ("settings", "/api/factory/settings", lambda d: d["tools"] and d["crew"]),
     ("people_list", "/api/people", lambda d: d["people"]),
     ("settings_providers", "/api/settings/providers", lambda d: d["providers"]),
-    ("settings_agents", "/api/settings/agents", lambda d: d["daily_cap"]),
     ("settings_usage", "/api/usage", lambda d: d["events"]),
     ("settings_usage_model", "/api/usage/model?days=30", lambda d: d["total"]["calls"] and d["days"]),
     ("settings_claude_usage", "/api/claude-code/usage?days=7", lambda d: d["projects"]),
     ("settings_keys", "/api/keys", lambda d: d["keys"]),
     ("projects_list", "/api/projects", lambda d: d["projects"]),               # the keys tab (ApiKeysPanel.tsx)
-    ("settings_tracing", "/api/settings/tracing", lambda d: d["providers"]),
     ("settings_mcp", "/api/settings/mcp", lambda d: "object_tools" in d),
     ("areas", "/api/areas", lambda d: d[0]["repo"]),
     ("slack_channels", "/api/slack/channels", lambda d: d["channels"]),        # MorningStatus.tsx
@@ -175,8 +169,14 @@ ROUTES = [
 ]
 
 _OLDER = "only an older page asks for it: "
+_GONE = "gone with Tares agents, Ask and triggers (TR-1810); the console stops asking in its own ticket"
 # The GETs the build of the console can make that are not timed, and why.
 NOT_TIMED = [
+    ("/api/ask/sessions", _GONE),
+    ("/api/ask/sessions/{id}", _GONE),
+    ("/api/triggers", _GONE),
+    ("/api/settings/agents", _GONE),
+    ("/api/settings/tracing", _GONE),
     ("/api/sources", _OLDER + "Sources, Connect Claude Code, Export, Resources, project setup"),
     ("/api/sources/{name}/events", _OLDER + "one source's page"),
     ("/api/sources/{name}/fields", _OLDER + "the source form, project setup"),
@@ -373,13 +373,6 @@ async def fixtures(cx, made: dict) -> dict:
         r = await cx.post("/api/brain/decisions", json={"title": f"Decision {k}",
                                                         "text": f"We chose option {k}. It is simpler to run."})
         assert r.status_code == 201, r.text[:300]
-
-    # the Ask overlay: saved chats of Sam
-    state = '{"messages": [' + ",".join(['{"role": "user", "content": "What changed in exports?"}'] * 20) + "]}"
-    for k in range(10):
-        ids["ask"] = f"{k:032x}"
-        r = await cx.put(f"/api/ask/sessions/{ids['ask']}", json={"title": f"Chat {k}", "state": state})
-        assert r.status_code == 200, r.text[:300]
 
     # Slack: a bot token and a signing secret
     STORE.set_setting(daemon.SLACK_TOKEN_SETTING, "xoxb-" + "not-a-token")

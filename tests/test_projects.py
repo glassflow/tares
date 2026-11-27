@@ -5,7 +5,8 @@ Run: .venv/bin/python tests/test_projects.py   (no external services needed)
 Uses a tests-only template (two webhook sources, a trigger over both, an agent, an MCP server) so
 it exercises every object kind without depending on a real template. Also covers the default
 project every cell has, and the rules that make a project the unit: a trigger, agent or MCP server
-is in exactly one project, a source in any number.
+is in exactly one project, a source in any number. The triggers, agents and MCP servers are read
+and written through the store: their routes went in TR-1810, the catalog keeps them until it goes.
 """
 import asyncio
 import os
@@ -90,6 +91,35 @@ async def main():
 
             print("== the default project ==")
             st = app.state.store
+
+            def triggers():
+                return [{**t, "project": t.get("owned_by")} for t in st.list_catalog_triggers()]
+
+            def agents():
+                return [{**a, "project": a.get("owned_by"), "enabled": st.agent_enabled(a["name"])}
+                        for a in st.list_catalog_agents()]
+
+            def mcps():
+                return [{**m, "project": m.get("owned_by")} for m in st.list_mcp_servers()]
+
+            class _Done:
+                status_code = 200
+                text = ""
+
+            def mk_mcp(name, url):
+                """What POST /api/mcp-servers did: the server, in the default project."""
+                st.upsert_mcp_server(name, url, "", "", {})
+                st.put_in_project("mcp_server", name, st.default_project_id())
+                return _Done()
+
+            def rm_mcp(name):
+                st.delete_mcp_server(name)
+                return _Done()
+
+            def rm_trigger(name):
+                st.delete_catalog_trigger(name)
+                app.state.runtime.reload_catalog()
+                return _Done()
             ps = (await cx.get("/api/projects")).json()["projects"]
             check("a fresh cell has no project, not even the default one (it is made lazily)",
                   ps == [] and st.get_setting("default_project") is None, json.dumps(ps)[:300])
@@ -146,15 +176,15 @@ async def main():
                   srcs["t_ui"]["owned_by"] == uid and srcs["t_api"]["owned_by"] == uid
                   and srcs["t_ui"]["projects"] == [uid] and not srcs["t_ui"]["customized"],
                   str({k: (v.get("owned_by"), v.get("projects")) for k, v in srcs.items()}))
-            trig = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}
+            trig = {t["name"]: t for t in triggers()}
             t = trig["t_trigger"]
             check("trigger carries its project, sources, filters and key_field",
                   t["project"] == uid and t["owned_by"] == uid and t["sources"] == ["t_ui", "t_api"]
                   and t["filters"] == [] and t["key_field"] == "app" and "view" not in t, str(t))
-            ag = {a["name"]: a for a in (await cx.get("/api/agents/builtin")).json()["agents"]}
+            ag = {a["name"]: a for a in agents()}
             check("agent in the project and disabled", ag["t_agent"]["project"] == uid
                   and ag["t_agent"]["enabled"] is False)
-            mcp = {m["name"]: m for m in (await cx.get("/api/mcp-servers")).json()["servers"]}
+            mcp = {m["name"]: m for m in mcps()}
             check("mcp server in the project", mcp["t_mcp"]["project"] == uid)
             # the source works like any source: ingest lands
             r = await cx.post(f"/ingest/{srcs['t_ui']['ingest_key']}", json={"msg": "hello"})
@@ -186,29 +216,15 @@ async def main():
                 r = await getattr(cx, method)(path, **({"json": {}} if method != "get" else {}))
                 check(f"{method.upper()} {path} -> 404, views were removed",
                       r.status_code == 404 and "views were removed" in r.text, f"{r.status_code} {r.text[:80]}")
-            body = {"name": "t_trigger", "sources": ["t_ui", "t_api"], "key_field": "app",
-                    "condition": COND, "emit": {"kind": "demo"}, "cooldown": "1m"}
-            r = await cx.put("/api/triggers/t_trigger", json={**body, "name": "other"})
-            check("trigger rename attempt still 400", r.status_code == 400, r.text[:120])
-            r = await cx.put("/api/triggers/t_trigger", json={**body, "view": "v"})
-            check("a trigger naming a view -> 400 with the reason",
-                  r.status_code == 400 and "views were removed" in r.text
-                  and "sources" in r.text, r.text[:200])
-            r = await cx.post("/api/triggers", json={**body, "name": "no_sources", "sources": []})
-            check("a trigger with no sources -> 400", r.status_code == 400 and "sources" in r.text,
-                  r.text[:200])
-            r = await cx.post("/api/triggers", json={**body, "name": "bad_filter",
-                                                     "filters": [{"field": "app", "op": "=="}]})
-            check("a trigger filter is validated like the old view filter",
-                  r.status_code == 400 and "field, op and value" in r.text, r.text[:200])
-            r = await cx.post("/api/triggers", json={**body, "name": "nope", "project": "uc_nope"})
-            check("a trigger in an unknown project -> 400", r.status_code == 400, r.text[:200])
-
             print("== customized protection ==")
-            r = await cx.put("/api/triggers/t_trigger", json={**body, "sources": ["t_ui"]})
-            check("hand edit of an owned trigger is allowed, stays in its project",
-                  r.status_code == 200 and r.json()["project"] == uid, r.text)
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["t_trigger"]
+            # what PUT /api/triggers/<name> did (the route went in TR-1810)
+            st.upsert_catalog_trigger("t_trigger", ["t_ui"], COND, {"kind": "demo"}, "1m",
+                                      key_field="app")
+            st.mark_customized("trigger", "t_trigger")
+            app.state.runtime.reload_catalog()
+            check("hand edit of an owned trigger stays in its project",
+                  st.projects_using("trigger", "t_trigger") == [uid], str(st.projects_using("trigger", "t_trigger")))
+            t = {t["name"]: t for t in triggers()}["t_trigger"]
             check("edited trigger flagged customized", t["customized"] is True and t["owned_by"] == uid)
 
             print("== update: add and remove ==")
@@ -220,17 +236,16 @@ async def main():
                   and "trigger:t_trigger" in rep["kept"], str(rep))
             names = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("t_api gone, t_web present", "t_api" not in names and "t_web" in names, str(names))
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["t_trigger"]
+            t = {t["name"]: t for t in triggers()}["t_trigger"]
             check("customized trigger kept the user's sources", t["sources"] == ["t_ui"], str(t))
 
             print("== repair ==")
             r = await cx.post(f"/api/projects/{uid}/repair", json={"key": "trigger"})
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["t_trigger"]
+            t = {t["name"]: t for t in triggers()}["t_trigger"]
             check("repair resets a customized trigger to the plan",
                   r.status_code == 200 and sorted(t["sources"]) == ["t_ui", "t_web"]
                   and t["customized"] is False, str(t))
-            r = await cx.delete("/api/triggers/t_trigger")
-            check("hand delete of an owned trigger is allowed", r.status_code == 200, r.text)
+            rm_trigger("t_trigger")
             inst = (await cx.get(f"/api/projects/{uid}")).json()
             miss = {o["key"]: o["missing"] for o in inst["objects"]}
             check("deleting it was the choice: the trigger leaves the project's list, not missing",
@@ -239,7 +254,7 @@ async def main():
                   st.get_catalog_agent("t_agent")["trigger"] == "", str(st.get_catalog_agent("t_agent")))
             r = await cx.post(f"/api/projects/{uid}/repair", json={"key": "trigger"})
             check("repair -> 200", r.status_code == 200, r.text)
-            trig = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}
+            trig = {t["name"]: t for t in triggers()}
             check("trigger re-created in the project", trig.get("t_trigger", {}).get("project") == uid,
                   str(list(trig)))
             check("and the template's agent has it back", st.get_catalog_agent("t_agent")["trigger"]
@@ -248,10 +263,10 @@ async def main():
             print("== pause / resume ==")
             r = await cx.post(f"/api/projects/{uid}/pause")
             check("pause -> paused", r.json()["status"] == "paused", r.text)
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["t_trigger"]
+            t = {t["name"]: t for t in triggers()}["t_trigger"]
             check("owned trigger paused", t["paused"] is True)
             r = await cx.post(f"/api/projects/{uid}/resume")
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["t_trigger"]
+            t = {t["name"]: t for t in triggers()}["t_trigger"]
             check("resume -> active, trigger running",
                   r.json()["status"] == "active" and t["paused"] is False)
             check("plain pause leaves sources running", not any(x["paused"] for x in (await cx.get("/api/sources")).json()))
@@ -293,57 +308,16 @@ async def main():
             if clash:
                 await cx.delete(f"/api/projects/{clash[0]['id']}")
 
-            print("== triggers, agents and MCP servers belong to one project ==")
+            print("== a source made without a project ==")
             r = await cx.post("/api/sources", json={"name": "loose", "connector": "webhook",
                                                     "config": {"labels": [{"name": "app", "field": "app", "primary": True}]}})
             check("a source created without a project -> the default project",
                   r.status_code == 201 and next(s for s in (await cx.get("/api/sources")).json()
                                                 if s["name"] == "loose")["projects"] == [did], r.text)
-            r = await cx.post("/api/triggers", json={"name": "loose_t", "sources": ["loose"],
-                                                     "condition": COND})
-            check("a trigger created without a project -> the default project",
-                  r.status_code == 201 and r.json()["project"] == did, r.text)
-            r = await cx.post("/api/triggers", json={"name": "cross", "project": uid,
-                                                     "sources": ["t_ui", "loose"], "condition": COND})
-            check("a trigger in a project over a source outside it -> 201", r.status_code == 201, r.text)
-            src = {x["name"]: x for x in (await cx.get("/api/sources")).json()}
-            check("the source joined the trigger's project and stays in the default one "
-                  "(a default trigger still reads it)",
-                  sorted(src["loose"]["projects"]) == sorted([did, uid]), str(src["loose"]["projects"]))
-            # parts are shared (P-TR-216): an agent may use any trigger and MCP server on the
-            # cell; the project it is made in wires it
-            r = await cx.post("/api/agents/builtin", json={"name": "wrong", "trigger": "t_trigger",
-                                                           "prompt": "x"})
-            check("an agent in the default project on another project's trigger -> 201",
-                  r.status_code == 201 and r.json()["project"] == did, r.text)
-            check("the default project wires it to that trigger, off",
-                  st.list_wakes(agent="wrong") == [{"project": did, "trigger": "t_trigger",
-                                                    "agent": "wrong", "enabled": False}],
-                  str(st.list_wakes(agent="wrong")))
-            r = await cx.post("/api/agents/builtin", json={"name": "right", "trigger": "loose_t",
-                                                           "prompt": "x", "mcp_servers": ["t_mcp"]})
-            check("an agent using another project's MCP server -> 201", r.status_code == 201, r.text)
-            r = await cx.post("/api/agents/builtin", json={"name": "right2", "trigger": "cross",
-                                                           "prompt": "x", "project": uid,
-                                                           "mcp_servers": ["t_mcp"]})
-            check("an agent made in a project -> 201, in that project",
-                  r.status_code == 201 and r.json()["project"] == uid, r.text)
-            r = await cx.post("/api/mcp-servers", json={"name": "m_default", "url": "https://example.invalid/d"})
-            check("an MCP server created without a project -> the default project",
-                  r.status_code == 201 and r.json()["project"] == did, r.text)
-            r = await cx.put("/api/agents/builtin/right2", json={"trigger": "cross", "prompt": "x"})
-            check("an agent edit keeps its project", r.status_code == 200, r.text)
-            r = await cx.put("/api/triggers/cross", json={"name": "cross", "project": did,
-                                                          "sources": ["t_ui", "loose"], "condition": COND})
-            check("putting a trigger in another project -> 200", r.status_code == 200, r.text)
-            check("it is in both projects now",
-                  sorted(st.projects_using("trigger", "cross")) == sorted([uid, did]),
-                  str(st.projects_using("trigger", "cross")))
-            check("its agent stays in its project",
-                  st.projects_using("agent", "right2") == [uid], str(st.projects_using("agent", "right2")))
-            for n in ("wrong", "right", "right2"):
-                await cx.delete(f"/api/agents/builtin/{n}")
-            await cx.delete("/api/triggers/cross")
+            # what POST /api/triggers without a project did: the trigger in the default project
+            st.upsert_catalog_trigger("loose_t", ["loose"], COND, {}, "5m")
+            st.put_in_project("trigger", "loose_t", did)
+            app.state.runtime.reload_catalog()
 
             print("== sources are shared ==")
             r = await cx.post(f"/api/projects/{uid}/sources", json={"name": "loose"})
@@ -357,7 +331,7 @@ async def main():
             r = await cx.delete(f"/api/projects/{did}/sources/loose")
             check("remove a source the default project's trigger reads -> 400",
                   r.status_code == 400 and "loose_t" in r.text, r.text)
-            await cx.delete("/api/triggers/loose_t")
+            rm_trigger("loose_t")
             r = await cx.delete(f"/api/projects/{did}/sources/loose")
             check("with its default trigger gone, the default project let go of the source by "
                   "itself (another project has it)",
@@ -399,7 +373,7 @@ async def main():
                   and r.json()["projects"] == 1, r.text)
             ps = (await cx.get("/api/projects")).json()["projects"]
             check("still one instance besides the default", len(ps) == 2, str([p["name"] for p in ps]))
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["t_trigger"]
+            t = {t["name"]: t for t in triggers()}["t_trigger"]
             check("the trigger is still in its project", t["project"] == uid, str(t))
             r = await cx.post("/api/catalog/import", json={"yaml":
                 "projects:\n  - template: test_demo\n    name: yaml one\n    params: {apps: [q], prefix: y}\n"})
@@ -415,7 +389,7 @@ async def main():
             r = await cx.post("/api/catalog/import", json={"yaml": (
                 "triggers:\n  - name: y_extra\n    project: yaml one\n    sources: [y_q]\n"
                 "    condition: {aggregate: count, predicate: '> 0', window: 5m}\n")})
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}.get("y_extra") or {}
+            t = {t["name"]: t for t in triggers()}.get("y_extra") or {}
             check("an imported trigger lands in the project it names",
                   r.status_code == 200 and t.get("project") == ucs["yaml one"]["id"], r.text[:200])
 
@@ -478,9 +452,8 @@ async def main():
                 "    emit: {kind: demo}\n    cooldown: 1m\n"
                 "agents:\n  - name: free_agent\n    trigger: free_trigger\n    prompt: say hi\n    enabled: true\n")})
             check("free objects imported", r.status_code == 200, r.text[:300])
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["free_trigger"]
+            t = {t["name"]: t for t in triggers()}["free_trigger"]
             check("an imported trigger with no project is in the default project", t["project"] == did, str(t))
-            from tares.config import agent_url
             check("free_agent is on", st.agent_enabled("free_agent"))
             objs = [{"kind": "source", "name": "free_src"}, {"kind": "trigger", "name": "free_trigger"},
                     {"kind": "agent", "name": "free_agent"}]
@@ -498,7 +471,7 @@ async def main():
                                                      "objects": objs + [{"kind": "view", "name": "free_view"}]})
             check("a view object is refused with the reason", r.status_code == 400 and "views were removed" in r.text,
                   r.text[:200])
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}
+            t = {t["name"]: t for t in triggers()}
             check("nothing moved by the failed creates",
                   t["free_trigger"]["project"] == did and t["t_trigger"]["project"] == uid, str(t))
             r = await cx.post("/api/projects", json={"template": "custom", "objects": objs})
@@ -517,19 +490,12 @@ async def main():
                   str(src["t_ui"]))
             check("the source taken from the default project left it (no default trigger reads it)",
                   src["free_src"]["projects"] == [cid], str(src["free_src"]["projects"]))
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["free_trigger"]
+            t = {t["name"]: t for t in triggers()}["free_trigger"]
             check("the trigger moved into the custom project", t["project"] == cid, str(t))
             await cx.put(f"/api/projects/{cid}", json={"objects": objs})
             src = {x["name"]: x for x in (await cx.get("/api/sources")).json()}
             check("letting go of the shared source leaves it with its other project",
                   src["t_ui"]["projects"] == [uid], str(src["t_ui"]["projects"]))
-            # hand edit an adopted object: no customized flag (there is no planned version)
-            r = await cx.put("/api/triggers/free_trigger", json={
-                "name": "free_trigger", "sources": ["free_src"], "key_field": "app",
-                "condition": COND, "emit": {"kind": "demo"}, "cooldown": "1m"})
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["free_trigger"]
-            check("editing an adopted object does not mark it customized, nor move it",
-                  r.status_code == 200 and not t["customized"] and t["project"] == cid, r.text[:200])
             # activity: a run and a firing show on the page
             for i in range(22):
                 st.start_agent_run(f"run_c{i}", "free_agent", "free_trigger", "d1", "x", "h")
@@ -556,7 +522,7 @@ async def main():
             check("pause remembers only the trigger that was on", r.json()["params"]["resume_triggers"] == ["free_trigger"], r.text[:300])
             check("pause turns the agent off here and pauses the trigger", r.json()["status"] == "paused"
                   and not st.agent_enabled("free_agent", cid)
-                  and next(t for t in (await cx.get("/api/triggers")).json() if t["name"] == "free_trigger")["paused"])
+                  and next(t for t in triggers() if t["name"] == "free_trigger")["paused"])
             r = await cx.post(f"/api/projects/{cid}/pause")
             check("a second pause keeps the remembered wiring",
                   r.json()["params"]["resume_wakes"] == [["free_trigger", "free_agent"]], r.text[:300])
@@ -564,38 +530,20 @@ async def main():
             check("resume turns the agent back on here", r.json()["status"] == "active"
                   and st.agent_enabled("free_agent", cid)
                   and "resume_wakes" not in r.json()["params"], r.text[:300])
-            trs = {t["name"]: t["paused"] for t in (await cx.get("/api/triggers")).json()}
+            trs = {t["name"]: t["paused"] for t in triggers()}
             check("resume unpauses only the trigger that was on", trs["free_trigger"] is False and trs["off_trigger"] is True, str(trs))
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
-            t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["off_trigger"]
+            t = {t["name"]: t for t in triggers()}["off_trigger"]
             check("a released trigger goes back to the default project",
                   r.status_code == 200 and t["project"] == did, str(t))
-            await cx.delete("/api/triggers/off_trigger")
-            # an agent on a trigger of this project joins it on creation; while paused, a second
-            # pause keeps what the first one remembered
-            await cx.post(f"/api/projects/{cid}/pause")
-            r = await cx.post("/api/agents/builtin", json={"name": "free_agent2", "trigger": "free_trigger",
-                                                           "prompt": "say hi", "project": cid})
-            check("an agent created on the paused project's trigger", r.status_code == 201, r.text[:200])
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
-            check("dropping an agent whose trigger stays is fine (parts are shared): it leaves, "
-                  "with its wiring here", r.status_code == 200
-                  and cid not in st.projects_using("agent", "free_agent2")
-                  and not st.list_wakes(project=cid, agent="free_agent2"), r.text[:300])
-            check("the remembered wiring is unchanged",
-                  r.json()["params"]["resume_wakes"] == [["free_trigger", "free_agent"]], r.text[:300])
-            await cx.post(f"/api/projects/{cid}/resume")
-            check("resume turns on only what was on",
-                  st.agent_enabled("free_agent", cid) and not st.agent_enabled("free_agent2"))
-            await cx.delete("/api/agents/builtin/free_agent2")
-            await cx.put(f"/api/projects/{cid}", json={"objects": objs})
+            rm_trigger("off_trigger")
             # a same-name object recreated by hand and claimed elsewhere is not released by us
-            r = await cx.post("/api/mcp-servers", json={"name": "lost_mcp", "url": "https://example.invalid/a"})
+            r = mk_mcp("lost_mcp", "https://example.invalid/a")
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "lost_mcp"}]})
             check("mcp server taken in", r.status_code == 200 and "mcp_server:lost_mcp" in r.json()["report"]["added"], r.text[:200])
-            r = await cx.delete("/api/mcp-servers/lost_mcp")
+            r = rm_mcp("lost_mcp")
             check("hand delete of the adopted mcp server", r.status_code == 200, r.text[:200])
-            await cx.post("/api/mcp-servers", json={"name": "lost_mcp", "url": "https://example.invalid/b"})
+            mk_mcp("lost_mcp", "https://example.invalid/b")
             r = await cx.post("/api/projects", json={"template": "custom", "name": "claimer",
                                                      "objects": [{"kind": "mcp_server", "name": "lost_mcp"}]})
             check("another project uses the recreated mcp server too", r.status_code == 201, r.text[:300])
@@ -619,12 +567,12 @@ async def main():
             check("deleting a project keeps a part another project uses, and says so",
                   r.status_code == 200 and "mcp_server:lost_mcp" not in r.json()["deleted"]
                   and {"kind": "mcp_server", "name": "lost_mcp", "project": cid} in r.json()["kept_shared"]
-                  and any(x["name"] == "lost_mcp" for x in (await cx.get("/api/mcp-servers")).json()["servers"]),
+                  and any(x["name"] == "lost_mcp" for x in mcps()),
                   r.text[:300])
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
-            await cx.delete("/api/mcp-servers/lost_mcp")
+            rm_mcp("lost_mcp")
             # edit: take an mcp server in, drop the trigger (the agent stays, unwired here)
-            r = await cx.post("/api/mcp-servers", json={"name": "free_mcp", "url": "https://example.invalid/mcp"})
+            r = mk_mcp("free_mcp", "https://example.invalid/mcp")
             check("free mcp server created", r.status_code in (200, 201), r.text[:200])
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "free_mcp"}]})
             check("edit takes the mcp server in", r.status_code == 200
@@ -654,11 +602,11 @@ async def main():
             names = {x["name"] for x in (await cx.get("/api/sources")).json()}
             check("the source is gone", "free_src" not in names, str(names))
             # a custom project whose only object is gone keeps an empty list in the export
-            r = await cx.post("/api/mcp-servers", json={"name": "solo_mcp", "url": "https://example.invalid/s"})
+            r = mk_mcp("solo_mcp", "https://example.invalid/s")
             r = await cx.post("/api/projects", json={"template": "custom", "name": "solo",
                                                      "objects": [{"kind": "mcp_server", "name": "solo_mcp"}]})
             solo = r.json()["id"]
-            await cx.delete("/api/mcp-servers/solo_mcp")
+            rm_mcp("solo_mcp")
             doc = _yaml.safe_load((await cx.get("/api/catalog/export")).text)
             check("export keeps a custom project with nothing left, as an empty project",
                   next(u for u in doc["projects"] if u["name"] == "solo")["objects"] == [], str(doc["projects"]))
@@ -676,11 +624,11 @@ async def main():
             names = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("the unshared source is removed, the shared one stays", "t_ui" not in names
                   and "t_web" in names, str(names))
-            trig = {t["name"] for t in (await cx.get("/api/triggers")).json()}
+            trig = {t["name"] for t in triggers()}
             check("owned trigger removed", "t_trigger" not in trig)
             check("owned agent and MCP server removed",
-                  not any(a["name"] == "t_agent" for a in (await cx.get("/api/agents/builtin")).json()["agents"])
-                  and not any(m["name"] == "t_mcp" for m in (await cx.get("/api/mcp-servers")).json()["servers"]))
+                  not any(a["name"] == "t_agent" for a in agents())
+                  and not any(m["name"] == "t_mcp" for m in mcps()))
             check("instance gone", (await cx.get(f"/api/projects/{uid}")).status_code == 404)
             check("unknown id -> 404", (await cx.delete("/api/projects/uc_nope")).status_code == 404)
             r = await cx.delete(f"/api/projects/{sharer}")
@@ -695,7 +643,7 @@ async def main():
             # file cannot be removed here)
             await cx.delete(f"/api/projects/{ucs['yaml one']['id']}?delete_sources=y_q")
             check("catalog empty again", (await cx.get("/api/sources")).json() == []
-                  and (await cx.get("/api/triggers")).json() == [], (await cx.get("/api/sources")).text[:200])
+                  and triggers() == [], (await cx.get("/api/sources")).text[:200])
 
     print("== YAML seed on an empty catalog ==")
     with open(CATALOG, "w") as f:

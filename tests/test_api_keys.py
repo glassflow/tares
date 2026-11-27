@@ -1,6 +1,6 @@
 """Scoped API keys — create/list/revoke via /api/keys, and scope enforcement across the surface:
-read (reads, catalog reads, subscribe), ingest (/ingest, /v1/*, remember), admin (CRUD,
-credentials, keys). Env tokens act as implicit root keys. Revoking a key removes its subscriptions.
+read (reads, catalog reads), ingest (/ingest, /v1/*, remember), admin (CRUD, credentials,
+keys). Env tokens act as implicit root keys. Revoking a key stops it at once.
 """
 import asyncio, os, subprocess, sys
 import httpx
@@ -96,9 +96,6 @@ async def main():
             ck("read key: /read narrowed to sources ok",
                (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}, "sources": ["evt"]},
                               headers=H(read_key))).status_code == 200)
-            sub = await cx.post(f"{B}/subscribe", json={"trigger": "t_evt", "url": "http://x/hook"},
-                                headers=H(read_key))
-            ck("read key: subscribe ok", sub.status_code == 200, sub.text)
 
             # ── ingest scope ──
             ck("ingest key: ingest ok",
@@ -120,17 +117,11 @@ async def main():
             w = (await cx.get(f"{B}/api/whoami", headers=H(read_key))).json()
             ck("whoami: name + scopes", w.get("name") == "agent" and w.get("scopes") == ["read"], str(w))
 
-            # ── revocation kills access AND subscriptions ──
+            # ── revocation kills access ──
             r = await cx.post(f"{B}/api/keys", json={"name": "revoke-me", "scopes": ["read"]}, headers=H(AUTH))
             rk, rk_id = r.json()["secret"], r.json()["id"]
-            await cx.post(f"{B}/subscribe", json={"trigger": "t_evt", "url": "http://gone/hook"}, headers=H(rk))
-            subs_before = (await cx.get(f"{B}/api/subscriptions", headers=H(AUTH))).json()
             ck("revoke -> 200", (await cx.delete(f"{B}/api/keys/{rk_id}", headers=H(AUTH))).status_code == 200)
             ck("revoked key -> 401", (await cx.get(f"{B}/catalog", headers=H(rk))).status_code == 401)
-            subs_after = (await cx.get(f"{B}/api/subscriptions", headers=H(AUTH))).json()
-            gone = all("gone" not in str(s) for s in subs_after) and any("gone" in str(s) for s in subs_before)
-            ck("revocation removed the key's subscriptions", gone,
-               f"before={subs_before} after={subs_after}")
             ck("revoke twice -> 404", (await cx.delete(f"{B}/api/keys/{rk_id}", headers=H(AUTH))).status_code == 404)
             ck("revoke ingest key of producer works",
                (await cx.delete(f"{B}/api/keys/{ing_id}", headers=H(AUTH))).status_code == 200)

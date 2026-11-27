@@ -1,10 +1,9 @@
 """The daemon's own counters, served at `GET /metrics` in the Prometheus text format (TR-308).
 
 What a cell is doing, for a fleet dashboard and alerts: events in, poll errors, source health,
-agent runs and their outcomes, model calls, tokens and spend by provider, database size against
-its limit, trigger evaluations and how long they take, the event loop's lag, and how long each
+model calls, tokens and spend by provider, database size against its limit, the event loop's lag, and how long each
 HTTP route takes (`tares_http_request_duration_seconds`, TR-652) and where the time of the ticket
-brief, the builder brief and merge-ready goes (`tares_route_phase_seconds`, TR-1476). Labels name the source, agent,
+brief, the builder brief and merge-ready goes (`tares_route_phase_seconds`, TR-1476). Labels name the source,
 provider, route template or status; never an entity key, an ID or anything from a payload.
 
 The endpoint is public unless TARES_METRICS_TOKEN is set; then it wants
@@ -34,10 +33,6 @@ if AVAILABLE:
                     ["source", "outcome"])   # ok | error | paused
     SOURCE_STATE = Gauge("tares_source_state", "Source health: 1 for the state the source is in",
                          ["source", "state"])   # ok | error | paused | push
-    AGENT_RUNS = Counter("tares_agent_runs_total", "Tares agent runs, per agent and outcome",
-                         ["agent", "status"])   # ok | empty | exhausted | capped | failed
-    AGENT_RUN_SECONDS = Histogram("tares_agent_run_seconds", "Wall time of an agent run", ["agent"],
-                                  buckets=(1, 5, 10, 20, 30, 60, 120, 300, 600))
     MODEL_CALLS = Counter("tares_model_calls_total", "Model calls, per provider and surface",
                           ["provider", "surface"])
     MODEL_TOKENS = Counter("tares_model_tokens_total", "Tokens, per provider, surface and direction",
@@ -47,11 +42,6 @@ if AVAILABLE:
                           ["provider", "surface"])
     MODEL_UNPRICED = Counter("tares_model_unpriced_calls_total", "Model calls on a model with no "
                              "price, per provider", ["provider"])
-    TRIGGER_EVALS = Counter("tares_trigger_evaluations_total", "Trigger evaluation passes")
-    TRIGGER_FIRINGS = Counter("tares_trigger_firings_total", "Trigger firings, per trigger", ["trigger"])
-    TRIGGER_EVAL_SECONDS = Histogram("tares_trigger_evaluation_seconds",
-                                     "Wall time of one evaluation pass (runs on the event loop)",
-                                     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
     DB_BYTES = Gauge("tares_db_bytes", "Database plus WAL size in bytes")
     DB_MAX_BYTES = Gauge("tares_db_max_bytes", "The storage limit ingest is measured against (0 when unknown)")
     STORAGE_PCT = Gauge("tares_storage_pct", "Database size as a percentage of the limit (0 to 100; 0 when unknown)")
@@ -155,13 +145,6 @@ def source_gone(source: str) -> None:
                 pass
 
 
-def agent_run(agent: str, status: str, seconds: float | None = None) -> None:
-    if AVAILABLE:
-        AGENT_RUNS.labels(agent=agent, status=status).inc()
-        if seconds is not None:
-            AGENT_RUN_SECONDS.labels(agent=agent).observe(seconds)
-
-
 def model_usage(provider: str | None, surface: str, calls: int, input_tokens: int,
                 output_tokens: int, cost_usd: float | None) -> None:
     if not AVAILABLE:
@@ -174,14 +157,6 @@ def model_usage(provider: str | None, surface: str, calls: int, input_tokens: in
         MODEL_UNPRICED.labels(provider=p).inc(calls)
     elif cost_usd > 0:
         MODEL_SPEND.labels(provider=p, surface=surface).inc(cost_usd)
-
-
-def trigger_evaluation(seconds: float, fired: list) -> None:
-    if AVAILABLE:
-        TRIGGER_EVALS.inc()
-        TRIGGER_EVAL_SECONDS.observe(seconds)
-        for name, _key in fired:
-            TRIGGER_FIRINGS.labels(trigger=name).inc()
 
 
 def session_ingest(seconds: float, ok: bool = True) -> None:
@@ -329,28 +304,20 @@ class RequestTiming:
                             time.perf_counter() - t0)
 
 
-RUN_STATUSES = ("ok", "empty", "exhausted", "capped", "failed")
-
-
-def prime(sources=(), triggers=(), agents=(), providers=()) -> None:
+def prime(sources=(), providers=()) -> None:
     """Create every counter's label set at zero before its first event. A counter that only
     appears when something happens makes `increase()` miss that first event (Prometheus sees a
     series that starts at 1); with the zero sample present, rates and increases are right from
-    the first run, the first firing, the first poll. Called on start and on every catalog reload."""
+    the first poll, the first model call. Called on start and on every catalog reload."""
     if not AVAILABLE:
         return
     for s in sources:
         EVENTS.labels(source=s)
         for o in ("ok", "error", "paused"):
             POLLS.labels(source=s, outcome=o)
-    for t in triggers:
-        TRIGGER_FIRINGS.labels(trigger=t)
-    for a in agents:
-        for st in RUN_STATUSES:
-            AGENT_RUNS.labels(agent=a, status=st)
     for p in providers:
         MODEL_UNPRICED.labels(provider=p)
-        for surface in ("agent", "ask"):
+        for surface in ("ask",):   # the summaries' surface (agents and Ask went, TR-1810)
             MODEL_CALLS.labels(provider=p, surface=surface)
             MODEL_SPEND.labels(provider=p, surface=surface)
             for d in ("input", "output"):

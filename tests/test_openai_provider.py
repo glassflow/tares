@@ -1,6 +1,6 @@
 """The OpenAI chat-completions provider (tares/models.py, TR-300): the neutral conversation
 rendered to chat messages and function tools, replies parsed back, streaming assembled from SSE
-deltas, and the agent runner's loop driven end to end on it, unchanged.
+deltas, and a tool call written as JSON text read back as the call.
 
 Run: .venv/bin/python tests/test_openai_provider.py   (no external services needed)
 """
@@ -13,8 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import tares.builtin_agents as ba
-from tares.models import (ModelError, ModelReply, OpenAIProvider, ToolCall, empty_usage,
+from tares.models import (ModelError, ModelReply, OpenAIProvider, ToolCall,
                           tool_call_in_text, tool_message)
 
 PASS = FAIL = 0
@@ -215,64 +214,7 @@ async def main():
         check("a router's label names it in the error", str(e).startswith("litellm 500"), str(e))
     STATUS[0] = 200
 
-    print("== the agent runner's loop on the OpenAI provider, unchanged ==")
-
-    class Toolbox:
-        tool_defs = TOOLS
-        calls: list = []
-
-        def owns(self, name):
-            return name == "read"
-
-        async def call(self, name, args):
-            self.calls.append((name, args))
-            return "evidence: latency spiked at 09:00"
-
-    class Store:
-        def last_finding(self, *a):
-            return None
-
-    runner = object.__new__(ba.AgentRunner)
-    runner.store = Store()
-    ANSWERS.append(completion(text=None, tool_calls=[
-        {"id": "call_r", "type": "function", "function": {"name": "read", "arguments": '{"selector": {"service": "billing"}}'}}],
-        finish="tool_calls", usage={"prompt_tokens": 100, "completion_tokens": 10}))
-    ANSWERS.append(completion(text="Root cause: a deploy at 08:58.", usage={"prompt_tokens": 150, "completion_tokens": 20}))
-    usage = empty_usage()
-    agent = {"name": "sre", "prompt": "investigate", "model": "gpt-x"}
-    toolbox = Toolbox()
-    finding, rounds, tool_calls, external, exhausted, partial = await runner._loop_with(
-        agent, "latency_high", "billing", "the timeline", p, toolbox, usage)
-    check("the run concluded with the model's finding",
-          finding == "Root cause: a deploy at 08:58." and not exhausted, f"{finding!r} {exhausted}")
-    check("two rounds, one tool call, the external tool recorded",
-          (rounds, tool_calls, external) == (2, 1, ["read"]), f"{rounds} {tool_calls} {external}")
-    check("the tool was called with the parsed arguments",
-          toolbox.calls == [("read", {"selector": {"service": "billing"}})], str(toolbox.calls))
-    second = CALLS[-1]["body"]["messages"]
-    check("the second request replays the assistant's tool call and carries the tool result",
-          second[-2]["role"] == "assistant" and second[-2]["tool_calls"][0]["id"] == "call_r"
-          and second[-1] == {"role": "tool", "tool_call_id": "call_r",
-                             "content": "evidence: latency spiked at 09:00"}, str(second[-2:]))
-    check("usage summed over both calls",
-          (usage["calls"], usage["input_tokens"], usage["output_tokens"]) == (2, 250, 30), str(usage))
-
-    print("== small-model slips: tool name case, unknown tools (TR-306) ==")
-    ANSWERS.append(completion(text=None, tool_calls=[
-        {"id": "c1", "type": "function", "function": {"name": "READ ", "arguments": '{"selector": {"service": "x"}}'}},
-        {"id": "c2", "type": "function", "function": {"name": "frobnicate", "arguments": "{}"}}],
-        finish="tool_calls"))
-    ANSWERS.append(completion(text="Finding."))
-    toolbox = Toolbox(); toolbox.calls = []
-    finding, rounds, tool_calls, external, exhausted, partial = await runner._loop_with(
-        agent, "latency_high", "billing", "the timeline", p, toolbox, empty_usage())
-    check("a mis-cased tool name still reaches the tool", toolbox.calls == [("read", {"selector": {"service": "x"}})], str(toolbox.calls))
-    second = CALLS[-1]["body"]["messages"]
-    unknown = next(m for m in second if m.get("role") == "tool" and m.get("tool_call_id") == "c2")
-    check("an unknown tool answers with the list of real tools, and the run goes on",
-          "unknown tool 'frobnicate'" in unknown["content"] and "read" in unknown["content"] and finding == "Finding.", str(unknown))
-
-    print("== a tool call written as JSON text (llama-style) is run, not filed as the finding ==")
+    print("== a tool call written as JSON text (llama-style) is read as the call ==")
     check("bare JSON object", tool_call_in_text('{"name": "read", "parameters": {"selector": {"service": "a"}}}', TOOLS)
           == ToolCall("text_call", "read", {"selector": {"service": "a"}}))
     check("embedded in prose, arguments key", tool_call_in_text('I will call the tool now: {"name": "Read", "arguments": {"selector": {"service": "b"}}} and wait.', TOOLS)
@@ -282,19 +224,6 @@ async def main():
     check("prose with braces that is not a call", tool_call_in_text('Latency {p99} rose; the cause is {"name": "nobody"}', TOOLS) is None)
     check("a real finding with no JSON", tool_call_in_text("Root cause: the deploy.", TOOLS) is None)
     check("string arguments are parsed", tool_call_in_text('{"name": "read", "arguments": "{\\"k\\": 2}"}', TOOLS).arguments == {"k": 2})
-    ANSWERS.append(completion(text='To narrow it down I will use the read tool.\n\n{"name": "read", "parameters": {"selector": {"service": "checkout"}}}'))
-    ANSWERS.append(completion(text="Finding: the 09:00 deploy."))
-    toolbox = Toolbox(); toolbox.calls = []
-    finding, rounds, tool_calls, external, exhausted, partial = await runner._loop_with(
-        agent, "latency_high", "billing", "the timeline", p, toolbox, empty_usage())
-    check("the meant call ran and the run concluded on the next round",
-          toolbox.calls == [("read", {"selector": {"service": "checkout"}})] and finding == "Finding: the 09:00 deploy." and rounds == 2 and tool_calls == 1,
-          f"{toolbox.calls} {finding!r} {rounds} {tool_calls}")
-    second = CALLS[-1]["body"]["messages"]
-    check("the replayed assistant turn carries a real tool call the tool message answers",
-          second[-2]["role"] == "assistant" and second[-2]["tool_calls"][0]["function"]["name"] == "read"
-          and second[-1]["role"] == "tool" and second[-1]["tool_call_id"] == second[-2]["tool_calls"][0]["id"], str(second[-2:]))
-
     srv.shutdown()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0

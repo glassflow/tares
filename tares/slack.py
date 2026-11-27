@@ -1,32 +1,26 @@
-"""Slack — the bot token, the outbound message, and the `/tares` slash command's replies.
+"""Slack: the bot token, the messages the cell posts, the channel list, and the `/tares` command's reply.
 
-Outbound (the dispatch sink): resolve the bot token, format a firing as Block Kit, post it.
-Inbound (the slash command): parse `/tares ask …`, bound its cost, and format the answer that
-goes back to Slack's `response_url`. Signature verification lives next door in `slack_verify.py`
-— it is the security boundary and is kept separately reviewable.
+Outbound: resolve the bot token and shape Block Kit for what the cell posts (the standup, the
+waiting items). Inbound: the button clicks and the `/tares` command, which only says that asking
+from Slack is gone (TR-1810). Signature verification lives next door in `slack_verify.py`: it is
+the security boundary and is kept separately reviewable.
 
 This is the *generic* half of Tares's Slack support: a bot token that an operator configures
 (env or console) and one `chat.postMessage` call. Nothing here knows about OAuth or hosted
 installs; a self-hosted user gets the full feature by pasting a token.
 
-Deliberately plain `httpx`, no `slack_sdk`: this is one HTTP call, and `Dispatcher` already owns
-its client, its timeout and its retry policy. Adding an SDK for it would buy a dependency and a
-second, divergent retry loop.
+Deliberately plain `httpx`, no `slack_sdk`: this is one HTTP call. Adding an SDK for it would buy
+a dependency for nothing.
 
 The one thing that needs care is Slack's error taxonomy. `chat.postMessage` answers **HTTP 200
 with `{"ok": false, "error": "..."}`** for most failures, so the status code alone cannot decide
-whether to retry — a revoked token would otherwise burn all five attempts and land in the ledger
-as a timeout rather than as "invalid_auth".
+whether to retry (`classify`).
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-from urllib.parse import quote
-import time
-from collections import deque
-from datetime import datetime, timezone
 
 import httpx
 
@@ -68,78 +62,6 @@ def public_base() -> str:
     return os.getenv("TARES_PUBLIC_URL", "").strip().rstrip("/")
 
 
-def entity_url(key: str) -> str:
-    """The entity's timeline in the console, or "" without a public address."""
-    base = public_base()
-    return f"{base}/explore?key={quote(key, safe='')}" if base and key else ""
-
-
-def run_url(agent: str, run_id: str | None) -> str:
-    """One run on its agent's page, opened and scrolled to, or "" without a public address."""
-    base = public_base()
-    if not base or not agent:
-        return ""
-    url = f"{base}/agents/{quote(agent, safe='')}?tab=runs"
-    return url + (f"&run={quote(run_id, safe='')}" if run_id else "")
-
-
-def dispatch_url(dispatch_id: str | None) -> str:
-    base = public_base()
-    return f"{base}/dispatches/{dispatch_id}" if base and dispatch_id else ""
-
-
-def dispatch_link(dispatch_id: str | None) -> str:
-    """The `<url|label>` for one firing. A trigger alert is about the firing, not the entity: the
-    dispatch page is the thing that answers "what actually fired, and what did it carry" — which is
-    the question someone reading the alert in Slack has."""
-    base = public_base()
-    return f"<{base}/dispatches/{dispatch_id}|Open in Tares>" if base and dispatch_id else ""
-
-
-# `[T-1734s]` on every event line. Correct, and what an agent wants; unreadable at a glance in a
-# chat client. Rewritten in the SLACK COPY ONLY — the payload itself is the agent-facing contract
-# (it goes out over MCP verbatim), so it keeps its exact seconds.
-_AGE = re.compile(r"\[T-(\d+)s\]")
-
-
-def _humanize_ages(text: str) -> str:
-    def one(m: re.Match) -> str:
-        s = int(m.group(1))
-        if s < 90:
-            return f"[{s}s ago]"
-        if s < 5400:
-            return f"[{round(s / 60)}m ago]"
-        if s < 172800:
-            return f"[{round(s / 3600)}h ago]"
-        return f"[{round(s / 86400)}d ago]"
-    return _AGE.sub(one, text)
-
-
-def _slack_date(iso: str) -> str:
-    """Slack's `<!date^…>` token, which renders in each READER's timezone. A raw ISO string with
-    microseconds and a UTC offset is not a timestamp anyone reads in a chat client. Falls back to
-    the original string if it can't be parsed — a wrong-looking date beats a broken token."""
-    try:
-        dt = datetime.fromisoformat(iso.strip().replace("Z", "+00:00"))
-    except (TypeError, ValueError, AttributeError):
-        return iso
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return f"<!date^{int(dt.timestamp())}^{{date_short_pretty}} at {{time}}|{iso}>"
-
-
-def _slack_time(iso: str) -> str:
-    """Slack's `<!date^…>` token for a clock time only, in each reader's timezone; the fallback
-    text is the UTC time."""
-    try:
-        dt = datetime.fromisoformat(str(iso).strip().replace("Z", "+00:00"))
-    except (TypeError, ValueError, AttributeError):
-        return str(iso or "")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return f"<!date^{int(dt.timestamp())}^{{time}}|{dt.astimezone(timezone.utc):%H:%M} UTC>"
-
-
 def cell_workspace() -> str | None:
     """This cell's workspace slug on Tares Cloud (None self-hosted), read from the environment."""
     return workspace_slug(os.getenv("TARES_SLACK_CONNECT_URL", ""))
@@ -149,37 +71,7 @@ def _truncate(text: str, limit: int = _MAX_SECTION) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
-def build_message(trigger: str, key: str, payload: str, fired_at: str | None = None,
-                  dispatch_id: str | None = None) -> dict:
-    """Block Kit body for a fired trigger. `text` is always set as well — Slack uses it for the
-    notification and for clients that can't render blocks, so a blocks-only message shows up as an
-    empty push notification.
-
-    `unfurl_links`/`unfurl_media` are off. The body carries every label on the event, so a source
-    with a `host` or `url` label — web traffic, CDN logs, deploys nearly always have one — made
-    Slack fetch that site and staple a preview card to the alert. It roughly doubled the height with
-    nothing about the incident, read as though Tares were linking somewhere relevant, and meant
-    alerting had the side effect of Slack fetching a customer's URLs.
-    """
-    # the trigger is the header, as an alert's name is on a Rius alert
-    fields = [("Entity", key)]
-    if fired_at:
-        fields.append(("Fired", _slack_date(fired_at)))
-    blocks: list[dict] = [_header(trigger), _fields(fields)]
-    body = _humanize_ages((payload or "").strip())
-    if body:
-        blocks.append({"type": "section", "text": {
-            "type": "mrkdwn", "text": "```" + _truncate(body, _MAX_PAYLOAD) + "```"}})
-    actions = _buttons([("View firing in Tares", dispatch_url(dispatch_id), "primary")])
-    if actions:
-        blocks.append(actions)
-    blocks.append(_context("Tares trigger" + (f" · {_slack_date(fired_at)}" if fired_at else "")))
-    return {"text": f"{trigger} fired for {key}", "blocks": blocks,
-            "unfurl_links": False, "unfurl_media": False}
-
-
 # ── Block Kit pieces shared by every message Tares posts (TR-275) ────────────
-_MAX_PAYLOAD = 1500      # a firing's payload excerpt; the full timeline is one click away
 _MAX_EXCERPT = 600       # a finding's excerpt in the channel; the full note is in the thread
 
 
@@ -187,28 +79,6 @@ def _header(text: str) -> dict:
     # plain_text only, 150 characters at most, or Slack rejects the whole message
     return {"type": "header", "text": {"type": "plain_text", "text": _truncate(text, 150),
                                         "emoji": True}}
-
-
-def _fields(pairs: list[tuple[str, str]]) -> dict:
-    """A two-column grid of label and value, as Rius alerts show; empty values are left out."""
-    return {"type": "section", "fields": [
-        {"type": "mrkdwn", "text": f"*{label}*\n{_truncate(str(value), 1900)}"}
-        for label, value in pairs if value not in (None, "")][:10]}
-
-
-def _buttons(buttons: list[tuple[str, str, str | None]]) -> dict | None:
-    """Link buttons; one without a URL (no public address) is left out, and none at all means no
-    actions block rather than an empty one."""
-    elems = []
-    for i, (text, url, style) in enumerate(buttons):
-        if not url:
-            continue
-        b = {"type": "button", "action_id": f"tares_link_{i}",
-             "text": {"type": "plain_text", "text": text}, "url": url}
-        if style:
-            b["style"] = style
-        elems.append(b)
-    return {"type": "actions", "elements": elems} if elems else None
 
 
 def _context(text: str) -> dict:
@@ -221,7 +91,7 @@ def _context(text: str) -> dict:
 # is on an old message, from a feature that is gone, and the clicker is told so with this.
 GONE_NOTE = "This button no longer does anything: the feature it belonged to is gone from Tares."
 LINK_ACTION_IDS = ("open_item",)        # tares/waiting_slack.py's "Open in Tares"
-LINK_ACTION_PREFIX = "tares_link_"      # _buttons above
+LINK_ACTION_PREFIX = "tares_link_"      # the link buttons on an older finding or firing message
 
 
 def is_link_click(payload: dict) -> bool:
@@ -264,7 +134,7 @@ def classify(status: int, data: dict | None) -> tuple[bool, str | None, bool]:
         DEFINITIVE_ERRORS; anything else there (internal_error, service_unavailable) is a
         transient Slack fault and retries, as does `ratelimited`.
       · HTTP 429 / 5xx                           → rate limit or outage, retry. Other 4xx are
-        definitive, the same rule `Dispatcher._post` applies to a webhook.
+        definitive.
     """
     if status == 429:
         return False, "slack: ratelimited", True
@@ -422,73 +292,16 @@ async def list_channels(token: str, timeout: float = 10.0
 
 
 # ── inbound: the /tares slash command ─────────────────────────────────────
-# Everything below serves `POST /api/slack/events`. It is deliberately pure — parsing, cost
-# bounding and message shaping — so the endpoint itself is only plumbing: verify, ACK, answer.
-
-USAGE = ("usage: `/tares ask <question>`; e.g. "
-         "`/tares ask what happened to checkout-svc in the last hour?`")
-
-# Cost ceiling, the same shape as `builtin_agents.DAILY_RUN_CAP`: a per-day count with an env
-# override, so one enthusiastic channel cannot run up an unbounded model bill. Counted per
-# (team, user) rather than per workspace — one person's loop must not lock out their colleagues.
-DAILY_ASK_CAP = int(os.getenv("TARES_SLACK_DAILY_CAP", "50"))
-
-
-class AskCap:
-    """A rolling 24h cap per (team, user).
-
-    Held in memory rather than in a table: unlike an agent run there is nothing to show in the
-    console for an ask, and a restart resetting the counter is an acceptable cost bound — the
-    ceiling exists to stop a runaway loop, not to bill anyone. Same knob shape as DAILY_RUN_CAP.
-    """
-
-    def __init__(self, cap: int = DAILY_ASK_CAP, window: float = 86400.0):
-        self.cap, self.window, self._seen = cap, window, {}
-
-    def take(self, team: str, user: str, now: float | None = None) -> bool:
-        """Record one ask; False when this user is already at the cap (nothing is recorded then)."""
-        now = time.time() if now is None else now
-        q = self._seen.setdefault((team or "-", user or "-"), deque())
-        while q and now - q[0] > self.window:
-            q.popleft()
-        if len(q) >= self.cap:
-            return False
-        q.append(now)
-        return True
-
-
-def parse_command(text: str, workspace: str | None = None) -> tuple[str, str | None]:
-    """`(question, error)` for the `text` of a `/tares` slash command.
-
-    `/tares ask <question>` is the documented form. A bare `/tares <question>` is accepted as
-    the same thing — forgetting the subcommand is the overwhelmingly likely mistake, and answering
-    it beats a lecture. Empty, or `help`, gets the usage line; nothing gets a stack trace.
-
-    `workspace` is this instance's slug on Tares Cloud (see `workspace_slug`). When one Slack
-    workspace is linked to several Tares workspaces, Tares Cloud asks for
-    `/tares ask <workspace> <question>` and forwards the text unchanged (the signature covers it),
-    so the first word after `ask` is dropped when it is exactly this slug. Anything else is part
-    of the question, which keeps self-hosted and single-workspace asks as they were.
-    """
-    text = (text or "").strip()
-    if not text or text.lower() in ("help", "-h", "--help", "?"):
-        return "", USAGE
-    head, _, rest = text.partition(" ")
-    if head.lower() == "ask":
-        rest = rest.strip()
-        if workspace:
-            first, _, tail = rest.partition(" ")
-            if first.lower() == workspace.lower():
-                rest = tail.strip()
-        return (rest, None) if rest else ("", f"ask what? {USAGE}")
-    return text, None
+# Asking Tares from Slack went with Ask (TR-1810): the command answers with this note alone.
+ASK_GONE_NOTE = ("Asking Tares from Slack is no longer available. Open Tares to see your "
+                 "projects and what the crew is doing.")
 
 
 def workspace_slug(connect_url: str | None) -> str | None:
     """This workspace's slug on Tares Cloud: the `workspace` query parameter of
     TARES_SLACK_CONNECT_URL, which the control plane sets to
     `<console>/slack/install?workspace=<slug>`. None when it is unset (self-hosted) or carries no
-    such parameter, and then `/tares ask` strips nothing."""
+    such parameter."""
     from urllib.parse import parse_qs, urlsplit
     try:
         vals = parse_qs(urlsplit((connect_url or "").strip()).query).get("workspace") or []
@@ -616,49 +429,6 @@ def to_mrkdwn(text: str) -> str:
     return text
 
 
-def build_finding_message(agent_name: str, trigger: str, key: str, finding: str, *,
-                          verdict: str | None = None, model: str | None = None,
-                          run_id: str | None = None, when: str | None = None,
-                          full_note: bool = False) -> dict:
-    """Block Kit body for a Tares agent's finding (TR-275): the entity as the header, a grid of
-    fields, a short excerpt of the note, and buttons into Tares.
-
-    A note that fits in one message block is posted whole (`full_note=True`), and Slack folds it
-    behind "Show more". A longer one gets an excerpt here and the full note in the message's
-    thread (`build_finding_thread`), so it cannot fill the channel. The incoming-webhook path
-    cannot thread, so it always posts the note whole. `text` is the notification fallback."""
-    # the entity is the header, so the fields say who wrote the note and why
-    fields = [("Agent", agent_name), ("Trigger", f"`{trigger}`"), ("Verdict", verdict),
-              ("Model", model)]
-    if when:
-        fields.append(("When", _slack_date(when)))
-    blocks: list[dict] = [_header(key), _fields(fields)]
-    if full_note:
-        blocks += _sections(finding)
-    else:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn",
-                                                    "text": excerpt(finding) or "_(no note)_"}})
-    actions = _buttons([("View in Tares", run_url(agent_name, run_id), "primary"),
-                        ("Open timeline", entity_url(key), None)])
-    if actions:
-        blocks.append(actions)
-    blocks.append(_context("Tares agent finding" + ("" if full_note else " · full note in the thread")))
-    return {"text": f"{agent_name} on {key}: {excerpt(finding, 200)}",
-            "blocks": blocks, "unfurl_links": False, "unfurl_media": False}
-
-
-def needs_thread(finding: str) -> bool:
-    """Whether the note is too long for one message block: then the channel gets an excerpt and
-    the full note goes in the thread. A note that fits in one block is posted whole, and Slack's
-    own "Show more" folds it; a thread there only repeated what the channel already showed."""
-    return len(_sections(finding)) > 1
-
-
-def build_finding_thread(finding: str) -> list[dict]:
-    """The full note, as the thread reply under a finding."""
-    return _sections(finding)
-
-
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -723,29 +493,6 @@ def _sections(text: str) -> list[dict]:
             in_fence = not in_fence
     emit(False)
     return out or [{"type": "section", "text": {"type": "mrkdwn", "text": "_(no answer)_"}}]
-
-
-def build_answer(question: str, answer: str, thread_ts: str | None = None,
-                 in_channel: bool = True) -> dict:
-    """The `response_url` body carrying an answer back to Slack.
-
-    `replace_original` clears the "thinking…" ACK so a channel is left with the answer alone, and
-    `text` is always set for the notification and for clients that can't render blocks.
-    """
-    blocks = [{"type": "context", "elements": [
-        {"type": "mrkdwn", "text": f":mag: *{to_mrkdwn(question)[:180]}*"}]}]
-    blocks += _sections(answer)
-    body = {"response_type": "in_channel" if in_channel else "ephemeral",
-            "replace_original": True,
-            "text": _truncate(answer.strip() or "(no answer)", 500),
-            "blocks": blocks,
-            # Same reason as build_message: an answer that mentions one of the user's hostnames
-            # should not make Slack go and fetch it.
-            "unfurl_links": False, "unfurl_media": False}
-    if thread_ts:
-        # Invoked inside a thread: the answer belongs in that thread, not adrift in the channel.
-        body["thread_ts"] = thread_ts
-    return body
 
 
 def build_error(message: str, thread_ts: str | None = None) -> dict:

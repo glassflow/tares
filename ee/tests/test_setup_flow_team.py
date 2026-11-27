@@ -142,8 +142,6 @@ async def main():
                                headers=H(ROOT))
         store = app.state.store
         runtime = app.state.runtime
-        runner = app.state.agents
-        runner.attach_loop()
         real_resolve = daemon.resolve_provider
         daemon.resolve_provider = lambda store, pid=None: (STUB, "test")
 

@@ -6,9 +6,9 @@ retry is still wrong, 409 without a provider), adjust (a number the model change
 knob), apply (goal, every object owned by the project, handoffs, on and off agents, skills, MCP
 servers from enabled tools only, rollback naming the failing step), the own agent (a key, no
 Tares agents), the Connect checks (waiting then receiving after a test event, tool test states,
-the own agent joining after a key call), practice runs (flagged, handoffs too, left out of today
-and health), the own agent's practice firing and finding, and auth (admin only, closed to
-project keys). The check route: the plan normalized as apply does it, sentences and the
+the own agent joining after a key call), and auth (admin only, closed to project keys). (The
+practice run, the tool test and the own agent's subscription went with Tares agents, triggers and
+MCP servers, TR-1810.) The check route: the plan normalized as apply does it, sentences and the
 summary derived from the plan as edited, problems per item in plain words, a source swapped for
 one already on the cell, a schedule, the average of a field, an MCP server already on the cell, a
 copied skill, and apply taking a plan edited in the console.
@@ -32,7 +32,6 @@ TMP = tempfile.mkdtemp()
 ROOT = "root-token-setup-flow"
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
-os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
@@ -42,7 +41,6 @@ os.environ.pop("TARES_MCP_URL", None)
 import httpx
 
 from tares import setup_flow as S
-from tares.builtin_agents import AgentRunner
 from tares.models import ModelReply, ToolCall
 
 P = F = 0
@@ -66,24 +64,6 @@ def no_em_dash(label, obj):
 
 def H(tok):
     return {"Authorization": f"Bearer {tok}"}
-
-
-# ── the stand-in model loop for agent runs ───────────────────────────────────
-SCRIPT: dict = {}
-
-
-async def fake_loop(self, agent, trigger_name, key, payload, provider, model, usage, tracer=None,
-                    obs=None, concluded=None, produced=None, skills_loaded=None, handoff=False):
-    s = SCRIPT.get(agent["name"], {})
-    summary = s.get("summary", f"{agent['name']} looked at {key}.")
-    concluded.update({"outcome": s.get("outcome", "finding"), "summary": summary,
-                      "verdict": s.get("verdict"), "key": s.get("key"), "label": s.get("label"),
-                      "headline": s.get("headline"), "next_step": s.get("next_step"),
-                      "produced": []})
-    return summary, 1, 1, [], False, ""
-
-
-AgentRunner._loop = fake_loop
 
 
 # ── the stand-in model provider for planning ─────────────────────────────────
@@ -162,15 +142,6 @@ def plan_with(**kw):
     return p
 
 
-async def wait_for(fn, tries=300):
-    for _ in range(tries):
-        v = fn()
-        if v:
-            return v
-        await asyncio.sleep(0.03)
-    return fn()
-
-
 def unit(store, catalog):
     print("== normalize ==")
     plan, errors = S.normalize(GOOD, store, catalog)
@@ -240,8 +211,6 @@ async def main():
         anon = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
         store = app.state.store
         runtime = app.state.runtime
-        runner = app.state.agents
-        runner.attach_loop()
         unit(store, runtime.catalog)
 
         print("== plan: no provider ==")
@@ -418,63 +387,11 @@ async def main():
         r = await cx.post(f"/api/projects/{uid}/setup/test-event", json={"source": "nope"})
         eq("an unknown source: 404", r.status_code, 404)
 
-        import tares.mcp_client as mc
-        real_list = mc.list_remote_tools
-
-        async def ok_tools(server):
-            return [{"name": "deploys"}, {"name": "commits"}]
-
-        async def bad_tools(server):
-            raise ConnectionError("refused")
-        mc.list_remote_tools = ok_tools
-        await cx.post("/api/mcp-servers/github/test")
-        t = (await cx.get(f"/api/projects/{uid}/setup")).json()["checks"]["tools"][0]
-        eq("a passing test: ok", (t["state"], t["detail"]), ("ok", "Connected, 2 tools offered"))
-        mc.list_remote_tools = bad_tools
-        await cx.post("/api/mcp-servers/github/test")
-        t = (await cx.get(f"/api/projects/{uid}/setup")).json()["checks"]["tools"][0]
-        ck("a failing test: error", t["state"] == "error" and "refused" in t["detail"], t)
-        mc.list_remote_tools = real_list
-
         r = await cx.put(f"/api/projects/{uid}/setup", json={"step": "try"})
         eq("move the step", (r.status_code, r.json().get("step")), (200, "try"))
         r = await cx.put(f"/api/projects/{uid}/setup", json={"step": "later"})
         eq("an unknown step: 400", r.status_code, 400)
 
-        print("== practice run ==")
-        SCRIPT["checkout-triage"] = {"verdict": "investigate", "headline": "Card declines",
-                                     "next_step": "Call the payment provider.",
-                                     "summary": "Real outage."}
-        SCRIPT["checkout-rca"] = {"verdict": "rca", "headline": "Gateway timeout",
-                                  "next_step": "Roll back the gateway config.",
-                                  "summary": "The gateway timed out."}
-        # both agents have a write-back webhook: a practice run must not call it
-        store.sc.execute("UPDATE catalog_agents SET webhook_url = 'http://127.0.0.1:9/hook' "
-                          "WHERE name IN ('checkout-triage', 'checkout-rca')")
-        r = await cx.post(f"/api/projects/{uid}/setup/practice")
-        ck("practice answers a run id", r.status_code == 200 and r.json().get("run_id"), r.text)
-        rid = r.json().get("run_id")
-        done = await wait_for(lambda: [x for x in store.list_agent_runs("checkout-rca", limit=5)
-                                       if x["status"] != "running"])
-        tri = store.get_agent_run(rid)
-        eq("the practice run is flagged and woken by practice",
-           (tri["practice"], tri["woken_by"], tri["key"]), (True, "practice", "checkout"))
-        ck("its handoff is practice too", bool(done) and done[0]["practice"], done)
-        ck("a practice run delivers nowhere outside Tares (no write-back attempt)",
-           tri["delivery"] is None and done and done[0]["delivery"] is None,
-           (tri["delivery"], done and done[0]["delivery"]))
-        res = (await cx.get(f"/api/projects/{uid}/results")).json()
-        ck("the result is shown, marked practice",
-           len(res["results"]) == 1 and res["results"][0]["practice"] is True, res)
-        eq("today leaves it out", res["today"], {"looked_at": 0, "found": 0, "spent_usd": 0.0})
-        eq("the daily cap in health leaves it out",
-           store.agent_runs_today("checkout-triage", include_practice=False), 0)
-        eq("the setup remembers the practice run",
-           (await cx.get(f"/api/projects/{uid}/setup")).json()["practice_run"], rid)
-        h = (await cx.get(f"/api/projects/{uid}/health")).json()
-        ck("health does not count it as a capped agent",
-           not any("limit" in i["message"] for i in h["issues"]), h)
-        await wait_for(lambda: not runner._inflight)
         ag = {x["name"]: x for x in store.list_catalog_agents()}
         ck("a planned agent is told to finish with conclude (it carries the headline)",
            ag["checkout-triage"]["prompt"].endswith(
@@ -526,8 +443,8 @@ async def main():
            (own["mcp_url"], own["claude_command"]),
            ("http://t/mcp", f"claude mcp add --transport http tares http://t/mcp --header "
                             f"\"Authorization: Bearer {secret}\""))
-        ck("the subscribe hint names the project's subscribe route",
-           f"/api/projects/{ouid}/subscribe" in own["subscribe_hint"])
+        ck("the hint names the project's timeline route",
+           f"/api/projects/{ouid}/timeline" in own["subscribe_hint"])
         chk = (await cx.get(f"/api/projects/{ouid}/setup")).json()["checks"]["own_agent"]
         eq("waiting for the agent", chk, {"state": "waiting",
                                           "detail": "Waiting for your agent to use its key"})
@@ -546,55 +463,6 @@ async def main():
            chk["state"] == "joined" and "subscribe" not in chk["detail"], chk)
         st_["plan"]["own_agent"]["wake"] = "webhook"
         store.set_project_setup(ouid, st_)
-
-        print("== own agent: practice firing and finding ==")
-        from tares.dispatch import Dispatcher
-        posted = []
-        real_post = Dispatcher._post
-
-        async def fake_post(self, url, body, attempts=5):
-            posted.append((url, body))
-            return True, None
-        Dispatcher._post = fake_post
-        r = await cx.post(f"/api/projects/{ouid}/subscribe",
-                          json={"url": "https://agent.example.com/hook"})
-        ck("admin subscribes a URL for the test", r.status_code == 200, r.text)
-        r = await cx.post(f"/api/projects/{ouid}/setup/practice")
-        Dispatcher._post = real_post
-        ck("practice answers a dispatch id", r.status_code == 200 and r.json().get("dispatch_id"),
-           r.text)
-        did = r.json().get("dispatch_id")
-        eq("the firing reached the subscription, marked practice",
-           [(u, b.get("practice"), b.get("key")) for u, b in posted],
-           [("https://agent.example.com/hook", True, "checkout")])
-        r = await anon.post(f"/api/projects/{ouid}/findings", headers=H(secret),
-                            json={"entity": "checkout", "finding": "Card declines spiked.",
-                                  "verdict": "rca", "headline": "Card declines",
-                                  "next_step": "Call the provider."})
-        ck("the agent records a finding", r.status_code == 201, r.text)
-        frun = store.get_agent_run(r.json()["run_id"])
-        eq("its finding is flagged practice", frun["practice"], True)
-        res = (await cx.get(f"/api/projects/{ouid}/results")).json()
-        ck("the results show it as practice", [x["practice"] for x in res["results"]] == [True],
-           res["results"])
-        eq("today leaves the practice firing and finding out", res["today"],
-           {"looked_at": 0, "found": 0, "spent_usd": 0.0})
-        r = await anon.post(f"/api/projects/{ouid}/findings", headers=H(secret),
-                            json={"entity": "checkout", "finding": "A second look."})
-        eq("only the first finding answers the practice firing",
-           store.get_agent_run(r.json()["run_id"])["practice"], False)
-        eq("the setup remembers the firing",
-           (await cx.get(f"/api/projects/{ouid}/setup")).json()["practice_run"], did)
-        # the first key is shown once: a key made in its place answers a practice firing too
-        st_ = store.get_project_setup(ouid)
-        st_["practice_finding"] = None
-        st_["practice_at"] = datetime.now(timezone.utc).isoformat()
-        store.set_project_setup(ouid, st_)
-        k2 = (await cx.post(f"/api/projects/{ouid}/keys", json={"name": "claude-code-2"})).json()
-        r = await anon.post(f"/api/projects/{ouid}/findings", headers=H(k2["secret"]),
-                            json={"entity": "checkout", "finding": "From the new key."})
-        eq("a replacement key's finding answers the practice firing",
-           store.get_agent_run(r.json()["run_id"])["practice"], True)
 
         print("== check: normalization, derived sentences and the summary ==")
         draft = copy.deepcopy(GOOD)
@@ -782,9 +650,9 @@ async def main():
            and "plain description" in S.SYSTEM, "")
 
         print("== check: an MCP server already on the cell, a copied skill ==")
-        r = await cx.post("/api/mcp-servers", json={"name": "deploys-mcp",
-                                                    "url": "https://deploys.example.com/mcp"})
-        ck("an existing MCP server", r.status_code == 201, r.text)
+        # what POST /api/mcp-servers did (the route went in TR-1810): the server, in the default project
+        store.upsert_mcp_server("deploys-mcp", "https://deploys.example.com/mcp", "", "", {})
+        store.put_in_project("mcp_server", "deploys-mcp", store.default_project_id())
         attach = copy.deepcopy(swap)
         attach["tools"] = [{"key": "t5", "name": "deploys-mcp", "existing": True, "url": "",
                             "why": "", "can_act": False, "enabled": True}]
@@ -1132,8 +1000,7 @@ async def main():
                                  ("get", f"/api/projects/{uid}/setup", None),
                                  ("put", f"/api/projects/{uid}/setup", {"step": "done"}),
                                  ("post", f"/api/projects/{uid}/setup/test-event",
-                                  {"source": "checkout-errors"}),
-                                 ("post", f"/api/projects/{uid}/setup/practice", None)):
+                                  {"source": "checkout-errors"})):
             kw = {"json": js} if js is not None else {}
             r = await getattr(anon, method)(path, headers=H(reader), **kw)
             eq(f"a read key: {method.upper()} {path.split('/api/')[1].replace(uid, '<id>')} is "

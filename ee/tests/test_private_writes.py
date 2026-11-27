@@ -5,7 +5,9 @@ A person who is not on a private project, even with an admin-scope key, must not
 delete, test or rerun anything that belongs only to that project. Each write route that names a
 source, trigger, agent, MCP server, run or rule proposal gets the same 404, with the same body,
 as it gives for a name that does not exist. Ann leads the project and keeps access; so does the
-system credential. An agent or a trigger that a visible project also uses stays reachable.
+system credential. An object that a visible project also uses stays reachable. (The trigger, agent,
+MCP server and subscription routes went in TR-1810: what is left is checked through the routes that
+remain, the project lists, the guided setup and the rule proposals.)
 
 Run: .venv/bin/python ee/tests/test_private_writes.py
 """
@@ -158,20 +160,8 @@ ROUTES = [
     ("source update", "PUT", "/api/sources/{n}", "source", "secret-src", "open-src"),
     ("source pause", "POST", "/api/sources/{n}/pause", None, "secret-src", "open-src"),
     ("source resume", "POST", "/api/sources/{n}/resume", None, "secret-src", "open-src"),
-    ("source delete", "DELETE", "/api/sources/{n}", None, "secret-src", "open-src"),
-    ("mcp server update", "PUT", "/api/mcp-servers/{n}", "mcp", "secret-mcp", "open-mcp"),
-    ("mcp server test", "POST", "/api/mcp-servers/{n}/test", None, "secret-mcp", "open-mcp"),
-    ("mcp server delete", "DELETE", "/api/mcp-servers/{n}", None, "secret-mcp", "open-mcp"),
-    ("trigger update", "PUT", "/api/triggers/{n}", "trigger", "secret-trig", "open-trig"),
-    ("trigger pause", "POST", "/api/triggers/{n}/pause", None, "secret-trig", "open-trig"),
-    ("trigger resume", "POST", "/api/triggers/{n}/resume", None, "secret-trig", "open-trig"),
-    ("trigger delete", "DELETE", "/api/triggers/{n}", None, "secret-trig", "open-trig"),
-    ("agent update", "PUT", "/api/agents/builtin/{n}", "agent", "secret-agent", "open-agent"),
-    ("agent enable", "POST", "/api/agents/builtin/{n}/enable", None, "secret-agent", "open-agent"),
-    ("agent disable", "POST", "/api/agents/builtin/{n}/disable", None, "secret-agent", "open-agent"),
-    ("agent rerun", "POST", "/api/agents/builtin/{n}/runs/run-secret/rerun", None, "secret-agent",
-     "open-agent"),
-    ("agent delete", "DELETE", "/api/agents/builtin/{n}", None, "secret-agent", "open-agent"),
+    # with its triggers: the trigger delete route went in TR-1810, so the source's own trigger goes with it
+    ("source delete", "DELETE", "/api/sources/{n}?cascade=true", None, "secret-src", "open-src"),
 ]
 
 
@@ -199,44 +189,6 @@ async def checks(B, ids):
                and shape(r.text, hidden) == shape(gone.text, "nobody-here"),
                f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
 
-        print("== a rerun ==")
-        rerun = "/api/agents/builtin/{n}/runs/{run}/rerun"
-        def url(n, run):
-            return B + rerun.replace("{n}", n).replace("{run}", run)
-        r = await cx.post(url("secret-agent", "run-secret"), headers=KIM)
-        gone = await cx.post(url("nobody-here", "run-secret"), headers=KIM)
-        ck("a hidden agent: as unknown as a name that does not exist",
-           r.status_code == gone.status_code == 404
-           and shape(r.text, "secret-agent") == shape(gone.text, "nobody-here"),
-           f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
-        r = await cx.post(url("shared-agent", "run-shared-secret"), headers=KIM)
-        gone = await cx.post(url("shared-agent", "run-nobody-here"), headers=KIM)
-        ck("a hidden run of an agent Kim can see: as unknown as a run that does not exist",
-           r.status_code == gone.status_code == 404
-           and shape(r.text, "run-shared-secret") == shape(gone.text, "run-nobody-here"),
-           f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
-        r = await cx.post(url("shared-agent", "run-shared-open"), headers=KIM)
-        ck("a run of the open project, on the same agent, still reruns", r.status_code == 201,
-           f"{r.status_code} {r.text[:120]}")
-
-        r = await cx.post(url("open-agent", "run-noproject"), headers=KIM)
-        ck("a run that belongs to no project, on an open agent, still reruns", r.status_code == 201,
-           f"{r.status_code} {r.text[:120]}")
-        # the name is checked before the body: a body that is wrong too must not tell a hidden
-        # trigger from an unknown one
-        bad = {"name": "something-else", "sources": ["open-src"], "condition": COND}
-        r = await cx.put(f"{B}/api/triggers/secret-trig", headers=KIM, json=bad)
-        gone = await cx.put(f"{B}/api/triggers/nobody-here", headers=KIM, json=bad)
-        ck("a hidden trigger with a wrong body: the unknown-name answer, not the body's",
-           r.status_code == gone.status_code == 404
-           and shape(r.text, "secret-trig") == shape(gone.text, "nobody-here"),
-           f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
-
-        print("== a run is hidden only when every project it belongs to is hidden ==")
-        r = await cx.post(url("shared-agent", "run-both"), headers=KIM)
-        ck("a run in a hidden project and an open one is still Kim's to rerun", r.status_code != 404,
-           f"{r.status_code} {r.text[:100]}")
-
         print("== a rule proposal ==")
         for decision in ("reject", "accept"):
             r = await cx.post(f"{B}/api/rule-proposals/{ids['rule_secret']}/{decision}",
@@ -249,31 +201,10 @@ async def checks(B, ids):
 
         print("== a hidden name in the body answers as an unknown name (TR-944) ==")
         team = ids["team"]
-        sub = {"url": "https://example.org/hook"}
         # (label, method, path, body with {n} for the name asked about, the hidden name)
         cases = [
             ("add a source to a project", "POST", f"/api/projects/{team}/sources",
              {"name": "{n}"}, "secret-src"),
-            ("a new trigger that reads it", "POST", "/api/triggers",
-             {"name": "new-trig", "sources": ["{n}"], "condition": COND}, "secret-src"),
-            ("an open trigger changed to read it", "PUT", "/api/triggers/open-trig",
-             {"name": "open-trig", "sources": ["{n}"], "condition": COND}, "secret-src"),
-            ("a new agent woken by it", "POST", "/api/agents/builtin",
-             {"name": "new-agent", "trigger": "{n}", "prompt": "Look."}, "secret-trig"),
-            ("a new agent using its MCP server", "POST", "/api/agents/builtin",
-             {"name": "new-agent", "trigger": "open-trig", "prompt": "Look.",
-              "mcp_servers": ["{n}"]}, "secret-mcp"),
-            ("a new agent that hands off to it", "POST", "/api/agents/builtin",
-             {"name": "new-agent", "trigger": "open-trig", "prompt": "Look.",
-              "handoffs": [{"verdict": "escalate", "agent": "{n}"}]}, "secret-agent"),
-            ("an open agent moved to its trigger", "PUT", "/api/agents/builtin/open-agent",
-             {"name": "open-agent", "trigger": "{n}", "prompt": "Look."}, "secret-trig"),
-            ("an open agent given its MCP server", "PUT", "/api/agents/builtin/open-agent",
-             {"name": "open-agent", "trigger": "open-trig", "prompt": "Look.",
-              "mcp_servers": ["{n}"]}, "secret-mcp"),
-            ("an open agent handing off to it", "PUT", "/api/agents/builtin/open-agent",
-             {"name": "open-agent", "trigger": "open-trig", "prompt": "Look.",
-              "handoffs": [{"verdict": "escalate", "agent": "{n}"}]}, "secret-agent"),
             ("a project list that adds a source", "PUT", f"/api/projects/{team}",
              {"objects": [{"kind": "source", "name": "{n}"}]}, "secret-src"),
             ("a project list that adds a trigger", "PUT", f"/api/projects/{team}",
@@ -282,8 +213,6 @@ async def checks(B, ids):
              {"objects": [{"kind": "agent", "name": "{n}"}]}, "secret-agent"),
             ("a project list that adds an MCP server", "PUT", f"/api/projects/{team}",
              {"objects": [{"kind": "mcp_server", "name": "{n}"}]}, "secret-mcp"),
-            ("a subscription to the trigger", "POST", "/subscribe",
-             {"trigger": "{n}", **sub}, "secret-trig"),
             ("a new project that takes a source", "POST", "/api/projects",
              {"template": "custom", "name": "made-from-{n}", "objects": [{"kind": "source", "name": "{n}"}]},
              "secret-src"),
@@ -319,20 +248,9 @@ async def checks(B, ids):
         ck("nothing hidden joined the open project",
            not any(o["name"].startswith("secret-") for o in proj.get("objects", [])),
            str(proj.get("objects"))[:200])
-        trigs = {t["name"]: t for t in (await cx.get(f"{B}/api/triggers", headers=ROOT)).json()}
-        ck("no trigger was created and the open trigger still reads its own source",
-           "new-trig" not in trigs and trigs["open-trig"]["sources"] == ["open-src"], str(trigs)[:200])
-        agents = (await cx.get(f"{B}/api/agents/builtin", headers=ROOT)).json()
-        agents = {a["name"]: a for a in (agents if isinstance(agents, list) else agents["agents"])}
-        ck("no agent was created and the open agent is unchanged",
-           "new-agent" not in agents and agents["open-agent"]["trigger"] == "open-trig"
-           and not agents["open-agent"].get("mcp_servers") and not agents["open-agent"].get("handoffs"),
-           str(agents.get("open-agent"))[:200])
-        subs = (await cx.get(f"{B}/api/subscriptions", headers=ROOT)).json()
-        ck("no subscription was added to the hidden trigger",
-           not any(x["trigger"] == "secret-trig" for x in subs), str(subs)[:200])
-        r = await cx.post(f"{B}/subscribe", headers=KIM, json={"trigger": "open-trig", **sub})
-        ck("a subscription to an open trigger still works", r.status_code == 200, f"{r.status_code} {r.text[:100]}")
+        trigs = {t["name"]: t for t in (await cx.get(f"{B}/catalog", headers=ROOT)).json()["triggers"]}
+        ck("the open trigger still reads its own source", trigs["open-trig"]["sources"] == ["open-src"],
+           str(trigs)[:200])
 
         print("== the guided setup does not find what Kim cannot see ==")
         def plan_of(**part):
@@ -401,15 +319,12 @@ async def checks(B, ids):
             return {x["name"] for x in (j if isinstance(j, list) else j[k])}
         ck("the sources are all still there",
            {"secret-src", "open-src", "shared-src"} <= names(await cx.get(f"{B}/api/sources", headers=ROOT), "sources"))
+        parts = await cx.get(f"{B}/api/resources", headers=ROOT)
         ck("the triggers are all still there",
-           {"secret-trig", "open-trig", "shared-trig"} <= names(await cx.get(f"{B}/api/triggers", headers=ROOT), "triggers"))
-        ck("the MCP servers are all still there",
-           {"secret-mcp", "open-mcp"} <= names(await cx.get(f"{B}/api/mcp-servers", headers=ROOT), "servers"))
+           {"secret-trig", "open-trig", "shared-trig"} <= names(parts, "triggers"))
+        ck("the MCP servers are all still there", {"secret-mcp", "open-mcp"} <= names(parts, "tools"))
         ck("the agents are all still there",
-           {"secret-agent", "open-agent", "shared-agent"} <= names(await cx.get(f"{B}/api/agents/builtin", headers=ROOT), "agents"))
-        runs = (await cx.get(f"{B}/api/agents/builtin/secret-agent/runs", headers=ROOT)).json()
-        rows = runs if isinstance(runs, list) else runs.get("runs", [])
-        ck("the private agent has the two runs it had", len(rows) == 2, str(runs)[:200])
+           {"secret-agent", "open-agent", "shared-agent"} <= names(parts, "agents"))
         sec = (await cx.get(f"{B}/api/rule-proposals", headers=ROOT)).json()["proposals"]
         ck("the hidden proposal is still open", any(p["id"] == ids["rule_secret"] and p["state"] == "open"
                                                      for p in sec), str(sec)[:200])
@@ -418,7 +333,7 @@ async def checks(B, ids):
         for label, meth, path, kind, _hidden, _open in ROUTES:
             if meth == "DELETE" or "run-secret" in path or "update" in label:
                 continue
-            shared = {"source": "shared-src", "trigger": "shared-trig", "agent": "shared-agent"}
+            shared = {"source": "shared-src"}
             word = label.split()[0]
             if word not in shared:
                 continue
@@ -433,12 +348,9 @@ async def checks(B, ids):
                     continue
                 r = await call(cx, B, hd, meth, path, kind, hidden)
                 ck(f"{who}: {label}", r.status_code != 404, f"{r.status_code} {r.text[:100]}")
-            r = await cx.post(url("secret-agent", "run-secret"), headers=hd)
-            ck(f"{who}: agent rerun", r.status_code == 201, f"{r.status_code} {r.text[:100]}")
         for who, hd in (("Ann", ANN), ("the system credential", ROOT)):
             for label, meth, path, body, hidden in cases:
-                if label not in ("add a source to a project", "a new agent woken by it",
-                                 "a subscription to the trigger"):
+                if label not in ("add a source to a project",):
                     continue   # the rest would rewire the open objects the deletes below use
                 r = await cx.request(meth, B + path, headers=hd, json=fill(body, hidden))
                 ck(f"{who}: {label} reaches the object", r.status_code != 404,

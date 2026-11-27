@@ -268,21 +268,18 @@ async def main():
             check("sources exist and are owned",
                   {"ctx_acme_context_acme_app", "ctx_acme_context_acme_lib"} <= set(sources)
                   and sources["ctx_acme_context_acme_app"]["owned_by"] == uid, str(list(sources)))
-            r = await cx.get("/api/triggers")
-            trigs = {t["name"]: t for t in r.json()}
+            st = app.state.store
+            trigs = {t["name"]: t for t in st.list_catalog_triggers()}
             check("trigger exists", "ctx_acme_context_changes" in trigs, str(list(trigs)))
-            r = await cx.get("/api/mcp-servers")
-            servers = {m["name"]: m for m in r.json()["servers"]}
+            servers = {m["name"]: m for m in st.list_mcp_servers()}
             m = servers.get("ctx_acme_context_github") or {}
             check("mcp server registered with credential and headers",
-                  m.get("auth_credential") == "gh" and m.get("headers") == {"X-MCP-Toolsets": "repos,pull_requests"}
-                  and m.get("owned_by") == uid, json.dumps(m))
-            r = await cx.get("/api/agents/builtin")
-            agents = {a["name"]: a for a in r.json()["agents"]}
-            a = agents.get("ctx_acme_context_maintainer") or {}
+                  m.get("auth_value") == "credential:github/gh" and m.get("headers") == {"X-MCP-Toolsets": "repos,pull_requests"}
+                  and m.get("owned_by") == uid, json.dumps(m, default=str))
+            a = st.get_catalog_agent("ctx_acme_context_maintainer") or {}
             check("agent enabled with mcp server and max_rounds",
-                  a.get("enabled") is True and a.get("mcp_servers") == ["ctx_acme_context_github"]
-                  and a.get("max_rounds") == 12 and a.get("owned_by") == uid, json.dumps(a)[:300])
+                  st.agent_enabled("ctx_acme_context_maintainer") and a.get("mcp_servers") == ["ctx_acme_context_github"]
+                  and a.get("max_rounds") == 12 and a.get("owned_by") == uid, json.dumps(a, default=str)[:300])
 
             # let the sources poll once (poll 60s; the runtime polls right after start)
             for _ in range(60):
@@ -331,29 +328,10 @@ async def main():
             names_now = {x["name"] for x in r.json()}
             check("sources reflect the new list",
                   "ctx_acme_context_acme_app" not in names_now and "ctx_acme_context_acme_context2" in names_now)
-            r = await cx.get("/api/triggers")
-            v = next(x for x in r.json() if x["name"] == "ctx_acme_context_changes")
+            v = next(x for x in app.state.store.list_catalog_triggers() if x["name"] == "ctx_acme_context_changes")
             check("trigger sources follow", set(v["sources"]) == {"ctx_acme_context_acme_lib", "ctx_acme_context_acme_context2"}, json.dumps(v))
 
-            print("== bootstrap hook ==")
-            from tares.builtin_agents import AgentRunner
-            runner = app.state.dispatcher.agents if hasattr(app.state, "dispatcher") else None
-            check("run_now and bootstrap exist on the runner",
-                  hasattr(AgentRunner, "run_now") and hasattr(AgentRunner, "bootstrap"))
-            runtime = app.state.runtime
-            runner = runtime.dispatcher.agents
-            before = len(app.state.store.list_agent_runs("ctx_acme_context_maintainer", limit=50))
-            runner.bootstrap("ctx_acme_context_maintainer", "ctx_acme_context_changes",
-                             ["acme/lib", "acme/nothing"], window="7d", delay_s=0)
-            for _ in range(40):
-                await asyncio.sleep(0.25)
-                runs = app.state.store.list_agent_runs("ctx_acme_context_maintainer", limit=50)
-                if len(runs) > before and all(r["status"] != "running" for r in runs):
-                    break
-            check("bootstrap ran the agent once for the repo with commits (skipped the empty one)",
-                  len(runs) == before + 1 and runs[0]["key"] == "acme/lib", json.dumps(runs, default=str)[:300])
-            check("bootstrap run failed fast on missing key (no network call)",
-                  runs and runs[0]["status"] == "failed" and ("key" in (runs[0].get("error") or "") or "model provider" in (runs[0].get("error") or "")), json.dumps(runs[0], default=str)[:300] if runs else "")
+            print("== no bootstrap run (agent runs went, TR-1810) ==")
             log = s.get("log") or []
             check("create logged and no bootstrap failure",
                   any(x["action"] == "created" for x in log) and not any(x["action"] == "bootstrap_failed" for x in log),
@@ -365,8 +343,8 @@ async def main():
             check("delete -> 200", r.status_code == 200, r.text)
             r = await cx.get("/api/sources")
             check("owned sources gone", not any(x["name"].startswith("ctx_acme_context_") for x in r.json()))
-            r = await cx.get("/api/mcp-servers")
-            check("mcp server gone", not any(m["name"] == "ctx_acme_context_github" for m in r.json()["servers"]))
+            check("mcp server gone", not any(m["name"] == "ctx_acme_context_github"
+                                             for m in app.state.store.list_mcp_servers()))
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return FAIL == 0

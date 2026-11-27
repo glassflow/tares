@@ -1,6 +1,6 @@
 """The plugin side of the challenger workflow (TR-198, TR-199, TR-200): the shipper marks a
 session when it sees the set_session_flow call, stamps flow on every line and writes the
-session_flow / session_end lines; the challenger hooks review plans and commits with a fake Codex
+session_flow line; the challenger hooks review plans and commits with a fake Codex
 (and with Grok against a fake xAI endpoint), block and loop like codex-review, ship challenge events to a fake Tares, and stay inert for an
 unmarked session; SessionStart prints no memory block (Tares 2.0 removes it) and reads no source events.
 Run: .venv/bin/python tests/test_plugin_challenger.py   (no Codex, no xAI, no daemon, no network)
@@ -444,8 +444,8 @@ def main():
 
     print("== session end ==")
     run(SHIP, {**hook, "hook_event_name": "SessionEnd"}, env)
-    check("session_end line shipped with the flow", INGESTED[-1]["type"] == "session_end" and INGESTED[-1]["flow"] == "challenger",
-          json.dumps(INGESTED[-1]))
+    check("no session_end line is shipped", all(x.get("type") != "session_end" for x in INGESTED),
+          json.dumps(INGESTED[-1:]))
     check("marker removed at session end", read_flow(data_dir, sid) == "")
     o, _ = run(CHAL, commit("after end"), env)
     check("hooks inert again after the session ended", o == {}, str(o))

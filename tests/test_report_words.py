@@ -207,6 +207,11 @@ async def writing_the_text(store, fake):
     ck("the model usage is recorded once, with who paid",
        len(used) == 1 and used[0][1]["input_tokens"] == 900 and used[0][1]["calls"] == 1
        and used[0][2:4] == ("console", "anthropic"), used)
+    # the summary reaches the model with the cell's agent tracing gone (TR-1810)
+    import importlib.util
+    ck("the model is called with no tracing module installed",
+       importlib.util.find_spec("tares.tracing") is None and len(fake.calls) == 1,
+       str(importlib.util.find_spec("tares.tracing")))
 
     fake.reset()
     fake.text = "2 tickets delivered and 17 bugs fixed."
