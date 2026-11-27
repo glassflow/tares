@@ -333,67 +333,6 @@ const until = async (fn, tries = 40) => {
         await n.ctx.close();
       }
     }
-    // Observability: where agents' traces go (TR-1392). Pictures first, of states set through the
-    // API, so the same steps picture the panel before and after.
-    {
-      const shots = async (tag) => {
-        if (!SHOTS) return;
-        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
-          const n = await newPage(w, { dark });
-          await go(n.page, "observability");
-          await shot(n.page, `tracing-${tag}-${w}${dark ? "-dark" : ""}.png`);
-          await n.ctx.close();
-        }
-      };
-      const before = (await api(TOKEN, "GET", "/api/settings/tracing")).body;
-      await shots("as-found");
-      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: true, provider: "otlp", endpoint: "https://collector.example:4318", headers: "authorization=Bearer e2e" });
-      await shots("otlp-on");
-      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: false, provider: "rius", endpoint: "", headers: "", api_key: "" });
-      await go(page, "observability");
-
-      const panel = page.getByTestId("tracing");
-      ck("Observability has one heading of that name", (await page.getByRole("heading", { name: "Observability", exact: true }).count()) === 1);
-      ck("tracing is off and says so", /^Off\. Nothing is sent/.test(await text(page, "tracing-state")), await text(page, "tracing-state"));
-      ck("the switch, the provider and the key each have a visible label",
-        (await panel.getByLabel("Send agent traces").count()) === 1 && (await panel.getByLabel("Where traces go").count()) === 1 && (await panel.getByLabel("Rius API key").count()) === 1);
-      ck("Rius has no key yet, and says what that means", /^No API key yet/.test(await text(page, "tracing-key-state")), await text(page, "tracing-key-state"));
-      ck("Save waits for something to save", await panel.getByRole("button", { name: "Save" }).isDisabled());
-      await checkWords(page, ck, "Observability item");
-
-      await panel.getByLabel("Send agent traces").click();
-      ck("switched on to Rius without a key, it says nothing arrives yet",
-        await until(async () => /^On, but nothing reaches Rius until there is an API key/.test(await text(page, "tracing-state"))), await text(page, "tracing-state"));
-      const key = panel.getByLabel("Rius API key");
-      ck("the switch is free again before typing", await until(async () => !(await panel.getByLabel("Send agent traces").isDisabled())));
-      await key.fill("gf_e2e_1392");
-      await key.press("Enter");
-      ck("Enter saves the key, and tracing reads as on, to Rius",
-        await until(async () => /^On\. Traces go to Rius/.test(await text(page, "tracing-state"))) && /^API key set, saved here/.test(await text(page, "tracing-key-state")), await text(page, "tracing-state"));
-      ck("the key field is empty again: a secret is never shown back", (await key.inputValue()) === "");
-      await panel.getByRole("button", { name: "Clear the saved key" }).click();
-      ck("Clear removes the key", await until(async () => /^No API key yet/.test(await text(page, "tracing-key-state"))) && (await api(TOKEN, "GET", "/api/settings/tracing")).body?.key_stored === false);
-
-      await panel.getByLabel("Where traces go").click();
-      await page.getByRole("option", { name: /Any OpenTelemetry endpoint/ }).click();
-      const ep = panel.getByLabel("Endpoint");
-      await ep.fill("collector:4318");
-      await panel.getByRole("button", { name: "Save" }).click();
-      ck("an endpoint that is not a URL is refused, under the field, as a sentence",
-        await until(async () => (await ep.getAttribute("aria-invalid")) === "true") && (await panel.getByText(/^Endpoint must be an http\(s\) URL/).count()) === 1);
-      await shot(page, "tracing-refused-1440.png");
-      await ep.fill("https://collector.example:4318");
-      ck("typing again clears the error", (await ep.getAttribute("aria-invalid")) !== "true");
-      await ep.press("Enter");
-      ck("saved, tracing goes to that endpoint",
-        await until(async () => /^On\. Traces go to https:\/\/collector\.example:4318/.test(await text(page, "tracing-state"))), await text(page, "tracing-state"));
-      const n = await newPage(390);
-      await go(n.page, "observability");
-      ck("the Observability item fits at 390 px", (await overflow(n.page)) <= 0);
-      await n.ctx.close();
-      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: before.enabled, provider: "", endpoint: "", headers: "", api_key: "" });
-    }
-
     // 2b. model providers (TR-1392). Pictures first, of states set through the API, so the same
     // steps picture the panel before and after. Every endpoint is a closed port, so discovery fails
     // at once instead of reaching a real provider; the cell ends with none, as it started.
@@ -509,7 +448,7 @@ const until = async (fn, tries = 40) => {
       ck("each key says what it can do, in words: read", (await rowText("reader", "keys-can")) === "Can read.", await rowText("reader", "keys-can"));
       ck("each key says what it can do, in words: send data, not ingest", (await rowText("writer", "keys-can")) === "Can send data.", await rowText("writer", "keys-can"));
       ck("a key nobody used says so, and when it was made", /^Never used\. Made (just now|\d+ \w+ ago)\.$/.test(await rowText("writer", "keys-used")), await rowText("writer", "keys-used"));
-      ck("a project key names its project, not its id", !!pname && (await rowText("px-reader", "keys-can")) === `Can read ${pname} and record findings in it.`, `${await rowText("px-reader", "keys-can")} / ${pname}`);
+      ck("a project key names its project, not its id", !!pname && (await rowText("px-reader", "keys-can")) === `Can read ${pname} only.`, `${await rowText("px-reader", "keys-can")} / ${pname}`);
       ck("each key says whose it is", /^Belongs to /.test(await rowText("writer", "keys-person")), await rowText("writer", "keys-person"));
       ck("a revoked key is hidden until asked for", (await row("old-ci").count()) === 0 && (await text(page, "keys-revoked-toggle")) === "Show 1 revoked key", await text(page, "keys-revoked-toggle"));
       await page.getByTestId("keys-revoked-toggle").click();
@@ -686,7 +625,7 @@ const until = async (fn, tries = 40) => {
 
     // 9. Advanced has its own place in the sidebar
     await go(page, "agent_tools");
-    ck("Advanced is open and lists its items", (await groupOpen(page)).join() === "Advanced" && (await page.getByTestId("nav-observability").isVisible()));
+    ck("Advanced is open and lists its items", (await groupOpen(page)).join() === "Advanced" && (await page.getByTestId("nav-agent_tools").isVisible()));
     for (const [id, href] of [["connections", "/sources"], ["explore", "/explore"], ["resources", "/resources"], ["connect", "/connect"], ["reads", "/reads"]]) {
       await go(page, "agent_tools");
       await page.getByTestId(`nav-${id}`).click();
@@ -696,7 +635,7 @@ const until = async (fn, tries = 40) => {
 
     // 10. the old addresses still land on the right item
     for (const [address, id] of [["/settings#crew", "crew"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],
-                                 ["/settings?tab=agents", "budget"], ["/settings?tab=access", "keys"], ["/settings/advanced?tab=observability", "observability"],
+                                 ["/settings?tab=agents", "budget"], ["/settings?tab=access", "keys"],
                                  ["/settings/advanced", "agent_tools"]]) {
       await page.goto(`${BASE}${address}`, { waitUntil: "load" });
       await page.getByTestId(`pane-${id}`).waitFor();
@@ -760,9 +699,9 @@ const until = async (fn, tries = 40) => {
     {
       const n = await newPage(1000);
       const p = n.page;
-      for (const tab of ["keys", "providers", "observability"]) {
+      for (const tab of ["keys", "providers"]) {
         await go(p, tab);
-        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : tab === "providers" ? '[data-testid="providers"]' : '[data-testid="keys"]'}`).first().waitFor();
+        await p.locator(`[data-testid="pane-${tab}"] ${tab === "github" ? '[data-testid="github-row"]' : tab === "providers" ? '[data-testid="providers"]' : '[data-testid="keys"]'}`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
       // Observability's select was the last native one in a pane (TR-1392 moved it to the kit);

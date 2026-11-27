@@ -9,7 +9,6 @@ import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import { AgentLimitsPanel, CLOUD_BACK, McpToolsPanel } from "../../pages/Security";
 import { AccessPanel, PeopleBlock, TerseSettings, useAccessData } from "../settings/AccessPanels";
 import WorkspaceSettings, { TeamPanel } from "../settings/WorkspacePanels";
-import { TracingPanel } from "../settings/TracingPanel";
 import { ProvidersPanel } from "../settings/ProvidersPanel";
 import { ApiKeysPanel } from "../settings/ApiKeysPanel";
 import { Banner, Button, Collapse, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
@@ -284,7 +283,6 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
       {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}
-      {tab === "observability" && (<><Heading title="Observability" /><TracingPanel /></>)}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
 
       {tab === "edition" && (

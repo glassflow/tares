@@ -37,7 +37,7 @@ const joinWords = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0
 export function scopeWords(k: Pick<ApiKey, "scopes" | "project">, projectName?: string): string {
   if (k.project) {
     const where = projectName ?? "one project";
-    return k.scopes.includes("findings") ? `Can read ${where} and record findings in it.` : `Can read ${where} only.`;
+    return `Can read ${where} only.`;
   }
   const words = SCOPES.filter((s) => k.scopes.includes(s.id)).map((s) => s.words);
   return words.length ? `Can ${joinWords(words)}.` : "No access.";

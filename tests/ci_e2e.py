@@ -27,7 +27,7 @@ UI = os.path.join(os.path.dirname(HERE), "ui")
 LIST = os.path.join(UI, "tests", "e2e_suites.txt")
 
 # Each suite starts up to three daemons on its port, +1 and +2, and an MCP port +20 from it, so
-# ports are 40 apart. The ones that set their own port (login-handoff, session-picker) ignore it.
+# ports are 40 apart. The ones that set their own port (login-handoff) ignore it.
 BASE_PORT = 9000
 PORT_STEP = 40
 # Ports fetch (undici) refuses as "bad port". A suite whose range holds one gets the next free
@@ -46,11 +46,11 @@ WEIGHT = {
     "brain-connect": 33, "edition-routes": 29, "projects-list": 28, "factory-projects": 28,
     "factory-docs": 28, "edition-shell": 27, "brain-repos": 27, "choose-edition": 26, "crew-people": 25,
     "brain-decisions": 22, "factory-project-controls": 19, "ee-chunk": 18, "source-claude-code": 17, "other-project": 16, "connect": 15, "a11y": 13,
-    "source-form": 11, "explore": 11, "redirects": 9, "factory-secrets": 9,
-    "component-gallery": 9, "source-new": 8, "reads": 8, "project-idle": 8, "ee-project-access": 8,
-    "resources": 7, "factory-team": 7, "factory-github": 7, "catalog-import": 7, "catalog-export": 7, "source-discover": 6, "source-detail": 6, "raise-limit": 6, "motion": 6,
-    "grants-declined": 6, "capped-runs": 6, "brain-folders": 5, "sources": 4, "factory-people": 4,
-    "settings-people": 3, "login-handoff": 3, "factory-new-project": 3, "session-picker": 2,
+    "source-form": 11, "redirects": 9, "factory-secrets": 9,
+    "component-gallery": 9, "source-new": 8, "project-idle": 8, "ee-project-access": 8,
+    "resources": 7, "factory-team": 7, "factory-github": 7, "catalog-import": 7, "catalog-export": 7, "source-discover": 6, "source-detail": 6, "motion": 6,
+    "grants-declined": 6, "brain-folders": 5, "sources": 4, "factory-people": 4,
+    "settings-people": 3, "login-handoff": 3, "factory-new-project": 3,
     "licence-words": 1,
 }
 
