@@ -392,12 +392,14 @@ async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squas
     """Merge the pull request through GitHub, trying each credential in turn. `sha` is the head
     the caller evaluated: GitHub refuses (409) when the branch has moved on. Never raises.
 
-    Returns {ok, status, message, no_write, rate_limited}: `ok` is a 200; `status` and `message`
+    Returns {ok, status, message, no_write, rate_limited, sha}: `ok` is a 200; `status` and `message`
     are GitHub's last answer (405, 409 and 422 end the search: the pull request itself is the
     problem, not the credential); `no_write` is true when no credential was allowed to (every
     answer was 401, 403 or 404, or there was no credential) and none of them was a spent rate
-    limit; `rate_limited` is true when one was."""
-    out = {"ok": False, "status": 0, "message": "", "no_write": False, "rate_limited": False}
+    limit; `rate_limited` is true when one was; `sha` is the commit the merge made, as the 200
+    answer names it, else ""."""
+    out = {"ok": False, "status": 0, "message": "", "no_write": False, "rate_limited": False,
+           "sha": ""}
     tokens = await _tokens(store, repo)
     refused = 0
     for tok, api in tokens:
@@ -417,7 +419,8 @@ async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squas
             body = {}
         msg = str(body.get("message") or "") if isinstance(body, dict) else ""
         if r.status_code == 200:
-            out.update(ok=True, message=msg, no_write=False, rate_limited=False)
+            sha = str(body.get("sha") or "") if isinstance(body, dict) else ""
+            out.update(ok=True, message=msg, no_write=False, rate_limited=False, sha=sha)
             return out
         if r.status_code in (405, 409, 422):
             out.update(message=msg or f"GitHub answered {r.status_code}", no_write=False,

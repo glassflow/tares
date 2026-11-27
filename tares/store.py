@@ -30,8 +30,8 @@ from sqlalchemy import and_, delete, null, select
 from . import session_ingest, session_read, state_db
 from .session_store import SessionStore
 from .session_store.copy import copy_from_duckdb
-from .session_store.tables import (COPIED, project_sessions, report_weeks, session_stations,
-                                    session_states)
+from .session_store.tables import (COPIED, merge_records, project_sessions, report_weeks,
+                                    session_stations, session_states)
 from .session_store.tables import session_commands, session_messages
 from .session_store.tables import (report_texts, session_archive_parts, session_files, session_lines,
                                     session_said, session_turns)
@@ -3093,6 +3093,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 conn.execute(delete(project_sessions).where(project_sessions.c.project == uid))
             # its weekly figures (report.py); a pass running now sees the project gone, above
             conn.execute(delete(report_weeks).where(report_weeks.c.project == uid))
+            conn.execute(delete(merge_records).where(merge_records.c.project == uid))
             # a crew station's session serves every project: its state stays
             linked = select(project_sessions.c.session).where(project_sessions.c.project.not_in(over))
             conn.execute(delete(session_states).where(
