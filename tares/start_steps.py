@@ -1,9 +1,10 @@
 """The Start checklist (TR-756): the few steps that take a new cell from empty to working.
 
-`factory_steps(ctx)` is the checklist of the software factory home; `sre_steps` (TR-765) is the
-one of the AI SRE home. A step is {key, title, gets, done, actions, detail?}: `gets` says what the person gains,
-`actions` is a list of buttons (empty once done), each a link inside the console (`to`), a link
-out (`href`) or a command to copy (`copy`). Every string is shown as it is, so
+`factory_steps(ctx)` is the checklist of the software factory home, and `joiner_steps(ctx)`
+(TR-1314) the one it gives a person joining a factory someone else set up; `sre_steps` (TR-765) is
+the one of the AI SRE home. A step is {key, title, gets, done, actions, detail?}: `gets` says what
+the person gains, `actions` is a list of buttons (empty once done), each a link inside the console
+(`to`), a link out (`href`) or a command to copy (`copy`). Every string is shown as it is, so
 tests/test_factory_start.py checks them against tares/words.py.
 
 `ctx` is a StartCtx (or a dict with the same names) made from reads of the store alone, never from
@@ -17,6 +18,7 @@ from dataclasses import dataclass, fields
 HIDDEN_PREFIX = "start_hidden:"
 SETTINGS_LINK = "/settings#tools"
 SETUP_LINK = "/setup"
+JOIN_SETTINGS_LINK = "/start#settings"
 # the page that explains keeping tickets in GitHub Issues
 GITHUB_ISSUES_DOCS = "https://docs.glassflow.ai/tares/software-factory/get-started"
 INSTALL_COMMAND = "uv tool install tares"
@@ -34,6 +36,8 @@ class StartCtx:
     machine_name: str = ""              # the machine that signed in or runs the crew
     crew_up: bool = False               # the orchestrator and the reviewer have both reported
     crew_text: str = ""                 # "Running on <machine>"
+    own_settings_set: bool = False      # joiner only: the person saved crew settings of their own
+    member_of_project: bool = False     # joiner only: they lead or belong to an open project
 
 
 @dataclass
@@ -96,6 +100,26 @@ def factory_steps(ctx) -> list[dict]:
                      "It reads your choices from this workspace and asks only what belongs to your machine.",
                      c.crew_up, [{"label": "Copy the command", "copy": CREW_COMMAND}],
                      c.crew_text), "terminal", CREW_COMMAND),
+    ]
+
+
+def joiner_steps(ctx) -> list[dict]:
+    """The steps of a person joining a factory someone else set up (TR-1314), in order: look at the
+    team's crew choices, the three terminal commands of `factory_steps`, then join a project. The
+    first ticks once they saved crew settings of their own (saving no change keeps the team's), or
+    their crew is up."""
+    c = _ctx(ctx)
+    own = {s["key"]: s for s in factory_steps(c)}
+    return [
+        _where(_step("settings", "Choose how your crew works",
+                     "Your team's choices, or stricter ones for your machine.",
+                     c.own_settings_set or c.crew_up,
+                     [{"label": "Review the choices", "to": JOIN_SETTINGS_LINK}]), "workspace"),
+        own["install"], own["login"], own["crew"],
+        _where(_step("project", "Join a project",
+                     "So the project shows up as yours, with its plan and tickets.",
+                     c.member_of_project,
+                     [{"label": "See the team's projects", "to": "/projects"}]), "workspace"),
     ]
 
 

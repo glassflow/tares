@@ -4,6 +4,7 @@ import { EmptyState, ListRow, WeekChart } from "../../../components/edition";
 import { formatCount } from "../../../lib/number";
 import { HOUR, ageWords, durationWords, formatDistance, formatStampUTC } from "../../../lib/time";
 import type { ReportData, Stage, StuckList, StuckRow, TimeData } from "../FactoryReport.api";
+import { CAPTION, CELL, HEAD, NoValue, TABLE, percent } from "./shared";
 
 // Time (TR-1669): where the time of the four stages went, each split into waiting on a person and agent
 // time, how long the merged tickets took from start to merge, and what is stuck now. The figures are the
@@ -17,17 +18,8 @@ const STAGES = Object.keys(STAGE) as Stage[];
 const BUCKETS = ["Under 1 h", "1 to 4 h", "4 to 24 h", "1 to 3 days", "Over 3 days"];
 const AGENT_NOTE = "Everything not covered by an answered question, including checks and queues. Unfinished stages are not counted.";
 
-const CAPTION = "font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground";
-// The platform pages style every table, th and td by element; each of those is set here. The section
-// around lets a word break anywhere, for a long title; in a table the words stay whole.
-const TABLE = "w-full border-collapse border-0 bg-transparent text-[13px] [overflow-wrap:normal]";
-const HEAD = "border-0 border-b border-solid border-rule-strong bg-transparent py-1 pl-0 pr-3 text-left align-bottom font-mono text-[11px] font-normal uppercase tracking-[0.08em] text-muted-foreground last:pr-0";
-const CELL = "border-0 bg-transparent py-1.5 pl-0 pr-3 text-left align-top font-normal tabular-nums last:pr-0";
-
-const percent = (value: number) => `${formatCount(value)}%`;
-
 function Percent({ value }: { value: number | null }) {
-  return value === null ? <><span aria-hidden="true">-</span><span className="sr-only">no value</span></> : <>{percent(value)}</>;
+  return value === null ? <NoValue /> : <>{percent(value)}</>;
 }
 
 function Stages({ data }: { data: TimeData }) {

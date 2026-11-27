@@ -12,6 +12,8 @@
  * under its row, the cell of one person that keeps the v2 list, no horizontal scroll at 390, and the words check in
  * every state. Shots: team-home-<state>-<width>.png in SHOTS_DIR (three-people, nothing-waiting, loading, error,
  * long-text, many-items, one-person) at 1440 and 390.
+ * TR-1720: Alex joins a project Kim leads and is marked as joined, with whom to ask for its secrets; Kim adds them
+ * from the picker and the mark goes.
  * Run:  npm run test:team-home     (builds first; tares installed in ../.venv or on PATH)
  * Needs python3 for the seeds (TARES_E2E_PYTHON to choose another). TARES_E2E_CHROME points Playwright at another Chrome.
  */
@@ -958,8 +960,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="project-row"]').length === 6, null, { timeout: 4000 }).catch(() => {});
       ck(t("choosing Team puts it in the address and reads nothing again"), /[?&]whose=team/.test(page.url()) && reads.length === before, `${page.url()} ${reads.slice(before).join()}`);
       ck(t("Team lists six projects"), (await rowsN()) === 6 && (await Promise.all(TEAM_NAMES.map((x) => prow(x).count()))).every((c) => c === 1), String(await rowsN()));
-      ck(t("Team has the stub, Private, led by Lee, after the rows, and no summary line"), (await n("hidden-row")) === 1
-         && (await texts("hidden-row"))[0].trim() === "Private, led by Lee" && (await stubAfterRows(page)) && (await n("hidden-summary")) === 0, JSON.stringify(await texts("hidden-row")));
+      ck(t("Team has the stub, whom to ask, after the rows, and no summary line"), (await n("hidden-row")) === 1
+         && (await texts("hidden-row"))[0].trim() === "Private project. Ask Lee to add you." && (await stubAfterRows(page)) && (await n("hidden-summary")) === 0, JSON.stringify(await texts("hidden-row")));
       ck(t("Search and Mobile say Led by Lee, Billing Led by Kim"), (await prow("Search").getByTestId("project-lead").innerText()).trim() === "Led by Lee"
          && (await prow("Mobile").getByTestId("project-lead").innerText()).trim() === "Led by Lee" && (await prow("Billing").getByTestId("project-lead").innerText()).trim() === "Led by Kim");
       ck(t("Team names nothing of the private project either"), (await leaks()).length === 0, (await leaks()).join());
@@ -1019,7 +1021,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         const label = t(`privateNotOn, ${view}`);
         if (view === "team") {
           ck(`${label}: one quiet row after the projects, its lead and nothing else`, (await n("hidden-row")) === 1
-             && (await page.getByTestId("hidden-row").innerText()).trim() === "Private, led by Lee" && (await stubAfterRows(page)));
+             && (await page.getByTestId("hidden-row").innerText()).trim() === "Private project. Ask Lee to add you." && (await stubAfterRows(page)));
           ck(`${label}: no summary line besides the row`, (await n("hidden-summary")) === 0);
         } else {
           ck(`${label}: one line says how many are hidden and who leads them`, (await n("hidden-summary")) === 1
@@ -1202,6 +1204,53 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("the page never loaded again"), await page.evaluate(() => window.__sameDocument === true));
       ck(t("no horizontal scroll"), (await overflow(page)) <= 0, String(await overflow(page)));
       await ctx.close();
+    }
+
+    // ── TR-1720: Alex joins Kim's project, and has its secrets once Kim adds them ──
+    for (const width of [1440, 390]) {
+      const t = (s) => `@${width} joining: ${s}`;
+      const at = `${BASE}/projects/${ids.projects.billing}/people`;
+      const secrets = () => api("GET", `/api/projects/${ids.projects.billing}/secrets`, null, ids.keys.alex);
+      const alex = await open("alex", width);
+      const joined = alex.page.getByTestId("people-joined");
+      const line = alex.page.getByTestId("people-you-joined");
+      await alex.page.goto(at, { waitUntil: "load" });
+      await alex.page.getByTestId("project-join").waitFor();
+      ck(t("before, no one is marked as joined"), (await joined.count()) === 0 && (await line.count()) === 0);
+      await alex.page.getByTestId("project-join").click();
+      await alex.page.getByTestId("project-join").waitFor({ state: "detached" });
+      ck(t("Alex is marked as joined"), (await joined.count()) === 1
+         && (await joined.innerText()).trim().toLowerCase() === "joined", String(await joined.count()));
+      const words = (await line.count()) ? (await line.innerText()).replace(/\s+/g, " ").trim() : "";
+      ck(t("the page says whom to ask for the secrets"), words === "You joined this project. Ask Kim to add you to get its secrets.", words);
+      ck(t("the cell refuses Alex the secrets"), (await secrets()).status === 403);
+      await checkWords(alex.page, ck, t("joined"));
+      ck(t("no horizontal scroll"), (await overflow(alex.page)) <= 0, String(await overflow(alex.page)));
+      await shot(alex.page, "joined", width);
+
+      const kim = await open("kim", width);
+      await kim.page.goto(at, { waitUntil: "load" });
+      await kim.page.getByTestId("people-add-member").waitFor();
+      ck(t("the lead sees who joined, without the line for them"), (await kim.page.getByTestId("people-joined").count()) === 1
+         && (await kim.page.getByTestId("people-you-joined").count()) === 0);
+      await kim.page.getByTestId("people-add-member").click();
+      const offered = kim.page.getByRole("option", { name: "Alex", exact: true });
+      const offers = await offered.waitFor({ timeout: 5000 }).then(() => true, () => false);
+      ck(t("the lead is still offered Alex to add"), offers);
+      if (offers) {
+        await offered.click();
+        const cleared = await kim.page.getByTestId("people-joined").waitFor({ state: "detached", timeout: 10000 }).then(() => true, () => false);
+        ck(t("once added, the mark goes"), cleared);
+        ck(t("and Alex has the secrets"), (await secrets()).status === 200);
+        await alex.page.reload({ waitUntil: "load" });
+        await alex.page.getByTestId("project-people").waitFor();
+        ck(t("Alex's page drops the line"), (await line.count()) === 0 && (await joined.count()) === 0
+           && (await alex.page.getByTestId("project-join").count()) === 0);
+      }
+      await kim.ctx.close();
+      await alex.ctx.close();
+      const off = await api("DELETE", `/api/projects/${ids.projects.billing}/members/${ids.people.alex}`);
+      ck(t("Alex is taken off again"), off.status === 200, String(off.status));
     }
   } finally {
     if (browser) await browser.close();

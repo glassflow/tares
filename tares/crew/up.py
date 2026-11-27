@@ -31,8 +31,9 @@ Differences from the old bash crew (each one a decision, none an accident):
     for `codex`, its version and its login instead (codex_ready), and nothing of Claude Code's.
  5. The terminal box (tares/factory_setup.py) is not imported here: it stays out of the engine, so the plain prompts need no terminal.
     `tares factory` runs it before the dispatcher, so a terminal user still sees the box.
- 6. prod_pattern is saved with the release profile as the default pattern, as bash does; the box keeps a
-    pattern Tares already has. The contract follows bash.
+ 6. prod_pattern is saved with the release profile as the default pattern, as bash does, but only when
+    Tares has none: a pattern already set (a team's) is not written over, nor copied into a person's
+    settings. The box and the contract do the same.
  7. The contract refuses an answer for a question that is not outstanding, an unknown answer, and any
     invalid answer, and saves nothing in that case. The prompts re-ask instead.
 """
@@ -47,10 +48,12 @@ import sys
 import time
 from pathlib import Path
 
+from ..words import team_choices
 from . import contract, doctor_lsp, jsonrun, state
 from . import watch as watch_mod
-from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
-from .errors import CrewError, CrewHomeUntrusted, SetupNeededError, UsageError
+from .client import (TaresClient, TaresHTTPError, looser_than_team, settings_defaults, settings_missing,
+                     team_settings)
+from .errors import CrewError, CrewHomeUntrusted, LooserThanTeam, SetupNeededError, UsageError
 from .paths import CREW_NAME_RULE, ME, CrewPaths
 
 NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,30}$"
@@ -255,6 +258,8 @@ class Up:
         self.paths = paths or paths_from(env)
         self.client = client or TaresClient(self.paths, env)
         self.assume_yes = False
+        self.input_ended = False
+        self._asked_over: dict = {}   # the settings the outstanding questions were made from
         self._kit = None
 
     def say(self, msg: str) -> None:
@@ -306,6 +311,7 @@ class Up:
         while True:
             _err(f"  Choice [{default}]: ")
             got = _read_line()
+            self.input_ended = got is None
             if got is None:
                 _err("\n")
                 got = ""
@@ -326,41 +332,75 @@ class Up:
 
     # -- the settings --
 
-    def ask_settings(self, missing: list) -> dict:
-        """Ask for each missing setting and save the answers on Tares. Returns what was saved."""
+    def team_line(self, raw: dict) -> str:
+        """"Using your team's choices: ..." for a member of a team that decided some of what is not asked.
+        "" for the owner, and when Tares does not say what the team set."""
+        if raw.get("autonomy") is None and raw.get("builders_max") is None:
+            return ""   # nothing to say whoever set it, so Tares is not asked
+        try:
+            home = state.loads_json(self.client.tares_http("GET", "/api/home"))
+        except (TaresHTTPError, ValueError):
+            return ""
+        return team_choices(team_settings(home), raw)
+
+    def ask_settings(self, missing: list, raw: dict) -> dict:
+        """Ask for each missing setting and save the answers on Tares. `raw` is the settings as they are.
+        Returns what was saved."""
         answers: dict = {}
         total = len(missing)
         n = 0
         _err("\nSetting up your crew. Asked once, saved on Tares.\n")
+        line = self.team_line(raw)
+        if line:
+            _err(f"{line}\n")
+        prefixes = {}
         for k in missing:
             if k == "autonomy":
                 n += 1
-                answers["autonomy"] = self._choose_q("autonomy", f"{n}/{total}  ")
+                prefixes[k] = f"{n}/{total}  "
+                answers["autonomy"] = self._choose_q("autonomy", prefixes[k])
             elif k == "releaser":
                 n += 1
                 answers["releaser"] = self._choose_q("releaser", f"{n}/{total}  ") == "yes"
-                if answers["releaser"]:
-                    answers["release_profile"] = self._choose_q("release_profile", "     ")
-                    answers["prod_pattern"] = settings_defaults()["prod_pattern"]
+                if answers["releaser"] and raw.get("release_profile") is None:
+                    self._ask_shipping(answers, raw, "     ")
             elif k == "challenger":
                 n += 1
-                answers["challenger"] = self._choose_q("challenger", f"{n}/{total}  ") == "yes"
+                prefixes[k] = f"{n}/{total}  "
+                answers["challenger"] = self._choose_q("challenger", prefixes[k]) == "yes"
             elif k == "builders_max":
                 n += 1
                 answers["builders_max"] = int(self._choose_q("builders_max", f"{n}/{total}  "))
             elif k in ("release_profile", "prod_pattern"):  # a releaser chosen earlier, its shipping not yet
                 if "release_profile" in answers:
                     continue
-                answers["release_profile"] = self._choose_q("release_profile", "")
-                answers["prod_pattern"] = settings_defaults()["prod_pattern"]
-        self.save_settings(answers)
-        return answers
+                self._ask_shipping(answers, raw, "")
+        while True:
+            try:
+                self.save_settings(answers)
+                return answers
+            except LooserThanTeam as e:
+                # the team set it while the person was answering: show why, and ask that one again
+                if self.assume_yes or self.input_ended or e.setting not in answers:
+                    raise
+                _err(f"\n{e}\n")
+                got = self._choose_q(e.setting, prefixes[e.setting])
+                answers[e.setting] = got == "yes" if e.setting == "challenger" else got
+
+    def _ask_shipping(self, answers: dict, raw: dict, prefix: str) -> None:
+        """How the releaser ships, and the default prod pattern with it when Tares has none."""
+        answers["release_profile"] = self._choose_q("release_profile", prefix)
+        if raw.get("prod_pattern") is None:
+            answers["prod_pattern"] = settings_defaults()["prod_pattern"]
 
     def save_settings(self, body: dict) -> None:
         """Both paths save the settings here: PUT /api/crew/settings."""
         try:
             self.client.tares_http("PUT", "/api/crew/settings", state.dumps_compact(body))
-        except TaresHTTPError:
+        except TaresHTTPError as e:
+            setting = looser_than_team(e.status, e.detail)
+            if setting:
+                raise LooserThanTeam(e.detail, setting) from None
             raise CrewError(f"could not save the crew settings on Tares at {self.client.tares}") from None
         self.client._settings = None
 
@@ -405,7 +445,7 @@ class Up:
         missing = settings_missing(raw)
         if not missing:
             return
-        self.ask_settings(missing)
+        self.ask_settings(missing, raw)
         self.ask_grants()
 
     # -- the crew's name --
@@ -524,12 +564,14 @@ class Up:
             out.append(question_json("crew_name", default=value, why=f"used in the station names: {value}-orchestrator, {value}-reviewer",
                                      text="More than one person works on this Tares. What should this crew be called, so it is "
                                           "told apart from the crews of the others (and from yours on another machine)?"))
-        missing = settings_missing(self.client.settings_raw())
+        self._asked_over = self.client.settings_raw()
+        missing = settings_missing(self._asked_over)
         shipping_done = False
         for k in missing:
             if k == "releaser":
                 out.append(question_json("releaser"))
-                out.append(question_json("release_profile", when={"releaser": True}))
+                if self._asked_over.get("release_profile") is None:
+                    out.append(question_json("release_profile", when={"releaser": True}))
                 shipping_done = True
             elif k in ("release_profile", "prod_pattern"):
                 if not shipping_done:
@@ -598,7 +640,8 @@ class Up:
                 if values.get("releaser") is False:
                     continue
                 body["release_profile"] = values[k]
-                body["prod_pattern"] = settings_defaults()["prod_pattern"]
+                if self._asked_over.get("prod_pattern") is None:
+                    body["prod_pattern"] = settings_defaults()["prod_pattern"]
             elif k == "builders_max":
                 body[k] = int(values[k])
             else:

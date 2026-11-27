@@ -2699,7 +2699,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
             with metrics.step("recurring"):
-                rec = recurring(pr["repo"], h.hidden_ids())
+                rec = factory_mod.recurring_findings(store, pr["repo"], now_utc(), h.hidden_ids())
             if rec:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
@@ -2840,31 +2840,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return "\n".join(L)
 
     # ── recurring findings and rules offered from them (TR-443) ───────────────
-    def recurring(repo: str, hidden: set | frozenset = frozenset()) -> list[dict]:
-        from datetime import timedelta
-        rows = [f for f in store.repo_findings(repo, now_utc() - timedelta(days=factory_mod.RECUR_DAYS))
-                if f["project"] not in hidden]
-        names = store.project_names()
-        by: dict[str, dict] = {}
-        for f in rows:
-            k = by.setdefault(f["kind"], {"kind": f["kind"], "refs": set(), "examples": []})
-            # the ticket's label comes with the finding (one read, not one per finding); a finding
-            # whose ticket sits in another project names no ticket, as get_ticket(project, id) did
-            lab = (factory_mod.label({"id": f["ticket"], "identifier": f["ticket_identifier"],
-                                      "number": f["ticket_number"]})
-                   if f["ticket_project"] == f["project"] else "?")
-            k["refs"].add((f["project"], lab))
-            if len(k["examples"]) < 3:
-                k["examples"].append(f["text"][:200])
-        out = [{"kind": k["kind"], "count": len(k["refs"]),
-                "projects": sorted({p for p, _ in k["refs"]}),
-                "tickets": sorted(f"{names.get(p, '?')} {lab}" for p, lab in k["refs"]),
-                "examples": k["examples"]} for k in by.values()
-               if len(k["refs"]) >= factory_mod.RECUR_MIN]
-        return sorted(out, key=lambda r: -r["count"])
-
     def offer_rules(repo: str) -> None:
-        for r in recurring(repo):
+        for r in factory_mod.recurring_findings(store, repo, now_utc()):
             scope = "all" if len(r["projects"]) > 1 else "project"
             pid = r["projects"][0] if scope == "project" else None
             text = rule_text(repo, r["kind"], r["count"])
@@ -2872,7 +2849,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     @app.get("/api/recurring-findings")
     def recurring_findings(repo: str):
-        return {"repo": repo, "recurring": recurring(repo.strip(), h.hidden_ids())}
+        return {"repo": repo,
+                "recurring": factory_mod.recurring_findings(store, repo.strip(), now_utc(), h.hidden_ids())}
 
     @app.get("/api/rule-proposals")
     def list_rule_proposals(state: str = "open"):
@@ -3840,10 +3818,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
         hidden = h.hidden_ids()
         projects = [p for p in store.list_projects() if p["id"] not in hidden]
         me, o = answerer(request), owners_mod.Owners(store)
+
+        def accepted_rules() -> set[tuple]:   # (repo, kind) of each accepted rule the offer list
+            offers = store.list_rule_proposals("accepted")           # shows this caller
+            return {(r["repo"], r["kind"]) for r in readable_offers(h, offers, hidden)}
+
         try:
             return report_mod.page(
                 store, projects, lambda: my_projects(request), o, scope, from_, to,
-                asks_me=lambda d: me is not None and desk_is_mine(d, me, o))
+                asks_me=lambda d: me is not None and desk_is_mine(d, me, o),
+                accepted_rules=accepted_rules)
         except report_mod.UnknownScope as e:
             raise HTTPException(404, str(e))
         except ValueError as e:

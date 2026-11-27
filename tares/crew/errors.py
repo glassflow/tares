@@ -17,6 +17,15 @@ class CrewError(Exception):
         return f"{ME}: {self}"
 
 
+class LooserThanTeam(CrewError):
+    """Tares refused a person's setting that is looser than the team's. The message is the server's, and
+    `setting` the one it refused."""
+
+    def __init__(self, message: str, setting: str):
+        super().__init__(message)
+        self.setting = setting
+
+
 class CrewHomeUntrusted(CrewError):
     """Claude Code has not trusted the crew home. `folder` is the home as the system writes it, so a caller can
     open Claude Code there."""

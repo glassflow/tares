@@ -1,17 +1,17 @@
-"""recurring() reads a fixed number of times however many findings a repo has (TR-1605).
+"""recurring_findings() reads a fixed number of times however many findings a repo has (TR-1605).
 
 The ticket brief, POST .../reviews (which offers rules from the recurring findings) and
-/api/recurring-findings all run recurring(). It used to read the ticket once per finding and every
+/api/recurring-findings all run factory.recurring_findings(). It used to read the ticket once per finding and every
 project's full row once; now the finding rows carry the ticket's label and the project names come
 in one query. The test seeds 200 findings over 40 tickets in 5 projects (some tickets named by a
 Linear identifier, one finding whose project is not its ticket's, one too old, one in another repo),
-holds the old function body as the reference and asserts the same answer, and that recurring() runs
+holds the old function body as the reference and asserts the same answer, and that the function runs
 at most 4 statements, and the same number for a repo with 3 findings as for one with 200.
 
 Counted (TR-1728): statements on the old connection and on the session store's engine whose call
-stack is inside recurring() in tares/factory_api.py. What the route reads around it (settings,
+stack is inside recurring_findings() in tares/factory.py. What the route reads around it (settings,
 people, hidden projects) is not counted, nor is SQLite's BEGIN. A count of 0 fails, so a renamed or
-moved recurring(), or reads that leave the hooked connections, cannot pass unnoticed.
+moved function, or reads that leave the hooked connections, cannot pass unnoticed.
 
 Run: .venv/bin/python tests/test_recurring_reads.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python tests/test_recurring_reads.py
@@ -40,7 +40,6 @@ import httpx
 from sqlalchemy import event, func, select, update
 
 from tares import factory as factory_mod
-from tares import factory_api
 from tares.envelope import now_utc
 from tares.session_store.tables import review_findings as findings_table
 
@@ -60,7 +59,7 @@ def ck(label, cond, detail=""):
 
 
 def reference(store, repo, hidden=frozenset()):
-    """recurring() as it was before TR-1605: one get_ticket per finding, list_projects once."""
+    """recurring_findings() as it was before TR-1605: one get_ticket per finding, list_projects once."""
     rows = [f for f in store.repo_findings(repo, now_utc() - timedelta(days=factory_mod.RECUR_DAYS))
             if f["project"] not in hidden]
     names = {p["id"]: p["name"] for p in store.list_projects()}
@@ -86,14 +85,14 @@ def _inside_recurring() -> bool:
     frame = sys._getframe(1)
     while frame is not None:
         code = frame.f_code
-        if code.co_name == "recurring" and code.co_filename == factory_api.__file__:
+        if code.co_name == "recurring_findings" and code.co_filename == factory_mod.__file__:
             return True
         frame = frame.f_back
     return False
 
 
 def _hit(statement):
-    """Count one statement of the measured request, if recurring() runs it. SQLite's BEGIN is a
+    """Count one statement of the measured request, if recurring_findings() runs it. SQLite's BEGIN is a
     statement to the engine but not a query."""
     c = _COUNTER.get()
     if c is None or str(statement).lstrip().upper().startswith("BEGIN"):
@@ -122,7 +121,7 @@ class CountingCon:
 
 
 def install_counters(store):
-    """Hook the session store's engine, where recurring() reads now, and the old connections."""
+    """Hook the session store's engine, where recurring_findings() reads now, and the old connections."""
     event.listen(store.sessions_db.engine, "before_cursor_execute",
                  lambda conn, cursor, statement, *a: _hit(statement))
     shared = store.sc is store.con
@@ -221,7 +220,7 @@ async def main():
         body = r.json()
         ck("the answer is the old function's, whole", body["recurring"] == want,
            (body["recurring"][:1], want[:1]))
-        ck(f"recurring() runs at most {BUDGET} statements for 200 findings", 0 < n <= BUDGET,
+        ck(f"recurring_findings() runs at most {BUDGET} statements for 200 findings", 0 < n <= BUDGET,
            f"counted {n}, want 1 to {BUDGET}")
         print(f"  statements for 200 findings: {n}")
         r3, n3 = await route("acme/other")

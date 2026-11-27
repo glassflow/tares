@@ -58,7 +58,7 @@ export function LeadLine({ p, me }: SlotProps["projects.lead"]) {
 const QUIET = "flex items-center gap-2.5 border-b border-border px-4 py-3.5 text-muted-foreground last:border-b-0";
 
 /** After the rows: a quiet row for each private project the person is not on (Team), or the one line
- *  about them, as the cell words it (Mine). No name, no goal, only who leads it. */
+ *  about them, as the cell words it (Mine). No name, no goal, only whom to ask: its lead. */
 export function HiddenRows({ stubs, summary, view }: SlotProps["projects.hidden"]) {
   if (view === "mine") {
     return summary ? (
@@ -74,7 +74,7 @@ export function HiddenRows({ stubs, summary, view }: SlotProps["projects.hidden"
         <div key={i} data-testid="hidden-row" className={QUIET}>
           <Lock aria-hidden className={LOCK} />
           <span className="[overflow-wrap:anywhere]">
-            Private{s.lead && <>, led by <span data-user-text>{s.lead.name}</span></>}
+            Private project. {s.lead ? <>Ask <span data-user-text>{s.lead.name}</span> to add you.</> : "Ask an admin to give it a lead."}
           </span>
         </div>
       ))}

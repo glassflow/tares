@@ -15,7 +15,7 @@ import hashlib
 import os
 import posixpath
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import status_words
 from .docs import DocError, title_ok
@@ -738,6 +738,48 @@ def finding_kind(text: str) -> str:
 
 RECUR_MIN = 3          # the same kind in this many tickets of a repo is a pattern
 RECUR_DAYS = 30
+
+
+def recurring_refs(findings: list[dict], ticket) -> dict[str, dict]:
+    """One repo's findings (store.repo_findings) by kind: `refs`, the (project id, ticket label)
+    pairs the kind was found on, and `examples`, up to three of its texts. `ticket(project, id)`
+    reads a ticket."""
+    by: dict[str, dict] = {}
+    for f in findings:
+        k = by.setdefault(f["kind"], {"refs": set(), "examples": []})
+        t = ticket(f["project"], f["ticket"])
+        k["refs"].add((f["project"], label(t) if t else "?"))
+        if len(k["examples"]) < 3:
+            k["examples"].append(f["text"][:200])
+    return by
+
+
+def recurring_row(kind: str, refs, names: dict) -> dict | None:
+    """What one kind comes to over the `refs` of recurring_refs, None below RECUR_MIN of them.
+    `names` maps a project id to its name."""
+    if len(refs) < RECUR_MIN:
+        return None
+    return {"kind": kind, "count": len(refs), "projects": sorted({p for p, _ in refs}),
+            "tickets": sorted(f"{names.get(p, '?')} {lab}" for p, lab in refs)}
+
+
+def recurring_findings(store, repo: str, now: datetime, hidden: set | frozenset = frozenset()) -> list[dict]:
+    """The kinds of finding on RECUR_MIN or more tickets of `repo` in the RECUR_DAYS before `now`,
+    most tickets first: what GET /api/recurring-findings answers. Findings of a project in `hidden`
+    are left out before the count."""
+    rows = [f for f in store.repo_findings(repo, now - timedelta(days=RECUR_DAYS)) if f["project"] not in hidden]
+    # the ticket's label comes with the finding (one read, not one per finding); a finding whose
+    # ticket sits in another project names no ticket, as get_ticket(project, id) did
+    own = {(f["project"], f["ticket"]): {"id": f["ticket"], "identifier": f["ticket_identifier"],
+                                         "number": f["ticket_number"]}
+           for f in rows if f["ticket_project"] == f["project"]}
+    names = store.project_names()
+    out = []
+    for kind, k in recurring_refs(rows, lambda *key: own.get(key)).items():
+        row = recurring_row(kind, k["refs"], names)
+        if row:
+            out.append({**row, "examples": k["examples"]})
+    return sorted(out, key=lambda r: -r["count"])
 
 
 def _norm(s: str) -> str:
