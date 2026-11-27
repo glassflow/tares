@@ -1465,6 +1465,15 @@ class FactoryStore:
                 "WHERE field = 'stage' ORDER BY ticket, changed_at").fetchall()
         return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
 
+    def all_holder_changes(self) -> list[dict]:
+        """Every holder change of every ticket, deleted tickets too, each ticket's together and
+        oldest first. `value` is the station that holds the ticket from then on, None for nobody."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT ticket, project, changed_at, value FROM ticket_history "
+                "WHERE field = 'holder' ORDER BY ticket, changed_at").fetchall()
+        return [{"ticket": r[0], "project": r[1], "at": r[2], "value": r[3]} for r in rows]
+
     def all_reviews(self) -> list[dict]:
         """Every review round of every ticket, each ticket's together and in round order."""
         with self._sread:

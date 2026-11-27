@@ -14,6 +14,7 @@ With TARES_TEST_PG set and PYTHONPATH=tests/pg_harness the state and session tab
 import asyncio
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -379,6 +380,182 @@ def deleting(s):
     ck("the other project is as it was", table(s, projects=["pa"]) == pa)
 
 
+def holds(s, project, ticket, *moves):
+    for station, when in moves:
+        s.add_ticket_history(ticket, project, "holder", station, None, None, None, when)
+
+
+def replied(s, session, when, cost, project=None):
+    seed_usage(s, session, uuid.uuid4().hex, replied_at=when, project=project, cost_usd=cost)
+
+
+def costs(s) -> tuple[dict, dict, dict]:
+    """What a pass saved: ({ticket (project, number): row}, {milestone id: row},
+    {project: [cost, replies with no price] tied to no ticket})."""
+    saved = json.loads(s.get_setting(report.COST_SETTING))
+    untied: dict = {}
+    for project, _, cost, unpriced in saved["untied"]:
+        was = untied.get(project, [0.0, 0])
+        untied[project] = [round(was[0] + cost, 6), was[1] + unpriced]
+    return ({(r["project"], r["number"]): r for r in saved["tickets"]},
+            {r["id"]: r for r in saved["milestones"]}, untied)
+
+
+def ticket_costs():
+    print("== ticket costs: which replies a ticket takes ==")
+    s = Store(os.path.join(tempfile.mkdtemp(), "costs.duckdb"))
+    for pid in ("pa", "pb"):
+        s.create_project(pid, "blank", pid, {})
+    for session, station, role_, parent, home in (
+            ("b1", "build-a", "builder", None, "pa"), ("b2", "build-a", "builder", None, "pb"),
+            ("h1", "help-1", "helper", "build-a", "pa"), ("h2", "help-2", "helper", "nobody", "pa"),
+            ("rv", "crew-reviewer", "reviewer", None, None),
+            ("or", "crew-orchestrator", "orchestrator", None, None),
+            ("rl", "crew-releaser", "releaser", None, None),
+            ("cm", "crew-comms", "comms", None, None)):
+        seed_station(s, session, station, role_, parent=parent, project=home)
+    ms = s.create_milestone("pa", "M")
+    open_ms = s.create_milestone("pa", "Still in review")
+    t1, t2, t3, t4 = (s.create_ticket("pa", "tares", f"t{n}", milestone=ms if n != 3 else None)
+                      for n in (1, 2, 3, 4))
+    t5 = s.create_ticket("pa", "tares", "t5", milestone=open_ms)
+    # t1 is worked on from 01:00, t2 from 02:00; each goes to review and is merged
+    holds(s, "pa", t1, ("build-a", at(12, 1)), (None, at(12, 7)))
+    stages(s, "pa", t1, ("doing", at(12, 1)), ("review", at(12, 3)), ("merged", at(12, 7)))
+    holds(s, "pa", t2, ("build-a", at(12, 2)), (None, at(12, 8)))
+    stages(s, "pa", t2, ("doing", at(12, 2)), ("blocked", at(12, 3, 40)),
+           ("changes", at(12, 4)), ("review", at(12, 5)), ("merged", at(12, 8)))
+    # t3 passes to another builder while it is worked on
+    holds(s, "pa", t3, ("build-a", at(12, 10)), ("other-build", at(12, 11)))
+    stages(s, "pa", t3, ("doing", at(12, 10)), ("merged", at(12, 14)))
+    # and, opened again the week after, is merged a second time
+    stages(s, "pa", t3, ("changes", at(20, 1)), ("merged", at(20, 2)))
+    # t4 is closed while build-a still holds it
+    holds(s, "pa", t4, ("build-a", at(12, 12)))
+    stages(s, "pa", t4, ("doing", at(12, 12)), (None, at(12, 13)))
+    stages(s, "pa", t5, ("review", at(14, 0)))               # and t5 is in review ever since
+    replied(s, "b1", at(12, 1, 30), 1.0, "pa")      # t1 alone is worked on
+    replied(s, "b1", at(12, 2, 30), 2.0, "pa")      # t1 and t2
+    replied(s, "b2", at(12, 2, 40), 0.9, "pb")      # the same name in pb holds nothing
+    replied(s, "b1", at(12, 2, 50), None, "pa")     # t1 and t2, no price
+    replied(s, "b1", at(12, 3, 30), 4.0, "pa")      # t2 is doing, t1 only in review
+    replied(s, "b1", at(12, 3, 50), 0.8, "pa")      # t2 is blocked: t1, in review
+    replied(s, "b1", at(12, 4, 10), 0.6, "pa")      # t2, in changes
+    replied(s, "b1", at(12, 6), 6.0, "pa")          # both in review
+    replied(s, "h1", at(12, 6), 0.5, "pa")          # its helper, the same way
+    replied(s, "h2", at(12, 6), 0.05, "pa")         # a helper of no builder
+    replied(s, "rv", at(12, 6), 8.0, "pa")          # both in review
+    replied(s, "rv", at(12, 9), 1.0, "pa")          # nothing in review
+    replied(s, "b1", at(12, 9), 0.7, "pa")          # nothing held
+    replied(s, "or", at(12, 9), 0.1, "pa")
+    replied(s, "rl", at(12, 9), 0.2, "pa")
+    replied(s, "cm", at(12, 9), 0.3, "pa")
+    replied(s, "me", at(12, 9), 0.4)                # a person's own session, of no project
+    replied(s, "me", at(12, 9, 1), None, "pa")
+    replied(s, "b1", at(12, 10, 30), 0.2, "pa")     # t3, still build-a's
+    replied(s, "b1", at(12, 11, 30), 0.3, "pa")     # t3 is another's now
+    replied(s, "b1", at(12, 12, 30), 2.5, "pa")     # t4
+    replied(s, "b1", at(12, 13, 30), 0.15, "pa")    # t4 is closed
+    replied(s, "rv", at(14, 1), 1.5, "pa")          # t5, whose review has not ended
+    review(s, "pa", t1, "block", at(12, 3, 10), findings=[("major", True, "no")])
+    review(s, "pa", t1, "pass", at(12, 6, 10))
+    review(s, "pa", t2, "pass", at(12, 6, 20))
+    s.accept_milestone("pa", ms, "Ada", None, at(13, 12))
+    s.accept_milestone("pa", open_ms, "Ada", None, at(15, 12))
+    report.rebuild_all(s)
+    tickets, milestones, untied = costs(s)
+    got = {n: tickets[p, n] for p, n in tickets}
+    ck("the merged tickets, and no other", sorted(got) == [1, 2, 3], sorted(got))
+    ck("t1: its own replies, half of the shared ones, half of the helper's and the reviewer's",
+       got[1]["cost_usd"] == 10.05, got[1])    # 1 + 1 + 0.8 + 3 + 0.25 + 4
+    ck("t2: doing and changes come before another ticket in review",
+       got[2]["cost_usd"] == 12.85, got[2])    # 1 + 4 + 0.6 + 3 + 0.25 + 4
+    ck("t3: only while that builder held it", got[3]["cost_usd"] == 0.2, got[3])
+    ck("a reply with no price is counted beside each ticket that takes it",
+       [got[n]["unpriced"] for n in (1, 2, 3)] == [1, 1, 0], got)
+    ck("rounds, and hours from first doing to first merge",
+       [(got[n]["rounds"], got[n]["hours"]) for n in (1, 2, 3)]
+       == [(2, 6.0), (1, 6.0), (0, 4.0)], got)
+    ck("a ticket is placed in the week of its first merge",
+       {r["week"] for r in got.values()} == {W2.isoformat()}, got)
+    m = milestones[ms]
+    ck("a milestone: the sum of its tickets, the closed one too, a reply with no price once",
+       (m["cost_usd"], m["unpriced"], m["rounds"], m["tickets"], m["hours"])
+       == (25.4, 1, 3, 3, 35.0), m)           # 10.05 + 12.85 + 2.5
+    m = milestones[open_ms]
+    ck("a review that has not ended still takes the reviewer's replies",
+       (m["cost_usd"], m["unpriced"], m["rounds"], m["hours"]) == (1.5, 0, 0, None), m)
+    ck("what no ticket takes is counted reply by reply, per project",
+       untied == {"pa": [2.8, 1], "pb": [0.9, 0], "": [0.4, 0]}, untied)
+    section = report.spend(report.read_weeks(s), [W2])
+    ck("tied and tied to no ticket add up to everything spent (t4 is in its milestone)",
+       round(sum(r["cost_usd"] for r in got.values()) + 2.5 + 1.5
+             + sum(v[0] for v in untied.values()), 6) == section["total"]["cost_usd"] == 31.2,
+       section["total"])
+    roles = {r["role"]: r["cost_usd"] for r in section["roles"]}
+    ck("the split by role adds up to the total, helpers and comms under other",
+       roles == {"builder": 19.15, "reviewer": 10.5, "orchestrator": 0.1, "releaser": 0.2,
+                 "person": 0.4, "other": 0.85}
+       and round(sum(roles.values()), 6) == section["total"]["cost_usd"], roles)
+    ck("per project, the highest spend first, with the replies with no price",
+       [(p["project"], p["cost_usd"], p["unpriced"]) for p in section["projects"]]
+       == [("pa", 29.9, 2), ("pb", 0.9, 0), ("", 0.4, 0)], section["projects"])
+
+
+def ticket_costs_access():
+    print("== ticket costs: a reviewer's reply and a project with limited access ==")
+    s = Store(os.path.join(tempfile.mkdtemp(), "access.duckdb"))
+    s.create_project("po", "blank", "Open", {})
+    s.create_project("pl", "blank", "Limited", {})
+    s.set_project_scope("pl", "private")
+    seed_station(s, "rv", "crew-reviewer", "reviewer")
+    seed_station(s, "bo", "build-o", "builder", project="po")
+
+    def reviewed_ticket(project, start, merged=None):
+        tid = s.create_ticket(project, "tares", "t")
+        stages(s, project, tid, ("review", start), *([("merged", merged)] if merged else []))
+        return tid
+
+    def figure(tid, project="pl"):
+        report.rebuild_all(s)
+        return costs(s)[0][project, s.get_ticket(project, tid)["number"]]["cost_usd"]
+
+    open_ticket = reviewed_ticket("po", at(12, 1), at(12, 5))
+    replied(s, "rv", at(12, 2), 6.0, "po")
+    alone = figure(open_ticket, "po")
+    ck("one open ticket in review takes the whole reply", alone == 6.0, alone)
+    first = reviewed_ticket("pl", at(12, 1, 30), at(12, 5, 30))
+    ck("adding a ticket of a limited project leaves the open ticket's figure as it was",
+       figure(open_ticket, "po") == alone, figure(open_ticket, "po"))
+    ck("and the limited ticket takes one of two shares", figure(first) == 3.0, figure(first))
+    second = reviewed_ticket("pl", at(12, 1, 40), at(12, 5, 40))
+    shared = (figure(first), figure(second), figure(open_ticket, "po"))
+    ck("two of its project: one of three shares each", shared == (2.0, 2.0, 6.0), shared)
+    s.delete_ticket(first)
+    s.delete_ticket(second)
+    ck("removing them leaves the open ticket's figure as it was",
+       figure(open_ticket, "po") == alone, figure(open_ticket, "po"))
+    # a reply counted for the open project while only a limited ticket is in review
+    third = reviewed_ticket("pl", at(13, 1), at(13, 5))
+    replied(s, "rv", at(13, 2), 4.0, "po")
+    report.rebuild_all(s)
+    ck("it goes to the limited ticket", figure(third) == 4.0, figure(third))
+    ck("and stays tied to no ticket in the open project's figures",
+       costs(s)[2].get("po") == [4.0, 0], costs(s)[2])
+    # replies counted for the limited project
+    other = s.create_ticket("po", "tares", "t")
+    holds(s, "po", other, ("build-o", at(14, 1)))
+    stages(s, "po", other, ("doing", at(14, 1)), ("review", at(14, 3)), ("merged", at(14, 5)))
+    reviewed_ticket("pl", at(14, 2), at(14, 6))
+    replied(s, "bo", at(14, 2, 30), 5.0, "pl")
+    replied(s, "rv", at(14, 4), 2.0, "pl")
+    report.rebuild_all(s)
+    ck("a reply counted for a limited project never goes to another project's ticket",
+       figure(other, "po") == 0.0, figure(other, "po"))
+    ck("a builder's with no ticket there is tied to no ticket in it",
+       costs(s)[2].get("pl") == [5.0, 0], costs(s)[2])
+
+
 def background():
     print("== the background pass ==")
     s = Store(os.path.join(tempfile.mkdtemp(), "bg.duckdb"))   # a data dir has one session store
@@ -528,6 +705,8 @@ def main():
     deleting(s)
     background()
     migration()
+    ticket_costs()
+    ticket_costs_access()
     asyncio.run(route())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
