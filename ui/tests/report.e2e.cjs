@@ -778,11 +778,12 @@ const plus = (day, days) => iso(Date.parse(`${day}T00:00:00Z`) + days * 86_400_0
       const { ctx, page } = await fresh(390);
       await open(page, "/report");
       await page.getByTestId("review-findings").waitFor();
+      const within = await inside(page);
+      const widths = await page.getByTestId("review-findings").locator("[data-findings-head], [data-finding]")
+        .evaluateAll((els) => els.map((e) => [e.scrollWidth, e.clientWidth]));
       ck("390: the review tiles, findings table, projects and recurring findings fit",
-         (await overflow(page)) <= 0 && await inside(page)
-         && await page.getByTestId("review-findings").locator("[data-findings-head], [data-finding]")
-           .evaluateAll((els) => els.length === 5 && els.every((e) => e.scrollWidth <= e.clientWidth)),
-         `${await overflow(page)}px over`);
+         (await overflow(page)) <= 0 && within && widths.length === 5 && widths.every(([s, c]) => s <= c),
+         `${await overflow(page)}px over, inside ${within}, rows ${JSON.stringify(widths)}`);
       await checkWords(page, ck, "review @390");
       await shot(page, "review-8w-390");
       await ctx.close();

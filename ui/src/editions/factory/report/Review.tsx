@@ -60,9 +60,9 @@ function Findings({ rows }: { rows: FindingRow[] }) {
             return (
               <Button key={c.key} variant="quiet" data-sort={c.key} data-sorted={on ? direction : undefined}
                       onClick={() => setSort({ key: c.key, down: on ? !sort.down : c.down })}
-                      className="h-auto min-w-0 justify-start gap-1 whitespace-normal border-0 p-0 text-left font-mono text-[11px] font-normal uppercase tracking-[0.08em]">
+                      className="h-auto min-w-0 justify-start gap-1 whitespace-normal border-0 p-0 text-left text-xs font-semibold text-muted-foreground">
                 {c.title}
-                <span aria-hidden="true" className="w-2">{on ? (sort.down ? "↓" : "↑") : ""}</span>
+                <span aria-hidden="true" className="w-3 shrink-0">{on ? (sort.down ? "↓" : "↑") : ""}</span>
                 {on && <span className="sr-only">, sorted {direction}</span>}
               </Button>
             );
