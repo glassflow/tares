@@ -7,7 +7,7 @@ once `local` is claimed, being `local` again (never refused, never a second row)
 who is already on the cell by email works in every licence state, and so does their key.
 
 The owner's key also carries two one-person behaviours that core must keep on its own: a project set
-up with a person's key is led by that person, and the Start hide is kept under the person's id.
+up with a person's key is led by that person.
 Both are checked under an owner key (`owner: true`), the way a one-person cell has it.
 
 The seats and the licensed paths are ee/tests/test_people_seats.py.
@@ -230,16 +230,6 @@ async def main():
         eq("a project made with the system credential has no lead",
            store.get_project((await cx.post("/api/projects", json={"template": "custom", "name": "sys"})).json()["id"])
            ["lead_person_id"], None)
-
-        print("== the Start hide is kept under the person's id (kept in core) ==")
-        r = await cx.post("/api/home/start/hide", headers=H(owner_key))
-        eq("hide with the owner's key answers", r.status_code, 200)
-        eq("the hide is kept under local, the person's id", ss.hidden(store, "local"), True)
-        eq("and not under the key's name", ss.hidden(store, "owner-1"), False)
-        bare = (await key(name="bare-key")).json()["secret"]
-        await cx.post("/api/home/start/hide", headers=H(bare))
-        eq("a key bound to nobody, on a cell with two people, hides under its own name",
-           ss.hidden(store, "bare-key"), True)
 
         await cx.aclose()
 

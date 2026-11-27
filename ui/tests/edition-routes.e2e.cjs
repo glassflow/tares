@@ -1,5 +1,5 @@
 /*
- * Browser e2e for TR-768: the route table of the factory and sre editions and Settings, Advanced.
+ * Browser e2e for TR-768: the route table of the factory edition and Settings, Advanced.
  *
  * Factory: /settings/advanced lands on Settings with its Advanced group open, which links Connections
  * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /report the
@@ -14,7 +14,7 @@
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
  * the flag rule: the address alone never shows sample data.
  *
- * Starts three scratch daemons with an empty cell each (TARES_EDITION factory, sre, platform) on
+ * Starts two scratch daemons with an empty cell each (TARES_EDITION factory, platform) on
  * TARES_E2E_PORT (default 8837), +1 and +2, MCP port +20, each with a fresh data directory, and stops only those.
  * Run:  npm run test:edition-routes     (builds first: the daemon serves ui/dist; tares installed in ../.venv or on PATH)
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
@@ -34,7 +34,7 @@ const { checkWords } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8837);
 const SHOTS = process.env.SHOTS_DIR;
-const EDITIONS = ["factory", "sre", "platform"];
+const EDITIONS = ["factory", "platform"];   // the AI SRE edition went with TR-1809
 const base = (e) => `http://127.0.0.1:${PORT + EDITIONS.indexOf(e)}`;
 
 let pass = 0, fail = 0;
@@ -205,40 +205,6 @@ function loadSample(env) {
       await checkWords(narrow.page, ck, "factory 390 Advanced tab");
       await shot(narrow.page, "advanced-factory-390.png");
       await narrow.ctx.close();
-    }
-
-    // 2. AI SRE
-    {
-      const e = "sre";
-      const { page, ctx } = await open();
-      await go(page, e, "/timeline");
-      ck("sre: /timeline stays on its address", where(page) === "/timeline", where(page));
-      ck("sre: and shows the Timeline page, not Explore", await page.getByRole("heading", { level: 1, name: "Timeline", exact: true }).isVisible()
-         && (await page.getByRole("heading", { name: "Explore", exact: true }).count()) === 0);
-      const home = await homeOf(page, e);
-      await go(page, e, "/services");
-      ck("sre: /services stays on its address and shows the Services page", where(page) === "/services" && (await page.getByTestId("sre-services").count()) === 1, where(page));
-      for (const p of ["/reviews", "/report", "/tickets", "/welcome/edition"]) {
-        await go(page, e, p);
-        ck(`sre: ${p} lands on /`, where(page) === home && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
-      }
-      await go(page, e, "/incidents");
-      ck("sre: /incidents stays on its address", where(page) === "/incidents", where(page));
-      await go(page, e, "/incidents/i-1");
-      ck("sre: and so does an incident's address", where(page) === "/incidents/i-1", where(page));
-      await goInApp(page, "/docs");
-      ck("sre: /docs lands on /", where(page) === home, where(page));
-      await go(page, e, "/settings");
-      ck("sre: /settings is the AI SRE Settings page, not the factory Settings or today's page", where(page) === "/settings"
-         && (await page.getByTestId("group-watching").count()) === 1 && (await page.getByTestId("section-crew").count()) === 0
-         && (await page.locator("section[id]").count()) !== 6 && (await advancedTab(page).count()) === 0);
-      await go(page, e, "/settings/advanced");
-      ck("sre: /settings/advanced has the Advanced tab open", (await advancedTab(page).getAttribute("aria-current")) === "page"
-         && (await page.getByTestId("advanced-panel").locator('a[href="/sources"]').count()) === 1);
-      await go(page, e, "/projects");
-      const items = await menuLabels(page);
-      ck("sre: the menu is Home, Services, Incidents, Timeline, Runbooks and memory, Settings", items.join(",") === "Home,Services,Incidents,Timeline,Runbooks and memory,Settings", items.join(","));
-      await ctx.close();
     }
 
     // 3. platform: today's console, no new path
