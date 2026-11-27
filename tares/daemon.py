@@ -4128,6 +4128,7 @@ def make_app() -> FastAPI:
                 "lead": p["lead"]}
 
     @app.get("/api/projects")
+    @request_memo.page
     def list_projects(request: Request):
         pk = _pk(request)
         if pk:

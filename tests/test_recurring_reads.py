@@ -5,8 +5,13 @@ The ticket brief, POST .../reviews (which offers rules from the recurring findin
 project's full row once; now the finding rows carry the ticket's label and the project names come
 in one query. The test seeds 200 findings over 40 tickets in 5 projects (some tickets named by a
 Linear identifier, one finding whose project is not its ticket's, one too old, one in another repo),
-holds the old function body as the reference and asserts the same answer, and that the route runs at
-most 4 statements, and the same number for a repo with 3 findings as for one with 200.
+holds the old function body as the reference and asserts the same answer, and that recurring() runs
+at most 4 statements, and the same number for a repo with 3 findings as for one with 200.
+
+Counted (TR-1728): statements on the old connection and on the session store's engine whose call
+stack is inside recurring() in tares/factory_api.py. What the route reads around it (settings,
+people, hidden projects) is not counted, nor is SQLite's BEGIN. A count of 0 fails, so a renamed or
+moved recurring(), or reads that leave the hooked connections, cannot pass unnoticed.
 
 Run: .venv/bin/python tests/test_recurring_reads.py
 Postgres: TARES_TEST_PG=postgresql://... PYTHONPATH=tests/pg_harness .venv/bin/python tests/test_recurring_reads.py
@@ -32,9 +37,10 @@ os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-recurring"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 
 from tares import factory as factory_mod
+from tares import factory_api
 from tares.envelope import now_utc
 from tares.session_store.tables import review_findings as findings_table
 
@@ -76,9 +82,23 @@ def reference(store, repo, hidden=frozenset()):
 _COUNTER: contextvars.ContextVar = contextvars.ContextVar("query_counter", default=None)
 
 
-def _hit():
+def _inside_recurring() -> bool:
+    frame = sys._getframe(1)
+    while frame is not None:
+        code = frame.f_code
+        if code.co_name == "recurring" and code.co_filename == factory_api.__file__:
+            return True
+        frame = frame.f_back
+    return False
+
+
+def _hit(statement):
+    """Count one statement of the measured request, if recurring() runs it. SQLite's BEGIN is a
+    statement to the engine but not a query."""
     c = _COUNTER.get()
-    if c is not None:
+    if c is None or str(statement).lstrip().upper().startswith("BEGIN"):
+        return
+    if _inside_recurring():
         c[0] += 1
 
 
@@ -90,11 +110,11 @@ class CountingCon:
         self._real = real
 
     def execute(self, *a, **kw):
-        _hit()
+        _hit(a[0] if a else "")
         return self._real.execute(*a, **kw)
 
     def executemany(self, *a, **kw):
-        _hit()
+        _hit(a[0] if a else "")
         return self._real.executemany(*a, **kw)
 
     def __getattr__(self, name):
@@ -102,6 +122,9 @@ class CountingCon:
 
 
 def install_counters(store):
+    """Hook the session store's engine, where recurring() reads now, and the old connections."""
+    event.listen(store.sessions_db.engine, "before_cursor_execute",
+                 lambda conn, cursor, statement, *a: _hit(statement))
     shared = store.sc is store.con
     store.con = CountingCon(store.con)
     if shared:
@@ -111,7 +134,7 @@ def install_counters(store):
         real = getattr(store.sc, name)
 
         def counted(*a, _real=real, **kw):
-            _hit()
+            _hit(a[0] if a else "")
             return _real(*a, **kw)
         setattr(store.sc, name, counted)
     return "postgres"
@@ -198,13 +221,16 @@ async def main():
         body = r.json()
         ck("the answer is the old function's, whole", body["recurring"] == want,
            (body["recurring"][:1], want[:1]))
-        ck(f"the route runs at most {BUDGET} statements for 200 findings", n <= BUDGET, n)
+        ck(f"recurring() runs at most {BUDGET} statements for 200 findings", 0 < n <= BUDGET,
+           f"counted {n}, want 1 to {BUDGET}")
         print(f"  statements for 200 findings: {n}")
         r3, n3 = await route("acme/other")
         ck("the other repo answers the old function's answer too", r3.json()["recurring"] == reference(store, "acme/other"))
         r0, n0 = await route("acme/none")
         ck("a repo with no findings answers an empty list", r0.json()["recurring"] == [])
-        ck("the same statements for 203 findings as for none", n == n0 == n3, (n, n3, n0))
+        ck("the same statements for 200 findings as for 3", 0 < n3 == n, (n, n3))
+        # a repo with none has nothing to name, so it may read less, but it still reads findings
+        ck("no more statements for none than for 3 findings", 0 < n0 <= n3, (n3, n0))
         print(f"  statements for 3 findings: {n3}, for none: {n0}")
         ck("hidden projects are left out as before",
            [(k["kind"], k["count"]) for k in reference(store, REPO, {"uc_rec0"})] != [(k["kind"], k["count"]) for k in want])
