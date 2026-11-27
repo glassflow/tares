@@ -1,14 +1,18 @@
 /*
  * Browser e2e for TR-1079: the factory project page offers "Change the lead" and "Add a member" only on a
  * cell whose licence allows enterprise. Both actions answer 402 without one, so the page must not show them.
+ * TR-1720: the same for "Join this project" on a team project the person is not on, and for the line naming
+ * whom to ask on a private one.
  *
  * Four scratch cells start through tests/licensed.cjs (the test licence root is trusted in that process
- * only), each on its own data directory seeded with tests/seed-factory-controls.py: one project, led by
- * the cell's owner, with three other people on the cell. Ports are TARES_E2E_PORT (default 8880) and the
+ * only), each on its own data directory seeded with tests/seed-factory-controls.py: one project led by
+ * the cell's owner, with three other people on the cell, and a team and a private project the owner is
+ * not on. Ports are TARES_E2E_PORT (default 8880) and the
  * ones after it (daemon + MCP, two per cell); the suite stops only those.
  *   - licensed: Change the lead and Add a member are on the page and work (the lead moves to Sam Roe, then
- *     Ana Ortiz is added as a member).
- *   - no licence: the page reads the same, with neither control, and no ee chunk is requested.
+ *     Ana Ortiz is added as a member). The team project is joined from its Overview, and again from
+ *     People and access after the owner is taken off it.
+ *   - no licence: the page reads the same, with none of these, and no ee chunk is requested.
  *   - expired: an expired licence keeps working, so the controls stay.
  *   - over seats: the licence is still valid, so the controls stay (the console shows its banner).
  * Set SHOTS_DIR to keep a screenshot of every state at 1440 and 390 px (factory-project-controls-<state>-<width>.png).
@@ -90,6 +94,65 @@ function seed(dir) {
 
         await ctx.close();
       }
+
+      for (const width of [1440, 390]) {   // the person looking is on neither of these
+        const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 } });
+        const page = await ctx.newPage();
+        for (const [id, join, ask] of [["uc_borealis", true, false], ["uc_cobalt", false, true]]) {
+          const kind = ask ? "private" : "team";
+          await page.goto(`${d.base}/projects/${id}/people`);
+          await page.getByTestId("project-people").waitFor({ timeout: 15000 });
+          await page.waitForLoadState("networkidle");
+          const button = await page.getByTestId("project-join").count();
+          const line = page.getByTestId("people-ask-lead");
+          ck(`${state} ${width}: ${kind}: Join this project is ${join && allowed ? "on" : "off"} People and access`,
+             button === (join && allowed ? 1 : 0), `join=${button}`);
+          ck(`${state} ${width}: ${kind}: the line naming whom to ask is ${ask && allowed ? "on" : "off"} the page`,
+             (await line.count()) === (ask && allowed ? 1 : 0), `ask=${await line.count()}`);
+          if (ask && allowed) {
+            const said = (await line.innerText()).trim();
+            ck(`${state} ${width}: private: it says to ask the lead`, said === "Private project. Ask Sam Roe to add you.", said);
+          }
+          ck(`${state} ${width}: ${kind}: no sideways scroll`,
+             (await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)) <= 0);
+          if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `factory-project-join-${kind}-${state}-${width}.png`), fullPage: true });
+          await page.goto(`${d.base}/projects/${id}`);
+          await page.getByTestId("factory-project").waitFor({ timeout: 15000 });
+          await page.waitForLoadState("networkidle");
+          const top = await page.getByTestId("project-join").count();
+          ck(`${state} ${width}: ${kind}: Join this project is ${join && allowed ? "on" : "off"} the Overview`,
+             top === (join && allowed ? 1 : 0), `join=${top}`);
+          if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `factory-project-join-${kind}-overview-${state}-${width}.png`) });
+        }
+        await ctx.close();
+      }
+
+      if (state === "valid") {   // joining: one click from each of the two pages
+        const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+        const page = await ctx.newPage();
+        const members = async () => ((await (await fetch(`${d.base}/api/projects/uc_borealis`)).json()).members || []);
+        for (const [where, at, ready] of [["the Overview", "", "factory-project"], ["People and access", "/people", "project-people"]]) {
+          await page.goto(`${d.base}/projects/uc_borealis${at}`);
+          await page.getByTestId(ready).waitFor({ timeout: 15000 });
+          ck(`valid: before joining from ${where}, You is not a member`, !(await members()).some((m) => m.id === "local"),
+             JSON.stringify(await members()));
+          await page.getByTestId("project-join").click();
+          const gone = await page.getByTestId("project-join").waitFor({ state: "detached", timeout: 10000 }).then(() => true, () => false);
+          ck(`valid: one click on ${where} joins, and the button goes`, gone && (await members()).some((m) => m.id === "local"),
+             JSON.stringify(await members()));
+          if (at) {
+            ck("valid: People and access lists You", /You/.test(await page.getByTestId("project-people").innerText()));
+            // with no sign-in the one person has the secrets however they joined, so nothing says to ask for them
+            ck("valid: joining with no sign-in leaves no mark and no line about secrets",
+               (await page.getByTestId("people-joined").count()) === 0 && (await page.getByTestId("people-you-joined").count()) === 0,
+               await page.getByTestId("project-people").innerText());
+          }
+          const off = await fetch(`${d.base}/api/projects/uc_borealis/members/local`, { method: "DELETE" });
+          ck(`valid: You is taken off again`, off.ok, String(off.status));
+        }
+        await ctx.close();
+      }
+
       if (state === "valid") {   // last, since it moves the lead away from the person who looks
         const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
         const page = await ctx.newPage();

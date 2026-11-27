@@ -324,7 +324,9 @@
   },
   "now": "2026-11-19T12:00:00+00:00",
   "people": {
+   "ask_lead": false,
    "can_add": false,
+   "can_join": true,
    "can_set_lead": true,
    "lead": null,
    "members": [],

@@ -7,6 +7,7 @@
  * (daemon + MCP, two each), and the suite stops only those.
  *   - licensed platform cell, two people, one project: the Team/Private switch, Change lead and the
  *     Members view (add and remove a member) work, and Settings, Areas lists a repo and sets its owner.
+ *     A member who joined by themselves is labelled so on Members and can still be added (TR-1720).
  *   - the same cell after its licence is gone: no switch or lead on the project page, a private project
  *     still shows "Private", the Members and Areas addresses show the licence page, Members and Areas
  *     are not in the navigation, and no ee chunk is ever requested.
@@ -109,6 +110,37 @@ async function post(base, p, body, method = "POST") {
       await page.getByRole("row", { name: /Kim Lee/ }).waitFor({ state: "detached", timeout: 10000 });
       members = (await (await fetch(`${lic.base}/api/projects/${priv.id}`)).json()).members.map((m) => m.name);
       ck("licensed: Remove takes Kim off", !members.includes("Kim Lee"), members.join());
+      await page.context().close();
+    }
+
+    {
+      // TR-1720: who joined by themselves. The cell's own person has the secrets anyway, so their row says only
+      // that; anyone else's (made up here, the cell has no second login) says they have none. Both can be added.
+      await fetch(`${lic.base}/api/projects/${open.id}/members/local`, { method: "DELETE" });
+      await post(lic.base, `/api/projects/${open.id}/join`, {});
+      const page = await newPage();
+      await page.route(`**/api/projects/${open.id}/summary`, async (route) => {
+        const res = await route.fetch();
+        const body = await res.json();
+        await route.fulfill({ response: res, json: { ...body, members: [...body.members, { id: "p-sam", name: "Sam Roe", reason: "self" }] } });
+      });
+      await page.goto(`${lic.base}/projects/${open.id}?view=settings:members`);
+      await page.getByRole("heading", { name: "Members" }).waitFor({ timeout: 15000 });
+      const why = async (name) => (await page.getByRole("row", { name: new RegExp(name) }).locator("td").nth(1).innerText()).trim();
+      await page.getByRole("row", { name: /Sam Roe/ }).waitFor({ timeout: 10000 });
+      ck("licensed: your own row says you joined by yourself", (await why("You")) === "joined by themselves", await why("You"));
+      ck("licensed: someone else's says they have no secrets", (await why("Sam Roe")) === "joined by themselves, no secrets", await why("Sam Roe"));
+      await page.getByRole("button", { name: "Person to add" }).click();
+      const you = page.getByRole("option", { name: "You", exact: true });
+      const offered = await you.waitFor({ timeout: 5000 }).then(() => true, () => false);
+      ck("licensed: someone who joined by themselves can still be added", offered);
+      if (offered) {
+        await you.click();
+        await page.getByRole("button", { name: "Add", exact: true }).click();
+        const became = await page.waitForFunction(() => /added by hand/.test(document.body.innerText), null, { timeout: 10000 }).then(() => true, () => false);
+        ck("licensed: adding turns the row into one added by hand", became && (await why("You")) === "added by hand", await why("You"));
+      }
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       await page.context().close();
     }
 
