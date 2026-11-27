@@ -226,6 +226,10 @@ class RuntimeCodex(Runtime):
                 },
                 # a hook Codex was not told to trust is skipped without an error (TR-1576)
                 "bypass_hook_trust": True,
+                # commands run in a plain shell, not a login one, so they keep the PATH the station was started
+                # with: on Debian and Ubuntu a login shell's /etc/profile sets PATH anew, and a `tares` installed
+                # in a virtualenv is then not found (TR-1600, measured with Codex 0.171.0 on Linux)
+                "allow_login_shell": False,
                 # the station writes its report (`tares factory report`) in the crew home, which is not the
                 # workspace of a station that works in a repository (a builder, a helper): without this every
                 # write of it would wait for the person's approval (TR-1598). For such a station only the

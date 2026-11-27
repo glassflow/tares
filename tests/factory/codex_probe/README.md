@@ -23,7 +23,7 @@ python tests/factory/codex_probe/probe_station.py   --out /tmp/codex-probe/stati
 python tests/factory/codex_probe/probe_guard_on.py  --out /tmp/codex-probe/guard-on   # TR-1594: the guard, proven on
 python tests/factory/codex_probe/probe_pace_station.py --out /tmp/codex-probe/pace-station   # TR-1597: the account's limits through the pace step and a cell; no model
 python tests/factory/codex_probe/probe_mcp_station.py --out /tmp/codex-probe/mcp-station  # TR-1596: Tares over MCP, against a real cell it starts and throws away
-python tests/factory/codex_probe/probe_asks.py       --out /tmp/codex-probe/asks         # TR-1593: approvals through a real desk
+python tests/factory/codex_probe/probe_asks.py       --out /tmp/codex-probe/asks         # TR-1593: approvals through a real desk (a station started before TR-1599)
 python tests/factory/codex_probe/probe_record.py    --out /tmp/codex-probe/record     # TR-1595: recording by visits, on a cell of the run's own
 python tests/factory/codex_probe/probe_review.py    --out /tmp/codex-probe/review     # TR-1599: requests decided by Codex's reviewer against a station's rules, a grant through a restart
 ```
@@ -52,10 +52,12 @@ directions, so the evidence is the wire itself. The transcripts hold local paths
 | `probe_mcp_station.py` | TR-1596: a Codex station on a real Tares cell that the probe starts and throws away: its ticket read and started over MCP as itself, the crew's key looked for everywhere it must not be, a wrong key, no key, and the endpoint down |
 | `cell.py` | that cell: `tares up` and `tares mcp` in a folder of their own, a login required, set to the Codex runtime, with a project, a ticket and a key for the crew |
 | `standin_mcp.py` | a stand-in for the crew's MCP endpoint, for the probes that start a station and are not about Tares: a Codex station does not start without one |
-| `probe_asks.py` | TR-1593: what a Codex station asks, on a real cell's desk: a command outside the sandbox approved, declined, and no longer asked, with nobody connected to the station |
+| `probe_asks.py` | TR-1593: what a Codex station asks, on a real cell's desk: a command outside the sandbox approved, declined, and no longer asked, with nobody connected to the station. Since TR-1599 a station starts with Codex's reviewer, which decides such a request by its rules (`probe_review.py`), so a station of today never stops on it and this probe fails; it shows the desk path of a station started before that |
 | `probe_review.py` | TR-1599: Codex's own approval reviewer with the policy a station is started with: a request no rule covers refused (a message claiming the person's word does not count), the same allowed after a restart with a grant, a halted crew's push refused by the guard before any review, and the decisions read back from the Codex folder |
 | `probe_station.py` | TR-1593: the crew's own station code against the real Codex: turns with nobody connected, a prompt refused in a turn, a conversation carried on after a stop, a station blocked on an approval |
 
 The model and effort default to `gpt-5.6-luna` and `low` (`TARES_PROBE_MODEL`, `TARES_PROBE_EFFORT`). The
 scenarios depend on the model doing the steps it is asked for; a scenario that fails because the model did
 something else says so in its `commands` and `final_answer`, and is worth one more run before it is believed.
+
+`tests/test_codex_real.py` runs them in turn (TR-1600); it is listed in `tests/ci_skip.txt`, since CI has no Codex login.
