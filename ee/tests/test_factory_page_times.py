@@ -63,12 +63,12 @@ sys.path.insert(0, licensed.REPO)
 
 import factory_seed as fs
 import fake_lore
+from _timing import SLACK   # tests/_timing.py, shared with test_sre_home (TR-1731)
 
 TARGET = 0.300                                       # seconds, the median of a route
-# How much the median of an OVER route may exceed its entry, per backend. Postgres gets more: a round
-# trip to the database (a container here, a service on CI) varies from run to run in a way
-# `calibrate()` cannot see. A route with no OVER entry gets none of this: its limit is TARGET.
-SLACK = {"duckdb": 1.25, "postgres": 1.5}
+# SLACK (imported above) is how much the median of an OVER route may exceed its entry, per backend.
+# Postgres gets more: a round trip to the database (a container here, a service on CI) varies from run
+# to run in a way `calibrate()` cannot see. A route with no OVER entry gets none of this: its limit is TARGET.
 LIMIT_SPEED_CAP = {"duckdb": 1.33, "postgres": 1.11}  # the most SPEED widens an OVER route's limit
 RUNS = 5                                             # timed calls per route, after one warm-up
 CALIBRATION_REF = 0.021                               # seconds `calibrate()` takes on the machine the OVER medians come from
