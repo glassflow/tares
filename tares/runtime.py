@@ -260,6 +260,11 @@ class Runtime:
         metrics.events_ingested(source_name, len(envelopes))
         if rt and rt.health.status == "push":
             metrics.source_state(source_name, "push")
+        cfg = self.catalog.sources.get(source_name)
+        if envelopes and cfg is not None:
+            from .github_webhook import GITHUB_CONNECTORS, after_store
+            if cfg.connector in GITHUB_CONNECTORS:
+                after_store(self.store, source_name, envelopes)   # pr_events and the GitHub hub (TR-1807)
         if envelopes:
             for listener in list(self.envelope_listeners):
                 try:

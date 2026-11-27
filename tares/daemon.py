@@ -826,13 +826,20 @@ def make_app() -> FastAPI:
     _SELF_JOIN = re.compile(r"^/api/projects/[^/]+/join$")
     _BRAIN_DECISION_WRITE = re.compile(r"^/api/brain/decisions(/[^/]+)?$")
 
+    def _webhook_key(key: str) -> bool:
+        """True when `key` is a GitHub App's webhook key. A store that cannot answer says no: the
+        delivery then needs a Tares credential, and other ingest is not held up."""
+        try:
+            return store.integration_key(key) is not None
+        except Exception:   # noqa: BLE001
+            return False
+
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
         admin, except the few in _READ_WRITES: a read with a body, and subscribe, which exposes
         nothing a reader couldn't pull and forward; it only persists that reader's own delivery."""
         if (method == "POST" and path.startswith("/ingest/")
-                and (store.integration_key(path[len("/ingest/"):]) is not None
-                     or runtime.signature_for(path[len("/ingest/"):]))):
+                and (_webhook_key(path[len("/ingest/"):]) or runtime.signature_for(path[len("/ingest/"):]))):
             # a source that checks signatures (a GitHub App, a signed webhook) is authenticated by
             # the signature the route verifies on the raw body; GitHub cannot send a Tares key
             return None
@@ -1646,9 +1653,14 @@ def make_app() -> FastAPI:
         with the App credential's webhook secret on the raw body, mapped, its pull requests kept in
         pr_events and every event told to the GitHub subscribers (the brain sync). The platform's
         ingest tail still stores the events until the catalog goes (TR-1811)."""
-        from .github_webhook import HUB, GithubAppDeliveries, pr_rows
+        from .github_webhook import GithubAppDeliveries
         from .webhook_verify import verify
         source = row.get("source") or "github"
+        cfg = runtime.catalog.sources.get(source)
+        if cfg is None:
+            _err(KeyError(f"the GitHub source {source!r} of this key was deleted"), 404)
+        if cfg.paused:
+            _err(ValueError(f"source {source!r} is paused"), 400)
         cred = store.get_github_credential(row.get("credential") or "") or {}
         secret = str((cred.get("config") or {}).get("webhook_secret") or "")
         reason = verify("github", secret, await request.body(), dict(request.headers), None)
@@ -1662,10 +1674,8 @@ def make_app() -> FastAPI:
                 body, headers=dict(request.headers))
         except ValueError as e:
             _err(e, 400)
-        rows = pr_rows(envs)
-        if rows:
-            await asyncio.to_thread(store.record_pr_events, rows)
-        HUB.tell(source, envs)
+        # the runtime's store step keeps the pull requests in pr_events and tells the GitHub hub,
+        # for every GitHub source (github_webhook.after_store); TR-1811 calls it from here instead
         n = await runtime._store_envelopes(source, envs)
         return JSONResponse({"ingested": n}, status_code=202, headers=_verify_headers(request))
 
@@ -1681,7 +1691,10 @@ def make_app() -> FastAPI:
         needs a credential with the `ingest` scope.
         """
         _refuse_if_full()
-        keyed = await asyncio.to_thread(store.integration_key, token)
+        try:
+            keyed = await asyncio.to_thread(store.integration_key, token)
+        except Exception:   # noqa: BLE001 — a store that cannot answer: the catalog path decides
+            keyed = None
         if keyed is not None and keyed.get("integration") == "ci_github":
             return await _ingest_github(keyed, request)
         sig = runtime.signature_for(token)
@@ -2756,6 +2769,7 @@ def make_app() -> FastAPI:
         if store.get_github_credential(name) is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
         store.delete_github_credential(name)
+        store.delete_integration_keys("ci_github", name)   # its webhook key stops working (TR-1807)
         forget_repos(name)
         return {"ok": True, **_gh_users(name)}
 

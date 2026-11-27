@@ -171,8 +171,6 @@ async def main():
                             text=b["text"], event_time=b["event_time"], labels=b["labels"], payload=payload)
 
         async def ingest(*envs):
-            from tares.github_webhook import HUB   # the App's deliveries reach the brain here (TR-1807)
-            HUB.tell("github", list(envs))
             await runtime._store_envelopes("github", list(envs))
 
         def syncs(sid):

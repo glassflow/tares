@@ -103,6 +103,25 @@ def pr_rows(envelopes: list) -> list[dict]:
     return out
 
 
+GITHUB_CONNECTORS = ("github_app", "github")   # whose events are told to HUB and kept in pr_events
+
+
+def after_store(store, source: str, envelopes: list) -> None:
+    """What every stored batch of a GitHub source goes through (the App's webhook, or a token's poll):
+    its pull requests kept in pr_events, then the batch told to HUB. A pr_events write that fails is
+    logged and never fails the batch (the delivery is already counted as seen)."""
+    if not envelopes:
+        return
+    rows = pr_rows(envelopes)
+    if rows:
+        try:
+            store.record_pr_events(rows)
+        except Exception as e:   # noqa: BLE001
+            print(f"taresd: could not keep {len(rows)} pull request event(s) of {source!r}: "
+                  f"{type(e).__name__}")
+    HUB.tell(source, envelopes)
+
+
 class GithubAppDeliveries:
     """Maps one App credential's webhook deliveries. `source` names them (the 1.x catalog source
     name, `github`, until the catalog goes); `credential` is the App credential's name."""

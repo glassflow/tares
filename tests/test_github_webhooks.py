@@ -105,6 +105,34 @@ async def main():
         ck("factory_branch_prs names the pull request of a factory/<ref> branch, and no other",
            seen == {("acme/app", "T12"): ("acme/app", 7)}, str(seen))
 
+        print("== the source and the credential ==")
+        src = row["source"]
+        r = await cx.post(f"/api/sources/{src}/pause")
+        r2 = await deliver(pr_payload(10, "factory/T14"), "d-5")
+        ck("a paused GitHub source refuses its deliveries again", r.status_code in (200, 204) and r2.status_code == 400,
+           f"{r.status_code} {r2.status_code} {r2.text[:120]}")
+        await cx.post(f"/api/sources/{src}/resume")
+        store.put_integration_key("github_app-new", "ci_github", "cloud", src)
+        ck("a new key for the same credential replaces its old one",
+           store.integration_key(key) is None and store.integration_key("github_app-new") is not None)
+        r = await cx.delete("/api/integrations/github/cloud")
+        ck("deleting the credential removes its webhook key", r.status_code == 200
+           and store.integration_key("github_app-new") is None, r.text[:200])
+
+        print("== a token's poll ==")
+        from tares.config import SourceCfg
+        from tares.envelope import Envelope
+        runtime = app.state.runtime
+        runtime.catalog.sources["gh_poll"] = SourceCfg(name="gh_poll", type="event_stream", connector="github",
+                                                       poll_seconds=0)
+        polled = Envelope(source="gh_poll", source_type="event_stream", key_value="acme/app#21",
+                          event_type="pull_request", text="PR 21", event_time=now_utc(),
+                          labels={"repo": "acme/app", "number": "21", "branch": "factory/T21", "action": "opened"},
+                          payload={"_github_delivery": "poll-21"})
+        await runtime._store_envelopes("gh_poll", [polled])
+        seen = store.factory_branch_prs({"acme/app"})
+        ck("a pull request a token's poll stores is kept in pr_events too", ("acme/app", "T21") in seen, str(seen))
+
         print("== 30 days ==")
         old = now_utc() - timedelta(days=40)
         store.record_pr_events([{"delivery_id": "old-1", "repo": "acme/app", "number": 1,

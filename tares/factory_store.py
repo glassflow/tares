@@ -1123,9 +1123,17 @@ class FactoryStore:
         """The webhook key `key` belongs to `integration`'s `credential`; events go under `source`."""
         t = integration_keys_table
         with self.sessions_db.begin() as conn:
-            conn.execute(delete(t).where(t.c.key == key))
+            # one key per credential: a recreated App's old key stops working
+            conn.execute(delete(t).where(or_(t.c.key == key, and_(t.c.integration == integration,
+                                                                  t.c.credential == credential))))
             conn.execute(insert(t).values(key=key, integration=integration, credential=credential,
                                           source=source, created_at=now_utc()))
+
+    def delete_integration_keys(self, integration: str, credential: str) -> None:
+        """Every webhook key of `integration`'s `credential` stops working."""
+        t = integration_keys_table
+        with self.sessions_db.begin() as conn:
+            conn.execute(delete(t).where(t.c.integration == integration, t.c.credential == credential))
 
     def integration_key(self, key: str) -> dict | None:
         """The row of webhook key `key`, or None."""

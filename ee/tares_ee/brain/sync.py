@@ -449,6 +449,8 @@ class Syncer:
                 try:
                     yield state
                 finally:
+                    from tares.github_webhook import HUB
+                    HUB.unsubscribe(self.on_envelopes)   # a stopped syncer hears no more pushes
                     running = [self.task, self.poll_task, *self._tasks.values()]
                     self.task = self.poll_task = None
                     for t in running:

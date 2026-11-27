@@ -221,9 +221,6 @@ async def main():
                             text=b["text"], event_time=b["event_time"], labels=b["labels"], payload=payload)
 
         async def ingest(*envs, source="github"):
-            from tares.github_webhook import HUB   # the App's deliveries reach the brain here (TR-1807)
-            if source == "github":
-                HUB.tell(source, list(envs))
             await runtime._store_envelopes(source, list(envs))
             await rd.wait()
 

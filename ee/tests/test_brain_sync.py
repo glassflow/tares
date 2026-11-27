@@ -235,10 +235,8 @@ async def main():
         from tares.github_webhook import HUB
 
         async def ingest(*envs, source="github"):
-            # the GitHub App's deliveries reach the brain through core's GitHub hub (TR-1807); any
-            # other source only goes through the runtime, which the brain no longer listens to
-            if source == "github":
-                HUB.tell(source, list(envs))
+            # the store step tells core's GitHub hub for a GitHub source (TR-1807); the brain hears
+            # nothing else
             await runtime._store_envelopes(source, list(envs))
 
         def syncs(sid=None):
