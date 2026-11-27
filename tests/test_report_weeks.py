@@ -768,7 +768,7 @@ async def route():
             ck("and the row is there", table(s).get((uid, W1), {}).get("merged") == 1, table(s))
             for label, body in (("a read key", {"name": "r", "scopes": ["read"]}),
                                 ("a project key", {"name": "p", "project": uid,
-                                                   "scopes": ["read", "findings"]})):
+                                                   "scopes": ["read"]})):
                 k = await cx.post("/api/keys", json=body)
                 assert k.status_code in (200, 201), k.text
                 r = await cx.post("/api/factory/report/rebuild",

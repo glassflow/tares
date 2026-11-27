@@ -436,7 +436,7 @@ async def main():
         keys = store.list_api_keys(project=ouid)
         eq("a project key named after the agent", [(k["name"], sorted(k["scopes"]))
                                                    for k in keys],
-           [("claude-code", ["findings", "read"])])
+           [("claude-code", ["read"])])
         own = ob["connect"]["own_agent"]
         secret = own["key"]
         eq("the MCP URL and the Claude Code command",

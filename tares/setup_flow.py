@@ -1471,7 +1471,7 @@ def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tupl
             engine._apply(uid, objs)
         else:
             step = "key"
-            key = make_key(plan["own_agent"]["name"], ["findings", "read"], uid)
+            key = make_key(plan["own_agent"]["name"], ["read"], uid)
 
         store.update_project(uid, params={"objects": objects})
         engine._do_reload()
