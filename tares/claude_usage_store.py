@@ -59,6 +59,7 @@ CLAUDE_USAGE_SCHEMA = [
 PLAN_SETTING = "claude_plan"          # the plan's limits as /usage last reported them
 SYNTHETIC = "<synthetic>"             # the model of Claude Code's own notices: no model call, no tokens
 CREW_ROLES = ("orchestrator", "reviewer", "releaser", "comms")
+TICKET_ROLES = ("builder", "helper", "reviewer")   # whose replies a ticket's cost can hold
 
 
 def reply_tokens(usage: dict) -> tuple[int, int, int, int, int]:
@@ -386,6 +387,34 @@ class ClaudeUsageStore:
     def _outside(project, projects):
         return project.is_(None) | project.not_in(sorted(projects))
 
+    def _dated_replies(self):
+        """(`_replies_by_project`'s join and project, the conditions a reply meets to be counted in
+        the report's figures): it has a time, and `usage_by_week`'s exclusion holds for it."""
+        replies, project, _ = self._replies_by_project()
+        counted = [session_usage.c.replied_at.is_not(None)]
+        deleted = self.deleted_private_projects()
+        if deleted:
+            counted.append(self._outside(project, deleted))
+        return replies, project, counted
+
+    def ticket_replies(self) -> tuple[list, set]:
+        """What the ticket costs are worked out from (report_cost.py). First, every reply
+        `usage_by_week` counts that a builder, helper or reviewer station made, one row each:
+        `proj` the project it counts for (None when none), `role`, `station`, `parent` (the
+        station a helper works for), `home` (the station's project), `at` and `cost` (None with no
+        price). Second, the (station, project) pairs that are builders."""
+        u, ss = session_usage, session_stations
+        replies, project, counted = self._dated_replies()
+        q = select(project.label("proj"), ss.c.role, ss.c.station, ss.c.parent,
+                   ss.c.project.label("home"), u.c.replied_at.label("at"),
+                   u.c.cost_usd.label("cost")
+                   ).select_from(replies).where(ss.c.role.in_(TICKET_ROLES), *counted)
+        builders = select(ss.c.station, ss.c.project).where(ss.c.role == "builder").distinct()
+        with self.sessions_db.begin() as conn:
+            rows = conn.execute(q).all()
+            held = conn.execute(builders).all()
+        return rows, {(r[0], r[1]) for r in held}
+
     def usage_by_week(self, since=None, until=None) -> list[dict]:
         """Replies in [since, until) (all when None) grouped by the project they count for (as
         usage_by_project does; None when none), the role of the session's station (None: a
@@ -393,21 +422,18 @@ class ClaudeUsageStore:
         `cost_usd` adds the priced replies; `unpriced` counts the rest. A reply with no time is
         in no week, and one of a deleted private project is not read (TR-1697)."""
         u, ss = session_usage, session_stations
-        replies, project, _ = self._replies_by_project()
+        replies, project, counted = self._dated_replies()
         if self.sessions_db.dialect == "postgresql":
             monday = func.to_char(func.date_trunc("week", func.timezone("UTC", u.c.replied_at)),
                                   "YYYY-MM-DD")
         else:   # SQLite keeps the UTC wall time: forward to Sunday, back six days
             monday = func.date(u.c.replied_at, "weekday 0", "-6 days")
         q = select(project.label("proj"), ss.c.role.label("role"), monday.label("week"),
-                   u.c.cost_usd).select_from(replies).where(u.c.replied_at.is_not(None))
+                   u.c.cost_usd).select_from(replies).where(*counted)
         if since is not None:
             q = q.where(u.c.replied_at >= since)
         if until is not None:
             q = q.where(u.c.replied_at < until)
-        deleted = self.deleted_private_projects()
-        if deleted:
-            q = q.where(self._outside(project, deleted))
         r = q.cte("w")
         final = select(r.c.proj, r.c.role, r.c.week, func.count(), func.sum(r.c.cost_usd),
                        func.count().filter(r.c.cost_usd.is_(None))
