@@ -41,6 +41,12 @@ its shape raises the number in `schema_version.json` all the same.
 `codex`, `codex_login`, and per station `codex_<station>`, `codex_home_<station>`, `codex_guard_<station>` and
 `codex_mcp_<station>`, and none of Claude Code's.
 
+On a cell that gives GitHub tokens (capability `github_token`), when a project folder of the crew is on
+github.com, `doctor --json` also has one `github_console` check: `ok` when the cell's token reaches every such
+repository, `warn` when it does but a token names nobody to commit as or a project folder has no github.com
+origin, `fix` when a repository is not reached. At `ok`, no check asks for `gh auth login` or a global git
+identity.
+
 `doctor --json` exits 1 when any check is at level `fix`, and still prints its document: read `checks`, not the
 exit code alone. The schema files are published with the package (`tares/crew/schemas/`), so an app can generate
 its types from them.
