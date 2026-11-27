@@ -14,7 +14,7 @@ it holds the settings written since the copy (a drop would lose them, and the co
 stop a second upgrade from filling the table again).
 
 Revision ID: 0011_core_settings
-Revises: 0010_session_command_outcome
+Revises: 0011_session_station_runtime
 """
 import sqlalchemy as sa
 from alembic import op
@@ -22,7 +22,7 @@ from alembic import op
 from tares.session_store.takeover import takeover
 
 revision = "0011_core_settings"
-down_revision = "0010_session_command_outcome"
+down_revision = "0011_session_station_runtime"
 branch_labels = None
 depends_on = None
 

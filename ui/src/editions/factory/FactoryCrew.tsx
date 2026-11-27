@@ -155,7 +155,11 @@ function Member({ m, actions }: { m: CrewMember; actions: CrewActions }) {
       <StatusDot tone={toneOf("crew", m.state)} className="mt-1.5" />
       <div className="min-w-0">
         <div className="font-semibold" data-user-text>{m.doing}</div>
-        <div className={MUTED}><b className="font-semibold text-foreground">{m.role_label}</b> · {m.state_text}</div>
+        <div className={MUTED}>
+          <b className="font-semibold text-foreground">{m.role_label}</b> · {m.state_text}
+          {m.runtime_text && <span data-testid="crew-runtime"> · {m.runtime_text}</span>}
+        </div>
+        {m.usage_text && <div className={MUTED} data-testid="crew-usage">{m.usage_text}</div>}
       </div>
       <div className={cn(MUTED, "col-start-2 md:col-start-auto md:whitespace-nowrap md:text-right")}>
         {m.heard ? `Heard ${m.heard}` : "Not heard from yet"}

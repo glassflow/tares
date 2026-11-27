@@ -121,6 +121,8 @@ def copy_from_duckdb(store, sessions_db, *, state_move: bool = False,
                     chunks = (lambda: [dict(r._mapping) for r in result.fetchmany(CHUNK)])
                 else:
                     stack.enter_context(store._lock)
+                    # a column added since DuckDB's copy (session_stations.runtime and .model,
+                    # TR-1600) is not in it, and stays empty
                     cols = _duckdb_columns(store, table)
                     if cols:
                         # quoted: a column may be a word of DuckDB's own (`at`)

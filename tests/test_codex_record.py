@@ -130,9 +130,13 @@ running = thread([{**command("exec-5", "make", None, "", "inProgress")}])
 ck("an item still in progress waits for its end", [k for k in kinds(rec.facts(running, [armed()], rec.new_sent(THREAD), BASE, True, NOW)[0])
                                                      if k[0] == "item"] == [])
 waiting = thread([], flags=["waitingOnApproval"])
-ck("a station that waits for an approval is waiting, and the reason is Codex's own word",
+ck("a station that waits for an approval is waiting, and the reason says so in words (TR-1600)",
    [(f["state"], f["reason"]) for f in rec.facts(waiting, [], rec.new_sent(THREAD), BASE, True, NOW)[0] if f["kind"] == "state"]
-   == [("waiting", "waitingOnApproval")])
+   == [("waiting", "waiting for an approval")])
+odd = thread([], flags=["waitingOnUserInput", "waitingOnSomethingNew"])
+ck("for an answer too; a flag with no words is sent as Codex wrote it",
+   [f["reason"] for f in rec.facts(odd, [], rec.new_sent(THREAD), BASE, True, NOW)[0] if f["kind"] == "state"]
+   == ["waiting for an answer, waitingOnSomethingNew"])
 long = thread([command("exec-6", "cat big", 0, "x" * 50000 + "TAIL")])
 big = next(f for f in rec.facts(long, [], rec.new_sent(THREAD), BASE, True, NOW)[0] if f["kind"] == "item")
 ck("a long output keeps its end", len(big["item"]["aggregatedOutput"]) == rec.OUTPUT_KEPT and big["item"]["aggregatedOutput"].endswith("TAIL"))
@@ -194,6 +198,26 @@ ck("an item that is listed by the second look is the command's end, not an unkno
 dead, s_dead = rec.facts(None, [*record, allow("exec-3", "make e2e", at=NOW - 1)], sent1, BASE, False, NOW + 5)
 ck("a station that is not running has ended; a new start in a turn that was seen is still sent",
    kinds(dead) == [("start", "exec-3"), ("state", "ended")] and dead[1]["reason"] == "the station is not running", kinds(dead))
+stopped, _ = rec.facts(None, record, sent1, BASE, False, NOW + 5, stopped="it ran `git push` with no guard record")
+ck("one the crew stopped has ended, and the reason says the crew stopped it, and why (TR-1600)",
+   [f["reason"] for f in stopped if f["kind"] == "state"]
+   == ["the crew stopped it: it ran `git push` with no guard record"], stopped)
+# the stop records its end before the crew marks why it stopped the station: the next look sends the reason
+dead1, s_dead1 = rec.facts(None, record, sent1, BASE, False, NOW + 5)
+marked, s_marked = rec.facts(None, record, s_dead1, BASE, False, NOW + 6, stopped="its guard was not running")
+ck("a stop recorded as ended is sent again once the crew marks why it stopped it, and only once (TR-1600)",
+   [f["reason"] for f in dead1 if f["kind"] == "state"] == ["the station is not running"]
+   and [(f["state"], f["reason"]) for f in marked if f["kind"] == "state"]
+   == [("ended", "the crew stopped it: its guard was not running")]
+   and [f for f in rec.facts(None, record, s_marked, BASE, False, NOW + 7, stopped="its guard was not running")[0]
+        if f["kind"] == "state"] == [], (dead1, marked))
+old_sent = {**sent1, "announced": True}
+old_sent.pop("reason", None)
+again, s_again = rec.facts(thread([]), [], old_sent, BASE, True, NOW + 8)
+ck("a conversation announced before the cell kept a session's runtime is announced once more, then not again (TR-1600)",
+   [f["kind"] for f in again].count("session") == 1 and s_again["announced"] == rec.ANNOUNCED
+   and [f for f in rec.facts(thread([]), [], s_again, BASE, True, NOW + 9)[0] if f["kind"] == "session"] == [],
+   kinds(again))
 unseen = [*record, allow("exec-4", "make", turn="01a2-turn-2", at=NOW + 3)]
 held, s_held = rec.facts(None, unseen, sent1, BASE, False, NOW + 5)
 ck("a start in a turn no look has listed waits while the station cannot be read",
@@ -343,7 +367,8 @@ class Tares:
 
 LOOK = {"found": mid, "alive": True}
 rec.read = lambda paths, station, thread: LOOK["found"]
-rec.cs = SimpleNamespace(is_alive=lambda paths, station: LOOK["alive"])
+rec.cs = SimpleNamespace(is_alive=lambda paths, station: LOOK["alive"], guard_off=lambda paths, station: "",
+                         unverified=lambda paths, station: {})
 tares = Tares()
 tares.fail = True
 got = rec.step(tares)
@@ -386,6 +411,36 @@ got = rec.step(tares)
 ck("a station that was retired: its session has ended, and its file is removed",
    [r["station"] for r in got] == [S] and kinds(tares.posts[0][2]) == [("state", "ended")] and not kept.exists(), (got, tares.posts))
 ck("a crew with no Codex station posts nothing", rec.step(tares) == [] and len(tares.posts) == 1)
+# an old record (announced before the cell kept a session's runtime and model) closed by a stop before any round
+# of this recorder looked at it: the closing announces it, once, and only once Tares took it (TR-1600)
+S2 = "crew-old"
+(home / "stations.json").write_text(json.dumps({S2: {"runtime": "codex", "role": "builder", "cwd": "/w",
+                                                     "model": "gpt-5.6-luna", "sessionId": "01a2-old"}}))
+(home / "stations" / f"{S2}.codex.sent").write_text(json.dumps(
+    {**{k: v for k, v in rec.new_sent("01a2-old").items() if k != "reason"}, "announced": True, "state": "working"}))
+tares.posts.clear()
+tares.fail = True
+r1 = rec.close_station(tares, paths, S2, "the station was stopped")
+old_kept = json.loads((home / "stations" / f"{S2}.codex.sent").read_text())
+ck("a closing Tares does not take is an error, and the old announcement is kept as it was",
+   "503" in r1["error"] and old_kept["announced"] is True and old_kept["closing"] == "the station was stopped", (r1, old_kept))
+tares.fail = False
+r2 = rec.close_station(tares, paths, S2, "the station was stopped")
+closed = [f for _, _, body in tares.posts for f in body]
+lines = cell.session_lines(closed)
+st_line = next((x for x in lines if x.get("type") == "session_station"), {})
+ck("taken on the retry: the session is announced with its runtime and model, then the end",
+   r2["error"] == "" and [f["kind"] for f in closed] == ["session", "state"]
+   and st_line.get("runtime") == "codex" and st_line.get("model") == "gpt-5.6-luna" and st_line.get("station") == S2,
+   (r2, kinds(closed), st_line))
+ck("and the new announcement is kept only now",
+   json.loads((home / "stations" / f"{S2}.codex.sent").read_text())["announced"] == rec.ANNOUNCED)
+tares.posts.clear()
+LOOK.update(found=None, alive=False)
+rec.step(tares)
+ck("a later round does not announce it again",
+   not [f for _, _, body in tares.posts for f in body if f["kind"] == "session"], tares.posts)
+
 (home / "stations.json").write_text("not json")
 ck("a crew file that cannot be read gives nothing and does not raise", rec.step(tares) == [])
 

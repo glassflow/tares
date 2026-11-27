@@ -9,6 +9,13 @@
     "crew": {"type": "string"},
     "orchestrator": {"type": "string"},
     "running": {"description": "How many stations are running (the length of `stations`).", "type": "integer", "minimum": 0},
+    "runtime": {"description": "What the crew runs on (TR-1600): `claude_code` or `codex`. A crew keeps the runtime it was started on; one whose stations recorded none is on Claude Code.", "type": "string"},
+    "stopped": {
+      "description": "A crew on Codex: the stations the crew stopped that are not running again (its guard was found off, or its last turn could not be compared with the guard's record), with why. Absent for a crew on Claude Code.",
+      "type": "array",
+      "items": {"type": "object", "required": ["station", "why"],
+                "properties": {"station": {"type": "string"}, "why": {"type": "string"}}, "additionalProperties": false}
+    },
     "stations": {
       "type": "array",
       "items": {
@@ -16,6 +23,7 @@
         "required": ["station", "role", "model", "effort", "state", "tempo", "detail"],
         "properties": {
           "station": {"type": "string"},
+          "runtime": {"description": "What the station runs on: `claude_code` or `codex` (TR-1600).", "type": "string"},
           "role": {"type": "string"},
           "model": {"type": "string"},
           "effort": {"type": "string"},

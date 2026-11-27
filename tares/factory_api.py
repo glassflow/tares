@@ -811,6 +811,8 @@ def blank_session(row: dict) -> None:
     row.update(session=None, started_at=None, lines=None, claude_version=None, state_reason=None)
     if row["context"]:
         row["context"] = dict.fromkeys(row["context"])
+    if row.get("runtime") != "codex":   # read from the session's status line; a Codex station's is its launch's
+        row["model"] = None
 
 
 def register(app, store, h: Host) -> SimpleNamespace:
@@ -1351,7 +1353,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "crew_id": cid, "crew": crew.get("name"),
                         "machine": crew.get("machine") or "", "person": crew.get("person"),
                         "projects": g["projects"], "usage": g["usage"],
-                        "coordination_calls": g["coordination_calls"]})
+                        "coordination_calls": g["coordination_calls"],
+                        # what it runs on (TR-1600): a Codex station's lines say so; the rest are Claude Code
+                        "runtime": cur.get("runtime") or "claude_code", "model": cur.get("model") or None})
         # the status line gives one cost for the whole session, so none of it is shown for a
         # session in a hidden project or with a reply that counts for one (TR-1696)
         no_cost: set[str] = set()
@@ -1382,6 +1386,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if st["context"] and st["session"] in no_cost:
                 st["context"]["cost_usd"] = None
             st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
+            if st["runtime"] != "codex":   # a Claude Code station's model is the one its status line names
+                st["model"] = (st["context"] or {}).get("model") or None
             # set while the watch retries its move, else null: the crew's own marks, else those
             # of its person that name no crew
             pid = (crews.get(st["crew_id"]) or {}).get("person_id")

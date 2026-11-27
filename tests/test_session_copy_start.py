@@ -201,8 +201,9 @@ def split_crews_after_a_failed_start(station_in_local_file):
     con.execute("INSERT INTO crews VALUES ('cb', 'crew', 'person1', '', ?, ?)", [t, t])
     con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
                 [t + timedelta(days=1), t + timedelta(days=2)])
-    station = ("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', "
-               "'2026-11-19 09:00:00+00', 'cb')")
+    # the columns are named: the session store's table has two more than DuckDB's (TR-1600)
+    station = ("INSERT INTO session_stations (session, station, role, parent, project, seen_at, crew_id) "
+               "VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', '2026-11-19 09:00:00+00', 'cb')")
     if not station_in_local_file:
         con.execute(station)
     con.execute("CHECKPOINT")
