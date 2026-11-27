@@ -22,7 +22,7 @@ import os
 import sys
 
 from . import codex as cx
-from . import codex_asks, codex_record, codex_reviews, proc, state
+from . import codex_asks, codex_record, codex_reviews, locks, proc, state
 from . import codex_station as cs
 from .client import TaresClient
 from .errors import CrewError
@@ -34,14 +34,20 @@ FAILED_TOLD = "turnFailedTold"   # on a station's row: the failed turn the perso
 def failed_turns(client, paths: CrewPaths, say=None) -> list:
     """Tell of each station whose newest turn failed, once per turn: a line, an event and a desk item (not a
     blocking one: nothing waits on an answer). Returns the stations it told of."""
+    from .errors import StationLockedError
     told = []
     for station, row in sorted(state.stations_load(paths).items()):
         if not isinstance(row, dict) or row.get("runtime") != cx.RUNTIME or not cs.is_alive(paths, station):
             continue
-        turn, why = cs.failed_turn(paths, station)
-        if not turn or row.get(FAILED_TOLD) == turn:
-            continue
-        state.stations_put(station, {FAILED_TOLD: turn}, paths)
+        # under the station's lock, and the mark read again there: two watches at once tell of a turn once (TR-1600)
+        try:
+            with locks.held_station_lock(station, paths):
+                turn, why = cs.failed_turn(paths, station)
+                if not turn or (state.stations_load(paths).get(station) or {}).get(FAILED_TOLD) == turn:
+                    continue
+                state.stations_put(station, {FAILED_TOLD: turn}, paths)
+        except StationLockedError:
+            continue   # another command is at work on it: looked at again next round
         state.event("turn-failed", station, why, paths=paths)
         if say:
             say(f"the last turn of {station} failed: {why}. It is at rest and did nothing")

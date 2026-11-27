@@ -1636,6 +1636,22 @@ ck("a turn that failed is told of: Codex leaves the station at rest, where it re
 said_f2 = codex_step(paths, tares)
 ck("once for a turn", "failed" not in said_f2 and len([d for d in tares.world["desk"] if "failed" in d["question"]]) == 1
    and len(events(paths, "turn-failed")) == 1, said_f2)
+# another command (or a second watch) holds the station's lock: the turn is not told of then, and is told once after
+state.stations_put(S, {codex_round.FAILED_TOLD: ""}, paths)
+holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+lock = paths.lock_dir(S)
+lock.mkdir(parents=True, exist_ok=True)
+(lock / "pid").write_text(f"{holder.pid}\n")
+said_l = codex_step(paths, tares)
+held_out = "failed" not in said_l and len(events(paths, "turn-failed")) == 1
+holder.kill()
+holder.wait()
+(lock / "pid").unlink()
+lock.rmdir()
+said_l2 = codex_step(paths, tares)
+ck("under the station's lock: while another command holds it the turn is not told of, then it is, once (TR-1600)",
+   held_out and f"the last turn of {S} failed" in said_l2 and len(events(paths, "turn-failed")) == 2
+   and "failed" not in codex_step(paths, tares), (said_l, said_l2))
 end(pid)
 tares, paths, said, mk = crew(world={"runtime": "claude_code"})
 before = len(tares.log)
