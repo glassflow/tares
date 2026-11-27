@@ -281,9 +281,6 @@ test_services
 test_services_write
 test_session_archive
 test_session_copy_start
-test_session_digest
-test_session_digest_memory
-test_session_digest_times
 test_session_facts
 test_session_flow
 test_session_lines

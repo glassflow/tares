@@ -21,8 +21,7 @@ of one source gives that source's lines.
 
 A part or a row of the archive that cannot be read is left out and one line says so, as a session
 page does (`session_read`). Nothing here writes, and nothing takes SQLite's write lock
-(`consistent_read`), so ingest never waits for one of these reads. The reads that only count and
-ask for times are answered from `session_digest`, a cache.
+(`consistent_read`), so ingest never waits for one of these reads.
 """
 from __future__ import annotations
 
@@ -32,7 +31,7 @@ from collections import Counter, namedtuple
 
 from sqlalchemy import exists, func, select
 
-from . import edition, session_archive, session_digest, session_read
+from . import edition, session_archive, session_read
 from .session_ingest import TABLE, claude_code_sources
 from .session_store.tables import session_archive_parts, session_lines, sessions, settings
 
@@ -318,14 +317,8 @@ def view(store, sources, since=None, until=None, key=None, filters=None, where=N
         born = _born(store, c, sources, since, until, key)
         if not born:
             return PLAIN
-        mine = born
-        if (types is not None or needles) and key is None and since is not None and not counted:
-            # a read narrowed by type or label loads no session that has no such line
-            mine = (session_digest.matching(store, c, [b for b in born if b.lines_complete],
-                                            since, types, needles)
-                    + [b for b in born if not b.lines_complete])
-        rows, parts = load(store, c, mine, since, until, types, needles, full, counted)
-    rows = finish(store, mine, rows, parts, since, until, types, needles)
+        rows, parts = load(store, c, born, since, until, types, needles, full, counted)
+    rows = finish(store, born, rows, parts, since, until, types, needles)
     return View(store, born, rows, need_text)
 
 
