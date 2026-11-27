@@ -39,6 +39,36 @@ def _cost(usd) -> str:
     return "under $1 at API prices" if c < 1 else f"${round(c)} at API prices"
 
 
+RUNTIME_TITLE = {"claude_code": "Claude Code", "codex": "Codex"}
+STOPPED = "the crew stopped it: "   # how the crew words an end it caused (tares/crew/codex_record.py, TR-1600)
+
+
+def _runtime_text(s: dict) -> str:
+    """What a station runs on, as the card says it (TR-1600): the runtime, then its model when one is known. A
+    Codex station started with no model named runs on the one its account gives."""
+    runtime = s.get("runtime") or "claude_code"
+    title = RUNTIME_TITLE.get(runtime, runtime)
+    if s.get("model"):
+        return f"{title}, {s['model']}"
+    return f"{title}, its account's default model" if runtime == "codex" else title
+
+
+def _usage_text(s: dict) -> str | None:
+    """What a Codex station's replies used, and that their cost is not known: the cell has no price for a
+    Codex model, and a count Codex did not give is unknown, never 0 (TR-1600). None for Claude Code, whose
+    use the Usage page shows."""
+    if (s.get("runtime") or "claude_code") != "codex":
+        return None
+    u = s.get("usage") or {}
+    tokens = sum(int(u.get(k) or 0) for k in ("input_tokens", "output_tokens", "cache_write_tokens",
+                                                "cache_read_tokens"))
+    if not u.get("replies") or not tokens:
+        return "Usage unknown: Codex has given no token counts yet."
+    cost = (_cost(u.get("cost_usd")) if u.get("cost_usd") and not u.get("unpriced_replies")
+            else "cost unknown (no price for a Codex model)")
+    return f"{tokens:,} tokens, {cost}."
+
+
 def _how(settings: dict) -> dict:
     far = _how_far(settings)
     merge = ("The crew merges after its review and green CI." if far["autonomy"] == "L4-ship"
@@ -162,7 +192,11 @@ def register(app, store, h, ctx):
                 # another person's crew waits for them, not for the caller
                 m = {**m, "state_text": f"Waiting for {owner.get('name') or 'its person'}"}
             doing, ended = m["doing"], s["state"] == "ended"
-            if ended:
+            reason = str(s.get("state_reason") or "")
+            stopped = ended and reason.startswith(STOPPED)
+            if stopped:   # not its work done: the crew stopped it, and says why (its guard, a turn not compared)
+                doing = "Stopped by the crew: " + reason[len(STOPPED):]
+            elif ended:
                 doing = "Finished its work."
             elif s["role"] == "builder" and s["state"] == "idle":
                 held = next((t for t in by_holder.get(s["name"], [])
@@ -175,7 +209,9 @@ def register(app, store, h, ctx):
                     "state_text": m["state_text"], "doing": doing,
                     "heard": m["heard"] or None,
                     "memory_pct": None if ended else m["memory_pct"],
-                    "memory_text": None if ended else m["memory_text"], "helpers": m["helpers"]}
+                    "memory_text": None if ended else m["memory_text"], "helpers": m["helpers"],
+                    "runtime": s.get("runtime") or "claude_code", "runtime_text": _runtime_text(s),
+                    "usage_text": _usage_text(s), "stopped": stopped}
 
         shown_all = [s for s in stations if s.get("role") in _SHOWN_ROLES]
 

@@ -194,8 +194,9 @@ def split_crews_after_a_failed_start():
         s.con.execute("INSERT INTO crews VALUES ('cn', 'crew', 'person1', 'laptop', ?, ?)",
                       [t + timedelta(days=1), t + timedelta(days=2)])
     with s.sessions_db.begin() as c:                   # the station is in the session store, as a cell
-        c.execute(text("INSERT INTO session_stations VALUES ('s3', 'crew-builder', 'builder', "
-                       "'crew-orch', 'p1', :t, 'cb')"), {"t": t})   # that ran on SQLite has it
+        c.execute(text("INSERT INTO session_stations (session, station, role, parent, project, seen_at, crew_id) "
+                       "VALUES ('s3', 'crew-builder', 'builder', 'crew-orch', 'p1', :t, 'cb')"),
+                  {"t": t})   # that ran on SQLite has it
     close(s)
     with pg_schema() as dsn:
         orig = state_db.move

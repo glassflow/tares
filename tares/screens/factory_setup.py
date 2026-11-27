@@ -75,10 +75,9 @@ HIDE_WITHOUT_CHOICE = ("memory", "guardrails")
 # Steps left out of setup for now, whatever they offer. Monitoring (Rius, OTLP) is not tested end to
 # end yet: take it out of this tuple once it is. Hiding the step changes nothing about tracing.
 HIDDEN_STEPS = ("monitoring",)
-# Installed, and not offered in setup yet. A crew on Codex cannot do a ticket until its stations have a
-# controller and a guard (TR-1593, TR-1594), so setup shows no button that would switch a factory to it.
-# The integrations API still takes the choice. Take it out of this set once a Codex crew works end to end.
-NOT_OFFERED = {("runtime", "codex")}
+# Installed, and not offered in setup. Codex is offered since a Codex crew works end to end (TR-1600); a crew
+# that runs keeps its runtime whatever the step says (the description below).
+NOT_OFFERED: set = set()
 # Fields that only make sense for one project, never for the whole cell: set at the factory, "This
 # repository has no CI" would switch CI off for every repo. A repo with no workflow files is found
 # to have no CI without it (ci_github.py).
@@ -115,7 +114,8 @@ DESCRIPTIONS = {
     ("guardrails", "tares"): "Built-in rules, always on.",
     ("guardrails", "webhook"): "Ask your own policy service before an action.",
     ("runtime", "claude_code"): "Crew members start as Claude Code background sessions.",
-    ("runtime", "codex"): "Crew members start as Codex app-servers.",
+    ("runtime", "codex"): ("Crew members start as Codex app-servers (Codex 0.171.0 or newer, signed in). A crew "
+                           "that already runs keeps the runtime it started on; a new crew starts on this one."),
 }
 
 # The words the schema does not carry: a label, help, placeholder and the line shown for a blank

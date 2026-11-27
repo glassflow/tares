@@ -23,6 +23,14 @@ export interface CrewMember {
   helpers: number;
   /** The id of the member's crew, for the detail call: crews repeat station names. */
   crew?: string | null;
+  /** What it runs on (TR-1600): "claude_code" or "codex". */
+  runtime?: string;
+  /** The runtime and its model in words: "Codex, gpt-5.6-luna", "Codex, its account's default model", "Claude Code". */
+  runtime_text?: string;
+  /** A Codex member's use, with what is not known said so: "Usage unknown: ...", "12,300 tokens, cost unknown ...". */
+  usage_text?: string | null;
+  /** True when the crew stopped it (its guard was off, or a turn could not be compared); `doing` says why. */
+  stopped?: boolean;
 }
 
 /** One crew on the cell, under the person it belongs to (TR-1223). */
