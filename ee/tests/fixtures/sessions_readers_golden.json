@@ -946,6 +946,12 @@
   "edition": "factory",
   "finished_count": 0,
   "headline": "The crew is not running. Nothing waits for you.",
+  "joiner": {
+   "joining": false,
+   "own_crew_up": false,
+   "team_crews": 0,
+   "team_settings": null
+  },
   "later_count": 0,
   "now": "2026-11-19T12:00:00+00:00",
   "onboarding": {
