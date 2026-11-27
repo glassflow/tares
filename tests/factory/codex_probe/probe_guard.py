@@ -34,9 +34,25 @@ from tares.crew.codex_station import unguarded  # noqa: E402
 
 MODEL = os.environ.get("TARES_PROBE_MODEL", "gpt-5.6-luna")
 EFFORT = os.environ.get("TARES_PROBE_EFFORT", "low")
-# The person's own plugins and MCP servers are left out of a probe station: they only add tools.
+
+
+def _own_mcp_servers() -> set:
+    """The MCP servers named in the person's Codex config (CODEX_HOME, else ~/.codex)."""
+    try:
+        import tomllib
+        home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+        with open(os.path.join(home, "config.toml"), "rb") as f:
+            return set((tomllib.load(f).get("mcp_servers") or {}))
+    except (OSError, ValueError, ImportError):
+        return set()
+
+
+# The person's own plugins and MCP servers are left out of a probe station: they only add tools. A server is
+# switched off only where it is configured: `enabled=false` for one that is not makes an entry with no transport,
+# and Codex then refuses to start (seen on Linux, where no app adds node_repl).
 QUIET = ["--disable", "apps", "--disable", "computer_use", "--disable", "browser_use",
-         "-c", "mcp_servers.node_repl.enabled=false", "-c", "mcp_servers.computer-use.enabled=false"]
+         *[a for name in ("node_repl", "computer-use") if name in _own_mcp_servers()
+           for a in ("-c", f"mcp_servers.{name}.enabled=false")]]
 RULES = ("You are a test station. Run exactly the shell commands or tools you are asked for, each as its own "
          "tool call, in the order given, and nothing else. If one is refused or fails, do not retry it, do not "
          "work around it and do not run it another way: go on to the next one. At the end, list each step with "
