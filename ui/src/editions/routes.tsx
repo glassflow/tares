@@ -4,6 +4,7 @@ import { Navigate, useParams } from "react-router-dom";
 import { SkeletonRows } from "../components/edition";
 import { useEdition } from "./edition";
 import FeedRedirect from "./FeedRedirect";
+import StartRedirect from "./StartRedirect";
 
 // The route table of the factory and sre editions: every page either edition will have. A screen
 // ticket gives its entry a lazy `page`; until then the entry's `fallback` decides what the address
@@ -124,8 +125,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-1527: the feed folded into Home, so /feed opens Home and keeps its query (/feed?item=<id> is a link in DMs already sent)
     "/feed": { page: lazyPage(() => Promise.resolve({ default: FeedRedirect })), fallback: { redirect: "/" } },
 
-    // TR-732: the factory home is /, so Start (the login landing) goes there
-    "/start": { page: null, fallback: { redirect: "/" } },
+    // TR-732: the factory home is /, so Start (the login landing) goes there. TR-1723: it keeps its query and
+    // hash, since the steps for a person joining link to /start#settings
+    "/start": { page: lazyPage(() => Promise.resolve({ default: StartRedirect })), fallback: { redirect: "/" } },
   },
   sre: {
     // TR-749
