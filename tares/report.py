@@ -7,8 +7,9 @@ background pass keeps them current (`run`).
 
 A pass reads every source once, works out all the (project, week) rows in memory and writes only the
 ones that differ. A late event changes an older week (an answer, a fix, a later review round, a long
-stage that just ended), and working everything out again cannot miss one. A full pass also writes
-what is stuck at that moment into the setting `report.stuck` (`_stuck`), which is no week's figure.
+stage that just ended), and working everything out again cannot miss one. A full pass also writes two
+things that are no week's figure: what is stuck at that moment into the setting `report.stuck`
+(`_stuck`), and the findings that recur into `report.recurring` (`_recurring`).
 
 The columns of a row. Project "" holds what belongs to no project; every duration is in hours:
 
@@ -57,6 +58,9 @@ BUILT_SETTING = "report.weeks_built"   # set once the cell's first full build ha
 STAGES = ("doing", "review", "changes", "blocked")   # the stages whose time is counted
 STUCK_SETTING = "report.stuck"   # what was stuck at the last full pass
 STUCK_SHOWN = 5                  # how many of each kind "stuck now" lists
+RECURRING_SETTING = "report.recurring"   # the findings that recurred at the last full pass
+RECURRING_SHOWN = 5                      # how many recurring findings the page lists
+NAMED_KINDS = frozenset(kind for kind, _ in factory_mod.FINDING_KINDS)
 BUCKET_EDGES = (1, 4, 24, 72)    # start to merge, hours; a time on an edge is in the bucket above it
 NO_PROJECT = ""
 PERSON = "person"         # the role of a session that is no station's
@@ -439,6 +443,46 @@ def _stuck_now(store, visible: dict[str, dict], ids: list[str],
     return out
 
 
+# ── recurring findings ────────────────────────────────────────────────────────
+def _recurring(store, read: dict, at: datetime) -> dict:
+    """What a full pass saves of the recurring findings: for each repo a ticket's PR names, each
+    kind found on RECUR_MIN or more of its tickets in the RECUR_DAYS before `at`, with the
+    (project id, ticket label) pairs it was found on, so a read can count its own projects."""
+    tickets = {(pid, t["id"]): t for pid, rows in read["tickets"].items() for t in rows}
+    since = at - timedelta(days=factory_mod.RECUR_DAYS)
+    out = []
+    for repo in sorted({(t["pr"] or {}).get("repo") or "" for t in tickets.values()} - {""}):
+        found = factory_mod.recurring_refs(store.repo_findings(repo, since),
+                                           lambda *key: tickets.get(key))
+        out += [{"repo": repo, "kind": kind, "refs": sorted(k["refs"])}
+                for kind, k in found.items() if len(k["refs"]) >= factory_mod.RECUR_MIN]
+    return {"at": _stamp(at), "rows": out}
+
+
+def _recurring_now(store, visible: dict[str, dict], ids: list[str],
+                   accepted_rules: Callable[[], set[tuple]]) -> dict | None:
+    """The last pass's recurring findings over the projects in `ids` (all of them in `visible`): a
+    row per repo and kind, counted over those projects and only then held to RECUR_MIN; the
+    RECURRING_SHOWN highest counts. A row is `rule_accepted` when `accepted_rules` has its repo
+    and kind, whatever the scope. None before the first pass."""
+    saved = store.get_setting(RECURRING_SETTING)
+    if not saved:
+        return None
+    snapshot = json.loads(saved)
+    names = {i: visible[i]["name"] for i in ids}
+    rows = []
+    for part in snapshot["rows"]:
+        refs = [(pid, ticket) for pid, ticket in part["refs"] if pid in names]
+        row = factory_mod.recurring_row(part["kind"], refs, names)
+        if row:
+            rows.append({"repo": part["repo"], **row})
+    rows.sort(key=lambda r: (-r["count"], r["repo"], r["kind"] or ""))
+    rows = rows[:RECURRING_SHOWN]
+    ruled = accepted_rules() if rows else set()
+    return {"at": snapshot["at"], "days": factory_mod.RECUR_DAYS,
+            "rows": [{**r, "rule_accepted": (r["repo"], r["kind"]) in ruled} for r in rows]}
+
+
 # ── the table ─────────────────────────────────────────────────────────────────
 def _write(store, rows: dict[tuple[str, date], dict], only: tuple[str, date] | None = None) -> dict:
     """Make the table (or the one row `only` names) hold exactly `rows`: a row that differs is
@@ -470,14 +514,15 @@ def _write(store, rows: dict[tuple[str, date], dict], only: tuple[str, date] | N
 
 
 def rebuild_all(store) -> dict:
-    """Work out every week of every project again, and what is stuck now. Returns {rows, changed,
-    removed} of the weekly rows."""
+    """Work out every week of every project again, what is stuck now and the findings that recur.
+    Returns {rows, changed, removed} of the weekly rows."""
     with _PASS:
         at = now_utc()
         read = _read(store)
         out = _write(store, _compute(store, read=read))
-        store.set_setting(STUCK_SETTING,
-                          json.dumps(_stuck(read, at), sort_keys=True, separators=(",", ":")))
+        for key, value in ((STUCK_SETTING, _stuck(read, at)),
+                           (RECURRING_SETTING, _recurring(store, read, at))):
+            store.set_setting(key, json.dumps(value, sort_keys=True, separators=(",", ":")))
         return out
 
 
@@ -531,19 +576,27 @@ CANNOT_SEE = (
 )
 
 
+def _review_figures(rows: list[dict]) -> dict:
+    """The pass rate and rounds of the tickets first reviewed in the weekly rows `rows`, as the
+    Delivered and Review sections both say them."""
+    rounds = [n for r in rows for n in r["rounds"]]
+    return {
+        "first_pass": {"passed": sum(r["passed_first"] for r in rows),
+                       "reviewed": sum(r["reviewed"] for r in rows)},
+        "rounds_per_ticket": sum(rounds) / len(rounds) if rounds else None,
+    }
+
+
 def _delivered_figures(rows: list[dict]) -> dict:
     """What was delivered in the weekly rows `rows`. Durations are in hours."""
     hours = [h for r in rows for h in r["start_to_merge"]]
-    rounds = [n for r in rows for n in r["rounds"]]
     return {
         "merged": sum(r["merged"] for r in rows),
         "milestones_accepted": sum(r["milestones_accepted"] for r in rows),
         "projects_merged": len({r["project"] for r in rows if r["merged"]}),
         "start_to_merge": {"p50": percentile(hours, 0.5), "p90": percentile(hours, 0.9),
                            "tickets": len(hours)},      # of `merged`: those with a start
-        "first_pass": {"passed": sum(r["passed_first"] for r in rows),
-                       "reviewed": sum(r["reviewed"] for r in rows)},
-        "rounds_per_ticket": sum(rounds) / len(rounds) if rounds else None,
+        **_review_figures(rows),
     }
 
 
@@ -562,6 +615,49 @@ def delivered(rows: list[dict], weeks: list[date], before: list[dict] | tuple = 
                    "merged": sum(r["merged"] for r in by_week[w]),
                    "p50": percentile([h for r in by_week[w] for h in r["start_to_merge"]], 0.5)}
                   for w in weeks],
+    }
+
+
+def _finding_split(rows: list[dict]) -> list[dict]:
+    """The findings first raised in the weekly rows `rows`, by kind and severity as they stand
+    today, fixed and still open, most open first. The kinds FINDING_KINDS does not name are one
+    "other" row per severity."""
+    counts = defaultdict(lambda: [0, 0])
+    for r in rows:
+        for f in r["findings"]:
+            kind = f["kind"] if f["kind"] in NAMED_KINDS else "other"
+            count = counts[kind, f["severity"]]
+            count[0] += f["opened_fixed"]
+            count[1] += f["opened_open"]
+    out = [{"kind": kind, "severity": severity, "fixed": fixed, "open": still}
+           for (kind, severity), (fixed, still) in counts.items() if fixed or still]
+    return sorted(out, key=lambda f: (-f["open"], f["severity"], f["kind"]))
+
+
+def review(rows: list[dict], weeks: list[date], before: list[dict] | tuple = ()) -> dict:
+    """The Review section (TR-1670): the pass rate and rounds of the range and week by week, its
+    findings, and the same two figures for each project with a ticket first reviewed in it, with
+    those of the rows `before` it (None when none was reviewed there). page() adds the projects'
+    names, puts them in order and adds the recurring findings."""
+    by_week, of_range, earlier = defaultdict(list), defaultdict(list), defaultdict(list)
+    for r in rows:
+        by_week[r["week"]].append(r)
+        of_range[r["project"]].append(r)
+    for r in before:
+        earlier[r["project"]].append(r)
+    projects = []
+    for pid, its in of_range.items():
+        figures = _review_figures(its)
+        if pid == NO_PROJECT or not figures["first_pass"]["reviewed"]:
+            continue
+        previous = _review_figures(earlier.get(pid, []))
+        projects.append({"project": pid, **figures,
+                         "previous": previous if previous["first_pass"]["reviewed"] else None})
+    return {
+        **_review_figures(rows),
+        "weeks": [{"week": w.isoformat(), **_review_figures(by_week[w])} for w in weeks],
+        "findings": _finding_split(rows),
+        "projects": projects,
     }
 
 
@@ -626,14 +722,15 @@ def time_spent(rows: list[dict], weeks: list[date]) -> dict:
 # f(rows, weeks) -> what `sections[key]` answers, from the weekly rows of the scope and range
 # (read_weeks) and the Mondays of the range. A builder named in COMPARED is also handed the rows
 # of as many weeks just before the range, in the same scope: f(rows, weeks, before). A builder
-# reads nothing else; page() itself adds the last pass's "stuck now" to the time section.
-COMPARED = {"delivered"}
+# reads nothing else; page() itself adds what is not a week's figure: the last pass's "stuck now"
+# to the time section and its recurring findings to the review section.
+COMPARED = {"delivered", "review"}
 SECTIONS: dict[str, Callable[..., dict] | None] = {
     "delivered": delivered,
 
     "time": time_spent,
 
-    "review": None,
+    "review": review,
 
     "cost": None,
 
@@ -685,12 +782,14 @@ def range_weeks(from_: str | None, to: str | None, today: date) -> list[date]:
 
 def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owners,
          scope: str = "factory", from_: str | None = None, to: str | None = None,
-         today: date | None = None, asks_me: Callable[[dict], bool] | None = None) -> dict:
+         today: date | None = None, asks_me: Callable[[dict], bool] | None = None,
+         accepted_rules: Callable[[], set[tuple]] = set) -> dict:
     """What GET /api/factory/report answers. `projects` are the ones the caller can read, and no
     other is ever named or counted. `mine` gives the ids that are the caller's own (None: nothing
     narrows them) and is asked for the "mine" scope only. `owners` (factory_owners.Owners) says
     who is here to lead a team. `asks_me` says whether the caller reads a desk question that
-    belongs to no project (None: none).
+    belongs to no project (None: none). `accepted_rules` gives the (repo, kind) of each accepted
+    rule the caller sees (none by default), which marks the recurring findings.
 
     A team is the projects one person leads, named by that person's id; a cell of one person has
     none. The "" rows (cost no project claims) belong to the whole factory only."""
@@ -731,6 +830,11 @@ def page(store, projects: list[dict], mine: Callable[[], set[str] | None], owner
     sections = {k: build(rows, weeks, before) if k in COMPARED else build(rows, weeks)
                 for k, build in SECTIONS.items() if build}
     sections["time"]["stuck"] = _stuck_now(store, visible, ids, asks_me if rest else None)
+    sections["review"]["projects"] = sorted(
+        ({**p, "name": visible[p["project"]]["name"]} for p in sections["review"]["projects"]),
+        key=lambda p: (p["first_pass"]["passed"] / p["first_pass"]["reviewed"],
+                       p["name"].lower(), p["project"]))     # lowest pass rate first
+    sections["review"]["recurring"] = _recurring_now(store, visible, ids, accepted_rules)
     return {
         "range": {"from": weeks[0].isoformat(),
                   "to": (weeks[-1] + timedelta(days=6)).isoformat(),

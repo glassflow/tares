@@ -1,12 +1,11 @@
 import { EmptyState, Stat, WeekChart } from "../../../components/edition";
-import { formatCount, formatDecimal } from "../../../lib/number";
+import { formatCount } from "../../../lib/number";
 import { HOUR, MIN, durationWords } from "../../../lib/time";
 import type { DeliveredData, DeliveredFigures, ReportData } from "../FactoryReport.api";
+import { passPercent, roundsWords, tickets } from "./shared";
 
 // Delivered (TR-1668): four headline figures for the range, each with its change on as many weeks just
 // before as a plain number, and merged tickets and start-to-merge week by week.
-
-const tickets = (n: number) => (n === 1 ? "ticket" : "tickets");
 
 /** No merge, no accepted milestone and no first review. */
 const nothing = (f: DeliveredFigures) => !f.merged && !f.milestones_accepted && !f.first_pass.reviewed;
@@ -55,12 +54,11 @@ export function Delivered({ data }: { data: ReportData }) {
   const startChange = typeof earlier !== "number" ? change(0, null, weeks.length)
     : took.p50 === null ? undefined
     : change(minutes(took.p50), minutes(earlier), weeks.length, (m) => durationWords(m * MIN));
-  const round = rounds === null ? "" : formatDecimal(rounds, 1);
   return (
     <div className="grid min-w-0 grid-cols-1 gap-5 pt-3">
       <div className="grid grid-cols-2 gap-x-6 gap-y-5 md:grid-cols-4">
         <Tile id="merged" label="Merged" value={formatCount(d.merged)} changed={count("merged")}
-              pair={first.reviewed > 0 && `${Math.round((100 * first.passed) / first.reviewed)}% passed first review, of ${formatCount(first.reviewed)} ${tickets(first.reviewed)} first reviewed`} />
+              pair={first.reviewed > 0 && `${passPercent(first)}% passed first review, of ${formatCount(first.reviewed)} ${tickets(first.reviewed)} first reviewed`} />
         <Tile id="milestones" label="Milestones accepted" value={formatCount(d.milestones_accepted)} changed={count("milestones_accepted")} />
         <Tile id="projects" label="Projects with a merge" value={formatCount(d.projects_merged)} changed={count("projects_merged")} />
         <Tile id="start-to-merge" label="Start to merge, p50" value={took.p50 === null ? "no value" : length(took.p50)}
@@ -69,7 +67,7 @@ export function Delivered({ data }: { data: ReportData }) {
                 took.tickets < d.merged && `from ${formatCount(took.tickets)} of ${formatCount(d.merged)} merged ${tickets(d.merged)}`,
               ]}
               changed={startChange}
-              pair={round !== "" && `${round} review ${round === "1" ? "round" : "rounds"} per ticket reviewed`} />
+              pair={rounds !== null && roundsWords(rounds)} />
       </div>
       <WeekChart caption="Merged per week" weeks={weeks} soFar={running} data-testid="delivered-merged-weeks"
                  series={[{ label: "Merged", values: d.weeks.map((w) => w.merged) }]} format={formatCount} />
