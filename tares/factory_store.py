@@ -624,12 +624,15 @@ class FactoryStore:
         return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
 
     def newest_session_line_at(self, source: str = "claude_code"):
-        """When the newest session line on `source` was written, from the sessions table; None
-        when the cell holds none."""
-        sx = sessions_table
+        """When the newest line of a Claude Code session on `source` was written, from the sessions
+        table; None when the cell holds none. A Codex station's lines share the source and are left
+        out (its station row says runtime codex)."""
+        sx, ss = sessions_table, session_stations
+        q = (select(func.max(sx.c.last_line_at))
+             .select_from(sx.outerjoin(ss, ss.c.session == sx.c.session))
+             .where(sx.c.source == source, or_(ss.c.runtime.is_(None), ss.c.runtime != "codex")))
         with self.sessions_db.read() as conn:
-            return conn.execute(select(func.max(sx.c.last_line_at))
-                                .where(sx.c.source == source)).scalar()
+            return conn.execute(q).scalar()
 
     def station_sessions(self, source: str) -> list[dict]:
         """Every session that played a station, with its station, role, parent and project, when

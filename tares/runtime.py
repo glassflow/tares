@@ -20,7 +20,6 @@ from .triggers import clear_cooldowns, eval_triggers
 
 # Catalog sources of an older cell that the integrations sync themselves now (TR-1806): never polled.
 SYNCED_BY_INTEGRATIONS = frozenset({"linear", "github_issues"})
-CODEX_INGEST = "codex"   # /ingest/codex: a crew's record of its Codex stations (tares.session_codex)
 
 
 @dataclass
@@ -209,16 +208,10 @@ class Runtime:
                 self._start(cfg)
 
     # ── push ingestion (webhook / memory / otlp sources) ──────────────────────
-    def _names_source(self, token: str) -> bool:
-        """Is `token` a source's ingest key or name?"""
-        return token in self.catalog.sources or any(
-            c.ingest_key and c.ingest_key == token for c in self.catalog.sources.values())
-
     def session_source(self) -> str:
-        """The source that holds the cell's agent sessions: the first one of the claude_code connector,
-        else `claude_code` (made on its first line)."""
-        return next((n for n, c in self.catalog.sources.items() if c.connector == "claude_code"),
-                    "claude_code")
+        """The source that holds the cell's agent sessions: always `claude_code` (TR-1804)."""
+        from .session_map import SOURCE
+        return SOURCE   # one source for every session line (TR-1804)
 
     def _push_cfg(self, token: str):
         # /ingest/<token>: match the stable ingest_key first, then the source name (back-compat for
@@ -327,11 +320,6 @@ class Runtime:
         `tares_person=<person_id>` on every event, or none when `person_id` is None. The sender
         cannot set it: the connector builds its labels from fixed fields, so the label comes only
         from the credential. Calls from inside the cell (no credential) leave it off."""
-        if token == CODEX_INGEST and not self._names_source(token):
-            # /ingest/codex (TR-1595): what a crew's recorder read of its Codex stations, turned into
-            # session lines and stored in the cell's session source, where every session reader looks
-            from . import session_codex as codex_lines
-            payload, token = codex_lines.session_lines(payload), self.session_source()
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)
         conn = build_connector(cfg, self.store)
