@@ -16,9 +16,10 @@ import { COLS, isTeam, LEFT, MUTED, PAGE, reason, RIGHT, SectionHead } from "./h
 import { InlineIcon } from "./ProjectIcon";
 import { ChoicesForm } from "./SetupParts";
 import type { HomeData, HomeOnboarding, HomeProject, HomeProjectRow, HomeStart } from "./home.types";
+import YourTeam from "./YourTeam";
 
-// Home for a person joining a factory someone else set up (TR-1723): what the team already set, then the
-// person's own three steps (the crew's choices, three commands on their machine, a project to join). Every
+// Home for a person joining a factory someone else set up (TR-1723): the team (YourTeam), what it already
+// set, then the person's own three steps (the crew's choices, three commands on their machine, a project to join). Every
 // step ticks from the cell. It stays while steps are open and the person has not hidden them; the usual
 // Home is back after that. What waits for the person is passed in and drawn above the steps.
 
@@ -67,13 +68,16 @@ function Welcome({ onChanged }: { onChanged: () => void }) {
     <Banner data-testid="joiner-welcome" action={
       <Button variant="quiet" className="px-1 underline" busy={busy} onClick={hide} data-testid="joiner-hide">Hide these steps</Button>
     }>
-      {owner === undefined ? (
-        <span className="block py-1" data-testid="joiner-welcome-loading"><Skeleton width={280} height={22} className="max-w-full" /></span>
-      ) : (
-        <h1 className="m-0 text-[22px] md:text-[28px]">
-          Welcome to {owner ? <><span data-user-text>{owner}</span>&rsquo;s</> : <>your team&rsquo;s</>} factory
-        </h1>
-      )}
+      <h1 className="m-0 text-[22px] md:text-[28px]">
+        {owner === undefined ? (
+          <span className="block py-1" data-testid="joiner-welcome-loading">
+            <span className="sr-only">Welcome</span>
+            <Skeleton width={280} height={22} className="max-w-full" />
+          </span>
+        ) : (
+          <>Welcome to {owner ? <><span data-user-text>{owner}</span>&rsquo;s</> : <>your team&rsquo;s</>} factory</>
+        )}
+      </h1>
       <span className="mt-1 block text-muted-foreground">Three steps, and your crew works with the team.</span>
       {error && <span role="alert" className="mt-1 block text-err" data-testid="joiner-hide-error">{HIDE_FAILED}</span>}
     </Banner>
@@ -292,6 +296,7 @@ export default function JoinerStart({ data, onChanged, notice, waiting }: {
       {notice}
       <div className={COLS}>
         <div className={LEFT}>
+          <YourTeam team={data.joiner?.team} now={Date.parse(data.now)} />
           <TeamStrip team={data.start?.team} />
           {waiting}
           {settings && <SettingsStep step={settings} n={++n} of={of} onboarding={data.onboarding} onChanged={onChanged} />}
