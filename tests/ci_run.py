@@ -39,7 +39,6 @@ WEIGHT = {
     "test_seed": 10, "test_login": 9, "test_usage": 9,
     "test_slack_ask": 9, "test_github_tickets": 8, "test_degraded": 8, "test_factory_seed": 45, "test_factory_page_times": 90,
     "test_session_move_archive": 19, "test_merge_queue_ci_rerun": 12,
-    "test_session_digest": 40, "test_session_digest_times": 20,
 }
 
 
