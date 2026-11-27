@@ -17,6 +17,7 @@ Run: .venv/bin/python tests/test_factory_review.py
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -226,6 +227,36 @@ def unit():
     ck("finding kinds use whole words: blocking is not a lock",
        factory.finding_kind("this is a blocking issue") != "concurrency"
        and factory.finding_kind("the author field") != "security")
+    ck("a module reaching into another layer is an architecture finding",
+       factory.finding_kind("this module reaches into the internals of another layer") == "architecture")
+    phrases = ("the layering here is upside down",
+               "the handler talks to the storage layer itself",
+               "the page reaches across to the queue",
+               "it reads the internals of the store",
+               "this crosses a module boundary",
+               "the two files import each other",
+               "this adds a circular import",
+               "the change makes an import cycle",
+               "the dependency direction is backwards",
+               "the price math belongs in the domain module",
+               "the screen owns a business rule",
+               "this is a second source of truth for the total",
+               "this contradicts the recorded decision on retries")
+    patterns = dict(factory.FINDING_KINDS)["architecture"]
+    hits = {p: [x for x in phrases if re.search(rf"\b{p}\b", x.lower())] for p in patterns}
+    ck("each pattern of the architecture kind has a phrase here, and each phrase one pattern",
+       all(len(v) == 1 for v in hits.values()) and sorted(v[0] for v in hits.values() if v) == sorted(phrases),
+       hits)
+    missed = {x: factory.finding_kind(x) for x in phrases if factory.finding_kind(x) != "architecture"}
+    ck("each of those phrases is put in the architecture kind", not missed, missed)
+    plain = ("the Codex layer was not run", "the module is slow to load", "an import is unused",
+             "a duplicate row in the table", "the dependency is outdated", "the internal name is shown")
+    taken = [x for x in plain if factory.finding_kind(x) == "architecture"]
+    ck("a single word such as layer or module does not make a finding about architecture", not taken, taken)
+    ck("a finding that fits a named kind keeps it, architecture words and all",
+       factory.finding_kind("the migration reaches into the internals of the old table") == "migration"
+       and factory.finding_kind("SQL injection in the repository layer") == "security"
+       and factory.FINDING_KINDS[-1][0] == "architecture")
 
     print("== the Codex layer from its recorded reviews (TR-440) ==")
     ev = [{"type": "challenge_commit", "challenge": {"verdict": "FAIL", "sha": "1", "findings": [
@@ -408,6 +439,28 @@ async def main():
             await store_reject_and_reoffer(cx, store, mf, as_station)
         await outside_gate_cases(store, mf, m, as_station, shop)
         await codex_builder(store, mf, as_station, mk)
+        await architecture_repo(store, m, mf, as_station)
+
+
+async def architecture_repo(store, m, mf, as_station):
+    """The Report puts an architecture finding on the repo of the ticket whose review opened it. The
+    finding names no ticket: it is matched to the review recorded at the same moment (TR-1673)."""
+    from tares import report
+    print("== the repo of an architecture finding in the Report (TR-1673) ==")
+    as_station()
+    layers = json.loads(await m.create_project("Layers", ""))["id"]
+    await m.write_ticket("Split the store", project="Layers")
+    await mf.set_stage("T1", "review", pr="https://github.com/acme/shop/pull/9", project="Layers")
+    as_station("crew-reviewer", "reviewer")
+    out = await mf.record_review(
+        "T1", HEAD["value"], "changes", "read the diff", "",
+        [{"severity": "P2", "text": "this module reaches into the internals of another layer"}],
+        project="Layers")
+    report.rebuild_all(store)
+    placed = [(g.get("repo"), g["opened"]) for week in report.read_weeks(store, projects=[layers])
+              for g in week["findings"] if g["kind"] == report.ARCHITECTURE]
+    ck("a recorded architecture finding lands on the repo of its review's ticket",
+       placed == [("acme/shop", 1)], (out, placed))
 
 
 async def codex_builder(store, mf, as_station, mk):

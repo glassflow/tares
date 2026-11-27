@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import hashlib
 import itertools
+import json
 import os
 import re
 import sys
@@ -201,8 +202,12 @@ async def scopes():
            len(lines) == 3 and lines[0] == SEEN and "merge queue" in lines[1]
            and "API-equivalent" in lines[2], lines)
         built = body.get("sections") or {}
-        ck("Delivered, Time, Review, Cost and Merges are built",
-           sorted(built) == ["cost", "delivered", "merges", "review", "time"], sorted(built))
+        ck("every section is built", sorted(built) == sorted(FIXED)
+           and all(v is not None for v in built.values()), built)
+        ck("with no finding and no decision: the Architecture section lists no repo and no decision",
+           built.get("architecture") == {"repos": [],
+                                         "unplaced": {"decisions_total": 0, "decisions": []}},
+           built.get("architecture"))
         merges = built.get("merges") or {}
         ck("with nothing merged: no merge, no level, every week at 0 and a file of the header alone",
            {k: v for k, v in merges.items() if k != "csv"} == {
@@ -450,9 +455,15 @@ async def scopes():
                and as_station.json() == plain.json(), as_station.text[:200])
 
             print("== no raw records on page load ==")
+            # decisions that name tickets, by id and by label: placing them reads no ticket
+            by_id, by_label = (pulled(s, "uc_beta", f"acme/{n}") for n in ("by-id", "by-label"))
+            decided(s, "uc_beta", 1, "Named by its id?", [by_id])
+            decided(s, "uc_beta", 1, "Named by its label?",
+                    [factory_mod.label(s.get_ticket("uc_beta", by_label))])
+            report.rebuild_all(s)
             raw = ["all_stage_changes", "all_reviews", "all_review_findings", "usage_by_week",
                    "list_desk", "milestones_by_project", "milestone_acceptances", "tickets_by_project",
-                   "repo_findings", "all_holder_changes", "ticket_replies"]
+                   "get_ticket", "repo_findings", "all_holder_changes", "ticket_replies"]
             touched = []
 
             def trap(name):
@@ -472,14 +483,22 @@ async def scopes():
             for name in raw:
                 setattr(s, name, trap(name))
             try:
-                got = []
+                got, placed = [], []
                 for scope in ("factory", f"team:{ada}", "project:uc_beta"):
                     try:
-                        got.append((await get(root, k_bo, scope=scope)).status_code)
+                        r = await get(root, k_bo, scope=scope)
+                        got.append(r.status_code)
+                        if r.status_code == 200:
+                            placed.append(rows_of(r.json()["sections"]["architecture"]))
                     except RuntimeError as e:
                         got.append(str(e))
                 ck("the factory, a team and a project read the weekly rows and no raw record",
                    got == [200, 200, 200] and not touched, (got, touched))
+                ck("and place a decision under the repo of the ticket it names",
+                   len(placed) == 3 and all(
+                       asked(p.get("acme/by-id", {})) == ["Named by its id?"]
+                       and asked(p.get("acme/by-label", {})) == ["Named by its label?"]
+                       for p in placed), placed)
                 ck("one read of the weekly table for each", len(reads_of_weeks) == 3, len(reads_of_weeks))
                 del s.tickets_by_project          # mine is Home's rule, which reads the tickets
                 try:
@@ -1311,6 +1330,262 @@ async def cost_section():
            close([r["cost_usd"] for r in by["top_tickets"]], [0.4, 0.3, 0.2, 0.15]), by["top_tickets"])
 
 
+LAYER = "This module reaches into the internals of another layer"
+_DECISIONS = itertools.count(1)
+
+
+def decided(s, uid, back, question, tickets=(), answer="Keep it", who=None, minute=0):
+    """A decision of `uid` (None: asked with no project) made `back` weeks ago."""
+    s.add_decision(uid, f"dk_arch{next(_DECISIONS)}", question, answer, answer, False, "project",
+                   True, None, False, list(tickets), noon(week(back)) + timedelta(minutes=minute),
+                   person_id=who)
+
+
+_ROUNDS = itertools.count(100)           # minutes past noon: no two rounds at the same moment
+
+
+def layered(s, uid, tid, counts):
+    """On `tid`, `counts[back]` new architecture findings in the week `back` weeks ago."""
+    for back, n in sorted(counts.items(), reverse=True):
+        raised(s, uid, tid, back, "changes",
+               [("P2", False, f"{LAYER}, place {i}") for i in range(n)], minute=next(_ROUNDS))
+
+
+def rows_of(section) -> dict:
+    return {r["repo"]: r for r in section.get("repos", [])}
+
+
+def counts_of(row) -> list[int]:
+    return [w["count"] for w in row.get("weeks", [])]
+
+
+def asked(group) -> list[str]:
+    return [d["question"] for d in group.get("decisions", [])]
+
+
+NOTHING_DECIDED = {"decisions_total": 0, "decisions": []}
+
+
+async def architecture_section():
+    async with cell() as (s, root, bare):
+        print("== the Architecture section ==")
+        ada, pat = (s.create_person(n, f"{n.lower()}@example.com")["id"] for n in ("Ada", "Pat"))
+        project(s, "uc_one", "One", lead=ada)
+        project(s, "uc_two", "Two", lead=ada)
+        project(s, "uc_hid", "Gamma", lead=pat, private=True)
+        api, web, docs = (pulled(s, "uc_one", f"acme/{n}") for n in ("api", "web", "docs"))
+        zed, early, small, capital = (pulled(s, "uc_two", f"acme/{n}")
+                                      for n in ("Zed", "early", "b", "C"))
+        loose = s.create_ticket("uc_two", "tares", "t")           # no pull request
+        hid_api, secret = (pulled(s, "uc_hid", f"acme/{n}") for n in ("api", "secret"))
+        # new findings per week, the key counting weeks back from the running one
+        layered(s, "uc_one", api, {3: 1, 2: 2, 1: 3, 0: 1})       # rises, from none
+        layered(s, "uc_one", web, {4: 1, 3: 2, 2: 2, 1: 3})       # one week as many as before
+        layered(s, "uc_two", zed, {4: 3, 3: 2, 2: 1, 0: 9})       # falls, then a big running week
+        layered(s, "uc_two", early, {5: 1, 4: 2, 3: 3, 2: 4})     # rose up to 2 weeks ago
+        layered(s, "uc_two", small, {5: 1})
+        layered(s, "uc_two", capital, {5: 1})
+        layered(s, "uc_two", loose, {3: 1, 2: 2, 1: 3})           # no repo to say it rises in
+        layered(s, "uc_hid", hid_api, {1: 2})
+        layered(s, "uc_hid", secret, {1: 1})
+        # one api finding is fixed and one is the gravest: both still count
+        raised(s, "uc_one", api, 1, "pass", resolved={"F1": "fixed"}, minute=30)
+        raised(s, "uc_one", docs, 1, "changes", [("P1", True, "The README is stale")])
+
+        made = factory_mod.label(s.get_ticket("uc_one", web))
+        decided(s, "uc_one", 1, "Which layer owns the retry rule?", [api], who=ada)
+        decided(s, "uc_one", 2, "One client for both?", [api, made])
+        decided(s, "uc_one", 1, "Where do the docs live?", [docs], answer="")
+        decided(s, "uc_two", 1, "A queue or a table?", [loose, "ZZ-999"])
+        decided(s, "uc_two", 1, "Which name for it?", minute=5)
+        decided(s, "uc_one", 1, "Merge PR #12 of acme/api (T1)?", [api], answer="Approve")
+        decided(s, None, 1, "A question for the whole cell?", [api])
+        decided(s, "uc_hid", 1, "A hidden choice?", [secret])
+        decided(s, "uc_one", 9, "An old choice?", [api])
+        report.rebuild_all(s)
+        k_ada = key(s, "karch", ["read"], person=ada)
+
+        async def read(who=None, **params):
+            r = await get(root, who, **params)
+            return (r.json()["sections"]["architecture"] if r.status_code == 200
+                    else {"error": r.text})
+
+        got = await read(k_ada)
+        rows = rows_of(got)
+        ck("a row per repo: a rising one first, then the most findings, the name whatever its case "
+           "on a tie, no repo last",
+           [r["repo"] for r in got.get("repos", [])]
+           == ["acme/api", "acme/Zed", "acme/early", "acme/web", "acme/b", "acme/C", "acme/docs",
+               None], [r["repo"] for r in got.get("repos", [])])
+        row = rows.get("acme/api", {})
+        ck("each week of the range with the findings first raised in it, fixed or open, and the total",
+           [w["week"] for w in row.get("weeks", [])] == [week(n).isoformat() for n in range(7, -1, -1)]
+           and counts_of(row) == [0, 0, 0, 0, 1, 2, 3, 1] and row.get("total") == 7, row)
+        ck("a finding of another kind is in no count",
+           counts_of(rows.get("acme/docs", {})) == [0] * 8
+           and rows.get("acme/docs", {}).get("total") == 0, rows.get("acme/docs"))
+        ck("rising: each of the last three finished weeks above the one before, from none too, the "
+           "running week left out",
+           row.get("rising") is True, row)
+        ck("a week with as many as the one before is no rise",
+           rows.get("acme/web", {}).get("rising") is False, rows.get("acme/web"))
+        ck("a large running week makes no rise",
+           rows.get("acme/Zed", {}).get("rising") is False
+           and counts_of(rows.get("acme/Zed", {}))[-1:] == [9], rows.get("acme/Zed"))
+        ck("a rise that stopped last week is no rise",
+           rows.get("acme/early", {}).get("rising") is False, rows.get("acme/early"))
+        none = rows.get(None, {})
+        ck("a finding on a ticket with no pull request is counted with no repo, never as rising",
+           counts_of(none) == [0, 0, 0, 0, 1, 2, 3, 0] and none.get("rising") is False
+           and {k: none.get(k) for k in NOTHING_DECIDED} == NOTHING_DECIDED, none)
+        ck("a decision is beside the repo of its ticket's pull request, newest first, with the total",
+           asked(row) == ["Which layer owns the retry rule?", "One client for both?"]
+           and row.get("decisions_total") == 2, row.get("decisions"))
+        web_row = rows.get("acme/web", {})
+        ck("a decision about tickets in two repos is beside both, one named by its label included",
+           asked(web_row) == ["One client for both?"] and web_row.get("decisions_total") == 1,
+           web_row.get("decisions"))
+        first = (row.get("decisions") or [{}])[0]
+        ck("a decision says its project, question, answer, day, who made it and its tickets",
+           {k: v for k, v in first.items() if k != "at"} == {
+               "project": "uc_one", "name": "One", "question": "Which layer owns the retry rule?",
+               "answer": "Keep it", "person": {"id": ada, "name": "Ada"}, "tickets": [api]}
+           and str(first.get("at", "")).startswith(week(1).isoformat()), first)
+        bare_one = (rows.get("acme/docs", {}).get("decisions") or [{}])[0]
+        ck("with no answer and no person recorded, neither is made up",
+           bare_one.get("question") == "Where do the docs live?" and not bare_one.get("answer")
+           and not bare_one.get("person"), bare_one)
+        unplaced = got.get("unplaced", {})
+        ck("a decision with no repo to go by, with or without a ticket, is listed apart",
+           asked(unplaced) == ["Which name for it?", "A queue or a table?"]
+           and unplaced.get("decisions_total") == 2, unplaced)
+        every = json.dumps(got)
+        ck("a merge approval, a decision asked with no project and one before the range are in no list",
+           bool(rows) and not any(words in every for words in
+                                  ("Merge PR #12", "whole cell", "An old choice")), every[:600])
+        ck("a private project is neither counted nor named for a reader without access",
+           bool(rows) and not any(words in every for words in
+                                  ("acme/secret", "A hidden choice", "Gamma", "uc_hid", secret))
+           and counts_of(row)[-2:] == [3, 1], every[:600])
+
+        full = await read()
+        rows = rows_of(full)
+        ck("who may open it gets its findings in the shared repo, its own repo and its decision",
+           counts_of(rows.get("acme/api", {})) == [0, 0, 0, 0, 1, 2, 5, 1]
+           and rows.get("acme/api", {}).get("total") == 9
+           and rows.get("acme/secret", {}).get("total") == 1
+           and asked(rows.get("acme/secret", {})) == ["A hidden choice?"], full)
+
+        got = await read(k_ada, from_=week(1).isoformat())
+        rows = rows_of(got)
+        ck("a range of 2 weeks counts those, and rising still looks at the four finished weeks",
+           counts_of(rows.get("acme/api", {})) == [3, 1] and rows.get("acme/api", {}).get("total") == 4
+           and rows.get("acme/api", {}).get("rising") is True
+           and rows.get("acme/web", {}).get("rising") is False, got)
+        ck("a decision made before those weeks is not listed",
+           asked(rows.get("acme/api", {})) == ["Which layer owns the retry rule?"]
+           and "acme/early" not in rows, rows)
+        got = await read(k_ada, from_=week(0).isoformat())
+        ck("the running week alone: rising from the weeks before it, and only repos with something "
+           "in the range",
+           [(r["repo"], r["total"], r["rising"]) for r in got.get("repos", [])]
+           == [("acme/api", 1, True), ("acme/Zed", 9, False)], got)
+        got = await read(k_ada, from_=week(3).isoformat(), to=week(2).isoformat())
+        rows = rows_of(got)
+        ck("a range that ends in the past: rising up to its last week, nothing after it",
+           rows.get("acme/early", {}).get("rising") is True
+           and counts_of(rows.get("acme/early", {})) == [3, 4]
+           and rows.get("acme/api", {}).get("rising") is False
+           and asked(rows.get("acme/api", {})) == ["One client for both?"]
+           and got.get("unplaced") == NOTHING_DECIDED, got)
+
+        got = await read(k_ada, scope="project:uc_two")
+        ck("one project: its repos and its decisions only",
+           [r["repo"] for r in got.get("repos", [])]
+           == ["acme/Zed", "acme/early", "acme/b", "acme/C", None]
+           and all(r["decisions_total"] == 0 for r in got.get("repos", []))
+           and asked(got.get("unplaced", {})) == ["Which name for it?", "A queue or a table?"], got)
+        got = await read(k_ada, from_=week(40).isoformat(), to=week(38).isoformat())
+        ck("weeks with nothing in them: no repo and no decision",
+           got == {"repos": [], "unplaced": NOTHING_DECIDED}, got)
+
+    async with cell() as (s, root, bare):
+        project(s, "uc_found", "Found")
+        project(s, "uc_said", "Said")
+        project(s, "uc_many", "Many")
+        found = pulled(s, "uc_found", "acme/found")
+        layered(s, "uc_found", found, {1: 1})
+        said = pulled(s, "uc_said", "acme/said")
+        decided(s, "uc_said", 1, "Only a decision?", [said])
+        many = pulled(s, "uc_many", "acme/many")
+        for n in range(7):
+            decided(s, "uc_many", 1, f"Choice {n}?", [many], minute=n)
+        for n in range(6):
+            decided(s, "uc_many", 1, f"Loose choice {n}?", minute=n)
+        report.rebuild_all(s)
+
+        async def read(uid):
+            r = await get(root, scope=f"project:{uid}")
+            return (r.json()["sections"]["architecture"] if r.status_code == 200
+                    else {"error": r.text})
+
+        got = await read("uc_found")
+        ck("findings and no decision: the repo with none beside it",
+           [(r["repo"], r["total"], r["decisions_total"], r["decisions"]) for r in got.get("repos", [])]
+           == [("acme/found", 1, 0, [])] and got.get("unplaced") == NOTHING_DECIDED, got)
+        got = await read("uc_said")
+        ck("a decision and no finding: its repo is listed with every week at 0, not rising",
+           [(r["repo"], r["total"], r["rising"], counts_of(r), asked(r)) for r in got.get("repos", [])]
+           == [("acme/said", 0, False, [0] * 8, ["Only a decision?"])], got)
+        got = await read("uc_many")
+        row = rows_of(got).get("acme/many", {})
+        ck("a long list shows the 5 newest of a repo, and says how many there are",
+           row.get("decisions_total") == 7 and asked(row) == [f"Choice {n}?" for n in (6, 5, 4, 3, 2)],
+           row)
+        unplaced = got.get("unplaced", {})
+        ck("and the 5 newest of those with no repo",
+           unplaced.get("decisions_total") == 6
+           and asked(unplaced) == [f"Loose choice {n}?" for n in (5, 4, 3, 2, 1)], unplaced)
+
+        layered(s, "uc_found", found, {1: 2})
+        decided(s, "uc_found", 1, "Decided since the pass?", [found])
+        got = await read("uc_found")
+        ck("a decision shows at once, a finding at the next pass of the weekly rows",
+           [(r["repo"], r["total"], asked(r)) for r in got.get("repos", [])]
+           == [("acme/found", 1, ["Decided since the pass?"])], got)
+
+        project(s, "uc_late", "Late")
+        late = pulled(s, "uc_late", "acme/late")
+        decided(s, "uc_late", 1, "On a ticket newer than the pass?", [late])
+        got = await read("uc_late")
+        ck("a decision on a ticket the last pass has not recorded is listed apart",
+           got.get("repos") == [] and asked(got.get("unplaced", {}))
+           == ["On a ticket newer than the pass?"], got)
+        report.rebuild_all(s)
+        got = await read("uc_late")
+        ck("and under its repo after the next pass",
+           [(r["repo"], asked(r)) for r in got.get("repos", [])]
+           == [("acme/late", ["On a ticket newer than the pass?"])]
+           and got.get("unplaced") == NOTHING_DECIDED, got)
+        s.set_setting(report.TICKET_REPOS_SETTING, "")
+        got = await read("uc_late")
+        ck("with no repo recorded at all, as on a cell just upgraded, the page still answers",
+           got.get("repos") == [] and asked(got.get("unplaced", {}))
+           == ["On a ticket newer than the pass?"], got)
+
+        project(s, "uc_path", "Path")
+        eve = s.create_person("Eve", "eve@example.com")["id"]
+        s.set_handover("uc_path", [{"path": "/home/dev/work/shop", "name": "shop"}], "L3-review",
+                       None, noon(week(2)), person_id=eve)
+        decided(s, "uc_path", 1, "Keep /home/dev/work/shop/config.yml?",
+                answer="Move it to /home/dev/work/shop/notes.md")
+        got = await read("uc_path")
+        told = (got.get("unplaced", {}).get("decisions") or [{}])[0]
+        ck("a folder path of the hand-over in a question or an answer is shortened, as in a merge title",
+           "/home/dev/work" not in json.dumps(got) and "config.yml" in told.get("question", "")
+           and "notes.md" in told.get("answer", ""), got)
+
+
 async def large():
     print("== a large cell: 20 projects, 12 weeks, 600 merged tickets ==")
     async with cell() as (s, root, bare):
@@ -1340,7 +1615,9 @@ async def large():
             s.add_ticket_history(tid, uids[i % 20], "stage", "doing", None, None, None, noon(week(1)))
             raised(s, uids[i % 20], tid, 1, "changes",
                    [("P2", False, "No migration for it"), ("P2", False, "Uncaught exception"),
-                    ("P3", False, f"Nit number {i} here")])
+                    ("P3", False, f"Nit number {i} here"), ("P3", False, LAYER)],
+                   minute=i // 20)   # one moment per review in a project, which places its finding
+            decided(s, uids[i % 20], 1, f"Choice {i}?", [tid])
         for i, uid in enumerate(uids):
             for back in range(12):
                 seed_usage(s, f"s-{i}-{back}", f"m-{i}-{back}", replied_at=noon(week(back)),
@@ -1367,6 +1644,11 @@ async def large():
                    and all(w["mean_cost_usd"] > 0 for w in by["weeks"])
                    and len(by["top_tickets"]) == 5 and all(t["cost_usd"] > 0 for t in by["top_tickets"]),
                    str(by)[:600])
+                layers = r.json()["sections"]["architecture"]["repos"]
+                ck("and 200 architecture findings and decisions, 5 decisions shown per repo",
+                   sum(x["total"] for x in layers) == 200
+                   and sum(x["decisions_total"] for x in layers) == 200
+                   and all(len(x["decisions"]) == 5 for x in layers), str(layers)[:600])
                 merged = r.json()["sections"]["merges"]
                 ck("and every merge through the queue, the newest 100 listed",
                    merged["total"] == 600 and len(merged["rows"]) == 100
@@ -1389,6 +1671,7 @@ def main():
     asyncio.run(review_section())
     asyncio.run(recurring_rows())
     asyncio.run(cost_section())
+    asyncio.run(architecture_section())
     asyncio.run(large())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
