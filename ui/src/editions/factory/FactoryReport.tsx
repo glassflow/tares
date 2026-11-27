@@ -7,6 +7,7 @@ import { DAY, formatDayUTC } from "../../lib/time";
 import { usePagePolling } from "../usePagePolling";
 import { factoryReport, isRefused, type ReportData, type SectionKey, type TimeData } from "./FactoryReport.api";
 import { Delivered } from "./report/Delivered";
+import { Review } from "./report/Review";
 import { TimeSpent } from "./report/TimeSpent";
 
 // Report (TR-1667): what the factory delivered, week by week, for a range and a scope. Both live in
@@ -32,7 +33,7 @@ const SECTIONS: { key: SectionKey; title: string; aside?: string; body?: (data: 
 
   { key: "time", title: "Time", body: (data) => <TimeSpent data={data} /> },
 
-  { key: "review", title: "Review" },
+  { key: "review", title: "Review", body: (data) => <Review data={data} /> },
 
   { key: "cost", title: "Cost", aside: "API-equivalent" },
 

@@ -7,14 +7,17 @@ cannot open it, and asked for by name it is unknown, like an id that names nothi
 all, bad input, that no raw record is read on page load, the Delivered section's figures against
 numbers worked out by hand, with those of the weeks before (TR-1668), the Time section's split into
 waiting on a person and agent time and its start-to-merge buckets, what "stuck now" lists and who
-reads it, that each stuck question has its row on the project page (TR-1669), and the time of the
-read on a large cell (20 projects, 12 weeks, 600 merged tickets).
+reads it, that each stuck question has its row on the project page (TR-1669), the Review section's
+pass rate, rounds, findings by kind and severity and rows per project, its recurring findings against
+GET /api/recurring-findings, per reader and scope (TR-1670), and the time of the read on a large cell
+(20 projects, 12 weeks, 600 merged tickets).
 
 Run: python tests/test_report_api.py
 """
 import asyncio
 import contextlib
 import hashlib
+import itertools
 import os
 import re
 import sys
@@ -196,7 +199,15 @@ async def scopes():
            len(lines) == 3 and lines[0] == SEEN and "merge queue" in lines[1]
            and "API-equivalent" in lines[2], lines)
         built = body.get("sections") or {}
-        ck("Delivered and Time are built", sorted(built) == ["delivered", "time"], sorted(built))
+        ck("Delivered, Time and Review are built",
+           sorted(built) == ["delivered", "review", "time"], sorted(built))
+        ck("with nothing reviewed, no finding, nothing worked out yet as recurring",
+           built.get("review") == {
+               "first_pass": {"passed": 0, "reviewed": 0}, "rounds_per_ticket": None,
+               "findings": [], "projects": [], "recurring": None,
+               "weeks": [{"week": week(n).isoformat(),
+                          "first_pass": {"passed": 0, "reviewed": 0}, "rounds_per_ticket": None}
+                         for n in range(7, -1, -1)]}, built.get("review"))
         ck("with nothing delivered and nothing earlier",
            built.get("delivered") == {
                "merged": 0, "milestones_accepted": 0, "projects_merged": 0,
@@ -420,7 +431,8 @@ async def scopes():
 
             print("== no raw records on page load ==")
             raw = ["all_stage_changes", "all_reviews", "all_review_findings", "usage_by_week",
-                   "list_desk", "milestones_by_project", "milestone_acceptances", "tickets_by_project"]
+                   "list_desk", "milestones_by_project", "milestone_acceptances", "tickets_by_project",
+                   "repo_findings"]
             touched = []
 
             def trap(name):
@@ -878,6 +890,254 @@ async def stuck_rows():
            took_in == {"prs_to_review": [merge_ask], "calls_to_confirm": [batch]}, took_in)
 
 
+_NUMBERS = itertools.count(1)
+
+
+def pulled(s, uid, repo) -> str:
+    """A ticket of `uid` with a pull request in `repo`."""
+    tid, n = s.create_ticket(uid, "tares", "t", repo=repo), next(_NUMBERS)
+    s.update_ticket(tid, pr={"url": f"https://github.com/{repo}/pull/{n}", "repo": repo, "number": n,
+                             "head": "abc1234", "base": "main", "state": "open", "checked_at": None})
+    return tid
+
+
+def raised(s, uid, tid, back, verdict, findings=(), resolved=None, minute=0):
+    """A review round with new findings, each (severity, blocking, text), and what became of
+    earlier ones."""
+    new = [{"severity": severity, "file": None, "line": None, "blocking": blocking, "text": text}
+           for severity, blocking, text in findings]
+    s.add_review(uid, tid, "7", "abc1234", verdict, "read the diff", "", "crew-reviewer", new,
+                 resolved or {}, factory_mod.finding_kind, noon(week(back)) + timedelta(minutes=minute))
+
+
+def rate(passed, first, rounds) -> dict:
+    return {"first_pass": {"passed": passed, "reviewed": first}, "rounds_per_ticket": rounds}
+
+
+def split(kind, severity, fixed, still) -> dict:
+    return {"kind": kind, "severity": severity, "fixed": fixed, "open": still}
+
+
+async def review_section():
+    async with cell() as (s, root, bare):
+        print("== the Review section ==")
+        ada, pat = (s.create_person(n, f"{n.lower()}@example.com")["id"] for n in ("Ada", "Pat"))
+        project(s, "uc_one", "One", lead=ada)
+        project(s, "uc_two", "beta", lead=ada)
+        project(s, "uc_hid", "Gamma", lead=pat, private=True)
+        project(s, "uc_quiet", "Quiet", lead=ada)
+        a, b, c, d = (s.create_ticket("uc_one", "tares", "t") for _ in range(4))
+        f = s.create_ticket("uc_two", "tares", "t")
+        g, h = (s.create_ticket("uc_hid", "tares", "t") for _ in range(2))
+        q = s.create_ticket("uc_quiet", "tares", "t")
+        # the range: the 4 weeks to this one. None of these tickets names a repo
+        raised(s, "uc_one", a, 1, "changes", [
+            ("P1", True, "No migration for the new column"),
+            ("P2", False, "The error handling swallows the timeout"),
+            ("P3", False, "Zebra stripes look wrong"),
+            ("P3", False, "Purple button wants padding"),
+            ("P2", False, "A secret is written to the log")])
+        raised(s, "uc_one", a, 1, "pass", minute=5,
+               resolved={"F1": "fixed", "F2": "open", "F3": "fixed", "F4": "open", "F5": "fixed"})
+        raised(s, "uc_one", b, 1, "pass")
+        reviewed(s, "uc_one", b, 1, "pass", minute=5, by=merge_queue.BY)    # no round
+        raised(s, "uc_one", c, 3, "pass", [("P3", False, "The README is stale")])
+        raised(s, "uc_two", f, 2, "changes", [
+            ("P1", False, "This migration has no way back"),
+            ("P2", True, "Uncaught exception in the worker"),
+            ("P3", False, "Odd spacing between cards"),
+            ("P3", False, "Heading colour drifts")])
+        s.add_ticket_history(f, "uc_two", "stage", "merged", None, None, None, noon(week(1)))
+        s.update_ticket(f, stage="merged")                     # merged with its findings open
+        raised(s, "uc_hid", g, 0, "changes", [("P1", False, "A race condition on save")])
+        reviewed(s, "uc_hid", g, 0, "changes", minute=5)
+        reviewed(s, "uc_hid", g, 0, "pass", minute=10)
+        # the 4 weeks before it
+        raised(s, "uc_one", d, 4, "pass", [("P2", False, "The caller leaves it unhandled")])
+        reviewed(s, "uc_hid", h, 5, "pass")
+        reviewed(s, "uc_quiet", q, 6, "pass")
+        m = s.create_ticket("uc_quiet", "tares", "t")          # merged in the range, never reviewed
+        s.add_ticket_history(m, "uc_quiet", "stage", "merged", None, None, None, noon(week(1)))
+        s.update_ticket(m, stage="merged")
+        report.rebuild_all(s)
+        k_ada = key(s, "krada", ["read"], person=ada)
+
+        async def read(who=None, **params):
+            params.setdefault("from_", week(3).isoformat())
+            r = await get(root, who, **params)
+            return r.json()["sections"] if r.status_code == 200 else {"error": r.text}
+
+        def weekly(*values):
+            return [{"week": week(3 - i).isoformat(), **rate(*v)} for i, v in enumerate(values)]
+
+        sections = await read(k_ada)
+        got, other = sections.get("review", {}), sections.get("delivered", {})
+        want = rate(2, 4, 5 / 4)
+        ck("the range: passed in the first round, and rounds per ticket",
+           close({k: got.get(k) for k in want}, want), got)
+        ck("the same two figures as Delivered gives",
+           all(got.get(k, "none") == other.get(k) for k in want), (got, other))
+        ck("week by week, none in a week without a first review",
+           close(got.get("weeks"), weekly((1, 1, 1.0), (0, 1, 1.0), (1, 2, 1.5), (0, 0, None))),
+           got.get("weeks"))
+        ck("findings first raised in the range by kind and severity, fixed and still open, the "
+           "unnamed kinds one other row, blocking and not in one row, most open first",
+           got.get("findings") == [
+               split("other", "P3", 1, 3), split("error handling", "P2", 0, 2),
+               split("migration", "P1", 1, 1), split("docs out of date", "P3", 0, 1),
+               split("security", "P2", 1, 0)], got.get("findings"))
+        total = sum(x["fixed"] + x["open"] for x in got.get("findings", []))
+        ck("fixed and still open add up to the 10 findings raised in the range", total == 10, total)
+        ck("each project with a first review in the range, lowest pass rate first, with the same "
+           "weeks before, none where nothing was reviewed then",
+           close(got.get("projects"), [
+               {"project": "uc_two", "name": "beta", **rate(0, 1, 1.0), "previous": None},
+               {"project": "uc_one", "name": "One", **rate(2, 3, 4 / 3),
+                "previous": rate(1, 1, 1.0)}]), got.get("projects"))
+        got = (await read()).get("review", {})
+        ck("an equal pass rate goes by name, whatever its case",
+           close(got.get("projects", [])[:2], [
+               {"project": "uc_two", "name": "beta", **rate(0, 1, 1.0), "previous": None},
+               {"project": "uc_hid", "name": "Gamma", **rate(0, 1, 3.0),
+                "previous": rate(1, 1, 1.0)}]) and len(got.get("projects", [])) == 3,
+           got.get("projects"))
+        ck("equal open counts go by severity, then kind",
+           [(x["severity"], x["kind"]) for x in got.get("findings", []) if x["open"] == 1]
+           == [("P1", "concurrency"), ("P1", "migration"), ("P3", "docs out of date")],
+           got.get("findings"))
+        got = (await read(k_ada, from_=week(7).isoformat(), to=week(4).isoformat())).get("review", {})
+        ck("the weeks before, asked for as a range, hold their own finding",
+           got.get("findings") == [split("error handling", "P2", 0, 1)]
+           and got.get("first_pass") == {"passed": 2, "reviewed": 2}, got)
+        got = (await read(scope="project:uc_hid", from_=week(5).isoformat(),
+                          to=week(5).isoformat())).get("review", {})
+        ck("reviewed with no finding: the figures, and an empty table",
+           got.get("findings") == [] and got.get("first_pass") == {"passed": 1, "reviewed": 1}, got)
+        got = (await read(scope="project:uc_quiet")).get("review", {})
+        ck("a merge and no first review in the range: no figure, no finding, no project row",
+           close({k: got.get(k) for k in ("first_pass", "rounds_per_ticket", "weeks", "findings",
+                                          "projects")},
+                 {**rate(0, 0, None), "weeks": weekly(*[(0, 0, None)] * 4), "findings": [],
+                  "projects": []}), got)
+
+
+async def recurring_rows():
+    async with cell() as (s, root, bare):
+        print("== recurring findings ==")
+        ada, bo, mia, pat = (s.create_person(n, f"{n.lower()}@example.com")["id"]
+                             for n in ("Ada", "Bo", "Mia", "Pat"))
+        project(s, "uc_shop", "Shop", lead=ada)
+        project(s, "uc_site", "Site", lead=ada)
+        project(s, "uc_far", "Far", lead=bo)
+        project(s, "uc_vault", "Vault", lead=pat, private=True)
+        s.add_project_member("uc_vault", mia)
+        k_ada, k_mia, k_pat = (key(s, f"krec{i}", ["read"], person=p)
+                               for i, p in enumerate((ada, mia, pat)))
+
+        async def section(who=None, **params):
+            r = await get(root, who, **params)
+            return r.json()["sections"]["review"] if r.status_code == 200 else {"error": r.text}
+
+        async def rows(who=None, **params):
+            return ((await section(who, **params)).get("recurring") or {}).get("rows")
+
+        def brief(got):
+            return None if got is None else [(r["repo"], r["kind"], r["count"]) for r in got]
+
+        got = await section()
+        ck("before the first pass the list is not worked out", got.get("recurring", 0) is None, got)
+        report.rebuild_all(s)
+        got = (await section()).get("recurring") or {}
+        ck("a pass with no finding: no row, over the last 30 days",
+           got.get("rows") == [] and got.get("days") == 30 and bool(got.get("at")), got)
+
+        shop, docs, many = "example-org/shop", "example-org/docs", "example-org/many"
+
+        def found(repo, uid, text, tickets=1, back=1, each=1):
+            """`tickets` tickets of `uid` with a pull request in `repo` (None: with none), each with
+            `each` findings of `text` raised `back` weeks ago."""
+            for _ in range(tickets):
+                tid = pulled(s, uid, repo) if repo else s.create_ticket(uid, "tares", "t")
+                raised(s, uid, tid, back, "changes", [("P2", False, text)] * each)
+
+        found(shop, "uc_shop", "No migration for it", tickets=2)
+        found(shop, "uc_site", "No migration for it")
+        found(shop, "uc_vault", "No migration for it", tickets=2)
+        found(shop, "uc_vault", "Uncaught exception", tickets=2)
+        found(shop, "uc_shop", "Uncaught exception")
+        found(shop, "uc_shop", "The README is stale", tickets=4, back=6)    # older than 30 days
+        found(shop, "uc_shop", "A secret in the log", tickets=2, each=2)    # 2 tickets, 4 findings
+        found(None, "uc_shop", "A race condition", tickets=3)               # no repo
+        found(docs, "uc_site", "A race condition", tickets=3)
+        stale = await rows()
+        ck("the list is what the last pass saved", stale == [], stale)
+        report.rebuild_all(s)
+
+        got = await rows()
+        ck("a repo and kind on 3 tickets or more, most tickets first, then by repo",
+           brief(got) == [(shop, "migration", 5), (docs, "concurrency", 3),
+                          (shop, "error handling", 3)], brief(got))
+        for who, label in ((None, "the cell's token"), (k_ada, "a lead"), (k_mia, "a member")):
+            want = []
+            for repo in (shop, docs):
+                r = await root.get("/api/recurring-findings", params={"repo": repo},
+                                   headers=bearer(who) if who else {})
+                want += [{"repo": repo, "rule_accepted": False,      # no rule is accepted yet
+                          **{k: v for k, v in row.items() if k != "examples"}}
+                         for row in r.json().get("recurring", [])]
+            got = await rows(who)
+            by = lambda r: (r["repo"], r["kind"])
+            ck(f"{label}, the whole factory: row for row what GET /api/recurring-findings says",
+               bool(want) and sorted(got or [], key=by) == sorted(want, key=by), (got, want))
+        answer = await section(k_ada)
+        got = (answer.get("recurring") or {}).get("rows")
+        ck("a reader's own projects are counted, and only then held to 3 tickets",
+           brief(got) == [(docs, "concurrency", 3), (shop, "migration", 3)], brief(got))
+        ck("and no other project is named in the section",
+           "Vault" not in str(answer) and "uc_vault" not in str(answer), answer)
+        for scope, who, label, expected in (
+                (f"team:{ada}", None, "a team", [(docs, "concurrency", 3), (shop, "migration", 3)]),
+                ("mine", k_ada, "mine", [(docs, "concurrency", 3), (shop, "migration", 3)]),
+                ("project:uc_shop", None, "a project with 2 tickets of a kind", []),
+                ("mine", k_pat, "the lead of Vault, with 2 of each", [])):
+            got = await rows(who, scope=scope)
+            ck(f"{label}: counted over the projects of the scope", brief(got) == expected, brief(got))
+        past = await rows(from_=week(30).isoformat(), to=week(30).isoformat())
+        ck("the range picked does not change the list", past == await rows(), past)
+
+        # a row is marked from the accepted offers the caller's offer list returns, at once
+        now = datetime.now(timezone.utc)
+        for repo, kind, bound in ((shop, "migration", "uc_vault"), (docs, "concurrency", None),
+                                  (shop, "error handling", None)):
+            s.upsert_rule_proposal(repo, kind, bound, "project" if bound else "repo",
+                                   "Write it", [], now)
+        offers = (await root.get("/api/rule-proposals", params={"state": "open"})).json()
+        for offer in offers["proposals"]:
+            if offer["kind"] != "error handling":          # that one stays open
+                s.decide_rule_proposal(offer["id"], "accepted", offer["text"], now)
+        both = [(docs, "concurrency"), (shop, "migration")]
+        for who, scope, label, expected in (
+                (None, "factory", "the cell's token", both),
+                (k_mia, "factory", "a member of Vault", both),
+                (k_ada, "factory", "a reader not on Vault, whose rule it is", both[:1]),
+                (None, f"team:{ada}", "a scope without the rule's project", both)):
+            got = await rows(who, scope=scope) or []
+            marked = sorted((r["repo"], r["kind"]) for r in got if r.get("rule_accepted") is True)
+            ck(f"{label}: the rows marked as having an accepted rule",
+               marked == expected and (shop, "migration") in [(r["repo"], r["kind"]) for r in got],
+               got)
+
+        for i, text in enumerate(("No migration for it", "No tests here", "Uncaught exception",
+                                  "A new env var", "A null value", "A deadlock")):
+            found(many, "uc_far", text, tickets=8 - i)
+        report.rebuild_all(s)
+        got = await rows(scope="project:uc_far")
+        ck("six kinds recur: the five with the most tickets are listed",
+           brief(got) == [(many, "migration", 8), (many, "missing test", 7),
+                          (many, "error handling", 6), (many, "config key", 5),
+                          (many, "null or empty", 4)], brief(got))
+
+
 async def large():
     print("== a large cell: 20 projects, 12 weeks, 600 merged tickets ==")
     async with cell() as (s, root, bare):
@@ -889,8 +1149,11 @@ async def large():
             uid, back = uids[i % 20], i % 12
             merge(s, uid, noon(week(back)), assignee=people[i % 8] if i % 3 == 0 else None)
         for i in range(200):
-            tid = s.create_ticket(uids[i % 20], "tares", "open")
+            tid = pulled(s, uids[i % 20], f"example-org/repo-{i % 3}")
             s.add_ticket_history(tid, uids[i % 20], "stage", "doing", None, None, None, noon(week(1)))
+            raised(s, uids[i % 20], tid, 1, "changes",
+                   [("P2", False, "No migration for it"), ("P2", False, "Uncaught exception"),
+                    ("P3", False, f"Nit number {i} here")])
         for i, uid in enumerate(uids):
             for back in range(12):
                 seed_usage(s, f"s-{i}-{back}", f"m-{i}-{back}", replied_at=noon(week(back)),
@@ -907,6 +1170,10 @@ async def large():
             label = scope.split(":")[0]
             if scope == "factory":
                 ck("the seed is all there", r.json()["range"]["merged"] == 600, r.text[:300])
+                review = r.json()["sections"]["review"]
+                ck("with its reviews and recurring findings",
+                   review["first_pass"]["reviewed"] == 200
+                   and len(review["recurring"]["rows"]) == 5, str(review)[:600])
             ck(f"{label}: answered under 300 ms, the slowest of 5 ({max(took) * 1000:.0f} ms)",
                r.status_code == 200 and r.json()["scope"]["count"] > 0 and max(took) < 0.3,
                (r.status_code, [round(t * 1000) for t in took]))
@@ -919,6 +1186,8 @@ def main():
     asyncio.run(time_section())
     asyncio.run(stuck())
     asyncio.run(stuck_rows())
+    asyncio.run(review_section())
+    asyncio.run(recurring_rows())
     asyncio.run(large())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
