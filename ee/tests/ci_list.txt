@@ -64,6 +64,7 @@ test_project_delete_reads
 test_project_page_lead_items
 test_project_page_others
 test_project_secrets
+test_project_self_join
 test_recording_person_team
 test_route_phase_metric
 test_sessions_readers

@@ -15,7 +15,8 @@ export default function FactoryProjectPeople() {
         <div className="grid min-w-0 gap-5" data-testid="people-page">
           <PageHead title="People and access" sub="Who leads the project, who works on it, and the secrets its crew may use." />
           <div className="grid items-start gap-6 xl:grid-cols-2">
-            {d.people ? <People people={d.people} onLead={sample ? undefined : act.lead} onAdd={sample ? undefined : act.add} />
+            {d.people ? <People people={d.people} onLead={sample ? undefined : act.lead} onAdd={sample ? undefined : act.add}
+                                onJoin={sample ? undefined : act.join} />
               : <EmptyState className="border-t border-border py-4" data-testid="people-none">Only the people on this project see who is on it.</EmptyState>}
             {!sample && d.secrets && <ProjectSecrets project={d.id} initial={d.secrets} />}
           </div>
