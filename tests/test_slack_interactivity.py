@@ -162,6 +162,14 @@ async def main():
     ck("a Worth raising button gets the same answer", r.status_code == 200 and len(REPLIES) == 1
        and REPLIES[0].get("text") == slack_mod.GONE_NOTE, (r.status_code, REPLIES))
 
+    print("== another workspace's button ==")
+    REPLIES.clear()
+    r = await post(click({"type": "button", "action_id": "tares_incident_ack", "block_id": "b4",
+                          "value": json.dumps({"i": "inc_1", "w": "some-other-cell"})}))
+    await settle(1, timeout=1.5)
+    ck("a button another workspace's cell made stays silent (shared Slack app)", r.status_code == 200
+       and REPLIES == [], (r.status_code, REPLIES))
+
     print("== nothing to answer to ==")
     REPLIES.clear()
     r = await post(click(old, response_url=None))

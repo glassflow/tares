@@ -19,7 +19,6 @@ const { chromium } = require("./browser.cjs");
 const { AxeBuilder } = require(path.join(UI_DIR, "node_modules", "@axe-core", "playwright"));
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8891);
-const SRE_PORT = PORT + 2;
 const FAILS = new Set(["serious", "critical"]);
 // What axe checks: WCAG 2.1 A and AA. Best practices are not rules here.
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
@@ -78,17 +77,15 @@ async function audit(page, label) {
   const tares = fs.existsSync(path.join(bin, "tares")) ? path.join(bin, "tares") : "tares";
   const python = fs.existsSync(path.join(bin, "python")) ? path.join(bin, "python") : "python3";
   const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
-  const homes = [fs.mkdtempSync(path.join(os.tmpdir(), "tares-a11y-factory-")), fs.mkdtempSync(path.join(os.tmpdir(), "tares-a11y-sre-"))];
-  execFileSync(python, [path.join(__dirname, "seed-sre-home.py"), homes[1], "new-cell"], { cwd: REPO, encoding: "utf8", env: cleanEnv({}) });
+  const homes = [fs.mkdtempSync(path.join(os.tmpdir(), "tares-a11y-factory-"))];
   const start = (edition, home, port) => spawn(tares, ["up", "--port", String(port), "--data-dir", home], {
     cwd: REPO, stdio: "ignore", detached: true,
     env: cleanEnv({ TARES_EDITION: edition, TARES_HOME: home, TARES_PORT: String(port), TARES_MCP_PORT: String(port + 1), TARES_UI_DIST: dist }),
   });
-  const daemons = [start("factory", homes[0], PORT), start("sre", homes[1], SRE_PORT)];
+  const daemons = [start("factory", homes[0], PORT)];
   let browser;
   try {
     ck("factory daemon up", await waitFor(`http://127.0.0.1:${PORT}/health`));
-    ck("sre daemon up", await waitFor(`http://127.0.0.1:${SRE_PORT}/health`));
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
     const open = async (port, route, ready, theme = "light") => {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
@@ -110,7 +107,6 @@ async function audit(page, label) {
     console.log("== edition pages ==");
     for (const [label, port, route, ready] of [
       ["Factory Home, busy", PORT, "/?sample=busy", "factory-home"],
-      ["SRE Home, one incident", SRE_PORT, "/?sample=one-incident", "sre-home"],
     ]) {
       const { ctx, page } = await open(port, route, ready);
       await audit(page, label);

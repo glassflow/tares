@@ -1,5 +1,5 @@
 """What the old DDL (`Store._ddl()`) still makes (TR-1618): the event tables, the tables only the
-platform uses and the SRE tables. Every other table is made by a revision of the session store, so
+platform uses (the SRE tables went with the AI SRE edition, TR-1809). Every other table is made by a revision of the session store, so
 a table added to the old DDL, or one moved without its line here, fails this test.
 
     python tests/test_old_ddl_left.py
@@ -20,8 +20,6 @@ PLATFORM_AND_EVENT_TABLES = EVENT_TABLES | {
     "trigger_state", "subscriptions", "dispatch_deliveries", "catalog_triggers", "catalog_agents",
     "agent_runs", "mcp_servers", "ask_sessions", "query_log", "dispatch_log", "project_wiring",
     "run_projects", "dispatch_projects",
-    # SRE
-    "services", "watch_state", "incidents", "incident_notes", "incident_log", "finding_feedback",
 }
 # two tables of a removed feature: the old DDL only drops them
 DROPPED = {"catalog_reviews", "review_runs"}
@@ -67,7 +65,7 @@ def main():
     found, unknown = read(Store._ddl())
     made = found["create"]
     ck("every statement of the old DDL is one this test reads", not unknown, unknown)
-    ck("the old DDL makes no table outside the event, platform and SRE ones",
+    ck("the old DDL makes no table outside the event and platform ones",
        not set(made) - PLATFORM_AND_EVENT_TABLES, sorted(set(made) - PLATFORM_AND_EVENT_TABLES))
     ck("and it makes every one of them", not PLATFORM_AND_EVENT_TABLES - set(made),
        sorted(PLATFORM_AND_EVENT_TABLES - set(made)))

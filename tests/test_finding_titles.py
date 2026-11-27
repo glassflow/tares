@@ -388,9 +388,10 @@ async def cell():
         eq("an outside finding is a note, titled by its words", (ext["outcome"], ext["title"].split(" since ")[0],
                                                               ext["failing"], ext["likely_cause"]),
            ("note_written", "docs-site: builds failing", "two failed builds", "a missing image"))
-        ck("every result has the new keys", all(
-            {"title", "title_parts", "failing", "likely_cause", "next_step", "outcome", "outcome_words",
-             "kind"} <= set(x) for x in res["results"]), str(res["results"][0].keys()))
+        everything = res["results"] + (await cx.get(f"/api/projects/{other}/results")).json()["results"]
+        ck("every result has the new keys, the outside finding's too", any(x["id"] == ext_id for x in everything)
+           and all({"title", "title_parts", "failing", "likely_cause", "next_step", "outcome", "outcome_words",
+                    "kind"} <= set(x) for x in everything), str(everything[0].keys()))
 
         print("== handled ==")
         sid = by["service-a"]["id"]

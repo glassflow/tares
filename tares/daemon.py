@@ -3973,7 +3973,8 @@ def make_app() -> FastAPI:
             except ValueError:
                 payload = None
             if isinstance(payload, dict) and payload.get("type") == "block_actions" \
-                    and not slack_mod.is_link_click(payload):
+                    and not slack_mod.is_link_click(payload) \
+                    and not slack_mod.is_foreign_click(payload, _slack_workspace):
                 task = asyncio.create_task(_slack_interaction(payload))
                 _ask_tasks.add(task)
                 task.add_done_callback(_ask_tasks.discard)

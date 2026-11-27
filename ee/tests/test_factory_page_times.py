@@ -63,7 +63,7 @@ sys.path.insert(0, licensed.REPO)
 
 import factory_seed as fs
 import fake_lore
-from _timing import SLACK   # tests/_timing.py, shared with test_sre_home (TR-1731)
+from _timing import SLACK   # tests/_timing.py (TR-1731)
 
 TARGET = 0.300                                       # seconds, the median of a route
 # SLACK (imported above) is how much the median of an OVER route may exceed its entry, per backend.

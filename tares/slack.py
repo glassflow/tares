@@ -20,6 +20,7 @@ as a timeout rather than as "invalid_auth".
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from urllib.parse import quote
@@ -232,6 +233,21 @@ def is_link_click(payload: dict) -> bool:
     action_id = str(action.get("action_id") or "")
     return bool(action.get("url")) or action_id in LINK_ACTION_IDS \
         or action_id.startswith(LINK_ACTION_PREFIX)
+
+
+def is_foreign_click(payload: dict, workspace: str | None) -> bool:
+    """Whether a click is on a button another workspace's cell made (its value names a different
+    workspace slug `w` than this cell's): on a shared Slack app such a click is not this cell's to
+    answer, so it stays silent."""
+    actions = payload.get("actions") if isinstance(payload, dict) else None
+    if not isinstance(actions, list) or not actions or not isinstance(actions[0], dict):
+        return False
+    try:
+        val = json.loads(actions[0].get("value") or "")
+    except (TypeError, ValueError):
+        return False
+    w = val.get("w") if isinstance(val, dict) else None
+    return bool(w) and str(w) != (workspace or "")
 
 
 def escape_text(text: str) -> str:
