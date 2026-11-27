@@ -1,2 +1,0 @@
-Fixed
-Two watches running at once on a crew that runs on Codex no longer record one decision of Codex's approval reviewer twice, or tell of one failed turn twice (TR-1600). Each step now reads and marks a station under its lock, the failed turn told of is kept in a file of the station's own (so a watch writing back the crew's stations file from an older read cannot undo it), and a station that another command is at work on is looked at in the next round.
