@@ -232,6 +232,27 @@ export interface HomeOnboarding {
   };
 }
 
+/** Whether the person is joining a factory someone else set up (factory_home.joiner_block). */
+export interface HomeJoiner {
+  /** True for a person other than the owner once the team's choices are saved and another person's crew
+   *  has reported. It stays true after the person's own steps are done. */
+  joining: boolean;
+  team_settings: {
+    autonomy: "L3-review" | "L4-ship" | null;
+    releaser: boolean | null;
+    builders_max: number | null;
+    challenger: boolean | null;
+  } | null;
+  team_crews: number;
+  own_crew_up: boolean;
+}
+
+/** The Start steps; a person joining also gets what the team already set, in words. Either line may be
+ *  empty. */
+export interface HomeStart extends StartBlock {
+  team?: { settings_text: string; github: string };
+}
+
 /** Where an answer was given, as the cell records it (tares/answers.py): Home is `console`; `feed` is
  *  what rows from the old feed page still say. `message` is a reply by message. */
 export type HomeVia = "feed" | "console" | "session" | "message";
@@ -274,9 +295,11 @@ export interface HomeData {
   /** The command that plans a project with the crew (`tares factory spec`), shown while there is none. */
   plan_command?: string;
   // The Start checklist (tares/start_steps.py); absent in older answers and in samples that skip it.
-  start?: StartBlock;
+  start?: HomeStart;
   // What the first-run panel shows beside it (tares/crew_onboarding.py); absent in older answers.
   onboarding?: HomeOnboarding;
+  // Absent in older answers and in samples.
+  joiner?: HomeJoiner;
   now: string;
 }
 

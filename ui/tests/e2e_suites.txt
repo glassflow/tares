@@ -23,6 +23,7 @@ factory-crew
 factory-docs
 factory-github
 factory-home
+factory-home-joiner
 factory-merge-queue
 factory-new-project
 factory-people
