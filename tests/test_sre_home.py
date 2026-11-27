@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
-from _timing import SLACK
+from _timing import read_limit
 
 scrub_os_environ()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -728,17 +728,10 @@ async def main():
             h = sre_home.build(store, runtime.catalog, None)
             times.append((time.perf_counter() - t0) * 1000)
         slow = p95(times)
-        # a 300 ms target, with the slack of the backend the state is on (TR-1731). The store says which,
-        # not the env: CI's duckdb and mit suites set TARES_TEST_PG without the harness on the path
-        backend = "postgres" if store.sessions_db.dialect == "postgresql" else "duckdb"
-        limit = 300 * SLACK[backend]
         print(f"  first build, nothing held: {first:.0f} ms")
         print(f"  build x20: min {min(times):.0f} ms, median {sorted(times)[10]:.0f} ms, "
               f"p95 {slow:.0f} ms, max {max(times):.0f} ms")
-        print(f"  p95 {slow:.0f} ms, limit {limit:.0f} ms (target 300 ms, {backend} slack {SLACK[backend]})")
-        if 300 <= slow < limit:
-            # a note, not a failure: over the target, within what this backend's timing varies by
-            print(f"  note: p95 {slow:.0f} ms is over the 300 ms target, within the {backend} slack")
+        limit = read_limit(store, slow)      # a 300 ms target, with the backend's slack (TR-1731)
         ck(f"p95 under {limit:.0f} ms", slow < limit, f"{slow:.0f} ms")
         ck("the first build on a cold cell is under 600 ms", first < 600, f"{first:.0f} ms")
         # the 24 hour error series is scanned once, then held for 30 seconds on the real clock

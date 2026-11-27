@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
+from _timing import read_limit
 
 scrub_os_environ()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -460,7 +461,8 @@ async def main():
         slow = p95(times)
         print(f"  list, first read with nothing held: {first:.0f} ms")
         print(f"  list x20: min {min(times):.0f} ms, median {sorted(times)[10]:.0f} ms, p95 {slow:.0f} ms, max {max(times):.0f} ms")
-        ck("list p95 under 300 ms", slow < 300, f"{slow:.0f} ms")
+        limit = read_limit(store, slow)
+        ck(f"list p95 under {limit:.0f} ms", slow < limit, f"{slow:.0f} ms")
         eq("all 24 services are in it", len(r.json()["services"]), 24)
         times = []
         for _ in range(20):
@@ -469,7 +471,8 @@ async def main():
             times.append((time.perf_counter() - t0) * 1000)
         slow = p95(times)
         print(f"  page x20: min {min(times):.0f} ms, median {sorted(times)[10]:.0f} ms, p95 {slow:.0f} ms, max {max(times):.0f} ms")
-        ck("page p95 under 300 ms", slow < 300, f"{slow:.0f} ms")
+        limit = read_limit(store, slow)
+        ck(f"page p95 under {limit:.0f} ms", slow < limit, f"{slow:.0f} ms")
         eq("and it is the whole page", (r.status_code, set(r.json()) == PAGE_KEYS, len(r.json()["chart"]["traffic"])), (200, True, 60))
         ck("with the traffic of 200,000 events in it", sum(r.json()["chart"]["traffic"]) > 90_000, sum(r.json()["chart"]["traffic"]))
 

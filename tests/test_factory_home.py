@@ -31,6 +31,7 @@ from fastapi import FastAPI
 
 import tares.mcp_factory as mf
 import tares.mcp_server as m
+from _timing import read_limit
 from session_helpers import seed_usage
 from tares import claude_usage, factory_api
 from tares import factory_home as fh
@@ -491,7 +492,8 @@ async def main():
                 took.append((time.perf_counter() - t0) * 1000)
             p95 = sorted(took)[18]
             print(f"       home() over 54 projects: p95 {p95:.0f} ms, slowest {max(took):.0f} ms")
-            ck("p95 under 300 ms", p95 < 300, f"{p95:.0f} ms")
+            limit = read_limit(store, p95)
+            ck(f"p95 under {limit:.0f} ms", p95 < limit, f"{p95:.0f} ms")
 
 
 async def private_shares():
