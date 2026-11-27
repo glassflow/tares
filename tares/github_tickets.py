@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from .connectors.github import _normalize_repo
+from .github_repo import normalize_repo as _normalize_repo
 from . import team as team_mod
 from .envelope import Envelope, now_utc
 
@@ -365,16 +365,5 @@ def _sync_milestones(store, uid: str, milestones: list[dict], issues: list[dict]
     return ids
 
 
-def ensure_source(store) -> bool:
-    """The cell's `github_issues` source exists; True when it was just made (the caller reloads)."""
-    if any(s["name"] == SOURCE_NAME for s in store.list_catalog_sources()):
-        return False
-    store.upsert_catalog_source(SOURCE_NAME, "event_stream", "github_issues", "60s", {
-        "labels": [{"name": "ticket", "field": "ticket", "primary": True},
-                   {"name": "project", "field": "project"},
-                   {"name": "repo", "field": "repo"}]})
-    return True
-
-
 __all__ = ["GitHubTicketsError", "default_issue_label", "fetch", "status_of", "identifier_of",
-           "sync_project", "ensure_source"]
+           "sync_project"]

@@ -556,21 +556,10 @@ def _sync_milestones(store, uid: str, milestones: list[dict]) -> dict[str, str]:
     return ids
 
 
-def ensure_source(store) -> bool:
-    """The cell's `linear` source exists; True when it was just made (the caller reloads)."""
-    if any(s["name"] == SOURCE_NAME for s in store.list_catalog_sources()):
-        return False
-    store.upsert_catalog_source(SOURCE_NAME, "event_stream", "linear", "60s", {
-        "labels": [{"name": "ticket", "field": "ticket", "primary": True},
-                   {"name": "project", "field": "project"},
-                   {"name": "linear_project", "field": "linear_project"}]})
-    return True
-
-
 def iso(dt) -> str:
     return dt.isoformat() if isinstance(dt, datetime) else str(dt or "")
 
 
 __all__ = ["LinearError", "get_connection", "public_connection", "connect_api_key",
            "set_cloud_connection", "find_project", "list_projects", "sync_project",
-           "ensure_source", "status_of", "timezone"]
+           "status_of", "timezone"]

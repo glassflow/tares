@@ -368,8 +368,8 @@ ck("the three tickets came in, Linear's", sorted(t["identifier"] for t in s.list
 s.create_ticket("p1", "tares", "Mine")
 n = run(b.sync({"id": "p1"}))
 ck("sync returns the count of Linear tickets, not Tares ones, and takes a project dict", n == 3, n)
-ck("the event of each change is on the timeline", s.con.execute(
-   "SELECT count(*) FROM events WHERE source = 'linear'").fetchone()[0] == 3)
+ck("the sync stores no change events: nothing reads them (TR-1806)", s.con.execute(
+   "SELECT count(*) FROM events WHERE source = 'linear'").fetchone()[0] == 0)
 STATE["issues"][0] = {**STATE["issues"][0], "state": {"name": "Done", "type": "completed"}}
 run(b.sync("p1"))
 ck("a change in Linear is read", tk(s, "FAC-1")["status"] == "done")

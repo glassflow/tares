@@ -188,13 +188,11 @@ async def main():
            [t["status"] for t in tickets] == ["todo", "todo", "todo"], tickets)
         ck("the link records the sync", r.json()["linear"]["name"] == "Invoicing"
            and r.json()["linear"]["synced_at"] and r.json()["linear"]["error"] is None, r.text)
-        ck("the linear source exists and is in the project",
-           "linear" in app.state.runtime.catalog.sources
-           and "linear" in store.project_sources(uid))
-        with store._lock:                    # the source's first poll writes under this lock, from its own thread
-            n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
-                                          "event_type = 'ticket_created'").fetchone()[0]
-        ck("one event per ticket found", n_created == 3, n_created)
+        ck("linking makes no catalog source: the sync runner keeps the tickets in step (TR-1806)",
+           "linear" not in app.state.runtime.catalog.sources and not store.list_catalog_sources())
+        with store._lock:
+            n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear'").fetchone()[0]
+        ck("the sync's change events are not stored", n_created == 0, n_created)
         r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x", "status": "done"})
         ck("a status is not set when a ticket is made: 409, Linear's to change", r.status_code == 409
            and "Linear" in r.json()["detail"], r.text)
