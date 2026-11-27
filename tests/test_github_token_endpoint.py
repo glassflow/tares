@@ -13,6 +13,8 @@ Covers, against one in-process cell:
    leaves the cell for any of those; a malformed one is 400;
  - which credential: github.com only; App credentials before personal tokens; one whose check fails
    does not hide a later one that follows the repository;
+ - a broker credential serves a key that is not an admin only when its projects name every
+   repository on that credential's list; admin keys and a self-held App do not depend on that list;
  - the answer for the three kinds, the permissions asked of the broker and of GitHub, the narrowing
    to one repository, the cache (apart from full-set tokens, refreshed under ten minutes), the
    errors (404, 403, 409, 502) and Cache-Control: no-store;
@@ -275,6 +277,12 @@ async def add_broker(cx, repositories, name="cloud"):
     assert r.status_code == 201, r.text
 
 
+async def relist(cx, repositories, name="cloud"):
+    r = keep(await cx.put(f"/api/integrations/github/{name}", headers=H(ROOT_KEY),
+                          json={"name": name, "repositories": repositories}))
+    assert r.status_code < 300, r.text
+
+
 async def add_app(cx, store, slug="tares-cell", name="own"):
     r = keep(await cx.post("/api/integrations/github", headers=H(ROOT_KEY), json={
         "name": name, "kind": "app", "app_id": "4242", "private_key": PEM,
@@ -320,7 +328,8 @@ async def who_and_which(cx, store, k):
           r.status_code == 404 and code(r) == "no_credential" and not CALLS, f"{r.text} {CALLS}")
     drop_credentials(store)
 
-    await add_broker(cx, ["acme/app", "acme/lib", "acme/secret", "acme/prlink", "acme/nowhere"])
+    named = ["acme/app", "acme/lib", "acme/secret"]
+    await add_broker(cx, named)
 
     section("who may ask")
     r = await ask(cx, "acme/app", k["ann"], X_Tares_Station="crew-build-x",
@@ -356,12 +365,14 @@ async def who_and_which(cx, store, k):
     r = await ask(cx, "https://github.com/acme/app.git", k["ann"])
     check("a github.com address of the repository is read as owner/name",
           r.status_code == 200, r.text)
-    r = await ask(cx, "acme/prlink", k["ann"])
-    check("a repository seen only in a pull request link: 403, no call",
-          r.status_code == 403 and code(r) == "repo_not_allowed" and not CALLS, f"{r.text} {CALLS}")
-    r = await ask(cx, "acme/nowhere", k["ann"])
-    check("a followed repository no project names: 403, no call",
-          r.status_code == 403 and code(r) == "repo_not_allowed" and not CALLS, f"{r.text} {CALLS}")
+    await relist(cx, ["acme/app", "acme/prlink", "acme/nowhere"])
+    for repo, what in (("acme/prlink", "a repository seen only in a pull request link"),
+                       ("acme/nowhere", "a followed repository no project names")):
+        r = await ask(cx, repo, k["adm"])
+        check(f"{what}, even for an admin key: 403, no call",
+              r.status_code == 403 and code(r) == "repo_not_allowed" and not CALLS,
+              f"{r.text} {CALLS}")
+    await relist(cx, named)
     r = await ask(cx, "acme/secret", k["bob"])
     check("a private project the person is not on: 403, no call",
           r.status_code == 403 and code(r) == "repo_not_allowed" and not CALLS, f"{r.text} {CALLS}")
@@ -480,6 +491,59 @@ async def broker(cx, store, k):
     check("a followed repository and no installation: 502 saying so, no call",
           r.status_code == 502 and "no installation" in r.json().get("detail", "") and not CALLS,
           f"{r.status_code} {r.text} {CALLS}")
+    drop_credentials(store)
+
+
+async def broker_list(cx, store, k):
+    section("a broker credential's repository list and a key that is not an admin")
+    reset_fake()
+    await add_broker(cx, ["acme/app", "ACME/Secret"])
+    github_app.forget("cloud")
+
+    def served(r, kind="app_broker"):
+        return r.status_code == 200 and r.json()["kind"] == kind and bool(r.json()["token"])
+
+    def refused(r):
+        return (r.status_code == 403 and code(r) == "repo_not_allowed" and "token" not in r.json()
+                and "secret" not in r.text.lower() and not CALLS)
+
+    r = await ask(cx, "acme/app", k["ann"])
+    check("projects name every listed repository, in any case: a token", served(r), r.text)
+    for label, more in (("a non-admin person's key", {}),
+                        ("a station on that key", {"X_Tares_Station": "crew-build-x"})):
+        r = await ask(cx, "acme/app", k["bob"], **more)
+        check(f"projects name only some listed repositories, {label}: 403, no token, no call",
+              refused(r), f"{r.status_code} {r.text} {CALLS}")
+    for key, label in ((k["adm"], "an admin key"), (ROOT_KEY, "the cell's own token")):
+        r = await ask(cx, "acme/app", key)
+        check(f"{label} is served from the same list", served(r), r.text)
+
+    await relist(cx, ["acme/app", "acme/lib"])
+    r = await ask(cx, "acme/app", k["bob"])
+    check("the same key once its projects name the whole list (hand-over and ticket): a token",
+          served(r), r.text)
+
+    for extra, label in (("acme/nowhere", "no project names"),
+                         ("acme/prlink", "only a pull request link names")):
+        await relist(cx, ["acme/app", extra])
+        r = await ask(cx, "acme/app", k["ann"])
+        check(f"a listed repository {label}: 403 for a non-admin key", refused(r),
+              f"{r.status_code} {r.text} {CALLS}")
+        r = await ask(cx, "acme/app", k["adm"])
+        check(f"a listed repository {label}: an admin key is served", served(r), r.text)
+
+    await relist(cx, ["acme/app", "acme/secret"])
+    await add_pat(cx, PAT_ONE)
+    r = await ask(cx, "acme/app", k["bob"])
+    check("beside a personal token: still 403, the personal token never tried",
+          refused(r) and "broker token" in r.json()["detail"], f"{r.status_code} {r.text} {CALLS}")
+    await add_app(cx, store)
+    r = await ask(cx, "acme/app", k["bob"])
+    check("beside a self-held App: the App serves the non-admin key, the broker is not asked",
+          served(r, "app") and not any(host == "broker.test" for _, host, _ in CALLS),
+          f"{r.text} {CALLS}")
+    r = await ask(cx, "acme/app", k["adm"])
+    check("... and the admin key still gets the first stored App credential", served(r), r.text)
     drop_credentials(store)
 
 
@@ -752,6 +816,7 @@ async def auth_on():
                  "project": await key("project", project="uc_team")}
             await who_and_which(cx, store, k)
             await broker(cx, store, k)
+            await broker_list(cx, store, k)
             await own_app(cx, store, k)
             await personal(cx, store, k)
             await echo_routes(cx)

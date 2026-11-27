@@ -236,9 +236,11 @@ person's) or the cell's own token, answers `{token, expires_at, kind, login, nam
   an App (`kind` `app` or `app_broker`) has at least 10 minutes left and is limited to contents, pull
   requests and checks (write) and metadata (read). A self-held App also limits it to that one
   repository. With Tares Cloud's App the cell asks the token service for those permissions.
+- A token from Tares Cloud's App (`kind` `app_broker`) goes to a key that is not an admin only when
+  every repository on that credential is named by a project the key's person can see.
 - A personal token (`kind` `pat`) goes to an admin key only (or the cell's own token). It is handed
-  out as stored and `expires_at` is null. Another key gets `403 repo_not_allowed` for a repository
-  that no App credential follows.
+  out as stored and `expires_at` is null.
+- A key that no credential following the repository may serve gets `403 repo_not_allowed`.
 - `login`, `name` and `email` say who to commit as: the App's bot, or the token's user. A field the
   cell cannot tell is null.
 - Refusals: `404 no_credential` (no github.com credential), `403 repo_not_allowed` (the repository or

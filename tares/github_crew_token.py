@@ -4,8 +4,9 @@ Who may ask: a key that belongs to a person (the stations of their crew included
 credential, or, with auth off, a program that is not a browser and calls the cell by `localhost`
 or an IP address. The repository must be one that a project the caller can see names, on its
 hand-over or on a ticket. The credential is a github.com one that follows the repository, App
-credentials before personal tokens. A personal token is considered for an admin key only (the
-system credential and auth off count as one).
+credentials before personal tokens. For a key that is not an admin (the system credential and auth
+off count as one), a personal token is never considered, and a broker credential only when the
+caller's projects name every repository on its list.
 
 An App token is asked for with PERMISSIONS only (a self-held App also narrows it to the one
 repository). A personal token is handed out as stored. The answer carries the identity to commit
@@ -59,12 +60,13 @@ async def token_for_repo(store, h, request, repo_param: str) -> dict:
     if not creds:
         raise Refused(404, "no github.com credential is stored (Settings > GitHub)",
                       "no_credential")
-    if not _named_by_a_project(store, h, repo):
+    named = _named_by_projects(store, h)
+    if repo.lower() not in named:
         raise Refused(403, f"no project you can see names the repository {repo}",
                       "repo_not_allowed")
     admin = h.is_admin(request)
-    if not admin:     # a personal token is a person's own access: only an admin key is handed one
-        creds = [c for c in creds if github_credentials.is_app(c)]
+    if not admin:
+        creds = [c for c in creds if _open_to_non_admin(c, named)]
     creds.sort(key=lambda c: not github_credentials.is_app(c))     # stable: stored order within
     cred, follow = await _first_following(creds, repo, admin)
     token, expires_at, grant = await _token(store, cred, follow)
@@ -118,16 +120,27 @@ def _on_github_com(cred: dict) -> bool:
     return api in ("", github_app.API_DEFAULT)
 
 
-def _named_by_a_project(store, h, repo: str) -> bool:
-    """Whether a project the caller can see names `repo` on its hand-over or as a ticket's own
-    repository. A repository seen only in a pull request link does not count."""
-    want = repo.lower()
+def _named_by_projects(store, h) -> set[str]:
+    """The repositories, in lower case, that the projects the caller can see name on a hand-over or
+    as a ticket's own repository. A repository seen only in a pull request link does not count."""
     ids = [p["id"] for p in store.list_projects() if h.can_see(p)]
-    for handover in store.handovers_by_project(ids).values():
-        if any(str(r.get("name") or "").lower() == want for r in handover.get("repos") or []):
-            return True
-    return any(str(t.get("repo") or "").lower() == want
-               for tickets in store.tickets_by_project(ids).values() for t in tickets)
+    names = [r.get("name") for handover in store.handovers_by_project(ids).values()
+             for r in handover.get("repos") or []]
+    names += [t.get("repo") for tickets in store.tickets_by_project(ids).values() for t in tickets]
+    return {str(n).lower() for n in names if n}
+
+
+def _listed(cred: dict) -> set[str]:
+    """A broker credential's repository list, in lower case."""
+    return {str(r).lower() for r in (cred.get("config") or {}).get("repositories") or []}
+
+
+def _open_to_non_admin(cred: dict, named: set[str]) -> bool:
+    """Whether a key that is not an admin may be handed `cred`'s token: a self-held App's, yes; a
+    broker's, when `named` holds every repository on its list; a personal token, never."""
+    if cred.get("kind") == "app_broker":
+        return _listed(cred) <= named
+    return github_credentials.is_app(cred)
 
 
 async def _follows(cred: dict, repo: str) -> Follow | None:
@@ -135,8 +148,7 @@ async def _follows(cred: dict, repo: str) -> Follow | None:
     want = repo.lower()
     kind = cred.get("kind") or "token"
     if kind == "app_broker":
-        followed = (cred.get("config") or {}).get("repositories") or []
-        if want not in {str(r).lower() for r in followed}:
+        if want not in _listed(cred):
             return None
         installations = github_app.installations(cred)
         if not installations:
@@ -187,10 +199,12 @@ async def _first_following(creds: list[dict], repo: str, admin: bool) -> tuple[d
             return cred, follow
     if failed:
         raise Refused(502, failed)
-    which = ("no GitHub credential follows the repository" if admin else
-             "personal tokens go to admin keys only, and no GitHub App credential follows the "
-             "repository")
-    raise Refused(403, f"{which} {repo} (Settings > GitHub)", "repo_not_allowed")
+    why = f"no GitHub credential follows the repository {repo}"
+    if not admin:
+        why = (f"no GitHub credential for this key follows the repository {repo}: personal tokens "
+               "go to admin keys only, and a broker token goes to another key only when its "
+               "projects name every repository on the credential")
+    raise Refused(403, f"{why} (Settings > GitHub)", "repo_not_allowed")
 
 
 async def _token(store, cred: dict, follow: Follow):
